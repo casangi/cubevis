@@ -9,7 +9,7 @@ using `Bokeh <https://bokeh.org/>`_.
 Introduction
 ------------
 
- These tools are primarily based on `Bokeh <https://bokeh.org/>`_. The GUIs use Python
+These tools are primarily based on `Bokeh <https://bokeh.org/>`_. The GUIs use Python
 and CASA to provide image access while a generated JavaScript interface provides a control
 front-end.
 

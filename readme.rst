@@ -30,7 +30,6 @@ Usage
 This example provide a summary of how to use interactive clean from Python:
 
 .. code-block:: python
-   :linenos:
 
    from cubevis import iclean
 

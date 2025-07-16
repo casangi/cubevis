@@ -27,9 +27,9 @@ perform the image reconstruction are
 Usage
 ^^^^^
 
-This example provide a summary of how to use interactive clean from Python:
+This example provide a summary of how to use interactive clean from Python
 
 
 For this sample, the test measurement set is
 `available <https://casa.nrao.edu/download/devel/casavis/data/refim_twopoints_twochan-ms.tar.gz>`_,
-while the `outlierfile` would look something like:
+while the `outlierfile` would look something like

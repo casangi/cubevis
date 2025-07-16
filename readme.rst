@@ -32,10 +32,4 @@ This example provide a summary of how to use interactive clean from Python:
 
 For this sample, the test measurement set is
 `available <https://casa.nrao.edu/download/devel/casavis/data/refim_twopoints_twochan-ms.tar.gz>`_,
-while the `outlierfile` would look something like::
-
-  imagename=try_multifield_1
-  imsize=[80,80]
-  cell=[8.0arcsec,8.0arcsec]
-  phasecenter=J2000 19:58:41.095 +40.56.01.043
-
+while the `outlierfile` would look something like:

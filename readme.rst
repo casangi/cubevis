@@ -29,19 +29,6 @@ Usage
 
 This example provide a summary of how to use interactive clean from Python:
 
-.. code-block:: python
-   :caption: Basic Usage
-   :linenos:
-
-   from cubevis import iclean
-
-   iclean( vis='refim_twopoints_twochan.ms', imagename='test',
-           imsize=100, cell='8.0arcsec',
-           phasecenter="J2000 19:59:28.500 +40.44.01.50",
-           outlierfile='test_outlier.txt',
-           niter=50, cycleniter=10, deconvolver='hogbom',
-           specmode='mfs', spw='0:0' )
-
 
 For this sample, the test measurement set is
 `available <https://casa.nrao.edu/download/devel/casavis/data/refim_twopoints_twochan-ms.tar.gz>`_,

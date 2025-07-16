@@ -2,7 +2,7 @@
 ###  This script was created to test loading larger cubes. This dataset was
 ###  suggested even though it turned out to just produce 512x512 image planes
 ###
-#from casagui.bokeh.state import initialize_bokeh
+#from cubevis.bokeh.state import initialize_bokeh
 #initialize_bokeh( "../../../casalib/dist/esbuild/casalib-v0.0.1.min.js",
 #                  "../../../casaguijs/dist/casaguijs.js" )                        ### local build
 #initialize_bokeh( "../../../casalib/dist/esbuild/casalib-v0.0.2.min.js" )
@@ -16,7 +16,7 @@ import asyncio
 import urllib
 import tarfile
 
-from casagui.apps import InteractiveClean
+from cubevis.apps import InteractiveClean
 
 ##
 ## demo measurement set to use

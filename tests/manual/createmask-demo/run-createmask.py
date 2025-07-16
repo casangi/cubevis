@@ -4,9 +4,9 @@ import certifi
 import asyncio
 import urllib
 import tarfile
-#from casagui.bokeh.state import initialize_bokeh
+#from cubevis.bokeh.state import initialize_bokeh
 #initialize_bokeh( bokeh='../../../casaguijs/dist/casaguijs.js' )                  ### local gui/js build + standard bokeh independent library
-from casagui.apps import CreateMask
+from cubevis.apps import CreateMask
 
 ##
 ## demo measurement set to use

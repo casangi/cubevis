@@ -4,7 +4,7 @@ import certifi
 import urllib
 import tarfile
 
-from casagui.apps import iclean
+from cubevis.apps import iclean
 
 ##
 ## demo measurement set to use

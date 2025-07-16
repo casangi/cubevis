@@ -1,4 +1,4 @@
-#from casagui.bokeh.state import initialize_bokeh
+#from cubevis.bokeh.state import initialize_bokeh
 #initialize_bokeh( "../../../casalib/dist/esbuild/casalib-v0.0.1.min.js",
 #                  "../../../casaguijs/dist/casaguijs.js" )                        ### local build
 #initialize_bokeh( "../../../casalib/dist/esbuild/casalib-v0.0.2.min.js" )
@@ -12,7 +12,7 @@ import asyncio
 import urllib
 import tarfile
 
-from casagui.apps import iclean
+from cubevis.apps import iclean
 
 ##
 ## demo measurement set to use

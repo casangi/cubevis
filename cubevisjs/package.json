@@ -1,0 +1,12 @@
+{
+  "name": "cubevisjs",
+  "version": "0.0.20",
+  "description": "cubevis browser-side bokeh implementation",
+  "license": "BSD-3-Clause",
+  "keywords": [],
+  "repository": {},
+  "dependencies": {
+    "@bokeh/bokehjs": "3.5.2"
+  },
+  "devDependencies": {}
+}

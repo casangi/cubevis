@@ -10,7 +10,7 @@ import asyncio
 import urllib
 import tarfile
 
-from casagui.apps import InteractiveClean
+from cubevis.apps import InteractiveClean
 
 ##
 ## demo measurement set to use, from:

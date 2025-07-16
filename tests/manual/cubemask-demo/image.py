@@ -6,7 +6,7 @@
 import asyncio
 from bokeh.plotting import show
 from bokeh.layouts import row, column
-from casagui.toolbox import CubeMask
+from cubevis.toolbox import CubeMask
 
 cube = CubeMask( 'g35_sma_usb_12co.image' )
 image = cube.image( )

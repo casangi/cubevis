@@ -1,6 +1,6 @@
 ###
 ### This workflows will upload a python package using pypi trusted publisher
-### when the casagui main branch is tagged with 'v*' and pushed up
+### when the cubevis main branch is tagged with 'v*' and pushed up
 ###
 
 name: Actions for each push or pull

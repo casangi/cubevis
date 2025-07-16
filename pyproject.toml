@@ -1,5 +1,5 @@
 [project]
-name = "casagui"
+name = "cubevis"
 dynamic = ["version"]
 description = "visualization toolkit and apps for casa"
 authors = [
@@ -22,11 +22,11 @@ license = {text = "LGPL"}
 [tool]
 [tool.pdm]
 [tool.pdm.build]
-excludes = [ "casagui/apps/*.mustache", "casagui/private/casashell/*.mustache", "casagui/private/casatasks/*.mustache", "**/*.xml", "**/*.py-*", "**/*~" ]
+excludes = [ "cubevis/apps/*.mustache", "cubevis/private/casashell/*.mustache", "cubevis/private/casatasks/*.mustache", "**/*.xml", "**/*.py-*", "**/*~" ]
 
 [tool.pdm.version]
 source = "scm"
-write_to = "casagui/__version__.py"
+write_to = "cubevis/__version__.py"
 write_template = "__version__ = '{}'"  # optional, default to "{}"
 
 [build-system]

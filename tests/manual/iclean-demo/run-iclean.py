@@ -6,7 +6,7 @@ import tarfile
 
 from os.path import splitext
 from os.path import split as splitpath
-from casagui.apps import iclean
+from cubevis.apps import iclean
 
 from argparse import ArgumentParser
 name = splitext(splitpath(__file__)[1])[0]

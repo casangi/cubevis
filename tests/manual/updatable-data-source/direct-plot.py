@@ -8,7 +8,7 @@ import numpy as np
 from bokeh.models import CustomJS
 from bokeh.plotting import figure, show
 from casatools import ms as mstool
-from casagui.utils import serialize, deserialize, find_ws_address
+from cubevis.utils import serialize, deserialize, find_ws_address
 
 ms_path = 'tl018b.ms'
 ms_url = 'https://casa.nrao.edu/download/devel/casavis/data/tl018b_ms.tar.gz'

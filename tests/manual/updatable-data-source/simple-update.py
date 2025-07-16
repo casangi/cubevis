@@ -4,7 +4,7 @@ import time
 from bokeh.plotting import figure, show
 from bokeh.models import CustomJS
 
-from casagui.bokeh.sources import UpdatableDataSource
+from cubevis.bokeh.sources import UpdatableDataSource
 
 started_up_future = None
 async def event_handler( msg ):

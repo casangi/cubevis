@@ -40,8 +40,8 @@ jobs:
         pip install "bokeh>=3.2"
     - name: Create dummy version file
       run: |
-        touch casagui/__version__.py
-        echo "__version__ = '0.0.0'" >> casagui/__version__.py
+        touch cubevis/__version__.py
+        echo "__version__ = '0.0.0'" >> cubevis/__version__.py
     - name: Analysing the code with pylint
       run: |
-        pylint "--msg-template='{abspath}:{line:5d},{column:2d}: {msg} ({symbol})'" --rcfile=pylintrc --output-format=colorized $(git ls-files '*.py' | egrep '^casagui/')
+        pylint "--msg-template='{abspath}:{line:5d},{column:2d}: {msg} ({symbol})'" --rcfile=pylintrc --output-format=colorized $(git ls-files '*.py' | egrep '^cubevis/')

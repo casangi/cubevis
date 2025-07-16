@@ -11,8 +11,8 @@ import numpy as np
 from bokeh.plotting import figure, show
 from bokeh.models import CustomJS
 from casatools import ms as mstool
-from casagui.utils import serialize, deserialize, find_ws_address
-from casagui.bokeh.sources import UpdatableDataSource
+from cubevis.utils import serialize, deserialize, find_ws_address
+from cubevis.bokeh.sources import UpdatableDataSource
 
 ms_path = 'tl018b.ms'
 ms_url = 'https://casa.nrao.edu/download/devel/casavis/data/tl018b_ms.tar.gz'

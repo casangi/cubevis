@@ -52,9 +52,9 @@ from bokeh.io import reset_output as reset_bokeh_output, output_notebook
 from bokeh.models.dom import HTML
 
 from bokeh.models.ui.tooltips import Tooltip
-from ..bokeh.models import TipButton, Tip, EvTextInput
-from ..utils import resource_manager, reset_resource_manager, is_notebook, find_pkg, load_pkg
-from ..utils import ContextMgrChain as CMC
+from cubevis.bokeh.models import TipButton, Tip, EvTextInput
+from cubevis.utils import resource_manager, reset_resource_manager, is_notebook, find_pkg, load_pkg
+from cubevis.utils import ContextMgrChain as CMC
 
 # pylint: disable=no-name-in-module
 from casatasks.private.imagerhelpers.imager_return_dict import ImagingDict
@@ -66,7 +66,7 @@ from cubevis.utils import find_ws_address, convert_masks
 from cubevis.toolbox import CubeMask, AppContext
 from cubevis.bokeh.utils import svg_icon
 from cubevis.bokeh.sources import DataPipe
-from ..utils import DocEnum
+from cubevis.utils import DocEnum
 
 from ._interactiveclean_wrappers import SharedWidgets
 

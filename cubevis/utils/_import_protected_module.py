@@ -9,7 +9,7 @@ def ImportProtectedModule( name, file_mapping ):
         """Import objects, functions and classes for export while avoiding requiring user to
            provide the sub-package name for the file contining the imported object, for example
            allowing:
-                         from cubevis.apps import iclean
+                         from cubevis import iclean
 
            instead of:
                          from cubevis.app._interactive_clean import iclean

@@ -18,7 +18,7 @@ kc = casaremote.connect_remote(connect_info_file, "zuul07")
 # Initialize the remote kernel environment for Interactive Clean
 # TODO: Move this into its own initialization function? Or keep it more explicit here
 casaremote.exe_and_print(kc, "import cubevis")
-casaremote.exe_and_print(kc, "from cubevis.apps import InteractiveClean")
+casaremote.exe_and_print(kc, "from cubevis import InteractiveClean")
 casaremote.exe_and_print(kc, "import casaremote")
 casaremote.exe_and_print(kc, "import asyncio")
 casaremote.exe_and_print(kc, "t = casaremote.TestProc(" + str(backchannel_port)+", asyncio.get_running_loop())")

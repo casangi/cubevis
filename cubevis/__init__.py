@@ -31,6 +31,9 @@ applications turn-key applications'''
 
 import os as __os
 
+
+from .private.apps import iclean
+
 try:
     from .__version__ import __version__
 except ModuleNotFoundError:

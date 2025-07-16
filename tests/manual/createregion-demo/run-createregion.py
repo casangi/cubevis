@@ -6,7 +6,7 @@ import urllib
 import tarfile
 #from cubevis.bokeh.state import initialize_bokeh
 #initialize_bokeh( bokeh='../../../casaguijs/dist/casaguijs.js' )                  ### local gui/js build + standard bokeh independent library
-from cubevis.apps import createregion
+from cubevis import createregion
 
 ##
 ## demo measurement set to use

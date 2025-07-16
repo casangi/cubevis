@@ -13,7 +13,7 @@ import asyncio
 import urllib
 import tarfile
 
-from cubevis.apps import InteractiveClean
+from cubevis import InteractiveClean
 
 ##
 ## demo measurement set to use

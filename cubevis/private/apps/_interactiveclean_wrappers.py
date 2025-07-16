@@ -1,5 +1,5 @@
 from bokeh.models import TextInput, Checkbox
-from ..utils import static_vars
+from cubevis.utils import static_vars
 
 ###
 ### These wrappers allow the creation of a SINGLE GUI element that is shared across multiple

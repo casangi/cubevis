@@ -28,8 +28,8 @@
 # pylint: disable=wrong-import-position
 '''End user applications supplied by ``cubevis``.'''
 import sys
-from ..utils import copydoc, ImportProtectedModule
-from ..bokeh.state import initialize_session
+from cubevis.utils import copydoc, ImportProtectedModule
+from cubevis.bokeh.state import initialize_session
 initialize_session()
 
 sys.modules[__name__].__class__ = ImportProtectedModule( __name__, { 'plotants': '._plotants',
@@ -37,8 +37,8 @@ sys.modules[__name__].__class__ = ImportProtectedModule( __name__, { 'plotants':
                                                                      'CreateMask': '._createmask',
                                                                      'CreateRegion': '._createregion',
                                                                      'InteractiveClean': '._interactiveclean',
-                                                                     'iclean': '..private.casatasks.iclean',
-                                                                     'createmask': '..private.casatasks.createmask',
-                                                                     'createregion': '..private.casatasks.createregion',
+                                                                     'iclean': '..casatasks.iclean',
+                                                                     'createmask': '..casatasks.createmask',
+                                                                     'createregion': '..casatasks.createregion',
                                                                      'MsRaster': '._ms_raster',
                                                                    } )

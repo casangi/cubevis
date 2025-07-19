@@ -208,15 +208,19 @@ class ImagePipe(DataPipe):
             ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
             amin = image_plane.min( )           ## array min
             amax = image_plane.max( )           ## array max
-            rg = [ amin if len(self.__quant_adjustments['bounds'][0]) == 0 else self.__quant_adjustments['bounds'][0][0],
-                   amax if len(self.__quant_adjustments['bounds'][1]) == 0 else self.__quant_adjustments['bounds'][1][0] ]
-            umin = min(rg)                      ## user specified min
-            umax = max(rg)                      ## user specified max
+
+            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+            ### Extract user bounds (use array bounds as fallback)
+            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+            umin = amin if len(self.__quant_adjustments['bounds'][0]) == 0 else self.__quant_adjustments['bounds'][0][0]
+            umax = amax if len(self.__quant_adjustments['bounds'][1]) == 0 else self.__quant_adjustments['bounds'][1][0]
+
+            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+            ### Handle cropping (when user bounds are narrower than data)
+            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
             if umin > amin:
-                ## elements that are masked to the minumum color for the image
                 exclude_below = image_plane < umin
             if umax < amax:
-                ## elements that are masked to the maximum color for the image
                 exclude_above = image_plane > umax
 
             ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
@@ -240,13 +244,26 @@ class ImagePipe(DataPipe):
                 else:
                     normalize = 0 if umin > 0 else -umin
                     result = np.ma.zeros(image_plane.shape,image_plane.dtype)
-                    result[included] = self.__quant_scaling[selected_scaling]( image_plane[included]+normalize if included is not None else image_plane+normalize,
-                                                                               **self.__quant_adjustments['transfer']['args'] )
-                    if exclude_below is not None:
-                        result[exclude_below] = result[included].min( )
-                    if exclude_above is not None:
-                        result[exclude_above] = result[included].max( )
+
+                    if included is not None:
+
+                        result[included] = self.__quant_scaling[selected_scaling](
+                            image_plane[included] + normalize,
+                            **self.__quant_adjustments['transfer']['args']
+                        )
+
+                        # Set excluded regions to min/max of included values
+                        if exclude_below is not None:
+                            result[exclude_below] = result[included].min( )
+                        if exclude_above is not None:
+                            result[exclude_above] = result[included].max( )
+                    else:
+                        result = self.__quant_scaling[selected_scaling](
+                            image_plane + normalize,
+                            **self.__quant_adjustments['transfer']['args']
+                        )
             else:
+
                 result = image_plane
 
             ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---

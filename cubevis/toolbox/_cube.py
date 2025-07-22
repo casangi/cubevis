@@ -881,7 +881,7 @@ class CubeMask:
         ### power: 𝑦=(𝛼^𝑥−1)/(𝛼−1)
         self._cm_adjust['alpha-value'] = TextInput( value="1000", prefix="alpha", max_width=170, visible=False )
         self._cm_adjust['gamma-value'] = TextInput( value="1", prefix="gamma", max_width=170, visible=False )
-        self._cm_adjust['equation'] = Div(text='''<math><mrow><mi>y</mi><mo>=</mo><mi>x</mi></mrow></math>''')  # linear
+        self._cm_adjust['equation'] = Div(text='''<math><mrow><mi>y</mi><mo>=</mo><mi>x</mi></mrow></math>''', margin=(12, 0, 0, 0))  # linear
         self._cm_adjust['scaling'] = Dropdown( label='linear',
                                                menu=[ ('linear', 'linear'), ('log', 'log'), ('sqrt','sqrt'),
                                                       ('square', 'square'), ('gamma', 'gamma'), ('power', 'power') ],
@@ -1048,6 +1048,7 @@ class CubeMask:
 
             return dict( result='failure', update={ } )
 
+        scaling_background = '#f8f8f8'
         return column( self._cm_adjust['fig'],
                        row( Tip( self._cm_adjust['min input'],
                                   tooltip=Tooltip( content=HTML("set minimum clip here or drag the left red line above"),
@@ -1055,16 +1056,18 @@ class CubeMask:
                             Tip( self._cm_adjust['max input'],
                                   tooltip=Tooltip( content=HTML("set maximum clip here or drag the right red line above"),
                                                    position="top_left" ) ), width_policy='min' ),
-                       row( Tip( self._cm_adjust['scaling'],
-                                  tooltip=Tooltip( content=HTML('scaling function applied to image intensities'),
-                                                   position="top" ) ),
-                            self._cm_adjust['equation'] ),
-                       row( Tip( self._cm_adjust['alpha-value'],
-                                  tooltip=Tooltip( content=HTML('set alpha value as indicated in the equation'),
-                                                   position="top" ) ),
-                            Tip( self._cm_adjust['gamma-value'],
-                                  tooltip=Tooltip( content=HTML('set gamma value as indicated in the equation'),
-                                                   position="top" ) ) ),
+                       column( Div(text="<small>scaling</small>", styles={'background-color': scaling_background, 'margin': '0px'}),
+                               row( Tip( self._cm_adjust['scaling'],
+                                         tooltip=Tooltip( content=HTML('scaling function applied to image intensities'),
+                                                          position="top" ) ),
+                                    self._cm_adjust['equation'] ),
+                               row( Tip( self._cm_adjust['alpha-value'],
+                                         tooltip=Tooltip( content=HTML('set alpha value as indicated in the equation'),
+                                                          position="top" ) ),
+                                    Tip( self._cm_adjust['gamma-value'],
+                                         tooltip=Tooltip( content=HTML('set gamma value as indicated in the equation'),
+                                                          position="top" ) ) ),
+                               width=325, styles={'background-color': scaling_background, 'border': '1px solid black', 'padding': '10px'} ),
                        sizing_mode="scale_width" )
 
     def bitmask_ctrl( self, reuse=None, **kw ):

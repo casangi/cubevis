@@ -32,6 +32,11 @@ from cubevis.utils import copydoc, ImportProtectedModule
 from cubevis.bokeh.state import initialize_session
 initialize_session()
 
+###
+### This import roundabout was introduced when astroviper and casa6 apps were in the same
+### package to avoid forcing the user to install BOTH astroviper and casa6 even if they
+### were only going to use one of the applications. Now it could be removed...
+###
 sys.modules[__name__].__class__ = ImportProtectedModule( __name__, { 'plotants': '._plotants',
                                                                      'plotbandpass': '._plotbandpass',
                                                                      'CreateMask': '._createmask',
@@ -40,5 +45,4 @@ sys.modules[__name__].__class__ = ImportProtectedModule( __name__, { 'plotants':
                                                                      'iclean': '..casatasks.iclean',
                                                                      'createmask': '..casatasks.createmask',
                                                                      'createregion': '..casatasks.createregion',
-                                                                     'MsRaster': '._ms_raster',
                                                                    } )

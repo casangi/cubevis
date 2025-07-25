@@ -41,10 +41,10 @@ from bokeh.io import curdoc
 from bokeh.io import reset_output as reset_bokeh_output
 from bokeh.models.dom import HTML
 from bokeh.models.ui.tooltips import Tooltip
-from ..utils import resource_manager, reset_resource_manager, is_notebook
-from ..data import casaimage
-from ..bokeh.models import TipButton, Tip
-from ..utils import ContextMgrChain as CMC
+from cubevis.utils import resource_manager, reset_resource_manager, is_notebook
+from cubevis.data import casaimage
+from cubevis.bokeh.models import TipButton, Tip
+from cubevis.utils import ContextMgrChain as CMC
 
 class CreateRegion:
     '''Class that can be used to launch a createregion GUI with ``CreateRegion('test.im')( )``.
@@ -376,7 +376,7 @@ class CreateRegion:
                                            title='Spectrum' ) ] if imdetails['image-channels'] > 1 else [ ] ) +
                              [ TabPanel( child=self._create_colormap_adjust(imdetails),
                                          title='Colormap' ),
-                               TabPanel( child=imdetails['gui']['cube'].statistics( ),
+                               TabPanel( child=column( *imdetails['gui']['cube'].statistics( ) ),
                                          title='Statistics' ) ],
                        width=500, sizing_mode='stretch_height', tabs_location='below' )
 

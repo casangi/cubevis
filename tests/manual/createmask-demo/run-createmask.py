@@ -6,7 +6,7 @@ import urllib
 import tarfile
 #from cubevis.bokeh.state import initialize_bokeh
 #initialize_bokeh( bokeh='../../../casaguijs/dist/casaguijs.js' )                  ### local gui/js build + standard bokeh independent library
-from cubevis import CreateMask
+from cubevis.private.casatasks.createmask import createmask
 
 ##
 ## demo measurement set to use
@@ -30,4 +30,4 @@ for paths in zip( image_paths, image_urls ):
             raise
 
 
-print(repr(CreateMask( image_paths )( )))
+print(createmask( image_paths ))

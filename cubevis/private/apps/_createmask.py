@@ -41,10 +41,10 @@ from bokeh.io import reset_output as reset_bokeh_output
 from bokeh.io import output_notebook
 from bokeh.models.dom import HTML
 from bokeh.models.ui.tooltips import Tooltip
-from ..utils import resource_manager, reset_resource_manager, is_notebook
-from ..data import casaimage
-from ..bokeh.models import TipButton, Tip
-from ..utils import ContextMgrChain as CMC
+from cubevis.utils import resource_manager, reset_resource_manager, is_notebook
+from cubevis.data import casaimage
+from cubevis.bokeh.models import TipButton, Tip
+from cubevis.utils import ContextMgrChain as CMC
 
 class CreateMask:
     '''Class that can be used to launch a createmask GUI with ``CreateMask('test.im','mask.im')( )``.
@@ -53,7 +53,7 @@ class CreateMask:
     cube where each pixel is a 1 (masked) or a 0 (unmasked).
     '''
 
-    def __stop( self ):
+    def __stop( self, _=None ):
         if not self.__result_future.done( ):
             self.__result_future.set_result(self.__retrieve_result( ))
 
@@ -310,7 +310,7 @@ class CreateMask:
                                            title='Spectrum' ) ] if imdetails['image-channels'] > 1 else [ ] ) +
                           [ TabPanel( child=self._create_colormap_adjust(imdetails),
                                       title='Colormap' ),
-                            TabPanel( child=imdetails['gui']['cube'].statistics( ),
+                            TabPanel( child=column( *imdetails['gui']['cube'].statistics( ) ),
                                       title='Statistics' ) ],
                        width=500, sizing_mode='stretch_height', tabs_location='below' )
 

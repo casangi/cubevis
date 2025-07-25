@@ -476,7 +476,7 @@ class InteractiveClean:
                 iteration_limit = int(msg['value']['iteration']['niter'])
                 stopdesc, stopcode, majordone, majorleft, iterleft, self._convergence_data = await self._clean['gclean'].__anext__( )
 
-                clean_cmds = self._clean['gclean'].cmds( )
+                clean_cmds = self._clean['gclean']._log( )
 
                 for key, value in self._convergence_data.items( ):
 
@@ -855,7 +855,7 @@ class InteractiveClean:
         ### Setup script that will be called when the user closes the
         ### browser tab that is running interactive clean
         ###
-        initial_log = self._clean['gclean'].cmds( )
+        initial_log = self._clean['gclean']._log( )
 
         self._pipe['control'].init_script=CustomJS( args=dict( ctrl_pipe=self._pipe['control'],
                                                                ids=self._clean_ids,
@@ -1044,7 +1044,7 @@ class InteractiveClean:
                     ###
                     raise RuntimeError(f'''gclean failure "%s" not returned: {imdetails["converge"]}''' % ('major' if imdetails['converge']['major'] is None else 'chan'))
 
-            self._clean['cmds'].extend(self._clean['gclean'].cmds( ))
+            self._clean['cmds'].extend(self._clean['gclean']._log( ))
 
             self._initial_clean_params['nmajor'] = majorleft
             self._initial_clean_params['niter'] = iterleft
@@ -1187,7 +1187,7 @@ class InteractiveClean:
         -------
         list[str]  tclean calls made during the interactive clean session.
         '''
-        return self._clean.cmds( True )
+        return self._clean['gclean']._log( True )
 
     def _initialize_javascript( self ):
         self._js = { ### initialize state

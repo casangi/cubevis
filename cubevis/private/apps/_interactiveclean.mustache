@@ -833,7 +833,7 @@ class InteractiveClean:
                                                                              body {
                                                                                  counter-reset: section;
                                                                              }
-                                                                             p:before {
+                                                                             p:not([data-skip]):before {
                                                                                  font-weight: bold;
                                                                                  counter-increment: section;
                                                                                  content: "" counter(section) ": ";
@@ -842,7 +842,7 @@ class InteractiveClean:
                                                                      </head>
                                                                      <body>
                                                                          <h1>Interactive Clean History</h1>
-                                                                     ` + elem.map((x) => `<p>${x}</p>`).join('\\n') + '</body>\\n</html>'
+                                                                     ` + elem.map((x) => x.startsWith('#') ? `<p data-skip>${x}</p>` : `<p>${x}</p>`).join('\\n') + '</body>\\n</html>'
                                                          }
                                                          let b = cb_obj.origin
                                                          if ( ! b._window || b._window.closed ) {

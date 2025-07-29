@@ -53,7 +53,7 @@ from bokeh.models.dom import HTML
 
 from bokeh.models.ui.tooltips import Tooltip
 from cubevis.bokeh.models import TipButton, Tip, EvTextInput
-from cubevis.utils import resource_manager, reset_resource_manager, is_notebook, find_pkg, load_pkg
+from cubevis.utils import resource_manager, reset_resource_manager, is_interactive_jupyter, find_pkg, load_pkg
 from cubevis.utils import ContextMgrChain as CMC
 
 # pylint: disable=no-name-in-module
@@ -1955,7 +1955,7 @@ class InteractiveClean:
         ###
         ### whether or not the session is being run from a jupyter notebook or script
         ###
-        self._is_notebook = is_notebook()
+        self._is_notebook = is_interactive_jupyter()
 
         ##
         ## the http port for serving GUI in webpage if not running in script

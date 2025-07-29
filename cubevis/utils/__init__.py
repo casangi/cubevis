@@ -43,6 +43,7 @@ from ._regions import polygon_indexes
 from ._docenum import DocEnum
 from ._copydoc import copydoc
 from ._pkgs import find_pkg, load_pkg
+from ._jupyter import is_interactive_jupyter
 
 from astropy import units
 from regions import PixCoord
@@ -604,17 +605,3 @@ def set_attributes(obj, **kw):
     return obj
 
 
-def is_notebook() -> bool:
-    try:
-        shell = get_ipython().__class__.__name__
-        if shell == 'ZMQInteractiveShell':
-            return True   # Jupyter notebook or qtconsole
-        elif shell == 'TerminalInteractiveShell':
-            return False  # Terminal running IPython
-        else:
-            if get_ipython().__class__.__module__ == 'google.colab._shell':
-                return True   # Google Colab
-            else:
-              return False  # Other type (?)
-    except NameError:
-        return False

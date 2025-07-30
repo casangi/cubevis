@@ -54,7 +54,7 @@ from cubevis.bokeh.sources import ImageDataSource, ImagePipe, DataPipe
 from cubevis.bokeh.format import WcsTicks
 from cubevis.bokeh.models import EditSpan
 from ..data import casaimage
-from ..utils import pack_arrays, find_ws_address, set_attributes, resource_manager, polygon_indexes, is_notebook
+from ..utils import pack_arrays, find_ws_address, set_attributes, resource_manager, polygon_indexes, is_interactive_jupyter
 from ..bokeh.models import EvTextInput
 from ..bokeh.tools import CBResetTool
 from ..bokeh.state import available_palettes, find_palette, default_palette
@@ -100,7 +100,7 @@ class CubeMask:
         self.COUNT = 1
         self.CCOUNT = 1
 
-        self._is_notebook = is_notebook()
+        self._is_notebook = is_interactive_jupyter()
         #self._color = '#00FF00'                               # anti-green user feedback (issue #40 2024-05-02 13:08:32)
         self._region_style=dict( fill_alpha=0, hover_fill_alpha=0.3,
                                  fill_color='white', hover_fill_color='white',

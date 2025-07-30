@@ -41,7 +41,7 @@ from bokeh.io import reset_output as reset_bokeh_output
 from bokeh.io import output_notebook
 from bokeh.models.dom import HTML
 from bokeh.models.ui.tooltips import Tooltip
-from cubevis.utils import resource_manager, reset_resource_manager, is_notebook
+from cubevis.utils import resource_manager, reset_resource_manager, is_interactive_jupyter
 from cubevis.data import casaimage
 from cubevis.bokeh.models import TipButton, Tip
 from cubevis.utils import ContextMgrChain as CMC
@@ -395,7 +395,7 @@ class CreateMask:
                                                              itergroups[document._casa_image_name].active = document._casa_last_control_tab''' ) )
 
         # Change display type depending on runtime environment
-        if is_notebook( ):
+        if is_interactive_jupyter( ):
             output_notebook()
         else:
             ### Directory is created when an HTTP server is running

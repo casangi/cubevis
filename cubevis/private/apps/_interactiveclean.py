@@ -1868,6 +1868,12 @@ class InteractiveClean:
         ###
         self._error_result = None
 
+        ###
+        ### iclean results
+        ###
+        self.__result = None
+        self.__result_from_gui = None
+
     '''
         _gen_port_fwd_cmd()
 
@@ -2914,9 +2920,12 @@ class InteractiveClean:
         if self.__result_future is None:
             raise RuntimeError( 'no interactive clean result is available' )
 
-        self._clean['gclean'].restore( )
+        if self.__result is None:
+            ### restore returns full return dictionary
+            self.__result_from_gui = self.__result_future.result( )
+            self.__result = self._clean['gclean'].restore( )
 
-        return self.__result_future.result( )
+        return self.__result
 
     def masks( self ):
         '''Retrieves the masks which were used with interactive clean.

@@ -4,7 +4,8 @@ import certifi
 import urllib
 import tarfile
 
-from cubevis import iclean
+from cubevis import iclean, set_log_level
+#set_log_level('debug')
 
 ##
 ## demo measurement set to use

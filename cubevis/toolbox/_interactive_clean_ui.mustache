@@ -1,7 +1,7 @@
 ########################################################################
 #
 #TASK XML> tclean -argfilter=interactive,fullsummary -argfilter:initParams=vis,imagename
-# Copyright (C) 2022,2023,2024
+# Copyright (C) 2022,2023,2024,2025
 # Associated Universities, Inc. Washington DC, USA.
 #
 # This script is free software; you can redistribute it and/or modify it
@@ -26,7 +26,7 @@
 #                        Charlottesville, VA 22903-2475 USA
 #
 ########################################################################
-'''implementation of the ``InteractiveClean`` application for interactive control
+'''implementation of the ``InteractiveCleanUI`` application for interactive control
 of tclean'''
 
 ###
@@ -35,12 +35,16 @@ of tclean'''
 ###from cubevis.bokeh.state import initialize_bokeh
 ###initialize_bokeh( bokehjs_subst=".../bokeh-3.2.2.js" )
 ###
+
+from pprint import pprint
+
 import os
+import sys
 import copy
 import asyncio
 import shutil
 import websockets
-from os.path import basename, abspath, exists
+from os.path import basename, abspath, exists, join
 from uuid import uuid4
 from html import escape as html_escape
 from contextlib import asynccontextmanager
@@ -68,14 +72,14 @@ from cubevis.toolbox import CubeMask, AppContext
 from cubevis.bokeh.utils import svg_icon
 from cubevis.bokeh.sources import DataPipe
 from cubevis.utils import DocEnum
+from cubevis import exe
 
 from ._interactiveclean_wrappers import SharedWidgets
 
 USE_MULTIPLE_GCLEAN_HACK=False
 
-class InteractiveClean:
-    '''InteractiveClean(...) implements interactive clean using Bokeh
-    {{docstring}}
+class InteractiveCleanUI:
+    '''InteractiveCleanUI(...) implements interactive clean using Bokeh
     '''
     def __stop( self, _=None ):
         self.__result_future.set_result(self.__retrieve_result( ))
@@ -158,24 +162,7 @@ class InteractiveClean:
                 return f"{p['imagepath']}/{p['maskname']}"
         raise RuntimeError( f'''gclean mask path not found for {imid}''' )
 
-    def __init__( self, vis, imagename{{# initParams}}, {{name}}={{default}}{{/ initParams}}, iclean_backend="PROD" ):
-
-        ###
-        ### iclean_backend can be used to select alternate backends for interactive clean. This could be used
-        ### to enable a backend with extended features or it could be used to select a stub backend designed
-        ### for testing
-        ###
-        mod_specs = None
-        self._gclean_module = None
-        if iclean_backend == 'PROD':
-            mod_specs = find_pkg( "casatasks.private.imagerhelpers._gclean" )
-        else:
-            mod_specs = find_pkg( f"_gclean_{iclean_backend}" )
-
-        if mod_specs:
-            self._gclean_module = load_pkg(mod_specs[0])
-        else:
-            raise ImportError(f"Could not locate {iclean_backend} kind of iclean backend")
+    def __init__( self, gclean, user_args ):
 
         ###
         ### With Bokeh 3.2.2, the spectrum and convergence plots extend beyond the edge of the
@@ -247,6 +234,31 @@ class InteractiveClean:
         ###
         self._initialize_javascript( )
 
+        self._pipe = { 'control': None }
+        self._clean = { 'converge': { 'state': { } }, 'last-success': None }
+
+        ###
+        ### create clean interface -- final version will have only one gclean object
+        ###
+        self._init_values = { "deconvolver": user_args['deconvolver'],          ### used by _residual_path( )
+                              "cycleniter": user_args['cycleniter'],            ### used by _setup( )
+                              "threshold": user_args['threshold'],              ### used by _setup( )
+                              "cyclefactor": user_args['cyclefactor'],          ### used by _setup( )
+                              "gain": user_args['gain'],                        ### used by _setup( )
+                              "nsigma": user_args['nsigma'],                    ### used by _setup( )
+                              "convergence_state": { 'convergence': {},         ### shares state between
+                                                     'cyclethreshold': {} } }   ### __init__( ) and _setup( )
+
+        self._clean['gclean'] = gclean
+
+        self._clean['gclean_paths'] = { prod['name']: prod for prod in self._clean['gclean'].image_products( ) }
+        self._clean['imid'] = [ name for name,prod in self._clean['gclean_paths'].items( ) ]
+        self._clean_targets = { id: { } for id in  self._clean['imid'] }
+        self._clean['gclean_rest'] = [ ]
+        self._initial_clean_params = { }
+
+        imagename = self._clean['imid'][0]
+
         # Create folder for the generated html webpage - needs its own folder to not name conflict (must be 'index.html')
         webpage_dirname = imagename + '_webpage'
         ### Directory is created when an HTTP server is running
@@ -255,50 +267,6 @@ class InteractiveClean:
 #          os.makedirs(webpage_dirname)
         self._webpage_path = os.path.abspath(webpage_dirname)
 
-        self._pipe = { 'control': None }
-        self._clean = { 'converge': { 'state': { } }, 'last-success': None }
-
-        self._clean_targets = { imagename: { 'args': {{forwDict}} } }
-        self._initial_clean_params = { }
-
-        self._parameters = ImagerParameters( **{ k:v for k,v in self._clean_targets[imagename]['args'].items( )
-                                                 if k in ImagerParameters.__init__.__code__.co_varnames[1:] } )
-
-        ###
-        ### For 6.6.5, outliers are not yet completely implemented so the
-        ### 'outlierfile' parameter may not be present.
-        ###
-        if 'outlierfile' in locals( ) and outlierfile and exists(outlierfile):
-            outliers, err = self._parameters.parseOutlierFile(outlierfile)
-            if err: raise RuntimeError( f'''outlierfile error: {err}''' )
-            for image in outliers:
-                if 'impars' in image and 'imagename' in image['impars']:
-                    name = image['impars']['imagename']
-                    self._clean_targets[name] = { }
-                    args = {{forwDict}}
-                    args['outlierfile'] = ''					### >>HERE>> outlierfile TEMPORARILY handled in _interactiveclean.py
-                    for _,arg_mods in image.items( ):
-                        for k,v in arg_mods.items( ):
-                            if k in args:
-                                args[k] = v
-                    self._clean_targets[name]['args'] = args
-
-        ###
-        ### create clean interface -- final version will have only one gclean object
-        ###
-        self._init_values = { "deconvolver": deconvolver,                       ### used by _residual_path( )
-                              "cycleniter": cycleniter,                         ### used by _setup( )
-                              "threshold": threshold,                           ### used by _setup( )
-                              "cyclefactor": cyclefactor,                       ### used by _setup( )
-                              "gain": gain,                                     ### used by _setup( )
-                              "nsigma": nsigma,                                 ### used by _setup( )
-                              "convergence_state": { 'convergence': {},         ### shares state between
-                                                     'cyclethreshold': {} } }   ### __init__( ) and _setup( )
-
-        self._clean['gclean'] = None
-        self._clean['gclean_paths'] = None
-        self._clean['imid'] = [ ]
-        self._clean['gclean_rest'] = [ ]
         for imid, imdetails in self._clean_targets.items( ):
             self._clean['imid'].append(imid)
 
@@ -306,18 +274,9 @@ class InteractiveClean:
             ### Residual path...
             ###
             if 'path' not in imdetails: imdetails['path'] = { }
-            if self._clean['gclean'] is None:
-
-                self._clean['gclean'] = self._gclean_module.gclean( **imdetails['args'] )
-                self._clean['gclean_paths'] = self._clean['gclean'].image_products( )
-
-                imdetails['path']['residual'] = self._residual_path(self._clean['gclean'],imid)
-                imdetails['path']['mask'] = self._mask_path(self._clean['gclean'],imid)
-
-            else:
-
-                imdetails['path']['residual'] = self._residual_path(self._clean['gclean'],imid)
-                imdetails['path']['mask'] = self._mask_path(self._clean['gclean'],imid)
+            output_dir = self._clean['gclean_paths'][imid]['imagepath']
+            imdetails['path']['residual'] = join( output_dir, self._clean['gclean_paths'][imid]['residualname'] )
+            imdetails['path']['mask'] = join( output_dir, self._clean['gclean_paths'][imid]['maskname'] )
 
         for idx, (imid, imdetails) in enumerate(self._clean_targets.items( )):
             imdetails['gui'] = { }
@@ -340,14 +299,14 @@ class InteractiveClean:
             ###
             imdetails['params'] = { }
             imdetails['params']['am'] = { }
-            imdetails['params']['am']['usemask'] = usemask
-            imdetails['params']['am']['noisethreshold'] = noisethreshold
-            imdetails['params']['am']['sidelobethreshold'] = sidelobethreshold
-            imdetails['params']['am']['lownoisethreshold'] = lownoisethreshold
-            imdetails['params']['am']['minbeamfrac'] = minbeamfrac
-            imdetails['params']['am']['negativethreshold'] = negativethreshold
-            imdetails['params']['am']['dogrowprune'] = dogrowprune
-            imdetails['params']['am']['fastnoise'] = fastnoise
+            imdetails['params']['am']['usemask'] = user_args['usemask']
+            imdetails['params']['am']['noisethreshold'] = user_args['noisethreshold']
+            imdetails['params']['am']['sidelobethreshold'] = user_args['sidelobethreshold']
+            imdetails['params']['am']['lownoisethreshold'] = user_args['lownoisethreshold']
+            imdetails['params']['am']['minbeamfrac'] = user_args['minbeamfrac']
+            imdetails['params']['am']['negativethreshold'] = user_args['negativethreshold']
+            imdetails['params']['am']['dogrowprune'] = user_args['dogrowprune']
+            imdetails['params']['am']['fastnoise'] = user_args['fastnoise']
 
     def _init_pipes( self ):
         if not self.__pipes_initialized:
@@ -987,7 +946,7 @@ class InteractiveClean:
                                             height_policy='max', width_policy='max' ),
                                        height_policy='max', width_policy='max' ), title=imid )
 
-    def __call__( self ):
+    def __call__( self, setting, exec_context, id=None ):
         '''Display GUI and process events until the user stops the application.
 
         Example:
@@ -1014,15 +973,110 @@ class InteractiveClean:
             # print("Cmd: " + str(repr(self.auto_fwd_ports_vscode())))
             input("\nPress enter when port forwarding is setup...")
 
-        async def _run_( ):
-            async with self.serve( ) as s:
-                await s
+        ###
+        ### cubevis.exe subpkg supports adding a stop condition to allow for interrupt,
+        ### but it is not needed for synchronous execution
+        ###
+        self._exec = { 'stop-condition': None }
+        #self._exec['stop-condition'], self._exec['id'] = exec_context.create_stop_condition(id)
 
-        if self._is_notebook:
-            ic_task = asyncio.create_task(_run_())
-        else:
-            asyncio.run(_run_( ))
-            return self.result( )
+        return exe.Task( self._task_server )
+                         # , stop_condition=self._exec['stop-condition'] )
+
+    async def _task_server( self ):
+        """Wrapper for your serve() context manager"""
+
+        @asynccontextmanager
+        async def serve_func( ):
+            '''This function is intended for developers who would like to embed interactive
+            clean as a part of a larger GUI. This embedded use of interactive clean is not
+            currently supported and would require the addition of parameters to this function
+            as well as changes to the interactive clean implementation. However, this function
+            does expose the ``asyncio.Future`` that is used to signal completion of the
+            interactive cleaning operation, and it provides the coroutines which must be
+            managed by asyncio to make the interactive clean GUI responsive.
+
+            Example:
+                Create ``iclean`` object, process events and retrieve result::
+
+                    ic = iclean( vis='refim_point_withline.ms', imagename='test', imsize=512,
+                                 cell='12.0arcsec', specmode='cube', interpolation='nearest', ... )
+                    async def process_events( ):
+                        async with ic.serve( ) as state:
+                            await state[0]
+
+                    asyncio.run(process_events( ))
+                    print( "Result:", ic.result( ) )
+
+            Returns
+            -------
+            (asyncio.Future, dictionary of coroutines)
+            '''
+            def start_http_server():
+                import http.server
+                import socketserver
+                PORT = self._http_port
+                DIRECTORY=self._webpage_path
+
+                class Handler(http.server.SimpleHTTPRequestHandler):
+                    def __init__(self, *args, **kwargs):
+                        super().__init__(*args, directory=DIRECTORY, **kwargs)
+
+                with socketserver.TCPServer(("", PORT), Handler) as httpd:
+                    print("\nServing Interactive Clean webpage from local directory: ", DIRECTORY)
+                    print("Use Control-C to stop Interactive clean.\n")
+                    print("Copy and paste one of the below URLs into your browser (Chrome or Firefox) to view:")
+                    print("http://localhost:"+str(PORT))
+                    print("http://127.0.0.1:"+str(PORT))
+
+                    httpd.serve_forever()
+
+            self._launch_gui( )
+
+            async with CMC( *( [ ctx for img in self._clean_targets.keys( ) for ctx in
+                                 [
+                                     self._clean_targets[img]['gui']['cube'].serve(self.__stop),
+                                 ]
+                               ] + [ websockets.serve( self._pipe['control'].process_messages,
+                                                       self._pipe['control'].address[0],
+                                                       self._pipe['control'].address[1] ),
+                                     websockets.serve( self._clean['converge']['pipe'].process_messages,
+                                                       self._clean['converge']['pipe'].address[0],
+                                                       self._clean['converge']['pipe'].address[1] ) ]
+                              ) ):
+                self.__result_future = asyncio.Future( )
+                yield self.__result_future
+
+        async with serve_func( ) as result_future:
+            if self._exec['stop-condition'] is None:
+                await result_future
+                return self.result( )
+            else:
+                raise RuntimeError( 'internal error: no stop condition expected' )
+
+            ###
+            ### If stop conditions were used, a mechanism to check the stop
+            ###  condition would be required...
+            ###
+            #if isinstance(self._exec['stop-condition'], asyncio.Event):
+            #    done, pending = await asyncio.wait(
+            #        [ result_future, asyncio.create_task(stop_condition.wait()) ],
+            #        return_when=asyncio.FIRST_COMPLETED
+            #    )
+            #    # Cancel pending tasks
+            #    for task in pending:
+            #        task.cancel()
+            #        try:
+            #            await task
+            #        except asyncio.CancelledError:
+            #            pass
+            #
+            #    if result_future in done:
+            #        return result_future.result()
+            #    else:
+            #        return "Stopped by signal"
+            #else:
+            #    raise RuntimeError( f"unexpected stop condition type: {type(self._exec['stop-condition'])}" )
 
     def _setup( self ):
         self.__reset( )
@@ -1081,70 +1135,8 @@ class InteractiveClean:
         ### Must occur AFTER initial "next" call to gclean(s)
         self._init_pipes()
 
-    @asynccontextmanager
-    async def serve( self ):
-        '''This function is intended for developers who would like to embed interactive
-        clean as a part of a larger GUI. This embedded use of interactive clean is not
-        currently supported and would require the addition of parameters to this function
-        as well as changes to the interactive clean implementation. However, this function
-        does expose the ``asyncio.Future`` that is used to signal completion of the
-        interactive cleaning operation, and it provides the coroutines which must be
-        managed by asyncio to make the interactive clean GUI responsive.
-
-        Example:
-            Create ``iclean`` object, process events and retrieve result::
-
-                ic = iclean( vis='refim_point_withline.ms', imagename='test', imsize=512,
-                             cell='12.0arcsec', specmode='cube', interpolation='nearest', ... )
-                async def process_events( ):
-                    async with ic.serve( ) as state:
-                        await state[0]
-
-                asyncio.run(process_events( ))
-                print( "Result:", ic.result( ) )
-
-
-        Returns
-        -------
-        (asyncio.Future, dictionary of coroutines)
-        '''
-        def start_http_server():
-            import http.server
-            import socketserver
-            PORT = self._http_port
-            DIRECTORY=self._webpage_path
-
-            class Handler(http.server.SimpleHTTPRequestHandler):
-                def __init__(self, *args, **kwargs):
-                    super().__init__(*args, directory=DIRECTORY, **kwargs)
-
-            with socketserver.TCPServer(("", PORT), Handler) as httpd:
-                print("\nServing Interactive Clean webpage from local directory: ", DIRECTORY)
-                print("Use Control-C to stop Interactive clean.\n")
-                print("Copy and paste one of the below URLs into your browser (Chrome or Firefox) to view:")
-                print("http://localhost:"+str(PORT))
-                print("http://127.0.0.1:"+str(PORT))
-
-                httpd.serve_forever()
-
-        self._launch_gui( )
-
-        async with CMC( *( [ ctx for img in self._clean_targets.keys( ) for ctx in
-                             [
-                                 self._clean_targets[img]['gui']['cube'].serve(self.__stop),
-                             ]
-                           ] + [ websockets.serve( self._pipe['control'].process_messages,
-                                                   self._pipe['control'].address[0],
-                                                   self._pipe['control'].address[1] ),
-                                 websockets.serve( self._clean['converge']['pipe'].process_messages,
-                                                   self._clean['converge']['pipe'].address[0],
-                                                   self._clean['converge']['pipe'].address[1] ) ]
-                          ) ):
-            self.__result_future = asyncio.Future( )
-            yield self.__result_future
-
     def __retrieve_result( self ):
-        '''If InteractiveClean had a return value, it would be filled in as part of the
+        '''If InteractiveCleanUI had a return value, it would be filled in as part of the
         GUI dialog between Python and JavaScript and this function would return it'''
         if isinstance(self._error_result,Exception):
             raise self._error_result
@@ -1153,7 +1145,7 @@ class InteractiveClean:
         return { k: v['converge'] for k,v in self._clean_targets.items( ) }
 
     def result( self ):
-        '''If InteractiveClean had a return value, it would be filled in as part of the
+        '''If InteractiveCleanUI had a return value, it would be filled in as part of the
         GUI dialog between Python and JavaScript and this function would return it'''
         if self.__result_future is None:
             raise RuntimeError( 'no interactive clean result is available' )

@@ -1,0 +1,89 @@
+########################################################################
+#
+#TASK XML> tclean -argfilter=interactive,fullsummary -argfilter:initParams=vis,imagename
+# Copyright (C) 2022,2023,2024,2025
+# Associated Universities, Inc. Washington DC, USA.
+#
+# This script is free software; you can redistribute it and/or modify it
+# under the terms of the GNU Library General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This library is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Library General Public
+# License for more details.
+#
+# You should have received a copy of the GNU Library General Public License
+# along with this library; if not, write to the Free Software Foundation,
+# Inc., 675 Massachusetts Ave, Cambridge, MA 02139, USA.
+#
+# Correspondence concerning AIPS++ should be adressed as follows:
+#        Internet email: casa-feedback@nrao.edu.
+#        Postal address: AIPS++ Project Office
+#                        National Radio Astronomy Observatory
+#                        520 Edgemont Road
+#                        Charlottesville, VA 22903-2475 USA
+#
+########################################################################
+'''implementation of the ``InteractiveClean`` application for interactive control
+of tclean'''
+
+from pprint import pprint
+
+import sys
+from os.path import exists
+from casatasks.private.imagerhelpers.input_parameters import ImagerParameters
+
+from cubevis.utils import find_pkg, load_pkg
+from cubevis.toolbox import InteractiveCleanUI
+from cubevis import exe
+
+class InteractiveClean:
+    '''InteractiveClean(...) implements interactive clean using Bokeh
+    {{docstring}}
+    '''
+
+    def __init__( self, vis, imagename{{# initParams}}, {{name}}={{default}}{{/ initParams}}, iclean_backend="PROD" ):
+
+
+        ###
+        ### iclean_backend can be used to select alternate backends for interactive clean. This could be used
+        ### to enable a backend with extended features or it could be used to select a stub backend designed
+        ### for testing
+        ###
+        mod_specs = None
+        self._gclean_module = None
+        if iclean_backend == 'PROD':
+            mod_specs = find_pkg( "casatasks.private.imagerhelpers._gclean" )
+        else:
+            mod_specs = find_pkg( f"_gclean_{iclean_backend}" )
+
+        if mod_specs:
+            self._gclean_module = load_pkg(mod_specs[0])
+        else:
+            raise ImportError(f"Could not locate {iclean_backend} kind of iclean backend")
+
+        self._args = {{forwDict}}
+        self._gclean = self._gclean_module.gclean( **self._args )
+        self._gclean_paths = self._gclean.image_products( )
+        #self._residual_path = self._residual_path(self._clean['gclean'],imid)
+        #self._mask_path = self._mask_path(self._clean['gclean'],imid)
+
+        self._ui = InteractiveCleanUI(self._gclean, self._args)
+
+
+    def __call__( self ):
+        '''Display GUI and process events until the user stops the application.
+
+        Example:
+            Create ``iclean`` object and display::
+
+                print( "Result: %s" %
+                       iclean( vis='refim_point_withline.ms', imagename='test', imsize=512,
+                               cell='12.0arcsec', specmode='cube',
+                               interpolation='nearest', ... )( ) )
+        '''
+        context = exe.Context( exe.Mode.SYNC )
+        exec_task = self._ui( exe.Setting.CLI, context, "interactive-clean" )
+        return context.execute( exec_task, "interactive-clean" )

@@ -29,10 +29,32 @@
 used to build GUI applications for astronomy. It also contains some
 applications turn-key applications'''
 
-import os as __os
+import os as _os
+import logging as _logging
 
+logger = _logging.getLogger('cubevis')
+_handler = _logging.StreamHandler()
+_formatter = _logging.Formatter('[%(name)s] %(levelname)s: %(message)s')
+_handler.setFormatter(_formatter)
+logger.addHandler(_handler)
+
+if _os.getenv('CUBEVIS_DEBUG', '').lower() in ('1', 'true', 'yes', 'on'):
+    logger.setLevel(_logging.DEBUG)
+else:
+    logger.setLevel(_logging.INFO)
 
 from .private.apps import iclean
+
+
+def set_log_level(level):
+    """Set the logging level for cubevis.
+
+    Args:
+        level: Logging level (e.g., logging.DEBUG, logging.INFO, 'DEBUG', 'INFO')
+    """
+    if isinstance(level, str):
+        level = getattr(_logging, level.upper())
+    logger.setLevel(level)
 
 try:
     from .__version__ import __version__
@@ -52,7 +74,7 @@ def xml_interface_defs( ):
     '''
     return { }
 
-__mustache_interface_templates__ = { 'iclean': __os.path.join( __os.path.dirname(__file__), "private", "casashell", "iclean.mustache" ) }
+__mustache_interface_templates__ = { 'iclean': _os.path.join( _os.path.dirname(__file__), "private", "casashell", "iclean.mustache" ) }
 def mustache_interface_templates( ):
     '''This provides a list of mustache files provided by cubevis. It may eventually allow
        casashell to generate all of its bindings at startup time. This would allow casashell

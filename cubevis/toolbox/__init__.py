@@ -30,3 +30,4 @@
 from ._cube import CubeMask
 from ._app_context import AppContext
 from ._region_list import RegionList
+from ._interactive_clean_ui import InteractiveCleanUI

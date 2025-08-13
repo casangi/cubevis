@@ -394,7 +394,7 @@ class InteractiveCleanUI:
                                                         minor_tick_line_color=self._converge_color['flux'] ), 'right')
 
 
-    def _launch_gui( self ):
+    def _build_bokeh( self ):
         '''create and show GUI
         '''
         ###
@@ -876,7 +876,7 @@ class InteractiveCleanUI:
 ###         output_file(self._imagename+'_webpage/index.html')
             pass
 
-        show(self._fig['layout'])
+        return self._fig['layout']
 
     def _create_colormap_adjust( self, imdetails ):
         palette = imdetails['gui']['cube'].palette( reuse=self._cube_palette )
@@ -974,13 +974,12 @@ class InteractiveCleanUI:
 
         ###
         ### cubevis.exe subpkg supports adding a stop condition to allow for interrupt,
-        ### but it is not needed for synchronous execution
+        ### but it is not needed for synchronous execution, e.g.
+        ### self._exec['stop-condition'], self._exec['id'] = exec_context.create_stop_condition(id)
         ###
         self._exec = { 'stop-condition': None }
-        #self._exec['stop-condition'], self._exec['id'] = exec_context.create_stop_condition(id)
 
-        return exe.Task( self._task_server )
-                         # , stop_condition=self._exec['stop-condition'] )
+        return self._build_bokeh( ), exe.Task( self._task_server )
 
     async def _task_server( self ):
         """Wrapper for your serve() context manager"""
@@ -1029,8 +1028,6 @@ class InteractiveCleanUI:
                     print("http://127.0.0.1:"+str(PORT))
 
                     httpd.serve_forever()
-
-            self._launch_gui( )
 
             async with CMC( *( [ ctx for img in self._clean_targets.keys( ) for ctx in
                                  [

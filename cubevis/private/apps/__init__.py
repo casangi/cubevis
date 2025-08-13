@@ -42,7 +42,9 @@ sys.modules[__name__].__class__ = ImportProtectedModule( __name__, { 'plotants':
                                                                      'CreateMask': '._createmask',
                                                                      'CreateRegion': '._createregion',
                                                                      'InteractiveClean': '._interactiveclean',
+                                                                     'InteractiveCleanJPY': '._interactivecleanjpy',
                                                                      'iclean': '..casatasks.iclean',
+                                                                     'icleanjpy': '..casatasks.icleanjpy',
                                                                      'createmask': '..casatasks.createmask',
                                                                      'createregion': '..casatasks.createregion',
                                                                    } )

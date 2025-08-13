@@ -43,7 +43,7 @@ if _os.getenv('CUBEVIS_DEBUG', '').lower() in ('1', 'true', 'yes', 'on'):
 else:
     logger.setLevel(_logging.INFO)
 
-from .private.apps import iclean
+from .private.apps import iclean, icleanjpy
 
 
 def set_log_level(level):

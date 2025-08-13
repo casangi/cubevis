@@ -945,7 +945,7 @@ class InteractiveCleanUI:
                                             height_policy='max', width_policy='max' ),
                                        height_policy='max', width_policy='max' ), title=imid )
 
-    def __call__( self, setting, exec_context, id=None ):
+    def __call__( self, exec_context, id=None ):
         '''Display GUI and process events until the user stops the application.
 
         Example:

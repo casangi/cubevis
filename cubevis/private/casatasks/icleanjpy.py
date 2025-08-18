@@ -43,7 +43,7 @@ def _icleanjpy_t( *args, **kwargs ):
     return ic( )
 
 class _icleanjpy:
-    """
+    r"""
     tclean ---- Radio Interferometric Image Reconstruction
 
     Form images from visibilities and reconstruct a sky model.

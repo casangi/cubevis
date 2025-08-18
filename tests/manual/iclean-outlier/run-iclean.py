@@ -4,7 +4,7 @@ import certifi
 import urllib
 import tarfile
 
-from cubevis import iclean, set_log_level
+from cubevis import iclean, set_log_level, icleanjpy
 #set_log_level('debug')
 
 ##

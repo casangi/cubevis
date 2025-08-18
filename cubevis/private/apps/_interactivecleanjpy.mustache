@@ -33,14 +33,16 @@ from pprint import pprint
 
 import sys
 from os.path import exists
+from bokeh.plotting import show
 from casatasks.private.imagerhelpers.input_parameters import ImagerParameters
 
+from cubevis.bokeh.models import Showable
 from cubevis.utils import find_pkg, load_pkg
 from cubevis.toolbox import InteractiveCleanUI
 from cubevis import exe
 
 class InteractiveCleanJPY:
-    '''InteractiveCleanJPY(...) implements interactive clean using Bokeh
+    r'''InteractiveCleanJPY(...) implements interactive clean using Bokeh
     {{docstring}}
     '''
 
@@ -85,10 +87,9 @@ class InteractiveCleanJPY:
                                interpolation='nearest', ... )( ) )
         '''
         context = exe.Context( exe.Mode.SYNC )
-        exec_task = self._ui( exe.Setting.CLI, context, "interactive-clean" )
-        #return JupyterTask( 
-        print( f"--------InteractiveCleanJPY--------------------------------------------------------------------------------" )
-        print( exec_task )
-        print( f"-----------------------------------------------------------------------------------------------------------" )
-        sys.exit(1)
-        #return context.execute( exec_task, "interactive-clean" )
+        bokeh_ui, exec_task = self._ui( context, "interactive-clean-jupyter" )
+        print( "Testing showable......................." )
+        showed = Showable(bokeh_ui)
+        showed.sizing_mode = "stretch_both"
+        show(showed)
+        return context.execute( exec_task, "interactive-clean" )

@@ -1854,4 +1854,4 @@ class InteractiveCleanJPY:
         showed = Showable(bokeh_ui)
         showed.sizing_mode = "stretch_both"
         show(showed)
-        return context.execute( exec_task, "interactive-clean" )
+        return context.execute( exec_task, "interactive-clean-jupyter" )

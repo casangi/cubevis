@@ -43,7 +43,7 @@ def _iclean_t( *args, **kwargs ):
     return ic( )
 
 class _iclean:
-    """
+    r"""
     tclean ---- Radio Interferometric Image Reconstruction
 
     Form images from visibilities and reconstruct a sky model.

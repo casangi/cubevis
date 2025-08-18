@@ -40,7 +40,7 @@ from cubevis.toolbox import InteractiveCleanUI
 from cubevis import exe
 
 class InteractiveClean:
-    '''InteractiveClean(...) implements interactive clean using Bokeh
+    r'''InteractiveClean(...) implements interactive clean using Bokeh
         tclean ---- Radio Interferometric Image Reconstruction
 
     Form images from visibilities and reconstruct a sky model.

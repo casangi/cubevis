@@ -39,9 +39,7 @@ node_modules/
 jspm_packages/
 
 # Yarn
-.yarn/install-state.gz
-.yarn/cache/
-.yarn/unplugged/
+.yarn/
 
 # TypeScript v1 declaration files
 typings/

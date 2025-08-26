@@ -54,7 +54,7 @@ from cubevis.bokeh.sources import ImageDataSource, ImagePipe, DataPipe
 from cubevis.bokeh.format import WcsTicks
 from cubevis.bokeh.models import EditSpan
 from ..data import casaimage
-from ..utils import pack_arrays, find_ws_address, set_attributes, resource_manager, polygon_indexes, is_interactive_jupyter
+from ..utils import pack_arrays, find_ws_address, set_attributes, resource_manager, polygon_indexes, is_interactive_jupyter, have_firefox
 from ..bokeh.models import EvTextInput
 from ..bokeh.tools import CBResetTool
 from ..bokeh.state import available_palettes, find_palette, default_palette
@@ -849,7 +849,8 @@ class CubeMask:
                                                  'wheel_zoom', 'pan',
                                                  ResetTool( icon=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'zoom-to-fit.png' )),
                                                             description="Reset pan/zoom but preserve extents" ) ],
-                                        sizing_mode="scale_width" )
+                                        sizing_mode="stretch_both"
+                                        )
 
         self._cm_adjust['fig'].toolbar.active_scroll = self._cm_adjust['fig'].select_one(WheelZoomTool)
 
@@ -1049,7 +1050,11 @@ class CubeMask:
             return dict( result='failure', update={ } )
 
         scaling_background = '#f8f8f8'
-        return column( self._cm_adjust['fig'],
+        return column( row( *[ self._cm_adjust['fig'] ] +
+                                 ### Firefox incorrectly sizes the colormap histogram plot resulting in the right
+                                 ### side being outside of the browser window... this may have to be tweaked again
+                                 ### when Jupyter notebooks are supported...
+                               ( [ Spacer( width=120 ) ] if have_firefox( ) else [ ] ), sizing_mode='stretch_both' ),
                        row( Tip( self._cm_adjust['min input'],
                                   tooltip=Tooltip( content=HTML("set minimum clip here or drag the left red line above"),
                                                    position="top" ) ),
@@ -1068,7 +1073,7 @@ class CubeMask:
                                          tooltip=Tooltip( content=HTML('set gamma value as indicated in the equation'),
                                                           position="top" ) ) ),
                                width=325, styles={'background-color': scaling_background, 'border': '1px solid black', 'padding': '10px'} ),
-                       sizing_mode="scale_width" )
+                       sizing_mode="stretch_both" )
 
     def bitmask_ctrl( self, reuse=None, **kw ):
 

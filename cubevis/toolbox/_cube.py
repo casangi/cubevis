@@ -880,7 +880,7 @@ class CubeMask:
         ### square: 𝑦=𝑥^2
         ### gamma: 𝑦=𝑥^𝛾
         ### power: 𝑦=(𝛼^𝑥−1)/(𝛼−1)
-        self._cm_adjust['alpha-value'] = TextInput( value="1000", prefix="alpha", max_width=170, visible=False )
+        self._cm_adjust['alpha-value'] = TextInput( value="10", prefix="alpha", max_width=170, visible=False )
         self._cm_adjust['gamma-value'] = TextInput( value="1", prefix="gamma", max_width=170, visible=False )
         self._cm_adjust['equation'] = Div(text='''<math><mrow><mi>y</mi><mo>=</mo><mi>x</mi></mrow></math>''', margin=(12, 0, 0, 0))  # linear
         self._cm_adjust['scaling'] = Dropdown( label='linear',

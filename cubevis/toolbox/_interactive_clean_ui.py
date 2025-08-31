@@ -44,12 +44,13 @@ import asyncio
 import shutil
 import websockets
 from os.path import basename, abspath, exists, join
+import numpy as np
 from uuid import uuid4
 from html import escape as html_escape
 from contextlib import asynccontextmanager
 from bokeh.models import Button, TextInput, Checkbox, Div, LinearAxis, CustomJS, Spacer, Span, HoverTool, DataRange1d, Step, InlineStyleSheet
 from bokeh.events import ModelEvent, MouseEnter
-from bokeh.models import TabPanel, Tabs
+from bokeh.models import TabPanel, Tabs,  Range1d
 from bokeh.plotting import ColumnDataSource, figure, show
 from bokeh.layouts import column, row, layout
 from bokeh.io import reset_output as reset_bokeh_output, output_notebook
@@ -342,57 +343,159 @@ class InteractiveCleanUI:
                     </div>'''
 
         hover = HoverTool( tooltips=TOOLTIPS )
-        imdetails['gui']['convergence'] = figure( sizing_mode=sizing_mode, y_axis_location="right",
+
+        ###
+        ### Data source that will be used for updating the convergence plot
+        ###
+        stokes = 0
+        convergence = imdetails['converge']['chan'][0][stokes]
+        imdetails['converge-data'] = { }
+        imdetails['converge-data']['flux']     = ColumnDataSource( data=dict( values=convergence['modelFlux'], iterations=convergence['iterations'],
+                                                                              cyclethreshold=convergence['cycleThresh'],
+                                                                              stopDesc=list( map( ImagingDict.get_summaryminor_stopdesc, convergence['stopCode'] ) ),
+                                                                              type=['flux'] * len(convergence['iterations']) ) )
+        imdetails['converge-data']['residual'] = ColumnDataSource( data=dict( values=convergence['peakRes'],   iterations=convergence['iterations'],
+                                                                              cyclethreshold=convergence['cycleThresh'],
+                                                                              stopDesc=list( map( ImagingDict.get_summaryminor_stopdesc, convergence['stopCode'] ) ),
+                                                                              type=['residual'] * len(convergence['iterations'])) )
+        imdetails['converge-data']['cyclethreshold'] = ColumnDataSource( data=dict( values=convergence['cycleThresh'], iterations=convergence['iterations'] ) )
+
+        # Calculate explicit ranges for each dataset
+        flux_values = convergence['modelFlux']
+        residual_values = convergence['peakRes']
+        iterations = convergence['iterations']
+        cyclethresh_values = convergence['cycleThresh']
+
+        # Calculate ranges with padding
+        if len(flux_values) > 0:
+            flux_min, flux_max = np.min(flux_values), np.max(flux_values)
+            flux_padding = max((flux_max - flux_min) * 0.1, abs(flux_max * 0.05)) if flux_max != flux_min else abs(flux_max * 0.1)
+        else:
+            flux_min, flux_max, flux_padding = 0, 1, 0.1
+
+        if len(residual_values) > 0:
+            residual_min, residual_max = np.min(residual_values), np.max(residual_values)
+            residual_padding = max((residual_max - residual_min) * 0.1, abs(residual_max * 0.05)) if residual_max != residual_min else abs(residual_max * 0.1)
+        else:
+            residual_min, residual_max, residual_padding = 0, 1, 0.1
+
+        # Create Range1d objects
+        flux_range = Range1d(start=flux_min - flux_padding, end=flux_max + flux_padding)
+        residual_range = Range1d(start=residual_min - residual_padding, end=residual_max + residual_padding)
+
+        # Ensure ranges are valid (non-zero span)
+        if flux_range.end - flux_range.start < 1e-10:
+            center = flux_range.start
+            if abs(center) < 1e-10:  # If center is essentially 0
+                flux_range.start = -0.1
+                flux_range.end = 1.0
+            else:
+                span = max(abs(center * 0.2), 0.1)
+                flux_range.start = center - span
+                flux_range.end = center + span
+
+        if residual_range.end - residual_range.start < 1e-10:
+            center = residual_range.start
+            span = max(abs(center * 0.2), 0.1)
+            residual_range.start = center - span
+            residual_range.end = center + span
+
+        # ORIENTATION CONFIGURATION - this eliminates the conditional branches
+        config = {
+            'vertical': {
+                'iteration_axis': 'y',
+                'data_axis': 'x',
+                'main_axis_label': 'Iteration (cycle threshold dotted red)',
+                'residual_axis_label': 'Peak Residual',
+                'flux_axis_label': 'Total Flux',
+                'residual_axis_pos': 'above',
+                'flux_axis_pos': 'above',
+                'extra_ranges_key': 'extra_x_ranges',
+                'glyph_coords': ('values', 'iterations'),  # (x, y)
+                'range_name_param': 'x_range_name'
+            },
+            'horizontal': {
+                'iteration_axis': 'x',
+                'data_axis': 'y',
+                'main_axis_label': 'Iteration (cycle threshold dotted red)',
+                'residual_axis_label': 'Peak Residual',
+                'flux_axis_label': 'Total Flux',
+                'residual_axis_pos': 'right',
+                'flux_axis_pos': 'right',
+                'extra_ranges_key': 'extra_y_ranges',
+                'glyph_coords': ('iterations', 'values'),  # (x, y)
+                'range_name_param': 'y_range_name'
+            }
+        }
+
+        cfg = config[orient]
+
+        # Create figure with no default axes; to control the axes they must
+        # be explicitly set to None
+        imdetails['gui']['convergence'] = figure( sizing_mode=sizing_mode,
+                                                  x_axis_location=None, y_axis_location=None,
                                                   tools=[ hover ], toolbar_location=None, **kw )
 
-        if orient == 'vertical':
-            imdetails['gui']['convergence'].yaxis.axis_label='Iteration (cycle threshold dotted red)'
-            imdetails['gui']['convergence'].xaxis.axis_label='Peak Residual'
-            imdetails['gui']['convergence'].extra_x_ranges = { 'residual_range': DataRange1d( follow='end' ),
-                                                               'flux_range': DataRange1d( follow='end' ) }
+        # Set up extra ranges
+        setattr(imdetails['gui']['convergence'], cfg['extra_ranges_key'], {
+            'residual_range': residual_range,
+            'flux_range': flux_range
+        })
 
-            imdetails['gui']['convergence'].step( 'values', 'iterations', source=imdetails['converge-data']['cyclethreshold'],
-                                                  line_color='red', x_range_name='residual_range', line_dash='dotted', line_width=2 )
-            imdetails['gui']['convergence'].line(   'values', 'iterations',   source=imdetails['converge-data']['residual'],
-                                                    line_color=self._converge_color['residual'], x_range_name='residual_range' )
-            imdetails['gui']['convergence'].scatter( 'values', 'iterations',   source=imdetails['converge-data']['residual'],
-                                                     color=self._converge_color['residual'], x_range_name='residual_range',size=10 )
-            imdetails['gui']['convergence'].line(   'values', 'iterations', source=imdetails['converge-data']['flux'],
-                                                    line_color=self._converge_color['flux'], x_range_name='flux_range' )
-            imdetails['gui']['convergence'].scatter( 'values', 'iterations', source=imdetails['converge-data']['flux'],
-                                                     color=self._converge_color['flux'], x_range_name='flux_range', size=10 )
+        # Store references for JavaScript updates
+        imdetails['converge-ranges'] = {
+            'residual_range': residual_range,
+            'flux_range': flux_range
+        }
 
-            imdetails['gui']['convergence'].add_layout( LinearAxis( x_range_name='flux_range', axis_label='Total Flux',
-                                                        axis_line_color=self._converge_color['flux'],
-                                                        major_label_text_color=self._converge_color['flux'],
-                                                        axis_label_text_color=self._converge_color['flux'],
-                                                        major_tick_line_color=self._converge_color['flux'],
-                                                        minor_tick_line_color=self._converge_color['flux'] ), 'above')
+        # Create main iteration axis
+        main_axis = LinearAxis(axis_label=cfg['main_axis_label'])
+        main_axis_pos = 'below' if cfg['iteration_axis'] == 'x' else 'left'
+        imdetails['gui']['convergence'].add_layout(main_axis, main_axis_pos)
 
-        else:
-            imdetails['gui']['convergence'].xaxis.axis_label='Iteration (cycle threshold dotted red)'
-            imdetails['gui']['convergence'].yaxis.axis_label='Peak Residual'
-            imdetails['gui']['convergence'].extra_y_ranges = { 'residual_range': DataRange1d( follow='end' ),
-                                                               'flux_range': DataRange1d( follow='end' ) }
+        # Create glyphs using configuration
+        x_coord, y_coord = cfg['glyph_coords']
+        range_param = {cfg['range_name_param']: 'residual_range'}
 
-            imdetails['gui']['convergence'].step( 'iterations', 'values', source=imdetails['converge-data']['cyclethreshold'],
-                                                  line_color='red', y_range_name='residual_range', line_dash='dotted', line_width=2 )
-            imdetails['gui']['convergence'].line(   'iterations', 'values',   source=imdetails['converge-data']['residual'],
-                                                    line_color=self._converge_color['residual'], y_range_name='residual_range' )
-            imdetails['gui']['convergence'].scatter( 'iterations', 'values',   source=imdetails['converge-data']['residual'],
-                                                     color=self._converge_color['residual'], y_range_name='residual_range',size=10 )
-            imdetails['gui']['convergence'].line(   'iterations', 'values', source=imdetails['converge-data']['flux'],
-                                                    line_color=self._converge_color['flux'], y_range_name='flux_range' )
-            imdetails['gui']['convergence'].scatter( 'iterations', 'values', source=imdetails['converge-data']['flux'],
-                                                     color=self._converge_color['flux'], y_range_name='flux_range', size=10 )
+        imdetails['gui']['convergence'].step( x_coord, y_coord, source=imdetails['converge-data']['cyclethreshold'],
+                                              line_color='red', line_dash='dotted', line_width=2, **range_param )
+        imdetails['gui']['convergence'].line( x_coord, y_coord, source=imdetails['converge-data']['residual'],
+                                              line_color=self._converge_color['residual'], **range_param )
+        imdetails['gui']['convergence'].scatter( x_coord, y_coord, source=imdetails['converge-data']['residual'],
+                                                 color=self._converge_color['residual'], size=10, **range_param )
 
-            imdetails['gui']['convergence'].add_layout( LinearAxis( y_range_name='flux_range', axis_label='Total Flux',
-                                                        axis_line_color=self._converge_color['flux'],
-                                                        major_label_text_color=self._converge_color['flux'],
-                                                        axis_label_text_color=self._converge_color['flux'],
-                                                        major_tick_line_color=self._converge_color['flux'],
-                                                        minor_tick_line_color=self._converge_color['flux'] ), 'right')
+        # Flux glyphs
+        range_param = {cfg['range_name_param']: 'flux_range'}
+        imdetails['gui']['convergence'].line( x_coord, y_coord, source=imdetails['converge-data']['flux'],
+                                              line_color=self._converge_color['flux'], **range_param )
+        imdetails['gui']['convergence'].scatter( x_coord, y_coord, source=imdetails['converge-data']['flux'],
+                                                 color=self._converge_color['flux'], size=10, **range_param )
 
+        # Create and style residual axis
+        residual_axis_param = {cfg['range_name_param'].replace('_name', '_name'): 'residual_range'}
+        residual_axis = LinearAxis(axis_label=cfg['residual_axis_label'], **residual_axis_param)
+        residual_axis.axis_line_color = self._converge_color['residual']
+        residual_axis.major_label_text_color = self._converge_color['residual']
+        residual_axis.axis_label_text_color = self._converge_color['residual']
+        residual_axis.major_tick_line_color = self._converge_color['residual']
+        residual_axis.minor_tick_line_color = self._converge_color['residual']
+        imdetails['gui']['convergence'].add_layout(residual_axis, cfg['residual_axis_pos'])
+
+        # Create and style flux axis
+        flux_axis_param = {cfg['range_name_param'].replace('_name', '_name'): 'flux_range'}
+        flux_axis = LinearAxis(axis_label=cfg['flux_axis_label'], **flux_axis_param)
+        flux_axis.axis_line_color = self._converge_color['flux']
+        flux_axis.major_label_text_color = self._converge_color['flux']
+        flux_axis.axis_label_text_color = self._converge_color['flux']
+        flux_axis.major_tick_line_color = self._converge_color['flux']
+        flux_axis.minor_tick_line_color = self._converge_color['flux']
+        imdetails['gui']['convergence'].add_layout(flux_axis, cfg['flux_axis_pos'])
+
+        # Store axis references for JavaScript access
+        imdetails['converge-axes'] = {
+            'residual_axis': residual_axis,
+            'flux_axis': flux_axis
+        }
 
     def _launch_gui( self ):
         '''create and show GUI
@@ -534,23 +637,6 @@ class InteractiveCleanUI:
             self._clean['converge']['pipe'].register( self._clean['converge']['id'], convergence_handler )
 
             ###
-            ### Data source that will be used for updating the convergence plot
-            ###
-            stokes = 0
-            convergence = imdetails['converge']['chan'][0][stokes]
-            imdetails['converge-data'] = { }
-            imdetails['converge-data']['flux']     = ColumnDataSource( data=dict( values=convergence['modelFlux'], iterations=convergence['iterations'],
-                                                               cyclethreshold=convergence['cycleThresh'],
-                                                               stopDesc=list( map( ImagingDict.get_summaryminor_stopdesc, convergence['stopCode'] ) ),
-                                                               type=['flux'] * len(convergence['iterations']) ) )
-            imdetails['converge-data']['residual'] = ColumnDataSource( data=dict( values=convergence['peakRes'],   iterations=convergence['iterations'],
-                                                               cyclethreshold=convergence['cycleThresh'],
-                                                               stopDesc=list( map( ImagingDict.get_summaryminor_stopdesc, convergence['stopCode'] ) ),
-                                                               type=['residual'] * len(convergence['iterations'])) )
-            imdetails['converge-data']['cyclethreshold'] = ColumnDataSource( data=dict( values=convergence['cycleThresh'], iterations=convergence['iterations'] ) )
-
-
-            ###
             ### help page for cube interactions
             ###
             if help_button is None:
@@ -584,8 +670,12 @@ class InteractiveCleanUI:
             imdetails['gui']['image']['src'] = imdetails['gui']['cube'].js_obj( )
             imdetails['gui']['image']['fig'] = imdetails['gui']['cube'].image( grid=False, height_policy='max', width_policy='max',
                                                                                channelcb=CustomJS( args=dict( img_state={ 'src': imdetails['gui']['image']['src'],
-                                                                                                                          'flux': imdetails['converge-data']['flux'],
-                                                                                                                          'residual': imdetails['converge-data']['residual'],
+                                                                                                                          'flux': { 'source': imdetails['converge-data']['flux'],
+                                                                                                                                    'axis': imdetails['converge-axes']['flux_axis'],
+                                                                                                                                    'range': imdetails['converge-ranges']['flux_range'] },
+                                                                                                                          'residual': { 'source': imdetails['converge-data']['residual'],
+                                                                                                                                        'axis': imdetails['converge-axes']['residual_axis'],
+                                                                                                                                        'range': imdetails['converge-ranges']['residual_range'] },
                                                                                                                           'cyclethreshold': imdetails['converge-data']['cyclethreshold'] },
                                                                                                               imid=imid,
                                                                                                               ctrl={ 'converge': self._clean['converge'] },
@@ -701,9 +791,13 @@ class InteractiveCleanUI:
                                                                                     'src': v['gui']['cube'].js_obj( ),
                                                                                     'spectrum': v['gui']['spectrum'],
                                                                                     'src': v['gui']['image']['src'],
-                                                                                    'flux': v['converge-data']['flux'],
+                                                                                    'flux': { 'source': v['converge-data']['flux'],
+                                                                                              'axis': v['converge-axes']['flux_axis'],
+                                                                                              'range': v['converge-ranges']['flux_range'] },
                                                                                     'cyclethreshold': v['converge-data']['cyclethreshold'],
-                                                                                    'residual': v['converge-data']['residual'],
+                                                                                    'residual': { 'source': v['converge-data']['residual'],
+                                                                                                  'axis': v['converge-axes']['residual_axis'],
+                                                                                                  'range': v['converge-ranges']['residual_range'] },
                                                                                     'navi': { 'slider': v['gui']['slider'],
                                                                                               'goto': v['gui']['goto'],
                                                                                               ## it doesn't seem like pixel tracking must be disabled
@@ -1215,7 +1309,52 @@ class InteractiveCleanUI:
                      ### -- The "Insert here ..." code seems to be called when when the stokes plane is changed   --
                      ### -- but there have been no tclean iterations yet...                                       --
                      ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-                     'update-converge': '''function update_convergence_single( target, data ) {
+                     'update-converge': '''function updateAxisRange(source, range_obj, axis_obj, axis_name) {
+                                               const data = source.data;
+                                               const values = data['values'];
+
+                                               if (values.length === 0) return;
+
+                                               // Calculate data bounds
+                                               const min_val = Math.min(...values);
+                                               const max_val = Math.max(...values);
+
+                                               // Add padding (10% of range, with minimum padding)
+                                               const span = max_val - min_val;
+                                               const padding = max_val != min_val ? Math.max(span * 0.1, Math.abs(max_val * 0.02)) : Math.abs(max_val * 0.1);
+
+                                               // Update range
+                                               range_obj.start = min_val - padding;
+                                               range_obj.end = max_val + padding;
+
+                                               // Ensure ranges are valid (non-zero span)
+                                               if ( range_obj.end - range_obj.start < 1e-10 ) {
+                                                   const center = range_obj.start
+                                                   if ( Math.abs(center) < 1e-10 ) {
+                                                       // If center is essentially 0
+                                                       range_obj.start = -0.1
+                                                       range_obj.end = 1.0
+                                                   } else {
+                                                       const span = Math.max(Math.abs(center * 0.2), 0.1)
+                                                       range_obj.start = center - span
+                                                       range_obj.end = center + span
+                                                   }
+                                               }
+
+                                               // Optional: Update tick density
+                                               if (axis_obj && axis_obj.ticker) {
+                                                   const new_span = range_obj.end - range_obj.start;
+                                                   if (new_span < 10) {
+                                                       axis_obj.ticker.desired_num_ticks = 8;
+                                                   } else if (new_span < 100) {
+                                                       axis_obj.ticker.desired_num_ticks = 10;
+                                                   } else {
+                                                       axis_obj.ticker.desired_num_ticks = 6;
+                                                   }
+                                               }
+                                           }
+
+                                           function update_convergence_single( target, data ) {
                                                const pos = target.src.cur_chan
                                                const imdata = data.get(pos[1]).get(pos[0])
                                                //  chan----------------^^^^^^      ^^^^^^----stokes
@@ -1225,9 +1364,11 @@ class InteractiveCleanUI:
                                                const modelFlux = imdata.modelFlux
                                                const stopCode = imdata.stopCode
                                                const stopDesc = imdata.stopCode.map( code => stopdescmap.has(code) ? stopdescmap.get(code): "" )
-                                               target.residual.data = { iterations, cyclethreshold, stopDesc, values: peakRes, type: Array(iterations.length).fill('residual') }
-                                               target.flux.data = { iterations, cyclethreshold, stopDesc, values: modelFlux, type: Array(iterations.length).fill('flux') }
+                                               target.residual.source.data = { iterations, cyclethreshold, stopDesc, values: peakRes, type: Array(iterations.length).fill('residual') }
+                                               target.flux.source.data = { iterations, cyclethreshold, stopDesc, values: modelFlux, type: Array(iterations.length).fill('flux') }
                                                target.cyclethreshold.data = { iterations, values: cyclethreshold }
+                                               updateAxisRange( target.flux.source, target.flux.range, target.flux.axis, 'Flux' )
+                                               updateAxisRange( target.residual.source, target.residual.range, target.residual.axis, 'Residual' )
                                            }
 
                                            function update_convergence( recurse=false ) {

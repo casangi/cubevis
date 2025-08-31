@@ -2969,8 +2969,8 @@ class CubeMask:
                                                                     ( spec ) => {
                                                                         if ( isource.masking_on( ) )
                                                                             refresh_pixel_display( spec.index,
+                                                                                                   spec.spectrum.pixel[spec.chan[1]],
                                                                                                    'mask' in spec ? spec.mask[spec.chan[1]] : undefined,
-                                                                                                   'mask' in spec && spec.mask[spec.chan[1]],
                                                                                                    pix_wrld && pix_wrld.label == 'pixel' ? false : true )
                                                                 } )
                                                if ( go_to && ! go_to._has_focus ) {

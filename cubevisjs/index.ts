@@ -9,12 +9,13 @@ import {CBResetTool} from "./src/bokeh/tools/cbreset_tool"
 import {serialize, deserialize} from "./src/bokeh/util/conversions"
 import {TipButton} from "./src/bokeh/models/tip_button"
 import {Tip} from "./src/bokeh/models/tip"
+import {SharedDict} from "./src/bokeh/models/shared_dict"
 import {EditSpan} from "./src/bokeh/models/edit_span"
 import {EvTextInput} from "./src/bokeh/models/ev_text_input"
 import {EvPolyAnnotation} from "./src/bokeh/annotations/ev_poly_annotation"
 import *  as find from "./src/bokeh/util/find"
 import {register_models} from "@bokehjs/base"
 
-export { find, DataPipe, ImagePipe, ImageDataSource, SpectraDataSource, UpdatableDataSource, WcsTicks, DragTool, CBResetTool, Tip, TipButton, EditSpan, EvTextInput, EvPolyAnnotation, serialize, deserialize }
+export { find, DataPipe, ImagePipe, ImageDataSource, SpectraDataSource, UpdatableDataSource, WcsTicks, DragTool, CBResetTool, Tip, TipButton, SharedDict, EditSpan, EvTextInput, EvPolyAnnotation, serialize, deserialize }
 
-register_models({ DataPipe, ImagePipe, ImageDataSource, SpectraDataSource, UpdatableDataSource, WcsTicks, DragTool, CBResetTool, Tip, TipButton, EditSpan, EvTextInput, EvPolyAnnotation })
+register_models({ DataPipe, ImagePipe, ImageDataSource, SpectraDataSource, UpdatableDataSource, WcsTicks, DragTool, CBResetTool, Tip, TipButton, SharedDict, EditSpan, EvTextInput, EvPolyAnnotation })

@@ -55,7 +55,7 @@ from cubevis.bokeh.format import WcsTicks
 from cubevis.bokeh.models import EditSpan
 from ..data import casaimage
 from ..utils import pack_arrays, find_ws_address, set_attributes, resource_manager, polygon_indexes, is_interactive_jupyter, have_firefox
-from ..bokeh.models import EvTextInput
+from ..bokeh.models import EvTextInput, SharedDict
 from ..bokeh.tools import CBResetTool
 from ..bokeh.state import available_palettes, find_palette, default_palette
 from ..bokeh.annotations import EvPolyAnnotation
@@ -187,6 +187,12 @@ class CubeMask:
         self._hotkey_state = { }                               # used to disambiguate multiple CubeMasks in browser
         self._image_freeze_cb = [ ]                            # CustomJS to be invoked when the use freezes cursor tracking (by typing 'f')
         self._image_unfreeze_cb  = [ ]                         # CustomJS to be invoked when cursor tracking is unfrozen
+
+        ###
+        ### This state object is provided as "this.disable_add_sub" when "init_script" is called.
+        ### By setting "disable_add_sub.values.disabled = True", the user can disable mask updates.
+        ###
+        self._mask_add_sub_disable = SharedDict( { 'disabled': False, 'message': None } )
 
         if self._mask_path:
             ###########################################################################################################################
@@ -1456,6 +1462,7 @@ class CubeMask:
                                 contour_ds=self._bitmask_contour_ds,
                                 status=self._status_div, statprec=7,
                                 selector=self._bitmask_color_selector,
+                                disable_add_sub = self._mask_add_sub_disable,
                                 user_init_script = self.init_script,
                                 freeze_cb = self._image_freeze_cb )
 
@@ -1465,7 +1472,8 @@ class CubeMask:
                                                                    ''' + self._js['mask-state-init'] +
                                                                    ( self._js['func-curmasks']( ) +
                                                                      self._js['key-state-funcs']
-                                                                     if self._mask_path is None else '' )  + self._js['setup-key-mgmt'] +
+                                                                     if self._mask_path is None else '' ) +
+                                                                        self._js['update-status'] + self._js['setup-key-mgmt'] +
                                                                    """// This function is called to collect the masks and/or stop
                                                                       // -->> collect_masks( ) is only defined if bitmask cube is NOT used
                                                                       document._cube_done = ( final_polys=null, cb=null ) => {
@@ -1511,6 +1519,8 @@ class CubeMask:
                                                                           stats_source.data = data
                                                                       }
                                                                       if ( stats_source ) source.update_statistics( stats_source.data ) /*** round pre-filled floats ***/
+                                                                      /*** this is the hook that allows the user to disable mask changes ***/
+                                                                      this.disable_add_sub = disable_add_sub
                                                                       if ( user_init_script ) { user_init_script.execute(this) }
                                                                    """ )
 
@@ -1619,12 +1629,6 @@ class CubeMask:
                               {input_screen}.value_ = {input_screen}.value = center.toFixed(5)
                           }}'''
 
-            update_status = '''function update_status( str ) {
-                                   const msg = `<b style='color:red;'>${str}</b>`
-                                   status.text = msg
-                                   setTimeout( ( ) => { if ( status.text == msg ) status.text = '' }, 5000 )
-                               }'''
-
             self._region_controls['tracking']['color-picker'].child.js_on_change( 'color',
                                                                                   CustomJS( args=dict( tracker=self._region_controls['tracking']['pointer'] ),
                                                                                             code='''tracker.line_color = cb_obj.color
@@ -1685,15 +1689,15 @@ class CubeMask:
                                                              text=text, source=self._image_source,
                                                              status=self._region_controls['coord']['status'],
                                                              stokes=(index,s) ),
-                                                  code=parse_ranges + update_status +
+                                                  code=parse_ranges + self._js['update-status'] +
                                                        #self._js['func-curmasks']('isource') +
                                                        '''if ( tracker._current_region ) {
                                                               status.text=''
                                                               const ranges = casalib.strparse_intranges(cb_obj.value,true)
                                                               const minmax = casalib.minmax(ranges.flat(Infinity))
 
-                                                              if ( minmax[0] < 0 ) nupdate_status('negative range')
-                                                              else if ( minmax[1] >= source.num_chans[1] ) update_status('exceeds channel range')
+                                                              if ( minmax[0] < 0 ) update_status_error('negative range')
+                                                              else if ( minmax[1] >= source.num_chans[1] ) update_status_error('exceeds channel range')
                                                               else {
                                                                   const chans_as_set = ranges.reduce(
                                                                                            (set,v) => casalib.forexpr( v[0], v[1], (s,i) => s.add([stokes[0],i]), set),
@@ -1704,7 +1708,7 @@ class CubeMask:
                                                                                                                 if (chan[0] == stokes[0]) acc.push(chan[1])
                                                                                                                 return acc }, chans_as_set, [ ] ) )
                                                               }
-                                                          } else update_status('no region selected')''' ) )
+                                                          } else update_status_error('no region selected')''' ) )
 
             ###
             ### set _region_controls_newpoly so it can be passed along and eventuall called by
@@ -1832,8 +1836,10 @@ class CubeMask:
                                                                       mask_region_button=self._mask_add_sub['mask'],
                                                                       mask_region_ds=self._bitmask_contour_maskmod_ds,
                                                                       contour_ds=self._bitmask_contour_ds,
+                                                                      disable_add_sub = self._mask_add_sub_disable,
                                                                       status=self._status_div ),
-                                                           code=self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
+                                                           code=self._js['update-status'] +
+                                                                self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
                                                                 '''if ( cb_obj._mode == 'cube' ) mask_add_cube( )
                                                                    else mask_add_chan( )''' )
             self._mask_add_sub['sub'].callback = CustomJS( args=dict( annotations=self._annotations,
@@ -1845,8 +1851,10 @@ class CubeMask:
                                                                       mask_region_button=self._mask_add_sub['mask'],
                                                                       mask_region_ds=self._bitmask_contour_maskmod_ds,
                                                                       contour_ds=self._bitmask_contour_ds,
+                                                                      disable_add_sub = self._mask_add_sub_disable,
                                                                       status=self._status_div ),
-                                                           code=self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
+                                                           code=self._js['update-status'] +
+                                                                self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
                                                                 '''if ( cb_obj._mode == 'cube' ) mask_sub_cube( )
                                                                    else mask_sub_chan( )''' )
 
@@ -1858,8 +1866,10 @@ class CubeMask:
                                                                        mask_region_button=self._mask_add_sub['mask'],
                                                                        mask_region_icons=self._mask_icons_,
                                                                        source=self._image_source,
+                                                                       disable_add_sub = self._mask_add_sub_disable,
                                                                        status=self._status_div ),
-                                                            code=self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
+                                                            code=self._js['update-status'] +
+                                                                self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
                                                                  '''if ( mask_region_button.icon == mask_region_icons['on'] ) source._mask.clear( )
                                                                     else source.mask.set( region )''' )
 
@@ -2258,6 +2268,7 @@ class CubeMask:
         ###########################################################################################################################
         self._js_mode_code = {
                    'bitmask-hotkey-setup-add-sub':    '''
+                                              const default_add_sub_disabled_text = 'mask ops currently disabled'
                                               function mask_mod_result( msg ) {
                                                   if ( msg.result == 'success' ) {
                                                       if ( 'update' in msg && 'clear_region' in msg.update && msg.update.clear_region ) {
@@ -2268,6 +2279,12 @@ class CubeMask:
                                                   }
                                               }
                                               function mask_add_chan( ) {
+                                                  if ( disable_add_sub.values.disabled ) {
+                                                      update_status_error( disable_add_sub.values.message ?
+                                                                           disable_add_sub.values.message :
+                                                                           default_add_sub_disabled_text )
+                                                      return
+                                                  }
                                                   const anno = source._mask.get( )
                                                   if ( anno.xs.length > 0 && anno.ys.length > 0 ) {
                                                       ctrl.send( ids['mask-mod'],
@@ -2287,6 +2304,12 @@ class CubeMask:
                                                   } else if ( status ) status.text = '<p>no region found</p>'
                                               }
                                               function mask_sub_chan( ) {
+                                                  if ( disable_add_sub.values.disabled ) {
+                                                      update_status_error( disable_add_sub.values.message ?
+                                                                           disable_add_sub.values.message :
+                                                                           default_add_sub_disabled_text )
+                                                      return
+                                                  }
                                                   if ( annotations[0].xs.length > 0 && annotations[0].ys.length > 0 ) {
                                                       ctrl.send( ids['mask-mod'],
                                                                  { scope: 'chan',
@@ -2305,6 +2328,12 @@ class CubeMask:
                                                   } else if ( status ) status.text = '<p>no region found</p>'
                                               }
                                               function mask_add_cube( ) {
+                                                  if ( disable_add_sub.values.disabled ) {
+                                                      update_status_error( disable_add_sub.values.message ?
+                                                                           disable_add_sub.values.message :
+                                                                           default_add_sub_disabled_text )
+                                                      return
+                                                  }
                                                   if ( annotations[0].xs.length > 0 && annotations[0].ys.length > 0 ) {
                                                       ctrl.send( ids['mask-mod'],
                                                                  { scope: 'cube',
@@ -2323,6 +2352,12 @@ class CubeMask:
                                                   } else if ( status ) status.text = '<p>no region found</p>'
                                               }
                                               function mask_sub_cube( ) {
+                                                  if ( disable_add_sub.values.disabled ) {
+                                                      update_status_error( disable_add_sub.values.message ?
+                                                                           disable_add_sub.values.message :
+                                                                           default_add_sub_disabled_text )
+                                                      return
+                                                  }
                                                   if ( annotations[0].xs.length > 0 && annotations[0].ys.length > 0 ) {
                                                       ctrl.send( ids['mask-mod'],
                                                                  { scope: 'cube',
@@ -2829,6 +2864,13 @@ class CubeMask:
 
         self._js = { ### ImagePipe initialization code which manages the shift-key behavior which swiches between
                      ### addition/subtraction to a single channel VS add/sub from all channels of the cube...
+                     'update-status': '''function update_status_error( str ) {
+                                             if ( status ) {
+                                                 const msg = `<b style='color:red;'>${str}</b>`
+                                                 status.text = msg
+                                                 setTimeout( ( ) => { if ( status.text === msg ) status.text = '' }, 5000 )
+                                             }
+                                         }''',
                      'cube-init': '''add._mode = 'chan'
                                      sub._mode = 'chan'
                                      let foo = casalib.is_empty

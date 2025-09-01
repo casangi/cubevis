@@ -278,6 +278,23 @@ class InteractiveCleanUI:
             imdetails['path']['residual'] = join( output_dir, self._clean['gclean_paths'][imid]['residualname'] )
             imdetails['path']['mask'] = join( output_dir, self._clean['gclean_paths'][imid]['maskname'] )
 
+        ###
+        ### There is one set of tclean controls for all images/outlier/etc. because
+        ### in the final version gclean will handle the iterations for all fields...
+        ###
+        cwidth = 64
+        cheight = 40
+        self._control['iteration'] = { }
+        self._control['iteration']['continue'] = TipButton( max_width=cwidth, max_height=cheight, name='continue',
+                                                        icon=svg_icon(icon_name="iclean-continue", size=18),
+                                                        tooltip=Tooltip( content=HTML( '''Stop after <b>one major cycle</b> or when any stopping criteria is met.''' ), position='left') )
+        self._control['iteration']['finish'] = TipButton( max_width=cwidth, max_height=cheight, name='finish',
+                                                      icon=svg_icon(icon_name="iclean-finish", size=18),
+                                                      tooltip=Tooltip( content=HTML( '''<b>Continue</b> until some stopping criteria is met.''' ), position='left') )
+        self._control['iteration']['stop'] = TipButton( button_type="danger", max_width=cwidth, max_height=cheight, name='stop',
+                                                    icon=svg_icon(icon_name="iclean-stop", size=18),
+                                                    tooltip=Tooltip( content=HTML( '''<p>Clicking a <font color="red">red</font> stop button will cause this tab to close and control will return to Python.<p>Clicking an <font color="orange">orange</font> stop button will cause <tt>tclean</tt> to stop after the current major cycle.''' ), position='left' ) )
+
         for idx, (imid, imdetails) in enumerate(self._clean_targets.items( )):
             imdetails['gui'] = { }
 
@@ -290,8 +307,13 @@ class InteractiveCleanUI:
             ###
             imdetails['gui']['cube'] = CubeMask( imdetails['path']['residual'], mask=imdetails['path']['mask'], abort=self._abort_handler,
                                                  init_script=CustomJS( args=dict( initial_convergence_state=self._init_values["convergence_state"],
+                                                                                  clean_ctrl=self._control['iteration'],
                                                                                   name=imid ),
-                                                                       code='''document._casa_convergence_data = initial_convergence_state''' )
+                                                                       code='''document._casa_convergence_data = initial_convergence_state
+                                                                               clean_ctrl.continue.disable_add_sub = this.disable_add_sub.values
+                                                                               clean_ctrl.finish.disable_add_sub = this.disable_add_sub.values
+                                                                               clean_ctrl.stop.disable_add_sub = this.disable_add_sub.values
+                                                                               this.disable_add_sub.values.message = "cannot modify mask during cleaning"''' )
                                                              if idx == 0 else None )
 
             ###
@@ -587,24 +609,6 @@ class InteractiveCleanUI:
             #print("%s: %s" % ( btn, self._clean_ids[btn] ) )
             self._pipe['control'].register( self._clean_ids[btn], clean_handler )
 
-
-        ###
-        ### There is one set of tclean controls for all images/outlier/etc. because
-        ### in the final version gclean will handle the iterations for all fields...
-        ###
-        cwidth = 64
-        cheight = 40
-        self._control['iteration'] = { }
-        self._control['iteration']['continue'] = TipButton( max_width=cwidth, max_height=cheight, name='continue',
-                                                        icon=svg_icon(icon_name="iclean-continue", size=18),
-                                                        tooltip=Tooltip( content=HTML( '''Stop after <b>one major cycle</b> or when any stopping criteria is met.''' ), position='left') )
-        self._control['iteration']['finish'] = TipButton( max_width=cwidth, max_height=cheight, name='finish',
-                                                      icon=svg_icon(icon_name="iclean-finish", size=18),
-                                                      tooltip=Tooltip( content=HTML( '''<b>Continue</b> until some stopping criteria is met.''' ), position='left') )
-        self._control['iteration']['stop'] = TipButton( button_type="danger", max_width=cwidth, max_height=cheight, name='stop',
-                                                    icon=svg_icon(icon_name="iclean-stop", size=18),
-                                                    tooltip=Tooltip( content=HTML( '''<p>Clicking a <font color="red">red</font> stop button will cause this tab to close and control will return to Python.<p>Clicking an <font color="orange">orange</font> stop button will cause <tt>tclean</tt> to stop after the current major cycle.''' ), position='left' ) )
-
         ###
         ### The single SHARED help button will be supplied by the first CubeMask...
         ###
@@ -783,6 +787,7 @@ class InteractiveCleanUI:
                                       tooltip=Tooltip( content=HTML('''click here to see the <pre>tclean</pre> execution log'''), position="right" ),
                                       margin=(-1, 0, -10, 0), button_type='light',
                                       stylesheets=[ InlineStyleSheet( css='''.bk-btn { border: 0px solid #ccc;  padding: 0 var(--padding-vertical) var(--padding-horizontal); margin-top: 3px; }''' ) ] )
+
 
         self._control['iteration']['cb'] = CustomJS( args=dict( images_state={ k: { 'status': v['gui']['stopcode'],
                                                                                     'automask': v['gui']['params']['automask'],
@@ -1452,6 +1457,7 @@ class InteractiveCleanUI:
                                                        )
                                                    }
                                                )
+                                               clean_ctrl.continue.disable_add_sub.disabled = true
                                                clean_ctrl.continue.disabled = true
                                                clean_ctrl.finish.disabled = true
                                                clean_ctrl.stop.disabled = with_stop
@@ -1476,6 +1482,7 @@ class InteractiveCleanUI:
 
                                                clean_ctrl.stop.disabled = false
                                                if ( ! only_stop ) {
+                                                   clean_ctrl.continue.disable_add_sub.disabled = false
                                                    clean_ctrl.continue.disabled = false
                                                    clean_ctrl.finish.disabled = false
                                                }

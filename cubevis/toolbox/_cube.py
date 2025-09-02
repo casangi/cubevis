@@ -1432,6 +1432,7 @@ class CubeMask:
                 init_args=dict( annotations=self._annotations, ctrl=self._pipe['control'], ids=self._ids,
                                 id=self._image_source.id,
                                 stats_source=self._statistics_source, chan_slider=self._slider,
+                                goto_txt=self._goto_txt,
                                 mask_region_button=None,
                                 mask_region_icons=None,
                                 mask_region_ds=self._bitmask_contour_maskmod_ds,
@@ -1456,6 +1457,7 @@ class CubeMask:
                 ###
                 init_args=dict( annotations=self._annotations, ctrl=self._pipe['control'], ids=self._ids,
                                 stats_source=self._statistics_source, chan_slider=self._slider,
+                                goto_txt=self._goto_txt,
                                 mask_region_button=self._mask_add_sub['mask'],
                                 mask_region_icons=self._mask_icons_,
                                 mask_region_ds=self._bitmask_contour_maskmod_ds,
@@ -3373,10 +3375,16 @@ class CubeMask:
                                                                              // wrap round to the first channel
                                                                              source.channel( 0, source.cur_chan[0] )
                                                                              if ( chan_slider ) { chan_slider.value = 0 }
+                                                                             if ( goto_txt && goto_txt.value != chan_slider.value ) {
+                                                                                 goto_txt.value = String(chan_slider.value)
+                                                                             }
                                                                          } else {
                                                                              // advance to the next channel
                                                                              source.channel( source.cur_chan[1] + 1, source.cur_chan[0] )
                                                                              if ( chan_slider ) { chan_slider.value = source.cur_chan[1] + 1 }
+                                                                             if ( goto_txt && goto_txt.value != chan_slider.value ) {
+                                                                                 goto_txt.value = String(chan_slider.value)
+                                                                             }
                                                                          } } )
                                                // previous channel -- all modes
                                                casalib.hotkeys( 'alt+down,ctrl+down,command+down', { scope: source._hotkeys.id},
@@ -3385,10 +3393,16 @@ class CubeMask:
                                                                              // advance to the prev channel
                                                                              source.channel( source.cur_chan[1] - 1, source.cur_chan[0] )
                                                                              if ( chan_slider ) { chan_slider.value = source.cur_chan[1] - 1 }
+                                                                             if ( goto_txt && goto_txt.value != chan_slider.value ) {
+                                                                                 goto_txt.value = String(chan_slider.value)
+                                                                             }
                                                                          } else {
                                                                              // wrap round to the last channel
                                                                              source.channel( source.num_chans[1] - 1, source.cur_chan[0] )
                                                                              if ( chan_slider ) { chan_slider.value = source.num_chans[1] - 1 }
+                                                                             if ( goto_txt && goto_txt.value != chan_slider.value ) {
+                                                                                 goto_txt.value = String(chan_slider.value)
+                                                                             }
                                                                          } } )
 
                                                // next polarization/stokes -- all modes

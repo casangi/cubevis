@@ -911,6 +911,7 @@ class InteractiveCleanUI:
                                                          if ( ! b._window || b._window.closed ) {
                                                              b._window = window.open("about:blank","Interactive Clean Log")
                                                              b._window.document.write(format_log(b._log))
+                                                             b._window.document.title = "Interactive Clean Log"
                                                              b._window.document.close( )
                                                          }''' ) )
 

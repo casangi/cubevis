@@ -203,15 +203,19 @@ class CubeMask:
                           cube=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'add-cube.png' ) ) )
             _sub_ = dict( chan=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'sub-chan.png' ) ),
                           cube=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'sub-cube.png' ) ) )
+            _del_ = dict( chan=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'trash.png' ) ),
+                          cube=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'trash_full.png' ) ) )
             self._mask_icons_ = dict( on=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'new-layer-sm-selected.png' ) ),
                                       off=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'new-layer-sm.png' ) ) )
             self._mask_add_sub = { 'add': CustomAction( icon=_add_['chan'], name="Mask Add",
                                                         description="add region to current channel's mask (hold Shift key then click to add to all channels)" ),
                                    'sub': CustomAction( icon=_sub_['chan'], name="Mask Sub",
                                                         description="subtract region from current channel's mask (hold Shift key then click to subtract from all channels)" ),
+                                   'dele': CustomAction( icon=_del_['chan'], name="Mask Delete",
+                                                        description="delete current channel's mask (hold Shift key then click to delete the mask from all channels)" ),
                                    'mask': CustomAction( icon=self._mask_icons_['off'], name="Mask Select",
                                                          description="select the mask for the current channel" ),
-                                   'img': dict( add=_add_, sub=_sub_ ) }
+                                   'img': dict( add=_add_, sub=_sub_, dele=_del_ ) }
 
         self._fig = { }
         self._hover = { 'spectrum': None, 'image': None }   # HoverTools which are used to synchronize image/spectrum
@@ -438,6 +442,23 @@ class CubeMask:
                                 err = "internal error: bad add/subtract scope"
                         else:
                             err = "internal error: bad add/subtract message"
+                    elif msg['action'] == 'delete':
+                        if msg['scope'] == 'chan':
+                            mask = self._pipe['image'].mask( msg['value']['chan'], True )
+                            mask.fill(0.0)
+                            self._pipe['image'].put_mask( msg['value']['chan'], mask )
+                            self._mask_id = str(uuid4( ))                   ### new mask identifier
+                            return dict( result='success', update={ } )
+                        elif msg['scope'] == 'cube':
+                            stokes = msg['value']['chan'][0]
+                            for c in range(shape[3]):
+                                mask = self._pipe['image'].mask( [stokes,c], True )
+                                mask.fill(0.0)
+                                self._pipe['image'].put_mask( [stokes,c], mask )
+                            self._mask_id = str(uuid4( ))                   ### new mask identifier
+                            return dict( result='success', update={ } )
+                        else:
+                            err = "internal error: bad invert scope"
                     elif msg['action'] == 'not':
                         notf = np.vectorize(lambda x: 0.0 if x != 0 else 1.0)
                         if msg['scope'] == 'chan':
@@ -496,7 +517,8 @@ class CubeMask:
                                                           ResetTool(name="Reset"), PolySelectTool(name="Poly Mask") ] +
                                                         ( [ self._mask_add_sub['add'],
                                                             self._mask_add_sub['sub'],
-                                                            self._mask_add_sub['mask'] ]  if self._mask_path else [ ] ),
+                                                            self._mask_add_sub['mask'],
+                                                            self._mask_add_sub['dele'] ]  if self._mask_path else [ ] ),
                                                   tooltips=None ), **kw )
 
             ###
@@ -1859,6 +1881,21 @@ class CubeMask:
                                                                 self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
                                                                 '''if ( cb_obj._mode == 'cube' ) mask_sub_cube( )
                                                                    else mask_sub_chan( )''' )
+            self._mask_add_sub['dele'].callback = CustomJS( args=dict( annotations=self._annotations,
+                                                                      source=self._image_source,
+                                                                      ctrl=self._pipe['control'],
+                                                                      ids=self._ids,
+                                                                      stats_source=self._statistics_source,
+                                                                      mask_region_icons=self._mask_icons_,
+                                                                      mask_region_button=self._mask_add_sub['mask'],
+                                                                      mask_region_ds=self._bitmask_contour_maskmod_ds,
+                                                                      contour_ds=self._bitmask_contour_ds,
+                                                                      disable_add_sub = self._mask_add_sub_disable,
+                                                                      status=self._status_div ),
+                                                           code=self._js['update-status'] +
+                                                                self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
+                                                                '''if ( cb_obj._mode == 'cube' ) mask_del_cube( )
+                                                                   else mask_del_chan( )''' )
 
             self._mask_add_sub['mask'].callback = CustomJS( args=dict( annotations=self._annotations,
                                                                        contour_ds=self._bitmask_contour_ds,
@@ -2329,6 +2366,19 @@ class CubeMask:
                                                                  mask_mod_result )
                                                   } else if ( status ) status.text = '<p>no region found</p>'
                                               }
+                                              function mask_del_chan( ) {
+                                                  if ( disable_add_sub.values.disabled ) {
+                                                      update_status_error( disable_add_sub.values.message ?
+                                                                           disable_add_sub.values.message :
+                                                                           default_add_sub_disabled_text )
+                                                      return
+                                                  }
+                                                  ctrl.send( ids['mask-mod'],
+                                                             { scope: 'chan',
+                                                               action: 'delete',
+                                                               value: { chan: source.cur_chan } },
+                                                             mask_mod_result )
+                                              }
                                               function mask_add_cube( ) {
                                                   if ( disable_add_sub.values.disabled ) {
                                                       update_status_error( disable_add_sub.values.message ?
@@ -2376,6 +2426,19 @@ class CubeMask:
                                                                             src: mask_region_ds._src_chan } },
                                                                  mask_mod_result )
                                                   } else if ( status ) status.text = '<p>no region found</p>'
+                                              }
+                                              function mask_del_cube( ) {
+                                                  if ( disable_add_sub.values.disabled ) {
+                                                      update_status_error( disable_add_sub.values.message ?
+                                                                           disable_add_sub.values.message :
+                                                                           default_add_sub_disabled_text )
+                                                      return
+                                                  }
+                                                  ctrl.send( ids['mask-mod'],
+                                                             { scope: 'cube',
+                                                               action: 'delete',
+                                                               value: { chan: source.cur_chan } },
+                                                             mask_mod_result )
                                               }''',
                    'bitmask-hotkey-setup':    '''
                                               function state_translate_selection( dx, dy ) {
@@ -2875,18 +2938,23 @@ class CubeMask:
                                          }''',
                      'cube-init': '''add._mode = 'chan'
                                      sub._mode = 'chan'
+                                     dele._mode = 'chan'
                                      let foo = casalib.is_empty
                                      function cube_on( ) {
                                          add._mode = 'cube'
                                          add.icon = img['add']['cube']
                                          sub._mode = 'cube'
                                          sub.icon = img['sub']['cube']
+                                         dele._mode = 'cube'
+                                         dele.icon = img['dele']['cube']
                                      }
                                      function cube_off( ) {
                                          add._mode = 'chan'
                                          add.icon = img['add']['chan']
                                          sub._mode = 'chan'
                                          sub.icon = img['sub']['chan']
+                                         dele._mode = 'chan'
+                                         dele.icon = img['dele']['chan']
                                      }
                                      casalib.hotkeys( '*',
                                                       { keyup: true, scope: 'all' },

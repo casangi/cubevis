@@ -1,0 +1,20 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" fill="#f5f5f5"/>
+
+  <!-- Trash can body (tapered) -->
+  <path d="M 160 200 L 352 200 L 332 440 Q 332 460 312 460 L 200 460 Q 180 460 180 440 L 160 200 Z"
+        fill="none" stroke="black" stroke-width="24" stroke-linejoin="round"/>
+
+  <!-- Trash can lid -->
+  <rect x="120" y="160" width="272" height="40" rx="20" ry="20"
+        fill="none" stroke="black" stroke-width="24"/>
+
+  <!-- Handle -->
+  <rect x="200" y="120" width="112" height="40" rx="20" ry="20"
+        fill="none" stroke="black" stroke-width="24"/>
+
+  <!-- Vertical indents -->
+  <line x1="220" y1="220" x2="210" y2="420" stroke="black" stroke-width="16" stroke-linecap="round"/>
+  <line x1="256" y1="220" x2="256" y2="420" stroke="black" stroke-width="16" stroke-linecap="round"/>
+  <line x1="292" y1="220" x2="302" y2="420" stroke="black" stroke-width="16" stroke-linecap="round"/>
+</svg>

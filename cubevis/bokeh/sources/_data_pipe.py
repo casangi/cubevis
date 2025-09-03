@@ -34,6 +34,8 @@ import inspect
 import threading
 import asyncio
 import traceback
+import time
+import json
 
 from bokeh.models.sources import DataSource
 from bokeh.util.compiler import TypeScript
@@ -68,6 +70,10 @@ class DataPipe(DataSource):
     """)
 
     address = Tuple( String, Int, help="two integer sequence representing the address and port to use for the websocket" )
+
+    # Class-level session tracking to prevent multiple connections
+    _active_sessions = {}  # session_id -> {'websocket': ws, 'timestamp': time, 'datapipe': instance}
+    _session_lock = threading.Lock()
 
     __javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
 
@@ -114,6 +120,73 @@ class DataPipe(DataSource):
             del self.__pending[ident]
             return result
         return None
+
+    @classmethod
+    async def __is_websocket_alive(cls, websocket):
+        """Check if a websocket connection is still alive"""
+        try:
+            # Try to ping the websocket with a short timeout
+            await asyncio.wait_for(websocket.ping(), timeout=2.0)
+            return True
+        except (asyncio.TimeoutError, ConnectionError, Exception):
+            return False
+
+    @classmethod
+    def __cleanup_dead_sessions(cls):
+        """Remove dead sessions from tracking"""
+        current_time = time.time()
+        dead_sessions = []
+
+        for session_id, session_info in cls._active_sessions.items():
+            # Remove sessions older than 5 minutes (stale cleanup)
+            if current_time - session_info['timestamp'] > 300:
+                dead_sessions.append(session_id)
+
+        for session_id in dead_sessions:
+            del cls._active_sessions[session_id]
+
+    async def __handle_session_conflict(self, websocket, existing_session_info, new_session_id):
+        """Handle session conflict by checking if existing connection is alive"""
+        existing_ws = existing_session_info['websocket']
+        existing_datapipe = existing_session_info['datapipe']
+
+        # Check if existing websocket is still alive
+        if await self.__is_websocket_alive(existing_ws):
+            # Existing connection is alive - send conflict message to BOTH connections
+            conflict_msg = {
+                'id': 'session_conflict',
+                'message': {
+                    'type': 'session_conflict',
+                    'error': 'Multiple windows/tabs detected. Please use only one browser window.',
+                    'action': 'close_duplicate'
+                },
+                'direction': 'error'
+            }
+
+            try:
+                # Send to existing connection
+                await existing_ws.send(serialize(conflict_msg))
+
+                # Send to new connection
+                await websocket.send(serialize(conflict_msg))
+
+                # Close the new connection
+                await websocket.close(code=1008, reason='Session conflict')
+
+                # Call abort on the existing DataPipe instance
+                if existing_datapipe.__abort is not None:
+                    err = RuntimeError(f"Session conflict detected: New connection attempted with session {new_session_id}")
+                    existing_datapipe.__abort(err)
+
+                return False  # Reject new connection
+
+            except Exception as e:
+                print(f"Error handling session conflict: {e}")
+                # If we can't communicate, treat existing as dead
+                pass
+
+        # Existing connection is dead - replace it
+        return True  # Allow new connection
 
     def register( self, ident, callback ):
         """Register a callback to handle all requests coming from JavaScript. The
@@ -175,6 +248,8 @@ class DataPipe(DataSource):
         """
         try:
             self.__websocket = websocket
+            session_established = False
+
             async for message in websocket:
                 msg = deserialize(message)
                 if 'session' not in msg:
@@ -185,8 +260,53 @@ class DataPipe(DataSource):
                     else:
                         raise err
                     return
+
+                # Handle session initialization with conflict detection
+                if not session_established:
+                    new_session_id = msg['session']
+
+                    with self._session_lock:
+                        # Clean up any stale sessions first
+                        self.__cleanup_dead_sessions()
+
+                        # Check if session already exists
+                        if new_session_id in self._active_sessions:
+                            existing_session_info = self._active_sessions[new_session_id]
+
+                            # Handle the conflict
+                            if not await self.__handle_session_conflict(websocket, existing_session_info, new_session_id):
+                                return  # Connection was rejected
+
+                        # Register this session as active
+                        self._active_sessions[new_session_id] = {
+                            'websocket': websocket,
+                            'timestamp': time.time(),
+                            'datapipe': self
+                        }
+                        self.__session = new_session_id
+                        session_established = True
+
+                # Existing session validation (your original logic)
                 elif self.__session != None and self.__session != msg['session']:
-                    await self.__websocket.close( )
+                    conflict_msg = {
+                        'id': self.__session,
+                        'message': {
+                            'type': 'session_corruption',
+                            'error': 'Session corruption detected',
+                            'expected': self.__session,
+                            'received': msg['session']
+                        },
+                        'direction': 'error'
+                    }
+
+                    await self.__websocket.send(serialize(conflict_msg))
+                    await self.__websocket.close()
+
+                    # Clean up from active sessions
+                    with self._session_lock:
+                        if self.__session in self._active_sessions:
+                            del self._active_sessions[self.__session]
+
                     err = RuntimeError(f"session corruption: {msg['session']} does not equal {self.__session}")
                     if self.__abort is not None:
                         self.__abort( err )
@@ -196,10 +316,11 @@ class DataPipe(DataSource):
 
                 with self.__lock:
                     ###
-                    ### initialize session identifier
+                    ### initialize session identifier (pre-state-corruption fixes)
                     ###
                     if self.__session == None:
                         self.__session = msg['session']
+
                     if msg['direction'] == 'p2j':
                         cb = self.__get_pending(msg['id'])
                         outgo = self.__dequeue_send(msg['id'])
@@ -255,4 +376,9 @@ class DataPipe(DataSource):
                                                                                        'exception': repr(e) },
                                                                           'direction': str(msg['direction']) } ) )
         finally:
+            # Clean up when connection closes
+            if self.__session is not None:
+                with self._session_lock:
+                    if self.__session in self._active_sessions:
+                        del self._active_sessions[self.__session]
             self.__websocket = None

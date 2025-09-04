@@ -29,8 +29,8 @@
 '''End user applications supplied by ``cubevis``.'''
 import sys
 from cubevis.utils import copydoc, ImportProtectedModule
-from cubevis.bokeh.state import initialize_session
-initialize_session()
+#from cubevis.bokeh.state import initialize_session
+#initialize_session()
 
 ###
 ### This import roundabout was introduced when astroviper and casa6 apps were in the same

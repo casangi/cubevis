@@ -32,3 +32,4 @@ from ._initialize import initialize_bokeh
 from ._session import setup_session as initialize_session
 from ._palette import available_palettes, find_palette, default_palette
 from ._javascript import casalib_url, cubevisjs_url
+from ._current import CurrentBokehState as current_bokeh_state

@@ -66,6 +66,16 @@ except ModuleNotFoundError:
     ###
     __version__ = {}
 
+try:
+    from ._js_versions import JS_LIBRARY_VERSIONS as javascript_versions
+except ImportError:
+    ###
+    ### _casalib_version.py is generated as part of the build with the
+    ### scripts/capture-casalib-version.py script. but if the source tree
+    ### for cubevis is used directly for development, no _casalib_version.py
+    ### will be available so set it to a default value...
+    ###
+    javascript_versions = { 'casalib': None, 'cubevisjs': None }
 
 def xml_interface_defs( ):
     '''This function may eventually return XML files for use in generating casashell bindings. An

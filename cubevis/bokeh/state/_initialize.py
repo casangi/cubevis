@@ -30,12 +30,14 @@ generated HTML that is used to display the Bokeh plots that ``casagui``'s
 applications produce'''
 import os
 import re
+import logging
 from os import path
 from os.path import dirname, join, basename, abspath
 from urllib.parse import urlparse
 from bokeh import resources
 from ...utils import path_to_url, static_vars, have_network
 
+logger = logging.getLogger(__name__)
 
 @static_vars( initialized=False,
               do_local_subst=not have_network( ) )
@@ -72,6 +74,13 @@ def initialize_bokeh( bokehjs_subst=None ):
         ### only initialize once...
         return
 
+    ###
+    ### NOTE that for this log message to be printed the user MUST use the
+    ### environment variable approach to setting logging level to DEBUG:
+    ###
+    ###    CUBEVIS_DEBUG=1
+    ###
+    logger.debug(f"\tinitialize_bokeh( bokehjs_subst={bokehjs_subst} )")
     initialize_bokeh.initialized = True
     resources.Resources._old_js_files = resources.Resources.js_files
     def js_files( self ):

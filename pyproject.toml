@@ -37,3 +37,8 @@ write_template = "__version__ = '{}'"  # optional, default to "{}"
 [build-system]
 requires = ["pdm-pep517>=0.12.0"]
 build-backend = "pdm.pep517.api"
+
+[tool.pdm.scripts]
+capture-js = {call = "scripts.capture_js_versions:main"}
+build = {composite = ["capture-js", "pdm build"]}
+

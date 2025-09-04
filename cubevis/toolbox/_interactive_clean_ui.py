@@ -135,8 +135,8 @@ class InteractiveCleanUI:
             ports.append( imdetails['gui']['cube']._pipe['control'].address[1] )
 
         # Also forward http port if serving webpage
-        if not self._is_notebook:
-            ports.append(self._http_port)
+        #if not self._is_notebook:
+        #    ports.append(self._http_port)
 
         cmd = 'ssh'
         for port in ports:
@@ -185,7 +185,7 @@ class InteractiveCleanUI:
         ###
         ### whether or not the session is being run from a jupyter notebook or script
         ###
-        self._is_notebook = is_interactive_jupyter()
+        #self._is_notebook = is_interactive_jupyter()
 
         ##
         ## the http port for serving GUI in webpage if not running in script
@@ -517,7 +517,7 @@ class InteractiveCleanUI:
         icw = SharedWidgets( )
         toolbars = [ ]
         for imid, imdetails in self._clean_targets.items( ):
-            imdetails['gui']['stats'] = imdetails['gui']['cube'].statistics( )
+            imdetails['gui']['stats'] = imdetails['gui']['cube'].statistics( name=f"{imid} stats" )
             imdetails['image-channels'] = imdetails['gui']['cube'].shape( )[3]
 
             status_line = imdetails['gui']['stopcode'] = imdetails['gui']['cube'].status_text( "<p>initial residual image</p>" if imdetails['image-channels'] > 1 else "<p>initial <b>single-channel</b> residual image</p>", width=230, reuse=status_line )
@@ -868,13 +868,13 @@ class InteractiveCleanUI:
                                                              itergroups[document._casa_image_name].active = document._casa_last_control_tab''' ) )
 
         # Change display type depending on runtime environment
-        if self._is_notebook:
-            output_notebook()
-        else:
-            ### Directory is created when an HTTP server is running
-            ### (MAX)
-###         output_file(self._imagename+'_webpage/index.html')
-            pass
+        #if self._is_notebook:
+        #    output_notebook()
+        #else:
+        #    ### Directory is created when an HTTP server is running
+        #    ### (MAX)
+###     #    output_file(self._imagename+'_webpage/index.html')
+        #    pass
 
         return self._fig['layout']
 
@@ -914,7 +914,7 @@ class InteractiveCleanUI:
                                       title='Colormap' ),
                             TabPanel( child=column( *imdetails['gui']['stats'] ),
                                       title='Statistics' ) ] + imdetails['gui']['auto-masking-panel'],
-                     width=500, sizing_mode='stretch_height', tabs_location='below' )
+                     sizing_mode='stretch_height', tabs_location='below' )
 
         if not hasattr(self,'_image_control_tab_groups'):
             self._image_control_tab_groups = { }
@@ -1192,6 +1192,8 @@ class InteractiveCleanUI:
                      ### -- document is used storing state                                                        --
                      ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
                      'initialize':      '''if ( ! document._casa_initialized ) {
+                                               console.log("HEREHEREHEREHEREHEREHEREHEREHEREHEREHEREHEREHEREHEREHEREHEREHEREHEREHEREHEREHERE")
+                                               console.log(`casalib version: ${casalib.version}`)
                                                document._casa_image_name = initial_image
                                                document._casa_initialized = true
                                                document._casa_window_closed = false

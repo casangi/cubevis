@@ -1,3 +1,6 @@
+import logging
+
+logger = logging.getLogger(__name__)
 
 #def is_notebook() -> bool:
 #    try:
@@ -31,10 +34,12 @@ def is_interactive_jupyter( ) -> bool:
         ipython = get_ipython()
 
         if ipython is None:
+            logger.debug(f"\tis_interactive_jupyter<1>: False")
             return False
 
         # Check if we're in a ZMQ-based shell (kernel)
         if ipython.__class__.__name__ != 'ZMQInteractiveShell':
+            logger.debug(f"\tis_interactive_jupyter<2>: False")
             return False
 
         # Check for active frontend connection
@@ -45,12 +50,14 @@ def is_interactive_jupyter( ) -> bool:
             if hasattr(kernel, 'shell_socket') and kernel.shell_socket is not None:
                 # For newer Jupyter versions, check connection count
                 if hasattr(kernel, 'connection_count'):
+                    logger.debug(f"\tis_interactive_jupyter<3>: {kernel.connection_count > 0}")
                     return kernel.connection_count > 0
 
                 # For older versions, check if socket is connected
                 try:
                     # Try to get socket state - if it fails, likely no frontend
                     socket_state = kernel.shell_socket.closed
+                    logger.debug(f"\tis_interactive_jupyter<4>: {not socket_state}")
                     return not socket_state
                 except AttributeError:
                     pass
@@ -60,12 +67,14 @@ def is_interactive_jupyter( ) -> bool:
                 try:
                     parent = kernel.get_parent()
                     # If there's a parent message, we're likely in interactive mode
+                    logger.debug(f"\tis_interactive_jupyter<5>: {parent is not None and len(parent) > 0}")
                     return parent is not None and len(parent) > 0
                 except Exception:
                     pass
 
             # Method 3: Check for execution context
             if hasattr(kernel, '_parent_ident') and kernel._parent_ident:
+                logger.debug(f"\tis_interactive_jupyter<6>: True")
                 return True
 
         # Fallback: Check for common Jupyter notebook environment indicators
@@ -82,11 +91,14 @@ def is_interactive_jupyter( ) -> bool:
                 try:
                     import IPython.display
                     # If we can import display and have env indicators, likely interactive
+                    logger.debug(f"\tis_interactive_jupyter<7>: True")
                     return True
                 except ImportError:
                     pass
 
+        logger.debug(f"\tis_interactive_jupyter<8>: False")
         return False
 
     except ImportError:
+        logger.debug(f"\tis_interactive_jupyter<9>: False")
         return False

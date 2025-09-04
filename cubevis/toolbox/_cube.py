@@ -100,7 +100,7 @@ class CubeMask:
         self.COUNT = 1
         self.CCOUNT = 1
 
-        self._is_notebook = is_interactive_jupyter()
+        ##self._is_notebook = is_interactive_jupyter()
         #self._color = '#00FF00'                               # anti-green user feedback (issue #40 2024-05-02 13:08:32)
         self._region_style=dict( fill_alpha=0, hover_fill_alpha=0.3,
                                  fill_color='white', hover_fill_color='white',
@@ -1468,7 +1468,11 @@ class CubeMask:
                                                                           function done_close_window( msg ) {
                                                                               if ( msg.result === 'stopped' ) {""" +
                                                                             # Don't close tab if running in a jupyter notebook
-                                                                            ("""console.log("Running in jupyter notebook. Not closing window.")""" if self._is_notebook else
+                                                                            ##("""console.log("Running in jupyter notebook. Not closing window.")""" if self._is_notebook else
+                                                                            ##     """console.log("Running from script/terminal. Closing window.")
+                                                                            ##        window.close()"""
+                                                                            ##) +
+                                                                            ("""console.log("Running in jupyter notebook. Not closing window.")""" if True else
                                                                                  """console.log("Running from script/terminal. Closing window.")
                                                                                     window.close()"""
                                                                             ) +

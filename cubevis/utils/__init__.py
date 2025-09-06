@@ -44,6 +44,7 @@ from ._docenum import DocEnum
 from ._copydoc import copydoc
 from ._pkgs import find_pkg, load_pkg
 from ._jupyter import is_interactive_jupyter
+from ._browser import have_firefox
 
 from astropy import units
 from regions import PixCoord

@@ -54,8 +54,8 @@ from cubevis.bokeh.sources import ImageDataSource, ImagePipe, DataPipe
 from cubevis.bokeh.format import WcsTicks
 from cubevis.bokeh.models import EditSpan
 from ..data import casaimage
-from ..utils import pack_arrays, find_ws_address, set_attributes, resource_manager, polygon_indexes, is_interactive_jupyter
-from ..bokeh.models import EvTextInput
+from ..utils import pack_arrays, find_ws_address, set_attributes, resource_manager, polygon_indexes, is_interactive_jupyter, have_firefox
+from ..bokeh.models import EvTextInput, SharedDict
 from ..bokeh.tools import CBResetTool
 from ..bokeh.state import available_palettes, find_palette, default_palette
 from ..bokeh.annotations import EvPolyAnnotation
@@ -188,6 +188,12 @@ class CubeMask:
         self._image_freeze_cb = [ ]                            # CustomJS to be invoked when the use freezes cursor tracking (by typing 'f')
         self._image_unfreeze_cb  = [ ]                         # CustomJS to be invoked when cursor tracking is unfrozen
 
+        ###
+        ### This state object is provided as "this.disable_add_sub" when "init_script" is called.
+        ### By setting "disable_add_sub.values.disabled = True", the user can disable mask updates.
+        ###
+        self._mask_add_sub_disable = SharedDict( { 'disabled': False, 'message': None } )
+
         if self._mask_path:
             ###########################################################################################################################
             ### JavaScript init script to be run early in the startup. Piggybacked off of the ImagePipe initialization              ###
@@ -197,15 +203,19 @@ class CubeMask:
                           cube=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'add-cube.png' ) ) )
             _sub_ = dict( chan=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'sub-chan.png' ) ),
                           cube=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'sub-cube.png' ) ) )
+            _del_ = dict( chan=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'trash.png' ) ),
+                          cube=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'trash_full.png' ) ) )
             self._mask_icons_ = dict( on=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'new-layer-sm-selected.png' ) ),
                                       off=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'new-layer-sm.png' ) ) )
             self._mask_add_sub = { 'add': CustomAction( icon=_add_['chan'], name="Mask Add",
                                                         description="add region to current channel's mask (hold Shift key then click to add to all channels)" ),
                                    'sub': CustomAction( icon=_sub_['chan'], name="Mask Sub",
                                                         description="subtract region from current channel's mask (hold Shift key then click to subtract from all channels)" ),
+                                   'dele': CustomAction( icon=_del_['chan'], name="Mask Delete",
+                                                        description="delete current channel's mask (hold Shift key then click to delete the mask from all channels)" ),
                                    'mask': CustomAction( icon=self._mask_icons_['off'], name="Mask Select",
                                                          description="select the mask for the current channel" ),
-                                   'img': dict( add=_add_, sub=_sub_ ) }
+                                   'img': dict( add=_add_, sub=_sub_, dele=_del_ ) }
 
         self._fig = { }
         self._hover = { 'spectrum': None, 'image': None }   # HoverTools which are used to synchronize image/spectrum
@@ -432,6 +442,23 @@ class CubeMask:
                                 err = "internal error: bad add/subtract scope"
                         else:
                             err = "internal error: bad add/subtract message"
+                    elif msg['action'] == 'delete':
+                        if msg['scope'] == 'chan':
+                            mask = self._pipe['image'].mask( msg['value']['chan'], True )
+                            mask.fill(0.0)
+                            self._pipe['image'].put_mask( msg['value']['chan'], mask )
+                            self._mask_id = str(uuid4( ))                   ### new mask identifier
+                            return dict( result='success', update={ } )
+                        elif msg['scope'] == 'cube':
+                            stokes = msg['value']['chan'][0]
+                            for c in range(shape[3]):
+                                mask = self._pipe['image'].mask( [stokes,c], True )
+                                mask.fill(0.0)
+                                self._pipe['image'].put_mask( [stokes,c], mask )
+                            self._mask_id = str(uuid4( ))                   ### new mask identifier
+                            return dict( result='success', update={ } )
+                        else:
+                            err = "internal error: bad invert scope"
                     elif msg['action'] == 'not':
                         notf = np.vectorize(lambda x: 0.0 if x != 0 else 1.0)
                         if msg['scope'] == 'chan':
@@ -490,7 +517,8 @@ class CubeMask:
                                                           ResetTool(name="Reset"), PolySelectTool(name="Poly Mask") ] +
                                                         ( [ self._mask_add_sub['add'],
                                                             self._mask_add_sub['sub'],
-                                                            self._mask_add_sub['mask'] ]  if self._mask_path else [ ] ),
+                                                            self._mask_add_sub['mask'],
+                                                            self._mask_add_sub['dele'] ]  if self._mask_path else [ ] ),
                                                   tooltips=None ), **kw )
 
             ###
@@ -849,7 +877,8 @@ class CubeMask:
                                                  'wheel_zoom', 'pan',
                                                  ResetTool( icon=casaimage.as_mime(join( dirname(dirname(__file__)), "__icons__", 'zoom-to-fit.png' )),
                                                             description="Reset pan/zoom but preserve extents" ) ],
-                                        sizing_mode="scale_width" )
+                                        sizing_mode="stretch_both"
+                                        )
 
         self._cm_adjust['fig'].toolbar.active_scroll = self._cm_adjust['fig'].select_one(WheelZoomTool)
 
@@ -879,7 +908,7 @@ class CubeMask:
         ### square: 𝑦=𝑥^2
         ### gamma: 𝑦=𝑥^𝛾
         ### power: 𝑦=(𝛼^𝑥−1)/(𝛼−1)
-        self._cm_adjust['alpha-value'] = TextInput( value="1000", prefix="alpha", max_width=170, visible=False )
+        self._cm_adjust['alpha-value'] = TextInput( value="10", prefix="alpha", max_width=170, visible=False )
         self._cm_adjust['gamma-value'] = TextInput( value="1", prefix="gamma", max_width=170, visible=False )
         self._cm_adjust['equation'] = Div(text='''<math><mrow><mi>y</mi><mo>=</mo><mi>x</mi></mrow></math>''', margin=(12, 0, 0, 0))  # linear
         self._cm_adjust['scaling'] = Dropdown( label='linear',
@@ -1049,7 +1078,11 @@ class CubeMask:
             return dict( result='failure', update={ } )
 
         scaling_background = '#f8f8f8'
-        return column( self._cm_adjust['fig'],
+        return column( row( *[ self._cm_adjust['fig'] ] +
+                                 ### Firefox incorrectly sizes the colormap histogram plot resulting in the right
+                                 ### side being outside of the browser window... this may have to be tweaked again
+                                 ### when Jupyter notebooks are supported...
+                               ( [ Spacer( width=120 ) ] if have_firefox( ) else [ ] ), sizing_mode='stretch_both' ),
                        row( Tip( self._cm_adjust['min input'],
                                   tooltip=Tooltip( content=HTML("set minimum clip here or drag the left red line above"),
                                                    position="top" ) ),
@@ -1068,7 +1101,7 @@ class CubeMask:
                                          tooltip=Tooltip( content=HTML('set gamma value as indicated in the equation'),
                                                           position="top" ) ) ),
                                width=325, styles={'background-color': scaling_background, 'border': '1px solid black', 'padding': '10px'} ),
-                       sizing_mode="scale_width" )
+                       sizing_mode="stretch_both" )
 
     def bitmask_ctrl( self, reuse=None, **kw ):
 
@@ -1421,6 +1454,7 @@ class CubeMask:
                 init_args=dict( annotations=self._annotations, ctrl=self._pipe['control'], ids=self._ids,
                                 id=self._image_source.id,
                                 stats_source=self._statistics_source, chan_slider=self._slider,
+                                goto_txt=self._goto_txt,
                                 mask_region_button=None,
                                 mask_region_icons=None,
                                 mask_region_ds=self._bitmask_contour_maskmod_ds,
@@ -1445,12 +1479,14 @@ class CubeMask:
                 ###
                 init_args=dict( annotations=self._annotations, ctrl=self._pipe['control'], ids=self._ids,
                                 stats_source=self._statistics_source, chan_slider=self._slider,
+                                goto_txt=self._goto_txt,
                                 mask_region_button=self._mask_add_sub['mask'],
                                 mask_region_icons=self._mask_icons_,
                                 mask_region_ds=self._bitmask_contour_maskmod_ds,
                                 contour_ds=self._bitmask_contour_ds,
                                 status=self._status_div, statprec=7,
                                 selector=self._bitmask_color_selector,
+                                disable_add_sub = self._mask_add_sub_disable,
                                 user_init_script = self.init_script,
                                 freeze_cb = self._image_freeze_cb )
 
@@ -1460,7 +1496,8 @@ class CubeMask:
                                                                    ''' + self._js['mask-state-init'] +
                                                                    ( self._js['func-curmasks']( ) +
                                                                      self._js['key-state-funcs']
-                                                                     if self._mask_path is None else '' )  + self._js['setup-key-mgmt'] +
+                                                                     if self._mask_path is None else '' ) +
+                                                                        self._js['update-status'] + self._js['setup-key-mgmt'] +
                                                                    """// This function is called to collect the masks and/or stop
                                                                       // -->> collect_masks( ) is only defined if bitmask cube is NOT used
                                                                       document._cube_done = ( final_polys=null, cb=null ) => {
@@ -1510,6 +1547,8 @@ class CubeMask:
                                                                           stats_source.data = data
                                                                       }
                                                                       if ( stats_source ) source.update_statistics( stats_source.data ) /*** round pre-filled floats ***/
+                                                                      /*** this is the hook that allows the user to disable mask changes ***/
+                                                                      this.disable_add_sub = disable_add_sub
                                                                       if ( user_init_script ) { user_init_script.execute(this) }
                                                                    """ )
 
@@ -1618,12 +1657,6 @@ class CubeMask:
                               {input_screen}.value_ = {input_screen}.value = center.toFixed(5)
                           }}'''
 
-            update_status = '''function update_status( str ) {
-                                   const msg = `<b style='color:red;'>${str}</b>`
-                                   status.text = msg
-                                   setTimeout( ( ) => { if ( status.text == msg ) status.text = '' }, 5000 )
-                               }'''
-
             self._region_controls['tracking']['color-picker'].child.js_on_change( 'color',
                                                                                   CustomJS( args=dict( tracker=self._region_controls['tracking']['pointer'] ),
                                                                                             code='''tracker.line_color = cb_obj.color
@@ -1684,15 +1717,15 @@ class CubeMask:
                                                              text=text, source=self._image_source,
                                                              status=self._region_controls['coord']['status'],
                                                              stokes=(index,s) ),
-                                                  code=parse_ranges + update_status +
+                                                  code=parse_ranges + self._js['update-status'] +
                                                        #self._js['func-curmasks']('isource') +
                                                        '''if ( tracker._current_region ) {
                                                               status.text=''
                                                               const ranges = casalib.strparse_intranges(cb_obj.value,true)
                                                               const minmax = casalib.minmax(ranges.flat(Infinity))
 
-                                                              if ( minmax[0] < 0 ) nupdate_status('negative range')
-                                                              else if ( minmax[1] >= source.num_chans[1] ) update_status('exceeds channel range')
+                                                              if ( minmax[0] < 0 ) update_status_error('negative range')
+                                                              else if ( minmax[1] >= source.num_chans[1] ) update_status_error('exceeds channel range')
                                                               else {
                                                                   const chans_as_set = ranges.reduce(
                                                                                            (set,v) => casalib.forexpr( v[0], v[1], (s,i) => s.add([stokes[0],i]), set),
@@ -1703,7 +1736,7 @@ class CubeMask:
                                                                                                                 if (chan[0] == stokes[0]) acc.push(chan[1])
                                                                                                                 return acc }, chans_as_set, [ ] ) )
                                                               }
-                                                          } else update_status('no region selected')''' ) )
+                                                          } else update_status_error('no region selected')''' ) )
 
             ###
             ### set _region_controls_newpoly so it can be passed along and eventuall called by
@@ -1831,8 +1864,10 @@ class CubeMask:
                                                                       mask_region_button=self._mask_add_sub['mask'],
                                                                       mask_region_ds=self._bitmask_contour_maskmod_ds,
                                                                       contour_ds=self._bitmask_contour_ds,
+                                                                      disable_add_sub = self._mask_add_sub_disable,
                                                                       status=self._status_div ),
-                                                           code=self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
+                                                           code=self._js['update-status'] +
+                                                                self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
                                                                 '''if ( cb_obj._mode == 'cube' ) mask_add_cube( )
                                                                    else mask_add_chan( )''' )
             self._mask_add_sub['sub'].callback = CustomJS( args=dict( annotations=self._annotations,
@@ -1844,10 +1879,27 @@ class CubeMask:
                                                                       mask_region_button=self._mask_add_sub['mask'],
                                                                       mask_region_ds=self._bitmask_contour_maskmod_ds,
                                                                       contour_ds=self._bitmask_contour_ds,
+                                                                      disable_add_sub = self._mask_add_sub_disable,
                                                                       status=self._status_div ),
-                                                           code=self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
+                                                           code=self._js['update-status'] +
+                                                                self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
                                                                 '''if ( cb_obj._mode == 'cube' ) mask_sub_cube( )
                                                                    else mask_sub_chan( )''' )
+            self._mask_add_sub['dele'].callback = CustomJS( args=dict( annotations=self._annotations,
+                                                                      source=self._image_source,
+                                                                      ctrl=self._pipe['control'],
+                                                                      ids=self._ids,
+                                                                      stats_source=self._statistics_source,
+                                                                      mask_region_icons=self._mask_icons_,
+                                                                      mask_region_button=self._mask_add_sub['mask'],
+                                                                      mask_region_ds=self._bitmask_contour_maskmod_ds,
+                                                                      contour_ds=self._bitmask_contour_ds,
+                                                                      disable_add_sub = self._mask_add_sub_disable,
+                                                                      status=self._status_div ),
+                                                           code=self._js['update-status'] +
+                                                                self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
+                                                                '''if ( cb_obj._mode == 'cube' ) mask_del_cube( )
+                                                                   else mask_del_chan( )''' )
 
             self._mask_add_sub['mask'].callback = CustomJS( args=dict( annotations=self._annotations,
                                                                        contour_ds=self._bitmask_contour_ds,
@@ -1857,8 +1909,10 @@ class CubeMask:
                                                                        mask_region_button=self._mask_add_sub['mask'],
                                                                        mask_region_icons=self._mask_icons_,
                                                                        source=self._image_source,
+                                                                       disable_add_sub = self._mask_add_sub_disable,
                                                                        status=self._status_div ),
-                                                            code=self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
+                                                            code=self._js['update-status'] +
+                                                                self._js_mode_code['bitmask-hotkey-setup-add-sub'] +
                                                                  '''if ( mask_region_button.icon == mask_region_icons['on'] ) source._mask.clear( )
                                                                     else source.mask.set( region )''' )
 
@@ -2257,6 +2311,7 @@ class CubeMask:
         ###########################################################################################################################
         self._js_mode_code = {
                    'bitmask-hotkey-setup-add-sub':    '''
+                                              const default_add_sub_disabled_text = 'mask ops currently disabled'
                                               function mask_mod_result( msg ) {
                                                   if ( msg.result == 'success' ) {
                                                       if ( 'update' in msg && 'clear_region' in msg.update && msg.update.clear_region ) {
@@ -2267,6 +2322,12 @@ class CubeMask:
                                                   }
                                               }
                                               function mask_add_chan( ) {
+                                                  if ( disable_add_sub.values.disabled ) {
+                                                      update_status_error( disable_add_sub.values.message ?
+                                                                           disable_add_sub.values.message :
+                                                                           default_add_sub_disabled_text )
+                                                      return
+                                                  }
                                                   const anno = source._mask.get( )
                                                   if ( anno.xs.length > 0 && anno.ys.length > 0 ) {
                                                       ctrl.send( ids['mask-mod'],
@@ -2286,6 +2347,12 @@ class CubeMask:
                                                   } else if ( status ) status.text = '<p>no region found</p>'
                                               }
                                               function mask_sub_chan( ) {
+                                                  if ( disable_add_sub.values.disabled ) {
+                                                      update_status_error( disable_add_sub.values.message ?
+                                                                           disable_add_sub.values.message :
+                                                                           default_add_sub_disabled_text )
+                                                      return
+                                                  }
                                                   if ( annotations[0].xs.length > 0 && annotations[0].ys.length > 0 ) {
                                                       ctrl.send( ids['mask-mod'],
                                                                  { scope: 'chan',
@@ -2303,7 +2370,26 @@ class CubeMask:
                                                                  mask_mod_result )
                                                   } else if ( status ) status.text = '<p>no region found</p>'
                                               }
+                                              function mask_del_chan( ) {
+                                                  if ( disable_add_sub.values.disabled ) {
+                                                      update_status_error( disable_add_sub.values.message ?
+                                                                           disable_add_sub.values.message :
+                                                                           default_add_sub_disabled_text )
+                                                      return
+                                                  }
+                                                  ctrl.send( ids['mask-mod'],
+                                                             { scope: 'chan',
+                                                               action: 'delete',
+                                                               value: { chan: source.cur_chan } },
+                                                             mask_mod_result )
+                                              }
                                               function mask_add_cube( ) {
+                                                  if ( disable_add_sub.values.disabled ) {
+                                                      update_status_error( disable_add_sub.values.message ?
+                                                                           disable_add_sub.values.message :
+                                                                           default_add_sub_disabled_text )
+                                                      return
+                                                  }
                                                   if ( annotations[0].xs.length > 0 && annotations[0].ys.length > 0 ) {
                                                       ctrl.send( ids['mask-mod'],
                                                                  { scope: 'cube',
@@ -2322,6 +2408,12 @@ class CubeMask:
                                                   } else if ( status ) status.text = '<p>no region found</p>'
                                               }
                                               function mask_sub_cube( ) {
+                                                  if ( disable_add_sub.values.disabled ) {
+                                                      update_status_error( disable_add_sub.values.message ?
+                                                                           disable_add_sub.values.message :
+                                                                           default_add_sub_disabled_text )
+                                                      return
+                                                  }
                                                   if ( annotations[0].xs.length > 0 && annotations[0].ys.length > 0 ) {
                                                       ctrl.send( ids['mask-mod'],
                                                                  { scope: 'cube',
@@ -2338,6 +2430,19 @@ class CubeMask:
                                                                             src: mask_region_ds._src_chan } },
                                                                  mask_mod_result )
                                                   } else if ( status ) status.text = '<p>no region found</p>'
+                                              }
+                                              function mask_del_cube( ) {
+                                                  if ( disable_add_sub.values.disabled ) {
+                                                      update_status_error( disable_add_sub.values.message ?
+                                                                           disable_add_sub.values.message :
+                                                                           default_add_sub_disabled_text )
+                                                      return
+                                                  }
+                                                  ctrl.send( ids['mask-mod'],
+                                                             { scope: 'cube',
+                                                               action: 'delete',
+                                                               value: { chan: source.cur_chan } },
+                                                             mask_mod_result )
                                               }''',
                    'bitmask-hotkey-setup':    '''
                                               function state_translate_selection( dx, dy ) {
@@ -2828,20 +2933,32 @@ class CubeMask:
 
         self._js = { ### ImagePipe initialization code which manages the shift-key behavior which swiches between
                      ### addition/subtraction to a single channel VS add/sub from all channels of the cube...
+                     'update-status': '''function update_status_error( str ) {
+                                             if ( status ) {
+                                                 const msg = `<b style='color:red;'>${str}</b>`
+                                                 status.text = msg
+                                                 setTimeout( ( ) => { if ( status.text === msg ) status.text = '' }, 5000 )
+                                             }
+                                         }''',
                      'cube-init': '''add._mode = 'chan'
                                      sub._mode = 'chan'
+                                     dele._mode = 'chan'
                                      let foo = casalib.is_empty
                                      function cube_on( ) {
                                          add._mode = 'cube'
                                          add.icon = img['add']['cube']
                                          sub._mode = 'cube'
                                          sub.icon = img['sub']['cube']
+                                         dele._mode = 'cube'
+                                         dele.icon = img['dele']['cube']
                                      }
                                      function cube_off( ) {
                                          add._mode = 'chan'
                                          add.icon = img['add']['chan']
                                          sub._mode = 'chan'
                                          sub.icon = img['sub']['chan']
+                                         dele._mode = 'chan'
+                                         dele.icon = img['dele']['chan']
                                      }
                                      casalib.hotkeys( '*',
                                                       { keyup: true, scope: 'all' },
@@ -2968,8 +3085,8 @@ class CubeMask:
                                                                     ( spec ) => {
                                                                         if ( isource.masking_on( ) )
                                                                             refresh_pixel_display( spec.index,
+                                                                                                   spec.spectrum.pixel[spec.chan[1]],
                                                                                                    'mask' in spec ? spec.mask[spec.chan[1]] : undefined,
-                                                                                                   'mask' in spec && spec.mask[spec.chan[1]],
                                                                                                    pix_wrld && pix_wrld.label == 'pixel' ? false : true )
                                                                 } )
                                                if ( go_to && ! go_to._has_focus ) {
@@ -3330,10 +3447,16 @@ class CubeMask:
                                                                              // wrap round to the first channel
                                                                              source.channel( 0, source.cur_chan[0] )
                                                                              if ( chan_slider ) { chan_slider.value = 0 }
+                                                                             if ( goto_txt && goto_txt.value != chan_slider.value ) {
+                                                                                 goto_txt.value = String(chan_slider.value)
+                                                                             }
                                                                          } else {
                                                                              // advance to the next channel
                                                                              source.channel( source.cur_chan[1] + 1, source.cur_chan[0] )
                                                                              if ( chan_slider ) { chan_slider.value = source.cur_chan[1] + 1 }
+                                                                             if ( goto_txt && goto_txt.value != chan_slider.value ) {
+                                                                                 goto_txt.value = String(chan_slider.value)
+                                                                             }
                                                                          } } )
                                                // previous channel -- all modes
                                                casalib.hotkeys( 'alt+down,ctrl+down,command+down', { scope: source._hotkeys.id},
@@ -3342,10 +3465,16 @@ class CubeMask:
                                                                              // advance to the prev channel
                                                                              source.channel( source.cur_chan[1] - 1, source.cur_chan[0] )
                                                                              if ( chan_slider ) { chan_slider.value = source.cur_chan[1] - 1 }
+                                                                             if ( goto_txt && goto_txt.value != chan_slider.value ) {
+                                                                                 goto_txt.value = String(chan_slider.value)
+                                                                             }
                                                                          } else {
                                                                              // wrap round to the last channel
                                                                              source.channel( source.num_chans[1] - 1, source.cur_chan[0] )
                                                                              if ( chan_slider ) { chan_slider.value = source.num_chans[1] - 1 }
+                                                                             if ( goto_txt && goto_txt.value != chan_slider.value ) {
+                                                                                 goto_txt.value = String(chan_slider.value)
+                                                                             }
                                                                          } } )
 
                                                // next polarization/stokes -- all modes

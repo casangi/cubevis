@@ -9,7 +9,6 @@ declare global {
     interface Document { shutdown_in_progress_: boolean }
 }
 
-
 // Data source where the data is defined column-wise, i.e. each key in the
 // the data attribute is a column name, and its value is an array of scalars.
 // Each column should be the same length.
@@ -31,7 +30,7 @@ export class DataPipe extends DataSource {
 
     websocket: any
     // used to queue up messages sent to a particular id which already has outstanding
-    // messages for wwhich a reply has not been received.
+    // messages for which a reply has not been received.
     send_queue: {[key: string]: any} = { }
     // used to queue up messages which are sent BEFORE the connection is completely
     // established. After the connection is established, these message are resent in order.
@@ -39,16 +38,161 @@ export class DataPipe extends DataSource {
     pending: {[key: string]: any} = { }
     incoming_callbacks: {[key: string]: any} = { }
 
+    // Session conflict detection properties
+    private session_id: string
+    private instance_key: string         // unique identifier for this DataPipe purpose
+    private session_storage_key: string  // computed storage key
+    private heartbeat_interval?: number
+
     constructor(attrs?: Partial<DataPipe.Attrs>) {
         super(attrs);
+        this.session_id = casalib.object_id(this)
         /**********************************************************
         *** With Bokeh 3.0 properties are no longer initialized ***
         *** before the constructor is called...                 ***
         **********************************************************/
     }
 
+    private checkSessionConflict(): boolean {
+        try {
+            if (typeof(Storage) === "undefined") {
+                console.warn('localStorage not available, skipping session conflict detection')
+                return true
+            }
+
+            const existing = localStorage.getItem(this.session_storage_key)
+            if (existing) {
+                const existingData = JSON.parse(existing)
+                // Check if another session is active within the last 2 minutes
+                if (existingData.sessionId !== this.session_id && 
+                    Date.now() - existingData.timestamp < 120000) {
+
+                    const message = `CubeVis DataPipe (${this.instance_key}) is already running in another browser window or tab.\n\n` +
+                                  'Please close other instances and refresh this page, or\n' +
+                                  'close this window to continue using the other instance.'
+
+                    alert(message)
+
+                    if (window.opener || window.history.length === 1) {
+                        window.close()
+                    } else {
+                        window.location.href = 'about:blank'
+                    }
+                    return false
+                }
+            }
+
+            this.updateSessionHeartbeat()
+            return true
+
+        } catch(e) {
+            console.warn('Session conflict detection failed:', e)
+            return true
+        }
+    }
+
+    private updateSessionHeartbeat(): void {
+        try {
+            if (typeof(Storage) !== "undefined") {
+                localStorage.setItem(this.session_storage_key, JSON.stringify({
+                    sessionId: this.session_id,
+                    timestamp: Date.now(),
+                    instanceKey: this.instance_key
+                }))
+            }
+        } catch(e) {
+            console.warn('Session heartbeat update failed:', e)
+        }
+    }
+
+    private startHeartbeat(): void {
+        // Update timestamp every 30 seconds to keep session "alive"
+        this.heartbeat_interval = window.setInterval(() => {
+            this.updateSessionHeartbeat()
+        }, 30000)
+    }
+
+    private stopHeartbeat(): void {
+        if (this.heartbeat_interval) {
+            clearInterval(this.heartbeat_interval)
+            this.heartbeat_interval = undefined
+        }
+    }
+
+    private cleanupSession(): void {
+        try {
+            if (typeof(Storage) !== "undefined") {
+                const current = localStorage.getItem(this.session_storage_key)
+                if (current) {
+                    const currentData = JSON.parse(current)
+                    if (currentData.sessionId === this.session_id) {
+                        localStorage.removeItem(this.session_storage_key)
+                    }
+                }
+            }
+        } catch(e) {
+            console.warn('Session cleanup failed:', e)
+        }
+        this.stopHeartbeat()
+    }
+
+    private handleSessionConflictMessage(message: any): void {
+        console.error('Session conflict detected by server:', message)
+
+        let alertMessage = 'Session conflict detected by server.'
+
+        if (message.type === 'session_conflict') {
+            alertMessage = message.error || alertMessage
+        } else if (message.type === 'session_corruption') {
+            alertMessage = `Session corruption detected.\nExpected: ${message.expected}\nReceived: ${message.received}`
+        }
+
+        alert(alertMessage + '\n\nThis window will be closed to prevent data corruption.')
+
+        // Clean up session data
+        this.cleanupSession()
+
+        // Trigger custom event for any additional cleanup
+        const event = new CustomEvent('cubevis_session_conflict', {
+            detail: { message, sessionId: this.session_id }
+        })
+        window.dispatchEvent(event)
+
+        // Close the window after a brief delay
+        setTimeout(() => {
+            if (window.opener || window.history.length === 1) {
+                window.close()
+            } else {
+                window.location.href = 'about:blank'
+            }
+        }, 2000)
+    }
+
+    private generateInstanceKey(): string {
+        // Create unique key based on address and optional purpose
+        const addressKey = `${this.address[0]}_${this.address[1]}`
+
+        // Could extend this to include purpose/context if needed
+        // For example, if you pass a 'purpose' property in attrs:
+        // const purpose = this.attrs.purpose || 'default'
+        // return `${addressKey}_${purpose}`
+
+        return addressKey
+    }
+
     initialize(): void {
         super.initialize();
+
+        // Generate instance key based on address and purpose
+        // This allows multiple DataPipes for different purposes
+        this.instance_key = this.generateInstanceKey()
+        this.session_storage_key = `cubevis_datapipe_${this.instance_key}`
+
+        // Check for session conflicts before initializing websocket
+        if (!this.checkSessionConflict()) {
+            return // Don't initialize if session conflict detected
+        }
+
         let ws_address = `ws://${this.address[0]}:${this.address[1]}`
         console.log( "datapipe url:", ws_address )
 
@@ -74,6 +218,17 @@ export class DataPipe extends DataSource {
                     if ( 'id' in data && 'direction' in data && 'message' in data ) {
                         // @ts-ignore: 'data' is of type 'unknown'
                         let { id, message, direction }: { id: string, message: any, direction: string} = data
+
+                        // Handle session conflict/corruption messages from server
+                        if (direction === 'error' && (id === 'session_conflict' || id === this.session_id)) {
+                            if (message && (message.type === 'session_conflict' ||
+                                          message.type === 'session_corruption' ||
+                                          message.action === 'close_duplicate')) {
+                                this.handleSessionConflictMessage(message)
+                                return
+                            }
+                        }
+
                         if ( typeof message  === 'undefined' ) {
                             console.log( 'Error, event failure', data )
                         }
@@ -98,7 +253,7 @@ export class DataPipe extends DataSource {
                         } else {
                             if ( id in this.incoming_callbacks ) {
                                 let result = this.incoming_callbacks[id](message)
-                                this.websocket.send( serialize({ id, direction, message: result, session: casalib.object_id(this) }))
+                                this.websocket.send( serialize({ id, direction, message: result, session: this.session_id }))
                             }
                         }
                     } else {
@@ -112,7 +267,9 @@ export class DataPipe extends DataSource {
 
             this.websocket.onopen = ( ) => {
                 if ( ! reconnections ) {
-                    this.websocket.send(serialize({ id: 'initialize', direction: 'j2p', session: casalib.object_id(this) }))
+                    this.websocket.send(serialize({ id: 'initialize', direction: 'j2p', session: this.session_id }))
+                    // Start heartbeat after successful connection
+                    this.startHeartbeat()
                 } else if ( reconnections.connected == false ) {
                     console.log( `connection reestablished at ${new Date( )}` )
                 }
@@ -146,6 +303,24 @@ export class DataPipe extends DataSource {
                 }
             }
         }
+
+        // Set up cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            this.cleanupSession()
+        })
+
+        // Set up cleanup on page visibility change (tab switching)
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') {
+                // Don't clean up immediately on tab switch, just stop heartbeat temporarily
+                this.stopHeartbeat()
+            } else if (document.visibilityState === 'visible') {
+                // Resume heartbeat when tab becomes visible again
+                this.updateSessionHeartbeat()
+                this.startHeartbeat()
+            }
+        })
+
         /**********************************************
         *** initial connection to python websocket  ***
         **********************************************/
@@ -165,7 +340,7 @@ export class DataPipe extends DataSource {
     }
 
     send( id: string, message: {[key: string]: any}, cb: (msg:{[key: string]: any}) => any, squash_queue: boolean | ((msg:{[key: string]: any}) => boolean) = false ): void {
-        let msg = { id, message, direction: 'j2p', session: casalib.object_id(this) }
+        let msg = { id, message, direction: 'j2p', session: this.session_id }
         // queue message if:
         //    (1) websocket is not yet initialized
         //    (2) a result indicated by id is pending

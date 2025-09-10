@@ -1,78 +1,59 @@
 import {LayoutDOM, LayoutDOMView} from "@bokehjs/models/layouts/layout_dom"
 import type {FullDisplay} from "@bokehjs/models/layouts/layout_dom"
-import {UIElement, UIElementView} from "@bokehjs/models/ui/ui_element"
+import {UIElement} from "@bokehjs/models/ui/ui_element"
 import type * as p from "@bokehjs/core/properties"
-import {build_view} from "@bokehjs/core/build_views"
 
 export class ShowableView extends LayoutDOMView {
   declare model: Showable
 
-  ui_view: UIElementView
-
+  // SIMPLIFIED: Implement required child_models but let parent handle everything else
   get child_models(): UIElement[] {
-    return [this.model.ui]
+    return this.model.ui != null ? [this.model.ui] : []
   }
 
+  // MINIMAL OVERRIDE: Let the parent class handle all the complex initialization
+  // This ensures DataTable and other complex widgets initialize properly
   async lazy_initialize(): Promise<void> {
+    // Just call parent - it will handle child view building through child_models
     await super.lazy_initialize()
-    // Build the view for the wrapped UI element
-    this.ui_view = await build_view(this.model.ui, {parent: this}) as UIElementView
   }
 
+  // MINIMAL OVERRIDE: Let parent handle signals
+  connect_signals(): void {
+    super.connect_signals()
+    // Parent will automatically handle child model changes through child_models
+  }
+
+  // MINIMAL OVERRIDE: Let parent handle layout
   _update_layout(): void {
-    // Let the parent handle basic layout setup
     super._update_layout()
-    
-    // Update the wrapped UI's layout if it supports it
-    if (this.ui_view != null && 'update_layout' in this.ui_view) {
-      (this.ui_view as any).update_layout()
-    }
   }
 
+  // MINIMAL OVERRIDE: Simple rendering that lets parent do the work
   render(): void {
     super.render()
     
-    // Clear any existing content
-    this.el.innerHTML = ""
-    
-    // Render and append the wrapped UI
-    if (this.ui_view != null) {
-      this.ui_view.render()
-      this.el.appendChild(this.ui_view.el)
+    // The parent class should have already rendered our children
+    // Just ensure we have proper styling/structure if needed
+    if (this.child_views.length === 0 && this.model.ui == null) {
+      this.el.innerHTML = `<div style="color: gray; padding: 10px; border: 1px dashed gray;">
+        Showable: No UI element set
+      </div>`
     }
   }
 
+  // MINIMAL OVERRIDE: Let parent handle after_layout
   after_layout(): void {
     super.after_layout()
-    
-    // Ensure the wrapped UI gets proper after_layout handling if it supports it
-    if (this.ui_view != null && 'after_layout' in this.ui_view) {
-      (this.ui_view as any).after_layout()
-    }
   }
 
-  // Override sizing to delegate to the wrapped UI
+  // MINIMAL OVERRIDE: Let parent handle sizing
   protected _intrinsic_display(): FullDisplay {
-    if (this.ui_view != null) {
-      // Try to get display info from the wrapped view
-      const ui_display = (this.ui_view as any)._intrinsic_display?.()
-      if (ui_display != null) {
-        // If the wrapped view returns a FullDisplay, use it
-        if ('inner' in ui_display && 'outer' in ui_display) {
-          return ui_display as FullDisplay
-        }
-        // If it returns something else, we still need to return a FullDisplay
-        // so fall back to the parent's implementation
-      }
-    }
     return super._intrinsic_display()
   }
 
-  // Ensure proper cleanup
+  // MINIMAL OVERRIDE: Let parent handle cleanup
   remove(): void {
-    if (this.ui_view != null) {
-      this.ui_view.remove()
-    }
     super.remove()
   }
 }

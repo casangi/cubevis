@@ -23,26 +23,21 @@ class Showable(LayoutDOM):
         if not provided_sizing_params:
             kwargs['sizing_mode'] = 'stretch_both'
 
+        # CRITICAL FIX: Don't call _ensure_in_document during __init__
+        # Let Bokeh handle document management through the normal flow
         super().__init__(**kwargs)
         
         # Set the UI element
         if ui_element is not None:
             self.ui = ui_element
-            
-        # Ensure this gets added to the current document
-        self._ensure_in_document()
 
     ui = Instance(UIElement, help="""
     A UI element, which can be plots, layouts, widgets, or any other UIElement.
     """)
 
-    # Override children property to include our UI element
-    @property  
-    def children(self):
-        """Return the UI as children so it gets rendered by Bokeh's layout system"""
-        if self.ui is not None:
-            return [self.ui]
-        return []
+    # FIXED: Remove the children property override
+    # Let LayoutDOM handle its own children management
+    # The TypeScript side will handle the UI element rendering
 
     def _sphinx_height_hint(self):
         """Delegate height hint to the wrapped UI element"""
@@ -56,20 +51,78 @@ class Showable(LayoutDOM):
         from bokeh.io import curdoc
         current_doc = curdoc()
         
-        # If we're not in any document or in the wrong document, add to current
-        if self.document is None or self.document is not current_doc:
-            if self.document is not None and self in self.document.roots:
-                self.document.remove_root(self)
+        # FIXED: More careful document management
+        # Only add to document if we're not already in the right one
+        if self.document is None:
             current_doc.add_root(self)
             logger.debug(f"\tShowable::_ensure_in_document(): Added {id(self)} to document {id(current_doc)}")
+        elif self.document is not current_doc:
+            # Remove from old document first
+            if self in self.document.roots:
+                self.document.remove_root(self)
+            current_doc.add_root(self)
+            logger.debug(f"\tShowable::_ensure_in_document(): Moved {id(self)} to document {id(current_doc)}")
+
+        # HOOK: Backend startup when added to document
+        # This catches both direct show() calls and Bokeh's show() function
+        if not hasattr(self, '_backend_started'):
+            self._start_backend()
+            self._backend_started = True
 
     def show(self):
         """Explicitly show this Showable using Bokeh's show function"""
         # Ensure we're in the current document before showing
         self._ensure_in_document()
+
         from bokeh.io import show
         return show(self)
     
+    def _start_backend(self):
+        """Hook to start backend services when showing"""
+        # Override this in subclasses or set a callback
+        if hasattr(self, '_backend_startup_callback'):
+            try:
+                self._backend_startup_callback()
+                logger.debug(f"\tShowable::_start_backend(): Executed startup callback for {id(self)}")
+            except Exception as e:
+                logger.error(f"\tShowable::_start_backend(): Error in startup callback: {e}")
+
+        # Example: Start asyncio backend
+        # if hasattr(self, '_backend_manager'):
+        #     self._backend_manager.start()
+
+        logger.debug(f"\tShowable::_start_backend(): Backend startup hook called for {id(self)}")
+
+    def set_backend_startup_callback(self, callback):
+        """Set a callback to be called when show() is invoked"""
+        if not callable(callback):
+            raise ValueError("Backend startup callback must be callable")
+        self._backend_startup_callback = callback
+        logger.debug(f"\tShowable::set_backend_startup_callback(): Set callback for {id(self)}")
+
+    def _stop_backend(self):
+        """Hook to stop backend services - override in subclasses"""
+        if hasattr(self, '_backend_cleanup_callback'):
+            try:
+                self._backend_cleanup_callback()
+                logger.debug(f"\tShowable::_stop_backend(): Executed cleanup callback for {id(self)}")
+            except Exception as e:
+                logger.error(f"\tShowable::_stop_backend(): Error in cleanup callback: {e}")
+
+        logger.debug(f"\tShowable::_stop_backend(): Backend cleanup hook called for {id(self)}")
+
+    def set_backend_cleanup_callback(self, callback):
+        """Set a callback to be called when cleaning up backend"""
+        if not callable(callback):
+            raise ValueError("Backend cleanup callback must be callable")
+        self._backend_cleanup_callback = callback
+        logger.debug(f"\tShowable::set_backend_cleanup_callback(): Set callback for {id(self)}")
+
+    def __del__(self):
+        """Cleanup when Showable is destroyed"""
+        if hasattr(self, '_backend_started') and self._backend_started:
+            self._stop_backend()
+
     def _repr_html_(self):
         """
         HTML representation for Jupyter display.
@@ -107,7 +160,8 @@ class Showable(LayoutDOM):
         """String representation"""
         ui_type = type(self.ui).__name__ if self.ui else "None"
         doc_info = f"doc={id(self.document)}" if self.document else "doc=None"
-        return f"{self.__class__.__name__}(ui={ui_type}, {doc_info})"
+        backend_info = f"backend={'started' if getattr(self, '_backend_started', False) else 'not started'}"
+        return f"{self.__class__.__name__}(ui={ui_type}, {doc_info}, {backend_info})"
 
 
 # Enhanced debugging and examples
@@ -145,97 +199,140 @@ class ShowableManager:
         if hasattr(obj, 'ui') and obj.ui:
             print(f"  UI type: {type(obj.ui).__name__}")
             print(f"  UI doc: {id(obj.ui.document) if obj.ui.document else None}")
-            
-        # Check children
-        if hasattr(obj, 'children'):
-            print(f"  Children: {[type(child).__name__ for child in obj.children]}")
+            print(f"  UI in current doc: {obj.ui.document is curdoc() if obj.ui.document else False}")
+
+        if hasattr(obj, '_backend_started'):
+            print(f"  Backend started: {obj._backend_started}")
+
+        if hasattr(obj, '_backend_startup_callback'):
+            print(f"  Has startup callback: {callable(obj._backend_startup_callback)}")
     
     @staticmethod
     def create_safe_example():
         """Create a Showable that works with show() function"""
         from bokeh.plotting import figure
-        from bokeh.models import Button
+        from bokeh.models import Button, DataTable, TableColumn, ColumnDataSource
         from bokeh.layouts import column
         
         # Ensure notebook is set up
         ShowableManager.ensure_notebook_setup()
         
-        # Create fresh components - fix the deprecation warning
+        # Create fresh components with DataTable to test the fix
         plot = figure(title="Example Plot", width=400, height=300)
         plot.scatter([1, 2, 3, 4], [1, 4, 2, 3], size=15, color='blue', alpha=0.6)
         
+        # Create a DataTable similar to your use case
+        source = ColumnDataSource({
+            'labels': ['Mean', 'Std', 'Min', 'Max'],
+            'values': [2.5, 1.2, 1.0, 4.0]
+        })
+        columns = [
+            TableColumn(field='labels', title='Statistics', width=75),
+            TableColumn(field='values', title='Values')
+        ]
+        table = DataTable(source=source, columns=columns, index_position=None)
+
         button = Button(label="Click me!", button_type="success")
-        layout = column(button, plot)
+        layout = column(button, table, plot)
         
-        # Create Showable with the simpler constructor
+        # Create Showable with backend callback
         showable = Showable(ui_element=layout)
         
+        # Add a demo backend startup callback
+        def demo_backend_startup():
+            print("🚀 Demo backend starting up!")
+            print("   - Initializing async services...")
+            print("   - Ready to handle GUI interactions!")
+
+        showable.set_backend_startup_callback(demo_backend_startup)
+
         return showable
-    
+
     @staticmethod
-    def demonstrate_usage():
-        """Demonstrate the correct usage patterns"""
-        print("=== Creating Showable Example ===")
+    def demonstrate_backend_hooks():
+        """Demonstrate the backend startup hooks"""
+        print("=== Backend Hooks Demo ===")
+
+        # Create example with backend hooks
         showable = ShowableManager.create_safe_example()
         
-        print("\n=== Debug Document State ===")
-        ShowableManager.debug_document_state(showable, "Example Showable")
+        print("\n=== Showable Created ===")
+        ShowableManager.debug_document_state(showable, "Showable with Backend")
         
-        print("\n=== Correct Usage Patterns ===")
-        print("1. In Jupyter notebook:")
-        print("   show(showable)  # This will display inline")
-        print("   # OR")
-        print("   showable.show()  # Convenience method")
+        print("\n=== Usage Examples ===")
+        print("1. The backend will start automatically when you call:")
+        print("   show(showable)  # Backend starts before GUI appears")
         print()
-        print("2. From Python CLI:")
-        print("   show(showable)  # This will open in browser")
+        print("2. You can also set cleanup callbacks:")
+        print("   showable.set_backend_cleanup_callback(cleanup_func)")
         print()
-        print("3. What WON'T work reliably:")
-        print("   showable  # Automatic display - Bokeh doesn't support this consistently")
-        print()
-        print("The reason: Bokeh's architecture requires explicit show() calls.")
-        print("The show() function handles all the document management and display logic.")
+        print("3. For custom backends, subclass and override _start_backend():")
+        print("   class MyShowable(Showable):")
+        print("       def _start_backend(self):")
+        print("           # Custom backend startup logic")
         
         return showable
+
+
+# Example backend integration patterns
+class AsyncShowable(Showable):
+    """Example of Showable with built-in async backend support"""
     
-    @staticmethod
-    def test_show_methods():
-        """Test the show methods"""
-        showable = ShowableManager.create_safe_example()
+    def __init__(self, ui_element, backend_manager=None, **kwargs):
+        super().__init__(ui_element, **kwargs)
+        self.backend_manager = backend_manager
+        self._backend_thread = None
         
-        print("=== Testing Show Methods ===")
-        print("Created showable:", repr(showable))
+    def _start_backend(self):
+        """Start async backend in a separate thread"""
+        super()._start_backend()  # Call parent for callbacks
         
-        # Debug state before ensuring document integration
-        print("\n--- Before ensuring document integration ---")
-        ShowableManager.debug_document_state(showable, "Before Integration")
+        if self.backend_manager and not self._backend_thread:
+            import threading
+            import asyncio
+
+            def run_async_backend():
+                try:
+                    # Create new event loop for this thread
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    # Run the backend manager
+                    loop.run_until_complete(self.backend_manager.start())
+                except Exception as e:
+                    logger.error(f"Error in async backend: {e}")
+                finally:
+                    loop.close()
+
+            self._backend_thread = threading.Thread(target=run_async_backend, daemon=True)
+            self._backend_thread.start()
+            logger.info("Started async backend thread")
+
+    def _stop_backend(self):
+        """Stop async backend"""
+        super()._stop_backend()  # Call parent for callbacks
         
-        # Ensure it's in the document
-        showable._ensure_in_document()
-        
-        # Debug state after ensuring document integration
-        print("\n--- After ensuring document integration ---")
-        ShowableManager.debug_document_state(showable, "After Integration")
-        
-        print("\nTo display this showable, run one of:")
-        print("show(showable)")
-        print("showable.show()")
-        
-        return showable
+        if self.backend_manager:
+            # Signal backend to stop (implementation depends on your backend)
+            # self.backend_manager.stop()
+            pass
 
 
 # Convenience function for creating Showables
-def make_showable(ui_element, **kwargs):
+def make_showable(ui_element, backend_callback=None, **kwargs):
     """Convenience function to create a Showable from any Bokeh UI element"""
-    return Showable(ui_element=ui_element, **kwargs)
+    showable = Showable(ui_element=ui_element, **kwargs)
+    if backend_callback:
+        showable.set_backend_startup_callback(backend_callback)
+    return showable
 
 
 # Example usage
 if __name__ == "__main__":
-    print("=== Showable Class - Correct Usage Patterns ===\n")
+    print("=== Showable Class - With Backend Hooks ===\n")
     
-    # Demonstrate the correct way to use Showable
-    my_showable = ShowableManager.demonstrate_usage()
+    # Demonstrate backend hooks
+    my_showable = ShowableManager.demonstrate_backend_hooks()
     
     print(f"\nExample created: {repr(my_showable)}")
-    print("\nTo see the actual widget, run: show(my_showable)")
+    print("\nTo see the widget with backend startup, run: show(my_showable)")

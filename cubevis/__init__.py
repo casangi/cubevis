@@ -29,6 +29,16 @@
 used to build GUI applications for astronomy. It also contains some
 applications turn-key applications'''
 
+###
+### Useful for debugging -- currently these customized JavaScript paths must
+###     be configured here. However, it would be nice to rework where
+###     "initialize_bokeh" is called to allow this import line to be used
+###     without also causing "initialize_bokeh" to be called in the process.
+###     "{CACHEDIR}" is substituted with the actual path to "cubvis/__js__".
+###
+#from cubevis.bokeh.state import initialize_bokeh
+#initialize_bokeh( bokehjs_subst={ 'bokeh-tables': "{CACHEDIR}/bokeh-tables-3.6.1.js" } )
+
 import os as _os
 import logging as _logging
 

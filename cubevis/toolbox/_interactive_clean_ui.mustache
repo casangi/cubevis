@@ -29,15 +29,6 @@
 '''implementation of the ``InteractiveCleanUI`` application for interactive control
 of tclean'''
 
-###
-### Useful for debugging
-###
-###from cubevis.bokeh.state import initialize_bokeh
-###initialize_bokeh( bokehjs_subst=".../bokeh-3.2.2.js" )
-###
-
-from pprint import pprint
-
 import os
 import sys
 import copy
@@ -1302,7 +1293,7 @@ class InteractiveCleanUI:
                                                                         function (e) {
                                                                             // if the window is already closed this message is never
                                                                             // delivered (unless interactive clean is called again then
-                                                                            // the event shows up in the newly created control pipe
+                                                                            // the event shows up in the newly created control pipe)
                                                                             if ( document._casa_window_closed == false ) {
                                                                                 ctrl_pipe.send( ids['stop'],
                                                                                                 { action: 'stop', value: { } },

@@ -86,11 +86,21 @@ class InteractiveCleanJPY:
                                cell='12.0arcsec', specmode='cube',
                                interpolation='nearest', ... )( ) )
         '''
+        from bokeh.io import output_notebook
+        output_notebook( )
         context = exe.Context( exe.Mode.SYNC )
         bokeh_ui, exec_task = self._ui( context, "interactive-clean-jupyter" )
         print( "Testing showable......................." )
-        showed = Showable(bokeh_ui)
+        showed = Showable(bokeh_ui, name="iclean-jpy")
+        #showed = Showable(bokeh_ui)
         print(showed)
+        print(repr(showed))
+        print(str(showed))
+        print('------------------------------------------------------------------------------------------------------------------------')
+        print(showed._repr_html_( ))
+        print('------------------------------------------------------------------------------------------------------------------------')
+        sys.exit(1)
         #return showed
-        show(showed)
-        return context.execute( exec_task, "interactive-clean-jupyter" )
+        #show(showed)
+        #return context.execute( exec_task, "interactive-clean-jupyter" )
+        return None

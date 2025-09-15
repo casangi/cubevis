@@ -1,3 +1,8 @@
+
+### Useful for debugging
+#from cubevis.bokeh import set_cubevis_lib
+#set_cubevis_lib( bokeh_tables="{JSLIB}/bokeh-tables-3.6.1.js" )
+
 import os
 import ssl
 import certifi

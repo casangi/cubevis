@@ -44,8 +44,9 @@ from bokeh.models.callbacks import Callback
 
 from ...utils import serialize, deserialize
 from ..state import casalib_url, cubevisjs_url
+from .. import BokehInit
 
-class DataPipe(DataSource):
+class DataPipe(DataSource,BokehInit):
     """This class allows for communication between Python and the JavaScript implementation
     running in a browser. It allows Python code to send a message to JavaScript and register
     a callback which will receive the result. JavaScript code can do the same to request

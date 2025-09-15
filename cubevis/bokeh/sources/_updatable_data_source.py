@@ -38,8 +38,9 @@ import websockets
 from ._data_pipe import DataPipe
 from ..state import casalib_url, cubevisjs_url
 from ...utils import find_ws_address
+from .. import BokehInit
 
-class UpdatableDataSource(ColumnDataSource):
+class UpdatableDataSource(ColumnDataSource,BokehInit):
     """Implementation of a `ColumnDataSource` customized to allow updates from Python via
     WebSockets after the Bokeh GUI has been displayed. This class is derived from `ColumnDataSource`
     and provides an `update` function that can be used to update the plotted data. While this

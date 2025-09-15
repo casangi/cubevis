@@ -36,8 +36,9 @@ from bokeh.core.properties import Instance, Nullable
 from bokeh.models.callbacks import Callback
 from os.path import join,dirname
 from pathlib import Path
+from .. import BokehInit
 
-class DragTool(Drag):
+class DragTool(Drag,BokehInit):
     '''Tool that emits press and pressup events to signal start and end of drag'''
 
     start = Nullable(Instance(Callback), help="""

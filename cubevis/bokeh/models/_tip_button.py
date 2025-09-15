@@ -6,10 +6,9 @@ from bokeh.models.widgets.buttons import AbstractButton
 from bokeh.models.ui.icons import BuiltinIcon
 from bokeh.core.properties import Instance, Required, Override, Nullable, Float, Int, Either
 from bokeh.models import Tooltip
+from .. import BokehInit
 
-
-
-class TipButton(AbstractButton):
+class TipButton(AbstractButton,BokehInit):
     """ A button with a help symbol that displays additional text when hovered
     over or clicked.
     """

@@ -30,8 +30,9 @@ from bokeh.util.compiler import TypeScript
 from bokeh.core.properties import Instance, String
 from cubevis.bokeh.sources import ImageDataSource
 from ..state import casalib_url, cubevisjs_url
+from .. import BokehInit
 
-class WcsTicks(TickFormatter):
+class WcsTicks(TickFormatter,BokehInit):
 
     ## which axis are we labeling
     axis = String( )

@@ -32,8 +32,9 @@
 from bokeh.models import ResetTool, Tool
 from bokeh.core.properties import Instance, Nullable
 from bokeh.models.callbacks import Callback
+from .. import BokehInit
 
-class CBResetTool(ResetTool):
+class CBResetTool(ResetTool,BokehInit):
     '''Tool that emits press and pressup events to signal start and end of drag'''
 
     precallback = Nullable(Instance(Callback), help="""

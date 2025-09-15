@@ -32,9 +32,9 @@ from bokeh.util.compiler import TypeScript
 from bokeh.core.properties import Instance
 from . import ImagePipe
 from ..state import casalib_url, cubevisjs_url
+from .. import BokehInit
 
-
-class SpectraDataSource(ColumnDataSource):
+class SpectraDataSource(ColumnDataSource,BokehInit):
     """Implementation of a ``ColumnDataSource`` customized for spectral lines
     from `CASA`/`CNGI` image cubes. This is designed to use an `ImagePipe` to
     update the spectral line plot displayed in a browser, app or notebook with

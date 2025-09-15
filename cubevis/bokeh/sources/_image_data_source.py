@@ -34,8 +34,9 @@ from bokeh.core.properties import Instance, Tuple, Int, Nullable
 from bokeh.models.callbacks import Callback
 from ._image_pipe import ImagePipe
 from ..state import casalib_url, cubevisjs_url
+from .. import BokehInit
 
-class ImageDataSource(ColumnDataSource):
+class ImageDataSource(ColumnDataSource,BokehInit):
     """Implementation of a ``ColumnDataSource`` customized for planes from
     `CASA`/`CNGI` image cubes. This is designed to use an `ImagePipe` to
     update the image channel/plane displayed in a browser, app or notebook

@@ -1,6 +1,6 @@
 ########################################################################
 #
-# Copyright (C) 2021,2022
+# Copyright (C) 2021,2022,2025
 # Associated Universities, Inc. Washington DC, USA.
 #
 # This script is free software; you can redistribute it and/or modify it
@@ -30,14 +30,15 @@ used to build GUI applications for astronomy. It also contains some
 applications turn-key applications'''
 
 ###
-### Useful for debugging -- currently these customized JavaScript paths must
-###     be configured here. However, it would be nice to rework where
-###     "initialize_bokeh" is called to allow this import line to be used
-###     without also causing "initialize_bokeh" to be called in the process.
-###     "{CACHEDIR}" is substituted with the actual path to "cubvis/__js__".
+### Useful for debugging -- the default libraries can be set with
+###     'set_cubevis_lib(...)' which accepts only keyword parameters.
+###     The parameters represent the JavaScript libraries used by
+###     cubevis. The parameters are 'bokeh', 'bokeh_widgets',
+###     'bokeh_tables', 'casalib', 'cubevisjs'. "{JSLIB}" is substituted
+###     with the actual path to "cubvis/__js__", so for example:
 ###
-#from cubevis.bokeh.state import initialize_bokeh
-#initialize_bokeh( bokehjs_subst={ 'bokeh-tables': "{CACHEDIR}/bokeh-tables-3.6.1.js" } )
+#from cubevis.bokeh import set_cubevis_lib
+#set_cubevis_lib( bokeh_tables="{JSLIB}/bokeh-tables-3.6.1.js", cubevisjs=... )
 
 import os as _os
 import logging as _logging

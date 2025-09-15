@@ -1,6 +1,6 @@
 ########################################################################
 #
-# Copyright (C) 2021,2022,2023
+# Copyright (C) 2021,2022,2023,2025
 # Associated Universities, Inc. Washington DC, USA.
 #
 # This script is free software; you can redistribute it and/or modify it
@@ -35,13 +35,46 @@ from os import path
 from os.path import dirname, join, basename, abspath
 from urllib.parse import urlparse
 from bokeh import resources
+from IPython.display import Javascript, display
 from ...utils import path_to_url, static_vars, have_network
 
 logger = logging.getLogger(__name__)
 
+# Package-level registry
+_JUPYTER_STATE = {
+    'casalib_loaded': False,
+    'cubevisjs_loaded': False,
+    'models_registered': set()
+}
+
+def get_jupyter_state( ):
+    """Get the package-level Jupyter state"""
+    return _JUPYTER_STATE
+
+_CUBEVIS_LIBS = { }
+
+def get_cubevis_libs( ):
+    """Get the package-level default cubevis paths"""
+    return _CUBEVIS_LIBS
+
+def set_cubevis_lib( **kw ):
+    libs = get_cubevis_libs( )
+    for lib in [ 'bokeh', 'bokeh_widgets', 'bokeh_tables', 'casalib', 'cubevisjs' ]:
+        if lib in kw:
+            libs[lib] = kw[lib]
+    return libs
+
+def is_jupyter():
+    """Check if running in Jupyter"""
+    try:
+        from IPython import get_ipython
+        return get_ipython() is not None
+    except ImportError:
+        return False
+
 @static_vars( initialized=False,
               do_local_subst=not have_network( ) )
-def initialize_bokeh( bokehjs_subst={ } ):
+def order_bokeh_js( ):
     """Initialize `bokeh` for use with the ``cubevisjs`` extensions.
 
     The ``cubevisjs`` extensions for Bokeh are built into a stand-alone
@@ -55,34 +88,34 @@ def initialize_bokeh( bokehjs_subst={ } ):
     can be supplied by the ``bokehjs_subst`` parameter and it will be
     substituted for the standard Bokeh library.
 
-    Parameters
-    ----------
-    bokehjs_subst: dict
-        Bokeh dependent javascript library which is loaded after all
-        other Bokeh libraries have been loaded. The dictionary keys
-        which are checked are:
+    Setting defaults
+    ----------------
+    The default paths for the cubevis libs can be controlled by fetching
+    the default JavaScript libraries with get_cubevis_libs( ) and setting
+    the path to the desired libraries.
 
-             *  'bokeh'
-             *  'bokeh-widgets'
-             *  'bokeh-tables'
-             *  'casalib'
-             *  'cubevisjs'
+    Bokeh dependent javascript library which is loaded after all
+    other Bokeh libraries have been loaded. The dictionary keys
+    which are checked are:
 
-        The value for each of these keys should be the path to the
-        corresponding Bokeh library that should be used. This path
-        could be a local path, a URL or None. None is the default
-        in which case it loads the published library for the current
-        version of ``cubevisjs`` and ``bokeh``
+         *  'bokeh'
+         *  'bokeh_widgets'
+         *  'bokeh_tables'
+         *  'casalib'
+         *  'cubevisjs'
 
-        If paths provided as the dictionary values contain
-        "{CACHEDIR}" at the start of the string, then it will be
-        replaced with the path to the "cubevis/__js__" directory.
+    The value for each of these keys should be the path to the
+    corresponding Bokeh library that should be used. This path
+    could be a local path, a URL or None. None is the default
+    in which case it loads the published library for the current
+    version of ``cubevisjs`` and ``bokeh``
 
-    Example
-    -------
-    from cubevis.bokeh.state import initialize_bokeh
-    initialize_bokeh( bokehjs_subst={ 'bokeh': "{CACHEDIR}/bokeh-3.2.2.js" } )
+    If paths provided as the dictionary values contain
+    "{JSLIB}" at the start of the string, then it will be
+    replaced with the path to the "cubevis/__js__" directory.
     """
+
+    js_libraries=get_cubevis_libs( )
 
     def include_all_bokehjs( urls ):
         result = urls.copy( )
@@ -118,35 +151,35 @@ def initialize_bokeh( bokehjs_subst={ } ):
 
     def fill_default_urls( jspaths ):
         sys_paths = include_all_bokehjs( jspaths )
-        result = bokehjs_subst.copy( )
+        result = js_libraries.copy( )
         for url in sys_paths:
             if re.match( r'.*/bokeh-\d+\.\d+\.\d+(?:\.min)?\.js$', url ):
                 if 'bokeh' not in result:
-                    result['bokeh'] = retrieve_local_cache(url) if initialize_bokeh.do_local_subst else url
+                    result['bokeh'] = retrieve_local_cache(url) if order_bokeh_js.do_local_subst else url
             if re.match( r'.*/bokeh-widgets-\d+\.\d+\.\d+(?:\.min)?\.js$', url ):
-                if 'bokeh-widgets' not in result:
-                    result['bokeh-widgets'] = retrieve_local_cache(url) if initialize_bokeh.do_local_subst else url
+                if 'bokeh_widgets' not in result:
+                    result['bokeh_widgets'] = retrieve_local_cache(url) if order_bokeh_js.do_local_subst else url
             if re.match( r'.*/bokeh-tables-\d+\.\d+\.\d+(?:\.min)?\.js$', url ):
-                if 'bokeh-tables' not in result:
-                    result['bokeh-tables'] = retrieve_local_cache(url) if initialize_bokeh.do_local_subst else url
+                if 'bokeh_tables' not in result:
+                    result['bokeh_tables'] = retrieve_local_cache(url) if order_bokeh_js.do_local_subst else url
             if re.match( r'.*/cubevisjs.*(?:\.min)?\.js$', url ):
                 if 'cubevisjs' not in result:
-                    result['cubevisjs'] =  retrieve_local_cache(url) if initialize_bokeh.do_local_subst else url
+                    result['cubevisjs'] =  retrieve_local_cache(url) if order_bokeh_js.do_local_subst else url
             if re.match( r'.*/casalib.*(?:\.min)?\.js$', url ):
                 if 'casalib' not in result:
-                    result['casalib'] =  retrieve_local_cache(url) if initialize_bokeh.do_local_subst else url
+                    result['casalib'] =  retrieve_local_cache(url) if order_bokeh_js.do_local_subst else url
         return result
 
-    if initialize_bokeh.initialized:
+    if order_bokeh_js.initialized:
         ### only initialize once...
         return
 
     ###
-    ### Substitute "{CACHEDIR}/..."
+    ### Substitute "{JSLIB}/..." {CACHEDIR}
     ###
-    for key, value in bokehjs_subst.items():
-        if value.startswith("{CACHEDIR}/"):
-            bokehjs_subst[key] = path_to_url(value[11:])
+    for key, value in js_libraries.items():
+        if value.startswith("{JSLIB}/"):
+            js_libraries[key] = path_to_url(value[8:])
 
     ###
     ### NOTE that for this log message to be printed the user MUST use the
@@ -154,8 +187,9 @@ def initialize_bokeh( bokehjs_subst={ } ):
     ###
     ###    CUBEVIS_DEBUG=1
     ###
-    logger.debug(f"\tinitialize_bokeh( bokehjs_subst={bokehjs_subst} )")
-    initialize_bokeh.initialized = True
+    state = get_jupyter_state()
+    logger.debug(f"\torder_bokeh_js( ) w/ {len(state['models_registered'])} model types and {js_libraries} defaults")
+    order_bokeh_js.initialized = True
     resources.Resources._old_js_files = resources.Resources.js_files
 
     def js_files( self ):
@@ -186,23 +220,66 @@ def initialize_bokeh( bokehjs_subst={ } ):
                         raise RuntimeError( f'''debugging bokehjs substitution ('{u}') does not exist''' )
                 return result
             return [ ]
-        def cubevisjs_predicate( s ):
-            ### detect cubevisjs library URL
-            return basename(s).startswith('cubevisjs')
-        def replace_bokehjs( urls, replacement ):
-            ### substitute replacement list for the bokehjs library URL
-            result = [ ]
-            for url in urls:
-                if re.match( r'.*/bokeh-\d+\.\d+\.\d+(?:\.min)?\.js$', url ):
-                    result += replacement
-                else:
-                    result.append(url)
-            return result
 
-        user_bokehjs_replacement = expand_paths(bokehjs_subst)
+        user_bokehjs_replacement = expand_paths(js_libraries)
         sys_urls = fill_default_urls( resources.Resources._old_js_files.fget(self) )
 
-        return [ sys_urls['casalib'], sys_urls['bokeh'], sys_urls['bokeh-widgets'], sys_urls['bokeh-tables'], sys_urls['cubevisjs'] ]
+        return [ sys_urls['casalib'], sys_urls['bokeh'], sys_urls['bokeh_widgets'], sys_urls['bokeh_tables'], sys_urls['cubevisjs'] ]
 
     resources.Resources.js_files = property(js_files)
     return
+
+def register_model(model_class):
+    """Register a model class that needs dependencies"""
+    _JUPYTER_STATE['models_registered'].add(model_class.__name__)
+
+
+def ensure_jupyter_dependencies( ):
+    """Ensure Jupyter dependencies using package state"""
+    from . import casalib_path as get_casalib_path
+    from . import cubevisjs_path as get_cubevisjs_path
+
+    order_bokeh_js( )
+
+    state = get_jupyter_state()
+
+    if not is_jupyter():
+        return
+
+    if state['casalib_loaded'] and state['cubevisjs_loaded']:
+        return
+
+    js_libraries = get_cubevis_libs( )
+    js_defaults = { 'casalib': get_casalib_path( ),
+                    'cubevisjs': get_cubevisjs_path( ) }
+
+    logger.debug( f"\tensure_jupyter_dependencies( ) w/ {len(state['models_registered'])} model types and {js_libraries} paths")
+
+    def load_javascript( name ):
+        nonlocal js_libraries
+        nonlocal js_defaults
+
+        try:
+            lib_path = js_libraries[name] if name in js_libraries else None
+            if lib_path is None:
+                lib_path = js_defaults[name]
+            else:
+                if lib_path.startswith( "file://" ):
+                    lib_path = casalib_path[7:]
+
+            # Load casalib
+            with open(lib_path, 'r') as f:
+                display(Javascript(f"console.log('Loading {name}: {lib_path}'); {f.read()}"))
+
+            logger.debug( f"\tensure_jupyter_dependencies( ) loaded {lib_path}" )
+            return True
+
+        except Exception as e:
+            logger.warning( f"\tensure_jupyter_dependencies( ) FAILED load of {lib_path}" )
+            return False
+
+    if state['casalib_loaded'] == False and load_javascript( 'casalib' ):
+        state['casalib_loaded'] = True
+
+    if state['cubevisjs_loaded'] == False and load_javascript( 'cubevisjs' ):
+        state['cubevisjs_loaded'] = True

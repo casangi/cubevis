@@ -1,6 +1,6 @@
 ########################################################################
 #
-# Copyright (C) 2022
+# Copyright (C) 2022,2025
 # Associated Universities, Inc. Washington DC, USA.
 #
 # This script is free software; you can redistribute it and/or modify it
@@ -28,8 +28,8 @@
 '''Bokeh state management functions (both within the Bokeh distribution
 and with the Bokeh extensions found in ``cubevis.bokeh``.'''
 
-from ._initialize import initialize_bokeh
+from ._initialize import ensure_jupyter_dependencies, register_model, set_cubevis_lib
 from ._session import setup_session as initialize_session
 from ._palette import available_palettes, find_palette, default_palette
-from ._javascript import casalib_url, cubevisjs_url
+from ._javascript import casalib_path, casalib_url, cubevisjs_path, cubevisjs_url
 from ._current import CurrentBokehState as current_bokeh_state

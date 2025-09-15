@@ -27,3 +27,19 @@
 ########################################################################
 '''This module contains the extensions and additions to the functionality
 provided by Bokeh'''
+
+from .state import ensure_jupyter_dependencies as _ensure_jupyter_dependencies
+from .state import register_model as _register_model
+from .state import set_cubevis_lib
+
+class BokehInit:
+    """Mixin for all cubevis models"""
+
+    def __init_subclass__(cls, **kwargs):
+        """Auto-register subclasses"""
+        super().__init_subclass__(**kwargs)
+        _register_model(cls)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _ensure_jupyter_dependencies()

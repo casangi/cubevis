@@ -1,6 +1,6 @@
 ########################################################################
 #
-# Copyright (C) 2024
+# Copyright (C) 2024,2025
 # Associated Universities, Inc. Washington DC, USA.
 #
 # This script is free software; you can redistribute it and/or modify it
@@ -25,7 +25,6 @@
 #                        Charlottesville, VA 22903-2475 USA
 #
 ########################################################################
-from cubevis.bokeh.state import initialize_bokeh
 from tempfile import TemporaryDirectory
 from bokeh.io import output_file
 from os.path import join
@@ -52,12 +51,6 @@ class AppContext:
         return re.sub(r'[-\s]+', '-', value).strip('-_')
 
     def __init__( self, title, prefix=None, init_bokeh=True ):
-
-        ###
-        ### Setup up Bokeh paths, inject cubevis libraries into Bokeh HTML output
-        ###
-        if init_bokeh:
-            initialize_bokeh( )
 
         if prefix is None:
             ## create a prefix from the title

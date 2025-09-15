@@ -3,10 +3,11 @@ from bokeh.models.layouts import LayoutDOM
 from bokeh.models.ui import UIElement
 from bokeh.core.properties import Instance
 from bokeh.io import curdoc
+from .. import BokehInit
 
 logger = logging.getLogger(__name__)
 
-class Showable(LayoutDOM):
+class Showable(LayoutDOM,BokehInit):
     """Wrap a UIElement to make any Bokeh UI component showable with show()
     
     This class works by acting as a simple container that delegates to its UI element.
@@ -66,7 +67,7 @@ class Showable(LayoutDOM):
         # HOOK: Backend startup when added to document
         # This catches both direct show() calls and Bokeh's show() function
         if not hasattr(self, '_backend_started'):
-            self._start_backend()
+            self._start_backend( )
             self._backend_started = True
 
     def show(self):
@@ -136,32 +137,38 @@ class Showable(LayoutDOM):
             return '<div style="color: red; padding: 10px; border: 1px solid red;">Showable object with no UI set</div>'
         
         # Check if we're in a notebook environment  
+        from bokeh.embed import components
         from bokeh.io.state import curstate
         state = curstate()
         
         if state.notebook:
-            return '''
+            script, div = components(self)
+            return script + div
+        else:
+            return '''<!-- non-notebook environment -->
             <div style="padding: 15px; border: 2px solid #4CAF50; border-radius: 5px; background: #f9fff9; margin: 10px 0;">
                 <strong>📊 Showable Widget Ready</strong><br>
-                <em>Use <code>show(this_showable)</code> to display the Bokeh widget inline.</em><br>
-                <small>Contains: {}</small>
-            </div>
-            '''.format(type(self.ui).__name__ if self.ui else "None")
-        else:
-            return '''
-            <div style="padding: 15px; border: 2px solid #2196F3; border-radius: 5px; background: #f0f8ff; margin: 10px 0;">
-                <strong>📊 Showable Widget</strong><br>
-                <em>Use <code>show(this_showable)</code> to display in browser.</em><br>
+                <em>Notebook display is not enabled, run:</em>
+                        <p><pre>
+    from bokeh.io import output_notebook
+    output_notebook()</pre>
+                        <p><em>and try again.</em>
+                <hr>
                 <small>Contains: {}</small>
             </div>
             '''.format(type(self.ui).__name__ if self.ui else "None")
 
+    def __str__(self):
+        """String conversion"""
+        name = f", name='{self.name}'" if self.name else ""
+        return f"{self.__class__.__name__}(id='{self.id}'{name} ...)"
+
     def __repr__(self):
-        """String representation"""
+        """String representation from repr(...)"""
         ui_type = type(self.ui).__name__ if self.ui else "None"
-        doc_info = f"doc={id(self.document)}" if self.document else "doc=None"
-        backend_info = f"backend={'started' if getattr(self, '_backend_started', False) else 'not started'}"
-        return f"{self.__class__.__name__}(ui={ui_type}, {doc_info}, {backend_info})"
+        doc_info = f"doc='{id(self.document)}'" if self.document else "doc=None"
+        backend_info = f"backend='{'started' if getattr(self, '_backend_started', False) else 'not-started'}'"
+        return f"{self.__class__.__name__}(id='{self.id}', name='{self.name}', ui='{ui_type}', {doc_info}, {backend_info})"
 
 
 # Enhanced debugging and examples

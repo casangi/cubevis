@@ -18,4 +18,7 @@ After the build is complete, commit the artifacts to the JavaScript directory in
 
   bash$ cp dist/esbuild/casalib.min.js ../cubevis/__js__/casalib.min.js
 
+If this version will be published for public use, the versioned library, within :code:`dist/esbuild` should also be copied
+to the `casa download area <https://casa.nrao.edu/download/javascript/cubevis/casalib>`_.
+
 The :code:`cubevis` JavaScript libraries are installed as part of the Python package and are loaded directly from disk at Bokeh startup time. The version of these JavaScript libraries is intended to match whatever version of Bokeh that :code:`cubevis` currently depends upon.

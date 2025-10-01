@@ -10,12 +10,12 @@ authors = [
 dependencies = [
     "bokeh==3.6.1",
     "astropy>=5.1",
-    "regions>=0.6",
+    "regions>=0.8",
     "websockets>=10.3",
     "certifi",
     "matplotlib",
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 readme = "readme.rst"
 license = {text = "LGPL"}
 

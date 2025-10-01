@@ -55,7 +55,7 @@ else:
     logger.setLevel(_logging.INFO)
 
 from .private.apps import iclean, icleanjpy
-
+from .bokeh.state import cubevis_version
 
 def set_log_level(level):
     """Set the logging level for cubevis.
@@ -66,27 +66,6 @@ def set_log_level(level):
     if isinstance(level, str):
         level = getattr(_logging, level.upper())
     logger.setLevel(level)
-
-try:
-    from .__version__ import __version__
-except ModuleNotFoundError:
-    ###
-    ### __version__.py is generated as part of the build, but if the source tree
-    ### for cubevis is used directly for development, no __version__.py will be
-    ### available so set it to a default value...
-    ###
-    __version__ = {}
-
-try:
-    from ._js_versions import JS_LIBRARY_VERSIONS as javascript_versions
-except ImportError:
-    ###
-    ### _casalib_version.py is generated as part of the build with the
-    ### scripts/capture-casalib-version.py script. but if the source tree
-    ### for cubevis is used directly for development, no _casalib_version.py
-    ### will be available so set it to a default value...
-    ###
-    javascript_versions = { 'casalib': None, 'cubevisjs': None }
 
 def xml_interface_defs( ):
     '''This function may eventually return XML files for use in generating casashell bindings. An

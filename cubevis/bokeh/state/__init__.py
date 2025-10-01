@@ -28,8 +28,8 @@
 '''Bokeh state management functions (both within the Bokeh distribution
 and with the Bokeh extensions found in ``cubevis.bokeh``.'''
 
-from ._initialize import ensure_jupyter_dependencies, register_model, set_cubevis_lib
+from ._initialize import order_bokeh_js, register_model, set_cubevis_lib, get_js_loading, set_js_loading, get_js_loading_selection, JsLoading
 from ._session import setup_session as initialize_session
 from ._palette import available_palettes, find_palette, default_palette
-from ._javascript import casalib_path, casalib_url, cubevisjs_path, cubevisjs_url
+from ._javascript import casalib_path, casalib_url, cubevisjs_path, cubevisjs_url, get_github_tag, set_github_tag, cubevis_version
 from ._current import CurrentBokehState as current_bokeh_state

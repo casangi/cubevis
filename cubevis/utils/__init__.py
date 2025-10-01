@@ -45,6 +45,7 @@ from ._copydoc import copydoc
 from ._pkgs import find_pkg, load_pkg
 from ._jupyter import is_interactive_jupyter
 from ._browser import have_firefox
+from ._git import max_git_version
 
 from astropy import units
 from regions import PixCoord
@@ -167,28 +168,129 @@ def warn_import(package):
         error_msg("warning, %s" % warn_import.msgs[package].format(package=package))
 
 
-@static_vars(url='http://clients3.google.com/generate_204')
+@static_vars(url='http://clients3.google.com/generate_204',
+             cached_result=None,
+             cache_timeout=30)  # Cache result for 30 seconds
 def have_network():
-    '''check to see if an active network with general internet connectivity
-    is available. returns ``True`` if we have internet connectivity and
+    '''Check to see if an active network with general internet connectivity
+    is available. Returns ``True`` if we have internet connectivity and
     ``False`` if we do not.
-    '''
-    ###
-    ### see: https://stackoverflow.com/questions/50558000/test-internet-connection-for-python3
-    ###
-    try:
-        with urllib.request.urlopen(have_network.url) as response:
-            return response.status == 204
-    except urllib.error.HTTPError:
-        ### http error
-        return False
-    except urllib.error.ContentTooShortError:
-        return False
-    except urllib.error.URLError:
-        return False
-    except Exception:
-        return False
 
+    Uses Google's connectivity check endpoint and caches the result briefly
+    to avoid repeated network calls.
+    '''
+    import time
+
+    # Check cache first
+    current_time = time.time()
+    if (hasattr(have_network, 'last_check_time') and
+        have_network.cached_result is not None and
+        current_time - have_network.last_check_time < have_network.cache_timeout):
+        return have_network.cached_result
+
+    def check_connectivity():
+        try:
+            # Set a reasonable timeout to avoid hanging
+            request = urllib.request.Request(
+                have_network.url,
+                headers={'User-Agent': 'Mozilla/5.0 (compatible; connectivity-check)'}
+            )
+
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status == 204
+
+        except urllib.error.HTTPError as e:
+            # Some proxies might return different status codes but still have connectivity
+            if e.code in [200, 301, 302]:
+                return True
+            return False
+        except (urllib.error.ContentTooShortError,
+                urllib.error.URLError,
+                socket.timeout,
+                socket.gaierror,  # DNS resolution errors
+                OSError) as e:
+            return False
+        except Exception:
+            # Catch any other unexpected errors
+            return False
+
+    # Perform the check
+    result = check_connectivity()
+
+    # Cache the result
+    have_network.cached_result = result
+    have_network.last_check_time = current_time
+
+    return result
+
+# Alternative version with fallback URLs
+@static_vars(urls=['http://clients3.google.com/generate_204',
+                   'http://detectportal.firefox.com/success.txt',
+                   'http://www.msftconnecttest.com/connecttest.txt'],
+             cached_result=None,
+             cache_timeout=30)
+def have_network_with_fallback():
+    '''Check network connectivity using multiple fallback endpoints.
+
+    Tries multiple well-known connectivity check endpoints to increase
+    reliability in different network environments.
+    '''
+    import time
+
+    # Check cache first
+    current_time = time.time()
+    if (hasattr(have_network_with_fallback, 'last_check_time') and
+        have_network_with_fallback.cached_result is not None and
+        current_time - have_network_with_fallback.last_check_time < have_network_with_fallback.cache_timeout):
+        return have_network_with_fallback.cached_result
+
+    def try_url(url, expected_status=None, expected_content=None):
+        try:
+            request = urllib.request.Request(
+                url,
+                headers={'User-Agent': 'Mozilla/5.0 (compatible; connectivity-check)'}
+            )
+
+            with urllib.request.urlopen(request, timeout=5) as response:
+                if expected_status and response.status != expected_status:
+                    return False
+
+                if expected_content:
+                    content = response.read().decode('utf-8').strip()
+                    return content == expected_content
+
+                # For Google's endpoint, expect 204 No Content
+                if 'generate_204' in url:
+                    return response.status == 204
+
+                # For other endpoints, any successful response is good
+                return 200 <= response.status < 400
+
+        except Exception:
+            return False
+
+    # Try each URL until one succeeds
+    for url in have_network_with_fallback.urls:
+        if url == 'http://detectportal.firefox.com/success.txt':
+            if try_url(url, expected_content='success'):
+                result = True
+                break
+        elif url == 'http://www.msftconnecttest.com/connecttest.txt':
+            if try_url(url, expected_content='Microsoft Connect Test'):
+                result = True
+                break
+        else:  # Google's endpoint
+            if try_url(url):
+                result = True
+                break
+    else:
+        result = False
+
+    # Cache the result
+    have_network_with_fallback.cached_result = result
+    have_network_with_fallback.last_check_time = current_time
+
+    return result
 
 def ranges(iterable, order=sorted, key=lambda x: x):
     '''collect elements of ``iterable`` into tuple ranges where each tuple represents

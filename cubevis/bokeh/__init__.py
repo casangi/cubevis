@@ -28,7 +28,7 @@
 '''This module contains the extensions and additions to the functionality
 provided by Bokeh'''
 
-from .state import ensure_jupyter_dependencies as _ensure_jupyter_dependencies
+from .state import order_bokeh_js as _order_bokeh_js
 from .state import register_model as _register_model
 from .state import set_cubevis_lib
 
@@ -42,4 +42,4 @@ class BokehInit:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        _ensure_jupyter_dependencies()
+        _order_bokeh_js()

@@ -1036,7 +1036,7 @@ class InteractiveCleanUI:
                                             height_policy='max', width_policy='max' ),
                                        height_policy='max', width_policy='max' ), title=imid )
 
-    def __call__( self, exec_context, id=None ):
+    def __call__( self, exec_context, task_id=None ):
         '''Display GUI and process events until the user stops the application.
 
         Example:
@@ -1066,7 +1066,7 @@ class InteractiveCleanUI:
         ###
         ### cubevis.exe subpkg supports adding a stop condition to allow for interrupt,
         ### but it is not needed for synchronous execution, e.g.
-        ### self._exec['stop-condition'], self._exec['id'] = exec_context.create_stop_condition(id)
+        ### self._exec['stop-condition'], self._exec['id'] = exec_context.create_stop_condition(task_id)
         ###
         self._exec = { 'stop-condition': None }
 

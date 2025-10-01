@@ -1,12 +1,18 @@
 {
   "name": "cubevisjs",
-  "version": "0.0.20",
+  "version": "1.0.0",
   "description": "cubevis browser-side bokeh implementation",
   "license": "BSD-3-Clause",
   "keywords": [],
   "repository": {},
   "dependencies": {
-    "@bokeh/bokehjs": "3.5.2"
+    "@bokeh/bokehjs": "3.6.1"
   },
-  "devDependencies": {}
+  "devDependencies": {},
+  "scripts": {
+    "sync-bokeh": "node scripts/sync-bokeh-version.js",
+    "prebuild": "mkdir -p scripts",
+    "build": "node scripts/update-version.js && bokeh build && npm run copy-versioned",
+    "copy-versioned": "node scripts/copy-versioned.js"
+  }
 }

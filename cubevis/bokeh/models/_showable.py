@@ -15,7 +15,7 @@ class Showable(LayoutDOM,BokehInit):
     is not reliably supported by Bokeh's architecture.
     """
 
-    def __init__(self, ui_element=None, **kwargs):
+    def __init__(self, ui_element=None, backend_func=None, **kwargs):
         logger.debug(f"\tShowable::__init__(ui_element={type(ui_element).__name__ if ui_element else None}, {kwargs}): {id(self)}")
         
         # Set default sizing if not provided
@@ -31,6 +31,10 @@ class Showable(LayoutDOM,BokehInit):
         # Set the UI element
         if ui_element is not None:
             self.ui = ui_element
+
+        # Set the function to be called upon display
+        if backend_func is not None:
+            self._backend_startup_callback = backend_func
 
     ui = Instance(UIElement, help="""
     A UI element, which can be plots, layouts, widgets, or any other UIElement.
@@ -70,21 +74,30 @@ class Showable(LayoutDOM,BokehInit):
             self._start_backend( )
             self._backend_started = True
 
-    def show(self):
+    def show(self,start_backend=True):
         """Explicitly show this Showable using Bokeh's show function"""
         # Ensure we're in the current document before showing
         self._ensure_in_document()
 
         from bokeh.io import show
+        if start_backend: self._start_backend( )
         return show(self)
     
     def _start_backend(self):
         """Hook to start backend services when showing"""
         # Override this in subclasses or set a callback
+        if hasattr(self, '_backend_startup_count'):
+            ### backend has already been started
+            ### must figure out what is the proper way to handle this case
+            logger.debug(f"\tShowable::_start_backend(): backend already started for {id(self)} [{self._backend_startup_count}]")
+            self._backend_startup_count += 1
+            return
+
         if hasattr(self, '_backend_startup_callback'):
             try:
                 self._backend_startup_callback()
                 logger.debug(f"\tShowable::_start_backend(): Executed startup callback for {id(self)}")
+                self._backend_startup_count = 1
             except Exception as e:
                 logger.error(f"\tShowable::_start_backend(): Error in startup callback: {e}")
 
@@ -121,10 +134,10 @@ class Showable(LayoutDOM,BokehInit):
 
     def __del__(self):
         """Cleanup when Showable is destroyed"""
-        if hasattr(self, '_backend_started') and self._backend_started:
+        if hasattr(self, '_backend_startup_callback') and self._backend_startup_callback:
             self._stop_backend()
 
-    def _repr_html_(self):
+    def _repr_html_(self,start_backend=True):
         """
         HTML representation for Jupyter display.
         
@@ -143,9 +156,10 @@ class Showable(LayoutDOM,BokehInit):
         
         if state.notebook:
             script, div = components(self)
+            if start_backend: self._start_backend( )
             return script + div
         else:
-            return '''<!-- non-notebook environment -->
+            return f"<!-- error: non-notebook environment{' in ' + self.name if self.name else ''} -->" + '''
             <div style="padding: 15px; border: 2px solid #4CAF50; border-radius: 5px; background: #f9fff9; margin: 10px 0;">
                 <strong>📊 Showable Widget Ready</strong><br>
                 <em>Notebook display is not enabled, run:</em>
@@ -167,7 +181,7 @@ class Showable(LayoutDOM,BokehInit):
         """String representation from repr(...)"""
         ui_type = type(self.ui).__name__ if self.ui else "None"
         doc_info = f"doc='{id(self.document)}'" if self.document else "doc=None"
-        backend_info = f"backend='{'started' if getattr(self, '_backend_started', False) else 'not-started'}'"
+        backend_info = f"backend='{'started' if getattr(self, '_backend_startup_count', 0) else 'not-started'}'"
         return f"{self.__class__.__name__}(id='{self.id}', name='{self.name}', ui='{ui_type}', {doc_info}, {backend_info})"
 
 
@@ -208,8 +222,8 @@ class ShowableManager:
             print(f"  UI doc: {id(obj.ui.document) if obj.ui.document else None}")
             print(f"  UI in current doc: {obj.ui.document is curdoc() if obj.ui.document else False}")
 
-        if hasattr(obj, '_backend_started'):
-            print(f"  Backend started: {obj._backend_started}")
+        if hasattr(obj, '_backend_startup_count'):
+            print(f"  Backend start count: {obj._backend_startup_count}")
 
         if hasattr(obj, '_backend_startup_callback'):
             print(f"  Has startup callback: {callable(obj._backend_startup_callback)}")

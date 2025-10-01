@@ -31,6 +31,7 @@ of tclean'''
 from pprint import pprint
 
 import sys
+from uuid import uuid4
 from os.path import exists
 from bokeh.plotting import show
 from casatasks.private.imagerhelpers.input_parameters import ImagerParameters
@@ -1847,7 +1848,8 @@ class InteractiveClean:
                                cell='12.0arcsec', specmode='cube',
                                interpolation='nearest', ... )( ) )
         '''
+        self._id = uuid4( )
         context = exe.Context( exe.Mode.SYNC )
-        bokeh_ui, exec_task = self._ui( context, "interactive-clean" )
+        bokeh_ui, exec_task = self._ui( context, self._id )
         show(bokeh_ui)
-        return context.execute( exec_task, "interactive-clean" )
+        return context.execute( exec_task, self._id )

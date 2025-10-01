@@ -32,6 +32,7 @@ of tclean'''
 from pprint import pprint
 
 import sys
+from uuid import uuid4
 from os.path import exists
 from bokeh.plotting import show
 from casatasks.private.imagerhelpers.input_parameters import ImagerParameters
@@ -88,19 +89,9 @@ class InteractiveCleanJPY:
         '''
         from bokeh.io import output_notebook
         output_notebook( )
-        context = exe.Context( exe.Mode.SYNC )
-        bokeh_ui, exec_task = self._ui( context, "interactive-clean-jupyter" )
-        print( "Testing showable......................." )
-        showed = Showable(bokeh_ui, name="iclean-jpy")
-        #showed = Showable(bokeh_ui)
-        print(showed)
-        print(repr(showed))
-        print(str(showed))
-        print('------------------------------------------------------------------------------------------------------------------------')
-        print(showed._repr_html_( ))
-        print('------------------------------------------------------------------------------------------------------------------------')
-        sys.exit(1)
-        #return showed
-        #show(showed)
-        #return context.execute( exec_task, "interactive-clean-jupyter" )
-        return None
+        self._id = uuid4( )
+        context = exe.Context( exe.Mode.THREAD )
+        bokeh_ui, exec_task = self._ui( context, self._id )
+        ### name is used in summary output of the Showable
+        showed = Showable(bokeh_ui, lambda: context.execute( exec_task, self._id ), name="iclean-jpy")
+        return showed

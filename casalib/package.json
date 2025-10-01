@@ -1,6 +1,6 @@
 {
   "name": "casalib",
-  "version": "0.0.8",
+  "version": "1.0.0",
   "description": "TypeScript library for CASA development",
   "author": "CASA Visualization Team <casa-feedback@nrao.edu>",
   "repository": "https://https://github.com/casangi/casagui",
@@ -19,8 +19,9 @@
     "ts-node": "ts-node",
     "docs": "typedoc --entryPoints src/main.ts",
     "build": "tsc -p tsconfig.json",
+    "prebuild-all": "node scripts/update-version.js",
     "build-all": "yarn clean && yarn build && yarn esbuild-node && yarn esbuild-browser",
-    "esbuild-browser": "node scripts/build-browser.js --production",
+    "esbuild-browser": "node scripts/update-version.js && node scripts/build-browser.js --production",
     "esbuild-browser:dev": "node scripts/build-browser.js --dev",
     "esbuild-browser:watch": "node scripts/build-browser.js --watch",
     "esbuild-node": "esbuild src/main.ts --bundle --minify --sourcemap=external --platform=node --outfile=dist/esbuild/casalib-node.js"

@@ -13,5 +13,9 @@ is merged to trunk:
          window.close()"""
      ) +
 
+   Interestingly, this only happens when the **Stop** button is pressed. Closing
+   the tab is not caught. Should it be? It seems like there was a reason this was
+   problematic.
+
 *  *Next item here*
 

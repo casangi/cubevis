@@ -13,5 +13,5 @@ is merged to trunk:
          window.close()"""
      ) +
 
-*. _Next item here_
+*  *Next item here*
 

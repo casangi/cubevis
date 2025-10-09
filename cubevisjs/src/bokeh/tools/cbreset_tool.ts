@@ -44,6 +44,7 @@ export class CBResetTool extends ResetTool {
       postcallback: [ Nullable(Any), null ],
     }))
 
+    // @ts-expect-error - Custom tool name not in Bokeh's ToolName enum
     this.register_alias("cbreset", () => new CBResetTool())
   }
 

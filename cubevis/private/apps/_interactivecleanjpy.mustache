@@ -35,6 +35,7 @@ import sys
 from uuid import uuid4
 from os.path import exists
 from bokeh.plotting import show
+from bokeh.io import output_notebook
 from casatasks.private.imagerhelpers.input_parameters import ImagerParameters
 
 from cubevis.bokeh.models import Showable
@@ -49,6 +50,9 @@ class InteractiveCleanJPY:
 
     def __init__( self, vis, imagename{{# initParams}}, {{name}}={{default}}{{/ initParams}}, iclean_backend="PROD" ):
 
+        ###
+        ### Output notebook is implied.
+        output_notebook( )
 
         ###
         ### iclean_backend can be used to select alternate backends for interactive clean. This could be used

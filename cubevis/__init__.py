@@ -55,17 +55,6 @@ else:
     logger.setLevel(_logging.INFO)
 
 from .private.apps import iclean, icleanjpy
-from .bokeh.state import cubevis_version
-
-def set_log_level(level):
-    """Set the logging level for cubevis.
-
-    Args:
-        level: Logging level (e.g., logging.DEBUG, logging.INFO, 'DEBUG', 'INFO')
-    """
-    if isinstance(level, str):
-        level = getattr(_logging, level.upper())
-    logger.setLevel(level)
 
 def xml_interface_defs( ):
     '''This function may eventually return XML files for use in generating casashell bindings. An

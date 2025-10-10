@@ -28,7 +28,7 @@
 '''This contains functions which return the URLs to the ``cubevis``
 JavaScript libraries. The ``casalib`` library has Bokeh independent
 functions while the `cubevisjs` library has the Bokeh extensions'''
-from os import path
+from os import path, environ
 from pathlib import Path
 from packaging import version
 from bokeh import __version__ as bokeh_version
@@ -38,22 +38,10 @@ from ...utils import max_git_version as _max_git_version
 _local_library_path = None
 _bokeh_major_minor = None
 
-_CUBEVIS_VERSION = None
+_CUBEVIS_RELEASE_VERSION = None
+_CUBEVIS_GITHUB_VERSION = None
 _BOKEH_MAJOR_MINOR = None
-_GITHUB_TAG = None
-
-def set_github_tag( tag ):
-    global _GITHUB_TAG
-    if tag is None or isinstance(tag, str):
-        _GITHUB_TAG = tag
-
-def get_github_tag( ):
-    global _GITHUB_TAG
-    if _GITHUB_TAG is None:
-        version = cubevis_version( )
-        if version:
-            set_github_tag(f"v{version}")
-    return _GITHUB_TAG
+_CUBEVIS_JS_TAG = None
 
 def bokeh_major_minor( ):
     global _BOKEH_MAJOR_MINOR
@@ -63,20 +51,38 @@ def bokeh_major_minor( ):
         _BOKEH_MAJOR_MINOR = f"{v.major}.{v.minor}"
     return _BOKEH_MAJOR_MINOR
 
-def cubevis_version( ):
-    global _CUBEVIS_VERSION
-    if _CUBEVIS_VERSION is None:
+def github_js_tag( ):
+    global _CUBEVIS_JS_TAG
+    if _CUBEVIS_JS_TAG is None:
+        release = cubevis_release_version( )
+        if release is not None:
+            _CUBEVIS_JS_TAG = f"v{release}"
+        else:
+            if 'CUBEVIS_JS_TAG' in environ:
+                _CUBEVIS_JS_TAG = environ['CUBEVIS_JS_TAG']
+            else:
+                _CUBEVIS_JS_TAG = f"v{cubevis_github_version( )}"
+    return _CUBEVIS_JS_TAG
+
+def cubevis_github_version( ):
+    global _CUBEVIS_GITHUB_VERSION
+    if _CUBEVIS_GITHUB_VERSION is None:
+        _CUBEVIS_GITHUB_VERSION = _max_git_version( )
+    return _CUBEVIS_GITHUB_VERSION
+
+def cubevis_release_version( ):
+    global _CUBEVIS_RELEASE_VERSION
+    if _CUBEVIS_RELEASE_VERSION is None:
         try:
-            from ...__version__ import __version__ as package_version
-            _CUBEVIS_VERSION = package_version
-        except ModuleNotFoundError:
             ###
             ### __version__.py is generated as part of the build, but if the source tree
             ### for cubevis is used directly for development, no __version__.py will be
-            ### available so set it to a default value...
+            ### available...
             ###
-            _CUBEVIS_VERSION = _max_git_version( )
-    return _CUBEVIS_VERSION
+            from ...__version__ import __version__ as package_version
+            _CUBEVIS_RELEASE_VERSION = package_version
+        except ModuleNotFoundError: pass
+    return _CUBEVIS_RELEASE_VERSION
 
 def casalib_path( ):
     global _local_library_path
@@ -110,12 +116,12 @@ def cubevisjs_path( ):
 def casalib_url( ):
     prefer_local, prefer_network = get_js_loading_selection( )
     if prefer_network:
-        return f"https://cdn.jsdelivr.net/gh/casangi/cubevis@{get_github_tag( )}/cubevis/__js__/casalib.min.js"
+        return f"https://cdn.jsdelivr.net/gh/casangi/cubevis@{github_js_tag( )}/cubevis/__js__/casalib.min.js"
     else:
         return f"file://{casalib_path( )}"
 def cubevisjs_url( ):
     prefer_local, prefer_network = get_js_loading_selection( )
     if prefer_network:
-        return f"https://cdn.jsdelivr.net/gh/casangi/cubevis@{get_github_tag( )}/cubevis/__js__/bokeh-{bokeh_major_minor( )}/cubevisjs.min.js"
+        return f"https://cdn.jsdelivr.net/gh/casangi/cubevis@{github_js_tag( )}/cubevis/__js__/bokeh-{bokeh_major_minor( )}/cubevisjs.min.js"
     else:
         return f"file://{cubevisjs_path( )}"

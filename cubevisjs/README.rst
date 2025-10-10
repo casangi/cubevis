@@ -87,7 +87,9 @@ Build Instructions
 
 6. When the build seems good, publish ``cubevisjs.min.js`` with::
 
-   bash$ cp dist/cubevisjs.min.js ../cubevis/__js__/cubevisjs.min.js
+   bash$ BOKEH_VERSION=`bokeh -v | perl -pe 's|^(\d+\.\d+).*|$1|'`
+   bash$ mkdir ../cubevis/__js__/bokeh-$BOKEH_VERSION
+   bash$ cp dist/cubevisjs.min.js ../cubevis/__js__/bokeh-$BOKEH_VERSION
    bash$
 
    A version of the *minified* JavaScript library and accompaning files are also created

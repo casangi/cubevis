@@ -60,7 +60,10 @@ class ImageDataSource(ColumnDataSource,BokehInit):
     num_chans = Tuple( Int, Int, help="[ num-stokes-planes, num-channels ]" )
     cur_chan  = Tuple( Int, Int, help="[ num-stokes-planes, num-channels ]" )
 
-    __javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
+    ###################################################################
+    ### filled from cubevis.bokeh.state._initialize._order_bokeh_js ###
+    ###################################################################
+    #__javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
 
     def __init__( self, *args, **kwargs ):
         super( ).__init__( *args, **kwargs )

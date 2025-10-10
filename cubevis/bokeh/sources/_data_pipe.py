@@ -76,7 +76,10 @@ class DataPipe(DataSource,BokehInit):
     _active_sessions = {}  # session_id -> {'websocket': ws, 'timestamp': time, 'datapipe': instance}
     _session_lock = threading.Lock()
 
-    __javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
+    ###################################################################
+    ### filled from cubevis.bokeh.state._initialize._order_bokeh_js ###
+    ###################################################################
+    #__javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
 
     def __init__( self, *args, abort=None, **kwargs ):
         super( ).__init__( *args, **kwargs )

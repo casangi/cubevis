@@ -88,7 +88,10 @@ class UpdatableDataSource(ColumnDataSource,BokehInit):
     Internal id used for communcations.
     """ )
 
-    __javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
+    ###################################################################
+    ### filled from cubevis.bokeh.state._initialize._order_bokeh_js ###
+    ###################################################################
+    #__javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
 
     __created_pipe = False
     __id = str(uuid4( ))

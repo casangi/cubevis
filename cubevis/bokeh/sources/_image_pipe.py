@@ -85,7 +85,10 @@ class ImagePipe(DataPipe):
     data source for (raw) image channel histogram of intensities used with a "figure.quad(...)"
     ''')
 
-    __javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
+    ###################################################################
+    ### filled from cubevis.bokeh.state._initialize._order_bokeh_js ###
+    ###################################################################
+    #__javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
 
     def __open_image( self, image ):
         if self.__img is not None:

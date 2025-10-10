@@ -48,7 +48,10 @@ class SpectraDataSource(ColumnDataSource,BokehInit):
 
     image_source = Instance(ImagePipe)
 
-    __javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
+    ###################################################################
+    ### filled from cubevis.bokeh.state._initialize._order_bokeh_js ###
+    ###################################################################
+    #__javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
 
     def __init__( self, *args, **kwargs ):
         super( ).__init__( *args, **kwargs )

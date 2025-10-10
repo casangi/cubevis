@@ -269,6 +269,7 @@ def order_bokeh_js():
 
         # Get original Bokeh URLs as fallback
         original_urls = resources.Resources._old_js_files.fget(self)
+        logger.debug( f"Original Bokeh JavaScript: {original_urls}" )
 
         def get_url_or_fallback(lib_key, fallback_pattern=None):
             """Get resolved URL or find fallback from original Bokeh URLs"""

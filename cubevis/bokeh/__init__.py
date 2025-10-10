@@ -37,9 +37,9 @@ class BokehInit:
 
     def __init_subclass__(cls, **kwargs):
         """Auto-register subclasses"""
+        _order_bokeh_js()
         super().__init_subclass__(**kwargs)
         _register_model(cls)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        _order_bokeh_js()

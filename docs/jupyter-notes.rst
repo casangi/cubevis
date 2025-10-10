@@ -17,5 +17,14 @@ is merged to trunk:
    the tab is not caught. Should it be? It seems like there was a reason this was
    problematic.
 
-*  *Next item here*
+*  Enter in debugging notes::
+
+     print(f"Logger name: {logger.name}")
+     print(f"Logger level: {logger.level}")
+     print(f"Logger effective level: {logger.getEffectiveLevel()}")
+     print(f"Logger handlers: {logger.handlers}")
+     print(f"Logger propagate: {logger.propagate}")
+     print(f"Logger parent: {logger.parent}")
+     print(f"Root logger level: {logging.root.level}")
+     print(f"Root logger handlers: {logging.root.handlers}")
 

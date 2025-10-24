@@ -16,6 +16,7 @@ class Showable(LayoutDOM,BokehInit):
     """
 
     def __init__( self, ui_element=None, backend_func=None,
+                  result_retrieval=None,
                   notebook_width=1200, notebook_height=800,
                   notebook_sizing='fixed', **kwargs):
         logger.debug(f"\tShowable::__init__(ui_element={type(ui_element).__name__ if ui_element else None}, {kwargs}): {id(self)}")
@@ -37,6 +38,9 @@ class Showable(LayoutDOM,BokehInit):
         # Set the function to be called upon display
         if backend_func is not None:
             self._backend_startup_callback = backend_func
+        # function to be called to fetch the Showable GUI
+        # result (if one is/will be available)...
+        self._result_retrieval = result_retrieval
 
         self._notebook_width = notebook_width
         self._notebook_height = notebook_height
@@ -89,7 +93,19 @@ class Showable(LayoutDOM,BokehInit):
         from bokeh.io import show
         if start_backend: self._start_backend( )
         return show(self)
-    
+
+    def get_future(self):
+        if self._result_retrieval is None:
+            raise RuntimeError( f"{self.name if self.name else 'this showable'} does not return a result" )
+        else:
+            return self._result_retrieval( )
+
+    def get_result(self):
+        if self._result_retrieval is None:
+            raise RuntimeError( f"{self.name if self.name else 'this showable'} does not return a result" )
+        else:
+            return self._result_retrieval( ).result( )
+
     def _start_backend(self):
         """Hook to start backend services when showing"""
         # Override this in subclasses or set a callback

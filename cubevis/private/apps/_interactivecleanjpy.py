@@ -1839,8 +1839,13 @@ class InteractiveCleanJPY:
         #self._residual_path = self._residual_path(self._clean['gclean'],imid)
         #self._mask_path = self._mask_path(self._clean['gclean'],imid)
 
+        self._future = None
         self._ui = InteractiveCleanUI(self._gclean, self._args)
 
+    def get_future(self):
+        if self._future is None:
+            raise RuntimeError( "interactive clean app has not been launched yet" )
+        return self._future
 
     def __call__( self ):
         '''Display GUI and process events until the user stops the application.
@@ -1858,6 +1863,10 @@ class InteractiveCleanJPY:
         self._id = uuid4( )
         context = exe.Context( exe.Mode.THREAD )
         bokeh_ui, exec_task = self._ui( context, self._id )
+
+        def startup( ):
+            self._future = context.execute( exec_task, self._id )
+
         ### name is used in summary output of the Showable
-        showed = Showable(bokeh_ui, lambda: context.execute( exec_task, self._id ), name="iclean-jpy")
+        showed = Showable(bokeh_ui, startup, self.get_future, name="iclean-jpy")
         return showed

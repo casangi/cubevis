@@ -15,7 +15,9 @@ class Showable(LayoutDOM,BokehInit):
     is not reliably supported by Bokeh's architecture.
     """
 
-    def __init__(self, ui_element=None, backend_func=None, **kwargs):
+    def __init__( self, ui_element=None, backend_func=None,
+                  notebook_width=1200, notebook_height=800,
+                  notebook_sizing='fixed', **kwargs):
         logger.debug(f"\tShowable::__init__(ui_element={type(ui_element).__name__ if ui_element else None}, {kwargs}): {id(self)}")
         
         # Set default sizing if not provided
@@ -35,6 +37,11 @@ class Showable(LayoutDOM,BokehInit):
         # Set the function to be called upon display
         if backend_func is not None:
             self._backend_startup_callback = backend_func
+
+        self._notebook_width = notebook_width
+        self._notebook_height = notebook_height
+        self._notebook_sizing = notebook_sizing  # 'fixed' or 'stretch'
+        self._notebook_rendering = None
 
     ui = Instance(UIElement, help="""
     A UI element, which can be plots, layouts, widgets, or any other UIElement.
@@ -155,9 +162,34 @@ class Showable(LayoutDOM,BokehInit):
         state = curstate()
         
         if state.notebook:
+
+            if self._notebook_rendering:
+                # Return a lightweight reference instead of re-rendering the full GUI
+                return f'''
+                <div style="padding: 10px; background: #f0f8f0; border-left: 4px solid #4CAF50; margin: 5px 0;">
+                    <strong>↑ iclean GUI active above</strong>
+                    <small style="color: #666; display: block; margin-top: 5px;">
+                        Showable ID: {self.id[-8:]} | Backend: Running
+                    </small>
+                </div>
+                '''
+
+            # Jupyter context, there is no container with a predetermined size to
+            # which self.ui can automatically resize. The sympton of this problem
+            # was that only the top, narrow row of the UI was visible.
+            if self._notebook_sizing == 'fixed':
+                self.sizing_mode = None
+                self.width = self._notebook_width
+                self.height = self._notebook_height
+
             script, div = components(self)
             if start_backend: self._start_backend( )
-            return script + div
+            self._notebook_rendering = f'''
+{script}
+{div}
+'''
+            return self._notebook_rendering
+
         else:
             return f"<!-- error: non-notebook environment{' in ' + self.name if self.name else ''} -->" + '''
             <div style="padding: 15px; border: 2px solid #4CAF50; border-radius: 5px; background: #f9fff9; margin: 10px 0;">

@@ -11,6 +11,42 @@ export class ShowableView extends LayoutDOMView {
     return this.model.ui != null ? [this.model.ui] : []
   }
 
+  initialize() {
+    super.initialize();
+
+    // Add the attribute to suppress JupyterLab keyboard shortcuts
+    // This is the standard way to prevent interference with embedded widgets
+    this.el.setAttribute('data-lm-suppress-shortcuts', 'true');
+
+    // Before finding the above attribute, typing a number in one of the text
+    // entry widgets of interactive clean would cause that number of hash signs
+    // to be inserted into the beginning of the cell that caused the interactive
+    // clean GUI to be rendered (so entering '3' would cause '###' to be inserted).
+    // It seems as though this was because Jupyter Lab has hotkeys, and it was
+    // treating this cell as markdown. And '3' caused a "sub-sub-section" to be
+    // created. This selective keydown handler prevented Jupyter shortcuts while
+    // allowing other keys to reach child widgets. The above attribute seems to
+    // have been introduced to fix this problem. This code does not SEEM to be
+    // needed for "Clasic Notebooks" but it is left here for reference.
+//  const rootEl = this.el;
+//  rootEl.addEventListener('keydown', (e) => {
+//    const conflictingKeys = ['1', '2', '3', '4', '5', '6'];
+//
+//    // Check if the event's target is within the Showable
+//    if (rootEl.contains(e.target as Node)) {
+//      if (e.key) { // Check if the key property is present
+//        // Only block if the key is in our list of conflicting keys
+//        if (conflictingKeys.includes(e.key)) {
+//          e.stopPropagation();
+//          console.log('🛑 BLOCKED keydown at view root:', e.key);
+//        } else {
+//          console.log('✅ ALLOWED keydown to propagate:', e.key);
+//        }
+//      }
+//    }
+//  }, true); // Use the capturing phase to ensure this runs first
+}
+
   // MINIMAL OVERRIDE: Let the parent class handle all the complex initialization
   // This ensures DataTable and other complex widgets initialize properly
   async lazy_initialize(): Promise<void> {

@@ -16,21 +16,38 @@ declare global {
 }
 
 export function view( model: Model ): View | null {
-    // find view for model using the global Bokeh index
-    function find( view: View, id: string ): View | null {
-        for (const v of view.children()) {
-            if ( v.model.id === model.id ) {
-                return v
-            } else {
-                if ( v.children( ) ) {
-                    const result = find( v, id )
-                    if ( result ) return result;
-                }
-            }
+
+    function find_view(v: View): View | null {
+        if ( v.model === model ) {
+            return v
+        }
+        for (const child of v.children( )) {
+            const result = find_view(child)
+            if (result) return result
         }
         return null
     }
-    return find( Bokeh.index[Object.keys(Bokeh.index)[0]], model.id )
+
+    const document = model.document;
+    if ( ! document ) {        //model unattached to document
+        return null
+    }
+
+    // @ts-ignore: views_manager is internal to Document
+    const view_manager = document.views_manager
+    if ( ! view_manager ) {
+        return null
+    }
+
+    const root_views = view_manager.roots
+    for ( const v of root_views ) {
+        const found = find_view(v)
+        if ( found ) {
+            return found
+        }
+    }
+
+    return null
 }
 
 export function span_coords( span: SpanView ) {

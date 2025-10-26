@@ -16,7 +16,7 @@ dependencies = [
     "matplotlib",
 ]
 requires-python = ">=3.11"
-README = "README.rst"
+readme = "README.rst"
 license = {text = "LGPL"}
 
 [project.urls]

@@ -31,6 +31,8 @@ from os.path import join
 import unicodedata
 import re
 
+from ..utils import is_interactive_jupyter
+
 class AppContext:
 
     def _slugify(self, value, allow_unicode=False):
@@ -57,7 +59,8 @@ class AppContext:
             prefix = self._slugify(title)[:10]
         self.__workdir = TemporaryDirectory(prefix=prefix)
         self.__htmlpath = join( self.__workdir.name, f'''{self._slugify(title)}.html''' )
-        output_file( self.__htmlpath, title=title )
+        if not is_interactive_jupyter( ):
+            output_file( self.__htmlpath, title=title )
 
     def __del__( self ):
         ### remove work directory and its contents

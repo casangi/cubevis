@@ -15,6 +15,78 @@ class Showable(LayoutDOM,BokehInit):
     is not reliably supported by Bokeh's architecture.
     """
 
+    @property
+    def document(self):
+        """Get the document this model is attached to."""
+        return getattr(self, '_document', None)
+
+    @document.setter
+    def document(self, doc):
+        """
+        Intercept when Bokeh tries to attach us to a document.
+        This is called by bokeh.plotting.show() when it adds us to a document.
+        """
+        from bokeh.io.state import curstate
+        import traceback
+
+        # Allow None (detaching from document)
+        if doc is None:
+            self._document = None
+            return
+
+        state = curstate()
+
+        # Check calling context
+        stack = traceback.extract_stack()
+
+        # Detect if called from bokeh.plotting.show or bokeh.io.show
+        called_from_bokeh_show = any(
+            ('bokeh/io/' in frame.filename or 'bokeh\\io\\' in frame.filename or
+             'bokeh/plotting/' in frame.filename or 'bokeh\\plotting\\' in frame.filename)
+            for frame in stack[:-2]  # Exclude the last 2 frames (this setter and __setattr__)
+        )
+
+        # Check if called from our own methods
+        called_from_our_methods = any(
+            'Showable' in str(frame.line) or frame.filename.endswith('showable.py')
+            for frame in stack[-5:-2]  # Check recent frames
+        )
+
+        if state.file and called_from_bokeh_show and not called_from_our_methods:
+            raise RuntimeError(
+                f"\n{'='*70}\n"
+                f"❌ Cannot use bokeh.plotting.show() with {self.__class__.__name__}\n\n"
+                f"Please use one of these methods instead:\n"
+                f"  • my_showable.show()     # Custom show method\n"
+                f"  • my_showable            # Automatic display (evaluate in cell)\n\n"
+                f"Reason: bokeh.plotting.show() doesn't properly handle the custom\n"
+                f"sizing and backend requirements of Showable objects.\n"
+                f"{'='*70}\n"
+            )
+
+        # Validate environment
+        if not state.notebook:
+            raise RuntimeError(
+                f"{self.__class__.__name__} can only be displayed in Jupyter notebooks.\n"
+                f"Please run:\n"
+                f"  from bokeh.io import output_notebook\n"
+                f"  output_notebook()"
+            )
+
+        # Apply notebook sizing before attaching to document
+        if self._notebook_sizing == 'fixed':
+            self.sizing_mode = None
+            self.width = self._notebook_width
+            self.height = self._notebook_height
+
+        # Now set the document
+        self._document = doc
+
+        # Start backend if needed
+        if not hasattr(self, '_backend_started') or not self._backend_started:
+            self._start_backend()
+            self._backend_started = True
+
     def __init__( self, ui_element=None, backend_func=None,
                   result_retrieval=None,
                   notebook_width=1200, notebook_height=800,
@@ -85,15 +157,6 @@ class Showable(LayoutDOM,BokehInit):
             self._start_backend( )
             self._backend_started = True
 
-    def show(self,start_backend=True):
-        """Explicitly show this Showable using Bokeh's show function"""
-        # Ensure we're in the current document before showing
-        self._ensure_in_document()
-
-        from bokeh.io import show
-        if start_backend: self._start_backend( )
-        return show(self)
-
     def get_future(self):
         if self._result_retrieval is None:
             raise RuntimeError( f"{self.name if self.name else 'this showable'} does not return a result" )
@@ -160,65 +223,121 @@ class Showable(LayoutDOM,BokehInit):
         if hasattr(self, '_backend_startup_callback') and self._backend_startup_callback:
             self._stop_backend()
 
-    def _repr_html_(self,start_backend=True):
+    def _get_notebook_html(self, start_backend=True):
+        """
+        Common logic for generating HTML in notebook environments.
+        Returns the HTML string to display, or None if not in a notebook.
+        """
+        from bokeh.embed import components
+        from bokeh.io.state import curstate
+
+        state = curstate()
+
+        if not state.notebook:
+            return None
+
+        if self.ui is None:
+            return '<div style="color: red; padding: 10px; border: 1px solid red;">Showable object with no UI set</div>'
+
+        if self._notebook_rendering:
+            # Return a lightweight reference instead of re-rendering the full GUI
+            return f'''
+            <div style="padding: 10px; background: #f0f8f0; border-left: 4px solid #4CAF50; margin: 5px 0;">
+                <strong>↑ iclean GUI active above</strong>
+                <small style="color: #666; display: block; margin-top: 5px;">
+                    Showable ID: {self.id[-8:]} | Backend: Running
+                </small>
+            </div>
+            '''
+
+        # Apply notebook sizing for Jupyter context
+        if self._notebook_sizing == 'fixed':
+            self.sizing_mode = None
+            self.width = self._notebook_width
+            self.height = self._notebook_height
+
+        script, div = components(self)
+        if start_backend:
+            self._start_backend()
+
+        self._notebook_rendering = f'{script}\n{div}'
+        return self._notebook_rendering
+
+    def _repr_html_(self, start_backend=True):
         """
         HTML representation for Jupyter display.
-        
+
         Note: Bokeh doesn't reliably support automatic display via _repr_mimebundle_.
         This provides a helpful message directing users to use show().
         """
-        logger.debug(f"\tShowable::_repr_html_(): {id(self)}")
-        
-        if self.ui is None:
-            return '<div style="color: red; padding: 10px; border: 1px solid red;">Showable object with no UI set</div>'
-        
-        # Check if we're in a notebook environment  
-        from bokeh.embed import components
+        html = self._get_notebook_html(start_backend)
+
+        if html is not None:
+            return html
+
+        # Not in notebook environment
+        return f"<!-- error: non-notebook environment{' in ' + self.name if self.name else ''} -->" + '''
+        <div style="padding: 15px; border: 2px solid #4CAF50; border-radius: 5px; background: #f9fff9; margin: 10px 0;">
+            <strong>📊 Showable Widget Ready</strong><br>
+            <em>Notebook display is not enabled, run:</em>
+                    <p><pre>
+from bokeh.io import output_notebook
+output_notebook()</pre>
+                    <p><em>and try again.</em>
+            <hr>
+            <small>Contains: {}</small>
+        </div>
+        '''.format(type(self.ui).__name__ if self.ui else "None")
+
+    def _repr_mimebundle_(self, include=None, exclude=None):
+        """
+        MIME bundle representation for Jupyter display.
+
+        This is called by Bokeh's show() function and IPython's display system.
+        By implementing this, we ensure consistent display whether the object
+        is displayed via:
+        - Automatic display (just evaluating the object)
+        - IPython display(showable)
+        - Bokeh show(showable)
+        - showable.show()
+        """
         from bokeh.io.state import curstate
+
         state = curstate()
-        
+
         if state.notebook:
+            html = self._get_notebook_html(start_backend=True)
+            if html:
+                return {
+                    'text/html': html
+                }
+    
+        # Fall back to default Bokeh behavior for non-notebook environments
+        # Return None to let Bokeh handle it
+        return None
 
-            if self._notebook_rendering:
-                # Return a lightweight reference instead of re-rendering the full GUI
-                return f'''
-                <div style="padding: 10px; background: #f0f8f0; border-left: 4px solid #4CAF50; margin: 5px 0;">
-                    <strong>↑ iclean GUI active above</strong>
-                    <small style="color: #666; display: block; margin-top: 5px;">
-                        Showable ID: {self.id[-8:]} | Backend: Running
-                    </small>
-                </div>
-                '''
+    def show(self, start_backend=True):
+        """Explicitly show this Showable using inline display in Jupyter"""
+        from bokeh.io.state import curstate
 
-            # Jupyter context, there is no container with a predetermined size to
-            # which self.ui can automatically resize. The sympton of this problem
-            # was that only the top, narrow row of the UI was visible.
-            if self._notebook_sizing == 'fixed':
-                self.sizing_mode = None
-                self.width = self._notebook_width
-                self.height = self._notebook_height
+        self._ensure_in_document()
 
-            script, div = components(self)
-            if start_backend: self._start_backend( )
-            self._notebook_rendering = f'''
-{script}
-{div}
-'''
-            return self._notebook_rendering
+        state = curstate()
 
-        else:
-            return f"<!-- error: non-notebook environment{' in ' + self.name if self.name else ''} -->" + '''
-            <div style="padding: 15px; border: 2px solid #4CAF50; border-radius: 5px; background: #f9fff9; margin: 10px 0;">
-                <strong>📊 Showable Widget Ready</strong><br>
-                <em>Notebook display is not enabled, run:</em>
-                        <p><pre>
-    from bokeh.io import output_notebook
-    output_notebook()</pre>
-                        <p><em>and try again.</em>
-                <hr>
-                <small>Contains: {}</small>
-            </div>
-            '''.format(type(self.ui).__name__ if self.ui else "None")
+        if state.notebook:
+            # In Jupyter, display directly using IPython.display
+            from IPython.display import display, HTML
+    
+            html = self._get_notebook_html(start_backend)
+            if html:
+                display(HTML(html))
+                return
+
+        # Fall back to standard Bokeh show for non-notebook environments
+        from bokeh.io import show as bokeh_show
+        if start_backend:
+            self._start_backend()
+        bokeh_show(self)
 
     def __str__(self):
         """String conversion"""
@@ -231,177 +350,3 @@ class Showable(LayoutDOM,BokehInit):
         doc_info = f"doc='{id(self.document)}'" if self.document else "doc=None"
         backend_info = f"backend='{'started' if getattr(self, '_backend_startup_count', 0) else 'not-started'}'"
         return f"{self.__class__.__name__}(id='{self.id}', name='{self.name}', ui='{ui_type}', {doc_info}, {backend_info})"
-
-
-# Enhanced debugging and examples
-class ShowableManager:
-    """Helper class to manage Showable instances and debug document issues"""
-    
-    @staticmethod
-    def ensure_notebook_setup():
-        """Ensure notebook output is properly configured"""
-        from bokeh.io import output_notebook
-        from bokeh.io.state import curstate
-        
-        state = curstate()
-        if not state.notebook:
-            print("Setting up notebook output...")
-            output_notebook()
-        else:
-            print("Notebook output already configured")
-        
-        return state.notebook
-    
-    @staticmethod
-    def debug_document_state(obj, name="object"):
-        """Enhanced debugging with document tracking"""
-        from bokeh.io import curdoc
-        
-        print(f"=== {name} ===")
-        print(f"  Type: {type(obj).__name__}")
-        print(f"  ID: {getattr(obj, 'id', 'No ID')}")
-        print(f"  Object doc: {id(obj.document) if obj.document else None}")
-        print(f"  Current doc: {id(curdoc())}")
-        print(f"  In current doc: {obj.document is curdoc()}")
-        print(f"  In doc roots: {obj in curdoc().roots if obj.document else False}")
-        
-        if hasattr(obj, 'ui') and obj.ui:
-            print(f"  UI type: {type(obj.ui).__name__}")
-            print(f"  UI doc: {id(obj.ui.document) if obj.ui.document else None}")
-            print(f"  UI in current doc: {obj.ui.document is curdoc() if obj.ui.document else False}")
-
-        if hasattr(obj, '_backend_startup_count'):
-            print(f"  Backend start count: {obj._backend_startup_count}")
-
-        if hasattr(obj, '_backend_startup_callback'):
-            print(f"  Has startup callback: {callable(obj._backend_startup_callback)}")
-    
-    @staticmethod
-    def create_safe_example():
-        """Create a Showable that works with show() function"""
-        from bokeh.plotting import figure
-        from bokeh.models import Button, DataTable, TableColumn, ColumnDataSource
-        from bokeh.layouts import column
-        
-        # Ensure notebook is set up
-        ShowableManager.ensure_notebook_setup()
-        
-        # Create fresh components with DataTable to test the fix
-        plot = figure(title="Example Plot", width=400, height=300)
-        plot.scatter([1, 2, 3, 4], [1, 4, 2, 3], size=15, color='blue', alpha=0.6)
-        
-        # Create a DataTable similar to your use case
-        source = ColumnDataSource({
-            'labels': ['Mean', 'Std', 'Min', 'Max'],
-            'values': [2.5, 1.2, 1.0, 4.0]
-        })
-        columns = [
-            TableColumn(field='labels', title='Statistics', width=75),
-            TableColumn(field='values', title='Values')
-        ]
-        table = DataTable(source=source, columns=columns, index_position=None)
-
-        button = Button(label="Click me!", button_type="success")
-        layout = column(button, table, plot)
-        
-        # Create Showable with backend callback
-        showable = Showable(ui_element=layout)
-        
-        # Add a demo backend startup callback
-        def demo_backend_startup():
-            print("🚀 Demo backend starting up!")
-            print("   - Initializing async services...")
-            print("   - Ready to handle GUI interactions!")
-
-        showable.set_backend_startup_callback(demo_backend_startup)
-
-        return showable
-
-    @staticmethod
-    def demonstrate_backend_hooks():
-        """Demonstrate the backend startup hooks"""
-        print("=== Backend Hooks Demo ===")
-
-        # Create example with backend hooks
-        showable = ShowableManager.create_safe_example()
-        
-        print("\n=== Showable Created ===")
-        ShowableManager.debug_document_state(showable, "Showable with Backend")
-        
-        print("\n=== Usage Examples ===")
-        print("1. The backend will start automatically when you call:")
-        print("   show(showable)  # Backend starts before GUI appears")
-        print()
-        print("2. You can also set cleanup callbacks:")
-        print("   showable.set_backend_cleanup_callback(cleanup_func)")
-        print()
-        print("3. For custom backends, subclass and override _start_backend():")
-        print("   class MyShowable(Showable):")
-        print("       def _start_backend(self):")
-        print("           # Custom backend startup logic")
-        
-        return showable
-
-
-# Example backend integration patterns
-class AsyncShowable(Showable):
-    """Example of Showable with built-in async backend support"""
-    
-    def __init__(self, ui_element, backend_manager=None, **kwargs):
-        super().__init__(ui_element, **kwargs)
-        self.backend_manager = backend_manager
-        self._backend_thread = None
-        
-    def _start_backend(self):
-        """Start async backend in a separate thread"""
-        super()._start_backend()  # Call parent for callbacks
-        
-        if self.backend_manager and not self._backend_thread:
-            import threading
-            import asyncio
-
-            def run_async_backend():
-                try:
-                    # Create new event loop for this thread
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-
-                    # Run the backend manager
-                    loop.run_until_complete(self.backend_manager.start())
-                except Exception as e:
-                    logger.error(f"Error in async backend: {e}")
-                finally:
-                    loop.close()
-
-            self._backend_thread = threading.Thread(target=run_async_backend, daemon=True)
-            self._backend_thread.start()
-            logger.info("Started async backend thread")
-
-    def _stop_backend(self):
-        """Stop async backend"""
-        super()._stop_backend()  # Call parent for callbacks
-        
-        if self.backend_manager:
-            # Signal backend to stop (implementation depends on your backend)
-            # self.backend_manager.stop()
-            pass
-
-
-# Convenience function for creating Showables
-def make_showable(ui_element, backend_callback=None, **kwargs):
-    """Convenience function to create a Showable from any Bokeh UI element"""
-    showable = Showable(ui_element=ui_element, **kwargs)
-    if backend_callback:
-        showable.set_backend_startup_callback(backend_callback)
-    return showable
-
-
-# Example usage
-if __name__ == "__main__":
-    print("=== Showable Class - With Backend Hooks ===\n")
-    
-    # Demonstrate backend hooks
-    my_showable = ShowableManager.demonstrate_backend_hooks()
-    
-    print(f"\nExample created: {repr(my_showable)}")
-    print("\nTo see the widget with backend startup, run: show(my_showable)")

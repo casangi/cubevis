@@ -49,11 +49,6 @@ class InteractiveCleanJPY:
     '''
 
     def __init__( self, vis, imagename{{# initParams}}, {{name}}={{default}}{{/ initParams}}, iclean_backend="PROD" ):
-
-        ###
-        ### Output notebook is implied.
-        output_notebook( )
-
         ###
         ### iclean_backend can be used to select alternate backends for interactive clean. This could be used
         ### to enable a backend with extended features or it could be used to select a stub backend designed
@@ -96,8 +91,15 @@ class InteractiveCleanJPY:
                                cell='12.0arcsec', specmode='cube',
                                interpolation='nearest', ... )( ) )
         '''
-        from bokeh.io import output_notebook
-        output_notebook( )
+        ###
+        ### Output notebook is implied.
+        ###
+        from bokeh.io.state import curstate
+        state = curstate()
+        if not state.notebook:
+            from bokeh.io import output_notebook
+            output_notebook( )
+
         self._id = uuid4( )
         context = exe.Context( exe.Mode.THREAD )
         bokeh_ui, exec_task = self._ui( context, self._id )

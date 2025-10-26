@@ -1509,7 +1509,7 @@ class CubeMask:
                                                                             ##     """console.log("Running from script/terminal. Closing window.")
                                                                             ##        window.close()"""
                                                                             ##) +
-                                                                            ("""console.log("Running in jupyter notebook. Not closing window.")""" if True else
+                                                                            ("""console.log("Running in jupyter notebook. Not closing window.")""" if is_interactive_jupyter( ) else
                                                                                  """console.log("Running from script/terminal. Closing window.")
                                                                                     window.close()"""
                                                                             ) +

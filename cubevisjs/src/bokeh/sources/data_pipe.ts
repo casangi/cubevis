@@ -55,9 +55,10 @@ export class DataPipe extends DataSource {
 
     private isJupyterContext(): boolean {
         // Check for Jupyter-specific window properties
-        return typeof (window as any).Jupyter !== 'undefined' ||
-               typeof (window as any)._jupyter_labextension_metadata !== 'undefined' ||
-               (window.frameElement !== null && window.parent !== window); // Running in an iframe
+        return window.self !== window.top
+      //return typeof (window as any).Jupyter !== 'undefined' ||
+      //       typeof (window as any)._jupyter_labextension_metadata !== 'undefined' ||
+      //       (window.frameElement !== null && window.parent !== window); // Running in an iframe
     }
 
     private checkSessionConflict(): boolean {

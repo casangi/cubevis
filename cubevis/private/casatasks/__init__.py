@@ -28,4 +28,3 @@
 '''casatask equivalent bindings'''
 
 from .iclean import iclean
-from .icleanjpy import icleanjpy

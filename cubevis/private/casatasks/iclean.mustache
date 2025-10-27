@@ -66,4 +66,8 @@ class _iclean:
             task_result = _end_log( _logging_state_, 'iclean', task_result )
         return task_result
 
+    def notebook( self, *args, **kwargs ):
+        from .iclean_notebook import iclean_notebook
+        return iclean_notebook( *args, **kwargs )
+
 iclean = _iclean( )

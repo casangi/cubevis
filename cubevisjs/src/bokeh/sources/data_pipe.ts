@@ -53,6 +53,13 @@ export class DataPipe extends DataSource {
         **********************************************************/
     }
 
+    private isJupyterContext(): boolean {
+        // Check for Jupyter-specific window properties
+        return typeof (window as any).Jupyter !== 'undefined' ||
+               typeof (window as any)._jupyter_labextension_metadata !== 'undefined' ||
+               (window.frameElement !== null && window.parent !== window); // Running in an iframe
+    }
+
     private checkSessionConflict(): boolean {
         try {
             if (typeof(Storage) === "undefined") {
@@ -67,18 +74,35 @@ export class DataPipe extends DataSource {
                 if (existingData.sessionId !== this.session_id && 
                     Date.now() - existingData.timestamp < 120000) {
 
-                    const message = `CubeVis DataPipe (${this.instance_key}) is already running in another browser window or tab.\n\n` +
-                                  'Please close other instances and refresh this page, or\n' +
-                                  'close this window to continue using the other instance.'
+                    if (this.isJupyterContext( )) {
+                        console.group(`DataPipe ${this.instance_key} conflict detected in Jupyter context`);
+                        console.log('Current session ID:', this.session_id);
+                        console.log('Existing session ID:', existingData.sessionId);
+                        console.log('Existing timestamp:', new Date(existingData.timestamp).toISOString());
+                        console.log('Age of existing session (ms):', Date.now() - existingData.timestamp);
+                        console.log('Address:', this.address);
+                        console.log('Instance key:', this.instance_key);
+                        console.log('Storage key:', this.session_storage_key);
+                        console.log('Existing data:', existingData);
+                        console.log('All localStorage keys:', Object.keys(localStorage).filter(k => k.startsWith('cubevis_datapipe_')));
+                        console.groupEnd();
 
-                    alert(message)
-
-                    if (window.opener || window.history.length === 1) {
-                        window.close()
+                        // In Jupyter, we'll allow it but keep monitoring
+                        // The existing session will be overwritten by updateSessionHeartbeat below
                     } else {
-                        window.location.href = 'about:blank'
+                        const message = `CubeVis DataPipe (${this.instance_key}) is already running in another browser window or tab.\n\n` +
+                                        'Please close other instances and refresh this page, or\n' +
+                                        'close this window to continue using the other instance.'
+
+                        alert(message)
+
+                        if (window.opener || window.history.length === 1) {
+                            window.close()
+                        } else {
+                            window.location.href = 'about:blank'
+                        }
+                        return false
                     }
-                    return false
                 }
             }
 

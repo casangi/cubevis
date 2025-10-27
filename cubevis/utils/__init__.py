@@ -104,29 +104,69 @@ def path_to_url(path):
         else:
             return path
 
+_DEBUG_NOTEBOOK_REUSE_ = False
+if _DEBUG_NOTEBOOK_REUSE_:
+    def find_ws_address(address='127.0.0.1'):
+        '''Find free port on ``address`` network and return a tuple with ``address`` and port number
 
-def find_ws_address(address='127.0.0.1'):
-    '''Find free port on ``address`` network and return a tuple with ``address`` and port number
+        This function uses the low level socket function to find a free port and return
+        a tuple representing the address plus port number.
 
-    This function uses the low level socket function to find a free port and return
-    a tuple representing the address plus port number.
+        Parameters
+        ----------
+        address: str
+            network to be probed for an available port
 
-    Parameters
-    ----------
-    address: str
-        network to be probed for an available port
+        Returns
+        -------
+        tuple of str and int
+            network address (`str`) and port number (`int`)
+        '''
+        sock = socket()
+        sock.bind((address, 0))
+        result = sock.getsockname()
+        sock.close()
+        return result
+else:
 
-    Returns
-    -------
-    tuple of str and int
-        network address (`str`) and port number (`int`)
-    '''
-    sock = socket()
-    sock.bind((address, 0))
-    result = sock.getsockname()
-    sock.close()
-    return result
+    _returned_ports = set()
 
+    def find_ws_address(address='127.0.0.1'):
+        '''Find free port on ``address`` network and return a tuple with ``address`` and port number
+
+        This function finds a free port that hasn't been returned before in this session.
+        It keeps sockets open during the search to guarantee uniqueness, then closes them
+        before returning.
+
+        Parameters
+        ----------
+        address: str
+            network to be probed for an available port
+
+        Returns
+        -------
+        tuple of str and int
+            network address (`str`) and port number (`int`)
+        '''
+        opened_sockets = []
+        try:
+            max_attempts = 2500
+            for _ in range(max_attempts):
+                sock = socket()
+                sock.bind((address, 0))
+                opened_sockets.append(sock)
+                result = sock.getsockname()
+                port = result[1]
+
+                if port not in _returned_ports:
+                    _returned_ports.add(port)
+                    return result
+
+            raise RuntimeError(f"Could not find unused port after {max_attempts} attempts")
+        finally:
+            # Always close all opened sockets
+            for sock in opened_sockets:
+                sock.close()
 
 def partition(pred, iterable):
     '''Split ``iterable`` into two lists based on ``pred`` predicate.

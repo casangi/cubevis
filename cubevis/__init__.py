@@ -54,7 +54,7 @@ if _os.getenv('CUBEVIS_DEBUG', '').lower() in ('1', 'true', 'yes', 'on'):
 else:
     logger.setLevel(_logging.INFO)
 
-from .private.apps import iclean, icleanjpy
+from .private.apps import iclean
 
 def xml_interface_defs( ):
     '''This function may eventually return XML files for use in generating casashell bindings. An

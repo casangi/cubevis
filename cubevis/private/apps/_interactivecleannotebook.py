@@ -42,8 +42,8 @@ from cubevis.utils import find_pkg, load_pkg
 from cubevis.toolbox import InteractiveCleanUI
 from cubevis import exe
 
-class InteractiveCleanJPY:
-    r'''InteractiveCleanJPY(...) implements interactive clean using Bokeh
+class InteractiveCleanNotebook:
+    r'''InteractiveCleanNotebook(...) implements interactive clean using Bokeh
         tclean ---- Radio Interferometric Image Reconstruction
 
     Form images from visibilities and reconstruct a sky model.

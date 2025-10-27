@@ -37,13 +37,13 @@ from casatools.errors import create_error_string
 from casatasks.private.task_logging import start_log as _start_log
 from casatasks.private.task_logging import end_log as _end_log
 from casatasks.private.task_logging import except_log as _except_log
-from cubevis.private.apps import InteractiveCleanJPY
+from cubevis.private.apps import InteractiveCleanNotebook
 
-def _icleanjpy_t( *args, **kwargs ):
-    ic = InteractiveCleanJPY( *args, **kwargs )
+def _iclean_notebook_t( *args, **kwargs ):
+    ic = InteractiveCleanNotebook( *args, **kwargs )
     return ic( )
 
-class _icleanjpy:
+class _iclean_notebook:
     r"""
 {{docstring}}
     """
@@ -55,15 +55,15 @@ class _icleanjpy:
         schema = { {{# paramListNKW}}'{{name}}': {{schema}}, {{/ paramListNKW}} }
         doc = { {{# paramListNKW}}'{{name}}': {{name}}, {{/ paramListNKW}} }
         assert _pc.validate(doc,schema), create_error_string(_pc.errors)
-        _logging_state_ = _start_log( 'icleanjpy', [ {{# paramListNKW}}'{{name}}=' + repr(_pc.document['{{name}}']), {{/ paramListNKW}} ] )
+        _logging_state_ = _start_log( 'iclean_notebook', [ {{# paramListNKW}}'{{name}}=' + repr(_pc.document['{{name}}']), {{/ paramListNKW}} ] )
         task_result = None
         try:
-            task_result = _icleanjpy_t( iclean_backend=iclean_backend, {{# paramListNKW}}{{name}}=_pc.document['{{name}}'], {{/ paramListNKW}} )
+            task_result = _iclean_notebook_t( iclean_backend=iclean_backend, {{# paramListNKW}}{{name}}=_pc.document['{{name}}'], {{/ paramListNKW}} )
         except Exception as exc:
-            _except_log('icleanjpy', exc)
+            _except_log('iclean_notebook', exc)
             raise
         finally:
-            task_result = _end_log( _logging_state_, 'icleanjpy', task_result )
+            task_result = _end_log( _logging_state_, 'iclean_notebook', task_result )
         return task_result
 
-icleanjpy = _icleanjpy( )
+iclean_notebook = _iclean_notebook( )

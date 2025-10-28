@@ -72,8 +72,7 @@ class DataPipe(DataSource,BokehInit):
 
     address = Tuple( String, Int, help="two integer sequence representing the address and port to use for the websocket" )
 
-    conflict_check = Bool( default=(not is_interactive_jupyter( )),
-                           help="Perform check to avoid reuse of URL for GUI. Not needed in the Jupyter context" )
+    conflict_check = Bool( help="Perform check to avoid reuse of URL for GUI. Not needed in the Jupyter context" )
 
     # Class-level session tracking to prevent multiple connections
     _active_sessions = {}  # session_id -> {'websocket': ws, 'timestamp': time, 'datapipe': instance}
@@ -85,6 +84,10 @@ class DataPipe(DataSource,BokehInit):
     #__javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
 
     def __init__( self, *args, abort=None, **kwargs ):
+
+        if 'conflict_check' not in kwargs:
+            kwargs['conflict_check'] = not is_interactive_jupyter( )
+
         super( ).__init__( *args, **kwargs )
         self.__send_queue = { }
         self.__pending = { }

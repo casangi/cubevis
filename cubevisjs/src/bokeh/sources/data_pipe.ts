@@ -201,7 +201,7 @@ export class DataPipe extends DataSource {
     initialize(): void {
         super.initialize();
 
-        console.log( 'conflict check:', this.conflict_check )
+        console.log( '>>conflict check:', this.conflict_check )
         // Generate instance key based on address and purpose
         // This allows multiple DataPipes for different purposes
         this.instance_key = this.generateInstanceKey()
@@ -444,7 +444,7 @@ export class DataPipe extends DataSource {
         this.define<DataPipe.Props>(({ Any, Tuple, String, Number, Bool }) => ({
             init_script: [ Any, null ],
             address: [Tuple(String,Number)],
-            conflict_check: [ Bool, true ]
+            conflict_check: [ Bool ]
         }))
     }
 }

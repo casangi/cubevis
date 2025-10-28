@@ -36,6 +36,7 @@ import asyncio
 import traceback
 import time
 import json
+from uuid import uuid4
 
 from bokeh.models.sources import DataSource
 from bokeh.util.compiler import TypeScript
@@ -72,6 +73,8 @@ class DataPipe(DataSource,BokehInit):
 
     address = Tuple( String, Int, help="two integer sequence representing the address and port to use for the websocket" )
 
+    instance_id = String( help="Unique ID for each DataPipe object" )
+
     conflict_check = Bool( default=True, help="Perform check to avoid reuse of URL for GUI. Not needed in the Jupyter context" )
 
     # Class-level session tracking to prevent multiple connections
@@ -87,12 +90,10 @@ class DataPipe(DataSource,BokehInit):
 
         if 'conflict_check' not in kwargs:
             kwargs['conflict_check'] = not is_interactive_jupyter( )
+        if 'instance_id' not in kwargs:
+            kwargs['instance_id'] = str(uuid4( ))
 
         super( ).__init__( *args, **kwargs )
-
-        print('************************************************************************************************************************')
-        print(f"*conflict check: {self.conflict_check}")
-        print('************************************************************************************************************************')
 
         self.__send_queue = { }
         self.__pending = { }

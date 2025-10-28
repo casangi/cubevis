@@ -448,7 +448,7 @@ export class DataPipe extends DataSource {
         this.define<DataPipe.Props>(({ Any, Tuple, String, Number, Bool }) => ({
             init_script: [ Any, null ],
             address: [Tuple(String,Number)],
-            conflict_check: [ Bool ]
+            conflict_check: [ Bool, true ]
         }))
     }
 }

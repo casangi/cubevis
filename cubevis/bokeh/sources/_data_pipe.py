@@ -39,10 +39,10 @@ import json
 
 from bokeh.models.sources import DataSource
 from bokeh.util.compiler import TypeScript
-from bokeh.core.properties import Tuple, String, Int, Instance, Nullable
+from bokeh.core.properties import Tuple, String, Int, Instance, Nullable, Bool
 from bokeh.models.callbacks import Callback
 
-from ...utils import serialize, deserialize
+from ...utils import serialize, deserialize, is_interactive_jupyter
 from ..state import casalib_url, cubevisjs_url
 from .. import BokehInit
 
@@ -71,6 +71,9 @@ class DataPipe(DataSource,BokehInit):
     """)
 
     address = Tuple( String, Int, help="two integer sequence representing the address and port to use for the websocket" )
+
+    conflict_check = Bool( default=(not is_interactive_jupyter( )),
+                           help="Perform check to avoid reuse of URL for GUI. Not needed in the Jupyter context" )
 
     # Class-level session tracking to prevent multiple connections
     _active_sessions = {}  # session_id -> {'websocket': ws, 'timestamp': time, 'datapipe': instance}

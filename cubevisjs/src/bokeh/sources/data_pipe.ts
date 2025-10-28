@@ -18,6 +18,7 @@ export namespace DataPipe {
     export type Props = DataSource.Props & {
         init_script: p.Property<CallbackLike0<DataPipe> | null>;
         address: p.Property<[string,number]>
+        conflict_check: p.Property<boolean>
     }
 }
 
@@ -53,14 +54,6 @@ export class DataPipe extends DataSource {
         **********************************************************/
     }
 
-    private isJupyterContext(): boolean {
-        // Check for Jupyter-specific window properties
-        return window.self !== window.top
-      //return typeof (window as any).Jupyter !== 'undefined' ||
-      //       typeof (window as any)._jupyter_labextension_metadata !== 'undefined' ||
-      //       (window.frameElement !== null && window.parent !== window); // Running in an iframe
-    }
-
     private checkSessionConflict(): boolean {
         try {
             if (typeof(Storage) === "undefined") {
@@ -75,7 +68,20 @@ export class DataPipe extends DataSource {
                 if (existingData.sessionId !== this.session_id && 
                     Date.now() - existingData.timestamp < 120000) {
 
-                    if (this.isJupyterContext( )) {
+                    if (this.conflict_check) {
+                        const message = `CubeVis DataPipe (${this.instance_key}) is already running in another browser window or tab.\n\n` +
+                                        'Please close other instances and refresh this page, or\n' +
+                                        'close this window to continue using the other instance.'
+
+                        alert(message)
+
+                        if (window.opener || window.history.length === 1) {
+                            window.close()
+                        } else {
+                            window.location.href = 'about:blank'
+                        }
+                        return false
+                    } else {
                         console.group(`DataPipe ${this.instance_key} conflict detected in Jupyter context`);
                         console.log('Current session ID:', this.session_id);
                         console.log('Existing session ID:', existingData.sessionId);
@@ -90,19 +96,6 @@ export class DataPipe extends DataSource {
 
                         // In Jupyter, we'll allow it but keep monitoring
                         // The existing session will be overwritten by updateSessionHeartbeat below
-                    } else {
-                        const message = `CubeVis DataPipe (${this.instance_key}) is already running in another browser window or tab.\n\n` +
-                                        'Please close other instances and refresh this page, or\n' +
-                                        'close this window to continue using the other instance.'
-
-                        alert(message)
-
-                        if (window.opener || window.history.length === 1) {
-                            window.close()
-                        } else {
-                            window.location.href = 'about:blank'
-                        }
-                        return false
                     }
                 }
             }
@@ -208,6 +201,7 @@ export class DataPipe extends DataSource {
     initialize(): void {
         super.initialize();
 
+        console.log( 'conflict check:', this.conflict_check )
         // Generate instance key based on address and purpose
         // This allows multiple DataPipes for different purposes
         this.instance_key = this.generateInstanceKey()
@@ -447,9 +441,10 @@ export class DataPipe extends DataSource {
     }
 
     static {
-        this.define<DataPipe.Props>(({ Any, Tuple, String, Number }) => ({
+        this.define<DataPipe.Props>(({ Any, Tuple, String, Number, Bool }) => ({
             init_script: [ Any, null ],
-            address: [Tuple(String,Number)]
+            address: [Tuple(String,Number)],
+            conflict_check: [ Bool, true ]
         }))
     }
 }

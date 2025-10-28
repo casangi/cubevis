@@ -17,7 +17,7 @@ export namespace DataPipe {
 
     export type Props = DataSource.Props & {
         init_script: p.Property<CallbackLike0<DataPipe> | null>;
-        address: p.Property<[string,number]>
+        address: p.Property<[string,number]>;
         conflict_check: p.Property<boolean>
     }
 }
@@ -201,7 +201,11 @@ export class DataPipe extends DataSource {
     initialize(): void {
         super.initialize();
 
-        console.log( '>>conflict check:', this.conflict_check )
+        console.log('**** TypeScript initialize ****')
+        console.log('conflict_check value:', this.conflict_check)
+        console.log('conflict_check type:', typeof this.conflict_check)
+        console.log('All properties:', this.properties)
+        console.log('*******************************')
         // Generate instance key based on address and purpose
         // This allows multiple DataPipes for different purposes
         this.instance_key = this.generateInstanceKey()

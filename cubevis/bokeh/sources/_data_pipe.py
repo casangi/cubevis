@@ -89,6 +89,11 @@ class DataPipe(DataSource,BokehInit):
             kwargs['conflict_check'] = not is_interactive_jupyter( )
 
         super( ).__init__( *args, **kwargs )
+
+        print('************************************************************************************************************************')
+        print(f"*conflict check: {self.conflict_check}")
+        print('************************************************************************************************************************')
+
         self.__send_queue = { }
         self.__pending = { }
         self.__incoming_callbacks = { }

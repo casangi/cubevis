@@ -1,3 +1,4 @@
+import {HasProps} from "@bokehjs/core/has_props"
 import {CoordinateMapper} from "@bokehjs/core/util/bbox"
 import {Scale} from "@bokehjs/models/scales/scale"
 import {CoordinateUnits} from "@bokehjs/core/enums"
@@ -6,6 +7,7 @@ import {PlotView} from "@bokehjs/models/plots/plot"
 import {Span, SpanView} from "@bokehjs/models/annotations/span"
 import {View} from "@bokehjs/core/view"
 import {Model} from "@bokehjs/model"
+import {BokehAppContext} from "../models/bokeh_app_context"
 
 declare global {
     var Bokeh: {
@@ -157,4 +159,89 @@ export function v_sy_from_dy( view: PlotView, dy: [ number ] ) {
     // map the data y coordinate supplied as y in cb_data for mouse
     // movement to the data coordinate used within the plot
     return view.frame.y_scale.v_compute(dy)
+}
+
+// The BokehAppContext is used to provide session storage and information
+// for a Bokeh app. It can be used in two ways:
+//
+//   (1) as a mix in:      column( myBokehAppContext, widget01, widget02 )
+//       in this mode, the app state is available, but the app must manage
+//       must manage finding its app context based on the `app_id` that is
+//       available from the BokehAppContext in both Python and JavaScript
+//
+//   (2) as a parent:      BokehAppContext( column( widget01, widget02 ),
+//                                          app_state={ 'key': "value" } )
+//       In this mode, the context for a specific application can be found
+//       by searching up the widget hierarchy to find a BokehAppContext
+//       above which will supply the `app_id` for this particular app
+//
+// This function can ONLY BE USED FOR THE SECOND CASE. Note that these
+// Models do not seem to necessarily be tied into the hierarchy:
+//
+//    * DataSources
+//
+
+//*********************************************************************************
+//*** Use a type guard like this with filter to satisfy the TypeScript compiler ***
+//*********************************************************************************
+//function isNotNullish<T>(value: T | null | undefined): value is T {
+//    return value !== null && value !== undefined;
+//}
+function find_model(
+    model: Model,
+    predicate: (m: Model) => boolean,
+    visited: Set<Model> = new Set()
+): Model | undefined {
+    if (visited.has(model)) return;
+    visited.add(model);
+
+    if (predicate(model)) return model;
+
+    // 'child' is used cubevis' Tip but also some Bokeh containers
+    // 'ui' is used by cubevis' Showable and BokehAppContext
+    const potentialChildrenProps = ['children', 'items', 'panes', 'tabs', 'child', 'ui'];
+
+    for (const propName of potentialChildrenProps) {
+        const children = (model as any)[propName];
+
+        if (children) {
+            // Unify handling for single children and arrays of children
+            const childrenArray = Array.isArray(children) ? children : [children];
+
+            for (const child of childrenArray) {
+                // Ensure the child is a Model instance before recursing
+                if (child instanceof Model && !visited.has(child)) {
+                    const result = find_model(child, predicate, visited);
+                    if (result) return result;
+                }
+            }
+        }
+    }
+
+    return;
+}
+
+export function context(model: Model): BokehAppContext | undefined {
+    const roots = model?.document?.all_roots
+    if ( roots ) {
+      const cl: BokehAppContext[] = roots.flatMap(
+          (value: HasProps) => {
+              const model = value as Model;
+              return ( model && model.type === "cubevis.bokeh.models._bokeh_app_context.BokehAppContext" )
+                    ? [model as BokehAppContext]  : []
+          } )
+      const result = cl.find( (root) => { return Boolean(find_model(root as Model, (candidate: Model) => candidate.id === model.id ) ) } )
+      return result
+    }
+    return;
+}
+
+export function appState(model: Model): object | undefined {
+    const ctx = context(model)
+    if ( ctx ) {
+        // @ts-ignore: defined on startup
+        const apps_state = window?.cubevisAppSession?.applications
+        return apps_state[ctx.app_id] ?? undefined
+    }
+    return
 }

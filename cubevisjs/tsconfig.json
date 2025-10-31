@@ -23,10 +23,10 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "target": "ES2017",
+    "target": "ES2019",
     "typeRoots": ["./src/types", "./node_modules/@types"],
     "lib": [
-      "es2017",
+      "ES2019",
       "dom",
       "dom.iterable"
     ],

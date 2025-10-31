@@ -49,7 +49,8 @@ from bokeh.io import reset_output as reset_bokeh_output, output_notebook
 from bokeh.models.dom import HTML
 
 from bokeh.models.ui.tooltips import Tooltip
-from cubevis.bokeh.models import TipButton, Tip, EvTextInput
+from cubevis.bokeh.models import TipButton, Tip, EvTextInput, BokehAppContext
+
 from cubevis.utils import resource_manager, reset_resource_manager, is_interactive_jupyter, find_pkg, load_pkg
 from cubevis.utils import ContextMgrChain as CMC
 
@@ -932,15 +933,19 @@ class InteractiveCleanUI:
 
         image_tabs = Tabs( tabs=tab_panels, tabs_location='below', height_policy='max', width_policy='max' )
 
-        self._fig['layout'] = column(
-                                  row( help_button,
-                                       self._log_button,
-                                       Spacer( height=self._control['iteration']['stop'].height, sizing_mode="scale_width" ),
-                                       Div( text="<div><b>status:</b></div>" ),
-                                       status_line,
-                                       self._control['iteration']['stop'], self._control['iteration']['continue'], self._control['iteration']['finish'], sizing_mode="scale_width" ),
-                                  row( image_tabs, height_policy='max', width_policy='max' ),
-                                  height_policy='max', width_policy='max' )
+        self._fig['layout'] = BokehAppContext(
+            column(  row( help_button,
+                          self._log_button,
+                          Spacer( height=self._control['iteration']['stop'].height, sizing_mode="scale_width" ),
+                          Div( text="<div><b>status:</b></div>" ),
+                          status_line,
+                          self._control['iteration']['stop'], self._control['iteration']['continue'], self._control['iteration']['finish'], sizing_mode="scale_width" ),
+                     row( image_tabs, height_policy='max', width_policy='max' ),
+                     height_policy='max', width_policy='max' ),
+            app_state={
+                'name': 'interactive clean',
+                'initialized': True
+            } )
 
         ###
         ### Keep track of which image is currently active in document._casa_image_name (which is

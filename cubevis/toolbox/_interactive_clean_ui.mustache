@@ -302,11 +302,13 @@ class InteractiveCleanUI:
                                                  init_script=CustomJS( args=dict( initial_convergence_state=self._init_values["convergence_state"],
                                                                                   clean_ctrl=self._control['iteration'],
                                                                                   name=imid ),
-                                                                       code='''document._casa_convergence_data = initial_convergence_state
-                                                                               clean_ctrl.continue.disable_add_sub = this.disable_add_sub.values
-                                                                               clean_ctrl.finish.disable_add_sub = this.disable_add_sub.values
-                                                                               clean_ctrl.stop.disable_add_sub = this.disable_add_sub.values
-                                                                               this.disable_add_sub.values.message = "cannot modify mask during cleaning"''' )
+                                                                       ### save appstate as _appstate in image source for future access
+                                                                       code='''cb_obj.appstate.convergence_data = initial_convergence_state
+                                                                               cb_obj.origin._appstate = cb_obj.appstate
+                                                                               clean_ctrl.continue.disable_add_sub = cb_obj.origin.disable_add_sub.values
+                                                                               clean_ctrl.finish.disable_add_sub = cb_obj.origin.disable_add_sub.values
+                                                                               clean_ctrl.stop.disable_add_sub = cb_obj.origin.disable_add_sub.values
+                                                                               cb_obj.origin.disable_add_sub.values.message = "cannot modify mask during cleaning"''' )
                                                              if idx == 0 else None )
 
             ###
@@ -678,7 +680,7 @@ class InteractiveCleanUI:
                                                                                                               ctrl={ 'converge': self._clean['converge'] },
                                                                                                               stopdescmap=ImagingDict.get_summaryminor_stopdesc( ) ),
                                                                                                    code=self._js['update-converge'] +
-                                                                                                        '''update_convergence_single( img_state, document._casa_convergence_data.convergence[imid] )''' ) )
+                                                                                                        '''update_convergence_single( img_state, cb_obj._appstate.convergence_data.convergence[imid] )''' ) )
 
             ###
             ### collect toolbars for syncing selection
@@ -810,7 +812,8 @@ class InteractiveCleanUI:
                                                                 logbutton=self._log_button,
                                                                 stopdescmap=ImagingDict.get_summaryminor_stopdesc( )
                                                               ),
-                                                 code=self._js['update-converge'] + self._js['clean-refresh'] + self._js['clean-disable'] +
+                                                 code="const appstate = Bokeh.find.appState(cb_obj.origin);" +
+                                                      self._js['update-converge'] + self._js['clean-refresh'] + self._js['clean-disable'] +
                                                       self._js['clean-enable'] + self._js['clean-status-update'] +
                                                       self._js['iter-gui-update'] + self._js['clean-wait'] +
                                                       '''function invalid_niter( s ) {
@@ -859,11 +862,11 @@ class InteractiveCleanUI:
                                                                  //                { action: 'stop',
                                                                  //                  value: { } },
                                                                  //                update_gui )
-                                                                 document._casa_window_closed = true
+                                                                 appstate.window_closed = true
                                                                  /*** this will close the tab >>>>---------+   ***/
                                                                  /***                                      |   ***/
-                                                                 /***     vvvvv----------------------------+   ***/
-                                                                 document._cube_done( Object.entries(images_state).reduce((acc,[k,v]) => ({ ...acc, [k]: v.src.masks( ) }),{ } ) )
+                                                                 /***      vvvvvvvvv-----------------------+   ***/
+                                                                 appstate.cube_done( Object.entries(images_state).reduce((acc,[k,v]) => ({ ...acc, [k]: v.src.masks( ) }),{ } ) )
                                                              }
                                                          } else if ( state.mode === 'continuous' &&
                                                                      cb_obj.origin.name === 'stop' &&
@@ -942,13 +945,13 @@ class InteractiveCleanUI:
                           self._control['iteration']['stop'], self._control['iteration']['continue'], self._control['iteration']['finish'], sizing_mode="scale_width" ),
                      row( image_tabs, height_policy='max', width_policy='max' ),
                      height_policy='max', width_policy='max' ),
-            app_state={
-                'name': 'interactive clean',
-                'initialized': True
+            app_state={                         ### while the state dictionary itself
+                'name': 'interactive clean',    ### is used, these particular element
+                'initialized': True             ### are not currently used for anything
             } )
 
         ###
-        ### Keep track of which image is currently active in document._casa_image_name (which is
+        ### Keep track of which image is currently active in appstate.image_name (which is
         ### initialized in self._js['initialize']). Also, update the current control sub-tab
         ### when the field main-tab is changed. An attempt to manage this all within the
         ### control sub-tabs using a reference to self._image_control_tab_groups from
@@ -956,13 +959,17 @@ class InteractiveCleanUI:
         ###
         ###     bokeh.core.serialization.SerializationError: circular reference
         ###
+        ### This set of tabs is the primary, outer tabs where each tab contains the complete
+        ### set of image controls
+        ###
         image_tabs.js_on_change( 'active', CustomJS( args=dict( names=[ t[0] for t in self._clean_targets.items( ) ],
                                                                 itergroups=self._image_control_tab_groups ),
-                                                     code='''if ( ! hasprop(document,'_casa_last_control_tab') ) {
-                                                                 document._casa_last_control_tab = 0
+                                                     code='''const appstate = Bokeh.find.appState(cb_obj)
+                                                             if ( ! hasprop(appstate,'last_control_tab') ) {
+                                                                 appstate.last_control_tab = 0
                                                              }
-                                                             document._casa_image_name = names[cb_obj.active]
-                                                             itergroups[document._casa_image_name].active = document._casa_last_control_tab''' ) )
+                                                             appstate.image_name = names[cb_obj.active]
+                                                             itergroups[appstate.image_name].active = appstate.last_control_tab''' ) )
 
         # Change display type depending on runtime environment
         #if self._is_notebook:
@@ -1017,8 +1024,11 @@ class InteractiveCleanUI:
             self._image_control_tab_groups = { }
 
         self._image_control_tab_groups[imid] = result
+
+        ### This set of tabs is the secondary, inner tabs for different controls for an individual image
         result.js_on_change( 'active', CustomJS( args=dict( ),
-                                                 code='''document._casa_last_control_tab = cb_obj.active''' ) )
+                                                 code='''const appstate = Bokeh.find.appState(cb_obj)
+                                                         appstate.last_control_tab = cb_obj.active''' ) )
         return result
 
     def _create_image_panel( self, imagetuple ):
@@ -1285,20 +1295,22 @@ class InteractiveCleanUI:
 
     def _initialize_javascript( self ):
         self._js = { ### initialize state
-                     ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-                     ### -- document is used storing state                                                        --
-                     ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-                     'initialize':      '''if ( ! document._casa_initialized ) {
+                     ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+                     ### -- "logbutton" is a random GUI model which can be used to locate the     --
+                     ### --  appstate that is used storing state                                  --
+                     ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+                     'initialize':      '''const appstate = Bokeh.find.appState(logbutton)
+                                           if ( ! appstate.ic_initialized ) {
                                                console.log(`casalib version: ${casalib.version}`)
-                                               document._casa_image_name = initial_image
-                                               document._casa_initialized = true
-                                               document._casa_window_closed = false
+                                               appstate.image_name = initial_image
+                                               appstate.ic_initialized = true
+                                               appstate.window_closed = false
                                                window.addEventListener( 'beforeunload',
                                                                         function (e) {
                                                                             // if the window is already closed this message is never
                                                                             // delivered (unless interactive clean is called again then
                                                                             // the event shows up in the newly created control pipe)
-                                                                            if ( document._casa_window_closed == false ) {
+                                                                            if ( appstate.window_closed == false ) {
                                                                                 ctrl_pipe.send( ids['stop'],
                                                                                                 { action: 'stop', value: { } },
                                                                                                   undefined ) } } )
@@ -1374,13 +1386,13 @@ class InteractiveCleanUI:
 
                                            function update_convergence( recurse=false ) {
                                                let convdata
-                                               if ( hasprop(document,'_casa_convergence_data') ) {
-                                                   convdata = document._casa_convergence_data
+                                               if ( hasprop(appstate,'convergence_data') ) {
+                                                   convdata = appstate.convergence_data
                                                } else {
                                                    if ( ! recurse ) {
                                                        ctrl.converge.pipe.send( ctrl.converge.id, { action: 'retrieve' },
                                                                                 (msg) => { if ( hasprop( msg.result, 'convergence' ) ) {
-                                                                                               document._casa_convergence_data = { convergence: msg.result.convergence,
+                                                                                               appstate.convergence_data = { convergence: msg.result.convergence,
                                                                                                                                    cyclethreshold: msg.result.cyclethreshold }
                                                                                                update_convergence(true)
                                                                                            } } )
@@ -1415,8 +1427,8 @@ class InteractiveCleanUI:
                                                    }
 
                                                    if ( hasprop(clean_msg,'convergence') && clean_msg.convergence != null ) {
-                                                       document._casa_convergence_data = { convergence: clean_msg.convergence,
-                                                                                           cyclethreshold: clean_msg.cyclethreshold }
+                                                       appstate.convergence_data = { convergence: clean_msg.convergence,
+                                                                                     cyclethreshold: clean_msg.cyclethreshold }
                                                    }
                                                }
 
@@ -1498,19 +1510,19 @@ class InteractiveCleanUI:
                                                                  'Stopping criteria encountered',
                                                                  'Unrecognized stop code' ]
                                                if ( typeof status === 'number' ) {
-                                                   images_state[document._casa_image_name]['status'].text =
+                                                   images_state[appstate.image_name]['status'].text =
                                                        '<p>' +
                                                        stopstr[ status < 0 || status >= stopstr.length ?
                                                                 stopstr.length - 1 : status ] +
                                                        '</p>'
                                                } else {
-                                                   images_state[document._casa_image_name]['status'].text = `<p>${status}</p>`
+                                                   images_state[appstate.image_name]['status'].text = `<p>${status}</p>`
                                                }
                                            }''',
 
                        'iter-gui-update': '''function get_update_dictionary( ) {
-                                                  //const amste = images_state[document._casa_image_name]['automask']
-                                                  //const clste = images_state[document._casa_image_name]['iteration']
+                                                  //const amste = images_state[appstate.image_name]['automask']
+                                                  //const clste = images_state[appstate.image_name]['iteration']
                                                   // Assumption is that there is ONE set of iteration and automask updates
                                                   // for ALL imaging fields...
                                                   const amobj = Object.entries(images_state)[0][1].automask
@@ -1529,7 +1541,7 @@ class InteractiveCleanUI:
 
                                                   const masks = Object.entries(images_state).reduce( (acc,[k,v]) => { acc[k] = v.src.masks( ); return acc }, { } )
                                                   const breadcrumbs = Object.entries(images_state).reduce( (acc,[k,v]) => { acc[k] = v.src.breadcrumbs( ); return acc }, { } )
-                                                  return { iteration, automask, masks, breadcrumbs, current_image: document._casa_image_name }
+                                                  return { iteration, automask, masks, breadcrumbs, current_image: appstate.image_name }
                                            }
                                            function update_log( log_lines ) {
                                                let b = logbutton

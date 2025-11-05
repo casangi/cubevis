@@ -43,7 +43,7 @@ from bokeh.models.dom import HTML
 from bokeh.models.ui.tooltips import Tooltip
 from cubevis.utils import resource_manager, reset_resource_manager, is_interactive_jupyter
 from cubevis.data import casaimage
-from cubevis.bokeh.models import TipButton, Tip
+from cubevis.bokeh.models import TipButton, Tip, BokehAppContext
 from cubevis.utils import ContextMgrChain as CMC
 
 class CreateRegion:
@@ -190,7 +190,7 @@ class CreateRegion:
 
             ###
             ### Use CubeMask init_script to set up a 'beforeunload' handler which will signal to
-            ### CubeMask that the app is shuting down (with 'document._cube_done( )'). It should then
+            ### CubeMask that the app is shuting down (with 'appstate.cube_done( )'). It should then
             ### send the final results to Python and then call the provided callback (the Promise
             ### resolve function).
             ###
@@ -231,7 +231,8 @@ class CreateRegion:
                 imdetails['gui']['slider'] = None
                 imdetails['gui']['goto'] = None
 
-        init_args = { 'sources': { } }
+        init_args = { 'status': self._fig['status'],
+                      'sources': { } }
         last_cube = None
         for k,v in self._region_state.items( ):
             init_args['sources'][k] = v['gui']['image']['src']
@@ -246,8 +247,9 @@ class CreateRegion:
                            acc[src.id] = img
                            if ( source == null ) source = src
                            return acc }}, sources, {{ }} )
-                       if ( source && document._cube_done )
-                       document._cube_done(
+                       const appstate = Bokeh.find.appState(status)
+                       if ( source && appstate?.cube_done )
+                       appstate.cube_done(
                            casalib.reduce(
                                (acc, poly) => {{
                                    acc[srcmap[poly.source.id]][poly.label] = {{
@@ -265,8 +267,8 @@ class CreateRegion:
         ## ImageDataSources (which is an element of CubeMask). This resulted in a circular
         ## reference when the plot was being rendered.
         ##
-        ## The document._cube_done callback ( `(msg) => { resolve(true); return false }` ) can
-        ## return `false` (indicating that the window should not be closed by _cube_done)
+        ## The appstate.cube_done callback ( `(msg) => { resolve(true); return false }` ) can
+        ## return `false` (indicating that the window should not be closed by cube_done)
         ## because the window is already being closed when this beforeunload callback
         ## is called.
         ##
@@ -385,7 +387,8 @@ class CreateRegion:
 
         self._image_control_tab_groups[imid] = result
         result.js_on_change( 'active', CustomJS( args=dict( ),
-                                                 code='''document._casa_last_control_tab = cb_obj.active''' ) )
+                                                 code='''const appstate = Bokeh.find.appState(cb_obj)
+                                                         appstate.last_control_tab = cb_obj.active''' ) )
         return result
 
     def _create_image_panel( self, imagetuple ):
@@ -421,17 +424,21 @@ class CreateRegion:
 
         image_tabs = Tabs( tabs=tab_panels, tabs_location='below', height_policy='max', width_policy='max' )
 
-        self._fig['layout'] = column(
-                                  row( self._fig['help'],
-                                       Spacer( height=self._ctrl_state['stop'].height, sizing_mode="scale_width" ),
-                                       Div( text="<div><b>status:</b></div>" ),
-                                       self._fig['status'],
-                                       self._ctrl_state['stop'], sizing_mode="scale_width" ),
-                                  row( image_tabs, height_policy='max', width_policy='max' ),
-                                  height_policy='max', width_policy='max' )
+        self._fig['layout'] = BokehAppContext(
+            column( row( self._fig['help'],
+                         Spacer( height=self._ctrl_state['stop'].height, sizing_mode="scale_width" ),
+                         Div( text="<div><b>status:</b></div>" ),
+                         self._fig['status'],
+                         self._ctrl_state['stop'], sizing_mode="scale_width" ),
+                    row( image_tabs, height_policy='max', width_policy='max' ),
+                    height_policy='max', width_policy='max' ),
+            app_state={                         ### while the state dictionary itself
+                'name': 'create region',        ### is used, these particular element
+                'initialized': True             ### are not currently used for anything
+            } )
 
         ###
-        ### Keep track of which image is currently active in document._casa_image_name (which is
+        ### Keep track of which image is currently active in appstate.image_name (which is
         ### initialized in self._js['initialize']). Also, update the current control sub-tab
         ### when the field main-tab is changed. An attempt to manage this all within the
         ### control sub-tabs using a reference to self._image_control_tab_groups from
@@ -441,11 +448,12 @@ class CreateRegion:
         ###
         image_tabs.js_on_change( 'active', CustomJS( args=dict( names=[ t[0] for t in self._region_state.items( ) ],
                                                                 itergroups=self._image_control_tab_groups ),
-                                                     code='''if ( ! hasprop(document,'_casa_last_control_tab') ) {
-                                                                 document._casa_last_control_tab = 0
+                                                     code='''const appstate = Bokeh.find.appState(cb_obj)
+                                                             if ( ! hasprop(appstate,'last_control_tab') ) {
+                                                                 appstate.last_control_tab = 0
                                                              }
-                                                             document._casa_image_name = names[cb_obj.active]
-                                                             itergroups[document._casa_image_name].active = document._casa_last_control_tab''' ) )
+                                                             appstate.image_name = names[cb_obj.active]
+                                                             itergroups[appstate.image_name].active = appstate.last_control_tab''' ) )
 
         # Change display type depending on runtime environment
         if is_interactive_jupyter( ):

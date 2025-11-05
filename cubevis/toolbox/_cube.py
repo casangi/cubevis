@@ -1488,20 +1488,23 @@ class CubeMask:
                                 selector=self._bitmask_color_selector,
                                 disable_add_sub = self._mask_add_sub_disable,
                                 user_init_script = self.init_script,
-                                freeze_cb = self._image_freeze_cb )
+                                freeze_cb = self._image_freeze_cb,
+                                image=self._image )
 
             self._image_source.init_script = CustomJS( args=init_args,
                                                        code='''let source = cb_obj
-                                                                      document._cube_already_shutdown = false
-                                                                   ''' + self._js['mask-state-init'] +
+                                                               const appstate = Bokeh.find.appState(image)
+                                                               appstate.cube_already_shutdown = false
+                                                            ''' + self._js['mask-state-init'] +
                                                                    ( self._js['func-curmasks']( ) +
                                                                      self._js['key-state-funcs']
                                                                      if self._mask_path is None else '' ) +
                                                                         self._js['update-status'] + self._js['setup-key-mgmt'] +
                                                                    """// This function is called to collect the masks and/or stop
                                                                       // -->> collect_masks( ) is only defined if bitmask cube is NOT used
-                                                                      document._cube_done = ( final_polys=null, cb=null ) => {
-                                                                          if ( document._cube_already_shutdown ) return
+                                                                      console.log( "App state:", appstate )
+                                                                      appstate.cube_done = ( final_polys=null, cb=null ) => {
+                                                                          if ( appstate.cube_already_shutdown ) return
                                                                           function done_close_window( msg ) {
                                                                               if ( msg.result === 'stopped' ) {""" +
                                                                             # Don't close tab if running in a jupyter notebook
@@ -1516,7 +1519,7 @@ class CubeMask:
                                                                     """
                                                                               }
                                                                           }
-                                                                          document._cube_already_shutdown = true
+                                                                          appstate.cube_already_shutdown = true
                                                                           ctrl.send( ids['done'],
                                                                                      { action: 'done',
                                                                                        value: { regions: final_polys ? final_polys : source.masks( ) },
@@ -1526,13 +1529,12 @@ class CubeMask:
                                                                       // exported functions -- enable/disable masking, retrieve masks etc.
                                                                       source._masking_enabled = true
                                                                       source._pixel_update_enabled = true
-                                                                      if ( ! ('_masking_state' in document) ) {
-                                                                          document._masking_state = { }
-                                                                      }
-                                                                      document._masking_state[source.id] = false
-                                                                      source.masking_on = ( ) => { return document._masking_state[source.id] }
-                                                                      source.disable_masking = ( ) => { source._masking_enabled = false; document._masking_state[source.id] = false }
-                                                                      source.enable_masking = ( ) => { source._masking_enabled = true; document._masking_state[source.id] = true }
+                                                                      if ( ! ('masking_state' in appstate) )
+                                                                          appstate.masking_state = { }
+                                                                      appstate.masking_state[source.id] = false
+                                                                      source.masking_on = ( ) => { return appstate.masking_state[source.id] }
+                                                                      source.disable_masking = ( ) => { source._masking_enabled = false; appstate.masking_state[source.id] = false }
+                                                                      source.enable_masking = ( ) => { source._masking_enabled = true; appstate.masking_state[source.id] = true }
                                                                       source.disable_pixel_update = ( ) => source._pixel_update_enabled = false
                                                                       source.enable_pixel_update = ( ) => source._pixel_update_enabled = true
                                                                       source.masks = ( ) => typeof collect_masks == 'function' ? collect_masks( ) : { masks: [], polys: [] }
@@ -1549,7 +1551,7 @@ class CubeMask:
                                                                       if ( stats_source ) source.update_statistics( stats_source.data ) /*** round pre-filled floats ***/
                                                                       /*** this is the hook that allows the user to disable mask changes ***/
                                                                       this.disable_add_sub = disable_add_sub
-                                                                      if ( user_init_script ) { user_init_script.execute(this) }
+                                                                      if ( user_init_script ) { user_init_script.execute({ origin: this, appstate }) }
                                                                    """ )
 
         def region_position_connections( ):
@@ -2189,7 +2191,7 @@ class CubeMask:
                                                       stokes_labels=[ k for k,_ in self._region_controls['coord']['chan'].items( ) ],
                                                       status_line=self._region_controls['coord']['status'] if self._mask_path is None else None,
                                                       chan_select = [ v.child for k,v in self._region_controls['coord']['chan'].items( ) ] ),
-                                           code= ( self._js['func-newpoly'] + self._js['func-curmasks']( ) +
+                                           code= ( "const appstate = Bokeh.find.appState(cb_obj.origin);" + self._js['func-newpoly'] + self._js['func-curmasks']( ) +
                                                    self._js['mask-state-init'] + self._js_mode_code['no-bitmask-tool-selection'] )
                                                    if self._mask_path is None else  "" + (
                                                    ### selector indicates if a on-disk mask is being used
@@ -2655,10 +2657,10 @@ class CubeMask:
             'no-bitmask-init':          '''function _create_poly_mgr( annos, stokes_labels ) {
                                                const chan2polys = { }
 
-                                               if ( typeof document._polygon_list == 'undefined' )
-                                                   document._polygon_list = [ ]
+                                               if ( typeof appstate.polygon_list == 'undefined' )
+                                                   appstate.polygon_list = [ ]
 
-                                               const polys = document._polygon_list
+                                               const polys = appstate.polygon_list
 
                                                return {
                                                    reset_annos: ( ) => {

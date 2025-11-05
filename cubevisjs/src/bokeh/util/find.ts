@@ -241,7 +241,7 @@ export function appState(model: Model): object | undefined {
     if ( ctx ) {
         // @ts-ignore: defined on startup
         const apps_state = window?.cubevisAppSession?.applications
-        return apps_state[ctx.app_id] ?? undefined
+        return apps_state[ctx.app_id]?.state
     }
     return
 }

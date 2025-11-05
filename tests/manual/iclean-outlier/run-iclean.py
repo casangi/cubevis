@@ -8,7 +8,7 @@ import certifi
 import urllib
 import tarfile
 
-from cubevis import iclean, set_log_level, icleanjpy
+from cubevis import iclean
 
 ##
 ## demo measurement set to use
@@ -36,8 +36,7 @@ if not os.path.isdir(ms_path):
 if not os.path.isdir(ms_path):
     raise  RuntimeError("Failed to fetch measurement set")
 
-#print("Result = " + str( repr( iclean( vis=ms_path, imagename=img,
-print("Result = " + str( repr( icleanjpy( vis=ms_path, imagename=img,
+print("Result = " + str( repr( iclean( vis=ms_path, imagename=img,
                                        imsize=100,
                                        cell='8.0arcsec',
                                        phasecenter="J2000 19:59:28.500 +40.44.01.50",

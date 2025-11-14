@@ -9,11 +9,19 @@ logger = logging.getLogger(__name__)
 
 class Showable(LayoutDOM,BokehInit):
     """Wrap a UIElement to make any Bokeh UI component showable with show()
-    
+
     This class works by acting as a simple container that delegates to its UI element.
     For Jupyter notebook display, use show(showable) - automatic display via _repr_mimebundle_
     is not reliably supported by Bokeh's architecture.
     """
+
+    ### _usage_mode is needed to prevent mixing "bokeh.plotting.show(showable)" with
+    ### "showable.show( )" or just evaluating "showable". This is required because the
+    ### latter use "bokeh.embed.components" to create the HTML that is rendered while
+    ### "bokeh.plotting.show(showable)" uses internal Bokeh rendering that is
+    ### incompatable with "bokeh.embed.components" usage. For this reason, the user
+    ### can use either one, but not both.
+    _usage_mode = None
 
     @property
     def document(self):
@@ -26,58 +34,80 @@ class Showable(LayoutDOM,BokehInit):
         Intercept when Bokeh tries to attach us to a document.
         This is called by bokeh.plotting.show() when it adds us to a document.
         """
-        from bokeh.io.state import curstate
-        import traceback
 
-        # Allow None (detaching from document)
+        def get_caller_class_name(frame):
+            """Attempt to find the name of the class the calling method belongs to."""
+            # Check if 'self' is in the caller's local variables (conventional for instance methods)
+            if 'self' in frame.f_locals:
+                return frame.f_locals['self'].__class__.__name__
+            # Check for 'cls' (conventional for class methods)
+            elif 'cls' in frame.f_locals:
+                return frame.f_locals['cls'].__name__
+            else:
+                # It might be a regular function or static method without explicit 'self'/'cls'
+                return None
+
+        # Detect Bokeh usage mode (i.e. self.__class__._usage_mode unset)
+        calling_mode = None
+        if self.__class__._usage_mode is None:
+            self.__class__._usage_mode = "bokeh"
+            calling_mode = "bokeh"
+
+        # Allow None (detaching from document) without any further checking
         if doc is None:
             self._document = None
             return
 
-        state = curstate()
+        if calling_mode is None:
+            import inspect
+            stack_frames = inspect.stack( )
+            try:
+                for frame in stack_frames[1:]:
+                    if frame.function == '_repr_mimebundle_' or frame.function == 'show':
+                        if get_caller_class_name(frame.frame) == self.__class__.__name__:
+                            calling_mode = "custom"
+                            break
+            finally:
+                # Essential to delete stack frames to avoid reference cycles
+                del stack_frames
 
-        # Check calling context
-        stack = traceback.extract_stack()
-
-        # Detect if called from bokeh.plotting.show or bokeh.io.show
-        called_from_bokeh_show = any(
-            ('bokeh/io/' in frame.filename or 'bokeh\\io\\' in frame.filename or
-             'bokeh/plotting/' in frame.filename or 'bokeh\\plotting\\' in frame.filename)
-            for frame in stack[:-2]  # Exclude the last 2 frames (this setter and __setattr__)
-        )
-
-        # Check if called from our own methods
-        called_from_our_methods = any(
-            'Showable' in str(frame.line) or frame.filename.endswith('showable.py')
-            for frame in stack[-5:-2]  # Check recent frames
-        )
-
-        if state.file and called_from_bokeh_show and not called_from_our_methods:
+        if calling_mode != self.__class__._usage_mode:
+            ###  THIS CATCHES:   using Bokeh show after Showable display methods
+            ###                  using Showable.show after Bokeh show
             raise RuntimeError(
-                f"\n{'='*70}\n"
-                f"❌ Cannot use bokeh.plotting.show() with {self.__class__.__name__}\n\n"
-                f"Please use one of these methods instead:\n"
-                f"  • my_showable.show()     # Custom show method\n"
-                f"  • my_showable            # Automatic display (evaluate in cell)\n\n"
-                f"Reason: bokeh.plotting.show() doesn't properly handle the custom\n"
-                f"sizing and backend requirements of Showable objects.\n"
-                f"{'='*70}\n"
+                f"\n{'='*70}\n" +
+                ( (self._usage_error['custom'] % self.__class__.__name__) if calling_mode == 'custom' else
+                  (self._usage_error['bokeh'] % 'bokeh.plotting.show') ) +
+                f"\n{'='*70}\n" )
+
+        from bokeh.io.state import curstate
+        state = curstate( )
+
+        # Validate environment (only one OUTPUT mode)
+        active_modes = []
+        if state.file: active_modes.append('file')
+        if state.notebook: active_modes.append('notebook')
+
+        # only allow a single GUI to be displayed since there is a backend
+        # this could be relaxed if the backend can manage events from two
+        # different GUIs
+        if len(active_modes) > 1:
+            raise RuntimeError(
+                f"{self.__class__.__name__} can only be displayed in a single Bokeh\n"
+                f"display mode. Either file or notebook, but not both."
             )
 
-        # Validate environment
-        if not state.notebook:
-            raise RuntimeError(
-                f"{self.__class__.__name__} can only be displayed in Jupyter notebooks.\n"
-                f"Please run:\n"
-                f"  from bokeh.io import output_notebook\n"
-                f"  output_notebook()"
-            )
-
-        # Apply notebook sizing before attaching to document
-        if self._notebook_sizing == 'fixed':
+        # For notebook display, fixed sizing is required. This selects between the
+        # fixed, notebook dimensions and the default browser dimensions based on
+        # the Bokeh output that has been selected.
+        if 'notebook' in active_modes and self._display_config['notebook']['mode'] == 'fixed':
             self.sizing_mode = None
-            self.width = self._notebook_width
-            self.height = self._notebook_height
+            self.width = self._display_config['notebook']['width']
+            self.height = self._display_config['notebook']['height']
+        else:
+            self.sizing_mode = self._display_config['browser']['mode']
+            self.width = self._display_config['browser']['width']
+            self.height = self._display_config['browser']['height']
 
         # Now set the document
         self._document = doc
@@ -92,7 +122,7 @@ class Showable(LayoutDOM,BokehInit):
                   notebook_width=1200, notebook_height=800,
                   notebook_sizing='fixed', **kwargs):
         logger.debug(f"\tShowable::__init__(ui_element={type(ui_element).__name__ if ui_element else None}, {kwargs}): {id(self)}")
-        
+
         # Set default sizing if not provided
         sizing_params = {'sizing_mode', 'width', 'height'}
         provided_sizing_params = set(kwargs.keys()) & sizing_params
@@ -102,10 +132,31 @@ class Showable(LayoutDOM,BokehInit):
         # CRITICAL FIX: Don't call _ensure_in_document during __init__
         # Let Bokeh handle document management through the normal flow
         super().__init__(**kwargs)
-        
+
         # Set the UI element
         if ui_element is not None:
             self.ui = ui_element
+
+        # Keep track of defaults based on display mode
+        ### self._notebook_width = notebook_width
+        ### self._notebook_height = notebook_height
+        ### self._notebook_sizing = notebook_sizing  # 'fixed' or 'stretch'
+        self._display_config = {
+            'notebook': { 'mode': notebook_sizing, 'width': notebook_width, 'height': notebook_height },
+            'browser': { 'mode': self.sizing_mode, 'width': self.width, 'height': self.height }
+        }
+
+        # Error messages included in RuntimeErrors
+        self._usage_error = {
+            'custom': "❌ Cannot use %s display methods:\n\n" \
+                      "Reason: bokeh.plotting.show() has already been used for display\n" \
+                      "        of this class. Mixing display methods within a single notebook\n" \
+                      "        corrupts Bokeh display within the notebook\n",
+            'bokeh':  "❌ Cannot use %s display method:\n\n" \
+                      "Reason: Showable display methods have already been used for display\n" \
+                      "        of this class. Mixing display methods within a single notebook\n" \
+                      "        corrupts Bokeh display within the notebook\n" }
+
 
         # Set the function to be called upon display
         if backend_func is not None:
@@ -114,9 +165,6 @@ class Showable(LayoutDOM,BokehInit):
         # result (if one is/will be available)...
         self._result_retrieval = result_retrieval
 
-        self._notebook_width = notebook_width
-        self._notebook_height = notebook_height
-        self._notebook_sizing = notebook_sizing  # 'fixed' or 'stretch'
         self._notebook_rendering = None
 
     ui = Instance(UIElement, help="""
@@ -138,7 +186,7 @@ class Showable(LayoutDOM,BokehInit):
         """Ensure this Showable is in the current document"""
         from bokeh.io import curdoc
         current_doc = curdoc()
-        
+
         # FIXED: More careful document management
         # Only add to document if we're not already in the right one
         if self.document is None:
@@ -231,6 +279,13 @@ class Showable(LayoutDOM,BokehInit):
         from bokeh.embed import components
         from bokeh.io.state import curstate
 
+        if self.__class__._usage_mode != "custom":
+            ###  THIS CATCHES:   Showable display via evaluation ( "ic" ) after Bokeh show
+            raise RuntimeError(
+                f"\n{'='*70}\n" +
+                (self._usage_error['custom'] % self.__class__.__name__) +
+                f"\n{'='*70}\n" )
+
         state = curstate()
 
         if not state.notebook:
@@ -251,10 +306,10 @@ class Showable(LayoutDOM,BokehInit):
             '''
 
         # Apply notebook sizing for Jupyter context
-        if self._notebook_sizing == 'fixed':
-            self.sizing_mode = None
-            self.width = self._notebook_width
-            self.height = self._notebook_height
+        ###if self._notebook_sizing == 'fixed':
+        ###    self.sizing_mode = None
+        ###    self.width = self._notebook_width
+        ###    self.height = self._notebook_height
 
         script, div = components(self)
         if start_backend:
@@ -262,32 +317,6 @@ class Showable(LayoutDOM,BokehInit):
 
         self._notebook_rendering = f'{script}\n{div}'
         return self._notebook_rendering
-
-    def _repr_html_(self, start_backend=True):
-        """
-        HTML representation for Jupyter display.
-
-        Note: Bokeh doesn't reliably support automatic display via _repr_mimebundle_.
-        This provides a helpful message directing users to use show().
-        """
-        html = self._get_notebook_html(start_backend)
-
-        if html is not None:
-            return html
-
-        # Not in notebook environment
-        return f"<!-- error: non-notebook environment{' in ' + self.name if self.name else ''} -->" + '''
-        <div style="padding: 15px; border: 2px solid #4CAF50; border-radius: 5px; background: #f9fff9; margin: 10px 0;">
-            <strong>📊 Showable Widget Ready</strong><br>
-            <em>Notebook display is not enabled, run:</em>
-                    <p><pre>
-from bokeh.io import output_notebook
-output_notebook()</pre>
-                    <p><em>and try again.</em>
-            <hr>
-            <small>Contains: {}</small>
-        </div>
-        '''.format(type(self.ui).__name__ if self.ui else "None")
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         """
@@ -301,6 +330,8 @@ output_notebook()</pre>
         - Bokeh show(showable)
         - showable.show()
         """
+        if self.__class__._usage_mode is None:
+            self.__class__._usage_mode = "custom"
         from bokeh.io.state import curstate
 
         state = curstate()
@@ -311,13 +342,16 @@ output_notebook()</pre>
                 return {
                     'text/html': html
                 }
-    
+
         # Fall back to default Bokeh behavior for non-notebook environments
         # Return None to let Bokeh handle it
         return None
 
     def show(self, start_backend=True):
         """Explicitly show this Showable using inline display in Jupyter"""
+        if self.__class__._usage_mode is None:
+            self.__class__._usage_mode = "custom"
+
         from bokeh.io.state import curstate
 
         self._ensure_in_document()
@@ -327,7 +361,7 @@ output_notebook()</pre>
         if state.notebook:
             # In Jupyter, display directly using IPython.display
             from IPython.display import display, HTML
-    
+
             html = self._get_notebook_html(start_backend)
             if html:
                 display(HTML(html))

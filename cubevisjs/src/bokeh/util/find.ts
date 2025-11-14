@@ -222,18 +222,41 @@ function find_model(
 }
 
 export function context(model: Model): BokehAppContext | undefined {
-    const roots = model?.document?.all_roots
-    if ( roots ) {
-      const cl: BokehAppContext[] = roots.flatMap(
-          (value: HasProps) => {
-              const model = value as Model;
-              return ( model && model.type === "cubevis.bokeh.models._bokeh_app_context.BokehAppContext" )
-                    ? [model as BokehAppContext]  : []
-          } )
-      const result = cl.find( (root) => { return Boolean(find_model(root as Model, (candidate: Model) => candidate.id === model.id ) ) } )
-      return result
-    }
-    return;
+    const roots = model?.document?.all_roots;
+    if (!roots) return undefined;
+
+    const potentialChildrenProps = ['children', 'items', 'panes', 'tabs', 'child', 'ui'];
+
+    // Recursively get the first BokehAppContext in the tree (or empty array if none)
+    const findContext = (node: HasProps): BokehAppContext[] => {
+        const nodeModel = node as Model;
+
+        // If current node is a BokehAppContext, return it (stop searching deeper)
+        if (nodeModel?.type === "cubevis.bokeh.models._bokeh_app_context.BokehAppContext") {
+            return [nodeModel as BokehAppContext];
+        } else {
+            // Otherwise, search children
+            return potentialChildrenProps.flatMap(prop => {
+                const children = (node as any)[prop];
+                if (!children) return [];
+
+                // Handle both single child and array of children
+                const childArray = Array.isArray(children) ? children : [children];
+                return childArray.flatMap(findContext);
+            });
+        }
+    };
+
+    // Get first context from each root and find the one containing our model
+    const contexts = roots.flatMap(findContext);
+
+    return contexts.find(context =>
+        Boolean(find_model(context as Model,
+            (candidate: Model) => {
+                return candidate.id === model.id;
+            }
+        ))
+    );
 }
 
 export function appState(model: Model): object | undefined {

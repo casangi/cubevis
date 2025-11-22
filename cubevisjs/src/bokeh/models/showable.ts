@@ -55,7 +55,6 @@ export class ShowableView extends LayoutDOMView {
     await super.lazy_initialize()
   }
 
-  // MINIMAL OVERRIDE: Let parent handle signals
   connect_signals(): void {
     super.connect_signals()
     // Parent will automatically handle child model changes through child_models
@@ -82,6 +81,8 @@ export class ShowableView extends LayoutDOMView {
   // MINIMAL OVERRIDE: Simple rendering that lets parent do the work
   render(): void {
     super.render()
+
+    console.log('Showable render() - disabled:', this.model.disabled, 'shadow_el:', this.shadow_el != null)
     
     // The parent class should have already rendered our children
     // Just ensure we have proper styling/structure if needed
@@ -98,6 +99,12 @@ export class ShowableView extends LayoutDOMView {
   // MINIMAL OVERRIDE: Let parent handle after_layout
   after_layout(): void {
     super.after_layout()
+    // CRITICAL: Re-apply disabled state after layout is complete
+    // This ensures the overlay appears correctly on notebook reload
+    console.log('Showable after_layout() - disabled:', this.model.disabled, 'shadow_el:', this.shadow_el != null)
+    if (this.model.disabled) {
+      this._update_disabled_state()
+    }
   }
 
   // MINIMAL OVERRIDE: Let parent handle sizing

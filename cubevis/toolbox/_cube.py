@@ -1,6 +1,6 @@
 #######################################################################
 #
-# Copyright (C) 2022,2023,2024
+# Copyright (C) 2022,2023,2024,2025
 # Associated Universities, Inc. Washington DC, USA.
 #
 # This script is free software; you can redistribute it and/or modify it
@@ -1494,6 +1494,7 @@ class CubeMask:
             self._image_source.init_script = CustomJS( args=init_args,
                                                        code='''let source = cb_obj
                                                                const appstate = Bokeh.find.appState(image)
+                                                               const showable = Bokeh.find.showable(image)
                                                                appstate.cube_already_shutdown = false
                                                             ''' + self._js['mask-state-init'] +
                                                                    ( self._js['func-curmasks']( ) +
@@ -1512,9 +1513,17 @@ class CubeMask:
                                                                             ##     """console.log("Running from script/terminal. Closing window.")
                                                                             ##        window.close()"""
                                                                             ##) +
-                                                                            ("""console.log("Running in jupyter notebook. Not closing window.")""" if is_interactive_jupyter( ) else
-                                                                                 """console.log("Running from script/terminal. Closing window.")
-                                                                                    window.close()"""
+                                                                            ( """if ( showable ) {
+                                                                                      console.log("Running in jupyter notebook.\\nDisabling GUI via root Showable.")
+                                                                                      showable.disabled = true
+                                                                                      const data_pipes = Bokeh.activeDataPipes.getInstances( )
+                                                                                      console.log("Data pipes to be closed:", data_pipes)
+                                                                                 } else {
+                                                                                     console.log("Running in jupyter notebook.\\nCannot find root Showable so cannot disable GUI.")
+                                                                                 }
+                                                                              """ if is_interactive_jupyter( ) else
+                                                                              """console.log("Running from script/terminal. Closing window.")
+                                                                                 window.close()"""
                                                                             ) +
                                                                     """
                                                                               }

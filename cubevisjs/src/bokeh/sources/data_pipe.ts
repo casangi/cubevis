@@ -3,6 +3,7 @@ import * as p from "@bokehjs/core/properties"
 import { serialize, deserialize } from "../util/conversions"
 import { CallbackLike0 } from "@bokehjs/core/util/callbacks";
 import {execute} from "@bokehjs/core/util/callbacks"
+import {activeDataPipes} from "./active_data_pipes"
 
 declare global {
     // extend document with our properties
@@ -201,6 +202,7 @@ export class DataPipe extends DataSource {
 
     initialize(): void {
         super.initialize();
+        activeDataPipes.register( this );
 
         console.log('**** TypeScript initialize ****')
         console.log('conflict_check value:', this.conflict_check)
@@ -357,6 +359,11 @@ export class DataPipe extends DataSource {
             if ( this.init_script != null ) void execute( this.init_script, this )
         }
         _execute( )
+    }
+
+    destroy( ): void {
+        activeDataPipes.unregister(this)
+        super.destroy( )
     }
 
     register( id: string, cb: (msg:{[key: string]: any}) => any ): void {

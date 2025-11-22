@@ -1,4 +1,5 @@
 import {DataPipe} from "./src/bokeh/sources/data_pipe"
+import {activeDataPipes} from "./src/bokeh/sources/active_data_pipes"
 import {ImagePipe} from "./src/bokeh/sources/image_pipe"
 import {ImageDataSource} from "./src/bokeh/sources/image_data_source"
 import {SpectraDataSource} from "./src/bokeh/sources/spectra_data_source"
@@ -18,6 +19,6 @@ import {EvPolyAnnotation} from "./src/bokeh/annotations/ev_poly_annotation"
 import *  as find from "./src/bokeh/util/find"
 import {register_models} from "@bokehjs/base"
 
-export { find, DataPipe, ImagePipe, ImageDataSource, SpectraDataSource, UpdatableDataSource, WcsTicks, DragTool, CBResetTool, Tip, TipButton, SharedDict, Showable, BokehAppContext, EditSpan, EvTextInput, EvPolyAnnotation, serialize, deserialize }
+export { find, DataPipe, activeDataPipes, ImagePipe, ImageDataSource, SpectraDataSource, UpdatableDataSource, WcsTicks, DragTool, CBResetTool, Tip, TipButton, SharedDict, Showable, BokehAppContext, EditSpan, EvTextInput, EvPolyAnnotation, serialize, deserialize }
 
 register_models({ DataPipe, ImagePipe, ImageDataSource, SpectraDataSource, UpdatableDataSource, WcsTicks, DragTool, CBResetTool, Tip, TipButton, SharedDict, Showable, BokehAppContext, EditSpan, EvTextInput, EvPolyAnnotation })

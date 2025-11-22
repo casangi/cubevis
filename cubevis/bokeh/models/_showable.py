@@ -1,7 +1,8 @@
 import logging
 from bokeh.models.layouts import LayoutDOM
 from bokeh.models.ui import UIElement
-from bokeh.core.properties import Instance
+from bokeh.core.properties import Instance, String
+
 from bokeh.io import curdoc
 from .. import BokehInit
 
@@ -169,6 +170,13 @@ class Showable(LayoutDOM,BokehInit):
 
     ui = Instance(UIElement, help="""
     A UI element, which can be plots, layouts, widgets, or any other UIElement.
+    """)
+    ###
+    ### when 'disabled' is set to true, this message should be displayed over
+    ### a grey-obscured GUI...
+    ###
+    disabled_message = String(default="Interaction Complete ✓", help="""
+    Message to show when disabled
     """)
 
     # FIXED: Remove the children property override

@@ -8,6 +8,7 @@ import {Span, SpanView} from "@bokehjs/models/annotations/span"
 import {View} from "@bokehjs/core/view"
 import {Model} from "@bokehjs/model"
 import {BokehAppContext} from "../models/bokeh_app_context"
+import {Showable} from "../models/showable"
 
 declare global {
     var Bokeh: {
@@ -221,43 +222,105 @@ function find_model(
     return;
 }
 
-export function context(model: Model): BokehAppContext | undefined {
-    const roots = model?.document?.all_roots;
-    if (!roots) return undefined;
+function find_parent<T extends Model>(
+    type_string: string
+): (model: Model) => T | undefined {
+    return (model: Model): T | undefined => {
+        const roots = model?.document?.all_roots;
+        if (!roots) return undefined;
 
-    const potentialChildrenProps = ['children', 'items', 'panes', 'tabs', 'child', 'ui'];
+        const potentialChildrenProps = ['children', 'items', 'panes', 'tabs', 'child', 'ui'];
 
-    // Recursively get the first BokehAppContext in the tree (or empty array if none)
-    const findContext = (node: HasProps): BokehAppContext[] => {
-        const nodeModel = node as Model;
+        // Recursively get the first matching type in the tree (or empty array if none)
+        const findParent = (node: HasProps): T[] => {
+            const nodeModel = node as Model;
 
-        // If current node is a BokehAppContext, return it (stop searching deeper)
-        if (nodeModel?.type === "cubevis.bokeh.models._bokeh_app_context.BokehAppContext") {
-            return [nodeModel as BokehAppContext];
-        } else {
-            // Otherwise, search children
-            return potentialChildrenProps.flatMap(prop => {
+            // If current node matches the type string, return it (stop searching deeper)
+            if (nodeModel?.type === type_string) {
+                return [nodeModel as T];
+            } else {
+                // Otherwise, search children
+                return potentialChildrenProps.flatMap(prop => {
+                    const children = (node as any)[prop];
+                    if (!children) return [];
+
+                    // Handle both single child and array of children
+                    const childArray = Array.isArray(children) ? children : [children];
+                    return childArray.flatMap(findParent);
+                });
+            }
+        };
+
+        // Get first parent from each root and find the one containing our model
+        const parents = roots.flatMap(findParent);
+
+        return parents.find(parent =>
+            Boolean(find_model(parent as Model,
+                (candidate: Model) => {
+                    return candidate.id === model.id;
+                }
+            ))
+        );
+    };
+}
+
+// "children" was created (and is visible as "Bokeh.find.children(...)") to allow
+// the DataPipe object to be found so that they can be closed. Unfortunately, the
+// design of the cubevisjs library is not so consistent which means that the
+// properties traversed as branch forks to attempt to root out DataPipe objects.
+// This usage discovers some, BUT NOT ALL of the DataPipes (where ctrl is a
+// DataPipe object):
+//
+//     const data_pipes = Bokeh.find.children(
+//                            ctrl.constructor,
+//                            [ 'children', 'items', 'panes', 'tabs', 'child', 'ui',
+//                              'source', 'data_source', 'renderers', 'image_source' ]
+//                        )(showable)
+//
+export function children<T extends Model>(
+    type_identifier: string | (new (...args: any[]) => Model),
+    properties: string[] = [ 'children', 'items', 'panes', 'tabs', 'child', 'ui' ]
+): (model: Model) => T[] {
+    return (root) => {
+        if (!root) return [];
+
+        const matches_type = (node: Model): boolean => {
+            if (typeof type_identifier === 'string') {
+                // String: exact type match only
+                console.log(`<S:${node.type}>`,node)
+                return node.type === type_identifier;
+            } else {
+                // Class: use instanceof for inheritance checking
+                console.log(`<C:${node.type}>`,node)
+                return node instanceof type_identifier;
+            }
+        };
+
+        const child_finder = (node: HasProps): T[] => {
+            const nodeModel = node as Model;
+
+            const search_children = (prop: string): T[] => {
                 const children = (node as any)[prop];
                 if (!children) return [];
-
-                // Handle both single child and array of children
                 const childArray = Array.isArray(children) ? children : [children];
-                return childArray.flatMap(findContext);
-            });
-        }
+                return childArray.flatMap(child_finder);
+            };
+
+            const matchingNode = matches_type(nodeModel) ? [nodeModel as T] : [];
+            return [...matchingNode, ...properties.flatMap(search_children)];
+        };
+
+        return child_finder(root);
     };
-
-    // Get first context from each root and find the one containing our model
-    const contexts = roots.flatMap(findContext);
-
-    return contexts.find(context =>
-        Boolean(find_model(context as Model,
-            (candidate: Model) => {
-                return candidate.id === model.id;
-            }
-        ))
-    );
 }
+
+export const context = find_parent<BokehAppContext>(
+    "cubevis.bokeh.models._bokeh_app_context.BokehAppContext"
+);
+
+export const showable = find_parent<Showable>(
+    "cubevis.bokeh.models._showable.Showable"
+);
 
 export function appState(model: Model): object | undefined {
     const ctx = context(model)

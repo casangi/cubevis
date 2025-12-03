@@ -226,7 +226,9 @@ function find_parent<T extends Model>(
     type_string: string
 ): (model: Model) => T | undefined {
     return (model: Model): T | undefined => {
-        const roots = model?.document?.all_roots;
+        // with Bokeh 3.6 there is a roots( ) function...
+        // with Bokeh 3.8 there is a all_roots property...
+        const roots = model?.document?.all_roots ?? model?.document?.roots();
         if (!roots) return undefined;
 
         const potentialChildrenProps = ['children', 'items', 'panes', 'tabs', 'child', 'ui'];

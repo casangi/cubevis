@@ -6,13 +6,13 @@ export class ModelManager<T extends { id: string }> {
   register(instance: T): void {
     // Access the ID directly as 'instance.id'
     this.instances.set(instance.id, instance);
-    console.log(`Registered instance of type ${instance.constructor.name} with id: ${instance.id}`);
+    console.log(`registered instance ${instance.id}`);
   }
 
   unregister(instance: T): void {
     // Access the ID directly as 'instance.id'
     this.instances.delete(instance.id);
-    console.log(`Unregistered instance of type ${instance.constructor.name} with id: ${instance.id}`);
+    console.log(`unregistered instance  ${instance.id}`);
   }
 
   getInstances(): T[] {

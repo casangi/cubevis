@@ -204,11 +204,6 @@ export class DataPipe extends DataSource {
         super.initialize();
         activeDataPipes.register( this );
 
-        console.log('**** TypeScript initialize ****')
-        console.log('conflict_check value:', this.conflict_check)
-        console.log('conflict_check type:', typeof this.conflict_check)
-        console.log('All properties:', this.properties)
-        console.log('*******************************')
         // Generate instance key based on address and purpose
         // This allows multiple DataPipes for different purposes
         this.instance_key = this.generateInstanceKey()

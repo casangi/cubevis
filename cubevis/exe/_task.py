@@ -67,31 +67,53 @@ class Task:
         
         return threading_event
 
+    def _run_coroutine_sync(self, coro):
+        """
+        Helper to run a coroutine synchronously, handling both CLI and Jupyter contexts.
+        """
+        try:
+            # Check if there's already a running event loop (Jupyter/IPython)
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop - safe to use asyncio.run() (CLI context)
+            return asyncio.run(coro)
+        else:
+            # Running loop exists (Jupyter context)
+            try:
+                import nest_asyncio
+                nest_asyncio.apply()
+                return asyncio.run(coro)
+            except ImportError:
+                # Fallback: run in a new thread with its own event loop
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    return pool.submit(asyncio.run, coro).result()
+
     def run_sync(self) -> Any:
         """Run synchronously until completion or stop signal."""
         if self.stop_condition is None:
             # Handle async functions in sync context
             if asyncio.iscoroutinefunction(self.server_func):
-                logger.debug( f"\tTask::run_sync( ): {id(self)} - asyncio no stop condition {self.server_func}" )
-                return asyncio.run(self.server_func(*self.args, **self.kwargs))
+                logger.debug(f"\tTask::run_sync( ): {id(self)} - asyncio no stop condition {self.server_func}")
+                return self._run_coroutine_sync(self.server_func(*self.args, **self.kwargs))
             else:
-                logger.debug( f"\tTask::run_sync( ): {id(self)} - no stop condition {self.server_func}" )
+                logger.debug(f"\tTask::run_sync( ): {id(self)} - no stop condition {self.server_func}")
                 return self.server_func(*self.args, **self.kwargs)
 
         # Handle asyncio.Event in sync context by converting to threading.Event
         stop_condition = self.stop_condition
         if isinstance(self.stop_condition, asyncio.Event):
-            logger.debug( f"\tTask::run_sync( ): {id(self)} - asyncio bridge {self.server_func}" )
+            logger.debug(f"\tTask::run_sync( ): {id(self)} - asyncio bridge {self.server_func}")
             # Convert asyncio.Event to threading.Event for sync execution
             stop_condition = self._convert_asyncio_event_to_threading(self.stop_condition)
-        
+
         if callable(stop_condition):
             # Poll-based stopping
-            logger.debug( f"\tTask::run_sync( ): {id(self)} - polling {self.server_func}" )
+            logger.debug(f"\tTask::run_sync( ): {id(self)} - polling {self.server_func}")
             while not stop_condition():
                 try:
                     if asyncio.iscoroutinefunction(self.server_func):
-                        result = asyncio.run(self.server_func(*self.args, **self.kwargs))
+                        result = self._run_coroutine_sync(self.server_func(*self.args, **self.kwargs))
                     else:
                         result = self.server_func(*self.args, **self.kwargs)
                     if result is not None:  # Server function completed
@@ -102,12 +124,12 @@ class Task:
 
         elif isinstance(stop_condition, threading.Event):
             # Event-based stopping for threads
-            logger.debug( f"\tTask::run_sync( ): {id(self)} - threading event {self.server_func}" )
+            logger.debug(f"\tTask::run_sync( ): {id(self)} - threading event {self.server_func}")
             def run_with_check():
                 while not stop_condition.is_set():
                     try:
                         if asyncio.iscoroutinefunction(self.server_func):
-                            result = asyncio.run(self.server_func(*self.args, **self.kwargs))
+                            result = self._run_coroutine_sync(self.server_func(*self.args, **self.kwargs))
                         else:
                             result = self.server_func(*self.args, **self.kwargs)
                         if result is not None:
@@ -118,26 +140,25 @@ class Task:
             return run_with_check()
 
         elif isinstance(stop_condition, threading.Condition):
-            logger.debug( f"\tTask::run_sync( ): {id(self)} - threading condition {self.server_func}" )
+            logger.debug(f"\tTask::run_sync( ): {id(self)} - threading condition {self.server_func}")
             # Condition-based stopping - most flexible and efficient
             def run_with_condition():
                 with stop_condition:
                     while True:
-                        # Check if we should stop (condition should have a flag or predicate)
-                        # The condition object should be used by external code to signal stopping
-                        # We'll pass the condition to the server function so it can wait efficiently
                         try:
                             # Pass the condition to the server function if it accepts it
                             import inspect
                             sig = inspect.signature(self.server_func)
                             if 'stop_condition' in sig.parameters:
                                 if asyncio.iscoroutinefunction(self.server_func):
-                                    result = asyncio.run(self.server_func(*self.args, stop_condition=stop_condition, **self.kwargs))
+                                    result = self._run_coroutine_sync(
+                                        self.server_func(*self.args, stop_condition=stop_condition, **self.kwargs)
+                                    )
                                 else:
                                     result = self.server_func(*self.args, stop_condition=stop_condition, **self.kwargs)
                             else:
                                 if asyncio.iscoroutinefunction(self.server_func):
-                                    result = asyncio.run(self.server_func(*self.args, **self.kwargs))
+                                    result = self._run_coroutine_sync(self.server_func(*self.args, **self.kwargs))
                                 else:
                                     result = self.server_func(*self.args, **self.kwargs)
 
@@ -227,4 +248,3 @@ class Task:
             # Sync function in async context - run in thread pool
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, self.run_sync)
-

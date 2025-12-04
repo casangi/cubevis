@@ -175,6 +175,23 @@ class Showable(LayoutDOM,BokehInit):
     ### when 'disabled' is set to true, this message should be displayed over
     ### a grey-obscured GUI...
     ###
+    ### May need to adjust message formatting to allow for more flexiblity,
+    ### i.e. all of the message does not need to be in big green print. May
+    ### need to allow something like:
+    ###
+    ###   <div style="font-size: 24px; font-weight: bold; color: #4CAF50; margin-bottom: 10px;">
+    ###      Interaction Complete ✓
+    ###   </div>
+    ###   <div style="font-size: 14px; color: #666;">
+    ###      You can now close this GUI or continue working in your notebook
+    ###   </div>
+    ###
+    ### currently the message is displayed in showable.ts like:
+    ###
+    ###   <div style="font-size: 24px; font-weight: bold; color: #4CAF50; margin-bottom: 10px;">
+    ###      ${this.model.disabled_message}
+    ###   </div>
+    ###
     disabled_message = String(default="Interaction Complete ✓", help="""
     Message to show when disabled
     """)

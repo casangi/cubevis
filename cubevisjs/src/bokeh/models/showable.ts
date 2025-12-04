@@ -208,9 +208,6 @@ export class ShowableView extends LayoutDOMView {
         <div style="font-size: 24px; font-weight: bold; color: #4CAF50; margin-bottom: 10px;">
           ${this.model.disabled_message}
         </div>
-        <div style="font-size: 14px; color: #666;">
-          You can now close this GUI or continue working in your notebook
-        </div>
       `
 
       console.log('Message box created')

@@ -1513,18 +1513,24 @@ class CubeMask:
                                                                             ##     """console.log("Running from script/terminal. Closing window.")
                                                                             ##        window.close()"""
                                                                             ##) +
-                                                                            ( """if ( showable ) {
-                                                                                      console.log("Running in jupyter notebook.\\nDisabling GUI via root Showable.")
-                                                                                      showable.disabled = true
-                                                                                      const data_pipes = Bokeh.activeDataPipes.getInstances( )
-                                                                                      console.log("Data pipes to be closed:", data_pipes)
+                                                                            ###
+                                                                            ###  Previously the Python is_interactive_jupyter( ) function was used
+                                                                            ###  to decide whether the window should be closed or not. However, to
+                                                                            ###  support the use of the regular iclean (i.e. display in a separate
+                                                                            ###  browser tab) the check is now whether a showable is available or
+                                                                            ###  not since Showable is the coupling between GUIs and Jupyter
+                                                                            ###  notebooks.
+                                                                            ###
+                                                                            """if ( showable ) {
+                                                                                     console.log("Running in jupyter notebook.\\nDisabling GUI via root Showable.")
+                                                                                     showable.disabled = true
+                                                                                     const data_pipes = Bokeh.activeDataPipes.getInstances( )
+                                                                                     console.log("Data pipes to be closed:", data_pipes)
                                                                                  } else {
-                                                                                     console.log("Running in jupyter notebook.\\nCannot find root Showable so cannot disable GUI.")
+                                                                                     console.log("Running from script/terminal. Closing window.")
+                                                                                     window.close()
                                                                                  }
-                                                                              """ if is_interactive_jupyter( ) else
-                                                                              """console.log("Running from script/terminal. Closing window.")
-                                                                                 window.close()"""
-                                                                            ) +
+                                                                              """ +
                                                                     """
                                                                               }
                                                                           }

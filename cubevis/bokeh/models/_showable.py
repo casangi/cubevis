@@ -48,38 +48,10 @@ class Showable(LayoutDOM,BokehInit):
                 # It might be a regular function or static method without explicit 'self'/'cls'
                 return None
 
-        # Detect Bokeh usage mode (i.e. self.__class__._usage_mode unset)
-        calling_mode = None
-        if self.__class__._usage_mode is None:
-            self.__class__._usage_mode = "bokeh"
-            calling_mode = "bokeh"
-
         # Allow None (detaching from document) without any further checking
         if doc is None:
             self._document = None
             return
-
-        if calling_mode is None:
-            import inspect
-            stack_frames = inspect.stack( )
-            try:
-                for frame in stack_frames[1:]:
-                    if frame.function == '_repr_mimebundle_' or frame.function == 'show':
-                        if get_caller_class_name(frame.frame) == self.__class__.__name__:
-                            calling_mode = "custom"
-                            break
-            finally:
-                # Essential to delete stack frames to avoid reference cycles
-                del stack_frames
-
-        if calling_mode != self.__class__._usage_mode:
-            ###  THIS CATCHES:   using Bokeh show after Showable display methods
-            ###                  using Showable.show after Bokeh show
-            raise RuntimeError(
-                f"\n{'='*70}\n" +
-                ( (self._usage_error['custom'] % self.__class__.__name__) if calling_mode == 'custom' else
-                  (self._usage_error['bokeh'] % 'bokeh.plotting.show') ) +
-                f"\n{'='*70}\n" )
 
         from bokeh.io.state import curstate
         state = curstate( )
@@ -118,11 +90,22 @@ class Showable(LayoutDOM,BokehInit):
             self._start_backend()
             self._backend_started = True
 
+    def to_serializable(self, *args, **kwargs):
+        if self._display_context:
+            self._display_context.on_to_serializable( )
+
+        # Call parent's to_serializable
+        return super().to_serializable(*args, **kwargs)
+
     def __init__( self, ui_element=None, backend_func=None,
                   result_retrieval=None,
                   notebook_width=1200, notebook_height=800,
-                  notebook_sizing='fixed', **kwargs):
+                  notebook_sizing='fixed',
+                  display_context=None,
+                  **kwargs ):
         logger.debug(f"\tShowable::__init__(ui_element={type(ui_element).__name__ if ui_element else None}, {kwargs}): {id(self)}")
+
+        self._display_context = display_context
 
         # Set default sizing if not provided
         sizing_params = {'sizing_mode', 'width', 'height'}
@@ -146,18 +129,6 @@ class Showable(LayoutDOM,BokehInit):
             'notebook': { 'mode': notebook_sizing, 'width': notebook_width, 'height': notebook_height },
             'browser': { 'mode': self.sizing_mode, 'width': self.width, 'height': self.height }
         }
-
-        # Error messages included in RuntimeErrors
-        self._usage_error = {
-            'custom': "❌ Cannot use %s display methods:\n\n" \
-                      "Reason: bokeh.plotting.show() has already been used for display\n" \
-                      "        of this class. Mixing display methods within a single notebook\n" \
-                      "        corrupts Bokeh display within the notebook\n",
-            'bokeh':  "❌ Cannot use %s display method:\n\n" \
-                      "Reason: Showable display methods have already been used for display\n" \
-                      "        of this class. Mixing display methods within a single notebook\n" \
-                      "        corrupts Bokeh display within the notebook\n" }
-
 
         # Set the function to be called upon display
         if backend_func is not None:
@@ -304,13 +275,6 @@ class Showable(LayoutDOM,BokehInit):
         from bokeh.embed import components
         from bokeh.io.state import curstate
 
-        if self.__class__._usage_mode != "custom":
-            ###  THIS CATCHES:   Showable display via evaluation ( "ic" ) after Bokeh show
-            raise RuntimeError(
-                f"\n{'='*70}\n" +
-                (self._usage_error['custom'] % self.__class__.__name__) +
-                f"\n{'='*70}\n" )
-
         state = curstate()
 
         if not state.notebook:
@@ -318,6 +282,9 @@ class Showable(LayoutDOM,BokehInit):
 
         if self.ui is None:
             return '<div style="color: red; padding: 10px; border: 1px solid red;">Showable object with no UI set</div>'
+
+        if self._display_context:
+            self._display_context.on_show( )
 
         if self._notebook_rendering:
             # Return a lightweight reference instead of re-rendering the full GUI

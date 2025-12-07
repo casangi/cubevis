@@ -42,6 +42,22 @@ from cubevis.utils import find_pkg, load_pkg
 from cubevis.toolbox import InteractiveCleanUI
 from cubevis import exe
 
+class DisplayContext:
+    def __init__(self, exclusion_manager):
+        self.exclusion_manager = exclusion_manager
+        self._custom_show_called = False
+
+    def on_show(self):
+        self._custom_show_called = True
+        self.exclusion_manager.set_mode('cell-custom-show')
+
+    def on_to_serializable(self):
+        # Only set mode if custom_show hasn't been called
+        if not self._custom_show_called:
+            self.exclusion_manager.set_mode('cell-bokeh-show')
+        # If custom_show was called, we're already in 'cell-custom-show' mode
+        # and don't need to do anything
+
 class InteractiveCleanNotebook:
     r'''InteractiveCleanNotebook(...) implements interactive clean using Bokeh
         tclean ---- Radio Interferometric Image Reconstruction
@@ -1869,6 +1885,13 @@ class InteractiveCleanNotebook:
         def startup( ):
             self._future = context.execute( exec_task, self._id )
 
+        display_ctx = DisplayContext(self._ui.exclusion_mgr)
         ### name is used in summary output of the Showable
-        showed = Showable(bokeh_ui, startup, self.get_future, name="iclean-jpy")
+        showed = Showable(
+            bokeh_ui,
+            startup,
+            self.get_future,
+            name="iclean-jpy",
+            display_context=display_ctx
+        )
         return showed

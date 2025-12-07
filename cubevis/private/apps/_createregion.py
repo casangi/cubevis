@@ -35,7 +35,7 @@ from contextlib import asynccontextmanager
 from bokeh.layouts import row, column, grid
 from bokeh.plotting import show
 from bokeh.models import Button, CustomJS, TabPanel, Tabs, Spacer, Div, Dropdown
-from cubevis.toolbox import CubeMask, AppContext, RegionList
+from cubevis.toolbox import CubeMask, RegionList
 from cubevis.bokeh.utils import svg_icon
 from bokeh.io import curdoc
 from bokeh.io import reset_output as reset_bokeh_output
@@ -140,12 +140,6 @@ class CreateRegion:
         image: str or list of str
             path(s) to CASA image for which interactive regions will be drawn
         '''
-
-        ###
-        ### Create application context (which includes a temporary directory).
-        ### This sets the title of the plot.
-        ###
-        self._app_state = AppContext( 'Create Region' )
 
         ###
         ### widgets shared across image tabs (masking multiple images)
@@ -435,7 +429,7 @@ class CreateRegion:
             app_state={                         ### while the state dictionary itself
                 'name': 'create region',        ### is used, these particular element
                 'initialized': True             ### are not currently used for anything
-            } )
+            }, title='Create Region' )
 
         ###
         ### Keep track of which image is currently active in appstate.image_name (which is
@@ -464,7 +458,7 @@ class CreateRegion:
 ###         output_file(self._imagename+'_webpage/index.html')
             pass
 
-        show(self._fig['layout'])
+        self._fig['layout'].show( )
 
     def _asyncio_loop( self ):
         '''return the event loop which can be mixed in with an existing event loop

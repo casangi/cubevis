@@ -1849,7 +1849,8 @@ class InteractiveClean:
                                interpolation='nearest', ... )( ) )
         '''
         self._id = uuid4( )
+        self._ui.exclusion_mgr.set_mode("tab")
         context = exe.Context( exe.Mode.SYNC )
         bokeh_ui, exec_task = self._ui( context, self._id )
-        show(bokeh_ui)
+        bokeh_ui.show( )
         return context.execute( exec_task, self._id )

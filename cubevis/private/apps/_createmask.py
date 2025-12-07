@@ -35,7 +35,7 @@ from contextlib import asynccontextmanager
 from bokeh.layouts import row, column
 from bokeh.plotting import show
 from bokeh.models import Button, CustomJS, TabPanel, Tabs, Spacer, Div
-from cubevis.toolbox import CubeMask, AppContext
+from cubevis.toolbox import CubeMask
 from cubevis.bokeh.utils import svg_icon
 from bokeh.io import reset_output as reset_bokeh_output
 from bokeh.io import output_notebook
@@ -148,12 +148,6 @@ class CreateMask:
             if True then the mask will be created if it does not exist
             if False a mask path which does not exist results in an exception
         '''
-
-        ###
-        ### Create application context (which includes a temporary directory).
-        ### This sets the title of the plot.
-        ###
-        self._app_state = AppContext( 'Create Mask' )
 
         ###
         ### widgets shared across image tabs (masking multiple images)
@@ -382,7 +376,7 @@ class CreateMask:
             app_state={                         ### while the state dictionary itself
                 'name': 'create mask',          ### is used, these particular element
                 'initialized': True             ### are not currently used for anything
-            } )
+            }, title='Create Mask' )
 
         ###
         ### Keep track of which image is currently active in appstate.image_name (which is
@@ -411,7 +405,7 @@ class CreateMask:
 ###         output_file(self._imagename+'_webpage/index.html')
             pass
 
-        show(self._fig['layout'])
+        self._fig['layout'].show( )
 
     def _asyncio_loop( self ):
         '''return the event loop which can be mixed in with an existing event loop

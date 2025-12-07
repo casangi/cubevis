@@ -53,6 +53,7 @@ from cubevis.bokeh.models import TipButton, Tip, EvTextInput, BokehAppContext
 
 from cubevis.utils import resource_manager, reset_resource_manager, is_interactive_jupyter, find_pkg, load_pkg
 from cubevis.utils import ContextMgrChain as CMC
+from cubevis.utils import MutualExclusionManager
 
 # pylint: disable=no-name-in-module
 from casatasks.private.imagerhelpers.imager_return_dict import ImagingDict
@@ -61,7 +62,7 @@ from casatasks.private.imagerhelpers.input_parameters import ImagerParameters
 # pylint: enable=no-name-in-module
 
 from cubevis.utils import find_ws_address, convert_masks
-from cubevis.toolbox import CubeMask, AppContext
+from cubevis.toolbox import CubeMask
 from cubevis.bokeh.utils import svg_icon
 from cubevis.bokeh.sources import DataPipe
 from cubevis.utils import DocEnum
@@ -74,6 +75,25 @@ USE_MULTIPLE_GCLEAN_HACK=False
 class InteractiveCleanUI:
     '''InteractiveCleanUI(...) implements interactive clean using Bokeh
     '''
+
+    exclusion_mgr = MutualExclusionManager(
+        name="interactive clean",
+        valid_modes={
+            "tab":              "❌ Cannot use iclean task display:\n\n" \
+                                "Reason: bokeh.plotting.show() or iclean show method has already been\n" \
+                                "        used for display of this class. Mixing display methods within\n" \
+                                "        a single notebook corrupts Bokeh display within the notebook\n",
+            "cell-bokeh-show":  "❌ Cannot use bokeh.plotting.show() display method:\n\n" \
+                                "Reason: iclean show or task method has already been used for display\n" \
+                                "        of this class. Mixing display methods within a single notebook\n" \
+                                "        corrupts Bokeh display within the notebook\n",
+            "cell-custom-show": "❌ Cannot use iclean show method:\n\n" \
+                                "Reason: bokeh.plotting.show() or task has already been used for display\n" \
+                                "        of this class. Mixing display methods within a single notebook\n" \
+                                "        corrupts Bokeh display within the notebook\n",
+        }
+    )
+
     def __stop( self, _=None ):
         self.__result_future.set_result(self.__retrieve_result( ))
 
@@ -164,11 +184,6 @@ class InteractiveCleanUI:
         ### the image display.
         ###
         self._conv_spect_plot_width = 450
-        ###
-        ### Create application context (which includes a temporary directory).
-        ### This sets the title of the plot.
-        ###
-        self._app_state = AppContext( 'Interactive Clean' )
 
         ###
         ### Whether or not the Interactive Clean session is running remotely
@@ -948,7 +963,7 @@ class InteractiveCleanUI:
             app_state={                         ### while the state dictionary itself
                 'name': 'interactive clean',    ### is used, these particular element
                 'initialized': True             ### are not currently used for anything
-            } )
+            }, title='Interactive Clean' )
 
         ###
         ### Keep track of which image is currently active in appstate.image_name (which is

@@ -1,3 +1,5 @@
+import os
+import sys
 import logging
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,7 @@ def is_interactive_jupyter( ) -> bool:
     - Interactive Jupyter notebook/lab with frontend (returns True)
     - Standalone Jupyter kernel without frontend (returns False)
     - Regular Python interpreter (returns False)
+    - Support Google Colab and legacy Jupyter versions.
 
     Returns:
         bool: True if running in interactive Jupyter with frontend, False otherwise
@@ -37,12 +40,21 @@ def is_interactive_jupyter( ) -> bool:
             logger.debug(f"\tis_interactive_jupyter<1>: False")
             return False
 
-        # Check if we're in a ZMQ-based shell (kernel)
-        if ipython.__class__.__name__ != 'ZMQInteractiveShell':
+        # Allow Colab's 'Shell' class in addition to standard 'ZMQInteractiveShell'
+        shell_class = ipython.__class__.__name__
+        is_colab = 'google.colab' in sys.modules
+
+        # Check if we're in a ZMQ-based shell (kernel) or Colab's 'Shell'
+        if shell_class not in ['ZMQInteractiveShell', 'Shell'] and not is_colab:
             logger.debug(f"\tis_interactive_jupyter<2>: False")
             return False
 
-        # Check for active frontend connection
+        # If we are in Colab, the existence of the shell itself implies
+        # an interactive frontend, as Colab sessions are inherently interactive.
+        if is_colab:
+            return True
+
+        # Check for active frontend connection (Standard Jupyter/Legacy)
         if hasattr(ipython, 'kernel') and ipython.kernel is not None:
             kernel = ipython.kernel
 
@@ -51,14 +63,15 @@ def is_interactive_jupyter( ) -> bool:
                 # For newer Jupyter versions, check connection count
                 if hasattr(kernel, 'connection_count'):
                     logger.debug(f"\tis_interactive_jupyter<3>: {kernel.connection_count > 0}")
-                    return kernel.connection_count > 0
+                    if kernel.connection_count > 0:
+                        return True
 
                 # For older versions, check if socket is connected
                 try:
                     # Try to get socket state - if it fails, likely no frontend
-                    socket_state = kernel.shell_socket.closed
                     logger.debug(f"\tis_interactive_jupyter<4>: {not socket_state}")
-                    return not socket_state
+                    if not kernel.shell_socket.closed:
+                        return True
                 except AttributeError:
                     pass
 
@@ -68,7 +81,8 @@ def is_interactive_jupyter( ) -> bool:
                     parent = kernel.get_parent()
                     # If there's a parent message, we're likely in interactive mode
                     logger.debug(f"\tis_interactive_jupyter<5>: {parent is not None and len(parent) > 0}")
-                    return parent is not None and len(parent) > 0
+                    if parent is not None and len(parent) > 0:
+                        return True
                 except Exception:
                     pass
 
@@ -77,12 +91,12 @@ def is_interactive_jupyter( ) -> bool:
                 logger.debug(f"\tis_interactive_jupyter<6>: True")
                 return True
 
-        # Fallback: Check for common Jupyter notebook environment indicators
-        # This catches cases where kernel introspection doesn't work
-        import os
+        # Fallback: Check for environment indicators (Legacy/Containerized Jupyter)
         jupyter_indicators = [
-            'JPY_PARENT_PID',  # JupyterLab/Notebook sets this
+            'JPY_PARENT_PID',       # JupyterLab/Notebook sets this
             'JUPYTER_RUNTIME_DIR',
+            'COLAB_RELEASE_DEVICE', # Additional Colab-specific env check
+            'COLAB_GPU'             # Additional Colab-specific env check
         ]
 
         for indicator in jupyter_indicators:
@@ -99,6 +113,6 @@ def is_interactive_jupyter( ) -> bool:
         logger.debug(f"\tis_interactive_jupyter<8>: False")
         return False
 
-    except ImportError:
+    except (ImportError, Exception):
         logger.debug(f"\tis_interactive_jupyter<9>: False")
         return False

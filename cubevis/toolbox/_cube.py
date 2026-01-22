@@ -1082,7 +1082,7 @@ class CubeMask:
                                  ### Firefox incorrectly sizes the colormap histogram plot resulting in the right
                                  ### side being outside of the browser window... this may have to be tweaked again
                                  ### when Jupyter notebooks are supported...
-                               ( [ Spacer( width=120 ) ] if have_firefox( ) else [ ] ), sizing_mode='stretch_both' ),
+                               ( [ Spacer( width=120 ) ] if not is_interactive_jupyter( ) and have_firefox( ) else [ ] ), sizing_mode='stretch_both' ),
                        row( Tip( self._cm_adjust['min input'],
                                   tooltip=Tooltip( content=HTML("set minimum clip here or drag the left red line above"),
                                                    position="top" ) ),

@@ -5,6 +5,7 @@ from bokeh.core.properties import Instance, String
 
 from bokeh.io import curdoc
 from .. import BokehInit
+from ...utils import is_colab
 
 logger = logging.getLogger(__name__)
 
@@ -272,8 +273,10 @@ class Showable(LayoutDOM,BokehInit):
         Common logic for generating HTML in notebook environments.
         Returns the HTML string to display, or None if not in a notebook.
         """
-        from bokeh.embed import components
+        from bokeh.embed import components, file_html
         from bokeh.io.state import curstate
+        from bokeh.resources import CDN
+        import sys
 
         state = curstate()
 
@@ -297,18 +300,21 @@ class Showable(LayoutDOM,BokehInit):
             </div>
             '''
 
-        # Apply notebook sizing for Jupyter context
-        ###if self._notebook_sizing == 'fixed':
-        ###    self.sizing_mode = None
-        ###    self.width = self._notebook_width
-        ###    self.height = self._notebook_height
-
-        script, div = components(self)
-        if start_backend:
-            self._start_backend()
-
-        self._notebook_rendering = f'{script}\n{div}'
-        return self._notebook_rendering
+        if is_colab( ):
+            # In Colab, use file_html to get a complete standalone HTML
+            # This includes all necessary Bokeh JS resources inline
+            html = file_html(self, resources=CDN, title="Showable")
+            if start_backend:
+                self._start_backend()
+            self._notebook_rendering = html
+            return html
+        else:
+            # In Jupyter Lab/Classic, use components() as before
+            script, div = components(self)
+            if start_backend:
+                self._start_backend()
+            self._notebook_rendering = f'{script}\n{div}'
+            return self._notebook_rendering
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         """

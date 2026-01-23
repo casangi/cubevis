@@ -43,7 +43,7 @@ from ._regions import polygon_indexes
 from ._docenum import DocEnum
 from ._copydoc import copydoc
 from ._pkgs import find_pkg, load_pkg
-from ._jupyter import is_interactive_jupyter
+from ._jupyter import is_interactive_jupyter, is_colab
 from ._browser import have_firefox
 from ._git import max_git_version
 

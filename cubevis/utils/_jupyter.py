@@ -19,6 +19,15 @@ logger = logging.getLogger(__name__)
 #    except NameError:
 #        return False
 
+def is_colab():
+    """
+    Detects if the current environment is Google Colab.
+    Combines module check (process-level) and env-var check (VM-level).
+    """
+    # 1. Check for the Colab-specific environment variable (VM level)
+    # 2. Check for the google.colab module (Python process level)
+    return os.getenv("COLAB_RELEASE_TAG") is not None or 'google.colab' in sys.modules
+
 def is_interactive_jupyter( ) -> bool:
     """
     Detect if running in an interactive Jupyter notebook with frontend connection.

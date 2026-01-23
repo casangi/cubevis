@@ -273,10 +273,11 @@ class Showable(LayoutDOM,BokehInit):
         Common logic for generating HTML in notebook environments.
         Returns the HTML string to display, or None if not in a notebook.
         """
-        from bokeh.embed import components, file_html
+        from bokeh.embed import components, json_item
         from bokeh.io.state import curstate
         from bokeh.resources import CDN
         import sys
+        import json as json_lib
 
         state = curstate()
 
@@ -287,13 +288,13 @@ class Showable(LayoutDOM,BokehInit):
             return '<div style="color: red; padding: 10px; border: 1px solid red;">Showable object with no UI set</div>'
 
         if self._display_context:
-            self._display_context.on_show( )
+            self._display_context.on_show()
 
         if self._notebook_rendering:
             # Return a lightweight reference instead of re-rendering the full GUI
             return f'''
             <div style="padding: 10px; background: #f0f8f0; border-left: 4px solid #4CAF50; margin: 5px 0;">
-                <strong>↑ iclean GUI active above</strong>
+                <strong>→ iclean GUI active above</strong>
                 <small style="color: #666; display: block; margin-top: 5px;">
                     Showable ID: {self.id[-8:]} | Backend: Running
                 </small>
@@ -301,11 +302,93 @@ class Showable(LayoutDOM,BokehInit):
             '''
 
         if is_colab( ):
-            # In Colab, use file_html to get a complete standalone HTML
-            # This includes all necessary Bokeh JS resources inline
-            html = file_html(self, resources=CDN, title="Showable")
+            # Get custom JavaScript resources (converted to jsdelivr URLs)
+            custom_js_urls = self._get_custom_js_urls()
+
+            # Separate pre-bokeh and post-bokeh custom libraries
+            pre_bokeh_libs = []
+            post_bokeh_libs = []
+
+            # Check if explicit ordering was provided
+            if hasattr(self, '_custom_js_urls_explicit'):
+                pre_bokeh_libs = self._custom_js_urls_explicit.get('pre_bokeh', [])
+                post_bokeh_libs = self._custom_js_urls_explicit.get('post_bokeh', [])
+            else:
+                # Auto-detect based on naming convention
+                for url in custom_js_urls:
+                    # casalib.min.js goes before Bokeh (third-party libs used in CustomJS)
+                    # cubevisjs.min.js goes after Bokeh (custom Bokeh model implementations)
+                    if 'casalib' in url or url.endswith('casalib.min.js'):
+                        pre_bokeh_libs.append(url)
+                    else:
+                        post_bokeh_libs.append(url)
+
+            # Build script tags
+            pre_bokeh_scripts = '\n'.join([
+                f'<script type="text/javascript" src="{url}"></script>'
+                for url in pre_bokeh_libs
+            ])
+
+            post_bokeh_scripts = '\n'.join([
+                f'<script type="text/javascript" src="{url}"></script>'
+                for url in post_bokeh_libs
+            ])
+
+            # Use json_item approach which is more reliable in iframes
+            item = json_item(self, target=f"bokeh-{self.id}")
+            item_json = json_lib.dumps(item)
+
+            # Build complete HTML with proper loading sequence
+            # Load order: 
+            # 1. Bokeh CSS
+            # 2. Third-party libs (casalib - for CustomJS)
+            # 3. Bokeh core, widgets, tables
+            # 4. Custom Bokeh models (cubevisjs)
+            # 5. Embed
+            html = f'''
+            <link href="{CDN.css_files[0]}" rel="stylesheet" type="text/css">
+            <div id="bokeh-{self.id}" class="bk-root"></div>
+            {pre_bokeh_scripts}
+            <script type="text/javascript" src="{CDN.js_files[0]}"></script>
+            <script type="text/javascript" src="{CDN.js_files[1]}"></script>
+            <script type="text/javascript" src="{CDN.js_files[2]}"></script>
+            {post_bokeh_scripts}
+            <script type="text/javascript">
+            (function() {{
+                var item = {item_json};
+
+                function embedWhenReady() {{
+                    // Check if all required libraries are loaded
+                    if (typeof Bokeh !== 'undefined' && Bokeh.embed) {{
+                        var target = document.getElementById("bokeh-{self.id}");
+                        if (target) {{
+                            try {{
+                                Bokeh.embed.embed_item(item);
+                                console.log("Bokeh plot embedded successfully");
+                            }} catch(e) {{
+                                console.error("Error embedding Bokeh plot:", e);
+                            }}
+                        }} else {{
+                            console.error("Target element not found");
+                            setTimeout(embedWhenReady, 50);
+                        }}
+                    }} else {{
+                        setTimeout(embedWhenReady, 50);
+                    }}
+                }}
+
+                if (document.readyState === 'loading') {{
+                    document.addEventListener('DOMContentLoaded', embedWhenReady);
+                }} else {{
+                    embedWhenReady();
+                }}
+            }})();
+            </script>
+            '''
+
             if start_backend:
                 self._start_backend()
+
             self._notebook_rendering = html
             return html
         else:
@@ -315,6 +398,64 @@ class Showable(LayoutDOM,BokehInit):
                 self._start_backend()
             self._notebook_rendering = f'{script}\n{div}'
             return self._notebook_rendering
+
+    def _get_custom_js_urls(self):
+        """
+        Get list of custom JavaScript URLs for notebook embedding.
+        Override this method or set an attribute to provide custom JS.
+
+        Returns:
+            list: List of JavaScript URLs in load order
+        """
+        # Check if custom URLs have been set explicitly
+        if hasattr(self, '_custom_js_urls'):
+            return self._custom_js_urls
+
+        # Try to get from BokehInit if available
+        if hasattr(self, 'get_js_urls'):
+            return self.get_js_urls()
+
+        # Check if there's a class-level configuration
+        if hasattr(self.__class__, '_default_js_urls'):
+            return self.__class__._default_js_urls
+
+        # Otherwise return empty list (only standard Bokeh will be loaded)
+        return []
+
+    def set_custom_js_urls(self, urls=None, pre_bokeh=None, post_bokeh=None):
+        """
+        Set custom JavaScript URLs to be loaded in notebook environments.
+
+        Args:
+            urls (list, optional): Simple list of URLs (will auto-detect casalib vs others)
+            pre_bokeh (list, optional): URLs to load BEFORE Bokeh (e.g., third-party libs)
+            post_bokeh (list, optional): URLs to load AFTER Bokeh (e.g., custom models)
+
+        Examples:
+            # Auto-detect based on filename
+            showable.set_custom_js_urls([
+                "https://cdn.jsdelivr.net/gh/myorg/myrepo@v1.0/casalib.min.js",
+                "https://cdn.jsdelivr.net/gh/myorg/myrepo@v1.0/cubevisjs.min.js",
+            ])
+
+            # Explicit control over load order
+            showable.set_custom_js_urls(
+                pre_bokeh=["https://.../casalib.min.js"],
+                post_bokeh=["https://.../cubevisjs.min.js"]
+            )
+        """
+        if urls is not None:
+            if not isinstance(urls, list):
+                raise ValueError("URLs must be provided as a list")
+            self._custom_js_urls = urls
+        elif pre_bokeh is not None or post_bokeh is not None:
+            # Store with explicit ordering metadata
+            self._custom_js_urls_explicit = {
+                'pre_bokeh': pre_bokeh or [],
+                'post_bokeh': post_bokeh or []
+            }
+        else:
+            raise ValueError("Must provide either 'urls' or 'pre_bokeh'/'post_bokeh'")
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         """

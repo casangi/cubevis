@@ -83,22 +83,7 @@ export class ShowableView extends LayoutDOMView {
     super.render()
 
     console.log('Showable render() - disabled:', this.model.disabled, 'shadow_el:', this.shadow_el != null)
-
-    try {
-      console.log('Colab environment check:')
-      console.log('window.location:', window.location)
-      console.log('window.google:', (window as any).google)
-      console.log('Parent frame:', window.parent !== window)
-
-      // Check if running in Colab's output frame
-      if (window.parent !== window) {
-        console.log('Running in iframe')
-        console.log('Parent location:', document.referrer)
-      }
-    } catch (error) {
-      console.warn("An error occurred during Colab diagnostics")
-    }
-    console.log("Past Colab diagnostics...")
+    
     // The parent class should have already rendered our children
     // Just ensure we have proper styling/structure if needed
     if (this.child_views.length === 0 && this.model.ui == null) {

@@ -202,22 +202,9 @@ export class DataPipe extends DataSource {
 
     initialize(): void {
         super.initialize();
-        activeDataPipes.register( this );
-
-        // Generate instance key based on address and purpose
-        // This allows multiple DataPipes for different purposes
-        this.instance_key = this.generateInstanceKey()
-        this.session_storage_key = `cubevis_datapipe_${this.instance_key}`
-
-        // Check for session conflicts before initializing websocket
-        if (!this.checkSessionConflict()) {
-            return // Don't initialize if session conflict detected
-        }
-
-        let ws_address = `ws://${this.address[0]}:${this.address[1]}`
-        console.log( "datapipe url:", ws_address )
 
         console.group("Colab diagnostics")
+        console.log( "HERE" )
         try {
           console.log('Colab environment check:')
           console.log('window.location:', window.location)
@@ -233,6 +220,21 @@ export class DataPipe extends DataSource {
           console.warn("An error occurred during Colab diagnostics")
         }
         console.groupEnd( )
+
+        activeDataPipes.register( this );
+
+        // Generate instance key based on address and purpose
+        // This allows multiple DataPipes for different purposes
+        this.instance_key = this.generateInstanceKey()
+        this.session_storage_key = `cubevis_datapipe_${this.instance_key}`
+
+        // Check for session conflicts before initializing websocket
+        if (!this.checkSessionConflict()) {
+            return // Don't initialize if session conflict detected
+        }
+
+        let ws_address = `ws://${this.address[0]}:${this.address[1]}`
+        console.log( ">datapipe url:", ws_address )
 
         var reconnections: any | undefined = undefined
         document.shutdown_in_progress_ = false

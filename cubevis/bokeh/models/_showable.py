@@ -302,36 +302,16 @@ class Showable(LayoutDOM,BokehInit):
             '''
 
         if is_colab( ):
-            # Get custom JavaScript resources (converted to jsdelivr URLs)
-            custom_js_urls = self._get_custom_js_urls()
+            # Get all JS paths from the existing function
+            # This returns paths in the correct order:
+            # [casalib, bokeh-core, bokeh-widgets, bokeh-tables, cubevisjs]
+            from cubevis.bokeh import get_bokeh_js_paths
+            js_paths = get_bokeh_js_paths( )
 
-            # Separate pre-bokeh and post-bokeh custom libraries
-            pre_bokeh_libs = []
-            post_bokeh_libs = []
-
-            # Check if explicit ordering was provided
-            if hasattr(self, '_custom_js_urls_explicit'):
-                pre_bokeh_libs = self._custom_js_urls_explicit.get('pre_bokeh', [])
-                post_bokeh_libs = self._custom_js_urls_explicit.get('post_bokeh', [])
-            else:
-                # Auto-detect based on naming convention
-                for url in custom_js_urls:
-                    # casalib.min.js goes before Bokeh (third-party libs used in CustomJS)
-                    # cubevisjs.min.js goes after Bokeh (custom Bokeh model implementations)
-                    if 'casalib' in url or url.endswith('casalib.min.js'):
-                        pre_bokeh_libs.append(url)
-                    else:
-                        post_bokeh_libs.append(url)
-
-            # Build script tags
-            pre_bokeh_scripts = '\n'.join([
+            # Build script tags for all libraries in order
+            all_scripts = '\n'.join([
                 f'<script type="text/javascript" src="{url}"></script>'
-                for url in pre_bokeh_libs
-            ])
-
-            post_bokeh_scripts = '\n'.join([
-                f'<script type="text/javascript" src="{url}"></script>'
-                for url in post_bokeh_libs
+                for url in js_paths
             ])
 
             # Use json_item approach which is more reliable in iframes
@@ -339,20 +319,16 @@ class Showable(LayoutDOM,BokehInit):
             item_json = json_lib.dumps(item)
 
             # Build complete HTML with proper loading sequence
-            # Load order: 
-            # 1. Bokeh CSS
-            # 2. Third-party libs (casalib - for CustomJS)
-            # 3. Bokeh core, widgets, tables
-            # 4. Custom Bokeh models (cubevisjs)
-            # 5. Embed
+            # get_bokeh_js_paths() already returns libs in the correct order:
+            # 1. casalib (third-party libs for CustomJS)
+            # 2. bokeh-core
+            # 3. bokeh-widgets
+            # 4. bokeh-tables
+            # 5. cubevisjs (custom Bokeh models)
             html = f'''
-            <link href="{CDN.css_files[0]}" rel="stylesheet" type="text/css">
+            {f'<link href="{CDN.css_files[0]}" rel="stylesheet" type="text/css">' if CDN.css_files else ""}
             <div id="bokeh-{self.id}" class="bk-root"></div>
-            {pre_bokeh_scripts}
-            <script type="text/javascript" src="{CDN.js_files[0]}"></script>
-            <script type="text/javascript" src="{CDN.js_files[1]}"></script>
-            <script type="text/javascript" src="{CDN.js_files[2]}"></script>
-            {post_bokeh_scripts}
+            {all_scripts}
             <script type="text/javascript">
             (function() {{
                 var item = {item_json};
@@ -398,64 +374,6 @@ class Showable(LayoutDOM,BokehInit):
                 self._start_backend()
             self._notebook_rendering = f'{script}\n{div}'
             return self._notebook_rendering
-
-    def _get_custom_js_urls(self):
-        """
-        Get list of custom JavaScript URLs for notebook embedding.
-        Override this method or set an attribute to provide custom JS.
-
-        Returns:
-            list: List of JavaScript URLs in load order
-        """
-        # Check if custom URLs have been set explicitly
-        if hasattr(self, '_custom_js_urls'):
-            return self._custom_js_urls
-
-        # Try to get from BokehInit if available
-        if hasattr(self, 'get_js_urls'):
-            return self.get_js_urls()
-
-        # Check if there's a class-level configuration
-        if hasattr(self.__class__, '_default_js_urls'):
-            return self.__class__._default_js_urls
-
-        # Otherwise return empty list (only standard Bokeh will be loaded)
-        return []
-
-    def set_custom_js_urls(self, urls=None, pre_bokeh=None, post_bokeh=None):
-        """
-        Set custom JavaScript URLs to be loaded in notebook environments.
-
-        Args:
-            urls (list, optional): Simple list of URLs (will auto-detect casalib vs others)
-            pre_bokeh (list, optional): URLs to load BEFORE Bokeh (e.g., third-party libs)
-            post_bokeh (list, optional): URLs to load AFTER Bokeh (e.g., custom models)
-
-        Examples:
-            # Auto-detect based on filename
-            showable.set_custom_js_urls([
-                "https://cdn.jsdelivr.net/gh/myorg/myrepo@v1.0/casalib.min.js",
-                "https://cdn.jsdelivr.net/gh/myorg/myrepo@v1.0/cubevisjs.min.js",
-            ])
-
-            # Explicit control over load order
-            showable.set_custom_js_urls(
-                pre_bokeh=["https://.../casalib.min.js"],
-                post_bokeh=["https://.../cubevisjs.min.js"]
-            )
-        """
-        if urls is not None:
-            if not isinstance(urls, list):
-                raise ValueError("URLs must be provided as a list")
-            self._custom_js_urls = urls
-        elif pre_bokeh is not None or post_bokeh is not None:
-            # Store with explicit ordering metadata
-            self._custom_js_urls_explicit = {
-                'pre_bokeh': pre_bokeh or [],
-                'post_bokeh': post_bokeh or []
-            }
-        else:
-            raise ValueError("Must provide either 'urls' or 'pre_bokeh'/'post_bokeh'")
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         """

@@ -30,6 +30,7 @@ provided by Bokeh'''
 
 from .state import order_bokeh_js as _order_bokeh_js
 from .state import register_model as _register_model
+from .state._initialize import get_bokeh_js_paths
 from .state import set_cubevis_lib
 
 class BokehInit:

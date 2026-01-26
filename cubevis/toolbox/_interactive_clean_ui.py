@@ -1313,22 +1313,7 @@ class InteractiveCleanUI:
                      ### -- "logbutton" is a random GUI model which can be used to locate the     --
                      ### --  appstate that is used storing state                                  --
                      ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-                     'initialize':      '''try {
-                                               console.log('Colab environment check:')
-                                               console.log('window.location:', window.location)
-                                               console.log('window.google:', (window as any).google)
-                                               console.log('Parent frame:', window.parent !== window)
-
-                                               // Check if running in Colab's output frame
-                                               if (window.parent !== window) {
-                                                   console.log('Running in iframe')
-                                                   console.log('Parent location:', document.referrer)
-                                               }
-                                           } catch (error) {
-                                               console.warn("An error occurred in the Colab diagnostic code...")
-                                           }
-                                           console.log("Past the Colab diagnostic code...")
-                                           const appstate = Bokeh.find.appState(logbutton)
+                     'initialize':      '''const appstate = Bokeh.find.appState(logbutton)
                                            if ( ! appstate.ic_initialized ) {
                                                console.log(`casalib version: ${casalib.version}`)
                                                appstate.image_name = initial_image

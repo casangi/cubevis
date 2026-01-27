@@ -43,7 +43,7 @@ from bokeh.util.compiler import TypeScript
 from bokeh.core.properties import Tuple, String, Int, Instance, Nullable, Bool
 from bokeh.models.callbacks import Callback
 
-from ...utils import serialize, deserialize, is_interactive_jupyter
+from ...utils import serialize, deserialize, is_interactive_jupyter, is_colab
 from ..state import casalib_url, cubevisjs_url
 from .. import BokehInit
 
@@ -86,6 +86,19 @@ class DataPipe(DataSource,BokehInit):
     ###################################################################
     #__javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
 
+    def _expose_colab_port(self):
+        """Expose the WebSocket port through Colab's proxy"""
+        try:
+            from google.colab import output
+            port = self.address[1]
+
+            # This registers the port with Colab's proxy system
+            output.serve_kernel_port_as_window(port)
+            print(f"✓ Colab: Exposed WebSocket port {port} through proxy")
+
+        except Exception as e:
+            print(f"⚠ Warning: Could not expose port {port} in Colab: {e}")
+
     def __init__( self, *args, abort=None, **kwargs ):
 
         if 'conflict_check' not in kwargs:
@@ -105,6 +118,10 @@ class DataPipe(DataSource,BokehInit):
 
         if self.__abort is not None and not callable(self.__abort):
                 raise RuntimeError(f'abort function must be callable ({type(self.__abort)} is not)')
+
+        # Expose port in Colab
+        if is_colab( ):
+            self._expose_colab_port()
 
     def __enqueue_send( self, ident, msg, callback ):
         ### it is assumed that this is called AFTER the lock has been aquired

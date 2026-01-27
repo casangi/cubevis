@@ -56,6 +56,41 @@ export class DataPipe extends DataSource {
         **********************************************************/
     }
 
+    private isColab(): boolean {
+        // Check if running in Colab environment
+        return (
+            typeof (window as any).google !== 'undefined' &&
+            typeof (window as any).google.colab !== 'undefined' &&
+            typeof (window as any).google.colab.kernel !== 'undefined'
+        )
+    }
+
+    private async getWebSocketUrl(): Promise<string> {
+        const [host, port] = this.address
+
+        if (this.isColab()) {
+            try {
+                const google = (window as any).google
+
+                // Get the proxy URL from Colab
+                const httpsUrl = await google.colab.kernel.proxyPort(port, {'cache': true})
+
+                // Convert https:// to wss://
+                const wssUrl = httpsUrl.replace(/^https:/, 'wss:')
+
+                console.log(`Colab proxy URL for port ${port}: ${wssUrl}`)
+                return wssUrl
+            } catch (e) {
+                console.error('Error getting Colab proxy URL:', e)
+                // Fallback to localhost (will fail, but provides error info)
+                return `ws://${host}:${port}`
+            }
+        }
+
+        // Standard WebSocket URL for non-Colab environments
+        return `ws://${host}:${port}`
+    }
+
     private checkSessionConflict(): boolean {
         try {
             if (typeof(Storage) === "undefined") {
@@ -200,22 +235,9 @@ export class DataPipe extends DataSource {
         return `${this.instance_id}_${addressKey}`
     }
 
-    initialize(): void {
-        super.initialize();
-        activeDataPipes.register( this );
-
-        // Generate instance key based on address and purpose
-        // This allows multiple DataPipes for different purposes
-        this.instance_key = this.generateInstanceKey()
-        this.session_storage_key = `cubevis_datapipe_${this.instance_key}`
-
-        // Check for session conflicts before initializing websocket
-        if (!this.checkSessionConflict()) {
-            return // Don't initialize if session conflict detected
-        }
-
-        let ws_address = `ws://${this.address[0]}:${this.address[1]}`
-        console.log( "datapipe url:", ws_address )
+    private async initializeWebSocket(): Promise<void> {
+        const ws_address = await this.getWebSocketUrl()
+        console.log("datapipe url:", ws_address)
 
         var reconnections: any | undefined = undefined
         document.shutdown_in_progress_ = false
@@ -315,8 +337,11 @@ export class DataPipe extends DataSource {
                                 console.log( `${tries+1}\treconnection attempt ${new Date( )}` )
                                 connect_to_server( )
                                 recon.backoff( )
-                                if ( recon.retries > 0 ) { setTimeout( reconnect, recon.timeout, tries+1 ) }
-                                else if ( reconnections.connected == false ) { console.log( `aborting reconnection after ${tries} attempts ${new Date( )}` ) }
+                                if ( recon.retries > 0 ) {
+                                    setTimeout(reconnect, recon.timeout, tries+1)
+                                } else if ( reconnections.connected == false ) {
+                                    console.log( `aborting reconnection after ${tries} attempts ${new Date()}` )
+                                }
                             }
                         }
                         reconnect( 0 )
@@ -345,7 +370,25 @@ export class DataPipe extends DataSource {
         /**********************************************
         *** initial connection to python websocket  ***
         **********************************************/
-        connect_to_server( )
+        connect_to_server()
+    }
+
+    initialize(): void {
+        super.initialize();
+        activeDataPipes.register( this );
+
+        // Generate instance key based on address and purpose
+        // This allows multiple DataPipes for different purposes
+        this.instance_key = this.generateInstanceKey()
+        this.session_storage_key = `cubevis_datapipe_${this.instance_key}`
+
+        // Check for session conflicts before initializing websocket
+        if (!this.checkSessionConflict()) {
+            return // Don't initialize if session conflict detected
+        }
+
+        // Start async WebSocket initialization
+        this.initializeWebSocket()
 
         //
         // Run any initialization script

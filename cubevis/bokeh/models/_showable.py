@@ -314,6 +314,10 @@ class Showable(LayoutDOM,BokehInit):
                 for url in js_paths
             ])
 
+            print( "-----scripts-being-used-----------------------------------------------" )
+            print( all_scripts )
+            print( "----------------------------------------------------------------------" )
+
             # Use json_item approach which is more reliable in iframes
             item = json_item(self, target=f"bokeh-{self.id}")
             item_json = json_lib.dumps(item)

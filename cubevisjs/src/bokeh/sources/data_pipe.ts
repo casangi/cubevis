@@ -202,25 +202,6 @@ export class DataPipe extends DataSource {
 
     initialize(): void {
         super.initialize();
-
-        console.group("Colab diagnostics")
-        console.log( "HERE" )
-        try {
-          console.log('Colab environment check:')
-          console.log('window.location:', window.location)
-          console.log('window.google:', (window as any).google)
-          console.log('Parent frame:', window.parent !== window)
-
-          // Check if running in Colab's output frame
-          if (window.parent !== window) {
-            console.log('Running in iframe')
-            console.log('Parent location:', document.referrer)
-          }
-        } catch (error) {
-          console.warn("An error occurred during Colab diagnostics")
-        }
-        console.groupEnd( )
-
         activeDataPipes.register( this );
 
         // Generate instance key based on address and purpose
@@ -234,7 +215,7 @@ export class DataPipe extends DataSource {
         }
 
         let ws_address = `ws://${this.address[0]}:${this.address[1]}`
-        console.log( ">datapipe url:", ws_address )
+        console.log( "datapipe url:", ws_address )
 
         var reconnections: any | undefined = undefined
         document.shutdown_in_progress_ = false

@@ -469,8 +469,7 @@ export class DataPipe extends DataSource {
 
             backend_url:    [ Str ],
 
-            // Match the Python 'Nullable(String)' with 'Nullable(Str)'
-            pipe_id:        [ Nullable(Str), null ],
+            instance_id:    [ Str ],
 
             conflict_check: [ Bool, true ]
         }))

@@ -189,5 +189,5 @@ class UpdatableDataSource(ColumnDataSource,BokehInit):
             raise RuntimeError( 'UpdatableDataSource.serve should only be called for when a "pipe" is NOT supplied as part of initialization' )
 
         self._stop_serving_function = stop_function
-        async with websockets.serve( self.pipe.process_messages, self.pipe.address[0], self.pipe.address[1] ) as msgpipe:
+        async with websockets.serve( self.pipe.process_messages, self.pipe.backend_ip, self.pipe.backend_port ) as msgpipe:
             yield { 'msgpipe': msgpipe }

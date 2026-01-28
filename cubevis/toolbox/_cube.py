@@ -2301,8 +2301,8 @@ class CubeMask:
     @asynccontextmanager
     async def serve( self, stop_function ):
         self._stop_serving_function = stop_function
-        async with websockets.serve( self._pipe['image'].process_messages, self._pipe['image'].address[0], self._pipe['image'].address[1] ) as im, \
-             websockets.serve( self._pipe['control'].process_messages, self._pipe['control'].address[0], self._pipe['control'].address[1] ) as ctrl:
+        async with websockets.serve( self._pipe['image'].process_messages, self._pipe['image'].backend_ip, self._pipe['image'].backend_port ) as im, \
+             websockets.serve( self._pipe['control'].process_messages, self._pipe['control'].backend_ip, self._pipe['control'].backend_port ) as ctrl:
             yield { 'im': im, 'ctrl': ctrl }
             #pass
 

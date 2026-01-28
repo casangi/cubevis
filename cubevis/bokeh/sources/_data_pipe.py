@@ -71,7 +71,9 @@ class DataPipe(DataSource,BokehInit):
     JavaScript to be run during initialization of an instance of an DataPipe object.
     """)
 
-    address = Tuple( String, Int, help="two integer sequence representing the address and port to use for the websocket" )
+    backend_ip = String(default="127.0.0.1", help="the IP address that the Python server binds to locally" )
+    backend_port = Int( help="the port that the Python server listens on" )
+    backend_url = String( help="the full URL used by the browser to connect to the Python server" )
 
     instance_id = String( help="Unique ID for each DataPipe object" )
 
@@ -86,100 +88,16 @@ class DataPipe(DataSource,BokehInit):
     ###################################################################
     #__javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
 
-    def _expose_colab_port(self):
-        """Expose the WebSocket port through Colab's proxy"""
-        try:
-            from google.colab import output
-            import os
-            import json
-            port = self.address[1]
-
-            # Expose the port
-            output.serve_kernel_port_as_iframe(port)
-
-            # Try to get kernel connection info
-            # Colab stores connection info in environment variables or files
-            kernel_info = {}
-
-            # Check various environment variables
-            for key in ['COLAB_KERNEL_ID', 'JPY_SESSION_NAME', 'KERNEL_ID',
-                        'COLAB_GPU', 'COLAB_TPU_ADDR', 'HOSTNAME']:
-                value = os.environ.get(key)
-                if value:
-                    kernel_info[key] = value
-
-            # Try to read kernel connection file
-            try:
-                # Jupyter/Colab stores connection info in runtime files
-                runtime_dir = os.environ.get('JUPYTER_RUNTIME_DIR', '/root/.local/share/jupyter/runtime')
-                if os.path.exists(runtime_dir):
-                    import glob
-                    connection_files = glob.glob(os.path.join(runtime_dir, 'kernel-*.json'))
-                    if connection_files:
-                        with open(connection_files[0], 'r') as f:
-                            conn_info = json.load(f)
-                            kernel_info['connection'] = conn_info
-            except Exception as e:
-                print(f"  Could not read kernel connection file: {e}")
-
-            # Get the actual WebSocket URL by checking where requests go
-            # This is hacky but might work
-            try:
-                import socket
-                hostname = socket.gethostname()
-                kernel_info['hostname'] = hostname
-
-                # Try to get external URL
-                import requests
-                # Colab has an internal metadata service
-                try:
-                    # This might reveal the actual kernel URL
-                    metadata_url = "http://metadata.google.internal/computeMetadata/v1/instance/"
-                    headers = {"Metadata-Flavor": "Google"}
-
-                    # Try to get instance info
-                    instance_info = {}
-                    for key in ['hostname', 'name', 'zone', 'id']:
-                        try:
-                            resp = requests.get(metadata_url + key, headers=headers, timeout=1)
-                            if resp.status_code == 200:
-                                instance_info[key] = resp.text
-                        except:
-                            pass
-
-                    if instance_info:
-                        kernel_info['instance'] = instance_info
-                except:
-                    pass
-
-            except Exception as e:
-                print(f"  Could not get hostname: {e}")
-
-            print(f"✓ Colab: Exposed WebSocket port {port} via iframe proxy")
-            print(f"  Kernel info: {json.dumps(kernel_info, indent=2)}")
-
-            # Inject whatever we found into JavaScript
-            from IPython.display import display, Javascript
-
-            display(Javascript(f"""
-            window.CUBEVIS_COLAB_PORT_{port} = {{
-                port: {port},
-                kernelInfo: {json.dumps(kernel_info)}
-            }};
-            console.log('Colab port info injected:', window.CUBEVIS_COLAB_PORT_{port});
-            """))
-
-        except Exception as e:
-            print(f"⚠ Warning: Could not expose port {port} in Colab: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def __init__( self, *args, abort=None, **kwargs ):
+    def __init__( self, *args, abort=None, address=None, **kwargs ):
 
         if 'conflict_check' not in kwargs:
             kwargs['conflict_check'] = not is_interactive_jupyter( )
         if 'instance_id' not in kwargs:
             kwargs['instance_id'] = str(uuid4( ))
+
+        if address is not None:
+            kwargs['backend_ip'] = address[0]
+            kwargs['backend_port'] = address[1]
 
         super( ).__init__( *args, **kwargs )
 
@@ -194,9 +112,15 @@ class DataPipe(DataSource,BokehInit):
         if self.__abort is not None and not callable(self.__abort):
                 raise RuntimeError(f'abort function must be callable ({type(self.__abort)} is not)')
 
-        # Expose port in Colab
+        # Fetch URL in Colab
         if is_colab( ):
-            self._expose_colab_port()
+            from google.colab.output import eval_js
+            # Colab maps the internal port to a secure external URL
+            external_https = eval_js(f"google.colab.kernel.proxyPort({self.backend_port})")
+            self.backend_url = external_https.replace("https://", "wss://")
+        else:
+            # Standard local/remote access
+            self.backend_url = f"ws://{self.backend_ip}:{self.backend_port}"
 
     def __enqueue_send( self, ident, msg, callback ):
         ### it is assumed that this is called AFTER the lock has been aquired
@@ -358,7 +282,7 @@ class DataPipe(DataSource,BokehInit):
             self.__websocket = websocket
             session_established = False
 
-            print(f"✓ WebSocket server received connection on port {self.address[1]}")
+            print(f"✓ WebSocket server received connection on port {self.backend_port}")
 
             async for message in websocket:
                 msg = deserialize(message)

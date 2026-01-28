@@ -142,11 +142,11 @@ class InteractiveCleanUI:
         ###
         ### need to add extra cube ports here for multifield imaging
         ###
-        ports = [ self._pipe['control'].address[1], self._clean['converge']['pipe'].address[1] ]
+        ports = [ self._pipe['control'].backend_port, self._clean['converge']['pipe'].backend_port ]
 
         for imid, imdetails in self._clean_targets.items( ):
-            ports.append( imdetails['gui']['cube']._pipe['image'].address[1] )
-            ports.append( imdetails['gui']['cube']._pipe['control'].address[1] )
+            ports.append( imdetails['gui']['cube']._pipe['image'].backend_port )
+            ports.append( imdetails['gui']['cube']._pipe['control'].backend_port )
 
         # Also forward http port if serving webpage
         #if not self._is_notebook:
@@ -1156,11 +1156,11 @@ class InteractiveCleanUI:
                                      self._clean_targets[img]['gui']['cube'].serve(self.__stop),
                                  ]
                                ] + [ websockets.serve( self._pipe['control'].process_messages,
-                                                       self._pipe['control'].address[0],
-                                                       self._pipe['control'].address[1] ),
+                                                       self._pipe['control'].backend_ip,
+                                                       self._pipe['control'].backend_port ),
                                      websockets.serve( self._clean['converge']['pipe'].process_messages,
-                                                       self._clean['converge']['pipe'].address[0],
-                                                       self._clean['converge']['pipe'].address[1] ) ]
+                                                       self._clean['converge']['pipe'].backend_ip,
+                                                       self._clean['converge']['pipe'].backend_port ) ]
                               ) ):
                 self.__result_future = asyncio.Future( )
                 yield self.__result_future

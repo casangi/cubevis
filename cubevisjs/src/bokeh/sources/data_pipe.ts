@@ -18,7 +18,9 @@ export namespace DataPipe {
 
     export type Props = DataSource.Props & {
         init_script: p.Property<CallbackLike0<DataPipe> | null>;
-        address: p.Property<[string,number]>;
+        backend_ip: p.Property<string>;
+        backend_port: p.Property<number>;
+        backend_url: p.Property<string>;
         instance_id: p.Property<string>;
         conflict_check: p.Property<boolean>
     }
@@ -56,42 +58,6 @@ export class DataPipe extends DataSource {
         **********************************************************/
     }
 
-    private isColab(): boolean {
-        // Check if running in Colab environment
-        return (
-            typeof (window as any).google !== 'undefined' &&
-            typeof (window as any).google.colab !== 'undefined' &&
-            typeof (window as any).google.colab.kernel !== 'undefined'
-        )
-    }
-
-    // @ts-expect-error: debugging colab websocket problems
-    private async getWebSocketUrl(): Promise<string> {
-        const [host, port] = this.address
-
-        if (this.isColab()) {
-            try {
-                const google = (window as any).google
-
-                // Get the proxy URL from Colab
-                const httpsUrl = await google.colab.kernel.proxyPort(port, {'cache': true})
-
-                // Convert https:// to wss://
-                const wssUrl = httpsUrl.replace(/^https:/, 'wss:')
-
-                console.log(`Colab proxy URL for port ${port}: ${wssUrl}`)
-                return wssUrl
-            } catch (e) {
-                console.error('Error getting Colab proxy URL:', e)
-                // Fallback to localhost (will fail, but provides error info)
-                return `ws://${host}:${port}`
-            }
-        }
-
-        // Standard WebSocket URL for non-Colab environments
-        return `ws://${host}:${port}`
-    }
-
     private checkSessionConflict(): boolean {
         try {
             if (typeof(Storage) === "undefined") {
@@ -125,7 +91,9 @@ export class DataPipe extends DataSource {
                         console.log('Existing session ID:', existingData.sessionId);
                         console.log('Existing timestamp:', new Date(existingData.timestamp).toISOString());
                         console.log('Age of existing session (ms):', Date.now() - existingData.timestamp);
-                        console.log('Address:', this.address);
+                        console.log('Backend IP:', this.backend_ip);
+                        console.log('Backend Port:', this.backend_port);
+                        console.log('Backend URL:', this.backend_url);
                         console.log('Instance key:', this.instance_key);
                         console.log('Storage key:', this.session_storage_key);
                         console.log('Existing data:', existingData);
@@ -225,130 +193,17 @@ export class DataPipe extends DataSource {
     }
 
     private generateInstanceKey(): string {
-        // Create unique key based on address and optional purpose
-        const addressKey = `${this.address[0]}_${this.address[1]}`
-
         // Could extend this to include purpose/context if needed
         // For example, if you pass a 'purpose' property in attrs:
         // const purpose = this.attrs.purpose || 'default'
         // return `${addressKey}_${purpose}`
 
-        return `${this.instance_id}_${addressKey}`
+        return `${this.instance_id}_${this.backend_port}`
     }
 
     private async initializeWebSocket(): Promise<void> {
 
-        let ws_address: string
-
-        if (this.isColab()) {
-            const [host, port] = this.address
-
-            console.log('=== Colab WebSocket Debug ===')
-            console.log('Port:', port)
-
-            try {
-                // Find the kernel proxy domain from the page
-                // Look for existing WebSocket connections or script sources
-                let kernelDomain = null
-
-                // Method 1: Check for existing WebSocket in the page
-                // Colab connects to wss://8080-{session}.{region}.prod.colab.dev
-                const referrer = document.referrer
-                console.log('Referrer:', referrer)
-
-                // Method 2: Try to extract from cookies or global variables
-                if ((window as any).colab && (window as any).colab.global && (window as any).colab.global.config) {
-                    console.log('Colab config:', (window as any).colab.global.config)
-                }
-
-                // Method 3: Look for the kernel domain in the parent page's connection
-                // The pattern is: wss://8080-{session-id}.{region}.prod.colab.dev
-                // We need to construct this from what we know
-
-                // Try to get it from the parent window's location (if accessible)
-                try {
-                    if (window.parent && window.parent.location) {
-                        console.log('Parent location:', window.parent.location.href)
-                    }
-                } catch (e) {
-                    console.log('Cannot access parent location (CORS)')
-                }
-
-                // Method 4: Extract session from current hostname
-                // Current: l9ni429nwkk-496ff2e9c6d22116-0-colab.googleusercontent.com
-                // We need: 8080-{session}.{region}.prod.colab.dev
-                const hostnameMatch = window.location.hostname.match(/([^-]+)-([^-]+)-\d+-colab/)
-                if (hostnameMatch) {
-                    const sessionId = hostnameMatch[1]
-                    const hash = hostnameMatch[2]
-                    console.log('Session ID:', sessionId, 'Hash:', hash)
-
-                    // Try to construct kernel domain
-                    // This is a guess at the pattern - we might need to adjust
-                    // Sww earlier logs for the actual kernel domain pattern
-
-                    // From the logs, I see: 8080-m-s-2yh301u7g04ix-a.us-central1-0.prod.colab.dev
-                    // But we're in: l9ni429nwkk-496ff2e9c6d22116-0-colab.googleusercontent.com
-
-                    // These don't seem to have an obvious mapping...
-                }
-
-                // Method 5: Make a request to find the kernel domain
-                // The parent page knows about it, but we can't access it due to CORS
-
-                // Let's try getting it from Colab's API
-                const google = (window as any).google
-                if (google && google.colab && google.colab.kernel) {
-                    // Check what properties are available
-                    const kernelProps = Object.keys(google.colab.kernel)
-                    console.log('Available kernel properties:', kernelProps)
-    
-                    // Try to find anything that looks like a URL or domain
-                    for (const prop of kernelProps) {
-                        const value = (google.colab.kernel as any)[prop]
-                        console.log(`  ${prop}:`, typeof value, value)
-                    }
-
-                    // Try to find the WebSocket URL or kernel connection info
-                    if ((google.colab.kernel as any).websocketUrl) {
-                        console.log('Kernel WebSocket URL:', (google.colab.kernel as any).websocketUrl)
-                        kernelDomain = (google.colab.kernel as any).websocketUrl
-                    }
-                }
-
-                // If we still don't have it, try the message passing approach
-                if (!kernelDomain) {
-                    console.log('Could not determine kernel domain, trying message passing...')
-
-                    // Try to ask the parent for the kernel domain
-                    window.parent.postMessage({ type: 'request_kernel_domain' }, '*')
-
-                    // For now, fall back to the googleusercontent proxy
-                    const httpsUrl = await google.colab.kernel.proxyPort(port, {'cache': true})
-                    ws_address = httpsUrl.replace(/^https:/, 'wss:')
-                    console.log('Using googleusercontent proxy (may not work):', ws_address)
-                } else {
-                    // Extract the domain and construct the proxy path
-                    const domainMatch = kernelDomain.match(/wss?:\/\/([^\/]+)/)
-                    if (domainMatch) {
-                        ws_address = `wss://${domainMatch[1]}/_proxy/${port}/`
-                        console.log('Constructed kernel proxy URL:', ws_address)
-                    } else {
-                        ws_address = `wss://${kernelDomain}/_proxy/${port}/`
-                    }
-                }
-
-            } catch (e) {
-                console.error('Error in Colab proxy detection:', e)
-                ws_address = `ws://${host}:${port}`
-            }
-
-            console.log('=== End Debug ===')
-        } else {
-            ws_address = `ws://${this.address[0]}:${this.address[1]}`
-        }
-
-        console.log("Final datapipe url:", ws_address)
+        console.log("datapipe url:", this.backend_url)
 
         var reconnections: any | undefined = undefined
         document.shutdown_in_progress_ = false
@@ -358,7 +213,7 @@ export class DataPipe extends DataSource {
                 this.websocket.close( )
             }
 
-            this.websocket = new WebSocket(ws_address)
+            this.websocket = new WebSocket(this.backend_url)
             this.websocket.binaryType = "arraybuffer"
 
             this.websocket.addEventListener("error", (e: Event) => {
@@ -602,10 +457,21 @@ export class DataPipe extends DataSource {
     }
 
     static {
-        this.define<DataPipe.Props>(({ Any, Tuple, String, Number, Bool }) => ({
-            init_script: [ Any, null ],
-            address: [Tuple(String,Number)],
-            instance_id: [ String ],
+        this.define<DataPipe.Props>(({ Any, Str, Int, Bool, Nullable }) => ({
+            // Use 'Nullable' and 'Any' for objects like callbacks
+            init_script:   [ Nullable(Any), null ],
+
+            // Use 'Str' instead of 'String' to avoid conflict with JS global String
+            backend_ip:     [ Str, "127.0.0.1" ],
+
+            // Use 'Int' to match your Python 'Int' property
+            backend_port:   [ Int ],
+
+            backend_url:    [ Str ],
+
+            // Match the Python 'Nullable(String)' with 'Nullable(Str)'
+            pipe_id:        [ Nullable(Str), null ],
+
             conflict_check: [ Bool, true ]
         }))
     }

@@ -245,7 +245,7 @@ export class DataPipe extends DataSource {
 
             console.log('=== Colab WebSocket Debug ===')
             console.log('Port:', port)
-        
+
             try {
                 // Find the kernel proxy domain from the page
                 // Look for existing WebSocket connections or script sources
@@ -300,7 +300,14 @@ export class DataPipe extends DataSource {
                 const google = (window as any).google
                 if (google && google.colab && google.colab.kernel) {
                     // Check what properties are available
-                    console.log('Available kernel properties:', Object.keys(google.colab.kernel))
+                    const kernelProps = Object.keys(google.colab.kernel)
+                    console.log('Available kernel properties:', kernelProps)
+    
+                    // Try to find anything that looks like a URL or domain
+                    for (const prop of kernelProps) {
+                        const value = (google.colab.kernel as any)[prop]
+                        console.log(`  ${prop}:`, typeof value, value)
+                    }
 
                     // Try to find the WebSocket URL or kernel connection info
                     if ((google.colab.kernel as any).websocketUrl) {

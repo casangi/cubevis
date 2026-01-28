@@ -91,32 +91,83 @@ class DataPipe(DataSource,BokehInit):
         try:
             from google.colab import output
             import os
+            import json
             port = self.address[1]
 
             # Expose the port
             output.serve_kernel_port_as_iframe(port)
 
-            # Get the kernel domain and inject it into JavaScript
-            # Colab sets environment variables we can use
-            kernel_id = os.environ.get('COLAB_KERNEL_ID', '')
+            # Try to get kernel connection info
+            # Colab stores connection info in environment variables or files
+            kernel_info = {}
 
-            # Inject the kernel WebSocket domain into the page
+            # Check various environment variables
+            for key in ['COLAB_KERNEL_ID', 'JPY_SESSION_NAME', 'KERNEL_ID',
+                        'COLAB_GPU', 'COLAB_TPU_ADDR', 'HOSTNAME']:
+                value = os.environ.get(key)
+                if value:
+                    kernel_info[key] = value
+
+            # Try to read kernel connection file
+            try:
+                # Jupyter/Colab stores connection info in runtime files
+                runtime_dir = os.environ.get('JUPYTER_RUNTIME_DIR', '/root/.local/share/jupyter/runtime')
+                if os.path.exists(runtime_dir):
+                    import glob
+                    connection_files = glob.glob(os.path.join(runtime_dir, 'kernel-*.json'))
+                    if connection_files:
+                        with open(connection_files[0], 'r') as f:
+                            conn_info = json.load(f)
+                            kernel_info['connection'] = conn_info
+            except Exception as e:
+                print(f"  Could not read kernel connection file: {e}")
+
+            # Get the actual WebSocket URL by checking where requests go
+            # This is hacky but might work
+            try:
+                import socket
+                hostname = socket.gethostname()
+                kernel_info['hostname'] = hostname
+
+                # Try to get external URL
+                import requests
+                # Colab has an internal metadata service
+                try:
+                    # This might reveal the actual kernel URL
+                    metadata_url = "http://metadata.google.internal/computeMetadata/v1/instance/"
+                    headers = {"Metadata-Flavor": "Google"}
+
+                    # Try to get instance info
+                    instance_info = {}
+                    for key in ['hostname', 'name', 'zone', 'id']:
+                        try:
+                            resp = requests.get(metadata_url + key, headers=headers, timeout=1)
+                            if resp.status_code == 200:
+                                instance_info[key] = resp.text
+                        except:
+                            pass
+
+                    if instance_info:
+                        kernel_info['instance'] = instance_info
+                except:
+                    pass
+
+            except Exception as e:
+                print(f"  Could not get hostname: {e}")
+
+            print(f"✓ Colab: Exposed WebSocket port {port} via iframe proxy")
+            print(f"  Kernel info: {json.dumps(kernel_info, indent=2)}")
+
+            # Inject whatever we found into JavaScript
             from IPython.display import display, Javascript
-
-            # The kernel domain follows the pattern:
-            # 8080-{session}.{region}.prod.colab.dev
-            # We need to discover this or pass it from Python
 
             display(Javascript(f"""
             window.CUBEVIS_COLAB_PORT_{port} = {{
                 port: {port},
-                kernelId: '{kernel_id}'
+                kernelInfo: {json.dumps(kernel_info)}
             }};
             console.log('Colab port info injected:', window.CUBEVIS_COLAB_PORT_{port});
             """))
-
-            print(f"✓ Colab: Exposed WebSocket port {port} via iframe proxy")
-            print(f"  Kernel ID: {kernel_id}")
 
         except Exception as e:
             print(f"⚠ Warning: Could not expose port {port} in Colab: {e}")

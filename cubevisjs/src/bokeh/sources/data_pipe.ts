@@ -245,26 +245,91 @@ export class DataPipe extends DataSource {
 
             console.log('=== Colab WebSocket Debug ===')
             console.log('Port:', port)
-            console.log('window.location.hostname:', window.location.hostname)
-            console.log('window.location.href:', window.location.href)
-            console.log('document.referrer:', document.referrer)
-            console.log('window.location.ancestorOrigins:', window.location.ancestorOrigins)
-
-            // Try to get the proxy URL
+        
             try {
+                // Find the kernel proxy domain from the page
+                // Look for existing WebSocket connections or script sources
+                let kernelDomain = null
+
+                // Method 1: Check for existing WebSocket in the page
+                // Colab connects to wss://8080-{session}.{region}.prod.colab.dev
+                const referrer = document.referrer
+                console.log('Referrer:', referrer)
+
+                // Method 2: Try to extract from cookies or global variables
+                if ((window as any).colab && (window as any).colab.global && (window as any).colab.global.config) {
+                    console.log('Colab config:', (window as any).colab.global.config)
+                }
+
+                // Method 3: Look for the kernel domain in the parent page's connection
+                // The pattern is: wss://8080-{session-id}.{region}.prod.colab.dev
+                // We need to construct this from what we know
+
+                // Try to get it from the parent window's location (if accessible)
+                try {
+                    if (window.parent && window.parent.location) {
+                        console.log('Parent location:', window.parent.location.href)
+                    }
+                } catch (e) {
+                    console.log('Cannot access parent location (CORS)')
+                }
+
+                // Method 4: Extract session from current hostname
+                // Current: l9ni429nwkk-496ff2e9c6d22116-0-colab.googleusercontent.com
+                // We need: 8080-{session}.{region}.prod.colab.dev
+                const hostnameMatch = window.location.hostname.match(/([^-]+)-([^-]+)-\d+-colab/)
+                if (hostnameMatch) {
+                    const sessionId = hostnameMatch[1]
+                    const hash = hostnameMatch[2]
+                    console.log('Session ID:', sessionId, 'Hash:', hash)
+
+                    // Try to construct kernel domain
+                    // This is a guess at the pattern - we might need to adjust
+                    // Sww earlier logs for the actual kernel domain pattern
+
+                    // From the logs, I see: 8080-m-s-2yh301u7g04ix-a.us-central1-0.prod.colab.dev
+                    // But we're in: l9ni429nwkk-496ff2e9c6d22116-0-colab.googleusercontent.com
+
+                    // These don't seem to have an obvious mapping...
+                }
+
+                // Method 5: Make a request to find the kernel domain
+                // The parent page knows about it, but we can't access it due to CORS
+
+                // Let's try getting it from Colab's API
                 const google = (window as any).google
-                const httpsUrl = await google.colab.kernel.proxyPort(port, {'cache': true})
-                console.log('proxyPort returned:', httpsUrl)
+                if (google && google.colab && google.colab.kernel) {
+                    // Check what properties are available
+                    console.log('Available kernel properties:', Object.keys(google.colab.kernel))
 
-                // Try multiple patterns
-                const patterns = [
-                    httpsUrl.replace(/^https:/, 'wss:'),  // Direct WSS
-                    httpsUrl.replace(/^https:/, 'wss:').replace(/\/$/, '') + '/ws',  // With /ws path
-                    httpsUrl.replace(/^https:/, 'wss:').replace(/\/$/, '') + '/websocket',  // With /websocket path
-                ]
+                    // Try to find the WebSocket URL or kernel connection info
+                    if ((google.colab.kernel as any).websocketUrl) {
+                        console.log('Kernel WebSocket URL:', (google.colab.kernel as any).websocketUrl)
+                        kernelDomain = (google.colab.kernel as any).websocketUrl
+                    }
+                }
 
-                console.log('Will try these WebSocket URLs:', patterns)
-                ws_address = patterns[0]  // Start with first one
+                // If we still don't have it, try the message passing approach
+                if (!kernelDomain) {
+                    console.log('Could not determine kernel domain, trying message passing...')
+
+                    // Try to ask the parent for the kernel domain
+                    window.parent.postMessage({ type: 'request_kernel_domain' }, '*')
+
+                    // For now, fall back to the googleusercontent proxy
+                    const httpsUrl = await google.colab.kernel.proxyPort(port, {'cache': true})
+                    ws_address = httpsUrl.replace(/^https:/, 'wss:')
+                    console.log('Using googleusercontent proxy (may not work):', ws_address)
+                } else {
+                    // Extract the domain and construct the proxy path
+                    const domainMatch = kernelDomain.match(/wss?:\/\/([^\/]+)/)
+                    if (domainMatch) {
+                        ws_address = `wss://${domainMatch[1]}/_proxy/${port}/`
+                        console.log('Constructed kernel proxy URL:', ws_address)
+                    } else {
+                        ws_address = `wss://${kernelDomain}/_proxy/${port}/`
+                    }
+                }
 
             } catch (e) {
                 console.error('Error in Colab proxy detection:', e)
@@ -276,8 +341,7 @@ export class DataPipe extends DataSource {
             ws_address = `ws://${this.address[0]}:${this.address[1]}`
         }
 
-        //const ws_address = await this.getWebSocketUrl()
-        console.log("datapipe url:", ws_address)
+        console.log("Final datapipe url:", ws_address)
 
         var reconnections: any | undefined = undefined
         document.shutdown_in_progress_ = false

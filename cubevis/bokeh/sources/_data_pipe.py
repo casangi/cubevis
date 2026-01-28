@@ -92,12 +92,20 @@ class DataPipe(DataSource,BokehInit):
             from google.colab import output
             port = self.address[1]
 
-            # This registers the port with Colab's proxy system
-            output.serve_kernel_port_as_window(port)
-            print(f"✓ Colab: Exposed WebSocket port {port} through proxy")
+            # Use serve_kernel_port_as_iframe for newer Colab
+            # This doesn't open a popup, just registers the port
+            try:
+                output.serve_kernel_port_as_iframe(port)
+                print(f"✓ Colab: Exposed WebSocket port {port} via iframe proxy")
+            except AttributeError:
+                # Fallback to older method
+                output.serve_kernel_port_as_window(port)
+                print(f"✓ Colab: Exposed WebSocket port {port} via window proxy")
 
         except Exception as e:
             print(f"⚠ Warning: Could not expose port {port} in Colab: {e}")
+            import traceback
+            traceback.print_exc()
 
     def __init__( self, *args, abort=None, **kwargs ):
 
@@ -282,6 +290,8 @@ class DataPipe(DataSource,BokehInit):
         try:
             self.__websocket = websocket
             session_established = False
+
+            print(f"✓ WebSocket server received connection on port {self.address[1]}")
 
             async for message in websocket:
                 msg = deserialize(message)

@@ -65,6 +65,7 @@ export class DataPipe extends DataSource {
         )
     }
 
+    // @ts-expect-error: debugging colab websocket problems
     private async getWebSocketUrl(): Promise<string> {
         const [host, port] = this.address
 
@@ -236,7 +237,46 @@ export class DataPipe extends DataSource {
     }
 
     private async initializeWebSocket(): Promise<void> {
-        const ws_address = await this.getWebSocketUrl()
+
+        let ws_address: string
+
+        if (this.isColab()) {
+            const [host, port] = this.address
+
+            console.log('=== Colab WebSocket Debug ===')
+            console.log('Port:', port)
+            console.log('window.location.hostname:', window.location.hostname)
+            console.log('window.location.href:', window.location.href)
+            console.log('document.referrer:', document.referrer)
+            console.log('window.location.ancestorOrigins:', window.location.ancestorOrigins)
+
+            // Try to get the proxy URL
+            try {
+                const google = (window as any).google
+                const httpsUrl = await google.colab.kernel.proxyPort(port, {'cache': true})
+                console.log('proxyPort returned:', httpsUrl)
+
+                // Try multiple patterns
+                const patterns = [
+                    httpsUrl.replace(/^https:/, 'wss:'),  // Direct WSS
+                    httpsUrl.replace(/^https:/, 'wss:').replace(/\/$/, '') + '/ws',  // With /ws path
+                    httpsUrl.replace(/^https:/, 'wss:').replace(/\/$/, '') + '/websocket',  // With /websocket path
+                ]
+
+                console.log('Will try these WebSocket URLs:', patterns)
+                ws_address = patterns[0]  // Start with first one
+
+            } catch (e) {
+                console.error('Error in Colab proxy detection:', e)
+                ws_address = `ws://${host}:${port}`
+            }
+
+            console.log('=== End Debug ===')
+        } else {
+            ws_address = `ws://${this.address[0]}:${this.address[1]}`
+        }
+
+        //const ws_address = await this.getWebSocketUrl()
         console.log("datapipe url:", ws_address)
 
         var reconnections: any | undefined = undefined

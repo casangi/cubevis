@@ -90,17 +90,33 @@ class DataPipe(DataSource,BokehInit):
         """Expose the WebSocket port through Colab's proxy"""
         try:
             from google.colab import output
+            import os
             port = self.address[1]
 
-            # Use serve_kernel_port_as_iframe for newer Colab
-            # This doesn't open a popup, just registers the port
-            try:
-                output.serve_kernel_port_as_iframe(port)
-                print(f"✓ Colab: Exposed WebSocket port {port} via iframe proxy")
-            except AttributeError:
-                # Fallback to older method
-                output.serve_kernel_port_as_window(port)
-                print(f"✓ Colab: Exposed WebSocket port {port} via window proxy")
+            # Expose the port
+            output.serve_kernel_port_as_iframe(port)
+
+            # Get the kernel domain and inject it into JavaScript
+            # Colab sets environment variables we can use
+            kernel_id = os.environ.get('COLAB_KERNEL_ID', '')
+
+            # Inject the kernel WebSocket domain into the page
+            from IPython.display import display, Javascript
+
+            # The kernel domain follows the pattern:
+            # 8080-{session}.{region}.prod.colab.dev
+            # We need to discover this or pass it from Python
+
+            display(Javascript(f"""
+            window.CUBEVIS_COLAB_PORT_{port} = {{
+                port: {port},
+                kernelId: '{kernel_id}'
+            }};
+            console.log('Colab port info injected:', window.CUBEVIS_COLAB_PORT_{port});
+            """))
+
+            print(f"✓ Colab: Exposed WebSocket port {port} via iframe proxy")
+            print(f"  Kernel ID: {kernel_id}")
 
         except Exception as e:
             print(f"⚠ Warning: Could not expose port {port} in Colab: {e}")

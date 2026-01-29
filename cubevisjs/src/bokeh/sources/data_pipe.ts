@@ -209,14 +209,29 @@ export class DataPipe extends DataSource {
         var reconnections: any | undefined = undefined
         document.shutdown_in_progress_ = false
 
-        var connect_to_server = ( ) => {
+        var connect_to_server = async ( ) => {
             if ( this.websocket !== undefined ) {
                 this.websocket.close( )
             }
 
-            this.websocket = new WebSocket(this.backend_url)
-            this.websocket.binaryType = "arraybuffer"
+            const url = this.backend_url;
+            const http_url = url.replace("wss://", "https://");
 
+            try {
+                // "Ping" the proxy to establish the session for this port
+                console.log("    priming proxy session...");
+                await fetch(http_url, { mode: 'no-cors' });
+
+                // Now attempt the WebSocket connection
+                this.websocket = new WebSocket(url);
+                this.websocket.binaryType = "arraybuffer"
+            } catch (err) {
+                console.error("Proxy wake-up failed", err);
+                // Fallback: try connecting anyway if fetch fails
+                this.websocket = new WebSocket(url);
+                this.websocket.binaryType = "arraybuffer";
+            }
+  
             this.websocket.addEventListener("error", (e: Event) => {
                 console.log( 'error encountered:', e )
             })
@@ -276,6 +291,7 @@ export class DataPipe extends DataSource {
             }
 
             this.websocket.onopen = ( ) => {
+                console.log(">>> DATAPIPE CONNECTED")
                 if ( ! reconnections ) {
                     this.websocket.send(serialize({ id: 'initialize', direction: 'j2p', session: this.session_id }))
                     // Start heartbeat after successful connection

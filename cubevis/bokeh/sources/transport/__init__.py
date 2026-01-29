@@ -8,6 +8,7 @@ class ColabWebSocketServerProtocol(websockets.WebSocketServerProtocol):
 
         # Get the request method
         request_method = self.request_method
+        print(f"Handling request method: {request_method}")
 
         if not is_upgrade:
             response_headers = Headers()

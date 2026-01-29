@@ -6,7 +6,17 @@ from websockets.http import Headers
 log_path = "/content/package_debug.txt"
 
 class ColabWebSocketServerProtocol(websockets.WebSocketServerProtocol):
+
+    def __init__(self, *args, **kwargs):
+        # Debug: Print or log the parameters
+        with open(log_path, "a") as f:
+            print(f"ColabWebSocketServerProtocol.__init__ Initializing Protocol with args={args} kwargs={kwargs}", file=f)
+        super().__init__(*args, **kwargs)
+
     async def process_request(self, path, request_headers):
+        with open(log_path, "a") as f:
+            print("In ColabWebSocketServerProtocol.process_request...", file=f)
+
         is_upgrade = "upgrade" in request_headers.get("Connection", "").lower()
 
         # Get the request method

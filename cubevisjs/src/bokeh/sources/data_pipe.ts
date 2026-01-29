@@ -215,16 +215,16 @@ export class DataPipe extends DataSource {
             const http_url = url.replace("wss://", "https://");
 
             // "Ping" the proxy to establish the session for this port
-            console.log( `    starting connection sequence ${this.backend_port} ...` )
-
-            // 1. Prime the proxy WITHOUT blocking (no await on the fetch itself)
-            // We send it, but we don't wait for it to finish in case it hangs
-            fetch(http_url, { mode: 'no-cors', cache: 'no-cache', credentials: 'include' })
-                .then( ( ) => console.log( `    proxy primed ${this.backend_port}` ) )
-                .catch( ( e ) => console.log( `    prime fetch failed ${this.backend_port} (expected)`, e ) );              
+            console.log( `    [${this.backend_port}] starting priming...` )
 
             try {
-                console.log( `    instantiating websocket ${this.backend_port} ...`);
+                // We MUST wait for this, but we'll add a 2-second safety timeout
+                await Promise.race([
+                    fetch(http_url, { mode: 'no-cors', cache: 'no-cache', credentials: 'include' }),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000))
+                ]).catch( e => console.log( `    [${this.backend_port}] prime finished/timed out`, e ) )
+
+                console.log(`    [${this.backend_port}] instantiating websocket...`)
 
                 // Close any existing websocket...
                 if ( this.websocket !== undefined ) {

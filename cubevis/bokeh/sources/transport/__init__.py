@@ -1,3 +1,4 @@
+from cubevis.utils import is_colab
 import websockets
 import http
 from websockets.http import Headers

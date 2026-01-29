@@ -222,7 +222,6 @@ export class DataPipe extends DataSource {
                 try {
                     await fetch( http_url, {
                         signal: AbortSignal.timeout(5000), // Built-in 5s timeout
-                        mode: 'no-cors',
                         cache: 'no-cache',
                         credentials: 'include'
                     } )

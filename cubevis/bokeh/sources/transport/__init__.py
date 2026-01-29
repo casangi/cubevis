@@ -11,7 +11,7 @@ class ColabWebSocketServerProtocol(websockets.WebSocketServerProtocol):
 
         # Get the request method
         request_method = self.request_method
-        with open(log_file_path, "w") as f:
+        with open(log_path, "a") as f:
             print(f"Handling request method: {request_method}", file=f)
 
         if not is_upgrade:
@@ -44,7 +44,7 @@ def create_ws_server(callback, ip_address, port):
     Uniform wrapper for creating a WebSocket server.
     """
     if is_colab( ):
-        with open(log_file_path, "w") as f:
+        with open(log_path, "a") as f:
             print( f'''websocket startup: {ip_address}/{port} (bind IP 0.0.0.0)
 with websockets.serve( callback, "0.0.0.0", {port}, origins=None, create_protocol={ColabWebSocketServerProtocol} )"''' , file=f)
         return websockets.serve( callback,

@@ -210,127 +210,138 @@ export class DataPipe extends DataSource {
         document.shutdown_in_progress_ = false
 
         var connect_to_server = async ( ) => {
-            if ( this.websocket !== undefined ) {
-                this.websocket.close( )
-            }
 
             const url = this.backend_url;
             const http_url = url.replace("wss://", "https://");
 
+            // "Ping" the proxy to establish the session for this port
+            console.log( `    starting connection sequence ${this.backend_port} ...` )
+
+            // 1. Prime the proxy WITHOUT blocking (no await on the fetch itself)
+            // We send it, but we don't wait for it to finish in case it hangs
+            fetch(http_url, { mode: 'no-cors', cache: 'no-cache', credentials: 'include' })
+                .then( ( ) => console.log( `    proxy primed ${this.backend_port}` ) )
+                .catch( ( e ) => console.log( `    prime fetch failed ${this.backend_port} (expected)`, e ) );              
+
             try {
-                // "Ping" the proxy to establish the session for this port
-                console.log("    priming proxy session...");
-                await fetch(http_url, { mode: 'no-cors' });
+                console.log( `    instantiating websocket ${this.backend_port} ...`);
+
+                // Close any existing websocket...
+                if ( this.websocket !== undefined ) {
+                    this.websocket.close( )
+                }
 
                 // Now attempt the WebSocket connection
                 this.websocket = new WebSocket(url);
                 this.websocket.binaryType = "arraybuffer"
-            } catch (err) {
-                console.error("Proxy wake-up failed", err);
-                // Fallback: try connecting anyway if fetch fails
-                this.websocket = new WebSocket(url);
-                this.websocket.binaryType = "arraybuffer";
-            }
-  
-            this.websocket.addEventListener("error", (e: Event) => {
-                console.log( 'error encountered:', e )
-            })
 
-            this.websocket.onmessage = (event: any) => {
-                if (typeof event.data === 'string' || event.data instanceof String) {
-                    let data = deserialize( event.data )
-                    // @ts-ignore: 'data' is of type 'unknown'
-                    if ( 'id' in data && 'direction' in data && 'message' in data ) {
-                        // @ts-ignore: 'data' is of type 'unknown'
-                        let { id, message, direction }: { id: string, message: any, direction: string} = data
+                this.websocket.onopen = ( ) => {
+                    console.log( `>>>${this.backend_port}>>> DATAPIPE CONNECTED` )
+                    if ( ! reconnections ) {
+                        this.websocket.send(serialize({ id: 'initialize', direction: 'j2p', session: this.session_id }))
+                        // Start heartbeat after successful connection
+                        this.startHeartbeat()
+                    } else if ( reconnections.connected == false ) {
+                        console.log( `connection reestablished at ${new Date( )}` )
+                    }
+                    reconnections = new (casalib.ReconnectState as any)( )
 
-                        // Handle session conflict/corruption messages from server
-                        if (direction === 'error' && (id === 'session_conflict' || id === this.session_id)) {
-                            if (message && (message.type === 'session_conflict' ||
-                                          message.type === 'session_corruption' ||
-                                          message.action === 'close_duplicate')) {
-                                this.handleSessionConflictMessage(message)
-                                return
-                            }
-                        }
+                    // if there were send events before the websocket was connected, resend them
+                    while ( this.connection_queue.length > 0 ) {
+                        let state = this.connection_queue.shift( )!
+                        this.send.apply( state[0], state[1] )
+                    }
+                }
 
-                        if ( typeof message  === 'undefined' ) {
-                            console.log( 'Error, event failure', data )
-                        }
-                        if ( direction == 'j2p' ) {
-                            if ( id in this.pending ) {
-                                let { cb }: { cb: (x:any) => any } = this.pending[id]
-                                delete this.pending[id]
-                                if ( id in this.send_queue && this.send_queue[id].length > 0 ) {
-                                    // send next message queued by 'id'
-                                    let {cb, msg} = this.send_queue[id].shift( )
-                                    this.pending[id] = { cb }
-                                    this.websocket.send(serialize(msg))
+                this.websocket.addEventListener("error", (e: Event) => {
+                    console.error( `>>>${this.backend_port}>>> DATAPIPE ERROR:`, e)
+                    // Log the readyState to see if the socket is closing or still connecting
+                    console.log( `>>>${this.backend_port}>> Socket State Upon Error:`, this.websocket?.readyState);
+                })
+
+                this.websocket.onclose = (e: CloseEvent) => {
+                    console.log( `>>>${this.backend_port}>>> WEBSOCKET CLOSED:`, e.code, e.reason)
+                    if ( reconnections && reconnections.connected == true ) {
+                        console.log( `connection lost at ${new Date( )}` )
+                        reconnections.connected = false
+                        if ( ! document.shutdown_in_progress_ ) {
+                            console.log( `connection lost at ${new Date( )}` )
+                            var recon = reconnections
+                            function reconnect( tries: number ) {
+                                if ( reconnections.connected == false ) {
+                                    console.log( `${tries+1}\treconnection attempt ${new Date( )}` )
+                                    connect_to_server( )
+                                    recon.backoff( )
+                                    if ( recon.retries > 0 ) {
+                                        setTimeout(reconnect, recon.timeout, tries+1)
+                                    } else if ( reconnections.connected == false ) {
+                                        console.log( `aborting reconnection after ${tries} attempts ${new Date()}` )
+                                    }
                                 }
-                                if ( typeof message === 'undefined' )
-                                    console.log( 'DROPPING ERROR FOR NOW (maybe need error callbacks)', data )
-                                else
-                                    // post message
-                                    cb( message )
+                            }
+                            reconnect( 0 )
+                        }
+                    }
+
+                }
+
+                this.websocket.onmessage = (event: any) => {
+                    if (typeof event.data === 'string' || event.data instanceof String) {
+                        let data = deserialize( event.data )
+                        // @ts-ignore: 'data' is of type 'unknown'
+                        if ( 'id' in data && 'direction' in data && 'message' in data ) {
+                            // @ts-ignore: 'data' is of type 'unknown'
+                            let { id, message, direction }: { id: string, message: any, direction: string} = data
+
+                            // Handle session conflict/corruption messages from server
+                            if (direction === 'error' && (id === 'session_conflict' || id === this.session_id)) {
+                                if (message && (message.type === 'session_conflict' ||
+                                              message.type === 'session_corruption' ||
+                                              message.action === 'close_duplicate')) {
+                                    this.handleSessionConflictMessage(message)
+                                    return
+                                }
+                            }
+
+                            if ( typeof message  === 'undefined' ) {
+                                console.log( 'Error, event failure', data )
+                            }
+                            if ( direction == 'j2p' ) {
+                                if ( id in this.pending ) {
+                                    let { cb }: { cb: (x:any) => any } = this.pending[id]
+                                    delete this.pending[id]
+                                    if ( id in this.send_queue && this.send_queue[id].length > 0 ) {
+                                        // send next message queued by 'id'
+                                        let {cb, msg} = this.send_queue[id].shift( )
+                                        this.pending[id] = { cb }
+                                        this.websocket.send(serialize(msg))
+                                    }
+                                    if ( typeof message === 'undefined' )
+                                        console.log( 'DROPPING ERROR FOR NOW (maybe need error callbacks)', data )
+                                    else
+                                        // post message
+                                        cb( message )
+                                } else {
+                                    console.log("message received but could not find id")
+                                }
                             } else {
-                                console.log("message received but could not find id")
+                                if ( id in this.incoming_callbacks ) {
+                                    let result = this.incoming_callbacks[id](message)
+                                    this.websocket.send( serialize({ id, direction, message: result, session: this.session_id }))
+                                }
                             }
                         } else {
-                            if ( id in this.incoming_callbacks ) {
-                                let result = this.incoming_callbacks[id](message)
-                                this.websocket.send( serialize({ id, direction, message: result, session: this.session_id }))
-                            }
+                            console.log( `datapipe received message without one of 'id', 'message' or 'direction': ${data}` )
                         }
                     } else {
-                        console.log( `datapipe received message without one of 'id', 'message' or 'direction': ${data}` )
-                    }
-
-                } else {
-                    console.log("datapipe received binary data", event.data.byteLength, "bytes" )
-                }
-            }
-
-            this.websocket.onopen = ( ) => {
-                console.log(">>> DATAPIPE CONNECTED")
-                if ( ! reconnections ) {
-                    this.websocket.send(serialize({ id: 'initialize', direction: 'j2p', session: this.session_id }))
-                    // Start heartbeat after successful connection
-                    this.startHeartbeat()
-                } else if ( reconnections.connected == false ) {
-                    console.log( `connection reestablished at ${new Date( )}` )
-                }
-                reconnections = new (casalib.ReconnectState as any)( )
-
-                // if there were send events before the websocket was connected, resend them
-                while ( this.connection_queue.length > 0 ) {
-                    let state = this.connection_queue.shift( )!
-                    this.send.apply( state[0], state[1] )
-                }
-            }
-
-            this.websocket.onclose = ( ) => {
-                if ( reconnections && reconnections.connected == true ) {
-                    console.log( `connection lost at ${new Date( )}` )
-                    reconnections.connected = false
-                    if ( ! document.shutdown_in_progress_ ) {
-                        console.log( `connection lost at ${new Date( )}` )
-                        var recon = reconnections
-                        function reconnect( tries: number ) {
-                            if ( reconnections.connected == false ) {
-                                console.log( `${tries+1}\treconnection attempt ${new Date( )}` )
-                                connect_to_server( )
-                                recon.backoff( )
-                                if ( recon.retries > 0 ) {
-                                    setTimeout(reconnect, recon.timeout, tries+1)
-                                } else if ( reconnections.connected == false ) {
-                                    console.log( `aborting reconnection after ${tries} attempts ${new Date()}` )
-                                }
-                            }
-                        }
-                        reconnect( 0 )
+                        console.log("datapipe received binary data", event.data.byteLength, "bytes" )
                     }
                 }
+
+            } catch (err) {
+                console.error( `>>>${this.backend_port}>>> CRITICAL JS ERROR during WS creation:`, err )
             }
+
         }
 
         // Set up cleanup on page unload

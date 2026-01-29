@@ -219,10 +219,18 @@ export class DataPipe extends DataSource {
 
             try {
                 // We MUST wait for this, but we'll add a 2-second safety timeout
-                await Promise.race([
-                    fetch(http_url, { mode: 'no-cors', cache: 'no-cache', credentials: 'include' }),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000))
-                ]).catch( e => console.log( `    [${this.backend_port}] prime finished/timed out`, e ) )
+                try {
+                    await fetch( http_url, {
+                        signal: AbortSignal.timeout(5000), // Built-in 5s timeout
+                        mode: 'no-cors',
+                        cache: 'no-cache',
+                        credentials: 'include'
+                    } )
+                } catch (e: any) {
+                    if (e.name === 'TimeoutError') {
+                        console.log( `    [${this.backend_port}] prime request timed out after 5 seconds` )
+                    }
+                }
 
                 console.log(`    [${this.backend_port}] instantiating websocket...`)
 

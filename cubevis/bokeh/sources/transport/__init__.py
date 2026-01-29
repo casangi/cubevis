@@ -3,7 +3,17 @@ from cubevis.utils import is_colab
 
 class ColabWebSocketServerProtocol(websockets.WebSocketServerProtocol):
     async def process_request(self, path, request_headers):
-        # Force the connection to be accepted even if the proxy stripped headers
+        """
+        Intervene before the handshake logic.
+        If the proxy stripped 'Upgrade', we manually tell the server
+        it's okay to proceed.
+        """
+        # If we see a standard GET (like our priming fetch),
+        # return a 200 OK so the fetch doesn't 500.
+        if "upgrade" not in request_headers.get("Connection", "").lower():
+            return http.HTTPStatus.OK, [], b"OK"
+
+        # For actual WS handshakes, return None to proceed to standard WS logic
         return None
 
 def create_ws_server(callback, ip_address, port):

@@ -33,7 +33,6 @@ import sys
 import copy
 import asyncio
 import shutil
-import websockets
 from os.path import basename, abspath, exists, join
 import numpy as np
 from uuid import uuid4
@@ -64,6 +63,7 @@ from cubevis.utils import find_ws_address, convert_masks
 from cubevis.toolbox import CubeMask
 from cubevis.bokeh.utils import svg_icon
 from cubevis.bokeh.sources import DataPipe
+from cubevis.bokeh.sources.transport import create_ws_server
 from cubevis.utils import DocEnum
 from cubevis import exe
 
@@ -1154,10 +1154,10 @@ class InteractiveCleanUI:
                                  [
                                      self._clean_targets[img]['gui']['cube'].serve(self.__stop),
                                  ]
-                               ] + [ websockets.serve( self._pipe['control'].process_messages,
+                               ] + [ create_ws_server( self._pipe['control'].process_messages,
                                                        self._pipe['control'].backend_ip,
                                                        self._pipe['control'].backend_port ),
-                                     websockets.serve( self._clean['converge']['pipe'].process_messages,
+                                     create_ws_server( self._clean['converge']['pipe'].process_messages,
                                                        self._clean['converge']['pipe'].backend_ip,
                                                        self._clean['converge']['pipe'].backend_port ) ]
                               ) ):

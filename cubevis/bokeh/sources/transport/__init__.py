@@ -1,23 +1,37 @@
 import websockets
-from cubevis.utils import is_colab
-from websockets.http import Headers
 import http
+from websockets.http import Headers
 
 class ColabWebSocketServerProtocol(websockets.WebSocketServerProtocol):
     async def process_request(self, path, request_headers):
         is_upgrade = "upgrade" in request_headers.get("Connection", "").lower()
 
+        # Get the request method
+        request_method = self.request_method
+
         if not is_upgrade:
-            # 1. Prepare CORS headers so the 'fetch' succeeds
             response_headers = Headers()
-            # We must echo the specific origin for credentials to work
-            origin = request_headers.get("Origin", "*")
-            response_headers["Access-Control-Allow-Origin"] = origin
-            response_headers["Access-Control-Allow-Credentials"] = "true"
+            origin = request_headers.get("Origin")
+
+            if origin:
+                response_headers["Access-Control-Allow-Origin"] = origin
+                response_headers["Access-Control-Allow-Credentials"] = "true"
+                # Add necessary headers for the OPTIONS preflight response
+                response_headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+                response_headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+
             response_headers["Content-Type"] = "text/plain"
+            response_headers["Connection"] = "close"
 
-            return http.HTTPStatus.OK, response_headers, b"OK"
+            # If it is an OPTIONS request, return 204 No Content immediately
+            if request_method == "OPTIONS":
+                return http.HTTPStatus.NO_CONTENT, response_headers, b"" # 204 Status and empty body
 
+            # If it is a GET request (the priming fetch), return 200 OK
+            if request_method == "GET":
+                 return http.HTTPStatus.OK, response_headers, b"OK"
+
+        # Proceed with standard WS handshake
         return None
 
 def create_ws_server(callback, ip_address, port):

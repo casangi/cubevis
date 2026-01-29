@@ -203,7 +203,8 @@ export class DataPipe extends DataSource {
 
     private async initializeWebSocket(): Promise<void> {
 
-        console.log("datapipe url:", this.backend_url)
+        console.log("    datapipe url:", this.backend_url)
+        console.log(`datapipe ip/port:  ${this.backend_ip}/${this.backend_port}`)
 
         var reconnections: any | undefined = undefined
         document.shutdown_in_progress_ = false

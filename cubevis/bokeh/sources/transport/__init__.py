@@ -17,41 +17,35 @@ except ImportError:
     IS_LEGACY = True
 
 def universal_process_request(*args):
-    """
-    Handles CORS priming.
-    Legacy signature: (path, request_headers)
-    Modern signature: (request)
-    """
-    if IS_LEGACY:
-        # Legacy passes: (path, headers)
-        path, headers = args[0], args[1]
-        method = "GET"
-    else:
-        request = args[0]
-        path, headers, method = request.path, request.headers, request.method
+    try:
+        if IS_LEGACY:
+            path, headers = args
+            method = "GET"
+        else:
+            # IMPORTANT: args is (RequestObject,)
+            request = args[0]
+            path, headers, method = request.path, request.headers, request.method
 
-    with open(log_path, "a") as f:
-        f.write(f"Top-level process_request: {method} {path}\n")
+        with open(log_path, "a") as f:
+            f.write(f"RECEIVED: {method} {path} | Upgrade: {headers.get('Upgrade')}\n")
 
-    is_upgrade = "upgrade" in headers.get("Connection", "").lower()
+        # Handle CORS
+        if "upgrade" not in headers.get("Connection", "").lower():
+            origin = headers.get("Origin", "*")
+            resp_headers = {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, OPTIONS, POST",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            }
+            if IS_LEGACY:
+                return (http.HTTPStatus.OK, resp_headers, b"OK")
+            return Response(http.HTTPStatus.OK, "OK", resp_headers)
 
-    if not is_upgrade:
-        origin = headers.get("Origin", "*")
-        resp_headers = {
-            "Content-Type": "text/plain",
-            "Connection": "close",
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "GET, OPTIONS, POST",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
-        }
-
-        if method == "OPTIONS":
-            return (http.HTTPStatus.NO_CONTENT, resp_headers, b"") if IS_LEGACY else Response(http.HTTPStatus.NO_CONTENT, "No Content", resp_headers)
-
-        if method == "GET":
-            return (http.HTTPStatus.OK, resp_headers, b"OK") if IS_LEGACY else Response(http.HTTPStatus.OK, "OK", resp_headers)
-
+    except Exception as e:
+        with open(log_path, "a") as f:
+            f.write(f"ERROR in process_request: {str(e)}\n")
+    
     return None
 
 class ColabWebSocketServerProtocol(BaseConnection):

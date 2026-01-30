@@ -114,11 +114,12 @@ class DataPipe(DataSource,BokehInit):
 
         # Fetch URL in Colab
         if is_colab( ):
-            from google.colab.output import eval_js
-            # Colab maps the internal port to a secure external URL
-            external_https = eval_js(f"google.colab.kernel.proxyPort({self.backend_port})")
-            print(f"Colab Proxy URL for {self.backend_port} is: {external_https}")
-            self.backend_url = external_https.replace("https://", "wss://")
+            from google.colab.output import proxy_port
+            # This function both returns the URL AND whitelists the port in the proxy
+            external_url = proxy_port(self.backend_port)
+            # external_url will be the https://{port}-m-s...dev/ link
+            self.backend_url = external_url.replace("https://", "wss://")
+            print( f"WHITELISTED PROXY URL FOR PORT {self.backend_port}: {self.backend_url}" )
         else:
             # Standard local/remote access
             self.backend_url = f"ws://{self.backend_ip}:{self.backend_port}"

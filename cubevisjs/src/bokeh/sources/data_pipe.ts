@@ -212,7 +212,6 @@ export class DataPipe extends DataSource {
         var connect_to_server = async ( ) => {
 
             const url = this.backend_url;
-            const http_url = url.replace("wss://", "https://");
 
             // "Ping" the proxy to establish the session for this port
             console.log( `    [${this.backend_port}] starting priming...` )
@@ -220,14 +219,23 @@ export class DataPipe extends DataSource {
             try {
                 // We MUST wait for this, but we'll add a 2-second safety timeout
                 try {
-                    await fetch( http_url, {
-                        signal: AbortSignal.timeout(5000), // Built-in 5s timeout
+                    //const http_url = url.replace("wss://", "https://");
+                    //await fetch( http_url, {
+                    //    signal: AbortSignal.timeout(5000), // Built-in 5s timeout
+                    //    method: 'GET',
+                    //    mode: 'no-cors',        // Force request submission with cookies
+                    //    credentials: 'include', // Attach Google Account session cookies
+                    //    cache: 'no-cache'
+                    //} )
+                    //console.log(`    [${this.backend_port}] Priming sent (no-cors mode)`)
+                    // Add ?authuser=0 to the priming URL to help the proxy find your session
+                    const primeUrl = this.backend_url.replace("wss://", "https://") + "?authuser=0";
+                    await fetch( primeUrl, {
                         method: 'GET',
-                        mode: 'no-cors',        // Force request submission with cookies
-                        credentials: 'include', // Attach Google Account session cookies
-                        cache: 'no-cache'
+                        mode: 'cors',
+                        credentials: 'include' // Mandatory for Colab Auth
                     } )
-                    console.log(`    [${this.backend_port}] Priming sent (no-cors mode)`)
+                    console.log(`    [${this.backend_port}] Priming sent: {primeUrl}`)
                 } catch (e: any) {
                     if (e.name === 'TimeoutError') {
                         console.log( `    [${this.backend_port}] prime request timed out after 5 seconds` )

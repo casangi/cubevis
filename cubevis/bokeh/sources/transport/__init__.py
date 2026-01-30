@@ -1,67 +1,91 @@
 from cubevis.utils import is_colab
 import websockets
 import http
-from websockets.http import Headers
+from websockets.http11 import Response # Available in newer versions
 
 log_path = "/content/package_debug.txt"
 
-class ColabWebSocketServerProtocol(websockets.WebSocketServerProtocol):
+try:
+    # Modern implementation (v14+)
+    from websockets.server import ServerConnection as BaseConnection
+    IS_LEGACY = False
+except ImportError:
+    # Legacy implementation (<v14)
+    from websockets.server import WebSocketServerProtocol as BaseConnection
+    IS_LEGACY = True
 
+class ColabWebSocketServerProtocol(BaseConnection):
     def __init__(self, *args, **kwargs):
-        # Debug: Print or log the parameters
         with open(log_path, "a") as f:
             print(f"ColabWebSocketServerProtocol.__init__ Initializing Protocol with args={args} kwargs={kwargs}", file=f)
         super().__init__(*args, **kwargs)
 
-    async def process_request(self, path, request_headers):
-        with open(log_path, "a") as f:
-            print("In ColabWebSocketServerProtocol.process_request...", file=f)
+    async def process_request(self, *args):
+        """Handle both old (path, headers) and new (request) signatures."""
+        if IS_LEGACY:
+            path, request_headers = args
+            request_method = getattr(self, "request_method", "GET")
+        else:
+            # Modern version passes (request) as the only arg
+            request = args[0]
+            path = request.path
+            request_headers = request.headers
+            request_method = request.method
 
+        with open(log_path, "a") as f:
+            print(f"ColabWebSocketServerProtocol.process_request: request_header={request_header} request_method={request_method}", file=f)
+
+        # Logic for CORS/OPTIONS remains similar, but response format differs
         is_upgrade = "upgrade" in request_headers.get("Connection", "").lower()
 
-        # Get the request method
-        request_method = self.request_method
-        with open(log_path, "a") as f:
-            print(f"Handling request method: {request_method}", file=f)
-
         if not is_upgrade:
-            response_headers = Headers()
             origin = request_headers.get("Origin")
-
+            headers = {"Content-Type": "text/plain", "Connection": "close"}
             if origin:
-                response_headers["Access-Control-Allow-Origin"] = origin
-                response_headers["Access-Control-Allow-Credentials"] = "true"
-                # Add necessary headers for the OPTIONS preflight response
-                response_headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-                response_headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+                headers.update({
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                })
 
-            response_headers["Content-Type"] = "text/plain"
-            response_headers["Connection"] = "close"
-
-            # If it is an OPTIONS request, return 204 No Content immediately
             if request_method == "OPTIONS":
-                return http.HTTPStatus.NO_CONTENT, response_headers, b"" # 204 Status and empty body
-
-            # If it is a GET request (the priming fetch), return 200 OK
+                return self._format_response(http.HTTPStatus.NO_CONTENT, headers, b"")
             if request_method == "GET":
-                 return http.HTTPStatus.OK, response_headers, b"OK"
+                return self._format_response(http.HTTPStatus.OK, headers, b"OK")
 
-        # Proceed with standard WS handshake
         return None
+
+    def _format_response(self, status, headers, body):
+        """Helper to return the correct type based on version."""
+        if IS_LEGACY:
+            # Legacy expects (status, headers, body)
+            return status, headers, body
+        else:
+            # Modern expects a Response object or self.respond call
+            return self.respond(status, body, headers)
 
 def create_ws_server(callback, ip_address, port):
     """
-    Uniform wrapper for creating a WebSocket server.
+    Uniform wrapper for creating a WebSocket server supporting all versions.
     """
-    if is_colab( ):
-        with open(log_path, "a") as f:
-            print( f'''websocket startup: {ip_address}/{port} (bind IP 0.0.0.0)
-with websockets.serve( callback, "0.0.0.0", {port}, origins=None, create_protocol={ColabWebSocketServerProtocol} )"''' , file=f)
-        return websockets.serve( callback,
-                                 "0.0.0.0",
-                                 port,
-                                 origins=None,
-                                 create_protocol=ColabWebSocketServerProtocol # This bypasses the strict check
-                                )
+    # Prepare base arguments
+    kwargs = {
+        "ws_handler": callback, # In newer versions 'callback' is the first positional or 'ws_handler'
+        "host": "0.0.0.0" if is_colab() else ip_address,
+        "port": port,
+        "origins": None
+    }
+
+    # Inject the custom protocol class using the correct version-specific key
+    if IS_LEGACY:
+        kwargs["create_protocol"] = ColabWebSocketServerProtocol
     else:
-        return websockets.serve( callback, ip_address, port )
+        kwargs["create_connection"] = ColabWebSocketServerProtocol
+
+    if is_colab():
+        with open(log_path, "a") as f:
+            f.write(f"Websocket startup: {kwargs['host']}:{port}\n")
+            f.write(f"Using class: {ColabWebSocketServerProtocol.__name__}\n")
+            f.write(f"Version mode: {'Legacy' if IS_LEGACY else 'Modern'}\n")
+
+    # Use **kwargs to bypass signature differences between library versions
+    return websockets.serve(**kwargs)

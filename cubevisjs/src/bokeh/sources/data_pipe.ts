@@ -223,12 +223,11 @@ export class DataPipe extends DataSource {
                     await fetch( http_url, {
                         signal: AbortSignal.timeout(5000), // Built-in 5s timeout
                         method: 'GET',
-                        mode: 'cors',           // Ensure CORS mode is explicit
-                        credentials: 'include', // This is vital for the Google Auth cookie
-                        headers: {
-                            'Accept': '*/*'
-                        }
+                        mode: 'no-cors',        // Force request submission with cookies
+                        credentials: 'include', // Attach Google Account session cookies
+                        cache: 'no-cache'
                     } )
+                    console.log(`    [${this.backend_port}] Priming sent (no-cors mode)`)
                 } catch (e: any) {
                     if (e.name === 'TimeoutError') {
                         console.log( `    [${this.backend_port}] prime request timed out after 5 seconds` )

@@ -222,8 +222,12 @@ export class DataPipe extends DataSource {
                 try {
                     await fetch( http_url, {
                         signal: AbortSignal.timeout(5000), // Built-in 5s timeout
-                        cache: 'no-cache',
-                        credentials: 'include'
+                        method: 'GET',
+                        mode: 'cors',           // Ensure CORS mode is explicit
+                        credentials: 'include', // This is vital for the Google Auth cookie
+                        headers: {
+                            'Accept': '*/*'
+                        }
                     } )
                 } catch (e: any) {
                     if (e.name === 'TimeoutError') {

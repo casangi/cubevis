@@ -4,20 +4,26 @@ import http
 from websockets.server import serve
 from websockets.http11 import Response
 
+log_path = "/content/package_debug.txt"
+
 def colab_cors_handler(request):
-    """ Handles the 'priming' fetch from TypeScript in websockets v15+ """
-    # If the browser is just 'priming' (not upgrading to WS)
+    # LOG EVERY ATTEMPT - If this doesn't show up, traffic isn't reaching Python
+    with open(log_path, "a") as f:
+        f.write(f"V15 HANDLER: {request.method} to {request.path}\n")
+
+    # If it's the priming fetch
     if "upgrade" not in request.headers.get("Connection", "").lower():
         origin = request.headers.get("Origin", "*")
         headers = {
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Allow-Methods": "GET, OPTIONS, POST",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
         }
-        # Return a standard HTTP 200 for the priming fetch
+        # Explicitly return 200 OK
         return Response(http.HTTPStatus.OK, "OK", headers)
-    return None # Continue to WebSocket handshake if it IS an upgrade
+
+    return None # Hand over to WebSocket
 
 def create_ws_server(callback, ip_address, port):
     if is_colab():

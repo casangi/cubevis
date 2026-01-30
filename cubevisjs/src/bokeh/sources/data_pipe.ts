@@ -217,7 +217,8 @@ export class DataPipe extends DataSource {
             console.log( `    [${this.backend_port}] starting priming...` )
 
             try {
-                // We MUST wait for this, but we'll add a 2-second safety timeout
+              // We MUST wait for this, but we'll add a 2-second safety timeout
+              if ( false ) {
                 try {
                     //const http_url = url.replace("wss://", "https://");
                     //await fetch( http_url, {
@@ -241,7 +242,7 @@ export class DataPipe extends DataSource {
                         console.log( `    [${this.backend_port}] prime request timed out after 5 seconds` )
                     }
                 }
-
+              }
                 console.log(`    [${this.backend_port}] instantiating websocket...`)
 
                 // Close any existing websocket...

@@ -19,7 +19,7 @@ export namespace DataPipe {
     export type Props = DataSource.Props & {
         init_script: p.Property<CallbackLike0<DataPipe> | null>;
         address: p.Property<[string,number]>;
-        instance_id: p.Property<string>;
+        pipe_id: p.Property<string>;
         conflict_check: p.Property<boolean>
     }
 }
@@ -197,7 +197,7 @@ export class DataPipe extends DataSource {
         // const purpose = this.attrs.purpose || 'default'
         // return `${addressKey}_${purpose}`
 
-        return `${this.instance_id}_${addressKey}`
+        return `${this.pipe_id}_${addressKey}`
     }
 
     initialize(): void {
@@ -451,7 +451,7 @@ export class DataPipe extends DataSource {
         this.define<DataPipe.Props>(({ Any, Tuple, String, Number, Bool }) => ({
             init_script: [ Any, null ],
             address: [Tuple(String,Number)],
-            instance_id: [ String ],
+            pipe_id: [ String ],
             conflict_check: [ Bool, true ]
         }))
     }

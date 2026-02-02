@@ -73,7 +73,7 @@ class DataPipe(DataSource,BokehInit):
 
     address = Tuple( String, Int, help="two integer sequence representing the address and port to use for the websocket" )
 
-    instance_id = String( help="Unique ID for each DataPipe object" )
+    pipe_id = String( help="Unique ID for each DataPipe object" )
 
     conflict_check = Bool( default=True, help="Perform check to avoid reuse of URL for GUI. Not needed in the Jupyter context" )
 
@@ -90,8 +90,8 @@ class DataPipe(DataSource,BokehInit):
 
         if 'conflict_check' not in kwargs:
             kwargs['conflict_check'] = not is_interactive_jupyter( )
-        if 'instance_id' not in kwargs:
-            kwargs['instance_id'] = str(uuid4( ))
+        if 'pipe_id' not in kwargs:
+            kwargs['pipe_id'] = str(uuid4( ))
 
         super( ).__init__( *args, **kwargs )
 

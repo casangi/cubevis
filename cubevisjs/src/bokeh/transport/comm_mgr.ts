@@ -11,6 +11,7 @@
 
 import {Model} from "@bokehjs/model"
 import * as p from "@bokehjs/core/properties"
+import * as find from "../util/find"
 
 // Import transport implementations
 import {TransportBase, WebSocketTransport, ColabCommsTransport, JupyterCommsTransport} from "./low_level_transport"
@@ -289,7 +290,6 @@ export class CommMgr extends Model {
     send(comm: Comm, messageId: string, message: any, callback?: (response: any) => void): void {
         const commId = comm.comm_id
         const requestId = this.generateId()
-        
         // Check if this comm has a pending request
         if (this.pending.has(commId)) {
             // Queue this message
@@ -613,6 +613,8 @@ export class Comm extends Model {
         
         // Find CommMgr
         this._mgr = this.findCommMgr()
+        if ( this._mgr ) console.log( `Comm ${this.comm_id} registered with mgr ${this._mgr}` )
+        else console.warn( `Comm ${this.comm_id} failed to register with mgr` )
         
         if (this._mgr) {
             // Register with CommMgr
@@ -630,67 +632,16 @@ export class Comm extends Model {
      * which should have comm_mgr property.
      */
     private findCommMgr(): CommMgr | undefined {
-        const roots = this.document?.roots()
-        if (!roots || roots.length === 0) {
-            console.warn("Comm: No document roots found")
-            return undefined
+        const ctx = find.context(this)
+        if ( ctx ) {
+            if ( ctx.comm_mgr ) return ctx.comm_mgr
+            else console.warn("CommMgr not available from BokehAppContext object")
+        } else {
+            console.warn("Could not find BokehAppContext so CommMgr find failed")
         }
-        
-        // The root should be BokehAppContext with comm_mgr property
-        const appContext = roots[0]
-        
-        // Check if appContext has comm_mgr property
-        if (appContext && 'comm_mgr' in appContext) {
-            const mgr = (appContext as any).comm_mgr
-            
-            if (mgr instanceof CommMgr && mgr.comm_mgr_id === this.comm_mgr_id) {
-                return mgr
-            }
-        }
-        
-        // Fallback: search all models in document
-        console.warn("Comm: comm_mgr not found in root, searching document...")
-        return this.searchDocumentForCommMgr()
-    }
-    
-    /**
-     * Fallback method to search entire document for CommMgr
-     */
-    private searchDocumentForCommMgr(): CommMgr | undefined {
-        if (!this.document) {
-            return undefined
-        }
-        
-        // Search all models in document
-        for (const model of this.document.roots()) {
-            const found = this.searchModelForCommMgr(model)
-            if (found) {
-                return found
-            }
-        }
-        
         return undefined
     }
-    
-    /**
-     * Recursively search a model and its references for CommMgr
-     */
-    private searchModelForCommMgr(model: any): CommMgr | undefined {
-        if (model instanceof CommMgr && model.comm_mgr_id === this.comm_mgr_id) {
-            return model
-        }
-        
-        // Search references
-        for (const ref of model.references()) {
-            const found = this.searchModelForCommMgr(ref)
-            if (found) {
-                return found
-            }
-        }
-        
-        return undefined
-    }
-    
+
     /**
      * Register a handler for messages with this ID
      */

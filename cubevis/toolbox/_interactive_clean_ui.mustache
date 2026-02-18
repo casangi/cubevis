@@ -273,6 +273,9 @@ class InteractiveCleanUI:
                                                          'initialized': True          ### are not currently used for anything
                                                        }, title='Interactive Clean' )
 
+        ## comm manager for opening communication channels
+        self._comm_mgr = self._app_context.comm_mgr
+
         self._clean['gclean'] = gclean
 
         self._clean['gclean_paths'] = { prod['name']: prod for prod in self._clean['gclean'].image_products( ) }
@@ -364,9 +367,7 @@ class InteractiveCleanUI:
             ### One pipe for updating the convergence plots.
             ###
             self._clean['converge'] = { 'state': None }
-            print( f"\t>>>>>>--------app-context----------------->> {self._app_context}" )
-            self._clean['converge']['comm'] = self._app_context.comm_mgr
-            self._clean['converge']['pipe'] = DataPipe( address=find_ws_address( ), abort=self._abort_handler )
+            self._clean['converge']['pipe'] = self._comm_mgr.open( )
             self._clean['converge']['id'] = str(uuid4( ))
 
             # Get port for serving HTTP server if running in script
@@ -658,7 +659,7 @@ class InteractiveCleanUI:
             ###
             ### Retrieve convergence information
             ###
-            def convergence_handler( msg, self=self, imid=imid ):
+            def convergence_handler( msg, self=self, imid=imid, context=None ):
                 if msg['action'] == 'retrieve':
                     return { 'result': self._clean['last-success'] }
                 else:
@@ -1172,12 +1173,12 @@ class InteractiveCleanUI:
                                ] + [ websockets.serve( self._pipe['control'].process_messages,
                                                        self._pipe['control'].address[0],
                                                        self._pipe['control'].address[1] ),
-                                     websockets.serve( self._clean['converge']['pipe'].process_messages,
-                                                       self._clean['converge']['pipe'].address[0],
-                                                       self._clean['converge']['pipe'].address[1] ),
-                                     websockets.serve( self._clean['converge']['comm'].process_messages,
-                                                       self._clean['converge']['comm'].address[0],
-                                                       self._clean['converge']['comm'].address[1] ) ]
+                                     #websockets.serve( self._clean['converge']['pipe'].process_messages,
+                                     #                  self._clean['converge']['pipe'].address[0],
+                                     #                  self._clean['converge']['pipe'].address[1] ),
+                                     websockets.serve( self._comm_mgr.process_messages,
+                                                       self._comm_mgr.address[0],
+                                                       self._comm_mgr.address[1] ) ]
                               ) ):
                 self.__result_future = asyncio.Future( )
                 yield self.__result_future

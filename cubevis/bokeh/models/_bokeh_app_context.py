@@ -10,6 +10,10 @@ import webbrowser
 import os
 import re
 
+from ..transport import CommMgr
+
+from .. import BokehInit
+
 logger = logging.getLogger(__name__)
 
 class BokehAppContext(LayoutDOM):
@@ -22,18 +26,28 @@ class BokehAppContext(LayoutDOM):
     """)
 
     app_id = String(default="")
-    session_id = String(default="")
+    comm_mgr = Nullable(Instance(CommMgr), help="Communications manager for this app")
+    backend_id = String(default="", help="""
+    The backend_id is filled by this class. This is expected to be a unique, non-null
+    string. There should be only one backend_id for each cubevis application.
+    """ )
+    frontend_id = Nullable(String, default=None, help="""
+    The frontend_id is filled with the identifier generated for the browser session. It is
+    populated by the DataPipe class which establishes communications between the frontend
+    and the backend. This is expected to be null. There should be only one frontend_id
+    for each cubevis application.
+    """ )
     app_state = Dict(String, Any, default={})
-
-    # Class-level session ID shared across all apps in the same Python session
-    _session_id = None
     
+    ## Class-level session ID shared across all apps in the same Python session
+    _backend_id = None
+
     @classmethod
-    def get_session_id(cls):
+    def _get_backend_id(cls):
         """Get or create a session ID for this Python session"""
-        if cls._session_id is None:
-            cls._session_id = str(uuid4())
-        return cls._session_id
+        if cls._backend_id is None:
+            cls._backend_id = str(uuid4())
+        return cls._backend_id
 
     def _slugify(self, value, allow_unicode=False):
         """
@@ -66,14 +80,21 @@ class BokehAppContext(LayoutDOM):
         if ui is not None and 'ui' in kwargs:
             raise RuntimeError( "'ui' supplied as both a positional parameter and a keyword parameter" )
 
-        kwargs['session_id'] = self.get_session_id( )
+        ### backend_id is not user settable
+        kwargs['backend_id'] = self._get_backend_id( )
 
         if 'ui' not in kwargs:
             kwargs['ui'] = ui
         if 'app_id' not in kwargs:
             kwargs['app_id'] = str(uuid4())
-        
+        # setting a unique well defined name for BokehAppContext
+        # allows this object to be found by name in JavaScript
+        kwargs['name'] = "_GLOBAL_APP_CONTEXT_"
+
         super().__init__(**kwargs)
+
+        # Register this context as the singleton
+        BokehInit.set_app_context(self)
 
     def _sphinx_height_hint(self):
         """Delegate height hint to the wrapped UI element"""

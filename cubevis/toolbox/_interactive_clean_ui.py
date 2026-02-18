@@ -49,6 +49,7 @@ from bokeh.models.dom import HTML
 
 from bokeh.models.ui.tooltips import Tooltip
 from cubevis.bokeh.models import TipButton, Tip, EvTextInput, BokehAppContext
+from cubevis.bokeh.transport import CommMgr
 
 from cubevis.utils import resource_manager, reset_resource_manager, is_interactive_jupyter, find_pkg, load_pkg
 from cubevis.utils import ContextMgrChain as CMC
@@ -70,6 +71,13 @@ from cubevis import exe
 from ._interactiveclean_wrappers import SharedWidgets
 
 USE_MULTIPLE_GCLEAN_HACK=False
+
+def shutdown_handler( reason, description ):
+    print( "SHUTDOWN HANDLER............." )
+    print( f"          Reason {reason}" )
+    print( f"     Description {description}" )
+def error_handler( *args, **kwargs ):
+    print( "ERROR HANDLER................" )
 
 class InteractiveCleanUI:
     '''InteractiveCleanUI(...) implements interactive clean using Bokeh
@@ -256,6 +264,14 @@ class InteractiveCleanUI:
                               "convergence_state": { 'convergence': {},         ### shares state between
                                                      'cyclethreshold': {} } }   ### __init__( ) and _setup( )
 
+        self._app_context = BokehAppContext( comm_mgr=CommMgr( address=find_ws_address( ),
+                                                               on_shutdown=shutdown_handler,
+                                                               on_error=error_handler ),
+                                             app_state={                              ### while the state dictionary itself
+                                                         'name': 'interactive clean', ### is used, these particular element
+                                                         'initialized': True          ### are not currently used for anything
+                                                       }, title='Interactive Clean' )
+
         self._clean['gclean'] = gclean
 
         self._clean['gclean_paths'] = { prod['name']: prod for prod in self._clean['gclean'].image_products( ) }
@@ -347,10 +363,10 @@ class InteractiveCleanUI:
             ### One pipe for updating the convergence plots.
             ###
             self._clean['converge'] = { 'state': None }
+            print( f"\t>>>>>>--------app-context----------------->> {self._app_context}" )
+            self._clean['converge']['comm'] = self._app_context.comm_mgr
             self._clean['converge']['pipe'] = DataPipe( address=find_ws_address( ), abort=self._abort_handler )
             self._clean['converge']['id'] = str(uuid4( ))
-
-
 
             # Get port for serving HTTP server if running in script
             self._http_port = find_ws_address("")[1]
@@ -950,19 +966,17 @@ class InteractiveCleanUI:
 
         image_tabs = Tabs( tabs=tab_panels, tabs_location='below', height_policy='max', width_policy='max' )
 
-        self._fig['layout'] = BokehAppContext(
-            column(  row( help_button,
-                          self._log_button,
-                          Spacer( height=self._control['iteration']['stop'].height, sizing_mode="scale_width" ),
-                          Div( text="<div><b>status:</b></div>" ),
-                          status_line,
-                          self._control['iteration']['stop'], self._control['iteration']['continue'], self._control['iteration']['finish'], sizing_mode="scale_width" ),
-                     row( image_tabs, height_policy='max', width_policy='max' ),
-                     height_policy='max', width_policy='max' ),
-            app_state={                         ### while the state dictionary itself
-                'name': 'interactive clean',    ### is used, these particular element
-                'initialized': True             ### are not currently used for anything
-            }, title='Interactive Clean' )
+        self._app_context.ui = column( row( help_button,
+                                            self._log_button,
+                                            Spacer( height=self._control['iteration']['stop'].height, sizing_mode="scale_width" ),
+                                            Div( text="<div><b>status:</b></div>" ),
+                                            status_line,
+                                            self._control['iteration']['stop'], self._control['iteration']['continue'],
+                                            self._control['iteration']['finish'], sizing_mode="scale_width" ),
+                                       row( image_tabs, height_policy='max', width_policy='max' ),
+                                       height_policy='max', width_policy='max' )
+
+        self._fig['layout'] = self._app_context
 
         ###
         ### Keep track of which image is currently active in appstate.image_name (which is
@@ -1159,7 +1173,10 @@ class InteractiveCleanUI:
                                                        self._pipe['control'].address[1] ),
                                      websockets.serve( self._clean['converge']['pipe'].process_messages,
                                                        self._clean['converge']['pipe'].address[0],
-                                                       self._clean['converge']['pipe'].address[1] ) ]
+                                                       self._clean['converge']['pipe'].address[1] ),
+                                     websockets.serve( self._clean['converge']['comm'].process_messages,
+                                                       self._clean['converge']['comm'].address[0],
+                                                       self._clean['converge']['comm'].address[1] ) ]
                               ) ):
                 self.__result_future = asyncio.Future( )
                 yield self.__result_future

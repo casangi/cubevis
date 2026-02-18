@@ -1,6 +1,9 @@
 import {LayoutDOM, LayoutDOMView} from "@bokehjs/models/layouts/layout_dom"
 import {UIElement} from "@bokehjs/models/ui/ui_element"
 import type * as p from "@bokehjs/core/properties"
+import {object_id} from "../util/find"
+
+import { CommMgr } from "../transport/comm_mgr"
 
 export class BokehAppContextView extends LayoutDOMView {
   declare model: BokehAppContext
@@ -38,7 +41,9 @@ export namespace BokehAppContext {
   export type Props = LayoutDOM.Props & {
     ui: p.Property<UIElement | null>
     app_id: p.Property<string>
-    session_id: p.Property<string>
+    comm_mgr: p.Property<CommMgr | null>
+    backend_id: p.Property<string>
+    frontend_id: p.Property<string | null>
     app_state: p.Property<any>
   }
 }
@@ -58,13 +63,24 @@ export class BokehAppContext extends LayoutDOM {
   override initialize(): void {
     super.initialize()
     
+    // frontend_id must be set by the frontend not preset by the backend
+    const frontend_identifier = object_id(this)
+    if ( this.frontend_id !== null && this.frontend_id !== frontend_identifier ) {
+      console.warn(
+        `BokehAppContext [${this.app_id}]: 'frontend_id' was incorrectly initialized as '${this.frontend_id}', ` +
+          `instead of '${frontend_identifier}', resetting it.`
+      )
+    }
+    if ( this.frontend_id !== frontend_identifier )
+      this.frontend_id = frontend_identifier
+
     // Initialize session-level data structure if it doesn't exist
     if (!(window as any).cubevisAppSession) {
       (window as any).cubevisAppSession = {
-        sessionId: this.session_id,
+        sessionId: this.backend_id,
         applications: {}
       }
-      console.log(`Initialized Bokeh session: ${this.session_id}`)
+      console.log(`Initialized Bokeh session: ${this.backend_id}:${this.frontend_id}`)
     }
     
     const session = (window as any).cubevisAppSession
@@ -86,7 +102,9 @@ export class BokehAppContext extends LayoutDOM {
     this.define<BokehAppContext.Props>(({Ref, Nullable, Dict, String, Unknown}) => ({
       ui: [ Nullable(Ref(UIElement)), null ],
       app_id: [String, ""],
-      session_id: [String, ""],
+      comm_mgr: [ Nullable(Ref(CommMgr)), null ],
+      backend_id: [String, ""],
+      frontend_id: [Nullable(String), null],
       app_state: [ Dict(Unknown), {} ],
     }))
   }

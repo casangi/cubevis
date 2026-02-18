@@ -316,9 +316,12 @@ export function children<T extends Model>(
     };
 }
 
-export const context = find_parent<BokehAppContext>(
-    "cubevis.bokeh.models._bokeh_app_context.BokehAppContext"
-);
+export function context(model: Model): BokehAppContext | undefined {
+    const result = model.document?.get_model_by_name("_GLOBAL_APP_CONTEXT_") as BokehAppContext | undefined
+    console.log("find.context BokehAppContext", result)
+    if ( result && ! result.frontend_id ) { object_id(result); console.log("find.context object_id called") }
+    return result
+}
 
 export const showable = find_parent<Showable>(
     "cubevis.bokeh.models._showable.Showable"
@@ -332,4 +335,53 @@ export function appState(model: Model): object | undefined {
         return apps_state[ctx.app_id]?.state
     }
     return
+}
+
+// This is a cubevisjs specialization of the casalib object_id. This version
+// uses the casalib object_id (barring bugs) to generate the object ID and
+// then if the obj being checked is a BokehAppContext it adds the ID to the
+// app_state.
+//
+// Other Models will be initialized BEFORE the BokehAppContext. This will
+// mean that the app_state.frontend_id may be filled in through earlier
+// calls to this function BEFORE the initialize function of BokehAppContext
+// is executed.
+export function object_id(obj: any): string {
+
+    console.log("find.object_id obj", obj)
+    if (!obj) return "invalid-object-provided";
+
+    // We check for the function globally or via a known registry
+    const globalCasalib = (globalThis as any).casalib;
+    console.log("find.object_id casalib", globalCasalib)
+    // 1. Generate ID: Call casalib object_id if available to generate ID
+    //.   otherwise generate a unique string...
+    const identifier = globalCasalib && typeof globalCasalib.object_id === 'function' ?
+        globalCasalib.object_id(obj) : undefined
+    console.log("find.object_id identifier", globalCasalib)
+
+    // Check for 'app_state' without importing the class and if so, add id to app_state
+    if ('app_state' in obj && obj.type === "cubevis.bokeh.models._bokeh_app_context.BokehAppContext") {
+        console.log("find.object_id BokehAppContext obj", obj)
+
+        if (!obj.app_state) obj.app_state = { }
+
+        // Use the casalib ID or a locally generated ID
+        if ( identifier ) {
+            if (!obj.frontend_id) obj.frontend_id = identifier
+
+            if ( ! obj.app_state.frontend_id || obj.app_state.frontend_id != identifier ) {
+                obj.app_state.frontend_id = identifier
+            }
+        } else {
+            if ( ! obj.app_state.frontend_id ) {
+                obj.app_state.frontend_id = `cube-${Math.random().toString(36).substr(2, 9)}`
+            }
+        }
+
+        return obj.app_state.frontend_id
+    }
+
+
+    return identifier ?? "casalib-not-found-fallback-id";
 }

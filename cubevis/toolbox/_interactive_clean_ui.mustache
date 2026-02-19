@@ -1423,10 +1423,11 @@ class InteractiveCleanUI:
                                                    convdata = appstate.convergence_data
                                                } else {
                                                    if ( ! recurse ) {
+                                                       /** fetch convergence state because it is missing from last clean exeuction **/
                                                        ctrl.converge.pipe.send( ctrl.converge.id, { action: 'retrieve' },
                                                                                 (msg) => { if ( hasprop( msg.result, 'convergence' ) ) {
                                                                                                appstate.convergence_data = { convergence: msg.result.convergence,
-                                                                                                                                   cyclethreshold: msg.result.cyclethreshold }
+                                                                                                                             cyclethreshold: msg.result.cyclethreshold }
                                                                                                update_convergence(true)
                                                                                            } } )
                                                    } else { console.log( 'INTERNAL ERROR: fetching convergence data failed' ) }

@@ -99,7 +99,6 @@ export class WebSocketTransport implements TransportBase {
     // @ts-expect-error: not yet used
     private connected: boolean = false
     private initialized: boolean = false
-    private shouldRun: boolean = true
   
     constructor(
         private comm_mgr: CommMgr,
@@ -133,7 +132,6 @@ export class WebSocketTransport implements TransportBase {
                 console.log("WebSocket closed")
                 this.connected = false
                 this.initialized = false
-                this.shouldRun = false
             }
             
             // Don't set onmessage here - that's for run()
@@ -228,19 +226,11 @@ export class WebSocketTransport implements TransportBase {
      * Blocks until connection closes.
      */
     async run(): Promise<void> {
-        if (!this.initialized) {
-            throw new Error("Must call connect() before run()")
-        }
-        
-        if (!this.onMessageCallback) {
-            throw new Error("Must call setMessageCallback() before run()")
-        }
-        
         console.log(`WebSocket event loop starting for ${this.comm_mgr.comm_mgr_id}`)
         
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             if (!this.websocket) {
-                resolve()
+                reject(new Error("WebSocket not initialized"))
                 return
             }
             
@@ -250,34 +240,34 @@ export class WebSocketTransport implements TransportBase {
                     try {
                         const data = deserialize(event.data as string)
                         
-                        // Call the callback (set by CommMgr)
                         if (this.onMessageCallback) {
                             this.onMessageCallback(data)
                         }
                     } catch (e) {
                         console.error("Error processing WebSocket message:", e)
                     }
-                } else {
-                    console.log("WebSocket received binary data", event.data.byteLength, "bytes")
                 }
             }
             
             // Set up close handler
-            this.websocket.onclose = () => {
-                console.log(`WebSocket event loop ended for ${this.comm_mgr.comm_mgr_id}`)
+            this.websocket.onclose = (event: CloseEvent) => {
+                console.log(
+                    `WebSocket closed: code=${event.code}, ` +
+                    `reason=${event.reason || 'none'}, ` +
+                    `clean=${event.wasClean}`
+                )
                 this.connected = false
                 this.initialized = false
-                this.shouldRun = false
+
+                // Resolve (not reject) - normal close
                 resolve()
             }
             
-            // Also resolve if shouldRun becomes false
-            const checkInterval = setInterval(() => {
-                if (!this.shouldRun) {
-                    clearInterval(checkInterval)
-                    resolve()
-                }
-            }, 100)
+            // Set up error handler
+            this.websocket.onerror = (event: Event) => {
+                console.error("WebSocket error:", event)
+                // Don't reject here - let onclose handle it
+            }
         })
     }
 
@@ -294,7 +284,6 @@ export class WebSocketTransport implements TransportBase {
     }
     
     close(): void {
-        this.shouldRun = false
         if (this.websocket) {
             this.websocket.close()
             this.websocket = undefined

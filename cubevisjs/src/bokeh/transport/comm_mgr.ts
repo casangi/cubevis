@@ -98,6 +98,14 @@ export class CommMgr extends Model {
 
     // Internal state (not Bokeh properties)
     private transport?: TransportBase
+
+    private reconnectAttempts: number = 0
+    private maxReconnectAttempts: number = 10
+    private reconnectDelay: number = 1000  // Start with 1 second
+    private maxReconnectDelay: number = 30000  // Max 30 seconds
+    private reconnectTimer?: number
+    private shouldReconnect: boolean = true
+
     private comms: Map<string, Comm> = new Map()
     private handlers: Map<string, Map<string, (msg: any, ctx: HandlerContext) => any>> = new Map()
     private pending: Map<string, string> = new Map()  // comm_id => request_id
@@ -110,7 +118,6 @@ export class CommMgr extends Model {
     private onError?: (error: Error) => void
     private initialized: boolean = false
     private shutdownRequested: boolean = false
-    private runTask?: Promise<void>
     
     constructor(attrs?: Partial<CommMgr.Attrs>) {
         super(attrs)
@@ -135,9 +142,9 @@ export class CommMgr extends Model {
         this._state = newState
         console.log(`CommMgr state: ${oldState} -> ${newState}`)
     }
-    
+
     /**
-     * Initialize the transport based on properties
+     * Initialize the transport with automatic reconnection.
      */
     private async initializeTransport(): Promise<void> {
         if (this.initialized) {
@@ -154,72 +161,177 @@ export class CommMgr extends Model {
             }
             
             // Create appropriate transport
-            // Note: WebSocket created in run() when we have the actual connection
             if (transportType === 'websocket') {
                 if (!this.address) {
                     throw new Error("WebSocket transport requires address")
                 }
-                this.transport = new WebSocketTransport(
-                    this,
-                    this.address
-                )
+                await this.connectWebSocket()
             } else if (transportType === 'colab') {
                 this.transport = new ColabCommsTransport(this)
+                await this.setupTransport()
             } else if (transportType === 'jupyter') {
                 this.transport = new JupyterCommsTransport(this)
+                await this.setupTransport()
             } else {
                 throw new Error(`Unknown transport type: ${transportType}`)
             }
-            
-            // ALL TRANSPORTS USE SAME PATTERN NOW!
-            // 1. Set message callback
-            this.transport.setMessageCallback((msg: any) => {
-                this.routeMessage(msg)
-            })
-            
-            // 2. Connect (performs handshake if needed)
-            await this.transport.connect()
             
             this.initialized = true
             this.state = AppState.RUNNING
             console.log(`CommMgr initialized with ${transportType} transport`)
             
-            // 3. Start event loop
-            this.runTransport()
-            
         } catch (e) {
             console.error("Error initializing CommMgr transport:", e)
             this.state = AppState.ERROR
+
+            // Attempt reconnection for WebSocket
+            if (this.transport_type === 'websocket' || this.transport_type === 'auto') {
+                this.scheduleReconnect()
+            } else {
+                throw e
+            }
+        }
+    }
+
+    /**
+     * Connect WebSocket with reconnection support.
+     */
+    private async connectWebSocket(): Promise<void> {
+        console.log(`Connecting WebSocket (attempt ${this.reconnectAttempts + 1})...`)
+
+        try {
+            this.transport = new WebSocketTransport(
+                this,
+                this.address!
+            )
+
+            await this.setupTransport()
+
+            // Reset reconnect counter on successful connection
+            this.reconnectAttempts = 0
+            this.reconnectDelay = 1000
+
+            console.log("WebSocket connected successfully")
+
+        } catch (e) {
+            console.error("WebSocket connection failed:", e)
             throw e
         }
     }
 
     /**
-     * Run the transport event loop.
-     * 
-     * ALL TRANSPORTS NOW USE THE SAME PATTERN!
+     * Set up transport callbacks and start event loop.
      */
-    private async runTransport(): Promise<void> {
+    private async setupTransport(): Promise<void> {
+        if (!this.transport) {
+            throw new Error("Transport not created")
+        }
+
+        // Set message callback
+        this.transport.setMessageCallback((msg: any) => {
+            this.routeMessage(msg)
+        })
+
+       // Connect
+        await this.transport.connect()
+
+        // Flush any queued messages
+        await this.flushAllQueues()
+
+        // Start event loop (DON'T await - let it run in background)
+        this.runTransportWithReconnection()  // ← No await!
+    }
+
+    /**
+     * Run transport event loop with automatic reconnection.
+     */
+    private async runTransportWithReconnection(): Promise<void> {
         if (!this.transport) {
             return
         }
-        
+
         try {
-            // Flush any queued messages
-            await this.flushAllQueues()
-            
-            // Run transport event loop (blocks until shutdown/close)
-            this.runTask = this.transport.run()
-            await this.runTask
-            
+            console.log("Transport event loop starting...")
+
+            // Run transport until it closes
+            await this.transport.run()
+
             console.log("Transport event loop completed")
-            
+
+            // Transport closed - attempt reconnection if still active
+            if (this.shouldReconnect && this.state !== AppState.STOPPED) {
+                console.log("Transport closed, attempting reconnection...")
+                this.scheduleReconnect()  // ← This should be called!
+            } else {
+                console.log("Not reconnecting (shouldReconnect=" + this.shouldReconnect + ", state=" + this.state + ")")
+            }
+
         } catch (e) {
-            console.error("Error in transport event loop:", e)
-            this.reportError(e as Error, true)
-        } finally {
-            await this.shutdown()
+            console.error("Transport error:", e)
+
+            // Attempt reconnection on error
+            if (this.shouldReconnect && this.state !== AppState.STOPPED) {
+                console.log("Transport error, attempting reconnection...")
+                this.scheduleReconnect()
+            }
         }
+    }
+
+    /**
+     * Schedule a reconnection attempt with exponential backoff.
+     */
+    private scheduleReconnect(): void {
+        // Don't reconnect if we're shutting down
+        if (!this.shouldReconnect || this.state === AppState.STOPPED) {
+            return
+        }
+
+        // Check if we've exceeded max attempts
+        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+            console.error(`Failed to reconnect after ${this.maxReconnectAttempts} attempts`)
+            this.state = AppState.ERROR
+            this.reportError(new Error("Max reconnection attempts exceeded"), true)
+            return
+        }
+
+        // Clear any existing timer
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer)
+        }
+
+        // Calculate delay with exponential backoff
+        const delay = Math.min(
+            this.reconnectDelay * Math.pow(2, this.reconnectAttempts),
+            this.maxReconnectDelay
+        )
+
+        console.log(`Reconnecting in ${delay}ms...`)
+
+        // Schedule reconnection
+        this.reconnectTimer = window.setTimeout(async () => {
+            this.reconnectAttempts++
+
+            try {
+                // Close old transport
+                if (this.transport) {
+                    try {
+                        this.transport.close()
+                    } catch (e) {
+                        console.error("Error closing old transport:", e)
+                    }
+                    this.transport = undefined
+                }
+
+                // Attempt to reconnect
+                await this.connectWebSocket()
+
+            } catch (e) {
+                console.error("Reconnection attempt failed:", e)
+
+                // Try again
+                this.scheduleReconnect()
+            }
+        }, delay)
     }
 
     /**
@@ -290,6 +402,34 @@ export class CommMgr extends Model {
     send(comm: Comm, messageId: string, message: any, callback?: (response: any) => void): void {
         const commId = comm.comm_id
         const requestId = this.generateId()
+
+        // Check if transport is connected
+        if (!this.transport || !this.transport.isConnected()) {
+            console.warn(
+                `Transport not ready, queuing message for ${commId}.${messageId} ` +
+                `(will send when reconnected)`
+            )
+
+            // Queue the message
+            if (!this.sendQueue.has(commId)) {
+                this.sendQueue.set(commId, [])
+            }
+
+            this.sendQueue.get(commId)!.push({
+                messageId,
+                message,
+                callback
+            })
+
+            // Trigger reconnection if not already happening
+            if (this.shouldReconnect && !this.reconnectTimer) {
+                console.log("Triggering reconnection due to queued message")
+                this.scheduleReconnect()
+            }
+
+            return
+        }
+
         // Check if this comm has a pending request
         if (this.pending.has(commId)) {
             // Queue this message
@@ -319,6 +459,20 @@ export class CommMgr extends Model {
         }
     }
     
+    /**
+     * Flush all queued messages after reconnection.
+     */
+    private async flushAllQueues(): Promise<void> {
+        console.log("Flushing queued messages after reconnection...")
+
+        for (const [commId, queue] of this.sendQueue.entries()) {
+            if (queue.length > 0 && !this.pending.has(commId)) {
+                console.log(`Flushing ${queue.length} messages for comm ${commId}`)
+                this.processNextQueued(commId)
+            }
+        }
+    }
+
     /**
      * Send a message immediately
      */
@@ -408,7 +562,7 @@ private sendImmediate(
         this.pendingRequests.delete(requestId)
         
         const {commId, messageId, callback} = request
-        
+
         // Clear pending state
         if (this.pending.get(commId) === requestId) {
             this.pending.delete(commId)
@@ -528,11 +682,17 @@ private sendImmediate(
     }
 
     async shutdown(): Promise<void> {
-        if (this.state === AppState.STOPPED) {
-            return
+        console.log("Shutting down CommMgr")
+
+        // Prevent reconnection
+        this.shouldReconnect = false
+
+        // Clear reconnect timer
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer)
+            this.reconnectTimer = undefined
         }
         
-        console.log("Shutting down CommMgr")
         this.state = AppState.SHUTTING_DOWN
         
         if (this.transport) {
@@ -546,14 +706,6 @@ private sendImmediate(
         this.comms.clear()
         
         this.state = AppState.STOPPED
-    }
-
-    private async flushAllQueues(): Promise<void> {
-        for (const commId of Array.from(this.sendQueue.keys())) {
-            if (this.sendQueue.get(commId)!.length > 0 && !this.pending.has(commId)) {
-                this.processNextQueued(commId)
-            }
-        }
     }
 
     private generateId(): string {

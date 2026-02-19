@@ -11,9 +11,17 @@ import traceback
 import logging
 from uuid import uuid4
 
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+
 from bokeh.model import Model
 from bokeh.core.properties import String, Bool, Tuple, Int, Nullable, Instance
 from .. import BokehInit
+
+class ShutdownReason(Enum):
+    """Reason for shutdown"""
+    REQUESTED = "shutdown_requested"      # User called requestShutdown()
+    TRANSPORT_CLOSED = "transport_closed" # Connection closed normally
+    ERROR = "error"                       # Fatal error occurred
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +173,7 @@ class CommMgr( Model, BokehInit ):
         self._on_shutdown = on_shutdown                   # REMOVED
         self._on_error = on_error                         # REMOVED
         self._shutdown_event = asyncio.Event()
+        self._on_connection_closed = None
 
         # Handler context (shared across all handlers)
         self._context = HandlerContext(self)
@@ -449,21 +458,28 @@ class CommMgr( Model, BokehInit ):
     async def process_messages(self, websocket=None):
         """
         Process messages from transport.
+
+        For WebSocket: Called by websockets.serve() for each connection.
+        On normal close, cleans up and returns (allows reconnection).
+        Only shuts down CommMgr for user request or fatal errors.
         """
-        logger.debug(f"CommMgr.process_messages ({self.comm_mgr_id}): {self.transport_type}/{websocket}/{self._transport}")
+        logger.debug(f"CommMgr.process_messages starting ({self.comm_mgr_id})")
 
         # Determine why we stopped
         shutdown_reason = None
         shutdown_description = ""
+        should_shutdown = False
 
         try:
             if self.transport_type == 'websocket':
                 if not websocket:
                     raise ValueError("WebSocket transport requires websocket parameter")
 
-                from ._low_level_transport import WebSocketTransport, ShutdownReason
+                from ._low_level_transport import WebSocketTransport
 
                 def transport_abort(error):
+                    # Only report truly fatal errors
+                    logger.error(f"Transport abort: {error}")
                     self.report_error(error, fatal=True)
 
                 # Create WebSocket transport
@@ -483,13 +499,12 @@ class CommMgr( Model, BokehInit ):
                 self.state = AppState.RUNNING
 
             elif self.transport_type in ('colab', 'jupyter'):
-                # Already initialized in initialize()
+                # Already initialized
                 pass
 
             # Flush any queued messages
             await self._flush_all_queues()
 
-            # ALL TRANSPORTS NOW USE THE SAME PATTERN!
             # Run transport event loop alongside shutdown monitor
             transport_task = asyncio.create_task(self._transport.run())
             shutdown_task = asyncio.create_task(self._shutdown_event.wait())
@@ -500,10 +515,40 @@ class CommMgr( Model, BokehInit ):
                 return_when=asyncio.FIRST_COMPLETED
             )
 
+            # Determine why we stopped
             if shutdown_task in done:
+                # User requested shutdown
                 shutdown_reason = ShutdownReason.REQUESTED
+                shutdown_description = "Shutdown requested by user"
+                should_shutdown = True
+                logger.info("Shutdown was requested by user")
             else:
-                shutdown_reason = ShutdownReason.TRANSPORT_CLOSED
+                # Transport closed - check if it was an error
+                try:
+                    # Get exception from transport task if any
+                    transport_task.result()
+
+                    # No exception - normal close
+                    shutdown_reason = ShutdownReason.TRANSPORT_CLOSED
+                    shutdown_description = "Connection closed normally"
+                    should_shutdown = False
+                    logger.info("Connection closed normally, ready for reconnection")
+
+                except ConnectionClosedError as e:
+                    # WebSocket connection closed (laptop sleep, browser refresh, etc.)
+                    # This is NORMAL - allow reconnection
+                    shutdown_reason = ShutdownReason.TRANSPORT_CLOSED
+                    shutdown_description = f"WebSocket closed: {e}"
+                    should_shutdown = False
+                    logger.info(f"WebSocket connection closed: {e} - ready for reconnection")
+
+                except Exception as e:
+                    # Some other error in transport
+                    shutdown_reason = ShutdownReason.ERROR
+                    shutdown_description = f"Transport error: {e}"
+                    should_shutdown = True
+                    logger.error(f"Fatal transport error: {e}")
+                    traceback.print_exc()
 
             # Cancel remaining tasks
             for task in pending:
@@ -512,16 +557,83 @@ class CommMgr( Model, BokehInit ):
                     await task
                 except asyncio.CancelledError:
                     pass
+                except Exception as e:
+                    logger.error(f"Error cancelling task: {e}")
 
         except Exception as e:
+            # Exception during setup or processing
             shutdown_description = f"Error in message processing: {e}"
             logger.error(shutdown_description)
             traceback.print_exc()
             self.report_error(e, fatal=True)
             shutdown_reason = ShutdownReason.ERROR
+            should_shutdown = True
+
         finally:
-            # Ensure we enter shutdown state
-            await self.shutdown(reason=shutdown_reason, description=shutdown_description)
+            # Clean up transport (make sure it's async)
+            if self._transport:
+                try:
+                    await self._transport.close()
+                except Exception as e:
+                    logger.error(f"Error closing transport: {e}")
+
+            # Only shutdown CommMgr for certain reasons
+            if should_shutdown:
+                logger.info(f"Shutting down CommMgr (reason: {shutdown_reason})")
+                await self.shutdown(reason=shutdown_reason, description=shutdown_description)
+            else:
+                # Just clean up this connection - ready for next one
+                logger.info(f"Connection ended (reason: {shutdown_reason}), ready for reconnection")
+
+                # Reset connection-specific state
+                self._transport = None
+
+                # Clear pending requests for this connection
+                self._pending.clear()
+                self._pending_requests.clear()
+
+                # Call connection closed callback if set
+                if self._on_connection_closed:
+                    try:
+                        self._on_connection_closed(shutdown_reason, shutdown_description)
+                    except Exception as e:
+                        logger.error(f"Error in on_connection_closed callback: {e}")
+
+    async def shutdown(self, reason: Optional[ShutdownReason] = None, description: str = ""):
+        """Shut down the communications manager."""
+        if self.state == AppState.STOPPED:
+            return
+
+        logger.info(f"Shutting down communications (reason: {reason.value if reason else 'unknown'})")
+
+        # Call shutdown callback
+        if self._on_shutdown and not self._shutdown_callback_called:
+            try:
+                # Pass the enum value for better type safety
+                self._on_shutdown(reason=reason, description=description)
+                self._shutdown_callback_called = True
+            except Exception as e:
+                logger.error(f"Error in shutdown callback: {e}")
+                traceback.print_exc()
+
+        self.state = AppState.SHUTTING_DOWN
+
+        # Close transport if still connected
+        if self._transport:
+            try:
+                await self._transport.close()
+            except Exception as e:
+                logger.error(f"Error closing transport during shutdown: {e}")
+
+        # Clear all state
+        self._handlers.clear()
+        self._pending.clear()
+        self._pending_requests.clear()
+        self._send_queue.clear()
+        self._comms.clear()
+
+        self.state = AppState.STOPPED
+        logger.info("Communications shutdown complete")
 
     async def _route_message(self, msg: Dict[str, Any]):
         """
@@ -660,40 +772,3 @@ class CommMgr( Model, BokehInit ):
 
         return 'websocket'
 
-
-    async def shutdown(self, reason: Optional[ShutdownReason] = None, description: String = ""):
-        """Shutdown communications gracefully."""
-        if self.state == AppState.STOPPED:
-            return
-
-        logger.info(f"Shutting down communications (reason: {reason.value if reason else 'unknown'})")
-        self.state = AppState.SHUTTING_DOWN
-
-        if self._on_shutdown and not self._shutdown_callback_called:
-            try:
-                self._on_shutdown(reason=reason, description=description)  # Pass enum to callback
-                self._shutdown_callback_called = True
-            except Exception as e:
-                logger.error(f"Error in on_shutdown callback: {e}")
-
-        # Cancel all pending tasks
-        for task in self._pending_tasks.values():
-            task.cancel()
-
-        # Close transport
-        if self._transport:
-            try:
-                await self._transport.close()
-            except Exception as e:
-                logger.error(f"Error closing transport: {e}")
-
-        # Clear state
-        self._initialized = False
-        self._handlers.clear()
-        self._pending.clear()
-        self._pending_requests.clear()
-        self._send_queue.clear()
-        self._comms.clear()
-
-        self.state = AppState.STOPPED
-        logger.info("Communications shutdown complete")

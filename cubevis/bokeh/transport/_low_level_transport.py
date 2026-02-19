@@ -12,13 +12,7 @@ import traceback
 from enum import Enum
 from abc import ABC, abstractmethod
 from typing import Optional, Callable, Dict, Any
-
-class ShutdownReason(Enum):
-    REQUESTED = "shutdown_requested"      # User called requestShutdown()
-    TRANSPORT_CLOSED = "transport_closed" # WebSocket/conn closed
-    ERROR = "error"                       # Fatal error occurred
-    NORMAL = "normal"                     # Normal exit
-
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 logger = logging.getLogger(__name__)
 
@@ -201,8 +195,8 @@ class WebSocketTransport(TransportBase):
         """
         Run the WebSocket event loop.
         
-        Iterates over incoming messages and calls the message callback.
-        Blocks until connection closes or error occurs.
+        Listens for messages until connection closes.
+        ConnectionClosedError can happen when laptop sleeps and NOT re-raised.
         """
         if not self._initialized:
             raise RuntimeError("Must call connect() before run()")
@@ -211,37 +205,41 @@ class WebSocketTransport(TransportBase):
             raise RuntimeError("Must call set_message_callback() before run()")
         
         from ...utils import deserialize
-        
+        logger.info(f"WebSocket event loop starting for {self._comm_mgr_id}")
+
         try:
-            logger.info(f"WebSocket event loop starting for {self._comm_mgr_id}")
-            
             # Iterate over incoming messages
             async for message in self.websocket:
                 try:
                     msg = deserialize(message)
-                    
+
                     # Call the callback (set by CommMgr)
                     await self._message_callback(msg)
-                    
+
                 except Exception as e:
-                    logger.error(f"Error processing WebSocket message: {e}")
-                    if self.abort:
-                        self.abort(e)
+                    logger.error(f"Error processing message: {e}")
                     # Continue processing other messages
-            
-            logger.info(f"WebSocket event loop ended for {self._comm_mgr_id}")
+
+            logger.info(f"WebSocket closed normally for {self._comm_mgr_id}")
+
+        except (ConnectionClosedError, ConnectionClosedOK) as e:
+            # Normal close - don't treat as error
+            logger.info(f"WebSocket connection closed: {e}")
+            # Don't re-raise - this is expected when laptop sleeps
             
         except Exception as e:
             logger.error(f"WebSocket event loop error: {e}")
             if self.abort:
                 self.abort(e)
-            raise
+            raise  # Re-raise unexpected errors
+
         finally:
             self._connected = False
+            self._initialized = False
     
     async def close(self) -> None:
         """Close the WebSocket connection."""
-        if self._connected:
+        if self.websocket and self._connected:
             try:
                 await self.websocket.close()
                 logger.info(f"Closed WebSocket for {self._comm_mgr_id}")
@@ -250,7 +248,8 @@ class WebSocketTransport(TransportBase):
             finally:
                 self._connected = False
                 self._initialized = False
-    
+                self._should_run = False
+
     def is_connected(self) -> bool:
         """Check if WebSocket is connected and initialized."""
         return self._connected and self._initialized

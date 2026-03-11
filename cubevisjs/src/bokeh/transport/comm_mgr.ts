@@ -11,6 +11,7 @@
 
 import {Model} from "@bokehjs/model"
 import * as p from "@bokehjs/core/properties"
+import {CustomJS} from "@bokehjs/models/callbacks/index"
 import * as find from "../util/find"
 
 // Import transport implementations
@@ -80,6 +81,7 @@ export namespace CommMgr {
         transport_type: p.Property<string>
         address: p.Property<[string, number] | null>
         comm_mgr_id: p.Property<string>
+        init_scripts: p.Property<[CustomJS, string, string][]>
     }
 }
 
@@ -131,8 +133,26 @@ export class CommMgr extends Model {
         
         // Initialize transport based on properties
         this.initializeTransport()
+
+        //
+        // Run any initialization script
+        //
+        const _execute = () => {
+            console.group( "CommMgr init script execution" )
+            this.init_scripts.forEach(
+                ([script, id, description], i) => {
+                    // Pass the current loop index 'i' into the cb_data object
+                    if ( description === null || description === undefined || description.trim().length === 0 )
+                        console.log(id)
+                    else
+                        console.log(description)
+                    script.execute( this, { index: i, id, description } )
+                } )
+            console.groupEnd( )
+        }
+        _execute( )
     }
-    
+
     get state(): AppState {
         return this._state
     }
@@ -405,6 +425,16 @@ export class CommMgr extends Model {
 
         // Check if transport is connected
         if (!this.transport || !this.transport.isConnected()) {
+
+            if ( ! this.shouldReconnect ) {
+                console.warn(
+                    `Attempted send of message for ${commId}.${messageId} ` +
+                        `after shutdown (dropping message):`, message
+                )
+                if ( callback ) callback( { result: 'Error', error: 'transport has been shut down' } )
+                return
+            }
+
             console.warn(
                 `Transport not ready, queuing message for ${commId}.${messageId} ` +
                 `(will send when reconnected)`
@@ -567,7 +597,11 @@ private sendImmediate(
         if (this.pending.get(commId) === requestId) {
             this.pending.delete(commId)
         }
-        
+
+        if (msg['transport_control'] === 'SHUTDOWN-NOW') {
+            this.shutdown( )
+        }
+
         // Call callback
         if (callback) {
             try {
@@ -713,10 +747,11 @@ private sendImmediate(
     }
 
     static {
-        this.define<CommMgr.Props>(({String, Tuple, Number, Nullable}) => ({
+      this.define<CommMgr.Props>(({String, Tuple, Number, Nullable, Array, Ref}) => ({
             transport_type: [String, 'auto'],
             address: [Nullable(Tuple(String, Number)), null],
             comm_mgr_id: [String],
+            init_scripts:   [ Array(Tuple(Ref(CustomJS), String, String)), [] ]
         }))
     }
 }
@@ -765,7 +800,7 @@ export class Comm extends Model {
         
         // Find CommMgr
         this._mgr = this.findCommMgr()
-        if ( this._mgr ) console.log( `Comm ${this.comm_id} registered with mgr ${this._mgr}` )
+        if ( this._mgr && this._mgr.comm_mgr_id ) console.log( `Comm ${this.comm_id} registered with mgr ${this._mgr.comm_mgr_id}` )
         else console.warn( `Comm ${this.comm_id} failed to register with mgr` )
         
         if (this._mgr) {

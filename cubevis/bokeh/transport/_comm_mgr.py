@@ -14,6 +14,8 @@ from uuid import uuid4
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from bokeh.model import Model
+from bokeh.models import CustomJS
+from bokeh.core.properties import List
 from bokeh.core.properties import String, Bool, Tuple, Int, Nullable, Instance
 from .. import BokehInit
 
@@ -46,6 +48,7 @@ class HandlerContext:
 
     def request_shutdown(self, reason: str = "Handler requested shutdown"):
         """Request graceful application shutdown."""
+        logger.debug(f"HandlerContext.request_shutdown: reason='{reason}'")
         self._comm_mgr.request_shutdown(reason)
 
     def report_error(self, error: Exception, fatal: bool = False):
@@ -85,6 +88,28 @@ class Comm( Model ):
                                  the waiting message queue when a new message is added''' )
 
     _mgr = None
+
+    def add_init_script(self, code, description='', args=None):
+        """
+        Helper to append a CustomJS script to a model's init_scripts list.
+
+        Args:
+            model: The Bokeh model containing the init_scripts property.
+        script_code (str): The JS code for the CustomJS instance.
+        args (dict, optional): Mapping of names to Bokeh models for the JS.
+        """
+        # Create the new CustomJS instance
+        new_script = CustomJS(code=code, args=args or {})
+
+        # 1. Access current scripts (default to empty list if None)
+        current_scripts = list(self._mgr.init_scripts) if self._mgr.init_scripts else []
+
+        # 2. Append the new script
+        new_entry = (new_script, self.comm_id, description)
+        current_scripts.append(new_entry)
+
+        # 3. REASSIGN to trigger synchronization
+        self._mgr.init_scripts = current_scripts
 
     def __init__( self, *args, comm_mgr: Optional[CommMgr] = None, **kwargs ):
         if 'comm_id' not in kwargs:
@@ -136,6 +161,11 @@ class CommMgr( Model, BokehInit ):
     address = Nullable( Tuple(String, Int), default=None,
                         help="the address (IP,port) when websockets low level transport is used" )
     comm_mgr_id = String( help="unique identifier for this communications manager" )
+    init_scripts = List(
+        Tuple(Instance(CustomJS), String, String),
+        default=[],
+        help="initialization scripts with associated metadata"
+    )
 
     def __init__( self, *args,
                   on_shutdown: Optional[Callable] = None,
@@ -164,6 +194,9 @@ class CommMgr( Model, BokehInit ):
         self._state = AppState.INITIALIZING
         self._state_lock = asyncio.Lock()                 # REMOVED
         self._shutdown_requested = False
+        self._pending_user_shutdown_reason = ''
+        self._pending_user_shutdown = False               # Mark that shutdown is underway
+                                                          # but not yet complete.
         self._shutdown_reason: Optional[str] = None       # REMOVED
         self._shutdown_callback_called = False            # Track if callback was called
         self._errors: List[Exception] = []                # REMOVED
@@ -180,7 +213,7 @@ class CommMgr( Model, BokehInit ):
 
         self._initialized = False
 
-        logger.info(f"Communications manager created: {self.comm_mgr_id}")
+        logger.debug(f"Communications manager created: {self.comm_mgr_id}")
 
     @property
     def state(self) -> AppState:
@@ -192,7 +225,7 @@ class CommMgr( Model, BokehInit ):
         """Set application state."""
         old_state = self._state
         self._state = new_state
-        logger.info(f"Application state: {old_state.value} -> {new_state.value}")
+        logger.debug(f"Application state: {old_state.value} -> {new_state.value}")
 
     def open(self, comm_id: Optional[str] = None, squash_queue: bool = False) -> Comm:
         """
@@ -224,7 +257,7 @@ class CommMgr( Model, BokehInit ):
         self._handlers[comm_id] = {}
         self._send_queue[comm_id] = []
 
-        logger.info(f"Opened comm: {comm_id} (squash_queue={squash_queue})")
+        logger.debug(f"Opened comm: {comm_id} (squash_queue={squash_queue})")
         return comm
 
     def _register_comm(self, comm: 'Comm'):
@@ -258,28 +291,21 @@ class CommMgr( Model, BokehInit ):
         if comm_id in self._comms:
             del self._comms[comm_id]
 
-        logger.info(f"Closed comm: {comm_id}")
+        logger.debug(f"Closed comm: {comm_id}")
 
     def request_shutdown(self, reason: str = "Shutdown requested"):
         """Request graceful shutdown of the application."""
         if not self._shutdown_requested:
             self._shutdown_requested = True
             self._shutdown_reason = reason
-            logger.info(f"Shutdown requested: {reason}")
+            ### shutdown must be postponed long enough for
+            ### the result of the callback which called this
+            ### request_shutdown to return a result before
+            ### ending communications
+            self._pending_user_shutdown = True
+            self._pending_user_shutdown_reason = reason
+            logger.debug(f"CommMgr.request_shutdown: '{reason}'")
 
-            # Signal the shutdown event
-            try:
-                loop = asyncio.get_running_loop()
-                loop.call_soon_threadsafe(self._shutdown_event.set)
-            except RuntimeError:
-                # No event loop running
-                pass
-
-            if self._on_shutdown:
-                try:
-                    self._on_shutdown(ShutdownReason.REQUESTED,description=reason)
-                except Exception as e:
-                    logger.error(f"Error in shutdown callback: {e}")
 
     def report_error(self, error: Exception, fatal: bool = False):
         """Report an error."""
@@ -354,7 +380,7 @@ class CommMgr( Model, BokehInit ):
             # Check if this comm has a pending request
             if comm_id in self._pending:
                 # This comm is waiting for a response - queue this message
-                if comm._squash_queue:
+                if comm.squash_queue:
                     # Squash mode: replace any queued message with same message_id
                     self._send_queue[comm_id] = [
                         (mid, m, cb) for mid, m, cb in self._send_queue[comm_id]
@@ -426,7 +452,7 @@ class CommMgr( Model, BokehInit ):
         # Auto-detect transport if needed
         if self.transport_type == 'auto':
             self.transport_type = self._detect_transport()
-            logger.info(f"Auto-detected transport type: {self.transport_type}")
+            logger.debug(f"Auto-detected transport type: {self.transport_type}")
 
         # Create transport with error handler
         def transport_abort(error):
@@ -449,11 +475,11 @@ class CommMgr( Model, BokehInit ):
             self.state = AppState.RUNNING
         elif self.transport_type == 'websocket':
             # WebSocket transport created in process_messages() when we have the websocket
-            logger.info("WebSocket transport will be initialized in process_messages()")
+            logger.debug("WebSocket transport will be initialized in process_messages()")
         else:
             raise ValueError(f"Unknown transport type: {self.transport_type}")
 
-        logger.info(f"Communications manager initialized with {self.transport_type}")
+        logger.debug(f"Communications manager initialized with {self.transport_type}")
 
     async def process_messages(self, websocket=None):
         """
@@ -521,7 +547,7 @@ class CommMgr( Model, BokehInit ):
                 shutdown_reason = ShutdownReason.REQUESTED
                 shutdown_description = "Shutdown requested by user"
                 should_shutdown = True
-                logger.info("Shutdown was requested by user")
+                logger.debug("Shutdown was requested by user")
             else:
                 # Transport closed - check if it was an error
                 try:
@@ -532,7 +558,7 @@ class CommMgr( Model, BokehInit ):
                     shutdown_reason = ShutdownReason.TRANSPORT_CLOSED
                     shutdown_description = "Connection closed normally"
                     should_shutdown = False
-                    logger.info("Connection closed normally, ready for reconnection")
+                    logger.debug("Connection closed normally, ready for reconnection")
 
                 except ConnectionClosedError as e:
                     # WebSocket connection closed (laptop sleep, browser refresh, etc.)
@@ -540,7 +566,7 @@ class CommMgr( Model, BokehInit ):
                     shutdown_reason = ShutdownReason.TRANSPORT_CLOSED
                     shutdown_description = f"WebSocket closed: {e}"
                     should_shutdown = False
-                    logger.info(f"WebSocket connection closed: {e} - ready for reconnection")
+                    logger.debug(f"WebSocket connection closed: {e} - ready for reconnection")
 
                 except Exception as e:
                     # Some other error in transport
@@ -579,11 +605,11 @@ class CommMgr( Model, BokehInit ):
 
             # Only shutdown CommMgr for certain reasons
             if should_shutdown:
-                logger.info(f"Shutting down CommMgr (reason: {shutdown_reason})")
+                logger.debug(f"Shutting down CommMgr (reason: {shutdown_reason})")
                 await self.shutdown(reason=shutdown_reason, description=shutdown_description)
             else:
                 # Just clean up this connection - ready for next one
-                logger.info(f"Connection ended (reason: {shutdown_reason}), ready for reconnection")
+                logger.debug(f"Connection ended (reason: {shutdown_reason}), ready for reconnection")
 
                 # Reset connection-specific state
                 self._transport = None
@@ -604,7 +630,7 @@ class CommMgr( Model, BokehInit ):
         if self.state == AppState.STOPPED:
             return
 
-        logger.info(f"Shutting down communications (reason: {reason.value if reason else 'unknown'})")
+        logger.debug(f"CommMgr.shutdown: {reason.value if reason else 'unknown'})")
 
         # Call shutdown callback
         if self._on_shutdown and not self._shutdown_callback_called:
@@ -633,7 +659,7 @@ class CommMgr( Model, BokehInit ):
         self._comms.clear()
 
         self.state = AppState.STOPPED
-        logger.info("Communications shutdown complete")
+        logger.debug("Communications shutdown complete")
 
     async def _route_message(self, msg: Dict[str, Any]):
         """
@@ -712,8 +738,13 @@ class CommMgr( Model, BokehInit ):
             # Check if handler expects context parameter
             sig = inspect.signature(handler)
             if len(sig.parameters) >= 2:
-                # Handler accepts (message, context)
-                result = handler(msg['message'], context=self._context)
+                try:
+                    # Handler accepts (message, context)
+                    result = handler(msg['message'], context=self._context)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Handler {handler.__name__!r} failed with {type(e).__name__}: {e}"
+                    ) from None
             else:
                 # Handler only accepts message
                 result = handler(msg['message'])
@@ -723,13 +754,19 @@ class CommMgr( Model, BokehInit ):
 
             # Send response if there's a request_id
             if request_id and self._transport:
-                await self._transport.send_message({
+                reply = {
                     'comm_id': comm_id,
                     'message_id': message_id,
                     'request_id': request_id,
                     'message': result,
                     'direction': 'j2p'
-                })
+                }
+
+                if getattr(self, '_pending_user_shutdown', False):
+                    ### transport_control is used to manage transport
+                    reply['transport_control'] = 'SHUTDOWN-NOW'
+
+                await self._transport.send_message(reply)
 
         except Exception as e:
             logger.error(f"Error in handler {comm_id}.{message_id}: {e}")
@@ -747,6 +784,24 @@ class CommMgr( Model, BokehInit ):
                     },
                     'direction': 'j2p'
                 })
+
+        # Fire any shutdown that was requested during handler execution,
+        # now that the response (if any) has been sent.
+        if getattr(self, '_pending_user_shutdown', False):
+
+            logger.debug(f"CommMgr._handle_request: user shutdown pending, message: {msg}")
+
+            self._pending_user_shutdown = False
+
+            # Signal the shutdown event
+            try:
+                loop = asyncio.get_running_loop()
+                logger.debug(f"CommMgr._handle_request effectuate shutdown")
+                loop.call_soon_threadsafe(self._shutdown_event.set)
+            except RuntimeError:
+                # No event loop running
+                logger.debug(f"CommMgr._handle_request effectuate shutdown without loop")
+                self._shutdown_event.set
 
     async def _flush_all_queues(self):
         """Flush all queued messages on startup."""

@@ -59,7 +59,7 @@ export class DataPipe extends DataSource {
     private checkSessionConflict(): boolean {
         try {
             if (typeof(Storage) === "undefined") {
-                console.warn('localStorage not available, skipping session conflict detection')
+                console.warn('DataPipe: localStorage not available, skipping session conflict detection')
                 return true
             }
 
@@ -106,7 +106,7 @@ export class DataPipe extends DataSource {
             return true
 
         } catch(e) {
-            console.warn('Session conflict detection failed:', e)
+            console.warn('DataPipe: session conflict detection failed:', e)
             return true
         }
     }
@@ -121,7 +121,7 @@ export class DataPipe extends DataSource {
                 }))
             }
         } catch(e) {
-            console.warn('Session heartbeat update failed:', e)
+            console.warn('DataPipe: session heartbeat update failed:', e)
         }
     }
 
@@ -151,13 +151,13 @@ export class DataPipe extends DataSource {
                 }
             }
         } catch(e) {
-            console.warn('Session cleanup failed:', e)
+            console.warn('DataPipe: session cleanup failed:', e)
         }
         this.stopHeartbeat()
     }
 
     private handleSessionConflictMessage(message: any): void {
-        console.error('Session conflict detected by server:', message)
+        console.error('DataPipe: session conflict detected by server:', message)
 
         let alertMessage = 'Session conflict detected by server.'
 
@@ -215,7 +215,7 @@ export class DataPipe extends DataSource {
         }
 
         let ws_address = `ws://${this.address[0]}:${this.address[1]}`
-        console.log( "datapipe url:", ws_address )
+        console.log( "DataPipe url:", ws_address )
 
         var reconnections: any | undefined = undefined
         document.shutdown_in_progress_ = false
@@ -229,7 +229,7 @@ export class DataPipe extends DataSource {
             this.websocket.binaryType = "arraybuffer"
 
             this.websocket.addEventListener("error", (e: Event) => {
-                console.log( 'error encountered:', e )
+                console.log( 'DataPipe: error encountered:', e )
             })
 
             this.websocket.onmessage = (event: any) => {
@@ -251,7 +251,7 @@ export class DataPipe extends DataSource {
                         }
 
                         if ( typeof message  === 'undefined' ) {
-                            console.log( 'Error, event failure', data )
+                            console.log( 'DataPipe: error, event failure', data )
                         }
                         if ( direction == 'j2p' ) {
                             if ( id in this.pending ) {
@@ -264,12 +264,12 @@ export class DataPipe extends DataSource {
                                     this.websocket.send(serialize(msg))
                                 }
                                 if ( typeof message === 'undefined' )
-                                    console.log( 'DROPPING ERROR FOR NOW (maybe need error callbacks)', data )
+                                    console.log( 'DataPipe: DROPPING ERROR FOR NOW (maybe need error callbacks)', data )
                                 else
                                     // post message
                                     cb( message )
                             } else {
-                                console.log("message received but could not find id")
+                                console.log("DataPipe: message received but could not find id")
                             }
                         } else {
                             if ( id in this.incoming_callbacks ) {
@@ -278,11 +278,11 @@ export class DataPipe extends DataSource {
                             }
                         }
                     } else {
-                        console.log( `datapipe received message without one of 'id', 'message' or 'direction': ${data}` )
+                        console.log( `DataPipe: received message without one of 'id', 'message' or 'direction': ${data}` )
                     }
 
                 } else {
-                    console.log("datapipe received binary data", event.data.byteLength, "bytes" )
+                    console.log("DataPipe: received binary data", event.data.byteLength, "bytes" )
                 }
             }
 
@@ -292,7 +292,7 @@ export class DataPipe extends DataSource {
                     // Start heartbeat after successful connection
                     this.startHeartbeat()
                 } else if ( reconnections.connected == false ) {
-                    console.log( `connection reestablished at ${new Date( )}` )
+                    console.log( `DataPipe: connection reestablished at ${new Date( )}` )
                 }
                 reconnections = new (casalib.ReconnectState as any)( )
 
@@ -305,18 +305,18 @@ export class DataPipe extends DataSource {
 
             this.websocket.onclose = ( ) => {
                 if ( reconnections && reconnections.connected == true ) {
-                    console.log( `connection lost at ${new Date( )}` )
+                    console.log( `DataPipe: connection lost at ${new Date( )}` )
                     reconnections.connected = false
                     if ( ! document.shutdown_in_progress_ ) {
-                        console.log( `connection lost at ${new Date( )}` )
+                        console.log( `DataPipe: connection lost at ${new Date( )}` )
                         var recon = reconnections
                         function reconnect( tries: number ) {
                             if ( reconnections.connected == false ) {
-                                console.log( `${tries+1}\treconnection attempt ${new Date( )}` )
+                                console.log( `DataPipe: ${tries+1}\treconnection attempt ${new Date( )}` )
                                 connect_to_server( )
                                 recon.backoff( )
                                 if ( recon.retries > 0 ) { setTimeout( reconnect, recon.timeout, tries+1 ) }
-                                else if ( reconnections.connected == false ) { console.log( `aborting reconnection after ${tries} attempts ${new Date( )}` ) }
+                                else if ( reconnections.connected == false ) { console.log( `DataPipe: aborting reconnection after ${tries} attempts ${new Date( )}` ) }
                             }
                         }
                         reconnect( 0 )

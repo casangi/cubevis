@@ -289,11 +289,9 @@ export function children<T extends Model>(
         const matches_type = (node: Model): boolean => {
             if (typeof type_identifier === 'string') {
                 // String: exact type match only
-                console.log(`<S:${node.type}>`,node)
                 return node.type === type_identifier;
             } else {
                 // Class: use instanceof for inheritance checking
-                console.log(`<C:${node.type}>`,node)
                 return node instanceof type_identifier;
             }
         };
@@ -318,8 +316,7 @@ export function children<T extends Model>(
 
 export function context(model: Model): BokehAppContext | undefined {
     const result = model.document?.get_model_by_name("_GLOBAL_APP_CONTEXT_") as BokehAppContext | undefined
-    console.log("find.context BokehAppContext", result)
-    if ( result && ! result.frontend_id ) { object_id(result); console.log("find.context object_id called") }
+    if ( result && ! result.frontend_id ) { object_id(result) }
     return result
 }
 
@@ -348,21 +345,17 @@ export function appState(model: Model): object | undefined {
 // is executed.
 export function object_id(obj: any): string {
 
-    console.log("find.object_id obj", obj)
     if (!obj) return "invalid-object-provided";
 
     // We check for the function globally or via a known registry
     const globalCasalib = (globalThis as any).casalib;
-    console.log("find.object_id casalib", globalCasalib)
     // 1. Generate ID: Call casalib object_id if available to generate ID
     //.   otherwise generate a unique string...
     const identifier = globalCasalib && typeof globalCasalib.object_id === 'function' ?
         globalCasalib.object_id(obj) : undefined
-    console.log("find.object_id identifier", globalCasalib)
 
     // Check for 'app_state' without importing the class and if so, add id to app_state
     if ('app_state' in obj && obj.type === "cubevis.bokeh.models._bokeh_app_context.BokehAppContext") {
-        console.log("find.object_id BokehAppContext obj", obj)
 
         if (!obj.app_state) obj.app_state = { }
 

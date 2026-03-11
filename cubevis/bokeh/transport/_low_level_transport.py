@@ -103,7 +103,7 @@ class WebSocketTransport(TransportBase):
         from ...utils import deserialize, serialize
         
         try:
-            logger.info(f"WebSocket waiting for initialization (comm_mgr_id={self._comm_mgr_id})")
+            logger.debug(f"WebSocket waiting for initialization (comm_mgr_id={self._comm_mgr_id})")
             
             # Wait for initialization message
             init_message = await self.websocket.recv()
@@ -115,7 +115,7 @@ class WebSocketTransport(TransportBase):
                 backend_id = msg.get('backend_id')
                 received_comm_mgr_id = msg.get('comm_mgr_id')
                 
-                logger.info(
+                logger.debug(
                     f"WebSocket initialization received: "
                     f"frontend={frontend_id}, backend={backend_id}, "
                     f"comm_mgr={received_comm_mgr_id}"
@@ -157,7 +157,7 @@ class WebSocketTransport(TransportBase):
                         else:
                             # Set frontend_id
                             app.frontend_id = frontend_id
-                            logger.info(f"Set frontend_id: {frontend_id}")
+                            logger.debug(f"Set frontend_id: {frontend_id}")
                 
                 # Send acknowledgment
                 await self.websocket.send(serialize({
@@ -170,7 +170,7 @@ class WebSocketTransport(TransportBase):
                 
                 self._connected = True
                 self._initialized = True
-                logger.info(f"WebSocket initialized for comm_mgr_id={self._comm_mgr_id}")
+                logger.debug(f"WebSocket initialized for comm_mgr_id={self._comm_mgr_id}")
                 
             else:
                 raise RuntimeError(
@@ -205,7 +205,7 @@ class WebSocketTransport(TransportBase):
             raise RuntimeError("Must call set_message_callback() before run()")
         
         from ...utils import deserialize
-        logger.info(f"WebSocket event loop starting for {self._comm_mgr_id}")
+        logger.debug(f"WebSocket event loop starting for {self._comm_mgr_id}")
 
         try:
             # Iterate over incoming messages
@@ -220,11 +220,11 @@ class WebSocketTransport(TransportBase):
                     logger.error(f"Error processing message: {e}")
                     # Continue processing other messages
 
-            logger.info(f"WebSocket closed normally for {self._comm_mgr_id}")
+            logger.debug(f"WebSocket closed normally for {self._comm_mgr_id}")
 
         except (ConnectionClosedError, ConnectionClosedOK) as e:
             # Normal close - don't treat as error
-            logger.info(f"WebSocket connection closed: {e}")
+            logger.debug(f"WebSocket connection closed: {e}")
             # Don't re-raise - this is expected when laptop sleeps
             
         except Exception as e:
@@ -242,7 +242,7 @@ class WebSocketTransport(TransportBase):
         if self.websocket and self._connected:
             try:
                 await self.websocket.close()
-                logger.info(f"Closed WebSocket for {self._comm_mgr_id}")
+                logger.debug(f"Closed WebSocket for {self._comm_mgr_id}")
             except Exception as e:
                 logger.error(f"Error closing WebSocket: {e}")
             finally:
@@ -366,7 +366,7 @@ class ColabCommsTransport(TransportBase):
                     comm: The comm object for bidirectional communication
                     open_msg: The initial message from frontend
                 """
-                logger.info(
+                logger.debug(
                     f"Frontend opened Colab comm to {self._target_name}"
                 )
                 
@@ -415,7 +415,7 @@ class ColabCommsTransport(TransportBase):
                             
                             if msg_type == 'comm_opened':
                                 # Frontend acknowledging connection
-                                logger.info('Frontend acknowledged comm connection')
+                                logger.debug('Frontend acknowledged comm connection')
                                 return
                         
                         # Call the message callback if set (by CommMgr)
@@ -447,7 +447,7 @@ class ColabCommsTransport(TransportBase):
                 # Register close handler
                 def on_close(msg):
                     """Handle comm close."""
-                    logger.info(f"Colab comm closed for {self._target_name}")
+                    logger.debug(f"Colab comm closed for {self._target_name}")
                     self._registered = False
                     self._comm = None
                     if self.abort:
@@ -471,7 +471,7 @@ class ColabCommsTransport(TransportBase):
             output.register_comm_target(self._target_name, comm_target_handler)
             
             self._registered = True
-            logger.info(
+            logger.debug(
                 f"Registered Colab comm target: {self._target_name}"
             )
             
@@ -498,7 +498,7 @@ class ColabCommsTransport(TransportBase):
                 
                 # Close the comm
                 self._comm.close()
-                logger.info(f"Closed Colab comm for {self._target_name}")
+                logger.debug(f"Closed Colab comm for {self._target_name}")
             except Exception as e:
                 logger.error(f"Error closing Colab comm: {e}")
             finally:
@@ -664,7 +664,7 @@ class JupyterCommsTransport(TransportBase):
             
             self._is_open = True
             
-            logger.info(
+            logger.debug(
                 f"Created Jupyter comm: {self._target_name} "
                 f"(comm_id: {self._comm.comm_id})"
             )
@@ -694,14 +694,14 @@ class JupyterCommsTransport(TransportBase):
             comm: The Comm object created by the frontend
             open_msg: The comm_open message from frontend
         """
-        logger.info(
+        logger.debug(
             f"Frontend opened comm to {self._target_name} "
             f"(comm_id: {comm.comm_id})"
         )
         
         # If we already have a comm, close the old one
         if self._comm is not None and self._comm.comm_id != comm.comm_id:
-            logger.info(
+            logger.debug(
                 f"Replacing old comm {self._comm.comm_id} "
                 f"with new comm {comm.comm_id}"
             )
@@ -805,7 +805,7 @@ class JupyterCommsTransport(TransportBase):
             
             elif msg_type == 'comm_opened':
                 # Frontend acknowledging our connection
-                logger.info('Frontend acknowledged comm connection')
+                logger.debug('Frontend acknowledged comm connection')
                 return
             
             # Call the message callback if set (by CommMgr)
@@ -840,7 +840,7 @@ class JupyterCommsTransport(TransportBase):
         Args:
             msg: The comm_close message
         """
-        logger.info(f"Jupyter comm closed for {self._target_name}")
+        logger.debug(f"Jupyter comm closed for {self._target_name}")
         self._is_open = False
         
         # Notify via abort callback
@@ -866,7 +866,7 @@ class JupyterCommsTransport(TransportBase):
                 
                 # Close the comm
                 self._comm.close()
-                logger.info(f"Closed Jupyter comm for {self._target_name}")
+                logger.debug(f"Closed Jupyter comm for {self._target_name}")
             except Exception as e:
                 logger.error(f"Error closing Jupyter comm: {e}")
             finally:

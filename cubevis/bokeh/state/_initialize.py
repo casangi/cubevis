@@ -1,6 +1,6 @@
 ########################################################################
 #
-# Copyright (C) 2021,2022,2023,2025
+# Copyright (C) 2021,2022,2023,2025,2026
 # Associated Universities, Inc. Washington DC, USA.
 #
 # This script is free software; you can redistribute it and/or modify it
@@ -176,7 +176,7 @@ def resolve_js_library_paths():
     try:
         bokeh_static_path = settings.bokehjs_path()
         js_dir = join(bokeh_static_path, 'js')
-        logger.debug( f"Bokeh static pat: {js_dir}" )
+        logger.debug( f"Bokeh static path: {js_dir}" )
 
         if path.exists(js_dir):
             for filename in os.listdir(js_dir):

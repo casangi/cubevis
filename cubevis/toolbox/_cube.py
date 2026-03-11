@@ -50,11 +50,13 @@ from bokeh.models import CustomJS, CustomAction, Slider, Div, Span, HoverTool, T
 from bokeh.models import WheelZoomTool, PanTool, ResetTool, PolySelectTool, LassoSelectTool, BoxSelectTool, SaveTool, ResetTool
 from bokeh.models import BasicTickFormatter
 from bokeh.plotting import ColumnDataSource, figure
-from cubevis.bokeh.sources import ImageDataSource, ImagePipe, DataPipe
+from cubevis.bokeh.transport import CommMgr
+from cubevis.bokeh.sources import ImageDataSource, ImagePipe
 from cubevis.bokeh.format import WcsTicks
 from cubevis.bokeh.models import EditSpan
 from ..data import casaimage
 from ..utils import pack_arrays, find_ws_address, set_attributes, resource_manager, polygon_indexes, is_interactive_jupyter, have_firefox
+from ..bokeh import BokehInit
 from ..bokeh.models import EvTextInput, SharedDict
 from ..bokeh.tools import CBResetTool
 from ..bokeh.state import available_palettes, find_palette, default_palette
@@ -74,7 +76,7 @@ class CubeMask:
     '''Class which provides a common implementation of Bokeh widget behavior for
     interactive clean and make mask'''
 
-    def __init__( self, image, mask=None, abort=None, init_script=None ):
+    def __init__( self, image, mask=None, init_script=None ):
         '''Create a cube masking GUI which includes the 2-D raster cube plane display
         along with these optional components:
 
@@ -96,9 +98,8 @@ class CubeMask:
         init_script: CustomJS script
             Script to run upon initialization of Cube
         '''
+        self._comm_mgr = BokehInit.get_app_context( ).comm_mgr
         self.init_script = init_script
-        self.COUNT = 1
-        self.CCOUNT = 1
 
         ##self._is_notebook = is_interactive_jupyter()
         #self._color = '#00FF00'                               # anti-green user feedback (issue #40 2024-05-02 13:08:32)
@@ -134,7 +135,6 @@ class CubeMask:
                                         hover_line_alpha="Line alpha for region with cursor focus",
                                         hover_line_dash="Line dash for region with cursor focus" )
 
-        self._stop_serving_function = None                     # function supplied when starting serving
         self._image_path = image                               # path to image cube to be displayed
         self._mask_path = mask                                 # path to bitmask cube (if any)
         self._region_controls={'coord':{'initialized': False}, # ONLY USED WITH NO MASK CUBE
@@ -239,18 +239,12 @@ class CubeMask:
                             'histogram': None,
                            }
 
-        self.__abort = abort
-
-        if self.__abort is not None and not callable(self.__abort):
-            raise RuntimeError('abort function must be callable')
-
         self.__init_js( )
 
     def __stop( self ):
         '''stop interactive masking
         '''
-        if self._stop_serving_function:
-            self._stop_serving_function( self._result )
+        pass
 
     def _init_pipes( self ):
         '''set up websockets
@@ -261,17 +255,22 @@ class CubeMask:
             ### init_script code sets up Ctrl key handling for switching the add/subtract plot tool actions from single channel ###
             ### operation to all channel operation                                                                              ###
             #######################################################################################################################
-            self._pipe['image'] = ImagePipe( image=self._image_path, mask=self._mask_path,
-                                             stats=True, abort=self.__abort, address=find_ws_address( ),
-                                             init_script=CustomJS( args=self._mask_add_sub,
-                                                                   code=self._js['cube-init'] ) if self._mask_path else None  )
+            self._pipe['image'] = ImagePipe( image=self._image_path, mask=self._mask_path, stats=True )
+            if self._mask_path:
+                self._pipe['image'].add_init_script( args=self._mask_add_sub,
+                                                     code=self._js['cube-init'],
+                                                     description = "cube mask add/sub" )
+
         if self._pipe['control'] is None:
             ### self._pipe['control']._freeze_cursor_update is used to keep track of whether pixel
             ### update has been "frozen" (by typing 'f')... for "specmode='mfs'" _freeze_cursor_update
             ### was undefined which resulted in failure to update pixel tracking... so it is now
             ### initialized upon construction in JavaScript...
-            self._pipe['control'] = DataPipe( address=find_ws_address( ), abort=self.__abort,
-                                              init_script=CustomJS( code='''cb_obj._freeze_cursor_update = false''' ) )
+
+            self._pipe['control'] = self._comm_mgr.open( squash_queue=True )
+            self._pipe['control'].add_init_script( code='''cb_obj._freeze_cursor_update = false''',
+                                                   description="cube mask control pipe"
+                                                 )
 
     def path( self ):
         '''return path to CASA image
@@ -344,7 +343,7 @@ class CubeMask:
 
             self._channel_callback = channelcb
 
-            async def receive_return_value( msg, self=self ):
+            async def receive_return_value( msg, context, self=self ):
                 self._result = self.jsmask_to_raw( msg['value'] )
                 self.__stop( )
                 return dict( result='stopped', update={ } )
@@ -364,7 +363,7 @@ class CubeMask:
                                                       **self._region_style ) for _ in range(maxanno) ]
             else:
                 ### a bitmask cube is available and a single annotation is used to add or subtract from the bitmask cube
-                async def mod_mask( msg, self=self ):
+                async def mod_mask( msg, context, self=self ):
                     err = None
                     shape = self._pipe['image'].shape
                     if msg['action'] == 'addition' or msg['action'] == 'subtract':
@@ -747,7 +746,7 @@ class CubeMask:
                                                           #width=400, height=200, autosize_mode='none', sizing_mode='stretch_height' ), **kw )
                                                           #width=400, height=200, autosize_mode='none' ), **kw )
             if self._mask_path:
-                async def config_statistics( msg, self=self ):
+                async def config_statistics( msg, context, self=self ):
                     if 'value' in msg and self._statistics_use_mask != bool(msg['value']):
                         self._statistics_use_mask = bool(msg['value'])
                         self._pipe['image'].statistics_config( use_mask=self._statistics_use_mask )
@@ -777,7 +776,7 @@ class CubeMask:
                 ###
                 raise RuntimeError('palette( ) requires an image cube display, but one has not yet been created')
 
-            async def fetch_palette( msg, self=self ):
+            async def fetch_palette( msg, context, self=self ):
                 if 'value' in msg:
                     return dict( result=find_palette(msg['value']), value=msg['value'], update={ } )
                 else:
@@ -1194,8 +1193,6 @@ class CubeMask:
 
     def region_position_ctrl( self ):
 
-        self.COUNT = self.COUNT + 1
-
         if self._mask_path is not None:
             raise RuntimeError( 'only applicable for region creation when a bitmask is not used' )
 
@@ -1424,7 +1421,7 @@ class CubeMask:
 
         self._pixel_tracking_text = Div( text='', min_width=200, **kw )
 
-        async def fetch_spectrum( msg, self=self ):
+        async def fetch_spectrum( msg, context, self=self ):
             if msg['action'] == 'spectrum':
                 chan = msg['value']['chan']
                 index = msg['value']['index']
@@ -1865,8 +1862,6 @@ class CubeMask:
                                                                                                 CustomJS( args=ARGS,
                                                                                                           code=style_code( "value", "line_width", "line.width" ) ) )
 
-        self.CCOUNT = self.CCOUNT + 1
-
         set_source_init_function( )
         region_position_connections( )
         region_style_changes( )
@@ -2300,11 +2295,7 @@ class CubeMask:
 
     @asynccontextmanager
     async def serve( self, stop_function ):
-        self._stop_serving_function = stop_function
-        async with websockets.serve( self._pipe['image'].process_messages, self._pipe['image'].address[0], self._pipe['image'].address[1] ) as im, \
-             websockets.serve( self._pipe['control'].process_messages, self._pipe['control'].address[0], self._pipe['control'].address[1] ) as ctrl:
-            yield { 'im': im, 'ctrl': ctrl }
-            #pass
+        yield { }
 
     def __init_js( self ):
         ###

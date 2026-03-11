@@ -1,6 +1,7 @@
+import {Model} from "@bokehjs/model"
 import { ColumnDataSource } from "@bokehjs/models/sources/column_data_source"
-import { DataPipe } from "./data_pipe"
 import * as p from "@bokehjs/core/properties"
+import { Comm } from "../transport/comm_mgr"
 
 // Data source where the data is defined column-wise, i.e. each key in the
 // the data attribute is a column name, and its value is an array of scalars.
@@ -8,20 +9,18 @@ import * as p from "@bokehjs/core/properties"
 export namespace ImagePipe {
     export type Attrs = p.AttrsOf<Props>
 
-    export type Props = DataPipe.Props & {
+    export type Props = Model.Props & {
+        comm: p.Property<Comm>
         dataid: p.Property<string>
         shape: p.Property<[number,number,number,number]>
         fits_header_json: p.Property<string | null>
         _histogram_source: p.Property<ColumnDataSource | null>     // source for histogram updates
-        channel: p.Property<( index: [number,number], cb: (msg:{[key: string]: any}) => any, id: string ) => void>
-        spectra: p.Property<( index: [number,number,number], cb: (msg:{[key: string]: any}) => any, id: string ) => void>
-        refresh: p.Property<( cb: (msg:{[key: string]: any}) => any, id: string, default_index: [number] ) => void>
     }
 }
 
 export interface ImagePipe extends ImagePipe.Attrs {}
 
-export class ImagePipe extends DataPipe {
+export class ImagePipe extends Model {
     declare properties: ImagePipe.Props
 
     static __module__ = "cubevis.bokeh.sources._image_pipe"
@@ -50,28 +49,28 @@ export class ImagePipe extends DataPipe {
     channel( index: [number, number], cb: (msg:{[key: string]: any}) => any, id: string ): void {
         this.position[id] = { index }
         let message = { action: 'channel', index, id }
-        super.send( this.dataid, message,
-                    (msg:{[key: string]: any}) => {
-                        // update histogram (for colormap adjust etc.)
-                        if ( this._histogram_source != null && 'hist' in msg &&
-                             'top' in msg.hist && 'bottom' in msg.hist &&
-                             'left' in msg.hist && 'right' in msg.hist ) {
-                            this._histogram_source.data = msg.hist
-                        }
-                        cb(msg) } )
+        this.comm.send( this.dataid, message,
+                        (msg:{[key: string]: any}) => {
+                            // update histogram (for colormap adjust etc.)
+                            if ( this._histogram_source != null && 'hist' in msg &&
+                                 'top' in msg.hist && 'bottom' in msg.hist &&
+                                 'left' in msg.hist && 'right' in msg.hist ) {
+                                this._histogram_source.data = msg.hist
+                            }
+                            cb(msg) } )
     }
     // fetch spectra
     //    index: [ RA index, DEC index, stokes index ]
     // RETURNED MESSAGE SHOULD HAVE { id: string, message: any }
-    spectrum( index: [number, number, number], cb: (msg:{[key: string]: any}) => any, id: string, squash_queue: boolean | ((msg:{[key: string]: any}) => boolean) = false ) {
+    spectrum( index: [number, number, number], cb: (msg:{[key: string]: any}) => any, id: string, _squash_queue: boolean | ((msg:{[key: string]: any}) => boolean) = false ) {
         let message = { action: 'spectrum', index, id }
-        super.send( this.dataid, message, cb, squash_queue )
+        this.comm.send( this.dataid, message, cb )
     }
 
     adjust_colormap( bounds: [ number[], number[] ] | string, transfer: {[key: string]: any},
-                     cb: (msg:{[key: string]: any}) => any, id: string, squash_queue: boolean | ((msg:{[key: string]: any}) => boolean) = false  ) {
+                     cb: (msg:{[key: string]: any}) => any, id: string, _squash_queue: boolean | ((msg:{[key: string]: any}) => boolean) = false  ) {
         const message = { action: 'adjust-colormap', bounds, transfer, id }
-        super.send( this.dataid, message, cb, squash_queue )
+        this.comm.send( this.dataid, message, cb )
     }
 
     refresh( cb: (msg:{[key: string]: any}) => any, id: string, default_index=[ 0, 0 ] as number[] ): void {
@@ -79,12 +78,12 @@ export class ImagePipe extends DataPipe {
         if ( index.length === 2 ) {
             // refreshing channel
             let message = { action: 'channel', index, id }
-            super.send( this.dataid, message, cb )
+            this.comm.send( this.dataid, message, cb )
 
         } else if ( index.length === 3 ) {
             // refreshing spectrum
             let message = { action: 'spectrum', index, id }
-            super.send( this.dataid, message, cb )
+            this.comm.send( this.dataid, message, cb )
         }
     }
 
@@ -94,6 +93,7 @@ export class ImagePipe extends DataPipe {
 
     static {
         this.define<ImagePipe.Props>(({Number, Nullable, String, Tuple, Ref }) => ({
+            comm: [ Ref(Comm) ],
             dataid: [ String ],
             shape: [ Tuple(Number,Number,Number,Number) ],
             fits_header_json: [ Nullable(String), null ],

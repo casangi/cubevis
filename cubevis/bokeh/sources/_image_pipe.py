@@ -1,6 +1,6 @@
 ########################################################################
 #
-# Copyright (C) 2021,2022,2023,2024
+# Copyright (C) 2021,2022,2023,2024,2026
 # Associated Universities, Inc. Washington DC, USA.
 #
 # This script is free software; you can redistribute it and/or modify it
@@ -35,12 +35,14 @@ import json
 import asyncio
 from uuid import uuid4
 
-from . import DataPipe
+from bokeh.model import Model
 from bokeh.util.compiler import TypeScript
 from bokeh.core.properties import Tuple, String, Int, Instance, Nullable
 from bokeh.models.callbacks import Callback
 from bokeh.plotting import ColumnDataSource
+from .. import BokehInit
 from ..state import casalib_url, cubevisjs_url
+from ..transport import Comm
 
 import numpy as np
 try:
@@ -54,7 +56,7 @@ except:
 
 from ...utils import pack_arrays, partition, resource_manager, strip_arrays
 
-class ImagePipe(DataPipe):
+class ImagePipe( Model ):
     """The `ImagePipe` allows for updates to Bokeh plots from a CASA or CNGI
 
     image. This is done using a `websocket`. A `ImagePipe` is created with
@@ -63,21 +65,12 @@ class ImagePipe(DataPipe):
     or CNGI imge to be opened once and shared among multiple Bokeh plots,
     for example ploting an image channel and a plot of a spectrum from the
     image cube.
-
-    Attributes
-    ----------
-    address: tuple of string and int
-        the string is the IP address for the network that should be used and the
-        integer is the port number, see ``cubevis.utils.find_ws_address``
-    init_script: JavaScript
-        this javascript is run when this DataPipe object is initialized. init_script
-        is used to run caller JavaScript which needs to be run at initialization time.
-        This is optional and does not need to be set.
     """
     __im_path = None
     __im = None
     __chan_shape = None
 
+    comm = Instance(Comm)
     shape = Tuple( Int, Int, Int, Int, help="shape: [ RA, DEC, Stokes, Spectral ]" )
     dataid = String( )
     fits_header_json = Nullable( String, help="""JSON representation of image FITS header for world coordinate labeling""" )
@@ -473,9 +466,12 @@ class ImagePipe(DataPipe):
             return { 'result': 'OK', 'id': cmd['id'] }
 
     def __init__( self, image, *args, mask=None, stats=False, **kwargs ):
-        super( ).__init__( *args, **kwargs, )
 
-        self.dataid = str(uuid4( ))
+        self._comm_mgr = BokehInit.get_app_context( ).comm_mgr
+        kwargs['dataid'] = str(uuid4( ))
+        kwargs['comm'] = self._comm_mgr.open( )
+
+        super( ).__init__( *args, **kwargs, )
 
         if ct is None:
             raise RuntimeError('cannot open an image because casatools is not available')
@@ -517,7 +513,10 @@ class ImagePipe(DataPipe):
                                  'gamma':  lambda chan,gamma: np.ma.power(chan,gamma),
                                  'power':  lambda chan,alpha: (np.ma.power(alpha,chan) - 1.0) / alpha }
 
-        super( ).register( self.dataid, self._image_message_handler )
+        self.comm.register( self.dataid, self._image_message_handler )
+
+    def add_init_script(self, code, args=None, description=''):
+        self.comm.add_init_script( code=code, args=args, description=f"ImagePipe: {description}" )
 
     def __del__(self):
         if self.__rgn:

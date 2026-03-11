@@ -34,6 +34,7 @@ import sys
 import copy
 import asyncio
 import shutil
+import logging
 import websockets
 from os.path import basename, abspath, exists, join
 import numpy as np
@@ -65,7 +66,6 @@ from casatasks.private.imagerhelpers.input_parameters import ImagerParameters
 from cubevis.utils import find_ws_address, convert_masks
 from cubevis.toolbox import CubeMask
 from cubevis.bokeh.utils import svg_icon
-from cubevis.bokeh.sources import DataPipe
 from cubevis.utils import DocEnum
 from cubevis import exe
 
@@ -73,12 +73,7 @@ from ._interactiveclean_wrappers import SharedWidgets
 
 USE_MULTIPLE_GCLEAN_HACK=False
 
-def shutdown_handler( reason, description ):
-    print( "SHUTDOWN HANDLER............." )
-    print( f"          Reason {reason}" )
-    print( f"     Description {description}" )
-def error_handler( *args, **kwargs ):
-    print( "ERROR HANDLER................" )
+logger = logging.getLogger(__name__)
 
 class InteractiveCleanUI:
     '''InteractiveCleanUI(...) implements interactive clean using Bokeh
@@ -103,11 +98,12 @@ class InteractiveCleanUI:
     )
 
     def __stop( self, _=None ):
-        self.__result_future.set_result(self.__retrieve_result( ))
-
-    def _abort_handler( self, err ):
-        self._error_result = err
-        self.__stop( )
+        if not self.__result_future.done():
+            logger.debug("InteractiveCleanUI.__stop: setting clean result")
+            self.__result_future.set_result(self.__retrieve_result( ))
+        else:
+            logger.debug("InteractiveCleanUI.__stop: result already set")
+        pass
 
     def __reset( self ):
         if self.__pipes_initialized:
@@ -265,6 +261,13 @@ class InteractiveCleanUI:
                               "convergence_state": { 'convergence': {},         ### shares state between
                                                      'cyclethreshold': {} } }   ### __init__( ) and _setup( )
 
+        def error_handler( *args, **kwargs ):
+            logger.debug( f"InteractiveCleanUI...error_handler: {args}, {kwargs}" )
+
+        def shutdown_handler( reason, description ):
+            logger.debug("InteractiveCleanUI...shutdown_handler: calling stop function")
+            self.__stop( )
+
         self._app_context = BokehAppContext( comm_mgr=CommMgr( address=find_ws_address( ),
                                                                on_shutdown=shutdown_handler,
                                                                on_error=error_handler ),
@@ -332,7 +335,7 @@ class InteractiveCleanUI:
             ###
             ### Only the first image should initialize the initial convergence state
             ###
-            imdetails['gui']['cube'] = CubeMask( imdetails['path']['residual'], mask=imdetails['path']['mask'], abort=self._abort_handler,
+            imdetails['gui']['cube'] = CubeMask( imdetails['path']['residual'], mask=imdetails['path']['mask'],
                                                  init_script=CustomJS( args=dict( initial_convergence_state=self._init_values["convergence_state"],
                                                                                   clean_ctrl=self._control['iteration'],
                                                                                   name=imid ),
@@ -362,7 +365,7 @@ class InteractiveCleanUI:
     def _init_pipes( self ):
         if not self.__pipes_initialized:
             self.__pipes_initialized = True
-            self._pipe['control'] = DataPipe( address=find_ws_address( ), abort=self._abort_handler )
+            self._pipe['control'] = self._comm_mgr.open( )
             ###
             ### One pipe for updating the convergence plots.
             ###
@@ -557,7 +560,7 @@ class InteractiveCleanUI:
         ###
         ### Python-side handler for events from the interactive clean control buttons
         ###
-        async def clean_handler( msg, self=self ):
+        async def clean_handler( msg, context, self=self ):
             if msg['action'] == 'next' or msg['action'] == 'finish':
 
                 if 'mask' in msg['value']:
@@ -615,7 +618,8 @@ class InteractiveCleanUI:
                 return self._clean['last-success']
 
             elif msg['action'] == 'stop':
-                self.__stop( )
+                logger.debug(f"InteractiveCleanUI...clean_handler received shutdown message")
+                context.request_shutdown( "user requested stop" )
                 return dict( result='stopped', update=dict( ) )
             elif msg['action'] == 'status':
                 return dict( result="ok", update=dict( ) )
@@ -890,15 +894,28 @@ class InteractiveCleanUI:
                                                          if ( state.mode === 'interactive' && cb_obj.origin.name === 'stop' ) {
                                                              if ( confirm( "Are you sure you want to end this interactive clean session and close the GUI?" ) ) {
                                                                  disable( true )
-                                                                 //ctrl_pipe.send( ids[cb_obj.origin.name],
-                                                                 //                { action: 'stop',
-                                                                 //                  value: { } },
-                                                                 //                update_gui )
-                                                                 appstate.window_closed = true
-                                                                 /*** this will close the tab >>>>---------+   ***/
-                                                                 /***                                      |   ***/
-                                                                 /***      vvvvvvvvv-----------------------+   ***/
-                                                                 appstate.cube_done( Object.entries(images_state).reduce((acc,[k,v]) => ({ ...acc, [k]: v.src.masks( ) }),{ } ) )
+                                                                 console.log('interactive clean: before shutdown')
+                                                                 appstate.cube_done(
+                                                                     Object.entries(images_state).reduce(
+                                                                         (acc,[k,v]) => ({ ...acc, [k]: v.src.masks( ) }),
+                                                                         { }
+                                                                     ),
+                                                                     (msg) => {
+                                                                         console.log('interactive clean: after cube done')
+                                                                         ctrl_pipe.send(
+                                                                             ids[cb_obj.origin.name],
+                                                                             { action: 'stop',
+                                                                               value: { } },
+                                                                             ( msg ) => {
+                                                                                     console.log('interactive clean: after shutdown')
+                                                                                     appstate.window_closed = true
+                                                                             }
+                                                                         )
+                                                                         // RETURNING true indicates that
+                                                                         // the window should be closed.
+                                                                         return true
+                                                                     }
+                                                                 )
                                                              }
                                                          } else if ( state.mode === 'continuous' &&
                                                                      cb_obj.origin.name === 'stop' &&
@@ -949,17 +966,18 @@ class InteractiveCleanUI:
         ###
         initial_log = self._clean['gclean']._log( )
 
-        self._pipe['control'].init_script=CustomJS( args=dict( ctrl_pipe=self._pipe['control'],
-                                                               ids=self._clean_ids,
-                                                               logbutton=self._log_button,
-                                                               log=initial_log,
-                                                               initial_image=list(self._clean_targets.items( ))[0][0]
-                                                             ),
-                                                      code=self._js['initialize'] +
-                                                           '''if ( ! logbutton._log ) {
-                                                                  /*** store log list with log button for access in other callbacks ***/
-                                                                  logbutton._log = log
-                                                              }''' )
+        self._pipe['control'].add_init_script( args=dict( ctrl_pipe=self._pipe['control'],
+                                                          ids=self._clean_ids,
+                                                          logbutton=self._log_button,
+                                                          log=initial_log,
+                                                          initial_image=list(self._clean_targets.items( ))[0][0]
+                                                         ),
+                                               code=self._js['initialize'] +
+                                                    '''if ( ! logbutton._log ) {
+                                                           /*** store log list with log button for access in other callbacks ***/
+                                                           logbutton._log = log
+                                                       }''',
+                                               description="interactive clean control pipe" )
 
         tab_panels = list( map( self._create_image_panel, self._clean_targets.items( ) ) )
 
@@ -1170,13 +1188,7 @@ class InteractiveCleanUI:
                                  [
                                      self._clean_targets[img]['gui']['cube'].serve(self.__stop),
                                  ]
-                               ] + [ websockets.serve( self._pipe['control'].process_messages,
-                                                       self._pipe['control'].address[0],
-                                                       self._pipe['control'].address[1] ),
-                                     #websockets.serve( self._clean['converge']['pipe'].process_messages,
-                                     #                  self._clean['converge']['pipe'].address[0],
-                                     #                  self._clean['converge']['pipe'].address[1] ),
-                                     websockets.serve( self._comm_mgr.process_messages,
+                               ] + [ websockets.serve( self._comm_mgr.process_messages,
                                                        self._comm_mgr.address[0],
                                                        self._comm_mgr.address[1] ) ]
                               ) ):

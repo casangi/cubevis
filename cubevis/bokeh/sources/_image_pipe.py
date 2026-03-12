@@ -469,7 +469,7 @@ class ImagePipe( Model ):
 
         self._comm_mgr = BokehInit.get_app_context( ).comm_mgr
         kwargs['dataid'] = str(uuid4( ))
-        kwargs['comm'] = self._comm_mgr.open( )
+        kwargs['comm'] = self._comm_mgr.open( description="image cube updates" )
 
         super( ).__init__( *args, **kwargs, )
 

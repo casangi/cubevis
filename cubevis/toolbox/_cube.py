@@ -267,7 +267,7 @@ class CubeMask:
             ### was undefined which resulted in failure to update pixel tracking... so it is now
             ### initialized upon construction in JavaScript...
 
-            self._pipe['control'] = self._comm_mgr.open( squash_queue=True )
+            self._pipe['control'] = self._comm_mgr.open( squash_queue=True, description='cube mask control' )
             self._pipe['control'].add_init_script( code='''cb_obj._freeze_cursor_update = false''',
                                                    description="cube mask control pipe"
                                                  )

@@ -364,12 +364,12 @@ class InteractiveCleanUI:
     def _init_pipes( self ):
         if not self.__pipes_initialized:
             self.__pipes_initialized = True
-            self._pipe['control'] = self._comm_mgr.open( )
+            self._pipe['control'] = self._comm_mgr.open( description="interactive clean control" )
             ###
             ### One pipe for updating the convergence plots.
             ###
             self._clean['converge'] = { 'state': None }
-            self._clean['converge']['pipe'] = self._comm_mgr.open( )
+            self._clean['converge']['pipe'] = self._comm_mgr.open( description="convergence update" )
             self._clean['converge']['id'] = str(uuid4( ))
 
             # Get port for serving HTTP server if running in script

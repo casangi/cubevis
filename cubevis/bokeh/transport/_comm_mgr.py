@@ -82,6 +82,7 @@ class Comm( Model ):
     """
 
     comm_id = String( help="unique id for each Comm instance" )
+    description = String( default='', help="string that describes this Comm object" )
     comm_mgr_id = String( help="comm_mgr that this comm channel is assocated with" )
     squash_queue = Bool( default=False,
                          help='''Existing messages with the same message id should be removed from
@@ -114,6 +115,8 @@ class Comm( Model ):
     def __init__( self, *args, comm_mgr: Optional[CommMgr] = None, **kwargs ):
         if 'comm_id' not in kwargs:
             kwargs['comm_id'] = str(uuid4( ))
+        if 'description' not in kwargs:
+            kwargs['description']
         if 'comm_mgr' and 'comm_mgr_id' not in kwargs:
             kwargs['comm_mgr_id'] = comm_mgr.comm_mgr_id
         super( ).__init__(*args, **kwargs)
@@ -227,7 +230,7 @@ class CommMgr( Model, BokehInit ):
         self._state = new_state
         logger.debug(f"Application state: {old_state.value} -> {new_state.value}")
 
-    def open(self, comm_id: Optional[str] = None, squash_queue: bool = False) -> Comm:
+    def open(self, comm_id: Optional[str] = None, squash_queue: bool = False, description: Optional[str] = '' ) -> Comm:
         """
         Open a new Comm (communication category).
 
@@ -251,7 +254,7 @@ class CommMgr( Model, BokehInit ):
             logger.warning(f"Comm '{comm_id}' already exists, returning existing")
             return self._comms[comm_id]
 
-        comm = Comm(comm_id=comm_id, comm_mgr_id=self.comm_mgr_id, squash_queue=squash_queue)
+        comm = Comm(comm_id=comm_id, comm_mgr_id=self.comm_mgr_id, squash_queue=squash_queue, description=description)
         comm._mgr = self  # Set internal reference
         self._comms[comm_id] = comm
         self._handlers[comm_id] = {}

@@ -380,7 +380,9 @@ export class CommMgr extends Model {
             this.comms.set(commId, comm)
             this.handlers.set(commId, new Map())
             this.sendQueue.set(commId, [])
-            console.log(`Registered comm: ${commId}`)
+            const desc = comm.description?.trim()
+            const logMsg = desc ? `${desc} (${commId})` : commId
+            console.log(`Registered comm: ${logMsg}`)
         }
     }
     
@@ -768,6 +770,7 @@ export namespace Comm {
     
     export type Props = Model.Props & {
         comm_id: p.Property<string>
+        description: p.Property<string>
         comm_mgr_id: p.Property<string>
         squash_queue: p.Property<boolean>
     }
@@ -795,20 +798,20 @@ export class Comm extends Model {
     
     initialize(): void {
         super.initialize()
-        
-        console.log(`Comm initializing: ${this.comm_id}`)
-        
+
+        console.log(`Comm initializing: ${this.description?.trim() || this.comm_id} [squash:${this.squash_queue}]`);
+
         // Find CommMgr
         this._mgr = this.findCommMgr()
-        if ( this._mgr && this._mgr.comm_mgr_id ) console.log( `Comm ${this.comm_id} registered with mgr ${this._mgr.comm_mgr_id}` )
-        else console.warn( `Comm ${this.comm_id} failed to register with mgr` )
+        if ( this._mgr && this._mgr.comm_mgr_id ) console.log( `Comm ${this.description?.trim() || this.comm_id} registered with mgr ${this._mgr.comm_mgr_id}` )
+        else console.warn( `Comm ${this.description?.trim() || this.comm_id} failed to register with mgr` )
         
         if (this._mgr) {
             // Register with CommMgr
             this._mgr.registerComm(this)
-            console.log(`Comm ${this.comm_id} found CommMgr ${this._mgr.comm_mgr_id}`)
+            console.log(`Comm ${this.description?.trim() || this.comm_id} found CommMgr ${this._mgr.comm_mgr_id}`)
         } else {
-            console.warn(`Comm ${this.comm_id} could not find CommMgr ${this.comm_mgr_id}`)
+            console.warn(`Comm ${this.description?.trim() || this.comm_id} could not find CommMgr ${this.comm_mgr_id}`)
         }
     }
     
@@ -836,7 +839,7 @@ export class Comm extends Model {
         if (this._mgr) {
             this._mgr.register(this, messageId, callback)
         } else {
-            console.error(`Comm ${this.comm_id}: Cannot register, CommMgr not found`)
+            console.error(`Comm ${this.description?.trim() || this.comm_id}: Cannot register, CommMgr not found`)
         }
     }
     
@@ -856,13 +859,14 @@ export class Comm extends Model {
         if (this._mgr) {
             this._mgr.send(this, messageId, message, callback)
         } else {
-            console.error(`Comm ${this.comm_id}: Cannot send, CommMgr not found`)
+            console.error(`Comm ${this.description?.trim() || this.comm_id}: Cannot send, CommMgr not found`)
         }
     }
     
     static {
         this.define<Comm.Props>(({String, Boolean}) => ({
             comm_id: [String],
+            description: [String,''],
             comm_mgr_id: [String],
             squash_queue: [Boolean, false]
         }))

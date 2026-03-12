@@ -13,6 +13,10 @@ from os.path import splitext
 from os.path import split as splitpath
 from cubevis import iclean
 
+#from cubevis.bokeh.state import set_js_loading, set_github_tag
+#set_js_loading("network")
+#set_github_tag("jupyter")
+
 from argparse import ArgumentParser
 name = splitext(splitpath(__file__)[1])[0]
 

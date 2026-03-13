@@ -25,7 +25,13 @@ def ImportProtectedModule( name, file_mapping ):
 
         def __getattr__(self, name):
             if name in self._mapping:
+                print( '****************************************************************************************************' )
+                print( f'''name:\t\t{name}\nmodule:\t\t{self._mapping[name]}\nself._module:\t{self._module}''' )
+                print( '****************************************************************************************************' )
                 m = importlib.import_module(self._mapping[name], self._module)  # import submodule
+                print( 'XX**************************************************************************************************' )
+                print( f'''loaded name: {m}''' )
+                print( 'XX**************************************************************************************************' )
                 o = getattr(m, name)                                            # find the required member
                 setattr(sys.modules[self._module], name, o)                     # bind it into the package
                 return o

@@ -1,6 +1,10 @@
 
-export function object_id( obj: { [key: string]: any } ): string {
-    if ( typeof obj._casagui_id_ === 'undefined' ) {
+
+export function object_id( obj?: { [key: string]: any } | null ): string {
+
+    if ( ! obj ) { return "invalid-object-provided" }
+
+    if ( typeof obj._casalib_id_ === 'undefined' ) {
         let array = null
         if ( typeof window === 'undefined' ) {
             if ( typeof crypto !== 'undefined' ) {
@@ -10,13 +14,13 @@ export function object_id( obj: { [key: string]: any } ): string {
                 let ranbytes = crypto.randomBytes(8)
                 array = new Uint32Array(ranbytes.buffer.slice(-4))
             }
-        }  else {
+        } else {
             array = new Uint32Array(1)
             window.crypto.getRandomValues(array)
         }
         let d = new Date()
         let seconds = Math.floor(d.getTime() / 1000)
-        obj._casagui_id_ = `${array ? array[0] : seconds}-${seconds}`
+        obj._casalib_id_ = `${array ? array[0] : seconds}-${seconds}`
     }
-    return obj._casagui_id_
+    return obj._casalib_id_
 }

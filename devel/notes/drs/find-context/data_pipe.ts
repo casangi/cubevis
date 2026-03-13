@@ -19,9 +19,7 @@ export namespace DataPipe {
 
     export type Props = DataSource.Props & {
         init_script: p.Property<CallbackLike0<DataPipe> | null>;
-        backend_ip: p.Property<string>;
-        backend_port: p.Property<number>;
-        backend_url: p.Property<string>;
+        address: p.Property<[string,number]>;
         pipe_id: p.Property<string | null>
         conflict_check: p.Property<boolean>
     }
@@ -46,10 +44,10 @@ export class DataPipe extends DataSource {
 
     // Session conflict detection properties
     private frontend_id: string
-    private backend_id: string
     private instance_key: string         // unique identifier for this DataPipe purpose
     private session_storage_key: string  // computed storage key
     private heartbeat_interval?: number
+    private another_id: string
 
     constructor(attrs?: Partial<DataPipe.Attrs>) {
         super(attrs);
@@ -58,6 +56,39 @@ export class DataPipe extends DataSource {
         *** With Bokeh 3.0 properties are no longer initialized ***
         *** before the constructor is called...                 ***
         **********************************************************/
+    }
+
+    override connect_signals(): void {
+        super.connect_signals();
+        const appContext04 = find.app_context04(this);
+        console.log('appContext04>>A>>', appContext04)
+        const appContext05 = find.app_context05(this)
+        console.log('appContext05>>A>>', appContext05)
+        console.log('appContext04/05>>A1>>', this.document)
+        console.log('appContext04/05>>*>>', this.document?.get_model_by_name("GLOBAL_APP_CONTEXT"))
+        if (appContext04) {
+            // Perform your initialization logic that requires the context
+        } else {
+          ////// If it's still missing, the model might not be in the document yet.
+          ////// You can listen for the 'attached' event if using Bokeh 3.x+
+          ////this.on_change(this.properties.document, () => {
+          ////     const delayedContext = find.app_context04(this);
+          ////     // ... logic ...
+          ////     console.log('appContext04>>B>>', delayedContext)
+          ////});
+          //this.on_event( "attached",
+          //  () =>{
+          //    const delayedContext = find.app_context04(this);
+          //    console.log('appContext04>>B>>', delayedContext)
+          //  } );
+          this.connect(this.change, () => {
+            console.log('appContext04>>B>>', this.document)
+            if (this.document != null) {
+              const delayedContext = find.app_context04(this);
+              console.log('appContext04>>C>>', delayedContext)
+            }
+          } )
+        }
     }
 
     private checkSessionConflict(): boolean {
@@ -71,7 +102,7 @@ export class DataPipe extends DataSource {
             if (existing) {
                 const existingData = JSON.parse(existing)
                 // Check if another session is active within the last 2 minutes
-                if (existingData.sessionId !== this.frontend_id &&
+                if (existingData.sessionId !== this.frontend_id && 
                     Date.now() - existingData.timestamp < 120000) {
 
                     if (this.conflict_check) {
@@ -93,9 +124,7 @@ export class DataPipe extends DataSource {
                         console.log('Existing session ID:', existingData.sessionId);
                         console.log('Existing timestamp:', new Date(existingData.timestamp).toISOString());
                         console.log('Age of existing session (ms):', Date.now() - existingData.timestamp);
-                        console.log('Backend IP:', this.backend_ip);
-                        console.log('Backend Port:', this.backend_port);
-                        console.log('Backend URL:', this.backend_url);
+                        console.log('Address:', this.address);
                         console.log('Instance key:', this.instance_key);
                         console.log('Storage key:', this.session_storage_key);
                         console.log('Existing data:', existingData);
@@ -195,17 +224,61 @@ export class DataPipe extends DataSource {
     }
 
     private generateInstanceKey(): string {
+        // Create unique key based on address and optional purpose
+        const addressKey = `${this.address[0]}_${this.address[1]}`
+
         // Could extend this to include purpose/context if needed
         // For example, if you pass a 'purpose' property in attrs:
         // const purpose = this.attrs.purpose || 'default'
         // return `${addressKey}_${purpose}`
 
-        return `${this.pipe_id}_${this.backend_port}`
+        return `${this.pipe_id}_${addressKey}`
     }
 
-    private async initializeWebSocket(): Promise<void> {
+    initialize(): void {
+        super.initialize();
+        const scriptElement = document.currentScript;
+        const appContainer = scriptElement?.closest('.jp-OutputArea-output') || 
+                                   scriptElement?.parentElement;
 
-        console.log("datapipe url:", this.backend_url)
+        this.frontend_id = casalib.object_id(this)
+        this.another_id = casalib.object_id(appContainer)
+        console.group('identity crisis deux')
+        console.log('scriptElement', scriptElement)
+        console.log('appContainer', appContainer)
+        console.log('frontend_id', this.frontend_id)
+        console.log('another_id', this.another_id)
+        console.log('typeof this', typeof this)
+        const appContext01 = find.context(this);
+        console.log('appContext01', appContext01)
+        const appContext02 = find.app_context02(this);
+        console.log('appContext02', appContext02)
+        const appContext03 = find.app_context03(this);
+        console.log('appContext03', appContext03)
+        const appContext04 = find.app_context04(this);
+        console.log('appContext04', appContext04)
+        const appContext05 = find.app_context05(this);
+        console.log('appContext05', appContext05)
+        const appContext06 = find.app_context06(this);
+        console.log('appContext06', appContext06)
+        const appContext07 = find.app_context07(this);
+        console.log('appContext07', appContext07)
+        console.groupEnd( )
+
+        activeDataPipes.register( this );
+
+        // Generate instance key based on address and purpose
+        // This allows multiple DataPipes for different purposes
+        this.instance_key = this.generateInstanceKey()
+        this.session_storage_key = `cubevis_datapipe_${this.instance_key}`
+
+        // Check for session conflicts before initializing websocket
+        if (!this.checkSessionConflict()) {
+            return // Don't initialize if session conflict detected
+        }
+
+        let ws_address = `ws://${this.address[0]}:${this.address[1]}`
+        console.log( "datapipe url:", ws_address )
 
         var reconnections: any | undefined = undefined
         document.shutdown_in_progress_ = false
@@ -215,7 +288,7 @@ export class DataPipe extends DataSource {
                 this.websocket.close( )
             }
 
-            this.websocket = new WebSocket(this.backend_url)
+            this.websocket = new WebSocket(ws_address)
             this.websocket.binaryType = "arraybuffer"
 
             this.websocket.addEventListener("error", (e: Event) => {
@@ -317,14 +390,11 @@ export class DataPipe extends DataSource {
                         var recon = reconnections
                         function reconnect( tries: number ) {
                             if ( reconnections.connected == false ) {
-                                console.log( `${tries+1}\treconnection attempt ${new Date()}` )
+                                console.log( `${tries+1}\treconnection attempt ${new Date( )}` )
                                 connect_to_server( )
                                 recon.backoff( )
-                                if ( recon.retries > 0 ) {
-                                    setTimeout( reconnect, recon.timeout, tries+1 )
-                                } else if ( reconnections.connected == false ) {
-                                    console.log( `aborting reconnection after ${tries} attempts ${new Date()}` )
-                                }
+                                if ( recon.retries > 0 ) { setTimeout( reconnect, recon.timeout, tries+1 ) }
+                                else if ( reconnections.connected == false ) { console.log( `aborting reconnection after ${tries} attempts ${new Date( )}` ) }
                             }
                         }
                         reconnect( 0 )
@@ -354,30 +424,6 @@ export class DataPipe extends DataSource {
         *** initial connection to python websocket  ***
         **********************************************/
         connect_to_server( )
-    }
-
-    initialize(): void {
-        super.initialize();
-
-        // frontend_id is the object_id of the BokehAppContext model
-        const context = find.app_context(this)
-        this.frontend_id = find.object_id(context)
-        this.backend_id = context?.backend_id ?? "backend-id-missing-in-action"
-
-        activeDataPipes.register( this );
-
-        // Generate instance key based on address and purpose
-        // This allows multiple DataPipes for different purposes
-        this.instance_key = this.generateInstanceKey()
-        this.session_storage_key = `cubevis_datapipe_${this.instance_key}`
-
-        // Check for session conflicts before initializing websocket
-        if (!this.checkSessionConflict()) {
-            return // Don't initialize if session conflict detected
-        }
-
-        // Start async WebSocket initialization
-        this.initializeWebSocket( )
 
         //
         // Run any initialization script
@@ -402,12 +448,10 @@ export class DataPipe extends DataSource {
     //private _ws_send(arg1: { [key: string]: any } | string, arg2?: { [key: string]: any }): void {
 
     private _ws_send(message: any): void;
-    private _ws_send(recipient: any, message: any ): void;
-    private _ws_send(recipient: any, message: any, log: any ): void;
-    private _ws_send(arg1: any, arg2?: any, arg3?: any ): void {
+    private _ws_send(recipient: any, message: any): void;
+    private _ws_send(arg1: any, arg2?: any): void {
         let recipient: string | undefined;
         let message: { [key: string]: any };
-        let log: boolean;
         if ( typeof arg1 === 'string' && arg1.trim().length > 0 ) {
             // Matches second signature: (recipient, message)
             recipient = arg1;
@@ -420,33 +464,25 @@ export class DataPipe extends DataSource {
             throw new Error(`Invalid arguments to _ws_send: expected (object) or (string, object).`);
         }
 
-        if ( typeof arg3 === 'boolean' ) { log = arg3 as boolean }
-        else { log = false }
-
         // message_type is either 'control' or 'content'
         if ( recipient ) {
-            const full_message = {
-              metadata: {
-                direction: 'j2p',
-                frontend_id: this.frontend_id,
-                backend_id: this.backend_id,
-                pipe_id: this.pipe_id,
-                recipient,
-                type: 'content'
-              },
-              payload: message
-            }
-            if ( log ) console.log( '<<WSSEND#1>>', full_message )
             this.websocket.send( serialize(
-                full_message
-            ) )
+                { metadata: {
+                  direction: 'j2p',
+                  frontend_id: this.frontend_id,
+                  another_id: this.another_id,
+                  pipe_id: this.pipe_id,
+                  recipient,
+                  type: 'content'
+                },
+                payload: message
+            } ) )
         } else {
-            if ( log ) console.log( '<<WSSEND#2>>' )
             this.websocket.send( serialize(
                 { metadata: {
                     direction: 'j2p',
                     frontend_id: this.frontend_id,
-                    backend_id: this.backend_id,
+                    another_id: this.another_id,
                     pipe_id: this.pipe_id,
                     recipient: 'system',
                     type: 'control'
@@ -456,16 +492,13 @@ export class DataPipe extends DataSource {
         }
     }
 
-
     send( id: string, message: {[key: string]: any}, cb: (msg:{[key: string]: any}) => any, squash_queue: boolean | ((msg:{[key: string]: any}) => boolean) = false ): void {
-        let msg = { id, message, direction: 'j2p', session: this.frontend_id, pipe_id: this.pipe_id }
+        let msg = { id, message, direction: 'j2p', session: this.frontend_id }
         // queue message if:
         //    (1) websocket is not yet initialized
         //    (2) a result indicated by id is pending
-        if ( message.action != "spectrum" ) console.log( '<<PIPE#1>>', message )
         if ( ! this.websocket || id in this.pending ) {
             if ( id in this.send_queue ) {
-                if ( message.action != "spectrum" ) console.log( '<<PIPE#2>>', message )
                 if ( typeof squash_queue == 'boolean' && squash_queue && this.send_queue[id].length > 0 ) {
                     // throw away existing message if squash_queue is true
                     this.send_queue[id][0].msg = msg
@@ -493,13 +526,10 @@ export class DataPipe extends DataSource {
                 this.send_queue[id] = [ { cb, msg } ]
             }
         } else {
-            if ( message.action != "spectrum" ) console.log( '<<PIPE#3A>>', message )
             if ( this.websocket.readyState === WebSocket.CONNECTING ) {
                 // connection not yet established yet...
-                if ( message.action != "spectrum" ) console.log( '<<PIPE#3B>>', message )
                 this.connection_queue.push( [ this, [ id, message, cb ] ] )
             } else if ( id in this.send_queue && this.send_queue[id].length > 0 ) {
-                if ( message.action != "spectrum" ) console.log( '<<PIPE#3C>>', message )
                 this.send_queue[id].push( { cb, msg } )
                 {   // seemingly cannot reference wider 'cb' and the block-scoped
                     // 'cb' within the same block...
@@ -524,14 +554,11 @@ export class DataPipe extends DataSource {
                     }
                 }
             } else {
-                if ( message.action != "spectrum" ) console.log( '<<PIPE#3D>>', message )
                 if ( this.websocket.readyState === WebSocket.OPEN ) {
-                    if ( message.action != "spectrum" ) console.log( '<<PIPE#3D%1>>', message )
                     this.pending[id] = { cb }
-                    this._ws_send( id, msg, true )
+                    this._ws_send( id, msg )
                     //this.websocket.send(serialize(msg))
                 } else {
-                    if ( message.action != "spectrum" ) console.log( '<<PIPE#3D%2>>', message )
                     let countdown = 20
                     let pipe = this
                     function resend( ) {
@@ -550,21 +577,10 @@ export class DataPipe extends DataSource {
     }
 
     static {
-        this.define<DataPipe.Props>(({ Any, Str, Int, Bool, Nullable }) => ({
-            // Use 'Nullable' and 'Any' for objects like callbacks
-            init_script:   [ Nullable(Any), null ],
-
-            // Use 'Str' instead of 'String' to avoid conflict with JS global String
-            backend_ip:     [ Str, "127.0.0.1" ],
-
-            // Use 'Int' to match your Python 'Int' property
-            backend_port:   [ Int ],
-
-            backend_url:    [ Str ],
-
-            // Match the Python 'Nullable(String)' with 'Nullable(Str)'
-            pipe_id:        [ Nullable(Str), null ],
-
+        this.define<DataPipe.Props>(({ Any, Tuple, String, Number, Bool }) => ({
+            init_script: [ Any, null ],
+            address: [Tuple(String,Number)],
+            pipe_id: [ String, null ],
             conflict_check: [ Bool, true ]
         }))
     }

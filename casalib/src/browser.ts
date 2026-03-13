@@ -21,9 +21,6 @@ import { contours } from 'd3-contour'
 // see https://d3js.org/d3-polygon
 import { polygonContains, polygonArea } from 'd3-polygon'
 
-declare const __VERSION__: string;
-const version = __VERSION__;
-
 //
 // In JavaScript "'PROP' in OBJ" only works if the type of OBJ
 // is actually an object. 'hasOwnProperty' can only be use
@@ -62,7 +59,6 @@ function polyArea( pts: number[] | [number, number][], ypts?: number[] ) : numbe
 }
 
 var casalib = {
-    version,
     is_empty,
     minmax,
     sorted,

@@ -1,6 +1,6 @@
 ########################################################################
 #
-# Copyright (C) 2021, 2023, 2025, 2026
+# Copyright (C) 2021, 2023
 # Associated Universities, Inc. Washington DC, USA.
 #
 # This script is free software; you can redistribute it and/or modify it
@@ -30,10 +30,8 @@ JavaScript via ``websockets``. This provides a mechanism like the
 ``ImagePipe``. The difference is that ``ImagePipe`` is tuned for use
 with CASA images but ``DataPipe`` can have generic messages.'''
 
-import sys
 import inspect
 import threading
-import logging
 import asyncio
 import traceback
 import time
@@ -45,11 +43,9 @@ from bokeh.util.compiler import TypeScript
 from bokeh.core.properties import Tuple, String, Int, Instance, Nullable, Bool
 from bokeh.models.callbacks import Callback
 
-from ...utils import serialize, deserialize, is_interactive_jupyter, is_colab
+from ...utils import serialize, deserialize, is_interactive_jupyter
 from ..state import casalib_url, cubevisjs_url
 from .. import BokehInit
-
-logger = logging.getLogger(__name__)
 
 class DataPipe(DataSource,BokehInit):
     """This class allows for communication between Python and the JavaScript implementation
@@ -75,9 +71,7 @@ class DataPipe(DataSource,BokehInit):
     JavaScript to be run during initialization of an instance of an DataPipe object.
     """)
 
-    backend_ip = String(default="127.0.0.1", help="the IP address that the Python server binds to locally" )
-    backend_port = Int( help="the port that the Python server listens on" )
-    backend_url = String( help="the full URL used by the browser to connect to the Python server" )
+    address = Tuple( String, Int, help="two integer sequence representing the address and port to use for the websocket" )
 
     pipe_id = Nullable(String, default=None, help="""
     Unique identifier for an individual DataPipe instance
@@ -85,36 +79,21 @@ class DataPipe(DataSource,BokehInit):
 
     conflict_check = Bool( default=True, help="Perform check to avoid reuse of URL for GUI. Not needed in the Jupyter context" )
 
-    ### Class-level session tracking to prevent multiple connections
-    #_active_sessions = {}  # backend_id -> {frontend_id, 'websocket': ws, 'timestamp': time, 'datapipe': instance}
-    ###
-    ###   a priori
-    ###   --------
-    ###   (1) backend_id is BAKED INTO the frontend code
-    ###   (2) pipe_id is BAKED INTO the frontend code
-    ###   (3) frontend_id will be unique for each execution of the JavaScript frontend
-    ###
-    ###   _active_sessions[pipe_id] => { pipe_id: {frontend_id, 'websocket': ws, 'timestamp': time, 'datapipe': instance} }
-    ###
-    _active_pipes = { }     # pipe_id -> { 'frontend_id', 'websocket', 'timestamp',  'datapipe' }
-    _session_lock = asyncio.Lock( )
-    _session_corruption = False
+    # Class-level session tracking to prevent multiple connections
+    _active_sessions = {}  # session_id -> {'websocket': ws, 'timestamp': time, 'datapipe': instance}
+    _session_lock = threading.Lock()
 
     ###################################################################
     ### filled from cubevis.bokeh.state._initialize._order_bokeh_js ###
     ###################################################################
     #__javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
 
-    def __init__( self, *args, abort=None,  address=None, **kwargs ):
+    def __init__( self, *args, abort=None, **kwargs ):
 
         if 'conflict_check' not in kwargs:
             kwargs['conflict_check'] = not is_interactive_jupyter( )
         if 'pipe_id' not in kwargs:
             kwargs['pipe_id'] = str(uuid4( ))
-
-        if address is not None:
-            kwargs['backend_ip'] = address[0]
-            kwargs['backend_port'] = address[1]
 
         super( ).__init__( *args, **kwargs )
 
@@ -128,16 +107,6 @@ class DataPipe(DataSource,BokehInit):
 
         if self.__abort is not None and not callable(self.__abort):
                 raise RuntimeError(f'abort function must be callable ({type(self.__abort)} is not)')
-
-        # Fetch URL in Colab
-        if is_colab( ):
-            from google.colab.output import eval_js
-            # Colab maps the internal port to a secure external URL
-            external_https = eval_js(f"google.colab.kernel.proxyPort({self.backend_port})")
-            self.backend_url = external_https.replace("https://", "wss://")
-        else:
-            # Standard local/remote access
-            self.backend_url = f"ws://{self.backend_ip}:{self.backend_port}"
 
     def __enqueue_send( self, ident, msg, callback ):
         ### it is assumed that this is called AFTER the lock has been aquired
@@ -173,25 +142,16 @@ class DataPipe(DataSource,BokehInit):
     @classmethod
     async def __is_websocket_alive(cls, websocket):
         """Check if a websocket connection is still alive"""
-        print(f'!!!!!!!!IS>>WEBSOCKET>>ALIVE>>ENTER!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {websocket}' )
         try:
             # Try to ping the websocket with a short timeout
-            print(f'!!!!!!!!IS>>WEBSOCKET>>ALIVE>>BEFORE!!CALL!!!!!!!!!!!!!!!!!!!!!!!!!!!! {websocket}' )
             await asyncio.wait_for(websocket.ping(), timeout=2.0)
-            print(f'!!!!!!!!IS>>WEBSOCKET>>ALIVE>>AFTER!!CALL!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {websocket}' )
             return True
         except (asyncio.TimeoutError, ConnectionError, Exception):
-            print(f'!!!!!!!!IS>>WEBSOCKET>>ALIVE>>EXCEPTION!!OCCURRED!!!!!!!!!!!!!!!!!!!!! {websocket}' )
             return False
 
     @classmethod
     def __cleanup_dead_sessions(cls):
-        """Remove dead sessions from tracking
-           Session tracking has moved to being based on the DataPipe pipe_id.
-           This does not close pipes.
-           HOWEVER, IT COULD BE THAT SESSION MANAGEMENT STATE MUST BE ABLE TO CHANGE
-           TO ALLOW THE USER TO SWITCH TO ANOTHER BROWSER/FRONTEND
-        """
+        """Remove dead sessions from tracking"""
         current_time = time.time()
         dead_sessions = []
 
@@ -205,66 +165,44 @@ class DataPipe(DataSource,BokehInit):
 
     async def __handle_session_conflict(self, websocket, existing_session_info, new_frontend_id):
         """Handle session conflict by checking if existing connection is alive"""
-        print(f'!!!!!!!!CONFLICT!!HANDLER!!ENTER!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {existing_session_info}' )
         existing_ws = existing_session_info['websocket']
-        print(f'!!!!!!!!CONFLICT!!HANDLER!!EXISTING!!WS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {existing_ws}' )
         existing_datapipe = existing_session_info['datapipe']
-        print(f'!!!!!!!!CONFLICT!!HANDLER!!EXISTING!!DATAPIPE!!!!!!!!!!!!!!!!!!!!!!!!! {existing_datapipe}' )
 
         # Check if existing websocket is still alive
-        try:
-            if await self.__is_websocket_alive(existing_ws):
-                print(f'!!!!!!!!PIPE!!IS!!ALIVE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {self.pipe_id}' )
-                # Existing connection is alive - send conflict message to BOTH connections
-                conflict_msg = {
-                    'id': 'session_conflict',
-                    'message': {
-                        'type': 'session_conflict',
-                        'error': 'Multiple windows/tabs detected. Please use only one browser window.',
-                        'action': 'close_duplicate'
-                    },
-                    'direction': 'error'
-                }
+        if await self.__is_websocket_alive(existing_ws):
+            # Existing connection is alive - send conflict message to BOTH connections
+            conflict_msg = {
+                'id': 'session_conflict',
+                'message': {
+                    'type': 'session_conflict',
+                    'error': 'Multiple windows/tabs detected. Please use only one browser window.',
+                    'action': 'close_duplicate'
+                },
+                'direction': 'error'
+            }
 
-                try:
-                    # Send to existing connection
-                    print(f'!!!!!!!!SEND!!EXISTING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {self.pipe_id}' )
-                    await existing_ws.send(serialize(conflict_msg))
+            try:
+                # Send to existing connection
+                await existing_ws.send(serialize(conflict_msg))
 
-                    # Send to new connection
-                    print(f'!!!!!!!!SEND!!NEW!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {self.pipe_id}' )
-                    await websocket.send(serialize(conflict_msg))
+                # Send to new connection
+                await websocket.send(serialize(conflict_msg))
 
-                    # Close the new connection
-                    print(f'!!!!!!!!CLOSING!!CONNECTION!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {self.pipe_id}' )
-                    await websocket.close(code=1008, reason='Session conflict')
+                # Close the new connection
+                await websocket.close(code=1008, reason='Session conflict')
 
-                    # Call abort on the existing DataPipe instance
-                    if existing_datapipe.__abort is not None:
-                        print(f'!!!!!!!!CALLING!!ABORT!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {self.pipe_id}' )
-                        err = RuntimeError(f"Session conflict detected: New connection attempted with session {new_frontend_id}")
-                        try:
-                            existing_datapipe.__abort(err)
-                            sys.exit("session corruption has occurred")
-                        except Exception as e:
-                            logger.error( f"an exception occurred during abort handling: {str(e)}" )
-                            sys.exit("session corruption has occurred")
+                # Call abort on the existing DataPipe instance
+                if existing_datapipe.__abort is not None:
+                    err = RuntimeError(f"Session conflict detected: New connection attempted with session {new_frontend_id}")
+                    existing_datapipe.__abort(err)
 
-                    return False  # Reject new connection
+                return False  # Reject new connection
 
-                except Exception as e:
-                    print(f'!!!!!!!!EXCEPTION!!OCCURRED!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {self.pipe_id}' )
-                    print(f"Error handling session conflict: {e}")
-                    # If we can't communicate or the abort function failed, treat existing as dead
-                    return False
+            except Exception as e:
+                print(f"Error handling session conflict: {e}")
+                # If we can't communicate, treat existing as dead
+                pass
 
-        except Exception as e:
-            print(f'!!!!!!!!SOME!!OTHER!!EXCEPTION!!OCCURRED!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {self.pipe_id}' )
-            print(f"Error handling session conflict: {e}")
-            # If we can't communicate, treat existing as dead
-            return False
-
-        print(f'!!!!!!!!CONNECTION!!IS!!DEAD!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {self.pipe_id}' )
         # Existing connection is dead - replace it
         return True  # Allow new connection
 
@@ -331,18 +269,8 @@ class DataPipe(DataSource,BokehInit):
             session_established = False
 
             async for message in websocket:
-
-                ######################################################################
-                ### pipe_id must be present in the metadata for all messages AND   ###
-                ### match our pipe_id                                              ###
-                ######################################################################
-                if DataPipe._session_corruption:
-                    print( "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv")
-                    print(f">>>CORRUPTION>>>>>>>> {self.pipe_id}" )
-                    print( "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
-                    return
-
                 msg = deserialize(message)
+                print( f'\t>>>>>---------->> {msg}' )
 
                 ######################################################################
                 ### all messages have a 'metadata' section and a 'payload' section ###
@@ -359,7 +287,7 @@ class DataPipe(DataSource,BokehInit):
                 metadata = msg['metadata']
                 payload = msg['payload']
                 ######################################################################
-                ### session_id must be present in the metadata for all messages    ###
+                ### session_id must be pressent in the metadata for all messages   ###
                 ######################################################################
                 if 'frontend_id' not in metadata:
                     await self.__websocket.close( )
@@ -370,128 +298,59 @@ class DataPipe(DataSource,BokehInit):
                         raise err
                     return
 
-                ######################################################################
-                ### pipe_id must be present in the metadata for all messages AND   ###
-                ### match our pipe_id                                              ###
-                ######################################################################
-                if 'pipe_id' not in metadata or self.pipe_id != metadata['pipe_id']:
-                    await self.__websocket.close( )
-                    err = RuntimeError(f'''Invalid pipe_id got "{metadata['pipe_id']}" expected {self.pipe_id}''') \
-                        if 'pipe_id' in metadata \
-                           else RuntimeError(f'frontend_id not in: {metadata}')
-                    if self.__abort is not None:
-                        self.__abort( err )
-                    else:
-                        raise err
-                    return
-
-                print('>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
-                print(f'>>>>>ESTABLISHED>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> {session_established}')
-                print(f'>>>>>PIPE>>ID>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> {self.pipe_id}')
-                print(f'''>>>>>MESSAGE>>PIPE>>ID>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> {metadata['pipe_id']}''')
-                if self.pipe_id in self._active_pipes:
-                    print(f'''>>>>>EXISTING>>PIPE>>ID>>FRONTEND>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> {self._active_pipes[self.pipe_id]['frontend_id']}''')
-                else:
-                    print(f'''>>>>>EXISTING>>PIPE>>ID>>FRONTEND>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> not found''')
-                print(f'''>>>>>NEW>>FRONTEND>>ID>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> {metadata['frontend_id']}''')
-                print('>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
-
                 # Handle session initialization with conflict detection
                 if not session_established:
+                    print( f'<001>\t>>>>>>>------------>> session initialization: {metadata}' )
                     new_frontend_id = metadata['frontend_id']
-                    msg_pipe_id = metadata['pipe_id']
-                    print( '########ESTABLISH#######################################################################################################' )
-                    print( f">>>>>>                       HERE#1" )
-                    print( metadata )
-                    print( f">>>>>> {new_frontend_id}/{self.get_app_context().backend_id}" )
-                    print( f">>>>>>      message pipe id: {msg_pipe_id}" )
-                    print( f">>>>>>     existing pipe id: {self.pipe_id}" )
-                    print( f">>>>>>      new frontend id: {new_frontend_id}" )
-                    print( f">>>>>>                       HERE#2" )
-                    if self.pipe_id in self._active_pipes and 'frontend_id' in self._active_pipes[self.pipe_id]:
-                        print( f">>>>>> existing frontend id: {self._active_pipes[self.pipe_id]['frontend_id']}" )
-                    else:
-                        print( f">>>>>> existing frontend id: NO EXISTING PIPE ID" )
-                    print( f">>>>>>                       HERE#3" )
-                    print( '########################################################################################################################' )
-                    print( f'########ATTEMPT#TO#ACQUIRE#SESSION#LOCK#################################################################################\n{self.pipe_id}' )
-                    async with self._session_lock:
-                        print( f'########SESSION#LOCK#ACQUIRED###########################################################################################\n{self.pipe_id}' )
+                    print( f'<002>\t>>>>>>>------------>> session initialization: {metadata}' )
+                    print( f"**ESTABLISH*SESSION****>>>>>> {new_frontend_id}/{self.get_app_context().backend_id}" )
+                    with self._session_lock:
                         # Clean up any stale sessions first
-                        #self.__cleanup_dead_sessions()    ###  <--------<<<<< is this needed now each "session info" corresponds to
-                                                           ###                 a pipe with an active connection and the __cleanup_dead_sessions
-                                                           ###                 function just deletes the state (and does not clean up the websockets)
+                        self.__cleanup_dead_sessions()
 
-                        # Check for conflicts:
-                        #   (1)
-
-                        if msg_pipe_id in self._active_pipes :
-                            # Reject future connections the session has been corrupted
-                            DataPipe._session_corruption = True
-
-                            print(f'!!!!!!!!PIPE!!CONFLICT!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {msg_pipe_id}' )
-                            existing_session_info = self._active_pipes[msg_pipe_id]
-                            print(f'!!!!!!!!EXISTING!!SESSION!!INFO!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {existing_session_info}' )
+                        # Check if session already exists
+                        if new_frontend_id in self._active_sessions:
+                            existing_session_info = self._active_sessions[new_frontend_id]
 
                             # Handle the conflict
                             if not await self.__handle_session_conflict(websocket, existing_session_info, new_frontend_id):
-                                print(f'!!!!!!!!CONFLICT!!HANDLER!!RETURNED!!FALSE!!!!!!!!!!!!!!!!!!!!!!!!!!!! {existing_session_info}' )
                                 return  # Connection was rejected
-                            else:
-                                print(f'!!!!!!!!CONFLICT!!HANDLER!!RETURNED!!TRUE!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {existing_session_info}' )
 
-                        print(f'!!!!!!!!PIPE!!REGISTRATION!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {msg_pipe_id}' )
                         # Register this session as active
-                        self._active_pipes[msg_pipe_id] = {
-                            'frontend_id': new_frontend_id,
+                        self._active_sessions[new_frontend_id] = {
                             'websocket': websocket,
                             'timestamp': time.time(),
                             'datapipe': self
                         }
                         self.__frontend_id = new_frontend_id
-                        try:
-                            self.get_app_context().set_frontend_id(self.__frontend_id)
-                        except ValueError:
-                            await self.__websocket.close( )
-                            err = RuntimeError(f'unrecoverable frontend conflict')
-                            raise err
+                        self.get_app_context().set_frontend_id(self.__frontend_id)
                         session_established = True
 
-                # Existing session validation (cut and pasted URL)
+                # Existing session validation
                 elif self.__frontend_id != None and self.__frontend_id != metadata['frontend_id']:
                     ### FIXME>>> python to typescript message format
-                    print( '########CONFLICT########################################################################################################' )
-                    print( metadata )
-                    print( '########################################################################################################################' )
                     conflict_msg = {
-                        ### FIXME>>> python to typescript message format
                         'id': self.__frontend_id,
                         'message': {
                             'type': 'session_corruption',
                             'error': 'Session corruption detected',
-                            ### FIXME>>> perhaps not expose the expected frontend_id, even though we close the connection?
                             'expected': self.__frontend_id,
-                            'received': metadata['frontend_id']
+                            'received': metadata['session']
                         },
                         'direction': 'error'
                     }
 
-                    print( f'*{self.pipe_id}\t>>>>>---------->> CONFLICTING MESSAGE RECEIVED' )
-                    if self.__websocket:
-                        await self.__websocket.send(serialize(conflict_msg))
-                        await self.__websocket.close()
+                    await self.__websocket.send(serialize(conflict_msg))
+                    await self.__websocket.close()
 
                     # Clean up from active sessions
-                    async with self._session_lock:
-                        if self.pipe_id in self._active_pipes:
-                            del self._active_pipess[self.pipe_id]
+                    with self._session_lock:
+                        if self.__frontend_id in self._active_sessions:
+                            del self._active_sessions[self.__frontend_id]
 
-                    err = RuntimeError(f"session corruption: {metadata['frontend_id']} does not equal {self.__frontend_id}")
+                    err = RuntimeError(f"session corruption: {metadata['session']} does not equal {self.__frontend_id}")
                     if self.__abort is not None:
-                        try:
-                            self.__abort( err )
-                        except:
-                            exit("abort handler failed, shutting down...")
+                        self.__abort( err )
                     else:
                         raise err
                     return
@@ -500,10 +359,6 @@ class DataPipe(DataSource,BokehInit):
                     ###
                     ### initialize session identifier (pre-state-corruption fixes)
                     ###
-                    print( '########PROCESS#########################################################################################################' )
-                    print( 'meta', metadata )
-                    print( 'data', payload )
-                    print( '########################################################################################################################' )
                     if self.__frontend_id == None:
                         self.__frontend_id = metadata['session']
 
@@ -565,11 +420,8 @@ class DataPipe(DataSource,BokehInit):
                                                                           'direction': str(metadata['direction']) } ) )
         finally:
             # Clean up when connection closes
-            try:
-                if self.pipe_id:
-                    async with self._session_lock:
-                        if self.pipe_id in self._active_pipes:
-                            del self._active_pipes[self.pipe_id]
-                self.__websocket = None
-            except:
-                pass
+            if self.__frontend_id is not None:
+                with self._session_lock:
+                    if self.__frontend_id in self._active_sessions:
+                        del self._active_sessions[self.__frontend_id]
+            self.__websocket = None

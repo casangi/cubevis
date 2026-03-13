@@ -69,25 +69,59 @@ class Task:
 
     def _run_coroutine_sync(self, coro):
         """
-        Helper to run a coroutine synchronously, handling both CLI and Jupyter contexts.
+        Helper to run a coroutine synchronously, avoiding cascades during shutdown.
         """
         try:
-            # Check if there's already a running event loop (Jupyter/IPython)
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # No running loop - safe to use asyncio.run() (CLI context)
-            return asyncio.run(coro)
-        else:
-            # Running loop exists (Jupyter context)
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError as e:
+                print( "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv")
+                print(f">>>001>>>>>>>> {str(e)}" )
+                print( "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
+                raise
+
+            # 1. Check if loop is actually functional/closing
+            if loop.is_closed():
+                return None
+
+            # 2. Jupyter/Existing Loop Handling
             try:
                 import nest_asyncio
                 nest_asyncio.apply()
-                return asyncio.run(coro)
-            except ImportError:
-                # Fallback: run in a new thread with its own event loop
+                return loop.run_until_complete(coro)
+            except ImportError as e:
+                print( "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv")
+                print(f">>>002>>>>>>>> {str(e)}" )
+                print( "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
+                # Fallback to thread executor, but guard against timeout/deadlock
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    return pool.submit(asyncio.run, coro).result()
+                    future = pool.submit(asyncio.run, coro)
+                    try:
+                        return future.result(timeout=5.0)
+                    except Exception:
+                        return None
+
+        except RuntimeError as e:
+            print( "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv")
+            print(f">>>003>>>>>>>> {str(e)}" )
+            print( "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
+            
+            # 3. No running loop (CLI context)
+            try:
+                return asyncio.run(coro)
+            except Exception:
+                print( "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv")
+                print(f">>>004>>>>>>>> {str(e)}" )
+                print( "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
+                return None
+        except Exception as e:
+            print( "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv")
+            print(f">>>005>>>>>>>> {str(e)}" )
+            print( "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
+            # Catch unexpected state errors during session unwinding
+            logging.debug(f"Coroutine execution suppressed during shutdown: {e}")
+            return None
 
     def run_sync(self) -> Any:
         """Run synchronously until completion or stop signal."""

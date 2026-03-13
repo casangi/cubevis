@@ -43,7 +43,7 @@ from ._regions import polygon_indexes
 from ._docenum import DocEnum
 from ._copydoc import copydoc
 from ._pkgs import find_pkg, load_pkg
-from ._jupyter import is_interactive_jupyter
+from ._jupyter import is_interactive_jupyter, is_colab
 from ._browser import have_firefox
 from ._git import max_git_version
 
@@ -236,9 +236,12 @@ def have_network():
                 have_network.url,
                 headers={'User-Agent': 'Mozilla/5.0 (compatible; connectivity-check)'}
             )
-
-            with urllib.request.urlopen(request, timeout=5) as response:
-                return response.status == 204
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    return response.status == 204
+            except urllib.error.URLError as e:
+                ### socket.gaierror: [Errno 8] nodename nor servname provided, or not known
+                return False
 
         except urllib.error.HTTPError as e:
             # Some proxies might return different status codes but still have connectivity
@@ -401,10 +404,10 @@ def __index_to_stokes(index: int):
         index (int): enumerated index defining stokes value.
 
     Returns:
-        str: String indicating stokes value. 
+        str: String indicating stokes value.
     """
     STOKES_MAP = ['I', 'Q', 'U', 'V']
-  
+
     try:
         return [STOKES_MAP[i] for i in index]
     except TypeError:
@@ -417,10 +420,10 @@ def index_to_stokes(index: int):
         index (int): enumerated index defining stokes value.
 
     Returns:
-        str: String indicating stokes value. 
+        str: String indicating stokes value.
     """
     STOKES_MAP = ['I', 'Q', 'U', 'V']
-  
+
     try:
         return [STOKES_MAP[i] for i in index]
     except TypeError:
@@ -438,7 +441,7 @@ def __get_center_pixels(params: dict):
     return params['d']
 
 def __write_casa_region(region_object: 'astropy.region', coord:str, polygon_shape: str)->list:
-    ''' Convert astropy region to casa region string. 
+    ''' Convert astropy region to casa region string.
 
     Parameters
     ----------
@@ -447,10 +450,10 @@ def __write_casa_region(region_object: 'astropy.region', coord:str, polygon_shap
     coord: str
         Coordinate system that should be used in the returned masks. Allowed values are 'pixel', 'world'.
     polygon_shape: str
-        Region shape definition: rect: centerbox/rotbox, poly:poly 
+        Region shape definition: rect: centerbox/rotbox, poly:poly
 
     '''
-    
+
     meta_value = []
     for key, value in region_object.meta.items():
         if key == 'corr':
@@ -459,7 +462,7 @@ def __write_casa_region(region_object: 'astropy.region', coord:str, polygon_shap
             meta_value.append('{key}=[{lower}chan, {upper}chan]'.format(key=key, lower=str(value[0]), upper=str(value[1])))
         else:
             print('Unknown key: {} skipping'.format(key))
-        
+
     meta = ', '.join(meta_value)
 
     if polygon_shape=='rect':
@@ -471,7 +474,7 @@ def __write_casa_region(region_object: 'astropy.region', coord:str, polygon_shap
                 height=region_object.height,
                 meta=meta
             )
-  
+
         if coord=='world':
             return 'rotbox[[{ra}, {dec}], [{width}, {height}], {angle}], {meta}'.format(
                 ra=region_object.center.ra,
@@ -481,11 +484,11 @@ def __write_casa_region(region_object: 'astropy.region', coord:str, polygon_shap
                 angle=region_object.angle,
                 meta=meta
             )
-  
+
         else:
             raise RuntimeError('Unknown coordinate value: {}'.format(coord))
-  
-    if polygon_shape=='poly':    
+
+    if polygon_shape=='poly':
         if coord=='pixel':
             coords_array = []
             for value in region_object.vertices:
@@ -551,7 +554,7 @@ def convert_masks(masks: dict, coord='pixel', cdesc=None)->list:
 
     region_list = []
 
-    # Group masks by unique center pixel and determine channel range. Extract 
+    # Group masks by unique center pixel and determine channel range. Extract
     # mask properties and build astropy region for each center pixel and geometry
     # including region meta data.
     for key, props in itertools.groupby(full_mask_params, __get_center_pixels):
@@ -560,9 +563,9 @@ def convert_masks(masks: dict, coord='pixel', cdesc=None)->list:
             channel_range.append(prop['c'])
             poly = prop['p']
             center_pixels = prop['d']
-      
+
             mask_shape = masks['polys'][poly]['type']
-      
+
             xs = masks['polys'][poly]['geometry']['xs']
             ys = masks['polys'][poly]['geometry']['ys']
 
@@ -570,10 +573,10 @@ def convert_masks(masks: dict, coord='pixel', cdesc=None)->list:
             height = max(ys) - min(ys)
 
             stokes_index = prop['s']
-    
+
         if mask_shape=='rect':
             region = RectanglePixelRegion(
-                PixCoord(x=center_pixels[0], y=center_pixels[1]), 
+                PixCoord(x=center_pixels[0], y=center_pixels[1]),
                 width=width, height=height, angle=0*units.deg
         )
         elif mask_shape=='poly':
@@ -747,5 +750,3 @@ def set_attributes(obj, **kw):
     for k, v in kw.items():
         if hasattr(obj,k): setattr(obj, k, v)
     return obj
-
-

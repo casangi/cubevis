@@ -34,10 +34,10 @@ from bokeh.plotting import ColumnDataSource
 from bokeh.core.properties import Instance, String, Nullable
 from bokeh.models.callbacks import Callback
 from bokeh.models import CustomJS
-import websockets
 from ._data_pipe import DataPipe
 from ..state import casalib_url, cubevisjs_url
 from ...utils import find_ws_address
+from .transport import create_ws_server
 from .. import BokehInit
 
 class UpdatableDataSource(ColumnDataSource,BokehInit):
@@ -189,5 +189,5 @@ class UpdatableDataSource(ColumnDataSource,BokehInit):
             raise RuntimeError( 'UpdatableDataSource.serve should only be called for when a "pipe" is NOT supplied as part of initialization' )
 
         self._stop_serving_function = stop_function
-        async with websockets.serve( self.pipe.process_messages, self.pipe.address[0], self.pipe.address[1] ) as msgpipe:
+        async with create_ws_server( self.pipe.process_messages, self.pipe.backend_ip, self.pipe.backend_port ) as msgpipe:
             yield { 'msgpipe': msgpipe }

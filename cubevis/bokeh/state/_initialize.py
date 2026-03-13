@@ -321,6 +321,13 @@ def order_bokeh_js():
     resources.Resources.js_files = property(js_files)
     return
 
+#def get_bokeh_js_paths( ):
+#    modes = ['cdn','inline','server','server-dev','relative','relative-dev','absolute','absolute-dev']
+#    return { 'new': { mode: resources.Resources(mode=mode).js_files for mode in modes },
+#             'old': { mode: resources.Resources(mode=mode)._old_js_files for mode in modes } }
+def get_bokeh_js_paths( ):
+    return resources.Resources(mode='cdn').js_files
+
 def get_jupyter_state( ):
     """Get the package-level Jupyter state"""
     return _JUPYTER_STATE

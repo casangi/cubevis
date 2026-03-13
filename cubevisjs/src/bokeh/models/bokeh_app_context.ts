@@ -1,6 +1,7 @@
 import {LayoutDOM, LayoutDOMView} from "@bokehjs/models/layouts/layout_dom"
 import {UIElement} from "@bokehjs/models/ui/ui_element"
 import type * as p from "@bokehjs/core/properties"
+import {object_id} from "../util/find"
 
 export class BokehAppContextView extends LayoutDOMView {
   declare model: BokehAppContext
@@ -38,7 +39,8 @@ export namespace BokehAppContext {
   export type Props = LayoutDOM.Props & {
     ui: p.Property<UIElement | null>
     app_id: p.Property<string>
-    session_id: p.Property<string>
+    backend_id: p.Property<string>
+    frontend_id: p.Property<string | null>
     app_state: p.Property<any>
   }
 }
@@ -57,14 +59,25 @@ export class BokehAppContext extends LayoutDOM {
 
   override initialize(): void {
     super.initialize()
-    
+
+    // frontend_id must be set by the frontend not preset by the backend
+    if (this.frontend_id !== null) {
+      console.warn(
+        `BokehAppContext [${this.app_id}]: 'frontend_id' was initialized as '${this.frontend_id}', ` +
+        `but it must be NULL upon initialization. Forcing to NULL.`
+      )
+      this.frontend_id = null
+    }
+
     // Initialize session-level data structure if it doesn't exist
     if (!(window as any).cubevisAppSession) {
       (window as any).cubevisAppSession = {
-        sessionId: this.session_id,
+        sessionId: this.backend_id,
         applications: {}
       }
-      console.log(`Initialized Bokeh session: ${this.session_id}`)
+
+      this.frontend_id = object_id(this)
+      console.log(`Initialized Bokeh session: ${this.backend_id}:${this.frontend_id}`)
     }
     
     const session = (window as any).cubevisAppSession
@@ -86,7 +99,8 @@ export class BokehAppContext extends LayoutDOM {
     this.define<BokehAppContext.Props>(({Ref, Nullable, Dict, String, Unknown}) => ({
       ui: [ Nullable(Ref(UIElement)), null ],
       app_id: [String, ""],
-      session_id: [String, ""],
+      backend_id: [String, ""],
+      frontend_id: [ Nullable(String), null ],
       app_state: [ Dict(Unknown), {} ],
     }))
   }

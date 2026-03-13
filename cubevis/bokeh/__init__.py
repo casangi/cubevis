@@ -30,10 +30,33 @@ provided by Bokeh'''
 
 from .state import order_bokeh_js as _order_bokeh_js
 from .state import register_model as _register_model
+from .state._initialize import get_bokeh_js_paths
 from .state import set_cubevis_lib
 
 class BokehInit:
     """Mixin for all cubevis models"""
+
+    _app_context = None  # Class-level storage for the singleton context
+
+    @classmethod
+    def set_app_context(cls, context):
+        """Register the application context singleton"""
+        if cls._app_context is not None and context is not cls._app_context:
+            raise RuntimeError(
+                f"BokehAppContext already registered. Cannot register a different context. "
+                f"Existing: {id(cls._app_context)}, Attempted: {id(context)}"
+            )
+        cls._app_context = context
+    
+    @classmethod
+    def get_app_context(cls):
+        """Get the registered application context"""
+        if cls._app_context is None:
+            raise RuntimeError(
+                "No BokehAppContext has been registered. "
+                "Call BokehInit.set_app_context() first."
+            )
+        return cls._app_context
 
     def __init_subclass__(cls, **kwargs):
         """Auto-register subclasses"""
@@ -43,3 +66,5 @@ class BokehInit:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    

@@ -5,6 +5,7 @@ from bokeh.core.properties import Instance, String
 
 from bokeh.io import curdoc
 from .. import BokehInit
+from ...utils import is_colab
 
 logger = logging.getLogger(__name__)
 
@@ -272,8 +273,11 @@ class Showable(LayoutDOM,BokehInit):
         Common logic for generating HTML in notebook environments.
         Returns the HTML string to display, or None if not in a notebook.
         """
-        from bokeh.embed import components
+        from bokeh.embed import components, json_item
         from bokeh.io.state import curstate
+        from bokeh.resources import CDN
+        import sys
+        import json as json_lib
 
         state = curstate()
 
@@ -284,31 +288,96 @@ class Showable(LayoutDOM,BokehInit):
             return '<div style="color: red; padding: 10px; border: 1px solid red;">Showable object with no UI set</div>'
 
         if self._display_context:
-            self._display_context.on_show( )
+            self._display_context.on_show()
 
         if self._notebook_rendering:
             # Return a lightweight reference instead of re-rendering the full GUI
             return f'''
             <div style="padding: 10px; background: #f0f8f0; border-left: 4px solid #4CAF50; margin: 5px 0;">
-                <strong>↑ iclean GUI active above</strong>
+                <strong>→ iclean GUI active above</strong>
                 <small style="color: #666; display: block; margin-top: 5px;">
                     Showable ID: {self.id[-8:]} | Backend: Running
                 </small>
             </div>
             '''
 
-        # Apply notebook sizing for Jupyter context
-        ###if self._notebook_sizing == 'fixed':
-        ###    self.sizing_mode = None
-        ###    self.width = self._notebook_width
-        ###    self.height = self._notebook_height
+        if is_colab( ):
+            # Get all JS paths from the existing function
+            # This returns paths in the correct order:
+            # [casalib, bokeh-core, bokeh-widgets, bokeh-tables, cubevisjs]
+            from cubevis.bokeh import get_bokeh_js_paths
+            js_paths = get_bokeh_js_paths( )
 
-        script, div = components(self)
-        if start_backend:
-            self._start_backend()
+            # Build script tags for all libraries in order
+            all_scripts = '\n'.join([
+                f'<script type="text/javascript" src="{url}"></script>'
+                for url in js_paths
+            ])
 
-        self._notebook_rendering = f'{script}\n{div}'
-        return self._notebook_rendering
+            print( "-----scripts-being-used-----------------------------------------------" )
+            print( all_scripts )
+            print( "----------------------------------------------------------------------" )
+
+            # Use json_item approach which is more reliable in iframes
+            item = json_item(self, target=f"bokeh-{self.id}")
+            item_json = json_lib.dumps(item)
+
+            # Build complete HTML with proper loading sequence
+            # get_bokeh_js_paths() already returns libs in the correct order:
+            # 1. casalib (third-party libs for CustomJS)
+            # 2. bokeh-core
+            # 3. bokeh-widgets
+            # 4. bokeh-tables
+            # 5. cubevisjs (custom Bokeh models)
+            html = f'''
+            {f'<link href="{CDN.css_files[0]}" rel="stylesheet" type="text/css">' if CDN.css_files else ""}
+            <div id="bokeh-{self.id}" class="bk-root"></div>
+            {all_scripts}
+            <script type="text/javascript">
+            (function() {{
+                var item = {item_json};
+
+                function embedWhenReady() {{
+                    // Check if all required libraries are loaded
+                    if (typeof Bokeh !== 'undefined' && Bokeh.embed) {{
+                        var target = document.getElementById("bokeh-{self.id}");
+                        if (target) {{
+                            try {{
+                                Bokeh.embed.embed_item(item);
+                                console.log("Bokeh plot embedded successfully");
+                            }} catch(e) {{
+                                console.error("Error embedding Bokeh plot:", e);
+                            }}
+                        }} else {{
+                            console.error("Target element not found");
+                            setTimeout(embedWhenReady, 50);
+                        }}
+                    }} else {{
+                        setTimeout(embedWhenReady, 50);
+                    }}
+                }}
+
+                if (document.readyState === 'loading') {{
+                    document.addEventListener('DOMContentLoaded', embedWhenReady);
+                }} else {{
+                    embedWhenReady();
+                }}
+            }})();
+            </script>
+            '''
+
+            if start_backend:
+                self._start_backend()
+
+            self._notebook_rendering = html
+            return html
+        else:
+            # In Jupyter Lab/Classic, use components() as before
+            script, div = components(self)
+            if start_backend:
+                self._start_backend()
+            self._notebook_rendering = f'{script}\n{div}'
+            return self._notebook_rendering
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         """

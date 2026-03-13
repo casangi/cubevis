@@ -222,7 +222,7 @@ function find_model(
     return;
 }
 
-function find_parent<T extends Model>(
+function find_parent01<T extends Model>(
     type_string: string
 ): (model: Model) => T | undefined {
     return (model: Model): T | undefined => {
@@ -236,6 +236,7 @@ function find_parent<T extends Model>(
         // Recursively get the first matching type in the tree (or empty array if none)
         const findParent = (node: HasProps): T[] => {
             const nodeModel = node as Model;
+          //console.log( '\t<<find=parent=1=001>>:', nodeModel )
 
             // If current node matches the type string, return it (stop searching deeper)
             if (nodeModel?.type === type_string) {
@@ -243,7 +244,9 @@ function find_parent<T extends Model>(
             } else {
                 // Otherwise, search children
                 return potentialChildrenProps.flatMap(prop => {
+                  //console.log( '\t<<find=parent=1=002>>:', prop, node )
                     const children = (node as any)[prop];
+                  //console.log( '\t<<find=parent=1=003>>:', children )
                     if (!children) return [];
 
                     // Handle both single child and array of children
@@ -289,11 +292,11 @@ export function children<T extends Model>(
         const matches_type = (node: Model): boolean => {
             if (typeof type_identifier === 'string') {
                 // String: exact type match only
-                //console.log(`<S:${node.type}>`,node)
+              //console.log(`<S:${node.type}>`,node)
                 return node.type === type_identifier;
             } else {
                 // Class: use instanceof for inheritance checking
-                //console.log(`<C:${node.type}>`,node)
+              //console.log(`<C:${node.type}>`,node)
                 return node instanceof type_identifier;
             }
         };
@@ -316,63 +319,246 @@ export function children<T extends Model>(
     };
 }
 
-export function app_context(model: Model): BokehAppContext | undefined {
-    return model.document?.get_model_by_name("_GLOBAL_APP_CONTEXT_") as BokehAppContext | undefined
+function find_parent02<T extends Model>(
+    type_string: string
+): (model: Model) => T | undefined {
+    return (model: Model): T | undefined => {
+        const doc = model.document;
+        if (!doc) return undefined;
+
+        const is_model = (obj: HasProps): obj is Model => obj instanceof Model;
+        const roots = doc.all_roots ?? doc.roots();
+
+        for (const root of roots) {
+          //console.log( '\t<<find=parent=2=001>>:', root.type )
+            const all_refs = root.references();
+            // Check if our model is in this subgraph
+            if (!all_refs.has(model)) continue;
+            
+            // Find parent of the specified type in this subgraph
+            for (const ref of all_refs) {
+                if (is_model(ref) && ref.type === type_string) {
+                    // Verify this parent contains our model
+                    if (ref.references().has(model)) {
+                        return ref as T;
+                    }
+                }
+            }
+        }
+        
+        return undefined;
+    };
 }
 
-export const showable = find_parent<Showable>(
+function find_parent03<T extends Model>(
+    type_string: string
+): (model: Model) => T | undefined {
+    return (model: Model): T | undefined => {
+        const doc = model.document;
+        if (!doc) return undefined;
+
+        const is_model = (obj: HasProps): obj is Model => obj instanceof Model;
+        const roots = doc.all_roots ?? doc.roots();
+
+        for (const root of roots) {
+            console.log( '\t<<find=parent=3=001>>:', root.type )
+            const all_refs = root.references();
+            
+            // Check if our model is in this subgraph
+            if (!all_refs.has(model)) continue;
+            
+            // Find parent of the specified type in this subgraph
+            for (const ref of all_refs) {
+                if (is_model(ref) && ref.type === type_string) {
+                    // Verify this parent contains our model
+                    if (ref.references().has(model)) {
+                        return ref as T;
+                    }
+                }
+            }
+        }
+        
+        return undefined;
+    };
+}
+
+function find_parent04<T extends Model>(
+  type_string: string
+): (model: Model) => T | undefined {
+    return (model: Model): T | undefined => {
+        const doc = model.document;
+        if (!doc) return undefined;
+
+        // 1. Get all roots from the document efficiently
+        const roots = model?.document?.all_roots ?? model?.document?.roots();
+
+        // 2. Use a Set for visited nodes to prevent infinite loops in cyclic graphs
+        const visited = new Set<string>();
+
+        // 3. Helper to find the AppContext and verify it contains our target model
+        const findContext = (current: HasProps): T | undefined => {
+            if (!(current instanceof Model) || visited.has(current.id)) return undefined;
+            visited.add(current.id);
+
+            // Check if this is the target context
+            if (current.type === type_string) {
+                // Efficiency: Check if the target 'model' exists within this subtree
+                // Bokeh's internal 'references()' returns all descendants
+                const descendants = (current as any).references();
+                if (descendants.has(model)) {
+                    return current as T;
+                }
+                return undefined;
+            }
+
+            // Recurse through all referenced models automatically
+            const refs = (current as any).references() as Set<Model>;
+            for (const ref of refs) {
+                const found = findContext(ref);
+                if (found) return found;
+            }
+            return undefined;
+        };
+
+        for (const root of roots ?? []) {
+            const context = findContext(root);
+            if (context) return context;
+        }
+
+        return undefined;
+    };
+};
+
+export const find_parent05 = <T extends Model>(type_string: string) => {
+    return (targetModel: Model): T | undefined => {
+        const doc = targetModel.document;
+        if (!doc) return undefined;
+
+        const roots = doc.roots();
+        const visited = new Set<string>();
+
+        const searchSubtree = (current: HasProps): T | undefined => {
+            if (!(current instanceof Model) || visited.has(current.id)) return undefined;
+            visited.add(current.id);
+
+            // 1. Check if current node is the AppContext
+            if (current.type === type_string) {
+                // Verify the target model actually lives inside this specific context
+                const allDescendants = (current as any).references() as Set<Model>;
+                if (allDescendants.has(targetModel)) {
+                    return current as T;
+                }
+            }
+
+            // 2. Recursively search all children discovered by Bokeh
+            const refs = (current as any).references() as Set<Model>;
+            for (const ref of refs) {
+                const found = searchSubtree(ref);
+                if (found) return found;
+            }
+            return undefined;
+        };
+
+        for (const root of roots) {
+            const result = searchSubtree(root);
+            if (result) return result;
+        }
+        return undefined;
+    };
+}
+
+export const find_in_document1 = <T extends Model>(type_string: string) => {
+    return (model: Model): T | undefined => {
+        const doc = model.document as any;
+        if (!doc) return undefined;
+
+        // 1. Efficient lookup using Document's internal model index
+        // BokehJS stores all models in the document in an internal map/index
+        const all_models = doc._all_models || {}; 
+        
+        for (const id in all_models) {
+            const m = all_models[id];
+            if (m.type === type_string) {
+                return m as T;
+            }
+        }
+
+        // 2. Fallback: Search roots if the index is unavailable
+        for (const root of doc.roots()) {
+            if (root.type === type_string) return root as T;
+        }
+
+        return undefined;
+    };
+}
+
+export const find_in_document2 = <T extends Model>(type_string: string) => {
+    return (model: Model): T | undefined => {
+        const doc = model.document;
+        if (!doc) return undefined;
+
+        // In 2026 BokehJS, we can aggregate all models by getting 
+        // references from all roots.
+        const roots = doc.roots();
+        const allDiscoveredModels = new Set<Model>();
+
+        for (const root of roots) {
+            // @ts-ignore: 
+            allDiscoveredModels.add(root);
+            // .references() returns every model reachable from this root
+            const refs = (root as any).references() as Set<Model>;
+            refs.forEach(m => allDiscoveredModels.add(m));
+        }
+
+        // Search the aggregated set for your context type
+        for (const m of allDiscoveredModels) {
+            if (m.type === type_string) {
+                return m as T;
+            }
+        }
+
+        return undefined;
+    };
+}
+
+export const app_context02 = find_parent02<BokehAppContext>(
+    "cubevis.bokeh.models._bokeh_app_context.BokehAppContext"
+);
+
+export const app_context03 = find_parent03<BokehAppContext>(
+    "cubevis.bokeh.models._bokeh_app_context.BokehAppContext"
+);
+
+export const app_context04 = find_parent04<BokehAppContext>(
+    "cubevis.bokeh.models._bokeh_app_context.BokehAppContext"
+);
+
+export const app_context05 = find_parent05<BokehAppContext>(
+    "cubevis.bokeh.models._bokeh_app_context.BokehAppContext"
+);
+
+export const app_context06 = find_in_document1<BokehAppContext>(
+    "cubevis.bokeh.models._bokeh_app_context.BokehAppContext"
+);
+
+export const app_context07 = find_in_document2<BokehAppContext>(
+    "cubevis.bokeh.models._bokeh_app_context.BokehAppContext"
+);
+
+export const context = find_parent01<BokehAppContext>(
+    "cubevis.bokeh.models._bokeh_app_context.BokehAppContext"
+);
+
+export const showable = find_parent01<Showable>(
     "cubevis.bokeh.models._showable.Showable"
 );
 
 export function appState(model: Model): object | undefined {
-    const ctx = app_context(model)
+    const ctx = context(model)
     if ( ctx ) {
         // @ts-ignore: defined on startup
         const apps_state = window?.cubevisAppSession?.applications
         return apps_state[ctx.app_id]?.state
     }
     return
-}
-
-// This is a cubevisjs specialization of the casalib object_id. This version
-// uses the casalib object_id (barring bugs) to generate the object ID and
-// then if the obj being checked is a BokehAppContext it adds the ID to the
-// app_state.
-//
-// Other Models will be initialized BEFORE the BokehAppContext. This will
-// mean that the app_state.frontend_id may be filled in through earlier
-// calls to this function BEFORE the initialize function of BokehAppContext
-// is executed.
-export function object_id(obj: any): string {
-
-    if (!obj) return "invalid-object-provided";
-
-    // We check for the function globally or via a known registry
-    const globalCasalib = (globalThis as any).casalib;
-    // 1. Generate ID: Call casalib object_id if available to generate ID
-    //.   otherwise generate a unique string...
-    const identifier = globalCasalib && typeof globalCasalib.object_id === 'function' ?
-        globalCasalib.object_id(obj) : undefined
-
-    // Check for 'app_state' without importing the class and if so, add id to app_state
-    if ('app_state' in obj && obj.type === "cubevis.bokeh.models._bokeh_app_context.BokehAppContext") {
-
-        if (!obj.app_state) obj.app_state = { }
-
-        // Use the casalib ID or a locally generated ID
-        if ( identifier ) {
-            if ( ! obj.app_state.frontend_id || obj.app_state.frontend_id != identifier ) {
-                obj.app_state.frontend_id = identifier
-            }
-        } else {
-            if ( ! obj.app_state.frontend_id ) {
-                obj.app_state.frontend_id = `cube-${Math.random().toString(36).substr(2, 9)}`
-            }
-        }
-
-        return obj.app_state.frontend_id
-    }
-
-
-    return identifier ?? "casalib-not-found-fallback-id";
 }

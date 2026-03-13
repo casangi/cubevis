@@ -10,6 +10,8 @@ import webbrowser
 import os
 import re
 
+from .. import BokehInit
+
 logger = logging.getLogger(__name__)
 
 class BokehAppContext(LayoutDOM):
@@ -22,18 +24,45 @@ class BokehAppContext(LayoutDOM):
     """)
 
     app_id = String(default="")
-    session_id = String(default="")
+    backend_id = String(default="", help="""
+    The backend_id is filled by this class. This is expected to be a unique, non-null
+    string. There should be only one backend_id for each cubevis application.
+    """ )
+    frontend_id = Nullable(String, default=None, help="""
+    The frontend_id is filled with the identifier generated for the browser session. It is
+    populated by the DataPipe class which establishes communications between the frontend
+    and the backend. This is expected to be null. There should be only one frontend_id
+    for each cubevis application.
+    """ )
     app_state = Dict(String, Any, default={})
 
-    # Class-level session ID shared across all apps in the same Python session
-    _session_id = None
-    
+    ## Class-level session ID shared across all apps in the same Python session
+    _backend_id = None
+
     @classmethod
-    def get_session_id(cls):
+    def _create_or_fetch_backend_id(cls):
         """Get or create a session ID for this Python session"""
-        if cls._session_id is None:
-            cls._session_id = str(uuid4())
-        return cls._session_id
+        if cls._backend_id is None:
+            cls._backend_id = str(uuid4())
+        return cls._backend_id
+
+    def get_frontend_id(self):
+        """Get the current frontend_id value."""
+        return self.frontend_id
+
+    def set_frontend_id(self, value):
+        """Set the frontend_id value with validation."""
+        print( "################################################################################")
+        print(f"### existing frontend_id: {self.frontend_id}")
+        print(f"###      new frontend_id: {value}")
+        print( "################################################################################")
+        if self.frontend_id is not None and self.frontend_id != value:
+            raise ValueError(
+                f"frontend_id is already set to '{self.frontend_id}' and cannot be "
+                f"changed to '{value}'. There should be only one frontend_id per "
+                f"cubevis application."
+            )
+        self.frontend_id = value
 
     def _slugify(self, value, allow_unicode=False):
         """
@@ -66,14 +95,24 @@ class BokehAppContext(LayoutDOM):
         if ui is not None and 'ui' in kwargs:
             raise RuntimeError( "'ui' supplied as both a positional parameter and a keyword parameter" )
 
-        kwargs['session_id'] = self.get_session_id( )
+        kwargs['backend_id'] = self._create_or_fetch_backend_id( )
+        print( '******backend_id*set****************************************************************************************************' )
+        print( f"**** {type(kwargs['backend_id'])}" )
+        print( f"**** {kwargs['backend_id']}" )
+        print( '************************************************************************************************************************' )
 
         if 'ui' not in kwargs:
             kwargs['ui'] = ui
         if 'app_id' not in kwargs:
             kwargs['app_id'] = str(uuid4())
-        
+        # setting a unique well defined name for BokehAppContext
+        # allows this object to be found by name in JavaScript
+        kwargs['name'] = "_GLOBAL_APP_CONTEXT_"
+
         super().__init__(**kwargs)
+
+        # Register this context as the singleton
+        BokehInit.set_app_context(self)
 
     def _sphinx_height_hint(self):
         """Delegate height hint to the wrapped UI element"""

@@ -33,7 +33,6 @@ import sys
 import copy
 import asyncio
 import shutil
-import websockets
 from os.path import basename, abspath, exists, join
 import numpy as np
 from uuid import uuid4
@@ -64,6 +63,7 @@ from cubevis.utils import find_ws_address, convert_masks
 from cubevis.toolbox import CubeMask
 from cubevis.bokeh.utils import svg_icon
 from cubevis.bokeh.sources import DataPipe
+from cubevis.bokeh.sources.transport import create_ws_server
 from cubevis.utils import DocEnum
 from cubevis import exe
 
@@ -141,11 +141,11 @@ class InteractiveCleanUI:
         ###
         ### need to add extra cube ports here for multifield imaging
         ###
-        ports = [ self._pipe['control'].address[1], self._clean['converge']['pipe'].address[1] ]
+        ports = [ self._pipe['control'].backend_port, self._clean['converge']['pipe'].backend_port ]
 
         for imid, imdetails in self._clean_targets.items( ):
-            ports.append( imdetails['gui']['cube']._pipe['image'].address[1] )
-            ports.append( imdetails['gui']['cube']._pipe['control'].address[1] )
+            ports.append( imdetails['gui']['cube']._pipe['image'].backend_port )
+            ports.append( imdetails['gui']['cube']._pipe['control'].backend_port )
 
         # Also forward http port if serving webpage
         #if not self._is_notebook:
@@ -1154,12 +1154,12 @@ class InteractiveCleanUI:
                                  [
                                      self._clean_targets[img]['gui']['cube'].serve(self.__stop),
                                  ]
-                               ] + [ websockets.serve( self._pipe['control'].process_messages,
-                                                       self._pipe['control'].address[0],
-                                                       self._pipe['control'].address[1] ),
-                                     websockets.serve( self._clean['converge']['pipe'].process_messages,
-                                                       self._clean['converge']['pipe'].address[0],
-                                                       self._clean['converge']['pipe'].address[1] ) ]
+                               ] + [ create_ws_server( self._pipe['control'].process_messages,
+                                                       self._pipe['control'].backend_ip,
+                                                       self._pipe['control'].backend_port ),
+                                     create_ws_server( self._clean['converge']['pipe'].process_messages,
+                                                       self._clean['converge']['pipe'].backend_ip,
+                                                       self._clean['converge']['pipe'].backend_port ) ]
                               ) ):
                 self.__result_future = asyncio.Future( )
                 yield self.__result_future
@@ -1314,8 +1314,8 @@ class InteractiveCleanUI:
                      ### --  appstate that is used storing state                                  --
                      ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
                      'initialize':      '''const appstate = Bokeh.find.appState(logbutton)
+                                           console.log( "AAAAAPPPPPP STTAAAAATTTEE>>>", appstate )
                                            if ( ! appstate.ic_initialized ) {
-                                               console.log(`casalib version: ${casalib.version}`)
                                                appstate.image_name = initial_image
                                                appstate.ic_initialized = true
                                                appstate.window_closed = false

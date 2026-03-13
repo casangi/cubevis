@@ -38,7 +38,6 @@ import asyncio
 from uuid import uuid4
 from sys import platform
 from os.path import dirname, join
-import websockets
 from contextlib import asynccontextmanager
 from bokeh.core.enums import HatchPattern as _hatch_patterns
 from bokeh.core.enums import DashPattern as _dash_patterns
@@ -59,6 +58,7 @@ from ..bokeh.models import EvTextInput, SharedDict
 from ..bokeh.tools import CBResetTool
 from ..bokeh.state import available_palettes, find_palette, default_palette
 from ..bokeh.annotations import EvPolyAnnotation
+from ..bokeh.sources.transport import create_ws_server
 from bokeh.layouts import row, column
 from bokeh.models.dom import HTML
 from bokeh.models import Tooltip
@@ -1082,7 +1082,7 @@ class CubeMask:
                                  ### Firefox incorrectly sizes the colormap histogram plot resulting in the right
                                  ### side being outside of the browser window... this may have to be tweaked again
                                  ### when Jupyter notebooks are supported...
-                               ( [ Spacer( width=120 ) ] if have_firefox( ) else [ ] ), sizing_mode='stretch_both' ),
+                               ( [ Spacer( width=120 ) ] if not is_interactive_jupyter( ) and have_firefox( ) else [ ] ), sizing_mode='stretch_both' ),
                        row( Tip( self._cm_adjust['min input'],
                                   tooltip=Tooltip( content=HTML("set minimum clip here or drag the left red line above"),
                                                    position="top" ) ),
@@ -2301,8 +2301,8 @@ class CubeMask:
     @asynccontextmanager
     async def serve( self, stop_function ):
         self._stop_serving_function = stop_function
-        async with websockets.serve( self._pipe['image'].process_messages, self._pipe['image'].address[0], self._pipe['image'].address[1] ) as im, \
-             websockets.serve( self._pipe['control'].process_messages, self._pipe['control'].address[0], self._pipe['control'].address[1] ) as ctrl:
+        async with create_ws_server( self._pipe['image'].process_messages, self._pipe['image'].backend_ip, self._pipe['image'].backend_port ) as im, \
+             create_ws_server( self._pipe['control'].process_messages, self._pipe['control'].backend_ip, self._pipe['control'].backend_port ) as ctrl:
             yield { 'im': im, 'ctrl': ctrl }
             #pass
 
@@ -2402,12 +2402,14 @@ class CubeMask:
                                               }
                                               function mask_add_cube( ) {
                                                   if ( disable_add_sub.values.disabled ) {
+                                                      console.log( '<<CUBE#1>>\t*add*mask*' )
                                                       update_status_error( disable_add_sub.values.message ?
                                                                            disable_add_sub.values.message :
                                                                            default_add_sub_disabled_text )
                                                       return
                                                   }
                                                   if ( annotations[0].xs.length > 0 && annotations[0].ys.length > 0 ) {
+                                                      console.log( '<<CUBE#2>>\t*add*mask*' )
                                                       ctrl.send( ids['mask-mod'],
                                                                  { scope: 'cube',
                                                                    action: 'addition',
@@ -2416,6 +2418,7 @@ class CubeMask:
                                                                             ys: annotations[0].ys } },
                                                                  mask_mod_result )
                                                   } else if ( ! casalib.is_empty(mask_region_ds.data.xs) && ! casalib.is_empty(mask_region_ds.data.ys) ) {
+                                                      console.log( '<<CUBE#3>>\t*add*mask*' )
                                                       ctrl.send( ids['mask-mod'],
                                                                  { scope: 'cube',
                                                                    action: 'addition',

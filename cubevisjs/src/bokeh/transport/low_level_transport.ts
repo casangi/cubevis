@@ -655,9 +655,11 @@ export class JupyterCommsTransport implements TransportBase {
      *   3. ipywidgets Comm constructor         — last-resort fallback
      */
     private async createComm(): Promise<any> {
+        console.group('JupyterCommsTransport.createComm')
         // Path 1: Classic Notebook 6 / JupyterLab 3 via @jupyter-widgets/base
         try {
             const commManager = await this.findCommManager()
+            console.log( 'Path 1', commManager )
             if (commManager && typeof commManager.new_comm === 'function') {
                 // new_comm() on these managers creates but does NOT immediately
                 // send the comm_open — we call open() ourselves after wiring handlers.
@@ -675,6 +677,7 @@ export class JupyterCommsTransport implements TransportBase {
         // global `kernel` object injected by the notebook widget.
         try {
             const kernel = await this.findJupyterLabKernel()
+            console.log( 'Path 2', kernel )
             if (kernel && typeof kernel.createComm === 'function') {
                 const comm = kernel.createComm(this.targetName)
                 console.log("Created comm via kernel.createComm() (JupyterLab 4)")
@@ -687,6 +690,7 @@ export class JupyterCommsTransport implements TransportBase {
         // Path 3: ipywidgets Comm constructor loaded via RequireJS (fallback)
         try {
             const WidgetsComm = await this.loadWidgetsComm()
+            console.log( 'Path 3', WidgetsComm )
             if (WidgetsComm) {
                 const comm = new WidgetsComm({ target_name: this.targetName })
                 console.log("Created comm via ipywidgets Comm constructor (fallback)")
@@ -696,6 +700,7 @@ export class JupyterCommsTransport implements TransportBase {
             console.debug("ipywidgets Comm fallback failed:", e)
         }
 
+        console.log( 'Failure', window )
         throw new Error(
             `Could not create a Jupyter comm for target '${this.targetName}'. ` +
             "Ensure @jupyter-widgets/base or @jupyter/services is available."

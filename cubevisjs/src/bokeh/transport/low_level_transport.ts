@@ -561,7 +561,6 @@ export class ColabCommsTransport implements TransportBase {
  */
 export class JupyterCommsTransport implements TransportBase {
     private comm?: any
-    private commManager?: any
     private targetName: string
     private isOpen: boolean = false
     private onMessageCallback?: (msg: any) => void
@@ -660,7 +659,6 @@ export class JupyterCommsTransport implements TransportBase {
         try {
             const commManager = await this.findCommManager()
             if (commManager && typeof commManager.new_comm === 'function') {
-                this.commManager = commManager
                 // new_comm() on these managers creates but does NOT immediately
                 // send the comm_open — we call open() ourselves after wiring handlers.
                 const comm = commManager.new_comm(this.targetName, {})

@@ -701,6 +701,7 @@ export class JupyterCommsTransport implements TransportBase {
         }
 
         console.log( 'Failure', window )
+        console.groupEnd( )
         throw new Error(
             `Could not create a Jupyter comm for target '${this.targetName}'. ` +
             "Ensure @jupyter-widgets/base or @jupyter/services is available."

@@ -28,6 +28,7 @@
 '''This contains functions which return the URLs to the ``cubevis``
 JavaScript libraries. The ``casalib`` library has Bokeh independent
 functions while the `cubevisjs` library has the Bokeh extensions'''
+import logging
 from os import path, environ
 from pathlib import Path
 from packaging import version
@@ -42,6 +43,8 @@ _CUBEVIS_RELEASE_VERSION = None
 _CUBEVIS_GITHUB_VERSION = None
 _BOKEH_MAJOR_MINOR = None
 _CUBEVIS_JS_TAG = None
+
+logger = logging.getLogger(__name__)
 
 def bokeh_major_minor( ):
     global _BOKEH_MAJOR_MINOR
@@ -104,6 +107,7 @@ def cubevisjs_path( ):
     cubevisjs_path = path.join( _local_library_path, f"bokeh-{_bokeh_major_minor}", 'cubevisjs.min.js' )
     if not path.isfile(cubevisjs_path):
         raise RuntimeError( f''''cubevisjs' JavaScript library not found at '{cubevisjs_path}\'''' )
+    logger.debug(f"cubevisjs_path: {cubevisjs_path}")
     return cubevisjs_path
 
 ### These functions MUST also select remote/local based on Jupyter or
@@ -115,13 +119,18 @@ def cubevisjs_path( ):
 ### Bokeh files.
 def casalib_url( ):
     prefer_local, prefer_network = get_js_loading_selection( )
-    if prefer_network:
+    if prefer_network or 'CUBEVIS_JS_TAG' in environ:
         return f"https://cdn.jsdelivr.net/gh/casangi/cubevis@{github_js_tag( )}/cubevis/__js__/casalib.min.js"
     else:
         return f"file://{casalib_path( )}"
 def cubevisjs_url( ):
     prefer_local, prefer_network = get_js_loading_selection( )
-    if prefer_network:
-        return f"https://cdn.jsdelivr.net/gh/casangi/cubevis@{github_js_tag( )}/cubevis/__js__/bokeh-{bokeh_major_minor( )}/cubevisjs.min.js"
+    if prefer_network or 'CUBEVIS_JS_TAG' in environ:
+        url = f"https://cdn.jsdelivr.net/gh/casangi/cubevis@{github_js_tag( )}/cubevis/__js__/bokeh-{bokeh_major_minor( )}/cubevisjs.min.js"
+        logger.debug(f"cubevisjs_url: {url}")
+        return url
     else:
-        return f"file://{cubevisjs_path( )}"
+        url = f"file://{cubevisjs_path( )}"
+        logger.debug(f"cubevisjs_url: {_CUBEVIS_JS_TAG}")
+        logger.debug(f"cubevisjs_url: {url}")
+        return url

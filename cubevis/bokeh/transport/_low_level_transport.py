@@ -584,12 +584,18 @@ class ColabCommsTransport(TransportBase):
 # ============================================================================
 class JupyterCommsTransport(TransportBase):
     def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
+        logger.debug('------------------------------------------------------------------------------------------------------------------------')
+        logger.debug ('JupyterCommsTransport.__init__')
+        logger.debug('------------------------------------------------------------------------------------------------------------------------')
         super().__init__(comm_mgr_id, abort)
         self._comm: Optional[Comm] = None
         self._callback: Optional[Callable] = None
         self._connected = asyncio.Event()
 
     async def connect(self) -> None:
+        logger.debug('------------------------------------------------------------------------------------------------------------------------')
+        logger.debug ('JupyterCommsTransport.connect')
+        logger.debug('------------------------------------------------------------------------------------------------------------------------')
         # 1. Register the target handler in the Python Kernel
         def _target_func(comm, open_msg):
             self._comm = comm
@@ -634,6 +640,9 @@ class JupyterCommsTransport(TransportBase):
         await self._connected.wait()
 
     async def send_message(self, message: Dict[str, Any]) -> None:
+        logger.debug('------------------------------------------------------------------------------------------------------------------------')
+        logger.debug ('JupyterCommsTransport.send_message')
+        logger.debug('------------------------------------------------------------------------------------------------------------------------')
         if self._comm:
             self._comm.send(message)
 
@@ -642,6 +651,9 @@ class JupyterCommsTransport(TransportBase):
 
     async def run(self) -> None:
         """Keep the transport alive. In Jupyter, this is just a wait loop."""
+        logger.debug('------------------------------------------------------------------------------------------------------------------------')
+        logger.debug ('JupyterCommsTransport.run')
+        logger.debug('------------------------------------------------------------------------------------------------------------------------')
         while self.is_connected():
             await asyncio.sleep(1)
 

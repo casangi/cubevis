@@ -583,6 +583,78 @@ class ColabCommsTransport(TransportBase):
 # Jupyter Comms Transport
 # ============================================================================
 class JupyterCommsTransport(TransportBase):
+    def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
+        super().__init__(comm_mgr_id, abort)
+        self._comm: Optional[Comm] = None
+        self._callback: Optional[Callable] = None
+        self._connected = asyncio.Event()
+
+    async def connect(self) -> None:
+        # 1. Register the target handler in the Python Kernel
+        def _target_func(comm, open_msg):
+            self._comm = comm
+            @self._comm.on_msg
+            def _recv(msg):
+                if self._callback:
+                    self._callback(msg['content']['data'])
+
+            self._connected.set()
+            self._comm.send({'status': 'connected'})
+
+        get_ipython().kernel.comm_manager.register_target(self._comm_mgr_id, _target_func)
+
+        # 2. Inject the JS to find the kernel and open the Comm from the frontend
+        # (This uses your specific logic to "find" the kernel in JupyterLab)
+        display(Javascript(f"""
+            console.log("We're off to see the wizard!")
+            (async () => {{
+                const poll = setInterval(async () => {{
+                    const panelEl = document.querySelector('.jp-NotebookPanel');
+                    const syms = Object.getOwnPropertySymbols(panelEl ?? document.body);
+                    let kernel = null;
+                    for (const sym of syms) {{
+                        const val = panelEl?.[sym];
+                        if (val?.sessionContext?.session?.kernel) {{
+                            kernel = val.sessionContext.session.kernel;
+                            break;
+                        }}
+                    }}
+                    if (!kernel) return;
+                    clearInterval(poll);
+
+                    const comm = kernel.createComm('{self._comm_mgr_id}');
+                    comm.onMsg = (msg) => console.log('JS Received:', msg.content.data);
+                    comm.open({{}});
+                    window["comm_{self._comm_mgr_id}"] = comm;
+                }}, 200);
+            }})();
+        """))
+
+        # Wait for the JS to actually hit our _target_func
+        await self._connected.wait()
+
+    async def send_message(self, message: Dict[str, Any]) -> None:
+        if self._comm:
+            self._comm.send(message)
+
+    def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]):
+        self._callback = callback
+
+    async def run(self) -> None:
+        """Keep the transport alive. In Jupyter, this is just a wait loop."""
+        while self.is_connected():
+            await asyncio.sleep(1)
+
+    async def close(self) -> None:
+        if self._comm:
+            self._comm.close()
+            self._comm = None
+        self._connected.clear()
+
+    def is_connected(self) -> bool:
+        return self._comm is not None
+
+class JupyterCommsTransportORIG(TransportBase):
     """
     Jupyter Comms-based transport for Classic Notebook and JupyterLab.
 

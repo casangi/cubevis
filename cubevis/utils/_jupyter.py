@@ -90,6 +90,7 @@ def is_interactive_jupyter( ) -> bool:
                     parent = kernel.get_parent()
                     # If there's a parent message, we're likely in interactive mode
                     logger.debug(f"\tis_interactive_jupyter<5>: {parent is not None and len(parent) > 0}")
+                    logger.debug("--->\tHERE #1")
                     if parent is not None and len(parent) > 0:
                         return True
                 except Exception:

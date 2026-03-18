@@ -177,6 +177,8 @@ class CommMgr( Model, BokehInit ):
         if 'comm_mgr_id' not in kwargs:
             kwargs['comm_mgr_id'] = str(uuid4( ))
 
+        logger.debug(f"CommMgr.__init__: {args}, on_shutdown={on_shutdown}, on_error={on_error}, {kwargs}", stack_info=True)
+
         super( ).__init__( *args, **kwargs )
 
         # Auto-detect transport type (sync operation)
@@ -254,6 +256,7 @@ class CommMgr( Model, BokehInit ):
             logger.warning(f"Comm '{comm_id}' already exists, returning existing")
             return self._comms[comm_id]
 
+        logger.debug(f"CommMgr.open: {description}")
         comm = Comm(comm_id=comm_id, comm_mgr_id=self.comm_mgr_id, squash_queue=squash_queue, description=description)
         comm._mgr = self  # Set internal reference
         self._comms[comm_id] = comm
@@ -461,6 +464,7 @@ class CommMgr( Model, BokehInit ):
         def transport_abort(error):
             self.report_error(error, fatal=True)
 
+        logger.debug(f"CommMgr.initialize: {self.transport_type}")
         from ._low_level_transport import ColabCommsTransport, JupyterCommsTransport
 
         # Create and initialize non-WebSocket transports
@@ -492,7 +496,10 @@ class CommMgr( Model, BokehInit ):
         On normal close, cleans up and returns (allows reconnection).
         Only shuts down CommMgr for user request or fatal errors.
         """
-        logger.debug(f"CommMgr.process_messages starting ({self.comm_mgr_id})")
+        logger.debug("************************************************************************************************************************")
+        logger.debug(f"CommMgr.process_messages  starting ({self.comm_mgr_id})")
+        logger.debug(f"CommMgr.process_messages: transport_type {self.transport_type}")
+        logger.debug("************************************************************************************************************************")
 
         # Determine why we stopped
         shutdown_reason = None

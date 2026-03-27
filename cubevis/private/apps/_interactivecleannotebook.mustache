@@ -117,7 +117,7 @@ class InteractiveCleanNotebook:
             output_notebook( )
 
         self._id = uuid4( )
-        context = exe.Context( exe.Mode.THREAD )
+        context = exe.Context( exe.Mode.SYNC )
         bokeh_ui, exec_task = self._ui( context, self._id )
 
         def startup( ):

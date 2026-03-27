@@ -5,12 +5,15 @@
 # for use with CommMgr.
 ########################################################################
 
+import os
 import asyncio
 import time
 import logging
+import importlib
 import traceback
 from enum import Enum
 from abc import ABC, abstractmethod
+from bokeh.models import Div, CustomJS
 from typing import Optional, Callable, Dict, Any
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
@@ -589,880 +592,117 @@ class ColabCommsTransport(TransportBase):
 # Jupyter Comms Transport
 # ============================================================================
 class JupyterCommsTransport(TransportBase):
-    """
-    Jupyter Comms-based transport for JupyterLab 4.x environments.
-
-    Uses IPython's kernel comm_manager to register a target, then injects
-    JavaScript to locate the live KernelConnection and open a comm from
-    the frontend side. This avoids all webpack module archaeology by having
-    Python inject a thin JS shim at connect time.
-
-    Usage (same as other transports — called by CommMgr.process_messages):
-        transport = JupyterCommsTransport(comm_mgr_id, abort=error_handler)
-        transport.set_message_callback(route_message)
-        await transport.connect()   # registers target, injects JS, waits for frontend
-        await transport.run()       # keeps event loop alive for callbacks
-    """
-
     def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
         super().__init__(comm_mgr_id, abort)
-        self._comm: Optional[Any] = None
-        self._message_callback: Optional[Callable] = None
-        self._connected = asyncio.Event()
-        self._should_run = False
-        self._is_open = False
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._heartbeat_task: Optional[asyncio.Task] = None
-        self._target_name = f'cubevis_comm_mgr_{comm_mgr_id}'
-
-    # ------------------------------------------------------------------
-    # Public TransportBase interface
-    # ------------------------------------------------------------------
-
-    def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]):
-        """Set callback for incoming messages (used by CommMgr)."""
-        self._message_callback = callback
-        logger.debug(f"Message callback set for {self._target_name}")
-
-    async def connect(self) -> None:
-        """
-        Register the comm target in the Python kernel and inject the JS shim
-        that opens the comm from the frontend side.
-
-        Blocks until the frontend connects (comm_open received).
-        """
-        logger.debug(f"++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-        logger.info(f"JupyterCommsTransport connecting for comm_mgr: {self._comm_mgr_id}")
-        logger.debug(f"++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-
-        # Capture the running event loop now, while we're in async context.
-        # _handle_comm_message runs in a sync callback so needs this reference.
-        self._loop = asyncio.get_running_loop()
-
-        # 1. Register the target handler in the Python kernel
-        try:
-            ip = get_ipython()
-            if ip is None:
-                raise RuntimeError("Not running in an IPython kernel")
-
-            def _target_func(comm, open_msg):
-                """Called when the frontend opens a comm to our target."""
-                logger.info(f"Frontend opened comm to {self._target_name}")
-                self._comm = comm
-                self._is_open = True
-
-                @comm.on_msg
-                def _recv(msg):
-                    self._handle_comm_message_sync(msg)
-
-                @comm.on_close
-                def _on_close(msg):
-                    self._handle_comm_close(msg)
-
-                self._connected.set()
-
-                # Acknowledge connection (mirrors WebSocket 'initialized' ack)
-                comm.send({
-                    'type': 'comm_opened',
-                    'comm_mgr_id': self._comm_mgr_id,
-                    'backend_ready': True
-                })
-
-            ip.kernel.comm_manager.register_target(self._target_name, _target_func)
-            logger.debug(f"Registered comm target: {self._target_name}")
-
-        except Exception as e:
-            logger.error(f"Failed to register comm target: {e}")
-            if self.abort:
-                self.abort(e)
-            raise
-
-        # 2. Inject JS shim to open the comm from the frontend
-        try:
-            self._inject_js_shim()
-        except Exception as e:
-            logger.error(f"Failed to inject JS shim: {e}")
-            if self.abort:
-                self.abort(e)
-            raise
-
-        # 3. Wait for the frontend to connect (mirrors WebSocket handshake wait)
-        logger.debug(f"Waiting for frontend to connect to {self._target_name}...")
-        try:
-            await asyncio.wait_for(self._connected.wait(), timeout=30.0)
-            logger.info(f"JupyterCommsTransport connected for {self._comm_mgr_id}")
-        except asyncio.TimeoutError:
-            msg = (
-                f"Frontend did not connect to {self._target_name} within 30s. "
-                "Check that the notebook cell has been rendered."
-            )
-            logger.error(msg)
-            raise RuntimeError(msg)
-
-    async def send_message(self, message: Dict[str, Any]) -> None:
-        """Send a message through the Jupyter comm."""
-        if not self._is_open or self._comm is None:
-            raise RuntimeError(
-                f"Jupyter comm not connected for {self._comm_mgr_id}. "
-                "Call connect() first."
-            )
-        try:
-            from ...utils import serialize
-            self._comm.send({
-                'type': 'cubevis_message',
-                'comm_mgr_id': self._comm_mgr_id,
-                'data': serialize(message)
-            })
-            logger.debug(f"Sent message via Jupyter comm {self._target_name}")
-        except Exception as e:
-            logger.error(f"Error sending message via Jupyter comm: {e}")
-            if self.abort:
-                self.abort(e)
-            raise
-
-    async def run(self) -> None:
-        """Keep event loop alive for Jupyter comm callbacks."""
-        if not self._is_open:
-            raise RuntimeError("Must call connect() before run()")
-        if not self._message_callback:
-            raise RuntimeError("Must call set_message_callback() before run()")
-
-        self._should_run = True
-        self._start_heartbeat()
-        logger.debug(f"Jupyter comm event loop starting for {self._comm_mgr_id}")
-
-        while self._should_run and self._is_open:
-            await asyncio.sleep(0.1)
-
-        logger.debug(f"Jupyter comm event loop ended for {self._comm_mgr_id}")
-
-    async def close(self) -> None:
-        """Close the Jupyter comm."""
-        self._should_run = False
-        self._stop_heartbeat()
-
-        if self._comm is not None and self._is_open:
-            try:
-                from ...utils import serialize
-                self._comm.send({
-                    'type': 'cubevis_message',
-                    'comm_mgr_id': self._comm_mgr_id,
-                    'data': serialize({
-                        'type': 'closing',
-                        'comm_mgr_id': self._comm_mgr_id,
-                        'message': 'Backend closing comm'
-                    })
-                })
-                self._comm.close()
-                logger.debug(f"Closed Jupyter comm for {self._target_name}")
-            except Exception as e:
-                logger.error(f"Error closing Jupyter comm: {e}")
-            finally:
-                self._comm = None
-                self._is_open = False
-
-        # Unregister the target to avoid stale handler on reconnect
-        try:
-            ip = get_ipython()
-            if ip is not None:
-                targets = getattr(ip.kernel.comm_manager, 'targets', {})
-                targets.pop(self._target_name, None)
-                logger.debug(f"Unregistered comm target {self._target_name}")
-        except Exception as e:
-            logger.error(f"Error unregistering comm target: {e}")
-
-    def is_connected(self) -> bool:
-        """Check if the Jupyter comm is open."""
-        return self._comm is not None and self._is_open
-
-    def get_comm_id(self) -> Optional[str]:
-        """Get the current comm ID for debugging."""
-        if self._comm is not None:
-            return getattr(self._comm, 'comm_id', None)
-        return None
-
-    # ------------------------------------------------------------------
-    # JS shim injection
-    # ------------------------------------------------------------------
-
-    def _inject_js_shim(self):
-        """
-        Inject JavaScript that locates the live JupyterLab kernel and opens
-        a comm to our registered target.
-
-        Resolution order mirrors low_level_transport.ts:
-          1. Lumino symbol scan on .jp-NotebookPanel (JupyterLab 4)
-          2. window.Jupyter.notebook.kernel.comm_manager (Classic Notebook 6)
-          3. window.IPython.kernel (legacy shim)
-        """
-        import json
-        from IPython.display import display, Javascript
-        target = json.dumps(self._target_name)
-        comm_mgr_id = json.dumps(self._comm_mgr_id)
-
-        logger.debug(f"++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-        logger.info(f"JupyterCommsTransport._inject_js_shim: target {target}")
-        logger.debug(f"++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-        display(Javascript(f"""
-        (async () => {{
-            const targetName  = {target};
-            const commMgrId   = {comm_mgr_id};
-            const pollMs      = 200;
-            const timeoutMs   = 30000;
-            const deadline    = Date.now() + timeoutMs;
-
-            console.log('++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++')
-            console.log(`cubevis: opening comm to ${{targetName}}`);
-            console.log('++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++')
-
-            const tryOpen = async () => {{
-
-                // ── Path 1: JupyterLab 4 — Lumino symbol on NotebookPanel ──
-                const panelEl = document.querySelector('.jp-NotebookPanel');
-                if (panelEl) {{
-                    for (const sym of Object.getOwnPropertySymbols(panelEl)) {{
-                        const val = panelEl[sym];
-                        const kernel = val?.sessionContext?.session?.kernel
-                                    ?? val?.context?.sessionContext?.session?.kernel;
-                        if (kernel?.createComm) {{
-                            console.log('cubevis: found kernel via Lumino symbol (JupyterLab 4)');
-                            openComm(kernel.createComm(targetName));
-                            return true;
-                        }}
-                    }}
-                }}
-
-                // ── Path 2: Classic Notebook 6 ─────────────────────────────
-                if (window.Jupyter?.notebook?.kernel?.comm_manager) {{
-                    console.log('cubevis: found comm_manager via window.Jupyter');
-                    const comm = window.Jupyter.notebook.kernel.comm_manager
-                                       .new_comm(targetName, {{}});
-                    openComm(comm);
-                    return true;
-                }}
-
-                // ── Path 3: Legacy IPython shim ────────────────────────────
-                if (window.IPython?.kernel?.createComm) {{
-                    console.log('cubevis: found kernel via window.IPython');
-                    openComm(window.IPython.kernel.createComm(targetName));
-                    return true;
-                }}
-
-                return false;
-            }};
-
-            const openComm = (comm) => {{
-                comm.onMsg = (msg) => {{
-                    const data = msg?.content?.data;
-                    if (!data) return;
-                    // Dispatch to the cubevis comm handler if available
-                    window[`cubevis_recv_${{commMgrId}}`]?.(data);
-                }};
-                comm.onClose = () => {{
-                    console.log(`cubevis: comm closed for ${{commMgrId}}`);
-                    delete window[`comm_${{commMgrId}}`];
-                }};
-                comm.open({{}});
-                // Store globally so low_level_transport.ts can find it
-                window[`comm_${{commMgrId}}`] = comm;
-                console.log(`cubevis: comm opened for ${{commMgrId}}`);
-            }};
-
-            // Poll until kernel is ready or timeout
-            const poll = setInterval(async () => {{
-                if (Date.now() > deadline) {{
-                    clearInterval(poll);
-                    console.error(`cubevis: timed out waiting for kernel (${{targetName}})`);
-                    return;
-                }}
-                if (await tryOpen()) clearInterval(poll);
-            }}, pollMs);
-
-            // Try immediately before first poll interval
-            await tryOpen();
-        }})();
-        """))
-        logger.debug(f"Injected JS shim for {self._target_name}")
-
-    # ------------------------------------------------------------------
-    # Internal message handling (mirrors JupyterCommsTransport pattern)
-    # ------------------------------------------------------------------
-
-    def _handle_comm_message_sync(self, msg: Dict[str, Any]):
-        """Handle incoming message from Jupyter comm (sync callback context)."""
-        from ...utils import deserialize
-
-        try:
-            content = msg.get('content', {})
-            data_wrapper = content.get('data', {})
-            serialized_data = data_wrapper.get('data')
-
-            if serialized_data:
-                data = deserialize(serialized_data) if isinstance(serialized_data, str) \
-                       else serialized_data
-            elif data_wrapper.get('type'):
-                data = data_wrapper
-            else:
-                logger.warning(f"Unexpected message structure: {msg}")
-                return
-
-            msg_type = data.get('type') if isinstance(data, dict) else None
-
-            # Handle ping → pong
-            if msg_type == 'ping':
-                from ...utils import serialize
-                if self._comm:
-                    self._comm.send({
-                        'type': 'cubevis_message',
-                        'comm_mgr_id': self._comm_mgr_id,
-                        'data': serialize({'type': 'pong', 'timestamp': time.time()})
-                    })
-                return
-
-            if msg_type in ('heartbeat', 'comm_opened', 'closing'):
-                logger.debug(f"Received {msg_type} message")
-                return
-
-            # Dispatch to CommMgr callback
-            if self._message_callback:
-                if inspect.iscoroutinefunction(self._message_callback):
-                    loop = self._loop
-                    if loop is not None and loop.is_running():
-                        asyncio.run_coroutine_threadsafe(
-                            self._message_callback(data), loop
-                        )
-                    else:
-                        logger.error("Cannot schedule async callback — no running event loop")
-                else:
-                    self._message_callback(data)
-
-        except Exception as e:
-            logger.error(f"Error handling Jupyter message: {e}")
-            traceback.print_exc()
-
-    def _handle_comm_close(self, msg: Dict[str, Any]):
-        """Handle comm close from frontend."""
-        logger.info(f"Jupyter comm closed for {self._target_name}")
-        self._is_open = False
-        self._should_run = False
-        self._stop_heartbeat()
-        self._comm = None
-
-    def _start_heartbeat(self, interval: float = 30.0):
-        """Start sending periodic heartbeats to keep the comm alive."""
-        from ...utils import serialize
-
-        async def _heartbeat_loop():
-            while self._is_open:
-                try:
-                    if self.is_connected():
-                        self._comm.send({
-                            'type': 'cubevis_message',
-                            'comm_mgr_id': self._comm_mgr_id,
-                            'data': serialize({
-                                'type': 'heartbeat',
-                                'timestamp': time.time()
-                            })
-                        })
-                except Exception:
-                    pass
-                await asyncio.sleep(interval)
-
-        self._heartbeat_task = asyncio.create_task(_heartbeat_loop())
-
-    def _stop_heartbeat(self):
-        """Cancel the heartbeat task."""
-        if self._heartbeat_task is not None:
-            self._heartbeat_task.cancel()
-            self._heartbeat_task = None
-
-class JupyterCommsTransportMINIMAL(TransportBase):
-    def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
-        super().__init__(comm_mgr_id, abort)
+        self._bridge = None
         self._comm: Optional[Comm] = None
         self._callback: Optional[Callable] = None
-        self._connected = asyncio.Event()
+        self._connected = False
+        self._debug = "CUBEVIS_DEBUG" in os.environ
+
+    def _ensure_anywidget(self):
+        """Lazy-load anywidget only when needed."""
+        if self._bridge is not None:
+            return
+
+        logger.debug("JupyterCommsTransport._ensure_anywidget: setting up bridge")
+        try:
+            import anywidget
+            from IPython.display import display
+        except ImportError:
+            raise ImportError(
+                "The 'anywidget' package is required for Jupyter transport. "
+                "Please install it with: pip install anywidget"
+            )
+
+        # Define the Bridge class locally so it's only created if anywidget exists
+        class CommBridge(anywidget.AnyWidget):
+            _esm = """
+                function render({ model, el }) {
+                    const isDebug = """ + ("true" if "CUBEVIS_DEBUG" in os.environ else "false") + """;
+
+                    if (isDebug) {
+                        el.innerHTML = "<div style='padding:5px; background: #dfd; border: 1px solid #4caf50;'>📡 Bridge JS Loaded</div>";
+                        console.log("CUBEVIS DEBUG: Bridge JS Starting");
+                    }
+
+                    model.on("msg:custom", (msg) => {
+                        if (msg.method === "open_comm") {
+                            const kernel = model.widget_manager.kernel;
+                            const comm = kernel.createComm(msg.target_id);
+
+                            comm.onMsg = (m) => model.send({ type: "comm_msg", data: m.content.data });
+                            comm.open({ status: "connected" });
+
+                            window["comm_" + msg.target_id] = comm;
+
+                            if (isDebug) {
+                                el.innerHTML = "<div style='padding:5px; background: #ccf; border: 1px solid #2196f3;'>✅ Bridge Connected</div>";
+                                console.log("CUBEVIS DEBUG: Comm opened for " + msg.target_id);
+                            }
+                        }
+                    });
+                }
+                export default { render };
+                """
+
+        self._bridge = CommBridge()
+        self._display_func = display
 
     async def connect(self) -> None:
-        # 1. Register the target handler in the Python Kernel
-        def _target_func(comm, open_msg):
+        self._ensure_anywidget()
+
+        from ipykernel.comm import Comm
+        from IPython import get_ipython
+
+        self._connected_event = asyncio.Event()
+
+        def _handle_open(comm, open_msg):
             self._comm = comm
-            @self._comm.on_msg
+            self._connected = True
+            self._connected_event.set()
+            if self._debug:
+                print("✅ Transport: Connection established!")
+
+            @comm.on_msg
             def _recv(msg):
                 if self._callback:
                     self._callback(msg['content']['data'])
 
-            self._connected.set()
-            self._comm.send({'status': 'connected'})
+        get_ipython().kernel.comm_manager.register_target(self._comm_mgr_id, _handle_open)
+        
+        # Simply display the anywidget directly
+        self._display_func(self._bridge)
+        
+        async def handshake():
+            await asyncio.sleep(1.0)
+            self._bridge.send({"method": "open_comm", "target_id": self._comm_mgr_id})
 
-        get_ipython().kernel.comm_manager.register_target(self._comm_mgr_id, _target_func)
+        asyncio.create_task(handshake())
+        
+        try:
+            await asyncio.wait_for(self._connected_event.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            if self._debug:
+                print("❌ Transport: Connection timeout.")
+            raise
 
-        from IPython.display import display, Javascript
-        # 2. Inject the JS to find the kernel and open the Comm from the frontend
-        # (This uses your specific logic to "find" the kernel in JupyterLab)
-        display(Javascript(f"""
-            console.log("We're off to see the wizard!")
-            (async () => {{
-                const poll = setInterval(async () => {{
-                    const panelEl = document.querySelector('.jp-NotebookPanel');
-                    const syms = Object.getOwnPropertySymbols(panelEl ?? document.body);
-                    let kernel = null;
-                    for (const sym of syms) {{
-                        const val = panelEl?.[sym];
-                        if (val?.sessionContext?.session?.kernel) {{
-                            kernel = val.sessionContext.session.kernel;
-                            break;
-                        }}
-                    }}
-                    if (!kernel) return;
-                    clearInterval(poll);
-
-                    const comm = kernel.createComm('{self._comm_mgr_id}');
-                    comm.onMsg = (msg) => console.log('JS Received:', msg.content.data);
-                    comm.open({{}});
-                    window["comm_{self._comm_mgr_id}"] = comm;
-                }}, 200);
-            }})();
-        """))
-
-        # Wait for the JS to actually hit our _target_func
-        await self._connected.wait()
+    def is_connected(self) -> bool:
+        return self._connected
 
     async def send_message(self, message: Dict[str, Any]) -> None:
         if self._comm:
             self._comm.send(message)
 
-    def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]):
+    def set_message_callback(self, callback: Callable):
         self._callback = callback
 
     async def run(self) -> None:
-        """Keep the transport alive. In Jupyter, this is just a wait loop."""
-        while self.is_connected():
-            await asyncio.sleep(1)
+        while self.is_connected() or self._comm is None:
+            await asyncio.sleep(0.1)
 
-    async def close(self) -> None:
+    async def close(self):
         if self._comm:
             self._comm.close()
-            self._comm = None
-        self._connected.clear()
+        self._connected = False
 
-    def is_connected(self) -> bool:
-        return self._comm is not None
-
-class JupyterCommsTransportORIG(TransportBase):
-    """
-    Jupyter Comms-based transport for Classic Notebook and JupyterLab.
-
-    Uses the kernel comm protocol for bidirectional communication between
-    the Python kernel and the JavaScript frontend.
-
-    Key features:
-    - Works with Classic Notebook 6.x and JupyterLab 3.x / 4.x
-    - Kernel can outlive browser connections
-    - Supports reconnection to running kernel
-    - Multiple frontends can connect
-    - Efficient array serialization via Bokeh
-
-    Usage:
-        transport = JupyterCommsTransport('app_comms', abort=error_handler)
-        transport.set_message_callback(route_message)
-        await transport.connect()
-        await transport.run()
-        await transport.send_message({'data': computation_result})
-    """
-
-    
-    def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
-        logger.debug('------------------------------------------------------------------------------------------------------------------------')
-        logger.debug ('JupyterCommsTransportORIG.__init__')
-        logger.debug('------------------------------------------------------------------------------------------------------------------------')
-        super().__init__(comm_mgr_id, abort)
-        self._comm = None
-        self._message_callback: Optional[Callable] = None
-        self._comm_manager = None
-        self._target_name = f'cubevis_comm_mgr_{comm_mgr_id}'
-        self._is_open = False
-        self._should_run = False
-        try:
-            self._loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_event_loop()
-        except RuntimeError:
-            self._loop = None
-        self._heartbeat_task: Optional[asyncio.Task] = None
-
-    # ------------------------------------------------------------------
-    # Public TransportBase interface
-    # ------------------------------------------------------------------
-    def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]):
-        """
-        Set callback for incoming messages (used by CommMgr).
-        
-        Args:
-            callback: Async function to call when messages arrive
-        """
-        self._message_callback = callback
-        logger.debug(f"Message callback set for {self._target_name}")
-        
-    async def connect(self) -> None:
-        """
-        Connect and create Jupyter comm.
-
-        Creates a comm using the best available kernel comm implementation
-        for the current environment (JupyterLab 4 / Classic Notebook 6).
-        """
-        self._loop = asyncio.get_event_loop()
-
-        logger.info(f"Jupyter Comms connecting for comm_mgr: {self._comm_mgr_id}")
-
-        try:
-            from IPython import get_ipython
-            ipython = get_ipython()
-            if not ipython:
-                raise RuntimeError("IPython kernel not available")
-
-            kernel = ipython.kernel
-
-            # Obtain the comm_manager — attribute name varies by ipykernel version
-            comm_manager = None
-            for attr in ('comm_manager', 'comm_info'):
-                if hasattr(kernel, attr):
-                    comm_manager = getattr(kernel, attr)
-                    break
-
-            # Newer ipykernel (≥ 6.15) uses `kernel.comm_manager` but as a
-            # CommManager instance from the standalone `comm` package.
-            # Also try the IPython kernel's internal comm_manager.
-            if comm_manager is None:
-                # Last-ditch: ipykernel exposes comm manager on the shell
-                if hasattr(ipython, 'comm_manager'):
-                    comm_manager = ipython.comm_manager
-
-            if comm_manager is None:
-                raise RuntimeError(
-                    "Kernel does not have comm_manager. "
-                    "Ensure ipykernel ≥ 5.x is installed."
-                )
-
-            self._comm_manager = comm_manager
-
-            # Register a target so the frontend can open a comm back to us
-            # (reconnection path, or when frontend initiates).
-            def target_func(comm, open_msg):
-                logger.info(
-                    f"Backend received comm open from frontend: {self._target_name}"
-                )
-                self._handle_comm_open(comm, open_msg)
-
-            comm_manager.register_target(self._target_name, target_func)
-            logger.info(f"Registered Jupyter comm target: {self._target_name}")
-
-            kind, comm_factory = _get_comm_class()
-
-            if kind == "create_comm":
-                # New standalone `comm` package API
-                self._comm = comm_factory(
-                    target_name=self._target_name,
-                    data={
-                        'type': 'initialization',
-                        'comm_mgr_id': self._comm_mgr_id,
-                        'backend_ready': True,
-                    }
-                )
-                # `create_comm` returns an already-open comm — no .open() needed
-                # but we must still call open() to send the comm_open message.
-                self._comm.open(data={
-                    'type': 'initialization',
-                    'comm_mgr_id': self._comm_mgr_id,
-                    'backend_ready': True,
-                })
-            else:
-                # Legacy ipykernel.comm.Comm API
-                self._comm = comm_factory(
-                    target_name=self._target_name,
-                    data={
-                        'type': 'initialization',
-                        'comm_mgr_id': self._comm_mgr_id,
-                        'backend_ready': True,
-                    }
-                )
-                # MUST call open() to actually send the comm_open
-                # message to the frontend.  Without this the frontend never
-                # receives the comm and the connection silently fails.
-                self._comm.open(data={
-                    'type': 'initialization',
-                    'comm_mgr_id': self._comm_mgr_id,
-                    'backend_ready': True,
-                })
-
-            # Register message handler
-            @self._comm.on_msg
-            def _on_msg(msg):
-                self._handle_jupyter_message_sync(msg)
-
-            # Register close handler
-            @self._comm.on_close
-            def _on_close(msg):
-                self._handle_comm_close(msg)
-
-            self._is_open = True
-            logger.info(f"Jupyter comm opened: {self._target_name}")
-
-            # Start heartbeat
-            self._start_heartbeat()
-
-        except Exception as e:
-            logger.error(f"Error connecting Jupyter comm: {e}")
-            if self.abort:
-                self.abort(e)
-            raise
-
-    async def send_message(self, message: Dict[str, Any]) -> None:
-        """
-        Send a message through Jupyter Comm.
-        
-        Args:
-            message: Dictionary message to send
-            
-        Raises:
-            RuntimeError: If comm is not initialized
-        """
-        if self._comm is None or not self._is_open:
-            raise RuntimeError(
-                f"Jupyter Comm not initialized or closed for {self._comm_mgr_id}"
-            )
-            
-        try:
-            from ...utils import serialize
-            serialized = serialize(message)
-            
-            # Jupyter comms expect a dict, wrap serialized data
-            comm_msg = {
-                'type': 'cubevis_message',
-                'comm_mgr_id': self._comm_mgr_id,
-                'data': serialized
-            }
-            self._comm.send(comm_msg)
-
-            logger.debug(
-                f"Sent message via Jupyter Comm {self._target_name} "
-                f"({len(serialized)} bytes)"
-            )
-        except Exception as e:
-            logger.error(f"Error sending message via Jupyter Comm: {e}")
-            if self.abort:
-                self.abort(e)
-            raise
-    
-    async def run(self) -> None:
-        """Keep event loop alive for Jupyter Comm callbacks."""
-        self._loop = asyncio.get_event_loop()
-        self._should_run = True
-        logger.debug(f"Jupyter Comms event loop starting for {self._comm_mgr_id}")
-        while self._should_run and self._is_open:
-            await asyncio.sleep(0.1)
-        logger.debug(f"Jupyter Comms event loop ended for {self._comm_mgr_id}")
-
-    async def close(self) -> None:
-        """Close the Jupyter Comm."""
-        self._should_run = False
-        self._stop_heartbeat()
-
-        if self._comm is not None and self._is_open:
-            try:
-                from ...utils import serialize
-                
-                # Send a close notification before actually closing
-                self._comm.send({
-                    'type': 'cubevis_message',
-                    'comm_mgr_id': self._comm_mgr_id,
-                    'data': serialize({
-                        'type': 'closing',
-                        'comm_mgr_id': self._comm_mgr_id,
-                        'message': 'Backend closing comm'
-                    })
-                })
-                
-                # Close the comm
-                self._comm.close()
-                logger.debug(f"Closed Jupyter comm for {self._target_name}")
-            except Exception as e:
-                logger.error(f"Error closing Jupyter comm: {e}")
-            finally:
-                self._comm = None
-                self._is_open = False
-        
-        # Unregister the target so it doesn't receive stale connections
-        if self._comm_manager is not None:
-            try:
-                targets = getattr(self._comm_manager, 'targets', {})
-                if self._target_name in targets:
-                    del targets[self._target_name]
-                    logger.debug(
-                        f"Unregistered comm target {self._target_name}"
-                    )
-            except Exception as e:
-                logger.error(f"Error unregistering comm target: {e}")
-
-    def is_connected(self) -> bool:
-        """Check if Jupyter Comm is open."""
-        return self._comm is not None and self._is_open
-    
-    def get_comm_id(self) -> Optional[str]:
-        """
-        Get the current comm ID for debugging / reconnection.
-        
-        Returns:
-            The comm_id string or None if no comm exists
-        """
-        if self._comm is not None:
-            return getattr(self._comm, 'comm_id', None)
-        return None
-
-    # ------------------------------------------------------------------
-    # Internal callbacks
-    # ------------------------------------------------------------------
-    def _handle_comm_open(self, comm, open_msg):
-        """Handle when frontend opens a comm to us (reconnection path)."""
-        logger.info("Frontend opened comm (replacing existing if any)")
-
-        # Close existing comm if any
-        if self._comm and self._comm != comm:
-            try:
-                self._comm.close()
-            except Exception:
-                pass
-
-        # Use the new comm
-        self._comm = comm
-        self._is_open = True
-
-        # Register handlers
-        @comm.on_msg
-        def _on_msg(msg):
-            self._handle_jupyter_message_sync(msg)
-
-        @comm.on_close
-        def _on_close(msg):
-            self._handle_comm_close(msg)
-
-        # Send acknowledgment
-        comm.send({
-            'type': 'comm_opened',
-            'comm_mgr_id': self._comm_mgr_id,
-            'backend_ready': True
-        })
-
-    def _handle_jupyter_message_sync(self, msg):
-        """
-        Handle incoming message from Jupyter comm (sync callback context).
-        """
-        from ...utils import deserialize
-
-        try:
-            # Jupyter comm messages have nested structure:
-            # msg = {'content': {'data': {...}}, ...}
-            content = msg.get('content', {})
-            data_wrapper = content.get('data', {})
-
-            # Our wrapper puts the Bokeh-serialized bytes in data_wrapper['data']
-            serialized_data = data_wrapper.get('data')
-
-            if serialized_data:
-                if isinstance(serialized_data, str):
-                    data = deserialize(serialized_data)
-                else:
-                    data = serialized_data
-            elif data_wrapper.get('type'):
-                # Direct message (no inner serialization)
-                data = data_wrapper
-            else:
-                logger.warning(f"Unexpected message structure: {msg}")
-                return
-
-            # Handle special messages
-            msg_type = data.get('type') if isinstance(data, dict) else None
-
-            if msg_type == 'ping':
-                from ...utils import serialize
-                if self._comm:
-                    self._comm.send({
-                        'type': 'cubevis_message',
-                        'comm_mgr_id': self._comm_mgr_id,
-                        'data': serialize({'type': 'pong', 'timestamp': time.time()})
-                    })
-                return
-
-            if msg_type in ('heartbeat', 'comm_opened', 'closing'):
-                logger.debug(f"Received {msg_type} message")
-                return
-
-            # Call the message callback
-            if self._message_callback:
-                import inspect
-                if inspect.iscoroutinefunction(self._message_callback):
-                    # FIX [5]: schedule on the captured event loop rather than
-                    # using create_task() which requires the current thread to
-                    # have a running loop.
-                    loop = self._loop
-                    if loop is not None and loop.is_running():
-                        asyncio.run_coroutine_threadsafe(
-                            self._message_callback(data), loop
-                        )
-                    else:
-                        # Fallback: try get_event_loop() from this thread
-                        try:
-                            current_loop = asyncio.get_event_loop()
-                            if current_loop.is_running():
-                                asyncio.run_coroutine_threadsafe(
-                                    self._message_callback(data), current_loop
-                                )
-                            else:
-                                current_loop.run_until_complete(
-                                    self._message_callback(data)
-                                )
-                        except RuntimeError as e:
-                            logger.error(
-                                f"Cannot schedule async callback — no running "
-                                f"event loop: {e}"
-                            )
-                else:
-                    self._message_callback(data)
-
-        except Exception as e:
-            logger.error(f"Error handling Jupyter message: {e}")
-            traceback.print_exc()
-
-    def _handle_comm_close(self, msg):
-        """Handle comm close from frontend."""
-        logger.info("Jupyter comm closed")
-        self._is_open = False
-        self._should_run = False
-        self._stop_heartbeat()
-        self._comm = None
-
-    def _start_heartbeat(self, interval: float = 30.0):
-        """Start sending periodic heartbeats to the frontend."""
-        from ...utils import serialize
-
-        async def heartbeat_loop():
-            while self._is_open:
-                try:
-                    if self.is_connected():
-                        self._comm.send({
-                            'type': 'cubevis_message',
-                            'comm_mgr_id': self._comm_mgr_id,
-                            'data': serialize({
-                                'type': 'heartbeat',
-                                'timestamp': time.time()
-                            })
-                        })
-                except Exception:
-                    pass  # Heartbeat failure is non-fatal
-                await asyncio.sleep(interval)
-
-        self._heartbeat_task = asyncio.create_task(heartbeat_loop())
-
-    def _stop_heartbeat(self):
-        """Stop the heartbeat task."""
-        if self._heartbeat_task is not None:
-            self._heartbeat_task.cancel()
-            self._heartbeat_task = None

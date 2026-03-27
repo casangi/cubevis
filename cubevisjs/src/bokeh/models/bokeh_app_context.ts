@@ -1,5 +1,6 @@
 import {LayoutDOM, LayoutDOMView} from "@bokehjs/models/layouts/layout_dom"
 import {UIElement} from "@bokehjs/models/ui/ui_element"
+import {CustomJS} from "@bokehjs/models/callbacks/index"
 import type * as p from "@bokehjs/core/properties"
 import {object_id} from "../util/find"
 
@@ -45,6 +46,7 @@ export namespace BokehAppContext {
     backend_id: p.Property<string>
     frontend_id: p.Property<string | null>
     app_state: p.Property<any>
+    init_scripts: p.Property<[CustomJS, string, string][]>
   }
 }
 
@@ -94,18 +96,36 @@ export class BokehAppContext extends LayoutDOM {
       }
       console.log(`Registered application: ${this.app_id}`)
     }
+    //
+    // Run any initialization script
+    //
+    const _execute = () => {
+        console.group( "BokehAppContext init script execution" )
+        this.init_scripts.forEach(
+            ([script, id, description], i) => {
+                // Pass the current loop index 'i' into the cb_data object
+                if ( description === null || description === undefined || description.trim().length === 0 )
+                    console.log(id)
+                else
+                    console.log(description)
+                script.execute( this, { index: i, id, description } )
+            } )
+        console.groupEnd( )
+    }
+    _execute( )
   }
 
   static {
     this.prototype.default_view = BokehAppContextView
 
-    this.define<BokehAppContext.Props>(({Ref, Nullable, Dict, String, Unknown}) => ({
+    this.define<BokehAppContext.Props>(({Ref, Tuple, Nullable, Array, Dict, String, Unknown}) => ({
       ui: [ Nullable(Ref(UIElement)), null ],
       app_id: [String, ""],
       comm_mgr: [ Nullable(Ref(CommMgr)), null ],
       backend_id: [String, ""],
       frontend_id: [Nullable(String), null],
       app_state: [ Dict(Unknown), {} ],
+      init_scripts:   [ Array(Tuple(Ref(CustomJS), String, String)), [] ],
     }))
   }
 }

@@ -1,5 +1,6 @@
 import logging
-from bokeh.core.properties import String, Dict, Any, Nullable, Instance
+from bokeh.models import CustomJS
+from bokeh.core.properties import String, Dict, Any, Nullable, Instance, List, Tuple
 from bokeh.models.layouts import LayoutDOM
 from bokeh.models.ui import UIElement
 from bokeh.resources import CDN
@@ -38,6 +39,12 @@ class BokehAppContext(LayoutDOM):
     for each cubevis application.
     """ )
     app_state = Dict(String, Any, default={})
+
+    init_scripts = List(
+        Tuple(Instance(CustomJS), String, String),
+        default=[],
+        help="initialization scripts with associated metadata set with add_init_script(...)"
+    )
     
     ## Class-level session ID shared across all apps in the same Python session
     _backend_id = None
@@ -102,6 +109,23 @@ class BokehAppContext(LayoutDOM):
         if self.ui and hasattr(self.ui, '_sphinx_height_hint'):
             return self.ui._sphinx_height_hint()
         return None
+
+    def add_init_script(self, code, description='', args=None):
+        """
+        Helper to append a CustomJS script to the init_scripts list.
+        """
+        # Create the new CustomJS instance
+        new_script = CustomJS(code=code, args=args or {})
+
+        # 1. Access current scripts (default to empty list if None)
+        current_scripts = list(self.init_scripts) if self.init_scripts else []
+
+        # 2. Append the new script
+        new_entry = (new_script, self.comm_id, description)
+        current_scripts.append(new_entry)
+
+        # 3. REASSIGN to trigger synchronization
+        self.init_scripts = current_scripts
 
     def update_app_state(self, state_updates):
         """

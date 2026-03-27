@@ -17,6 +17,7 @@ from bokeh.model import Model
 from bokeh.models import CustomJS
 from bokeh.core.properties import List
 from bokeh.core.properties import String, Bool, Tuple, Int, Nullable, Instance
+from ...utils import find_ws_address
 from .. import BokehInit
 
 class ShutdownReason(Enum):
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 class AppState(Enum):
     """Application lifecycle states."""
+    CONSTRUCTED = "constructed"
     INITIALIZING = "initializing"
     RUNNING = "running"
     SHUTTING_DOWN = "shutting_down"
@@ -167,7 +169,7 @@ class CommMgr( Model, BokehInit ):
     init_scripts = List(
         Tuple(Instance(CustomJS), String, String),
         default=[],
-        help="initialization scripts with associated metadata"
+        help="initialization scripts with associated metadata set from Comm object"
     )
 
     def __init__( self, *args,
@@ -196,7 +198,7 @@ class CommMgr( Model, BokehInit ):
         self._lock = asyncio.Lock()
 
         # State management
-        self._state = AppState.INITIALIZING
+        self._state = AppState.CONSTRUCTED
         self._state_lock = asyncio.Lock()                 # REMOVED
         self._shutdown_requested = False
         self._pending_user_shutdown_reason = ''
@@ -217,6 +219,15 @@ class CommMgr( Model, BokehInit ):
         self._context = HandlerContext(self)
 
         self._initialized = False
+
+        # Websocket address management (if not set with parameters)
+        if self.transport_type == 'websocket':
+            if not self.address:
+                self.address = find_ws_address( )
+                logger.debug( f"CommMgr.__init__: websocket address initialized to '{self.address}'" )
+        else:
+            if self.address:
+                raise RuntimeError( 'CommMgr.__init__: address set for non-websocket transport' )
 
         logger.debug(f"Communications manager created: {self.comm_mgr_id}")
 
@@ -536,7 +547,8 @@ class CommMgr( Model, BokehInit ):
 
             elif self.transport_type in ('colab', 'jupyter'):
                 # Already initialized
-                pass
+                if self.state == AppState.CONSTRUCTED:
+                    await self.initialize( )
 
             # Flush any queued messages
             await self._flush_all_queues()

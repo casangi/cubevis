@@ -53,7 +53,6 @@ from cubevis.bokeh.models import TipButton, Tip, EvTextInput, BokehAppContext
 from cubevis.bokeh.transport import CommMgr
 
 from cubevis.utils import resource_manager, reset_resource_manager, is_interactive_jupyter, find_pkg, load_pkg
-from cubevis.utils import ContextMgrChain as CMC
 from cubevis.utils import MutualExclusionManager
 
 # pylint: disable=no-name-in-module
@@ -62,7 +61,7 @@ from casatasks.private.imagerhelpers.imager_return_dict import ImagingDict
 from casatasks.private.imagerhelpers.input_parameters import ImagerParameters
 # pylint: enable=no-name-in-module
 
-from cubevis.utils import find_ws_address, convert_masks
+from cubevis.utils import convert_masks
 from cubevis.toolbox import CubeMask
 from cubevis.bokeh.utils import svg_icon
 from cubevis.utils import DocEnum
@@ -267,8 +266,7 @@ class InteractiveCleanUI:
             logger.debug("InteractiveCleanUI...shutdown_handler: calling stop function")
             self.__stop( )
 
-        self._app_context = BokehAppContext( comm_mgr=CommMgr( address=find_ws_address( ),
-                                                               on_shutdown=shutdown_handler,
+        self._app_context = BokehAppContext( comm_mgr=CommMgr( on_shutdown=shutdown_handler,
                                                                on_error=error_handler ),
                                              app_state={                              ### while the state dictionary itself
                                                          'name': 'interactive clean', ### is used, these particular element
@@ -373,7 +371,7 @@ class InteractiveCleanUI:
             self._clean['converge']['id'] = str(uuid4( ))
 
             # Get port for serving HTTP server if running in script
-            self._http_port = find_ws_address("")[1]
+            # self._http_port = find_ws_address("")[1]
         for imid, imdetails in self._clean_targets.items( ):
             imdetails['gui']['cube']._init_pipes( )
 
@@ -1136,94 +1134,20 @@ class InteractiveCleanUI:
         return self._build_bokeh( ), exe.Task( self._task_server )
 
     async def _task_server( self ):
-        """Wrapper for your serve() context manager"""
+        self.__result_future = asyncio.Future( )
 
-        @asynccontextmanager
-        async def serve_func( ):
-            '''This function is intended for developers who would like to embed interactive
-            clean as a part of a larger GUI. This embedded use of interactive clean is not
-            currently supported and would require the addition of parameters to this function
-            as well as changes to the interactive clean implementation. However, this function
-            does expose the ``asyncio.Future`` that is used to signal completion of the
-            interactive cleaning operation, and it provides the coroutines which must be
-            managed by asyncio to make the interactive clean GUI responsive.
+        if self._comm_mgr.address:
+            async with websockets.serve( self._comm_mgr.process_messages,
+                                         self._comm_mgr.address[0],
+                                         self._comm_mgr.address[1] ):
+                await self.__result_future
+        else:
+            await self._comm_mgr.process_messages( )
+            #self._comm_task = asyncio.create_task( self._comm_mgr.process_messages( ) )
+            #self._comm_task.add_done_callback( self._on_comm_task_done )
+            #await self.__result_future
 
-            Example:
-                Create ``iclean`` object, process events and retrieve result::
-
-                    ic = iclean( vis='refim_point_withline.ms', imagename='test', imsize=512,
-                                 cell='12.0arcsec', specmode='cube', interpolation='nearest', ... )
-                    async def process_events( ):
-                        async with ic.serve( ) as state:
-                            await state[0]
-
-                    asyncio.run(process_events( ))
-                    print( "Result:", ic.result( ) )
-
-            Returns
-            -------
-            (asyncio.Future, dictionary of coroutines)
-            '''
-            def start_http_server():
-                import http.server
-                import socketserver
-                PORT = self._http_port
-                DIRECTORY=self._webpage_path
-
-                class Handler(http.server.SimpleHTTPRequestHandler):
-                    def __init__(self, *args, **kwargs):
-                        super().__init__(*args, directory=DIRECTORY, **kwargs)
-
-                with socketserver.TCPServer(("", PORT), Handler) as httpd:
-                    print("\nServing Interactive Clean webpage from local directory: ", DIRECTORY)
-                    print("Use Control-C to stop Interactive clean.\n")
-                    print("Copy and paste one of the below URLs into your browser (Chrome or Firefox) to view:")
-                    print("http://localhost:"+str(PORT))
-                    print("http://127.0.0.1:"+str(PORT))
-
-                    httpd.serve_forever()
-
-            async with CMC( *( [ ctx for img in self._clean_targets.keys( ) for ctx in
-                                 [
-                                     self._clean_targets[img]['gui']['cube'].serve(self.__stop),
-                                 ]
-                               ] + [ websockets.serve( self._comm_mgr.process_messages,
-                                                       self._comm_mgr.address[0],
-                                                       self._comm_mgr.address[1] ) ]
-                              ) ):
-                self.__result_future = asyncio.Future( )
-                yield self.__result_future
-
-        async with serve_func( ) as result_future:
-            if self._exec['stop-condition'] is None:
-                await result_future
-                return self.result( )
-            else:
-                raise RuntimeError( 'internal error: no stop condition expected' )
-
-            ###
-            ### If stop conditions were used, a mechanism to check the stop
-            ###  condition would be required...
-            ###
-            #if isinstance(self._exec['stop-condition'], asyncio.Event):
-            #    done, pending = await asyncio.wait(
-            #        [ result_future, asyncio.create_task(stop_condition.wait()) ],
-            #        return_when=asyncio.FIRST_COMPLETED
-            #    )
-            #    # Cancel pending tasks
-            #    for task in pending:
-            #        task.cancel()
-            #        try:
-            #            await task
-            #        except asyncio.CancelledError:
-            #            pass
-            #
-            #    if result_future in done:
-            #        return result_future.result()
-            #    else:
-            #        return "Stopped by signal"
-            #else:
-            #    raise RuntimeError( f"unexpected stop condition type: {type(self._exec['stop-condition'])}" )
+        return self.result( )
 
     def _setup( self ):
         self.__reset( )

@@ -256,7 +256,7 @@ function find_parent<T extends Model>(
         // Get first parent from each root and find the one containing our model
         const parents = roots.flatMap(findParent);
 
-        return parents.find(parent =>
+        return parents.find((parent: T) =>
             Boolean(find_model(parent as Model,
                 (candidate: Model) => {
                     return candidate.id === model.id;

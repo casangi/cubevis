@@ -350,32 +350,21 @@ export class ColabCommsTransport implements TransportBase {
     }
 
     async connect(): Promise<void> {
-        console.log(`Connecting to Colab Comm target: ${this.targetName}`);
-
-        // Verify Colab environment
-        if (!window.google?.colab?.kernel) {
-            throw new Error("Colab environment or kernel not detected.");
-        }
-
-        const kernel = window.google.colab.kernel;
-
-        if (!kernel.comms) {
-            throw new Error("Colab kernel.comms is not available in this environment.");
-        }
+        const kernel = (window as any).google?.colab?.kernel;
+        if (!kernel) throw new Error("Not in Colab");
+        if (!kernel.comms) throw new Error("Colab kernel.comms not available");
 
         try {
-            // Establishes the channel back to the Python backend
-            this.comm = await kernel.comms.open(this.targetName, {
-                comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                origin: 'frontend'
-            });
-            
+            // The second argument {} satisfies the 'data' requirement (TS2554)
+            this.comm = await kernel.comms.open(this.targetName, {});
+
             if (!this.comm) {
                 throw new Error(`Failed to establish channel for ${this.targetName}`);
             }
 
             this.comm.onMsg = (msg: any) => this.handleIncoming(msg);
-            this.comm.onClose = () => this.handleClose();
+
+            this.comm.onClose = (msg: any) => this.handleClose(msg);
 
             this.isRegistered = true;
             console.log("Colab Comm connection established.");
@@ -394,8 +383,8 @@ export class ColabCommsTransport implements TransportBase {
         }
     }
 
-    private handleClose(): void {
-        console.warn("Colab Comm channel closed.");
+    private handleClose(msg: any): void {
+        console.warn(`Colab Comm channel closed: ${msg}`);
         this.isRegistered = false;
         this.shouldRun = false;
         this.comm = undefined;

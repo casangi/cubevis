@@ -331,31 +331,35 @@ class ColabCommsTransport(TransportBase):
         self._loop = asyncio.get_event_loop()
 
     async def connect(self) -> None:
-        """Initializes the Colab comms target and waits for the frontend to connect."""
-        # Local imports to prevent errors in non-Colab environments
         from google.colab import kernel
         from IPython.display import display, Javascript
 
-        # 1. Register the target in Python
+        # 1. Register the target first so it's ready when JS calls
         kernel.comms.register_target(self._comm_mgr_id, self._on_comm_open)
         
-        # 2. Trigger the frontend (JS) to open the channel
+        # 2. Inject the JS. NOTE: This won't run until this cell finishes!
         display(Javascript(f'''
             (async () => {{
-                const channel = await google.colab.kernel.comms.open('{self._comm_mgr_id}');
+                // This global check ensures we don't try to connect if already active
+                if (window.colab_transport_{self._comm_mgr_id}) return;
+
+                const kernel = google.colab.kernel;
+                const channel = await kernel.comms.open('{self._comm_mgr_id}', {{}});
+                window.colab_transport_{self._comm_mgr_id} = channel;
+
                 (async () => {{
                     for await (const message of channel.messages) {{
+                        // Dispatch to your TS implementation listeners
                         window.dispatchEvent(new CustomEvent('{self._comm_mgr_id}', {{ detail: message.data }}));
                     }}
                 }})();
+                console.log("Colab JS Transport initialized");
             }})();
         '''))
         
-        # Handshake wait loop
-        timeout = 5
-        while not self._is_connected and timeout > 0:
-            await asyncio.sleep(0.5)
-            timeout -= 0.5
+        # IMPORTANT: Do not 'while not self._is_connected' here if you want
+        # the cell to finish and the JS to actually run.
+        print(f"📡 Target '{self._comm_mgr_id}' registered. Awaiting JS handshake...")
 
     def _on_comm_open(self, comm, msg):
         """Callback triggered when the frontend opens the comm channel."""

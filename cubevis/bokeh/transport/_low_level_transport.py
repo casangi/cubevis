@@ -317,276 +317,83 @@ class WebSocketTransport(TransportBase):
 # ============================================================================
 # Colab Comms Transport
 # ============================================================================
-class ColabCommsTransport(TransportBase):
-    """
-    Colab Comms-based transport for Google Colab environment.
-    
-    Uses google.colab.output.register_comm_target for efficient bidirectional
-    communication.  Leverages Bokeh's serialization for numpy arrays and
-    complex data structures.
+import asyncio
+from typing import Dict, Any, Optional, Callable
 
-    Key features:
-    - Uses Colab's native comm protocol (not eval_js)
-    - Handles large data efficiently (images, arrays)
-    - Automatic serialization via Bokeh
-    - Callback-based message reception
-    
-    Usage:
-        transport = ColabCommsTransport('app_comms', abort=error_handler)
-        transport.set_message_callback(route_message)
-        await transport.connect()
-        await transport.run()
-        await transport.send_message({'data': large_array})
-    """
-    
+class ColabCommsTransport(TransportBase):
+    """Transport for Google Colab using google.colab.kernel.comms."""
+
     def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
-        logger.debug('------------------------------------------------------------------------------------------------------------------------')
-        logger.debug ('ColabCommsTransport.__init__')
-        logger.debug('------------------------------------------------------------------------------------------------------------------------')
         super().__init__(comm_mgr_id, abort)
         self._comm = None
-        self._registered = False
-        self._should_run = False
-        self._message_callback: Optional[Callable] = None
-        self._target_name = f'cubevis_comm_mgr_{comm_mgr_id}'
-
-    # ------------------------------------------------------------------
-    # Public TransportBase interface
-    # ------------------------------------------------------------------
-    def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]):
-        """Set callback for incoming messages (used by CommMgr).
-
-        Args:
-            callback: Async function to call when messages arrive.
-        """
-        self._message_callback = callback
-        logger.debug(f"Message callback set for {self._target_name}")
+        self._message_callback = None
+        self._is_connected = False
+        self._loop = asyncio.get_event_loop()
 
     async def connect(self) -> None:
-        """
-        Connect and register Colab comm.
-        """
-        logger.info(f"Colab Comms connecting for comm_mgr: {self._comm_mgr_id}")
-        await self._register_comm()
+        """Initializes the Colab comms target and waits for the frontend to connect."""
+        # Local imports to prevent errors in non-Colab environments
+        from google.colab import kernel
+        from IPython.display import display, Javascript
+
+        # 1. Register the target in Python
+        kernel.comms.register_target(self._comm_mgr_id, self._on_comm_open)
+        
+        # 2. Trigger the frontend (JS) to open the channel
+        display(Javascript(f'''
+            (async () => {{
+                const channel = await google.colab.kernel.comms.open('{self._comm_mgr_id}');
+                (async () => {{
+                    for await (const message of channel.messages) {{
+                        window.dispatchEvent(new CustomEvent('{self._comm_mgr_id}', {{ detail: message.data }}));
+                    }}
+                }})();
+            }})();
+        '''))
+        
+        # Handshake wait loop
+        timeout = 5
+        while not self._is_connected and timeout > 0:
+            await asyncio.sleep(0.5)
+            timeout -= 0.5
+
+    def _on_comm_open(self, comm, msg):
+        """Callback triggered when the frontend opens the comm channel."""
+        self._comm = comm
+        self._is_connected = True
+        
+        @comm.on_msg
+        def _recv(msg):
+            data = msg['content']['data']
+            if self._message_callback:
+                self._loop.call_soon_threadsafe(self._message_callback, data)
+
+        @comm.on_close
+        def _close(msg):
+            self._is_connected = False
+            if self.abort:
+                self.abort()
 
     async def send_message(self, message: Dict[str, Any]) -> None:
-        """
-        Send a message through Colab Comms.
-        
-        The message is serialized using Bokeh's serialization which efficiently
-        handles numpy arrays and complex data structures.
-        
-        Args:
-            message: Dictionary message to send (may contain numpy arrays)
-            
-        Raises:
-            RuntimeError: If comm is not registered
-        """
-        if not self._registered or self._comm is None:
-            raise RuntimeError(
-                f"Colab Comm not connected for {self._comm_mgr_id}. "
-                "Call connect() first."
-            )
+        """Send message from Python to Colab JS."""
+        if self._comm:
+            self._comm.send(message)
 
-        try:
-            from ...utils import serialize
-            
-            # Serialize the message using Bokeh's serialization
-            # This handles numpy arrays efficiently
-            serialized = serialize(message)
-            
-            # Send the serialized string via comm
-            # Colab comms expect a dict, so wrap in data field
-            self._comm.send({'data': serialized})
-            
-            logger.debug(
-                f"Sent message via Colab comm {self._target_name} "
-                f"({len(serialized)} bytes)"
-            )
-        except Exception as e:
-            logger.error(f"Error sending message via Colab comm: {e}")
-            if self.abort:
-                self.abort(e)
-            raise
-    
+    def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]):
+        self._message_callback = callback
+
     async def run(self) -> None:
-        """Keep event loop alive for Colab comm callbacks."""
-        self._should_run = True
-        logger.debug(f"Colab Comms event loop starting for {self._comm_mgr_id}")
-        while self._should_run and self._registered:
-            await asyncio.sleep(0.1)
-        logger.debug(f"Colab Comms event loop ended for {self._comm_mgr_id}")
+        """Keeps the transport alive until disconnected."""
+        while self._is_connected:
+            await asyncio.sleep(1)
 
     async def close(self) -> None:
-        """Close the Colab Comms connection."""
-        self._should_run = False
+        if self._comm:
+            self._comm.close()
+        self._is_connected = False
 
-        if self._comm is not None:
-            try:
-                from ...utils import serialize
-                
-                # Send closing notification
-                self._comm.send({'data': serialize({
-                    'type': 'closing',
-                    'comm_mgr_id': self._comm_mgr_id,
-                    'message': 'Backend closing comm'
-                })})
-
-                # Close the comm
-                self._comm.close()
-                logger.debug(f"Closed Colab comm for {self._target_name}")
-            except Exception as e:
-                logger.error(f"Error closing Colab comm: {e}")
-            finally:
-                self._comm = None
-        
-        self._registered = False
-    
     def is_connected(self) -> bool:
-        """Check if Colab Comms is registered and has an active comm."""
-        return self._registered and self._comm is not None
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-    async def _register_comm(self):
-        """
-        Register the comm target using the correct Colab API.
-
-        This sets up bidirectional communication with the frontend.
-        The frontend will open a comm to this target to establish connection.
-        """
-        try:
-            # Import here to fail gracefully if not in Colab
-            from google.colab import output
-        except ImportError:
-            raise RuntimeError(
-                "ColabCommsTransport requires google.colab. "
-                "This transport can only be used inside Google Colab."
-            )
-
-        # Define the handler that will be called when frontend sends messages
-        def comm_target_handler(comm, open_msg):
-            """
-            Handler called when frontend opens a comm to this target.
-
-            Args:
-                comm: The comm object for bidirectional communication
-                open_msg: The initial message from frontend
-            """
-            logger.debug(f"Frontend opened Colab comm to {self._target_name}")
-
-            # Store the comm object
-            self._comm = comm
-
-            # Register message handler for incoming messages
-            def on_msg(msg):
-                """Handle incoming messages from frontend."""
-                try:
-                    from ...utils import deserialize
-
-                    # Extract the data from the message
-                    # Colab sends messages as {'data': <content>}
-                    msg_data = msg.get('data', msg)
-
-                    # If it's a string, deserialize it using Bokeh's deserializer
-                    if isinstance(msg_data, str):
-                        data = deserialize(msg_data)
-                    else:
-                        # Already deserialized (shouldn't normally happen)
-                        data = msg_data
-
-                    logger.debug(
-                        f"Received Colab comm message: "
-                        f"{data.get('type', 'unknown') if isinstance(data, dict) else type(data)}"
-                    )
-
-                    # Handle special message types
-                    if isinstance(data, dict):
-                        msg_type = data.get('type')
-
-                        if msg_type == 'ping':
-                            # Respond to ping
-                            from ...utils import serialize
-                            comm.send({'data': serialize({
-                                'type': 'pong',
-                                'comm_mgr_id': self._comm_mgr_id,
-                                'timestamp': time.time()
-                            })})
-                            return
-
-                        if msg_type in ('heartbeat', 'comm_opened', 'closing'):
-                            logger.debug(f"Received {msg_type} message")
-                            return
-
-                    # Call the message callback if set (by CommMgr)
-                    if self._message_callback is not None:
-                        import inspect
-                        if inspect.iscoroutinefunction(self._message_callback):
-                            # Schedule on the running event loop
-                            try:
-                                loop = asyncio.get_event_loop()
-                                asyncio.run_coroutine_threadsafe(
-                                    self._message_callback(data), loop
-                                )
-                            except RuntimeError:
-                                # No running loop — create a new one (last resort)
-                                asyncio.run(self._message_callback(data))
-                        else:
-                            self._message_callback(data)
-                    else:
-                        logger.warning(
-                            f"Received message but no callback set: {data}"
-                        )
-
-                except Exception as e:
-                    logger.error(f"Error handling Colab comm message: {e}")
-                    traceback.print_exc()
-                    # Try to send error back to frontend
-                    try:
-                        from ...utils import serialize
-                        comm.send({'data': serialize({
-                            'type': 'error',
-                            'error': str(e),
-                            'traceback': traceback.format_exc()
-                        })})
-                    except Exception:
-                        pass
-
-            # Register close handler
-            def on_close(msg):
-                """Handle comm close from frontend."""
-                logger.debug(f"Colab comm closed for {self._target_name}")
-                self._registered = False
-                self._should_run = False
-                self._comm = None
-                if self.abort:
-                    self.abort(
-                        RuntimeError(f"Colab comm closed for {self._comm_mgr_id}")
-                    )
-
-            comm.on_msg(on_msg)
-            comm.on_close(on_close)
-
-            # Send acknowledgment back to frontend
-            from ...utils import serialize
-            comm.send({'data': serialize({
-                'type': 'comm_opened',
-                'comm_mgr_id': self._comm_mgr_id,
-                'backend_ready': True,
-                'message': 'Colab comm established successfully'
-            })})
-
-        try:
-            # Register the target with Colab's comm system
-            # This makes the backend ready to receive comm connections
-            output.register_comm_target(self._target_name, comm_target_handler)
-
-            self._registered = True
-            logger.debug(f"Registered Colab comm target: {self._target_name}")
-        except Exception as e:
-            logger.error(f"Error registering Colab comm target: {e}")
-            raise
+        return self._is_connected
 
 # ============================================================================
 # Jupyter Comms Transport

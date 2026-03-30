@@ -318,223 +318,111 @@ export class WebSocketTransport implements TransportBase {
  * - Automatic Bokeh serialization support
  * - Bidirectional message passing
  */
+/**
+ * TypeScript implementation for Google Colab communication.
+ * This acts as the frontend counterpart to the Python ColabCommsTransport.
+ */
+/**
+ * TypeScript implementation for Google Colab communication.
+ * This acts as the frontend counterpart to the Python ColabCommsTransport.
+ */
 export class ColabCommsTransport implements TransportBase {
-    private comm?: any
-    private targetName: string
-    private registered: boolean = false
-    private onMessageCallback?: (msg: any) => void
-    private shouldRun: boolean = false
-    
+    private comm?: any;
+    private targetName: string;
+    private isRegistered: boolean = false;
+    private onMessageCallback?: (msg: any) => void;
+    private shouldRun: boolean = false;
+
     constructor(private comm_mgr: CommMgr) {
-        this.targetName = `cubevis_comm_mgr_${comm_mgr.comm_mgr_id}`
+        // This ID must match the string passed to the Python register_target
+        this.targetName = this.comm_mgr.comm_mgr_id;
     }
-    
+
     setMessageCallback(callback: (msg: any) => void): void {
-        this.onMessageCallback = callback
+        this.onMessageCallback = callback;
     }
-    
+
+    /**
+     * Satisfies the TransportBase interface requirement.
+     */
+    isConnected(): boolean {
+        return this.isRegistered && this.comm !== undefined;
+    }
+
     async connect(): Promise<void> {
-        console.log("Colab Comms connecting for comm_mgr:", this.comm_mgr.comm_mgr_id)
-        
+        console.log(`Connecting to Colab Comm target: ${this.targetName}`);
+
         // Verify Colab environment
-        if (!window.google || !window.google.colab || !window.google.colab.kernel) {
-            throw new Error("Colab environment not detected")
+        if (!window.google?.colab?.kernel) {
+            throw new Error("Colab environment or kernel not detected.");
         }
-        
-        const kernel = window.google.colab.kernel
+
+        const kernel = window.google.colab.kernel;
+
         if (!kernel.comms) {
-            throw new Error("Colab kernel.comms not available")
+            throw new Error("Colab kernel.comms is not available in this environment.");
         }
-        
+
         try {
-            // Register comm target to receive comms from backend
-            kernel.comms.registerTarget(
-                this.targetName,
-                (comm: any, openMsg: any) => {
-                    this.handleCommOpen(comm, openMsg)
-                }
-            )
-            
-            console.log(`Registered Colab comm target: ${this.targetName}`)
-            
-            // Open a comm to the backend
-            this.comm = await kernel.comms.open(
-                this.targetName,
-                {
-                    data: serialize({
-                        type: 'initialization',
-                        comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                        frontend_ready: true
-                    })
-                }
-            )
+            // Establishes the channel back to the Python backend
+            this.comm = await kernel.comms.open(this.targetName, {
+                comm_mgr_id: this.comm_mgr.comm_mgr_id,
+                origin: 'frontend'
+            });
             
             if (!this.comm) {
-                throw new Error(`Failed to open Colab comm to ${this.targetName}`)
+                throw new Error(`Failed to establish channel for ${this.targetName}`);
             }
-            
-            // Register message handler
-            this.comm.onMsg = (msg: any) => {
-                this.handleMessage(msg)
-            }
-            
-            // Register close handler
-            this.comm.onClose = (msg: any) => {
-                this.handleClose(msg)
-            }
-            
-            this.registered = true
-            
-            console.log(`Colab comm opened: ${this.targetName}`)
-            
-        } catch (e) {
-            console.error("Error initializing Colab Comms:", e)
-            throw e
+
+            this.comm.onMsg = (msg: any) => this.handleIncoming(msg);
+            this.comm.onClose = () => this.handleClose();
+
+            this.isRegistered = true;
+            console.log("Colab Comm connection established.");
+
+        } catch (error) {
+            console.error("Colab Comm connection failed:", error);
+            throw error;
         }
     }
-    
-    async run(): Promise<void> {
-        this.shouldRun = true
-        console.log(`Colab Comms event loop starting for ${this.comm_mgr.comm_mgr_id}`)
-        
-        // Keep alive until shutdown
-        while (this.shouldRun && this.registered) {
-            await new Promise(resolve => setTimeout(resolve, 100))
-        }
-        
-        console.log(`Colab Comms event loop ended for ${this.comm_mgr.comm_mgr_id}`)
-    }
-    
-    private handleCommOpen(comm: any, _openMsg: any): void {
-        console.log(`Backend opened Colab comm to ${this.targetName}`)
-        
-        if (this.comm && this.comm !== comm) {
-            console.log("Replacing existing comm with new one from backend")
-            try {
-                this.comm.close()
-            } catch (e) {
-                console.warn("Error closing old comm:", e)
-            }
-        }
-        
-        this.comm = comm
-        this.registered = true
-        
-        this.comm.onMsg = (msg: any) => {
-            this.handleMessage(msg)
-        }
-        
-        this.comm.onClose = (msg: any) => {
-            this.handleClose(msg)
-        }
-        
-        this.comm.send({
-            data: serialize({
-                type: 'comm_opened',
-                comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                frontend_ready: true
-            })
-        })
-    }
-    
-    private handleMessage(msg: any): void {
-        try {
-            const msgData = msg.data || msg
-            
-            let data
-            if (typeof msgData === 'string') {
-                data = deserialize(msgData)
-            } else {
-                data = msgData
-            }
-            
-            console.debug("Received Colab comm message:", data.type || typeof data)
-            
-            // Handle special message types
-            if (typeof data === 'object' && data !== null) {
-                const msgType = data.type
-                
-                if (msgType === 'ping') {
-                    if (this.comm) {
-                        this.comm.send({
-                            data: serialize({
-                                type: 'pong',
-                                comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                                timestamp: Date.now()
-                            })
-                        })
-                    }
-                    return
-                }
-                
-                if (msgType === 'heartbeat') {
-                    console.debug(`Heartbeat received for ${this.comm_mgr.comm_mgr_id}`)
-                    return
-                }
-                
-                if (msgType === 'comm_opened' || msgType === 'closing') {
-                    console.log(`Backend message: ${msgType}`)
-                    return
-                }
-            }
-            
-            // Call the message callback
-            if (this.onMessageCallback) {
-                this.onMessageCallback(data)
-            }
-            
-        } catch (e) {
-            console.error("Error handling Colab comm message:", e)
+
+    private handleIncoming(msg: any): void {
+        // Colab usually nests user data in a 'data' property
+        const data = msg.data || msg;
+        if (this.onMessageCallback) {
+            this.onMessageCallback(data);
         }
     }
-    
-    private handleClose(_msg: any): void {
-        console.log(`Colab comm closed for ${this.targetName}`)
-        this.registered = false
-        this.shouldRun = false
-        this.comm = undefined
+
+    private handleClose(): void {
+        console.warn("Colab Comm channel closed.");
+        this.isRegistered = false;
+        this.shouldRun = false;
+        this.comm = undefined;
     }
-    
+
     send(message: any): void {
-        if (!this.registered || !this.comm) {
-            console.warn("Colab Comm not initialized, message not sent:", message)
-            return
-        }
-        
-        try {
-            const serialized = serialize(message)
-            this.comm.send({ data: serialized })
-            console.debug(`Sent message via Colab comm ${this.targetName}`)
-        } catch (e) {
-            console.error("Error sending message via Colab Comm:", e)
+        if (this.isConnected()) {
+            this.comm.send(message);
+        } else {
+            console.warn("Colab Comm not connected; message dropped.");
         }
     }
-    
-    close(): void {
-        this.shouldRun = false
-        if (this.comm && this.registered) {
-            try {
-                this.comm.send({
-                    data: serialize({
-                        type: 'closing',
-                        comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                        message: 'Frontend closing comm'
-                    })
-                })
-                
-                this.comm.close()
-                console.log(`Closed Colab comm for ${this.targetName}`)
-            } catch (e) {
-                console.error("Error closing Colab comm:", e)
-            } finally {
-                this.comm = undefined
-                this.registered = false
-            }
+
+    async run(): Promise<void> {
+        this.shouldRun = true;
+        while (this.shouldRun && this.isRegistered) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
     }
-    
-    isConnected(): boolean {
-        return this.registered && this.comm !== undefined
+
+    async close(): Promise<void> {
+        this.shouldRun = false;
+        if (this.comm) {
+            this.comm.close();
+        }
+        this.isRegistered = false;
+        this.comm = undefined;
     }
 }
 

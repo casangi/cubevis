@@ -461,42 +461,34 @@ class JupyterCommsTransport(TransportBase):
         self._display_func = display
 
     async def connect(self) -> None:
-        self._ensure_anywidget()
+        from google.colab import kernel
+        from IPython.display import display, Javascript
 
-        from ipykernel.comm import Comm
-        from IPython import get_ipython
+        # 1. Register the target so Python is ready to hear from JS
+        kernel.comms.register_target(self._comm_mgr_id, self._on_comm_open)
 
-        self._connected_event = asyncio.Event()
+        # 2. Inject JS. This ONLY runs once this cell finishes!
+        # We add a small delay to ensure the backend is fully ready.
+        display(Javascript(f'''
+            (async () => {{
+                const target = "{self._comm_mgr_id}";
+                console.log("Starting JS Handshake for:", target);
+                try {{
+                    const channel = await google.colab.kernel.comms.open(target, {{}});
+                    // Success! Now listen for messages
+                    (async () => {{
+                        for await (const message of channel.messages) {{
+                            window.dispatchEvent(new CustomEvent(target, {{ detail: message.data }}));
+                        }}
+                    }})();
+                    console.log("JS Handshake Complete.");
+                }} catch (e) {{
+                    console.error("JS Handshake Failed:", e);
+                }}
+            }})();
+        '''))
 
-        def _handle_open(comm, open_msg):
-            self._comm = comm
-            self._connected = True
-            self._connected_event.set()
-            if self._debug:
-                print("✅ Transport: Connection established!")
-
-            @comm.on_msg
-            def _recv(msg):
-                if self._callback:
-                    self._callback(msg['content']['data'])
-
-        get_ipython().kernel.comm_manager.register_target(self._comm_mgr_id, _handle_open)
-        
-        # Simply display the anywidget directly
-        self._display_func(self._bridge)
-        
-        async def handshake():
-            await asyncio.sleep(1.0)
-            self._bridge.send({"method": "open_comm", "target_id": self._comm_mgr_id})
-
-        asyncio.create_task(handshake())
-        
-        try:
-            await asyncio.wait_for(self._connected_event.wait(), timeout=10.0)
-        except asyncio.TimeoutError:
-            if self._debug:
-                print("❌ Transport: Connection timeout.")
-            raise
+        print(f"📡 Registered {self._comm_mgr_id}. Run the next cell to verify.")
 
     def is_connected(self) -> bool:
         return self._connected

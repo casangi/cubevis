@@ -331,42 +331,43 @@ class ColabCommsTransport(TransportBase):
         self._loop = asyncio.get_event_loop()
 
     async def connect(self) -> None:
-        # Local imports to prevent errors in non-Colab environments
         try:
-            from google.colab import _kernel as colab_kernel
+            import google.colab
             from IPython.display import display, Javascript
         except ImportError:
-            raise RuntimeError(
-                "This transport requires the Google Colab environment. "
-                "Ensure you are running on colab.research.google.com."
-            )
+            raise RuntimeError("Google Colab environment not detected.")
 
-        # 1. Register the target using the internal _kernel module
-        colab_kernel.comms.register_target(self._comm_mgr_id, self._on_comm_open)
+        # In newer Colab versions, 'output.register_callback' is the stable way
+        # to handle frontend-to-backend calls if 'kernel.comms' is hidden.
+        # However, for a persistent channel, we use this:
+        try:
+            # Re-attempting the standard high-level access
+            google.colab.kernel.comms.register_target(self._comm_mgr_id, self._on_comm_open)
+        except AttributeError:
+            # Fallback for environments where the attribute is nested differently
+            from google.colab import _kernel
+            # Use the shell's kernel instance directly
+            shell = get_ipython()
+            shell.kernel.comm_manager.register_target(self._comm_mgr_id, self._on_comm_open)
 
-        # 2. Trigger the frontend (JS) to open the channel
         display(Javascript(f'''
             (async () => {{
-                // Guard against multiple initializations
                 if (window._colab_comm_{self._comm_mgr_id}) return;
-
                 try {{
                     const channel = await google.colab.kernel.comms.open('{self._comm_mgr_id}', {{}});
                     window._colab_comm_{self._comm_mgr_id} = channel;
-
                     (async () => {{
                         for await (const message of channel.messages) {{
                             window.dispatchEvent(new CustomEvent('{self._comm_mgr_id}', {{ detail: message.data }}));
                         }}
                     }})();
-                    console.log("Colab Comms: JS Handshake Complete for {self._comm_mgr_id}");
-                }} catch (err) {{
-                    console.error("Colab Comms: JS Handshake Failed", err);
+                    console.log("JS Handshake Success");
+                }} catch (e) {{
+                    console.error("JS Handshake Failed", e);
                 }}
             }})();
         '''))
-
-        print(f"📡 Colab Transport: Registered {self._comm_mgr_id}. Awaiting JS...")
+        print(f"📡 Registered {self._comm_mgr_id}. Please run the next cell.")
 
     def _on_comm_open(self, comm, msg):
         """Callback triggered when the frontend opens the comm channel."""

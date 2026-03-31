@@ -331,35 +331,42 @@ class ColabCommsTransport(TransportBase):
         self._loop = asyncio.get_event_loop()
 
     async def connect(self) -> None:
-        from google.colab import kernel
-        from IPython.display import display, Javascript
+        # Local imports to prevent errors in non-Colab environments
+        try:
+            from google.colab import _kernel as colab_kernel
+            from IPython.display import display, Javascript
+        except ImportError:
+            raise RuntimeError(
+                "This transport requires the Google Colab environment. "
+                "Ensure you are running on colab.research.google.com."
+            )
 
-        # 1. Register the target first so it's ready when JS calls
-        kernel.comms.register_target(self._comm_mgr_id, self._on_comm_open)
-        
-        # 2. Inject the JS. NOTE: This won't run until this cell finishes!
+        # 1. Register the target using the internal _kernel module
+        colab_kernel.comms.register_target(self._comm_mgr_id, self._on_comm_open)
+
+        # 2. Trigger the frontend (JS) to open the channel
         display(Javascript(f'''
             (async () => {{
-                // This global check ensures we don't try to connect if already active
-                if (window.colab_transport_{self._comm_mgr_id}) return;
+                // Guard against multiple initializations
+                if (window._colab_comm_{self._comm_mgr_id}) return;
 
-                const kernel = google.colab.kernel;
-                const channel = await kernel.comms.open('{self._comm_mgr_id}', {{}});
-                window.colab_transport_{self._comm_mgr_id} = channel;
+                try {{
+                    const channel = await google.colab.kernel.comms.open('{self._comm_mgr_id}', {{}});
+                    window._colab_comm_{self._comm_mgr_id} = channel;
 
-                (async () => {{
-                    for await (const message of channel.messages) {{
-                        // Dispatch to your TS implementation listeners
-                        window.dispatchEvent(new CustomEvent('{self._comm_mgr_id}', {{ detail: message.data }}));
-                    }}
-                }})();
-                console.log("Colab JS Transport initialized");
+                    (async () => {{
+                        for await (const message of channel.messages) {{
+                            window.dispatchEvent(new CustomEvent('{self._comm_mgr_id}', {{ detail: message.data }}));
+                        }}
+                    }})();
+                    console.log("Colab Comms: JS Handshake Complete for {self._comm_mgr_id}");
+                }} catch (err) {{
+                    console.error("Colab Comms: JS Handshake Failed", err);
+                }}
             }})();
         '''))
-        
-        # IMPORTANT: Do not 'while not self._is_connected' here if you want
-        # the cell to finish and the JS to actually run.
-        print(f"📡 Target '{self._comm_mgr_id}' registered. Awaiting JS handshake...")
+
+        print(f"📡 Colab Transport: Registered {self._comm_mgr_id}. Awaiting JS...")
 
     def _on_comm_open(self, comm, msg):
         """Callback triggered when the frontend opens the comm channel."""

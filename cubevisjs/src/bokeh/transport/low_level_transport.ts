@@ -392,6 +392,7 @@ export class ColabCommsTransport implements TransportBase {
 
     send(message: any): void {
         if (this.isConnected()) {
+            console.log(`[ColabCommsTransport.send] ${message}`)
             this.comm.send(message);
         } else {
             console.warn("Colab Comm not connected; message dropped.");

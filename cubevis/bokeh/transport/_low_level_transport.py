@@ -371,14 +371,20 @@ class ColabCommsTransport(TransportBase):
 
     def _on_comm_open(self, comm, msg):
         """Callback triggered when the frontend opens the comm channel."""
+        print(f"DEBUG: Comm opened for {self._comm_mgr_id}")
         self._comm = comm
         self._is_connected = True
         
-        @comm.on_msg
+        # In some environments, the decorator @comm.on_msg might not
+        # bind correctly if the comm object is already initialized.
         def _recv(msg):
-            data = msg['content']['data']
+            # Colab/IPyKernel wraps the payload in content -> data
+            data = msg.get('content', {}).get('data', msg)
             if self._message_callback:
                 self._loop.call_soon_threadsafe(self._message_callback, data)
+
+        # Explicitly set the handler
+        self._comm.on_msg(_recv)
 
         @comm.on_close
         def _close(msg):

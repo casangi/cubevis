@@ -351,28 +351,23 @@ export class ColabCommsTransport implements TransportBase {
 
     async connect(): Promise<void> {
         const kernel = (window as any).google?.colab?.kernel;
+
         if (!kernel) throw new Error("Not in Colab");
-        if (!kernel.comms) throw new Error("Colab kernel.comms not available");
 
-        try {
-            // The second argument {} satisfies the 'data' requirement (TS2554)
-            this.comm = await kernel.comms.open(this.targetName, {});
+        // Colab's comms must be opened from the frontend to the backend
+        this.comm = await kernel.comms.open(this.targetName, {});
 
-            if (!this.comm) {
-                throw new Error(`Failed to establish channel for ${this.targetName}`);
-            }
-
-            this.comm.onMsg = (msg: any) => this.handleIncoming(msg);
-
-            this.comm.onClose = (msg: any) => this.handleClose(msg);
-
-            this.isRegistered = true;
-            console.log("Colab Comm connection established.");
-
-        } catch (error) {
-            console.error("Colab Comm connection failed:", error);
-            throw error;
+        if (!this.comm) {
+            throw new Error(`Failed to establish channel for ${this.targetName}`);
         }
+
+        this.comm.onMsg = (msg: any) => this.handleIncoming(msg);
+
+        this.comm.onClose = (msg: any) => this.handleClose(msg);
+
+        this.isRegistered = true;
+
+        console.log("Colab Comm connection established.", this.comm);
     }
 
     private handleIncoming(msg: any): void {

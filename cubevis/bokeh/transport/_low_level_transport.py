@@ -352,21 +352,29 @@ class ColabCommsTransport(TransportBase):
 
         display(Javascript(f'''
             (async () => {{
-                if (window._colab_comm_{self._comm_mgr_id}) return;
+                const target = '{self._comm_mgr_id}';
                 try {{
-                    const channel = await google.colab.kernel.comms.open('{self._comm_mgr_id}', {{}});
-                    window._colab_comm_{self._comm_mgr_id} = channel;
+                    // Use the persistent kernel object
+                    const channel = await google.colab.kernel.comms.open(target, {{}});
+
+                    // Store it in a way that survives cell isolation if possible,
+                    // or just keep the listener alive.
                     (async () => {{
                         for await (const message of channel.messages) {{
-                            window.dispatchEvent(new CustomEvent('{self._comm_mgr_id}', {{ detail: message.data }}));
+                            // Broadcast to your TypeScript library
+                            window.dispatchEvent(new CustomEvent(target, {{ detail: message.data }}));
                         }}
                     }})();
-                    console.log("JS Handshake Success");
+
+                    // Send a confirm back to Python immediately
+                    channel.send({{"type": "handshake_confirm"}});
+                    console.log("JS Handshake Success for " + target);
                 }} catch (e) {{
                     console.error("JS Handshake Failed", e);
                 }}
             }})();
         '''))
+
         print(f"📡 Registered {self._comm_mgr_id}. Please run the next cell.")
 
     def _on_comm_open(self, comm, msg):

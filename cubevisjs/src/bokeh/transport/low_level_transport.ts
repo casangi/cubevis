@@ -328,34 +328,39 @@ export class WebSocketTransport implements TransportBase {
  */
 export class ColabCommsTransport implements TransportBase {
     private comm?: any;
+    private comm_mgr: CommMgr | null = null;
     private targetName: string;
     private isRegistered: boolean = false;
     private onMessageCallback?: (msg: any) => void;
     private shouldRun: boolean = false;
 
-    constructor(private comm_mgr: CommMgr) {
+    constructor(comm_id: CommMgr | string) {
         // This ID must match the string passed to the Python register_target
-        this.targetName = this.comm_mgr.comm_mgr_id;
-    }
-
-    setMessageCallback(callback: (msg: any) => void): void {
-        this.onMessageCallback = callback;
-    }
-
-    /**
-     * Satisfies the TransportBase interface requirement.
-     */
-    isConnected(): boolean {
-        return this.isRegistered && this.comm !== undefined;
+        if ( typeof comm_id === "object" ) {
+            this.comm_mgr = comm_id
+            this.targetName = comm_id.comm_mgr_id
+        } else {
+            this.targetName = comm_id
+        }
     }
 
     async connect(): Promise<void> {
+        // Colab's kernel object is global, but the comm is local to this instance
         const kernel = (window as any).google?.colab?.kernel;
 
         if (!kernel) throw new Error("Not in Colab");
 
-        // Colab's comms must be opened from the frontend to the backend
-        this.comm = await kernel.comms.open(this.targetName, {});
+        try {
+            // Open the channel: this triggers the Python 'register_target' callback
+            this.comm = await kernel.comms.open(this.targetName, {
+                ts: Date.now(),
+                type: 'connection_request'
+            });
+
+        } catch (err) {
+            console.error("Failed to connect Colab transport:", err);
+            throw err;
+        }
 
         if (!this.comm) {
             throw new Error(`Failed to establish channel for ${this.targetName}`);
@@ -368,6 +373,26 @@ export class ColabCommsTransport implements TransportBase {
         this.isRegistered = true;
 
         console.log("Colab Comm connection established.", this.comm);
+    }
+
+    send(message: any): void {
+        if (this.isConnected()) {
+            console.log(`[ColabCommsTransport.send] ${message}`)
+            this.comm.send(message);
+        } else {
+            console.warn("Colab Comm not connected; message dropped.");
+        }
+    }
+
+    setMessageCallback(callback: (msg: any) => void): void {
+        this.onMessageCallback = callback;
+    }
+
+    /**
+     * Satisfies the TransportBase interface requirement.
+     */
+    isConnected(): boolean {
+        return this.isRegistered && this.comm;
     }
 
     private handleIncoming(msg: any): void {
@@ -383,15 +408,6 @@ export class ColabCommsTransport implements TransportBase {
         this.isRegistered = false;
         this.shouldRun = false;
         this.comm = undefined;
-    }
-
-    send(message: any): void {
-        if (this.isConnected()) {
-            console.log(`[ColabCommsTransport.send] ${message}`)
-            this.comm.send(message);
-        } else {
-            console.warn("Colab Comm not connected; message dropped.");
-        }
     }
 
     async run(): Promise<void> {

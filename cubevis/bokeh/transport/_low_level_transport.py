@@ -337,45 +337,27 @@ class ColabCommsTransport(TransportBase):
         except ImportError:
             raise RuntimeError("Google Colab environment not detected.")
 
-        # In newer Colab versions, 'output.register_callback' is the stable way
-        # to handle frontend-to-backend calls if 'kernel.comms' is hidden.
-        # However, for a persistent channel, we use this:
+        # 1. Register the target and EXIT. Do not wait for the flag here.
         try:
-            # Re-attempting the standard high-level access
             google.colab.kernel.comms.register_target(self._comm_mgr_id, self._on_comm_open)
         except AttributeError:
-            # Fallback for environments where the attribute is nested differently
-            from google.colab import _kernel
-            # Use the shell's kernel instance directly
             shell = get_ipython()
             shell.kernel.comm_manager.register_target(self._comm_mgr_id, self._on_comm_open)
 
+        # 2. This JS won't execute until this cell COMPLETES.
         display(Javascript(f'''
             (async () => {{
-                const target = '{self._comm_mgr_id}';
+                console.log("JS: Handshake starting for {self._comm_mgr_id}...");
                 try {{
-                    // Use the persistent kernel object
-                    const channel = await google.colab.kernel.comms.open(target, {{}});
-
-                    // Store it in a way that survives cell isolation if possible,
-                    // or just keep the listener alive.
-                    (async () => {{
-                        for await (const message of channel.messages) {{
-                            // Broadcast to your TypeScript library
-                            window.dispatchEvent(new CustomEvent(target, {{ detail: message.data }}));
-                        }}
-                    }})();
-
-                    // Send a confirm back to Python immediately
-                    channel.send({{"type": "handshake_confirm"}});
-                    console.log("JS Handshake Success for " + target);
+                    const channel = await google.colab.kernel.comms.open('{self._comm_mgr_id}', {{}});
+                    window._colab_comm_{self._comm_mgr_id} = channel;
+                    console.log("JS: Handshake SUCCESS.");
                 }} catch (e) {{
-                    console.error("JS Handshake Failed", e);
+                    console.error("JS: Handshake FAILED", e);
                 }}
             }})();
         '''))
-
-        print(f"📡 Registered {self._comm_mgr_id}. Please run the next cell.")
+        print(f"📡 Registered {self._comm_mgr_id}. Cell finished. Ready for JS connection.")
 
     def _on_comm_open(self, comm, msg):
         """Callback triggered when the frontend opens the comm channel."""

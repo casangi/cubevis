@@ -360,40 +360,19 @@ class ColabCommsTransport(TransportBase):
         print(f"📡 Registered {self._comm_mgr_id}. Cell finished. Ready for JS connection.")
 
     def _on_comm_open(self, comm, msg):
-        """Callback triggered when the frontend opens the comm channel."""
+        # This will show up in the cell output area
+        print(f"🔥 KERNEL: Comm opened for {self._comm_mgr_id}")
         self._comm = comm
         self._is_connected = True
-
-        # 1. Manually check if the FIRST message is bundled in the 'open' request
-        initial_data = msg.get('content', {}).get('data', {})
-        if initial_data and self._message_callback:
-            # Handle any data sent during the actual .open() call
-            self._loop.call_soon_threadsafe(self._message_callback, initial_data)
-
-        # 2. Define the persistent receiver
+        
         def _recv(msg):
-            # IPyKernel wraps the user payload in content -> data
-            # Use .get() to avoid KeyErrors if the message is malformed
-            data = msg.get('content', {}).get('data', None)
-            if data is not None and self._message_callback:
+            data = msg.get('content', {}).get('data', {})
+            # Print to both places for absolute certainty
+            print(f"📩 KERNEL RECEIVED: {data}")
+            if self._message_callback:
                 self._loop.call_soon_threadsafe(self._message_callback, data)
-            elif data is None:
-                # Debugging tip: print the raw msg if data is missing
-                with debug_view:
-                    print(f"⚠️ Raw message received without 'data' field: {msg}")
 
-        # 3. Explicitly bind the handler to the comm instance
         self._comm.on_msg(_recv)
-
-        @comm.on_close
-        def _close(msg):
-            self._is_connected = False
-            if self.abort:
-                self.abort()
-
-        # Final Confirmation
-        with debug_view:
-            print(f"✅ Comm Handshake Complete: {self._comm_mgr_id}")
 
     async def send_message(self, message: Dict[str, Any]) -> None:
         """Send message from Python to Colab JS."""

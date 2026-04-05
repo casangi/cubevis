@@ -446,8 +446,28 @@ class JupyterCommsTransport(TransportBase):
     # Comm-open callback – called by the kernel when JS opens the comm
     # ------------------------------------------------------------------
     def _on_comm_open(self, comm, msg):
+        """
+        Called each time any JS context opens a comm to our target_name.
+
+        On JupyterLab: called once, from the widget's render() function.
+        On Colab: called once per iframe that calls comms.open(targetId).
+          - First call: the widget render() in the bridge iframe.
+          - Subsequent calls: any %%javascript cell or app iframe that
+            independently opens a channel to communicate with Python.
+            Each gets its own comm and its own _recv wired up, so messages
+            from all of them reach the Python callback.
+            The LAST opener's comm is stored as self._comm for Python->JS
+            sends (send_message). On Colab, Python->JS is sent to ALL open
+            comms via _colab_comms so every listener receives it.
+        """
         logger.debug(f"JupyterCommsTransport._on_comm_open: comm opened for {self._comm_mgr_id}")
-        self._comm = comm
+
+        # Track all open comms for Python->JS broadcast (Colab needs this
+        # because each iframe opener is a separate channel)
+        if not hasattr(self, '_colab_comms'):
+            self._colab_comms = []
+        self._colab_comms.append(comm)
+        self._comm = comm   # also keep last for the JupyterLab single-comm case
         self._connected = True
 
         def _recv(msg):
@@ -456,14 +476,12 @@ class JupyterCommsTransport(TransportBase):
                 return
             logger.debug(f"JupyterCommsTransport._recv: {data}")
             if self._callback:
-                # Call directly on the kernel thread – this is what the original
-                # code did and what makes ipywidgets Output capture work.
                 self._callback(data)
 
         comm.on_msg(_recv)
 
-        # Unblock connect()
-        if self._conn_event is not None:
+        # Unblock connect() on first open
+        if self._conn_event is not None and not self._conn_event.is_set():
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
@@ -565,36 +583,50 @@ class JupyterCommsTransport(TransportBase):
                 }
 
                 // ── Path 2: Google Colab ──────────────────────────────────────
-                // Colab does not expose kernel.createComm(), so we use the
-                // google.colab.kernel.comms API instead.
-                // JS->Python: comm.send(data) calls model.send({ type:"comm_msg", data })
-                //   because Colab comm objects have no direct ZMQ back-channel.
-                //   Python receives via bridge.on_msg() wired in _wire_colab_recv().
-                // Python->JS: pumped from channel.messages to rawComm.onMsg.
+                // Colab does not expose kernel.createComm().  We use
+                // google.colab.kernel.comms.open(targetId) instead.
+                //
+                // comms.open() triggers _on_comm_open on the Python side, giving
+                // Python a comm with on_msg(_recv) wired — exactly like JupyterLab.
+                //
+                // JS->Python: channel.send({}, data) goes to Python _recv via
+                //   the kernel comm that _on_comm_open registered.
+                //
+                // Python->JS: Python calls send_message() which broadcasts to all
+                //   open comms including this channel; messages arrive in the
+                //   channel.messages async iterator and are pumped to onMsg.
+                //
+                // Cross-iframe access: other Colab cell iframes cannot reach
+                //   window["comm_"+id] since each cell has its own sandboxed window.
+                //   Those cells must call google.colab.kernel.comms.open(targetId)
+                //   themselves to get their own channel — _on_comm_open fires again,
+                //   _recv is wired to the new comm, and send_message() broadcasts
+                //   Python->JS to all open comms including the new one.
                 async function tryColabPath() {
                     try {
                         const colabComms = google?.colab?.kernel?.comms;
                         if (!colabComms || typeof colabComms.open !== "function") return false;
 
                         const channel = await colabComms.open(targetId, {});
-                        const rawComm = { onMsg: null };
 
-                        // Pump Python->JS Colab messages to rawComm.onMsg
+                        // Wrap channel in a comm-shaped object so app code can use
+                        // comm.send(data) and comm.onMsg = fn uniformly.
+                        const comm = {
+                            // JS -> Python: goes through the kernel comm (_recv fires)
+                            send(data) { channel.send({}, data); },
+                            // Python -> JS: set by app/notebook code to receive messages
+                            onMsg: null,
+                        };
+
+                        // Pump Python->JS messages from channel.messages to comm.onMsg
                         (async () => {
                             for await (const message of channel.messages) {
-                                if (typeof rawComm.onMsg === "function") {
-                                    rawComm.onMsg({ content: { data: message.data || {} } });
+                                if (typeof comm.onMsg === "function") {
+                                    comm.onMsg({ content: { data: message.data || {} } });
                                 }
                             }
                         })();
 
-                        // Wrap: redirect comm.send() through model.send for Colab
-                        const comm = {
-                            send(data) { model.send({ type: "comm_msg", data }); },
-                            get onMsg()    { return rawComm.onMsg; },
-                            set onMsg(fn)  { rawComm.onMsg = fn; },
-                            _raw: rawComm,
-                        };
                         attachComm(comm);
                         return true;
                     } catch (e) {
@@ -649,48 +681,8 @@ class JupyterCommsTransport(TransportBase):
             except Exception as e:
                 logger.warning(f"JupyterCommsTransport: comm target registration failed: {e}")
 
-        # On Colab, also wire JS->Python via the anywidget model channel,
-        # since Colab comm objects cannot route back through kernel ZMQ.
-        if self._is_colab():
-            self._wire_colab_recv()
-
         display(self._bridge)
         logger.debug(f"JupyterCommsTransport.display_bridge: widget displayed for {self._comm_mgr_id}")
-
-    # ------------------------------------------------------------------
-    # Colab-only: JS->Python via anywidget model channel
-    # ------------------------------------------------------------------
-    def _wire_colab_recv(self) -> None:
-        """
-        On Colab only, register a model.on_msg handler to receive JS->Python
-        messages that arrive via model.send({ type:"comm_msg", data }).
-
-        On JupyterLab, comm.on_msg(_recv) in _on_comm_open handles this instead,
-        using the reliable kernel ZMQ path.
-        """
-        def _on_custom_msg(widget, content, buffers):
-            msg_type = content.get("type")
-            if msg_type == "js_ready":
-                logger.debug(f"JupyterCommsTransport: js_ready (Colab) for {self._comm_mgr_id}")
-                self._connected = True
-                if self._conn_event is not None and not self._conn_event.is_set():
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            loop.call_soon_threadsafe(self._conn_event.set)
-                        else:
-                            self._conn_event.set()
-                    except RuntimeError:
-                        self._conn_event.set()
-                return
-            if msg_type != "comm_msg":
-                return
-            data = content.get("data", {})
-            logger.debug(f"JupyterCommsTransport._on_custom_msg (Colab): {data}")
-            if self._callback:
-                self._callback(data)
-
-        self._bridge.on_msg(_on_custom_msg)
 
     # ------------------------------------------------------------------
     # Phase 2: async – wait for the JS handshake to complete
@@ -700,7 +692,7 @@ class JupyterCommsTransport(TransportBase):
         Wait for the JS side to complete the handshake.
 
         On JupyterLab: _on_comm_open fires when JS calls comm.open().
-        On Colab: the js_ready model message sets _conn_event via _wire_colab_recv().
+        On Colab: _on_comm_open fires when JS calls comms.open(targetId), setting _conn_event.
 
         Must be called after display_bridge(). Raises RuntimeError on timeout.
         """
@@ -736,14 +728,21 @@ class JupyterCommsTransport(TransportBase):
     async def send_message(self, message: Dict[str, Any]) -> None:
         if not self._connected:
             raise RuntimeError("JupyterCommsTransport: not connected")
-        if self._comm is not None:
+        colab_comms = getattr(self, '_colab_comms', None)
+        if colab_comms:
+            # Colab: broadcast to every iframe that has opened a channel.
+            # This ensures the app iframe, the widget iframe, and any test
+            # cell that opened its own comm all receive Python->JS messages.
+            for c in list(colab_comms):
+                try:
+                    c.send(message)
+                except Exception as e:
+                    logger.warning(f"JupyterCommsTransport.send_message: comm send failed: {e}")
+        elif self._comm is not None:
+            # JupyterLab: single kernel comm
             self._comm.send(message)
-        elif self._bridge is not None:
-            # Colab: _on_comm_open may not have fired; route via anywidget model
-            logger.debug("JupyterCommsTransport.send_message: Colab fallback via model")
-            self._bridge.send(message)
         else:
-            raise RuntimeError("JupyterCommsTransport: no comm or bridge available")
+            raise RuntimeError("JupyterCommsTransport: not connected (no comm available)")
 
     async def run(self) -> None:
         """Keep the transport alive until disconnected."""
@@ -751,7 +750,12 @@ class JupyterCommsTransport(TransportBase):
             await asyncio.sleep(0.1)
 
     async def close(self) -> None:
-        if self._comm:
-            self._comm.close()
+        for c in getattr(self, '_colab_comms', []):
+            try:
+                c.close()
+            except Exception:
+                pass
+        self._colab_comms = []
+        self._comm = None
         self._connected = False
         self._bridge = None

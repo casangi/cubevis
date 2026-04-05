@@ -589,7 +589,7 @@ class JupyterCommsTransport(TransportBase):
                 // comms.open() triggers _on_comm_open on the Python side, giving
                 // Python a comm with on_msg(_recv) wired — exactly like JupyterLab.
                 //
-                // JS->Python: channel.send({}, data) goes to Python _recv via
+                // JS->Python: channel.send(data) goes to Python _recv via
                 //   the kernel comm that _on_comm_open registered.
                 //
                 // Python->JS: Python calls send_message() which broadcasts to all
@@ -613,7 +613,7 @@ class JupyterCommsTransport(TransportBase):
                         // comm.send(data) and comm.onMsg = fn uniformly.
                         const comm = {
                             // JS -> Python: goes through the kernel comm (_recv fires)
-                            send(data) { channel.send({}, data); },
+                            send(data) { channel.send(data); },
                             // Python -> JS: set by app/notebook code to receive messages
                             onMsg: null,
                         };

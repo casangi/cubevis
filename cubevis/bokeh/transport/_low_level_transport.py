@@ -417,7 +417,9 @@ class JupyterCommsTransport(TransportBase):
     --------------
         transport = JupyterCommsTransport(comm_mgr_id="my_pipe")
         transport.set_message_callback(handler)
-        transport.display_bridge()   # synchronous – must run inside a cell
+        # The bridge widget is displayed automatically during __init__.
+        # If CUBEVIS_DEBUG is set it shows connection status; otherwise it
+        # is a zero-height invisible element with no visual footprint.
         # ---- same or next cell ----
         await transport.connect()    # waits for JS handshake; raises on timeout
     """
@@ -430,6 +432,10 @@ class JupyterCommsTransport(TransportBase):
         self._connected = False
         self._debug = "CUBEVIS_DEBUG" in os.environ
         self._conn_event: Optional[asyncio.Event] = None
+        # Build and display the bridge immediately while the cell output
+        # context is still open.  display_bridge() is intentionally NOT a
+        # separate public call anymore — construction = display.
+        self.display_bridge()
 
     # ------------------------------------------------------------------
     # Environment detection
@@ -496,11 +502,15 @@ class JupyterCommsTransport(TransportBase):
     # ------------------------------------------------------------------
     def display_bridge(self) -> None:
         """
-        Build the anywidget bridge, register the comm target, and display it.
+        Build the anywidget bridge widget, register the comm target, and
+        display it in the current cell output.
 
-        MUST be the last statement of a notebook cell (or called before the
-        cell finishes) so that IPython's output context is still open when
-        display() is called and the widget renders.
+        Called automatically by __init__ while the cell output context is
+        still open.  Should not be called directly.
+
+        When CUBEVIS_DEBUG is set the widget shows a visible connection-status
+        indicator.  Otherwise it renders as a zero-height invisible element
+        so it has no visual footprint in the notebook.
 
         In Colab, also enables the custom widget manager automatically.
         """
@@ -553,6 +563,9 @@ class JupyterCommsTransport(TransportBase):
                     el.innerHTML = `<div style="padding:5px;background:#dfd;border:1px solid #4caf50">` +
                                    `📡 Bridge JS Loaded (${targetId})</div>`;
                     console.log("CUBEVIS DEBUG: Bridge JS Starting, target =", targetId);
+                } else {
+                    // Zero-height invisible element — no visual footprint.
+                    el.style.cssText = "display:block;height:0;overflow:hidden;margin:0;padding:0";
                 }
 
                 function attachComm(comm) {

@@ -476,17 +476,11 @@ class CommMgr( Model, BokehInit ):
             self.report_error(error, fatal=True)
 
         logger.debug(f"CommMgr.initialize: {self.transport_type}")
-        from ._low_level_transport import ColabCommsTransport, JupyterCommsTransport
+        from ._low_level_transport import CommsTransport
 
         # Create and initialize non-WebSocket transports
-        if self.transport_type == 'colab':
-            self._transport = ColabCommsTransport(self.comm_mgr_id, abort=transport_abort)
-            self._transport.set_message_callback(self._route_message)
-            await self._transport.connect()
-            self._initialized = True
-            self.state = AppState.RUNNING
-        elif self.transport_type == 'jupyter':
-            self._transport = JupyterCommsTransport(self.comm_mgr_id, abort=transport_abort)
+        if self.transport_type == 'colab' or self.transport_type == 'jupyter':
+            self._transport = CommsTransport(self.comm_mgr_id, abort=transport_abort)
             self._transport.set_message_callback(self._route_message)
             await self._transport.connect()
             self._initialized = True

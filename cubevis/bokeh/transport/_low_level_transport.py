@@ -22,8 +22,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     'TransportBase',
     'WebSocketTransport',
-    'ColabCommsTransport',
-    'JupyterCommsTransport',
+    'CommsTransport',
 ]
 
 # ============================================================================
@@ -315,90 +314,9 @@ class WebSocketTransport(TransportBase):
         return self._connected and self._initialized
 
 # ============================================================================
-# Colab Comms Transport
+# Jupyter and Colab Comms Transport
 # ============================================================================
-import asyncio
-from typing import Dict, Any, Optional, Callable
-
-class ColabCommsTransport(TransportBase):
-    """Transport for Google Colab using google.colab.kernel.comms."""
-
-    def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
-        super().__init__(comm_mgr_id, abort)
-        self._comm = None
-        self._message_callback = None
-        self._is_connected = False
-        self._loop = asyncio.get_event_loop()
-
-    async def connect(self) -> None:
-        try:
-            import google.colab
-            from IPython.display import display, Javascript
-        except ImportError:
-            raise RuntimeError("Google Colab environment not detected.")
-
-        # 1. Register the target and EXIT. Do not wait for the flag here.
-        try:
-            google.colab.kernel.comms.register_target(self._comm_mgr_id, self._on_comm_open)
-        except AttributeError:
-            shell = get_ipython()
-            shell.kernel.comm_manager.register_target(self._comm_mgr_id, self._on_comm_open)
-
-        # 2. This JS won't execute until this cell COMPLETES.
-        display(Javascript(f'''
-            (async () => {{
-                console.log("JS: Handshake starting for {self._comm_mgr_id}...");
-                try {{
-                    const channel = await google.colab.kernel.comms.open('{self._comm_mgr_id}', {{}});
-                    window._colab_comm_{self._comm_mgr_id} = channel;
-                    console.log("JS: Handshake SUCCESS.");
-                }} catch (e) {{
-                    console.error("JS: Handshake FAILED", e);
-                }}
-            }})();
-        '''))
-        print(f"📡 Registered {self._comm_mgr_id}. Cell finished. Ready for JS connection.")
-
-    def _on_comm_open(self, comm, msg):
-        # This will show up in the cell output area
-        print(f"🔥 KERNEL: Comm opened for {self._comm_mgr_id}")
-        self._comm = comm
-        self._is_connected = True
-        
-        def _recv(msg):
-            data = msg.get('content', {}).get('data', {})
-            # Print to both places for absolute certainty
-            print(f"📩 KERNEL RECEIVED: {data}")
-            if self._message_callback:
-                self._loop.call_soon_threadsafe(self._message_callback, data)
-
-        self._comm.on_msg(_recv)
-
-    async def send_message(self, message: Dict[str, Any]) -> None:
-        """Send message from Python to Colab JS."""
-        if self._comm:
-            self._comm.send(message)
-
-    def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]):
-        self._message_callback = callback
-
-    async def run(self) -> None:
-        """Keeps the transport alive until disconnected."""
-        while self._is_connected:
-            await asyncio.sleep(1)
-
-    async def close(self) -> None:
-        if self._comm:
-            self._comm.close()
-        self._is_connected = False
-
-    def is_connected(self) -> bool:
-        return self._is_connected
-
-# ============================================================================
-# Jupyter Comms Transport
-# ============================================================================
-class JupyterCommsTransport(TransportBase):
+class CommsTransport(TransportBase):
     """
     anywidget-based transport for JupyterLab 4 and Google Colab.
 
@@ -415,7 +333,7 @@ class JupyterCommsTransport(TransportBase):
 
     Notebook usage
     --------------
-        transport = JupyterCommsTransport(comm_mgr_id="my_pipe")
+        transport = CommsTransport(comm_mgr_id="my_pipe")
         transport.set_message_callback(handler)
         # The bridge widget is displayed automatically during __init__.
         # If CUBEVIS_DEBUG is set it shows connection status; otherwise it
@@ -466,7 +384,7 @@ class JupyterCommsTransport(TransportBase):
             sends (send_message). On Colab, Python->JS is sent to ALL open
             comms via _colab_comms so every listener receives it.
         """
-        logger.debug(f"JupyterCommsTransport._on_comm_open: comm opened for {self._comm_mgr_id}")
+        logger.debug(f"CommsTransport._on_comm_open: comm opened for {self._comm_mgr_id}")
 
         # Track all open comms for Python->JS broadcast (Colab needs this
         # because each iframe opener is a separate channel)
@@ -480,7 +398,7 @@ class JupyterCommsTransport(TransportBase):
             data = msg.get("content", {}).get("data", {})
             if data.get("type") == "js_ready":
                 return
-            logger.debug(f"JupyterCommsTransport._recv: {data}")
+            logger.debug(f"CommsTransport._recv: {data}")
             if self._callback:
                 self._callback(data)
 
@@ -519,9 +437,9 @@ class JupyterCommsTransport(TransportBase):
             try:
                 from google.colab import output as _colab_out
                 _colab_out.enable_custom_widget_manager()
-                logger.debug("JupyterCommsTransport: Colab custom widget manager enabled")
+                logger.debug("CommsTransport: Colab custom widget manager enabled")
             except Exception as e:
-                logger.warning(f"JupyterCommsTransport: could not enable Colab widget manager: {e}")
+                logger.warning(f"CommsTransport: could not enable Colab widget manager: {e}")
 
         try:
             import anywidget
@@ -682,7 +600,7 @@ class JupyterCommsTransport(TransportBase):
                     self._comm_mgr_id, self._on_comm_open
                 )
             except Exception as e:
-                logger.warning(f"JupyterCommsTransport: comm target registration failed: {e}")
+                logger.warning(f"CommsTransport: comm target registration failed: {e}")
         else:
             try:
                 from IPython import get_ipython
@@ -692,10 +610,10 @@ class JupyterCommsTransport(TransportBase):
                         self._comm_mgr_id, self._on_comm_open
                     )
             except Exception as e:
-                logger.warning(f"JupyterCommsTransport: comm target registration failed: {e}")
+                logger.warning(f"CommsTransport: comm target registration failed: {e}")
 
         display(self._bridge)
-        logger.debug(f"JupyterCommsTransport.display_bridge: widget displayed for {self._comm_mgr_id}")
+        logger.debug(f"CommsTransport.display_bridge: widget displayed for {self._comm_mgr_id}")
 
     # ------------------------------------------------------------------
     # Phase 2: async – wait for the JS handshake to complete
@@ -714,20 +632,20 @@ class JupyterCommsTransport(TransportBase):
                 "display_bridge() must be called before connect()."
             )
         if self._connected:
-            logger.debug("JupyterCommsTransport.connect: already connected")
+            logger.debug("CommsTransport.connect: already connected")
             return
 
         self._conn_event = asyncio.Event()
-        logger.debug(f"JupyterCommsTransport.connect: waiting for handshake (timeout={timeout}s)")
+        logger.debug(f"CommsTransport.connect: waiting for handshake (timeout={timeout}s)")
         try:
             await asyncio.wait_for(self._conn_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             raise RuntimeError(
-                f"JupyterCommsTransport: JS handshake timed out after {timeout}s. "
+                f"CommsTransport: JS handshake timed out after {timeout}s. "
                 "Ensure the bridge widget rendered (CUBEVIS_DEBUG will show it) "
                 "and that anywidget is installed."
             )
-        logger.debug("JupyterCommsTransport.connect: handshake complete")
+        logger.debug("CommsTransport.connect: handshake complete")
 
     # ------------------------------------------------------------------
     # TransportBase interface
@@ -740,7 +658,7 @@ class JupyterCommsTransport(TransportBase):
 
     async def send_message(self, message: Dict[str, Any]) -> None:
         if not self._connected:
-            raise RuntimeError("JupyterCommsTransport: not connected")
+            raise RuntimeError("CommsTransport: not connected")
         colab_comms = getattr(self, '_colab_comms', None)
         if colab_comms:
             # Colab: broadcast to every iframe that has opened a channel.
@@ -750,12 +668,12 @@ class JupyterCommsTransport(TransportBase):
                 try:
                     c.send(message)
                 except Exception as e:
-                    logger.warning(f"JupyterCommsTransport.send_message: comm send failed: {e}")
+                    logger.warning(f"CommsTransport.send_message: comm send failed: {e}")
         elif self._comm is not None:
             # JupyterLab: single kernel comm
             self._comm.send(message)
         else:
-            raise RuntimeError("JupyterCommsTransport: not connected (no comm available)")
+            raise RuntimeError("CommsTransport: not connected (no comm available)")
 
     async def run(self) -> None:
         """Keep the transport alive until disconnected."""

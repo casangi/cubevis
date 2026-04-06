@@ -15,7 +15,7 @@ import {CustomJS} from "@bokehjs/models/callbacks/index"
 import * as find from "../util/find"
 
 // Import transport implementations
-import {TransportBase, WebSocketTransport, ColabCommsTransport, JupyterCommsTransport} from "./low_level_transport"
+import {TransportBase, WebSocketTransport, CommsTransport} from "./low_level_transport"
 
 // Enums
 enum AppState {
@@ -186,11 +186,8 @@ export class CommMgr extends Model {
                     throw new Error("WebSocket transport requires address")
                 }
                 await this.connectWebSocket()
-            } else if (transportType === 'colab') {
-                this.transport = new ColabCommsTransport(this)
-                await this.setupTransport()
-            } else if (transportType === 'jupyter') {
-                this.transport = new JupyterCommsTransport(this)
+            } else if (transportType === 'colab' || transportType === 'jupyter') {
+                this.transport = new CommsTransport(this)
                 await this.setupTransport()
             } else {
                 throw new Error(`Unknown transport type: ${transportType}`)

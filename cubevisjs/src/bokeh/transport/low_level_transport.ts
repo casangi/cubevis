@@ -303,136 +303,11 @@ export class WebSocketTransport implements TransportBase {
 }
 
 // ============================================================================
-// Colab Comms Transport
+// Jupyter and Colab Comms Transport
 // ============================================================================
 
 /**
- * Colab Comms-based transport for Google Colab environment.
- * 
- * Uses Colab's native comm protocol for efficient bidirectional communication.
- * Handles large data like images and arrays efficiently.
- * 
- * Key features:
- * - Native Colab comm protocol (not eval_js)
- * - Efficient large data transfer
- * - Automatic Bokeh serialization support
- * - Bidirectional message passing
- */
-/**
- * TypeScript implementation for Google Colab communication.
- * This acts as the frontend counterpart to the Python ColabCommsTransport.
- */
-/**
- * TypeScript implementation for Google Colab communication.
- * This acts as the frontend counterpart to the Python ColabCommsTransport.
- */
-export class ColabCommsTransport implements TransportBase {
-    private comm?: any;
-    private comm_mgr: CommMgr | null = null;
-    private targetName: string;
-    private isRegistered: boolean = false;
-    private onMessageCallback?: (msg: any) => void;
-    private shouldRun: boolean = false;
-
-    constructor(comm_id: CommMgr | string) {
-        // This ID must match the string passed to the Python register_target
-        if ( typeof comm_id === "object" ) {
-            this.comm_mgr = comm_id
-            this.targetName = comm_id.comm_mgr_id
-        } else {
-            this.targetName = comm_id
-        }
-    }
-
-    async connect(): Promise<void> {
-        // Colab's kernel object is global, but the comm is local to this instance
-        const kernel = (window as any).google?.colab?.kernel;
-
-        if (!kernel) throw new Error("Not in Colab");
-
-        try {
-            // Open the channel: this triggers the Python 'register_target' callback
-            this.comm = await kernel.comms.open(this.targetName, {
-                ts: Date.now(),
-                type: 'connection_request'
-            });
-
-        } catch (err) {
-            console.error("Failed to connect Colab transport:", err);
-            throw err;
-        }
-
-        if (!this.comm) {
-            throw new Error(`Failed to establish channel for ${this.targetName}`);
-        }
-
-        this.comm.onMsg = (msg: any) => this.handleIncoming(msg);
-
-        this.comm.onClose = (msg: any) => this.handleClose(msg);
-
-        this.isRegistered = true;
-
-        console.log("Colab Comm connection established.", this.comm);
-    }
-
-    send(message: any): void {
-        if (this.isConnected()) {
-            console.log(`[ColabCommsTransport.send] ${message}`)
-            this.comm.send(message);
-        } else {
-            console.warn("Colab Comm not connected; message dropped.");
-        }
-    }
-
-    setMessageCallback(callback: (msg: any) => void): void {
-        this.onMessageCallback = callback;
-    }
-
-    /**
-     * Satisfies the TransportBase interface requirement.
-     */
-    isConnected(): boolean {
-        return this.isRegistered && this.comm;
-    }
-
-    private handleIncoming(msg: any): void {
-        // Colab usually nests user data in a 'data' property
-        const data = msg.data || msg;
-        if (this.onMessageCallback) {
-            this.onMessageCallback(data);
-        }
-    }
-
-    private handleClose(msg: any): void {
-        console.warn(`Colab Comm channel closed: ${msg}`);
-        this.isRegistered = false;
-        this.shouldRun = false;
-        this.comm = undefined;
-    }
-
-    async run(): Promise<void> {
-        this.shouldRun = true;
-        while (this.shouldRun && this.isRegistered) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-    }
-
-    async close(): Promise<void> {
-        this.shouldRun = false;
-        if (this.comm) {
-            this.comm.close();
-        }
-        this.isRegistered = false;
-        this.comm = undefined;
-    }
-}
-
-// ============================================================================
-// Jupyter Comms Transport
-// ============================================================================
-
-/**
- * Jupyter Comms transport for Classic Notebook and JupyterLab.
+ * Jupyter and Colab Comms transport for Classic Notebook and JupyterLab.
  * 
  * Enables connection to Jupyter kernels for persistent, reconnectable sessions.
  * 
@@ -448,7 +323,7 @@ export class ColabCommsTransport implements TransportBase {
  *   JupyterLab 3        — comm via @jupyter-widgets/base CommManager.new_comm()
  *   JupyterLab 4        — comm via kernel.createComm() (@jupyter/services kernel)
  */
-export class JupyterCommsTransport implements TransportBase {
+export class CommsTransport implements TransportBase {
     private comm?: any
     private targetName: string
     private isOpen: boolean = false
@@ -457,7 +332,7 @@ export class JupyterCommsTransport implements TransportBase {
     private shouldRun: boolean = true
     
     constructor(private comm_mgr: CommMgr) {
-        this.targetName = `cubevis_comm_mgr_${comm_mgr.comm_mgr_id}`
+        this.targetName = `comm_${comm_mgr.comm_mgr_id}`
     }
     
     setMessageCallback(callback: (msg: any) => void): void {
@@ -465,7 +340,7 @@ export class JupyterCommsTransport implements TransportBase {
     }
     
     async connect(): Promise<void> {
-        console.log("Jupyter Comms connecting for comm_mgr:", this.comm_mgr.comm_mgr_id)
+        console.log("Comms connecting for comm_mgr:", this.comm_mgr.comm_mgr_id)
         
         try {
             // Register handlers BEFORE opening the comm so we
@@ -514,20 +389,20 @@ export class JupyterCommsTransport implements TransportBase {
             this.startHeartbeat()
 
         } catch (e) {
-            console.error("Error initializing Jupyter Comms:", e)
+            console.error("Error initializing Comms:", e)
             throw e
         }
     }
     
     async run(): Promise<void> {
-        console.log(`Jupyter Comms event loop starting for ${this.comm_mgr.comm_mgr_id}`)
+        console.log(`Comms event loop starting for ${this.comm_mgr.comm_mgr_id}`)
         
         // Keep alive until shutdown
         while (this.shouldRun && this.isOpen) {
             await new Promise(resolve => setTimeout(resolve, 100))
         }
         
-        console.log(`Jupyter Comms event loop ended for ${this.comm_mgr.comm_mgr_id}`)
+        console.log(`Comms event loop ended for ${this.comm_mgr.comm_mgr_id}`)
     }
     
     // --------------------------------------------------------------------------
@@ -544,7 +419,7 @@ export class JupyterCommsTransport implements TransportBase {
      *   3. ipywidgets Comm constructor         — last-resort fallback
      */
     private async createComm(): Promise<any> {
-        console.group('JupyterCommsTransport.createComm')
+        console.group('CommsTransport.createComm')
         // Path 1: Classic Notebook 6 / JupyterLab 3 via @jupyter-widgets/base
         try {
             const commManager = await this.findCommManager()

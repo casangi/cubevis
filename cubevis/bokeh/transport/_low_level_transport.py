@@ -350,6 +350,8 @@ class CommsTransport(TransportBase):
         self._connected = False
         self._debug = "CUBEVIS_DEBUG" in os.environ
         self._conn_event: Optional[asyncio.Event] = None
+        # _comm_event is set once Comm connection is established
+        self._conn_event = asyncio.Event()
         # Build and display the bridge immediately while the cell output
         # context is still open.  display_bridge() is intentionally NOT a
         # separate public call anymore — construction = display.
@@ -396,8 +398,6 @@ class CommsTransport(TransportBase):
 
         def _recv(msg):
             data = msg.get("content", {}).get("data", {})
-            if data.get("type") == "js_ready":
-                return
             logger.debug(f"CommsTransport._recv: {data}")
             if self._callback:
                 self._callback(data)
@@ -496,7 +496,6 @@ class CommsTransport(TransportBase):
                         console.log("CUBEVIS DEBUG: Comm stored for", targetId);
                         console.log("CUBEVIS DEBUG: Comm stored in", window);
                     }
-                    model.send({ type: "js_ready", target_id: targetId });
                 }
 
                 // ── Path 1: JupyterLab 4 / classic Jupyter ────────────────────
@@ -638,7 +637,6 @@ class CommsTransport(TransportBase):
             logger.debug("CommsTransport.connect: already connected")
             return
 
-        self._conn_event = asyncio.Event()
         logger.debug(f"CommsTransport.connect: waiting for handshake (timeout={timeout}s)")
         try:
             await asyncio.wait_for(self._conn_event.wait(), timeout=timeout)

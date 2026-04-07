@@ -333,6 +333,7 @@ export class CommsTransport implements TransportBase {
             // never miss a fast reply from the Python kernel.
             // We create the comm object first, wire up handlers, then open it.
             this.comm = await this.retrieveComm()
+            console.log("CommsTransport.connect:", this.comm)
 
             if (!this.comm) {
                 throw new Error("Could not create Jupyter comm")

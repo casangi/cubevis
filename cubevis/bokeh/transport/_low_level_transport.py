@@ -458,7 +458,7 @@ class CommsTransport(TransportBase):
         #     comm.send(data) → kernel comm_msg → Python comm.on_msg(_recv)
         #     This is the standard kernel comm path and it works reliably when
         #     the comm is created from within the widget's own render() context.
-        #     The %%javascript verification cell accesses window["comm_"+id]
+        #     The %%javascript verification cell accesses window["cubevis_"+id]
         #     which is set in the same widget iframe, so the comm_id is consistent.
         #
         #   Python -> JS
@@ -487,11 +487,12 @@ class CommsTransport(TransportBase):
                 }
 
                 function attachComm(comm) {
-                    window["comm_" + targetId] = comm;
+                    window["cubevis_" + targetId] = { comm };
                     if (isDebug) {
                         el.innerHTML = `<div style="padding:5px;background:#ccf;border:1px solid #2196f3">` +
                                        `✅ Bridge Connected (${targetId})</div>`;
                         console.log("CUBEVIS DEBUG: Comm stored for", targetId);
+                        console.log("CUBEVIS DEBUG: Comm stored in", window);
                     }
                     model.send({ type: "js_ready", target_id: targetId });
                 }
@@ -528,7 +529,7 @@ class CommsTransport(TransportBase):
                 //   channel.messages async iterator and are pumped to onMsg.
                 //
                 // Cross-iframe access: other Colab cell iframes cannot reach
-                //   window["comm_"+id] since each cell has its own sandboxed window.
+                //   window["cubevis_"+id] since each cell has its own sandboxed window.
                 //   Those cells must call google.colab.kernel.comms.open(targetId)
                 //   themselves to get their own channel — _on_comm_open fires again,
                 //   _recv is wired to the new comm, and send_message() broadcasts

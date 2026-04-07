@@ -414,9 +414,9 @@ export class CommsTransport implements TransportBase {
             console.log(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`, comm)
             const el = window["cubevis_" + target_id].dbg_el;
             if ( el ) {
-                el.insertAdjustHTML( 'beforeend',
-                                      `<div style="padding:5px;background:#ccf">` +
-                                        `✅ Comm Retrieved (${target_id})</div>` )
+                el.insertAdjacentHTML( 'beforeend',
+                                       `<div style="padding:5px;background:#ccf">` +
+                                         `✅ Comm Retrieved (${target_id})</div>` )
             }
             return comm
         } else {

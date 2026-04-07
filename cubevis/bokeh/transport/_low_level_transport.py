@@ -487,7 +487,9 @@ class CommsTransport(TransportBase):
                 }
 
                 function attachComm(comm) {
-                    window["cubevis_" + targetId] = { comm };
+
+                    window["cubevis_" + targetId] = { comm, dbg_el: isDebug ? el : null };
+
                     if (isDebug) {
                         el.innerHTML = `<div style="padding:5px;background:#ccf;border:1px solid #2196f3">` +
                                        `✅ Bridge Connected (${targetId})</div>`;

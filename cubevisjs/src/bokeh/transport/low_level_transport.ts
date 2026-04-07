@@ -307,21 +307,7 @@ export class WebSocketTransport implements TransportBase {
 // ============================================================================
 
 /**
- * Jupyter and Colab Comms transport for Classic Notebook and JupyterLab.
- * 
- * Enables connection to Jupyter kernels for persistent, reconnectable sessions.
- * 
- * Key features:
- * - Works with Classic Notebook 6.x AND JupyterLab 3.x / 4.x
- * - Session persistence across browser sessions
- * - Reconnection support
- * - Multi-client kernel access
- * - Efficient data transfer via Bokeh serialization
- * 
- * Environment support matrix:
- *   Classic Notebook 6  — comm via Jupyter.notebook.kernel.comm_manager.new_comm()
- *   JupyterLab 3        — comm via @jupyter-widgets/base CommManager.new_comm()
- *   JupyterLab 4        — comm via kernel.createComm() (@jupyter/services kernel)
+ * Jupyter and Colab Comms transport created from Python with `anywidget`.
  */
 export class CommsTransport implements TransportBase {
     private comm?: any
@@ -346,7 +332,7 @@ export class CommsTransport implements TransportBase {
             // Register handlers BEFORE opening the comm so we
             // never miss a fast reply from the Python kernel.
             // We create the comm object first, wire up handlers, then open it.
-            this.comm = await this.createComm()
+            this.comm = await this.retrieveComm()
 
             if (!this.comm) {
                 throw new Error("Could not create Jupyter comm")
@@ -410,176 +396,49 @@ export class CommsTransport implements TransportBase {
     // --------------------------------------------------------------------------
 
     /**
-     * Create a Jupyter comm object using the best available API for the
-     * current environment.
+     * Retrieve a Colab or Jupyter comm object injected with `anywidget` from Python.
+     * Colab.
      *
      * Resolution order:
-     *   1. Classic Notebook 6 / JupyterLab 3 — commManager.new_comm()
-     *   2. JupyterLab 4                       — kernel.createComm()
-     *   3. ipywidgets Comm constructor         — last-resort fallback
+     *   1. See if injected comm is available directly (Jupyter Lab and Colab when
+     *      retrieved from within the cell where the injection occurred)
+     *   2. Colab open second comm using the same `comm_mgr_id` (Colab when retrieved
+     *      from a cell that is not the cell where the injection occurred). Messages
+     *      are delivered to all comms opened to the same identifier.
      */
-    private async createComm(): Promise<any> {
-        console.group('CommsTransport.createComm')
-        // Path 1: Classic Notebook 6 / JupyterLab 3 via @jupyter-widgets/base
-        try {
-            const commManager = await this.findCommManager()
-            console.log( 'Path 1', commManager )
-            if (commManager && typeof commManager.new_comm === 'function') {
-                // new_comm() on these managers creates but does NOT immediately
-                // send the comm_open — we call open() ourselves after wiring handlers.
-                const comm = commManager.new_comm(this.targetName, {})
-                console.log("Created comm via commManager.new_comm() (Classic/JupyterLab 3)")
-                return comm
+    private async retrieveComm(): Promise<any> {
+        const target_id = this.comm_mgr.comm_mgr_id
+        const comm = window["cubevis_" + target_id]?.comm
+
+        if ( comm ) {
+            console.log(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`, comm)
+            const el = window["cubevis_" + target_id].dbg_el;
+            if ( el ) {
+                el.insertAdjustHTML( 'beforeend',
+                                      `<div style="padding:5px;background:#ccf">` +
+                                        `✅ Comm Retrieved (${target_id})</div>` )
             }
-        } catch (e) {
-            console.debug("commManager.new_comm path failed:", e)
-        }
-
-        // Path 2: JupyterLab 4 — kernel object exposed by the lab extension system
-        // JupyterLab 4 removed CommManager from @jupyter-widgets/base.
-        // The live kernel is available via jupyterapp.serviceManager or the
-        // global `kernel` object injected by the notebook widget.
-        try {
-            const kernel = await this.findJupyterLabKernel()
-            console.log( 'Path 2', kernel )
-            if (kernel && typeof kernel.createComm === 'function') {
-                const comm = kernel.createComm(this.targetName)
-                console.log("Created comm via kernel.createComm() (JupyterLab 4)")
-                return comm
-            }
-        } catch (e) {
-            console.debug("kernel.createComm path failed:", e)
-        }
-
-        // Path 3: ipywidgets Comm constructor loaded via RequireJS (fallback)
-        try {
-            const WidgetsComm = await this.loadWidgetsComm()
-            console.log( 'Path 3', WidgetsComm )
-            if (WidgetsComm) {
-                const comm = new WidgetsComm({ target_name: this.targetName })
-                console.log("Created comm via ipywidgets Comm constructor (fallback)")
-                return comm
-            }
-        } catch (e) {
-            console.debug("ipywidgets Comm fallback failed:", e)
-        }
-
-        console.log( 'Failure', window )
-        console.groupEnd( )
-        throw new Error(
-            `Could not create a Jupyter comm for target '${this.targetName}'. ` +
-            "Ensure @jupyter-widgets/base or @jupyter/services is available."
-        )
-    }
-
-
-    /**
-     * Find the comm manager for Classic Notebook 6 / JupyterLab 3.
-     */
-    private async findCommManager(): Promise<any> {
-        // Classic Notebook 6
-        if ((window as any).Jupyter?.notebook?.kernel?.comm_manager) {
-            console.debug("Found comm_manager via window.Jupyter (Classic Notebook)")
-            return (window as any).Jupyter.notebook.kernel.comm_manager
-        }
-
-        // Some JupyterLab 3 builds expose the kernel on window.kernel
-        if ((window as any).kernel?.comm_manager) {
-            console.debug("Found comm_manager via window.kernel")
-            return (window as any).kernel.comm_manager
-        }
-
-        // JupyterLab 3 via @jupyter-widgets/base CommManager
-        // Try RequireJS (present in JupyterLab 3).
-        if (typeof (window as any).require !== 'undefined') {
-            try {
-                const widgets: any = await new Promise((resolve, reject) => {
-                    (window as any).require(
-                        ['@jupyter-widgets/base'],
-                        (base: any) => resolve(base),
-                        (err: any) => reject(err)
-                    )
-                })
-                if (widgets?.CommManager) {
-                    const mgr = widgets.CommManager.get_comm_manager?.()
-                    if (mgr) {
-                        console.debug("Found comm_manager via RequireJS @jupyter-widgets/base")
-                        return mgr
+            return comm
+        } else {
+            const isColab = typeof google !== "undefined" && google?.colab?.kernel?.comms
+            if ( isColab) {
+                let colabComm
+                try {
+                    colabComm = await google.colab.kernel.comms.open(target_id, {})
+                    if ( colabComm ) {
+                        console.log(`CommsTransport.retrieveComm: created Colab comm for ${target_id}`, colabComm)
+                        return colabComm
+                    } else {
+                        console.log(`CommsTransport.retrieveComm: Colab comm creation failed for ${target_id}`)
+                        return null
                     }
+                } catch(e) {
+                    console.log(`CommsTransport.retrieveComm: Colab comm creation failed for ${target_id} with error`,e)
+                    return null
                 }
-            } catch (e) {
-                console.debug("RequireJS @jupyter-widgets/base failed:", e)
             }
         }
-
-        return null
-    }
-
-    /**
-     * Find the live kernel object in JupyterLab 4.
-     *
-     * JupyterLab 4 exposes the kernel through the application's
-     * service manager rather than through @jupyter-widgets/base.
-     */
-    private async findJupyterLabKernel(): Promise<any> {
-        // JupyterLab 4: window.jupyterapp is the JupyterFrontEnd application
-        const jupyterapp = (window as any).jupyterapp
-        if (jupyterapp) {
-            // Active session's kernel via the sessions manager
-            try {
-                const sessions = jupyterapp.serviceManager?.sessions
-                if (sessions) {
-                    const running = [...sessions.running()]
-                    if (running.length > 0) {
-                        const connection = await sessions.connectTo({ model: running[0] })
-                        const kernel = connection?.kernel
-                        if (kernel && typeof kernel.createComm === 'function') {
-                            console.debug("Found kernel via jupyterapp.serviceManager.sessions")
-                            return kernel
-                        }
-                    }
-                }
-            } catch (e) {
-                console.debug("jupyterapp.serviceManager path failed:", e)
-            }
-        }
-
-        // JupyterLab 4 also often exposes the kernel directly on window
-        if ((window as any).kernel?.createComm) {
-            console.debug("Found kernel via window.kernel.createComm")
-            return (window as any).kernel
-        }
-
-        // IPython kernel shim (some JupyterLab 3 / extension-provided kernels)
-        if ((window as any).IPython?.kernel?.createComm) {
-            console.debug("Found kernel via window.IPython.kernel")
-            return (window as any).IPython.kernel
-        }
-
-        return null
-    }
-    
-
-    /**
-     * Load the ipywidgets Comm constructor as a last-resort fallback.
-     */
-    private async loadWidgetsComm(): Promise<any> {
-        if (typeof (window as any).require !== 'undefined') {
-            try {
-                const widgets: any = await new Promise((resolve, reject) => {
-                    (window as any).require(
-                        ['@jupyter-widgets/base'],
-                        (base: any) => resolve(base),
-                        (err: any) => reject(err)
-                    )
-                })
-                if (widgets?.Comm) {
-                    return widgets.Comm
-                }
-            } catch (e) {
-                console.debug("loadWidgetsComm RequireJS failed:", e)
-            }
-        }
+        console.log(`CommsTransport.retrieveComm: Colab comm creation failed, no viable path`)
         return null
     }
 

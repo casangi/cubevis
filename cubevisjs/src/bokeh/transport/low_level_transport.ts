@@ -347,16 +347,16 @@ export class CommsTransport implements TransportBase {
                 this.handleCommClose(msg)
             })
 
-            // Now open the comm — this sends the comm_open message to the kernel
-            if (typeof this.comm.open === 'function') {
-                // @jupyter/services IComm (JupyterLab 4) and ipywidgets Comm both
-                // expose open(). Classic Notebook's new_comm() opens implicitly.
-                this.comm.open({
-                    comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                    type: 'initialization',
-                    frontend_ready: true
-                })
-            }
+//          // Now open the comm — this sends the comm_open message to the kernel
+//          if (typeof this.comm.open === 'function') {
+//              // @jupyter/services IComm (JupyterLab 4) and ipywidgets Comm both
+//              // expose open(). Classic Notebook's new_comm() opens implicitly.
+//              this.comm.open({
+//                  comm_mgr_id: this.comm_mgr.comm_mgr_id,
+//                  type: 'initialization',
+//                  frontend_ready: true
+//              })
+//          }
 
             this.isOpen = true
             console.log(`Jupyter comm opened: ${this.targetName}`)

@@ -340,13 +340,13 @@ export class CommsTransport implements TransportBase {
             }
 
             // handlers wired before any open/send call
-            this.comm.onMsg((msg: any) => {
+            this.comm.onMsg = (msg: any) => {
                 this.handleJupyterMessage(msg)
-            })
+            }
 
-            this.comm.onClose((msg: any) => {
+            this.comm.onClose = (msg: any) => {
                 this.handleCommClose(msg)
-            })
+            }
 
 //          // Now open the comm — this sends the comm_open message to the kernel
 //          if (typeof this.comm.open === 'function') {
@@ -422,19 +422,33 @@ export class CommsTransport implements TransportBase {
             return comm
         } else {
             const isColab = typeof google !== "undefined" && google?.colab?.kernel?.comms
-            if ( isColab) {
-                let colabComm
+            if (isColab) {
                 try {
-                    colabComm = await google.colab.kernel.comms.open(target_id, {})
-                    if ( colabComm ) {
+                    const channel = await google.colab.kernel.comms.open(target_id, {})
+                    if (channel) {
+                        // Wrap the native Colab channel to match the JupyterLab IComm interface
+                        const colabComm: any = {
+                            send(data: any) { channel.send(data) },
+                            onMsg: null as any,
+                            onClose: null as any,
+                        };
+                        // Pump incoming messages to onMsg
+                        (async () => {
+                            for await (const message of channel.messages) {
+                                if (typeof colabComm.onMsg === "function") {
+                                    colabComm.onMsg({ content: { data: message.data || {} } })
+                                }
+                            }
+                            // Channel closed — fire onClose if set
+                            if (typeof colabComm.onClose === "function") {
+                                colabComm.onClose({})
+                            }
+                        })()
                         console.log(`CommsTransport.retrieveComm: created Colab comm for ${target_id}`, colabComm)
                         return colabComm
-                    } else {
-                        console.log(`CommsTransport.retrieveComm: Colab comm creation failed for ${target_id}`)
-                        return null
                     }
                 } catch(e) {
-                    console.log(`CommsTransport.retrieveComm: Colab comm creation failed for ${target_id} with error`,e)
+                    console.log(`CommsTransport.retrieveComm: Colab comm creation failed`, e)
                     return null
                 }
             }

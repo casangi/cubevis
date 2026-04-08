@@ -340,11 +340,11 @@ export class CommsTransport implements TransportBase {
             }
 
             // handlers wired before any open/send call
-            this.comm.on_msg((msg: any) => {
+            this.comm.onMsg((msg: any) => {
                 this.handleJupyterMessage(msg)
             })
 
-            this.comm.on_close((msg: any) => {
+            this.comm.onClose((msg: any) => {
                 this.handleCommClose(msg)
             })
 

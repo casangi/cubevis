@@ -59,7 +59,9 @@ export class BokehAppContext extends LayoutDOM {
   static __module__ = "cubevis.bokeh.models._bokeh_app_context"
 
   constructor(attrs?: Partial<BokehAppContext.Attrs>) {
+    console.log("BokehAppContext.constructor <A>")
     super(attrs)
+    console.log("BokehAppContext.constructor <B>",this.init_scripts,this.app_state)
   }
 
   override initialize(): void {

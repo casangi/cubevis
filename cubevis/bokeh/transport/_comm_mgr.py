@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import TYPE_CHECKING
 from typing import Optional, Callable, Dict, Any, List, Tuple
 import asyncio
 import inspect
@@ -19,6 +20,8 @@ from bokeh.core.properties import List
 from bokeh.core.properties import String, Bool, Tuple, Int, Nullable, Instance
 from ...utils import find_ws_address
 from .. import BokehInit
+if TYPE_CHECKING:
+    from .. import BokehAppContext
 
 class ShutdownReason(Enum):
     """Reason for shutdown"""
@@ -180,6 +183,7 @@ class CommMgr( Model, BokehInit ):
             kwargs['comm_mgr_id'] = str(uuid4( ))
 
         logger.debug(f"CommMgr.__init__: {args}, on_shutdown={on_shutdown}, on_error={on_error}, {kwargs}", stack_info=True)
+        logger.debug(">>>>>>>>>>------------->> CommMgr.__init__")
 
         super( ).__init__( *args, **kwargs )
 
@@ -220,6 +224,12 @@ class CommMgr( Model, BokehInit ):
 
         self._initialized = False
 
+        logger.debug(f"Communications manager created: {self.comm_mgr_id}")
+
+    def registered( self, context: BokehAppContext ) -> None:
+        '''This is called when this CommMgr is registered with BokehAppContext.
+        '''
+        logger.debug(">>>>>>>>>>------------->> CommMgr.registered", stack_info=True)
         # Websocket address management (if not set with parameters)
         if self.transport_type == 'websocket':
             if not self.address:
@@ -228,8 +238,16 @@ class CommMgr( Model, BokehInit ):
         else:
             if self.address:
                 raise RuntimeError( 'CommMgr.__init__: address set for non-websocket transport' )
+            if self.transport_type == 'colab' or self.transport_type == 'jupyter':
+                from ._low_level_transport import CommsTransport
+                # Create transport with error handler
+                def transport_abort(error):
+                    self.report_error(error, fatal=True)
+                ### CommsTransport is created here to allow for registration of
+                ### preflight callables which enable the anywidget bridge.
+                self._transport = CommsTransport(self.comm_mgr_id, abort=transport_abort)
 
-        logger.debug(f"Communications manager created: {self.comm_mgr_id}")
+        logger.debug(f"Communications manager registered: {self.comm_mgr_id}")
 
     @property
     def state(self) -> AppState:
@@ -471,16 +489,12 @@ class CommMgr( Model, BokehInit ):
             self.transport_type = self._detect_transport()
             logger.debug(f"Auto-detected transport type: {self.transport_type}")
 
-        # Create transport with error handler
-        def transport_abort(error):
-            self.report_error(error, fatal=True)
-
         logger.debug(f"CommMgr.initialize: {self.transport_type}")
-        from ._low_level_transport import CommsTransport
 
         # Create and initialize non-WebSocket transports
         if self.transport_type == 'colab' or self.transport_type == 'jupyter':
-            self._transport = CommsTransport(self.comm_mgr_id, abort=transport_abort)
+            if not self._transport:
+                raise RuntimeError(f"transport should be set earlier for {self.transport_type}")
             self._transport.set_message_callback(self._route_message)
             await self._transport.connect()
             self._initialized = True

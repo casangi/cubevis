@@ -7,6 +7,7 @@
 
 import os
 import asyncio
+import threading
 import time
 import logging
 import importlib
@@ -344,18 +345,23 @@ class CommsTransport(TransportBase):
 
     def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
         super().__init__(comm_mgr_id, abort)
+        logger.debug(">>>>>>>>>>------------->> CommsTransport.__init__", stack_info=True)
         self._bridge = None
         self._comm = None
         self._callback: Optional[Callable] = None
         self._connected = False
         self._debug = "CUBEVIS_DEBUG" in os.environ
-        self._conn_event: Optional[asyncio.Event] = None
-        # _comm_event is set once Comm connection is established
-        self._conn_event = asyncio.Event()
+        # _conn_event is set once Comm connection is established
+        # This may be set and read in different threads/event loops
+        # so asyncio.Event( ) will not work.
+        self._conn_event = threading.Event()
         # Build and display the bridge immediately while the cell output
         # context is still open.  display_bridge() is intentionally NOT a
         # separate public call anymore — construction = display.
-        self.display_bridge()
+        from .. import BokehInit
+        logger.debug(">>>>>>>>>>------------->> adding birdge")
+        logger.debug('----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------')
+        BokehInit.get_app_context().add_preflight_callable(self.display_bridge)
 
     # ------------------------------------------------------------------
     # Environment detection
@@ -394,26 +400,17 @@ class CommsTransport(TransportBase):
             self._colab_comms = []
         self._colab_comms.append(comm)
         self._comm = comm   # also keep last for the JupyterLab single-comm case
-        self._connected = True
 
         def _recv(msg):
+            logger.debug(f"CommsTransport._recv: {msg}")
             data = msg.get("content", {}).get("data", {})
             logger.debug(f"CommsTransport._recv: {data}")
             if self._callback:
                 self._callback(data)
 
+        self._connected = True
         comm.on_msg(_recv)
-
-        # Unblock connect() on first open
-        if self._conn_event is not None and not self._conn_event.is_set():
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.call_soon_threadsafe(self._conn_event.set)
-                else:
-                    self._conn_event.set()
-            except RuntimeError:
-                self._conn_event.set()
+        self._conn_event.set()
 
     # ------------------------------------------------------------------
     # Phase 1: synchronous – must run inside the cell output context
@@ -432,6 +429,7 @@ class CommsTransport(TransportBase):
 
         In Colab, also enables the custom widget manager automatically.
         """
+        logger.debug(">>>>>>>>>>------------->> display_bridge called", stack_info=True)
         # Colab: enable CDN widget manager before any widget is displayed
         if self._is_colab():
             try:
@@ -629,23 +627,19 @@ class CommsTransport(TransportBase):
 
         Must be called after display_bridge(). Raises RuntimeError on timeout.
         """
-        if self._bridge is None:
-            raise RuntimeError(
-                "display_bridge() must be called before connect()."
-            )
-        if self._connected:
-            logger.debug("CommsTransport.connect: already connected")
-            return
+        if self._connected: return
 
-        logger.debug(f"CommsTransport.connect: waiting for handshake (timeout={timeout}s)")
-        try:
-            await asyncio.wait_for(self._conn_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            raise RuntimeError(
-                f"CommsTransport: JS handshake timed out after {timeout}s. "
-                "Ensure the bridge widget rendered (CUBEVIS_DEBUG will show it) "
-                "and that anywidget is installed."
-            )
+        if self._bridge is None:
+            raise RuntimeError( "display_bridge() must be called before connect()." )
+
+        logger.debug( ">>>>>>>>>>------------->> connect called", stack_info=True )
+
+        deadline = asyncio.get_event_loop( ).time( ) + timeout
+        while not self._conn_event.is_set( ):
+            if asyncio.get_event_loop( ).time( ) > deadline:
+                raise RuntimeError( f"CommsTransport: JS handshake timed out after {timeout}s" )
+            await asyncio.sleep( 0.1 )
+
         logger.debug("CommsTransport.connect: handshake complete")
 
     # ------------------------------------------------------------------

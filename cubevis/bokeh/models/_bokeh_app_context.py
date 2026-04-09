@@ -1,4 +1,5 @@
 import logging
+from typing import TypeAlias, Callable, Union
 from bokeh.models import CustomJS
 from bokeh.core.properties import String, Dict, Any, Nullable, Instance, List, Tuple
 from bokeh.models.layouts import LayoutDOM
@@ -11,11 +12,14 @@ import webbrowser
 import os
 import re
 
+### Showable is only needed for type hints
+from . import Showable
 from ..transport import CommMgr
-
 from .. import BokehInit
 
 logger = logging.getLogger(__name__)
+
+PreflightFunc: TypeAlias = Union[Callable[[Showable], None], Callable[[], None]]
 
 class BokehAppContext(LayoutDOM):
     """
@@ -73,6 +77,13 @@ class BokehAppContext(LayoutDOM):
         value = re.sub(r'[^\w\s-]', '', value.lower())
         return re.sub(r'[-\s]+', '-', value).strip('-_')
 
+    @property
+    def preflight_callables(self) -> list[PreflightFunc]:
+        return self._preflight_callables.copy( )
+
+    def add_preflight_callable( self, func: PreflightFunc ):
+        self._preflight_callables.append(func)
+
     def __init__( self, ui=None, title=str(uuid4( )), prefix=None, **kwargs ):
         logger.debug(f"\tBokehAppContext::__init__(ui={type(ui).__name__ if ui else None}, {kwargs}): {id(self)}")
 
@@ -83,6 +94,10 @@ class BokehAppContext(LayoutDOM):
         self.__title = title
         self.__workdir = TemporaryDirectory(prefix=prefix)
         self.__htmlpath = os.path.join( self.__workdir.name, f'''{self._slugify(self.__title)}.html''' )
+
+        ## list of functions to be called before launching the Bokeh GUI application
+        self._preflight_callables: list[PreflightFunc] = [ ]
+
 
         if ui is not None and 'ui' in kwargs:
             raise RuntimeError( "'ui' supplied as both a positional parameter and a keyword parameter" )
@@ -102,6 +117,7 @@ class BokehAppContext(LayoutDOM):
 
         # Register this context as the singleton
         BokehInit.set_app_context(self)
+        self.comm_mgr.registered(self)
 
     def _sphinx_height_hint(self):
         """Delegate height hint to the wrapped UI element"""

@@ -1,4 +1,5 @@
 import logging
+import inspect
 from bokeh.models.layouts import LayoutDOM
 from bokeh.models.ui import UIElement
 from bokeh.core.properties import Instance, String
@@ -88,6 +89,7 @@ class Showable(LayoutDOM,BokehInit):
 
         # Start backend if needed
         if not hasattr(self, '_backend_started') or not self._backend_started:
+            logger.debug( "Showable.document: starting backend" )
             self._start_backend()
             self._backend_started = True
 
@@ -217,6 +219,8 @@ class Showable(LayoutDOM,BokehInit):
     def _start_backend(self):
         """Hook to start backend services when showing"""
         # Override this in subclasses or set a callback
+        logger.debug(">>>>>>>>>>------------->> _start_backend")
+        logger.debug('----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------',stack_info=True)
         if hasattr(self, '_backend_startup_count'):
             ### backend has already been started
             ### must figure out what is the proper way to handle this case
@@ -226,6 +230,14 @@ class Showable(LayoutDOM,BokehInit):
 
         if hasattr(self, '_backend_startup_callback'):
             try:
+                ## Preflight callables are called before backend startup
+                ## Importantly, these functions MUST be called in the main thread
+                for func in BokehInit.get_app_context( ).preflight_callables:
+                    sig = inspect.signature(func)
+                    if len(sig.parameters) == 0:
+                        func( )
+                    else:
+                        func(self)
                 self._backend_startup_callback()
                 logger.debug(f"\tShowable::_start_backend(): Executed startup callback for {id(self)}")
                 self._backend_startup_count = 1
@@ -371,6 +383,7 @@ class Showable(LayoutDOM,BokehInit):
             # In Jupyter Lab/Classic, use components() as before
             script, div = components(self)
             if start_backend:
+                logger.debug( "Showable._get_notebook_html: starting backend" )
                 self._start_backend()
             self._notebook_rendering = f'{script}\n{div}'
             return self._notebook_rendering

@@ -383,12 +383,13 @@ export class CommsTransport implements TransportBase {
     
     async run(): Promise<void> {
         console.log(`Comms event loop starting for ${this.comm_mgr.comm_mgr_id}`)
-        
+        console.log(new Error().stack)
+
         // Keep alive until shutdown
         while (this.shouldRun && this.isOpen) {
             await new Promise(resolve => setTimeout(resolve, 100))
         }
-        
+
         console.log(`Comms event loop ended for ${this.comm_mgr.comm_mgr_id}`)
     }
     

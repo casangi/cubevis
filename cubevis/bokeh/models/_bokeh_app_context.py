@@ -4,7 +4,7 @@ from bokeh.models import CustomJS
 from bokeh.core.properties import String, Dict, Any, Nullable, Instance, List, Tuple
 from bokeh.models.layouts import LayoutDOM
 from bokeh.models.ui import UIElement
-from bokeh.resources import CDN
+from bokeh.resources import INLINE, CDN
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 import unicodedata
@@ -16,10 +16,33 @@ import re
 from . import Showable
 from ..transport import CommMgr
 from .. import BokehInit
+from ...utils import is_interactive_jupyter
 
 logger = logging.getLogger(__name__)
 
 PreflightFunc: TypeAlias = Union[Callable[[Showable], None], Callable[[], None]]
+
+def inline_local_scripts(html_content):
+    """
+    Finds <script src="file://..."></script> tags and replaces them 
+    with the actual file contents to satisfy Chrome's origin policy.
+    """
+    # Pattern specifically targets your file:/// script tags
+    script_pattern = re.compile(r'<script\s+src="file://([^"]+)"></script>')
+
+    def replacer(match):
+        file_path = match.group(1)
+        # Ensure the path is absolute for the open() call
+        abs_path = os.path.abspath(file_path)
+
+        try:
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return f'<script type="text/javascript">\n/* Inlined: {file_path} */\n{content}\n</script>'
+        except Exception as e:
+            return f'<!-- ERROR: Could not inline {file_path} - {str(e)} -->'
+
+    return script_pattern.sub(replacer, html_content)
 
 class BokehAppContext(LayoutDOM):
     """
@@ -49,7 +72,7 @@ class BokehAppContext(LayoutDOM):
         default=[],
         help="initialization scripts with associated metadata set with add_init_script(...)"
     )
-    
+
     ## Class-level session ID shared across all apps in the same Python session
     _backend_id = None
 
@@ -154,18 +177,90 @@ class BokehAppContext(LayoutDOM):
         current_state.update(state_updates)
         self.app_state = current_state
 
-    def show( self ):
-        """Always show plot in a new browser tab without changing output settings.
-           Jupyter display is handled by the Showable class. However, at some
-           point this function might need to support more than just independent
-           browser tab display.
-        """
-        logger.debug(f"\tBokehAppContext::show( ): {id(self)}")
+#    def show(self):
+#        from bokeh.plotting import save
+#        from bokeh.resources import INLINE
+#        import threading, os, socketserver, webbrowser
+#        import http.server
+#
+#        save(self, filename=self.__htmlpath, resources=INLINE, title=self.__title)
+#
+#        directory = os.path.dirname(os.path.abspath(self.__htmlpath))
+#        filename  = os.path.basename(self.__htmlpath)
+#
+#        class QuietHandler(http.server.SimpleHTTPRequestHandler):
+#            def __init__(self, *args, **kwargs):
+#                super().__init__(*args, directory=directory, **kwargs)
+#            def log_message(self, format, *args):
+#                pass
+#
+#        httpd = socketserver.TCPServer(("", 0), QuietHandler)
+#        port  = httpd.server_address[1]
+#
+#        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+#        webbrowser.open(f'http://localhost:{port}/{filename}')
 
-        from bokeh.plotting import save
 
-        # Save the plot
-        save( self, filename=self.__htmlpath, resources=CDN, title=self.__title)
+#    def show( self ):
+#        """Always show plot in a new browser tab without changing output settings.
+#           Jupyter display is handled by the Showable class. However, at some
+#           point this function might need to support more than just independent
+#           browser tab display.
+#        """
+#        logger.debug(f"\tBokehAppContext::show( ): {id(self)}")
+#
+#        from bokeh.io import curdoc
+#        from bokeh import plotting
+#        from bokeh.plotting import save, show, output_file
+#        from bokeh.resources import Resources
+#        inline_res = Resources(mode='cdn', root_url=None)
+#
+#        # Save the plot
+#        #output_file(self.__htmlpath, mode="inline")
+#        save( self,
+#              filename=self.__htmlpath,
+#              title=self.__title,
+#              resources=inline_res,
+#              template=None
+#             )
+#        # Open in browser
+#        webbrowser.open('file://' + os.path.abspath(self.__htmlpath))
 
-        # Open in browser
+    def show(self):
+        from bokeh.embed import file_html
+        from bokeh.resources import INLINE
+
+        from bokeh.resources import Resources
+
+        # Create a resource object that is strictly inline and has no base for lookups
+        strict_inline = Resources(mode='inline', root_url=None)
+
+        # Use this inside your file_html call
+        html_content = file_html(self, strict_inline, self.__title)
+
+#        # 1. Generate the initial HTML with BokehJS already inlined
+#        # This will still contain your custom file:/// tags from your template
+#        raw_html = file_html(self, INLINE, self.__title)
+#
+#        # 2. Convert those external script tags to internal ones
+#        final_html = inline_local_scripts(raw_html)
+        # 2. Convert those external script tags to internal ones
+        intermediate_html = inline_local_scripts(html_content)
+
+        # Insert this right after the <head> tag starts
+#        isolation_fix = """
+#<script>
+#  // Prevents scripts from trying to traverse origins via the parent window
+#  window.parent = window;
+#  window.top = window;
+#</script>
+#"""
+#        final_html = intermediate_html.replace("<head>", f"<head>{isolation_fix}")
+
+        # 3. Write the self-contained file to disk
+        with open(self.__htmlpath, 'w', encoding='utf-8') as f:
+            f.write(intermediate_html)
+
+        # 4. Open safely in Chrome
+        import webbrowser
         webbrowser.open('file://' + os.path.abspath(self.__htmlpath))

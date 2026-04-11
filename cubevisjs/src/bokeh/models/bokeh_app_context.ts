@@ -61,12 +61,17 @@ export class BokehAppContext extends LayoutDOM {
   constructor(attrs?: Partial<BokehAppContext.Attrs>) {
     console.log("BokehAppContext.constructor <A>")
     super(attrs)
-    console.log("BokehAppContext.constructor <B>",this.init_scripts,this.app_state)
   }
 
   override initialize(): void {
     super.initialize()
     
+    try {
+      console.log("BokehAppContext.initialize <B>",this.init_scripts,this.app_state)
+    } catch (error) {
+      console.error("An error occurred:", error);
+    }
+
     // frontend_id must be set by the frontend not preset by the backend
     const frontend_identifier = object_id(this)
     if ( this.frontend_id !== null && this.frontend_id !== frontend_identifier ) {

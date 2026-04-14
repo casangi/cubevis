@@ -422,6 +422,7 @@ export class CommMgr extends Model {
         const commId = comm.comm_id
         const requestId = this.generateId()
 
+        console.log( `CommMgr.send(messageId: ${messageId}, requestId: ${requestId}):`, message, callback )
         // Check if transport is connected
         if (!this.transport || !this.transport.isConnected()) {
 
@@ -462,9 +463,11 @@ export class CommMgr extends Model {
         // Check if this comm has a pending request
         if (this.pending.has(commId)) {
             // Queue this message
+            console.log( 'CommMgr.send: queuing message' )
             if (comm.squash_queue) {
                 // Squash mode: remove any queued message with same message_id
                 const queue = this.sendQueue.get(commId)!
+                console.log( 'CommMgr.send: squash queue' )
                 this.sendQueue.set(
                     commId,
                     queue.filter(item => item.messageId !== messageId)
@@ -484,6 +487,7 @@ export class CommMgr extends Model {
             )
         } else {
             // Send immediately
+            console.log( 'CommMgr.send: sending message', message )
             this.sendImmediate(commId, messageId, message, requestId, callback)
         }
     }
@@ -512,6 +516,7 @@ private sendImmediate(
         requestId: string,
         callback?: (response: any) => void
     ): void {
+        console.log( `CommMgr.sendImmediate(commId: ${commId}):`, message )
         const msg = {
             comm_id: commId,
             message_id: messageId,
@@ -530,6 +535,7 @@ private sendImmediate(
         
         // Send through transport
         if (this.transport && this.transport.isConnected()) {
+            console.log( `CommMgr.sendImmediate(commId: ${commId}): sending message` )
             this.transport.send(msg)
             console.debug(`Sent message: ${commId}.${messageId} (request_id=${requestId})`)
         } else {
@@ -854,6 +860,7 @@ export class Comm extends Model {
      */
     send(messageId: string, message: any, callback?: (response: any) => void): void {
         if (this._mgr) {
+            console.log( `Comm.send(messageId: ${messageId}):`, message, callback )
             this._mgr.send(this, messageId, message, callback)
         } else {
             console.error(`Comm ${this.description?.trim() || this.comm_id}: Cannot send, CommMgr not found`)

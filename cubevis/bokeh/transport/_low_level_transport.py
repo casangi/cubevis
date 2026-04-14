@@ -11,7 +11,6 @@ import threading
 import time
 import logging
 import importlib
-import traceback
 from enum import Enum
 from abc import ABC, abstractmethod
 from bokeh.models import Div, CustomJS
@@ -347,7 +346,6 @@ class CommsTransport(TransportBase):
         super().__init__(comm_mgr_id, abort)
         logger.debug(">>>>>>>>>>------------->> CommsTransport.__init__", stack_info=True)
         self._bridge = None
-        self._comm = None
         self._callback: Optional[Callable] = None
         self._connected = False
         self._debug = "CUBEVIS_DEBUG" in os.environ
@@ -390,23 +388,47 @@ class CommsTransport(TransportBase):
             from all of them reach the Python callback.
             The LAST opener's comm is stored as self._comm for Python->JS
             sends (send_message). On Colab, Python->JS is sent to ALL open
-            comms via _colab_comms so every listener receives it.
+            comms via _comm_objs so every listener receives it.
         """
         logger.debug(f"CommsTransport._on_comm_open: comm opened for {self._comm_mgr_id}")
 
         # Track all open comms for Python->JS broadcast (Colab needs this
         # because each iframe opener is a separate channel)
-        if not hasattr(self, '_colab_comms'):
-            self._colab_comms = []
-        self._colab_comms.append(comm)
-        self._comm = comm   # also keep last for the JupyterLab single-comm case
+        if not hasattr(self, '_comm_objs'):
+            self._comm_objs = []
+        self._comm_objs.append(comm)
 
         def _recv(msg):
             logger.debug(f"CommsTransport._recv: {msg}")
+
             data = msg.get("content", {}).get("data", {})
-            logger.debug(f"CommsTransport._recv: {data}")
-            if self._callback:
-                self._callback(data)
+            if data.get("type") == "cubevis_message":
+                from ...utils import deserialize
+                try:
+                    raw = data.get("data", "{}")
+                    if isinstance( raw, str ):
+                        actual_message = deserialize(raw)
+                        logger.debug(f"CommsTransport._recv app message: {actual_message}")
+                        if self._callback:
+                            # the comm.on_msg callback mechanism is synchronous by design. It expects
+                            # a standard function and does not await the result
+                            async def _async_recv_wrapper(msg):
+                                try:
+                                    await self._callback(msg)
+                                except Exception as e:
+                                    logger.error(f"Error in async comms handler: {e}", exc_info=True)
+
+                            asyncio.create_task(_async_recv_wrapper(actual_message))
+                        else:
+                            logger.error(f"_recv: no callback is available")
+                    else:
+                        logger.error(f"_recv: data does not seem to be in a serialized format")
+
+                except Exception as e:
+                    logger.warning(f"CommsTransport._recv: deserialize failed: {e}, raw={raw[:200]}")
+
+            else:
+                logger.debug(f"CommsTransport._recv out of band message: {data}")
 
         self._connected = True
         comm.on_msg(_recv)
@@ -652,21 +674,26 @@ class CommsTransport(TransportBase):
         self._callback = callback
 
     async def send_message(self, message: Dict[str, Any]) -> None:
+        from ...utils import serialize
         if not self._connected:
             raise RuntimeError("CommsTransport: not connected")
-        colab_comms = getattr(self, '_colab_comms', None)
+
+        envelope = {
+            "type": "cubevis_message",
+            "comm_mgr_id": self._comm_mgr_id,
+            "data": serialize(message)          # Bokeh-serialize the payload
+        }
+
+        colab_comms = getattr(self, '_comm_objs', None)
         if colab_comms:
             # Colab: broadcast to every iframe that has opened a channel.
             # This ensures the app iframe, the widget iframe, and any test
             # cell that opened its own comm all receive Python->JS messages.
             for c in list(colab_comms):
                 try:
-                    c.send(message)
+                    c.send(envelope)
                 except Exception as e:
                     logger.warning(f"CommsTransport.send_message: comm send failed: {e}")
-        elif self._comm is not None:
-            # JupyterLab: single kernel comm
-            self._comm.send(message)
         else:
             raise RuntimeError("CommsTransport: not connected (no comm available)")
 
@@ -676,12 +703,11 @@ class CommsTransport(TransportBase):
             await asyncio.sleep(0.1)
 
     async def close(self) -> None:
-        for c in getattr(self, '_colab_comms', []):
+        for c in getattr(self, '_comm_objs', []):
             try:
                 c.close()
             except Exception:
                 pass
-        self._colab_comms = []
-        self._comm = None
+        self._comm_objs = []
         self._connected = False
         self._bridge = None

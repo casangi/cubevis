@@ -108,6 +108,7 @@ class Showable(LayoutDOM,BokehInit):
                   **kwargs ):
         logger.debug(f"\tShowable::__init__(ui_element={type(ui_element).__name__ if ui_element else None}, {kwargs}): {id(self)}")
 
+        self._backend_started = False
         self._display_context = display_context
 
         # Set default sizing if not provided
@@ -198,11 +199,9 @@ class Showable(LayoutDOM,BokehInit):
             current_doc.add_root(self)
             logger.debug(f"\tShowable::_ensure_in_document(): Moved {id(self)} to document {id(current_doc)}")
 
-        # HOOK: Backend startup when added to document
-        # This catches both direct show() calls and Bokeh's show() function
-        if not hasattr(self, '_backend_started'):
-            self._start_backend( )
-            self._backend_started = True
+        # NOTE: Backend is intentionally NOT started here.
+        # show() delegates to _get_notebook_html() for that.
+        # The document setter handles it for the bokeh.plotting.show() path.
 
     def get_future(self):
         if self._result_retrieval is None:
@@ -219,8 +218,12 @@ class Showable(LayoutDOM,BokehInit):
     def _start_backend(self):
         """Hook to start backend services when showing"""
         # Override this in subclasses or set a callback
-        logger.debug(">>>>>>>>>>------------->> _start_backend")
-        logger.debug('----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------',stack_info=True)
+        if self._backend_started:
+            logger.debug('Showable._start_backend: backend already started, skipping')
+            return
+
+        self._backend_started = True
+
         if hasattr(self, '_backend_startup_count'):
             ### backend has already been started
             ### must figure out what is the proper way to handle this case
@@ -403,8 +406,9 @@ class Showable(LayoutDOM,BokehInit):
         if self.__class__._usage_mode is None:
             self.__class__._usage_mode = "custom"
         from bokeh.io.state import curstate
-
         state = curstate()
+
+        self._ensure_in_document()
 
         if state.notebook:
             html = self._get_notebook_html(start_backend=True)
@@ -424,18 +428,23 @@ class Showable(LayoutDOM,BokehInit):
 
         from bokeh.io.state import curstate
 
-        self._ensure_in_document()
-
         state = curstate()
 
         if state.notebook:
             # In Jupyter, display directly using IPython.display
             from IPython.display import display, HTML
 
+            # Ensure document registration WITHOUT triggering backend start.
+            # _get_notebook_html will call _start_backend() itself, AFTER
+            # components() has rendered — matching what _repr_mimebundle_ does.
+            self._ensure_in_document()
+
             html = self._get_notebook_html(start_backend)
+            logger.debug(f"Showable.show: html is {'None' if html is None else f'{len(html)} chars'}, _notebook_rendering={'set' if self._notebook_rendering else 'unset'}, starts_with={repr(html[:80]) if html else None}")
             if html:
+                logger.debug("Showable.show: calling display(HTML(...))")
                 display(HTML(html))
-                return
+            return
 
         # Fall back to standard Bokeh show for non-notebook environments
         from bokeh.io import show as bokeh_show

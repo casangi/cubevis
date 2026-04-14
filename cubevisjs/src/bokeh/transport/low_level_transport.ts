@@ -314,7 +314,6 @@ export class CommsTransport implements TransportBase {
     private targetName: string
     private isOpen: boolean = false
     private onMessageCallback?: (msg: any) => void
-    private heartbeatInterval?: number
     private shouldRun: boolean = true
     
     constructor(private comm_mgr: CommMgr) {
@@ -372,8 +371,6 @@ export class CommsTransport implements TransportBase {
                     frontend_ready: true
                 })
             })
-
-            this.startHeartbeat()
 
         } catch (e) {
             console.error("Error initializing Comms:", e)
@@ -496,7 +493,6 @@ export class CommsTransport implements TransportBase {
         console.log(`Jupyter comm closed for ${this.targetName}`)
         this.isOpen = false
         this.shouldRun = false
-        this.stopHeartbeat()
     }
 
     // --------------------------------------------------------------------------
@@ -522,7 +518,6 @@ export class CommsTransport implements TransportBase {
 
     close(): void {
         this.shouldRun = false
-        this.stopHeartbeat()
 
         if (this.comm && this.isOpen) {
             try {
@@ -548,32 +543,5 @@ export class CommsTransport implements TransportBase {
 
     isConnected(): boolean {
         return this.comm !== undefined && this.isOpen
-    }
-
-    // --------------------------------------------------------------------------
-    // Heartbeat
-    // --------------------------------------------------------------------------
-
-    private startHeartbeat(intervalMs: number = 30000): void {
-        if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval)
-        }
-
-        this.heartbeatInterval = window.setInterval(() => {
-            if (this.isConnected()) {
-                this.send({
-                    type: 'heartbeat',
-                    comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                    timestamp: Date.now()
-                })
-            }
-        }, intervalMs)
-    }
-
-    private stopHeartbeat(): void {
-        if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval)
-            this.heartbeatInterval = undefined
-        }
     }
 }

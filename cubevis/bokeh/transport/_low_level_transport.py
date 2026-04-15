@@ -413,6 +413,7 @@ class CommsTransport(TransportBase):
             # first check if it is a CommsTransport message
             if data.get("type") == "cubevis_message":
                 from ...utils import deserialize
+                logger.debug(f"CommsTransport._recv: expected message {data}, {self._callback}")
                 try:
                     raw = data.get("data", "{}")
 
@@ -429,6 +430,7 @@ class CommsTransport(TransportBase):
             else:
                 # when testing simple messages are sent directly using
                 # the Jupyter/Colab comm object
+                logger.debug(f"CommsTransport._recv: unexpected message {data}, {self._callback}")
                 _invoke_callback(data)
 
         self._connected = True

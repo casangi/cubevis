@@ -431,7 +431,17 @@ class CommsTransport(TransportBase):
                 # when testing simple messages are sent directly using
                 # the Jupyter/Colab comm object
                 logger.debug(f"CommsTransport._recv: unexpected message {data}, {self._callback}")
-                _invoke_callback(data)
+                from pathlib import Path
+                file_path = Path.home() / "debug.txt"
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(f"{self} calling a regular function with {data}")
+                try:
+                    _invoke_callback(data)
+                except Exception as e:
+                    with open( file_path, "w", encoding="utf-8") as f:
+                        f.write( f"{self} error calling function: {e}")
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(f"{self} after calling a regular function with {data}")
 
         self._connected = True
         comm.on_msg(_recv)

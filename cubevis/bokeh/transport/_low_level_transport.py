@@ -12,6 +12,7 @@ import time
 import logging
 import importlib
 from enum import Enum
+from functools import wraps
 from abc import ABC, abstractmethod
 from bokeh.models import Div, CustomJS
 from typing import Optional, Callable, Dict, Any
@@ -137,9 +138,7 @@ class WebSocketTransport(TransportBase):
     """
     
     def __init__(self, comm_mgr_id: str, websocket, abort: Optional[Callable] = None):
-        logger.debug('------------------------------------------------------------------------------------------------------------------------')
-        logger.debug ('WebSocketTransport.__init__', stack_info=True)
-        logger.debug('------------------------------------------------------------------------------------------------------------------------')
+        logger.debug( f'WebSocketTransport.__init__: {comm_mgr_id}' )
         super().__init__(comm_mgr_id, abort)
         self.websocket = websocket
         self._message_callback: Optional[Callable] = None
@@ -343,9 +342,10 @@ class CommsTransport(TransportBase):
     """
 
     def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
+        logger.debug( f'CommsTransport.__init__: {comm_mgr_id}' )
         super().__init__(comm_mgr_id, abort)
-        logger.debug(">>>>>>>>>>------------->> CommsTransport.__init__", stack_info=True)
         self._bridge = None
+        self._bridge_started = { }                   # key is self._comm_mgr_id
         self._callback: Optional[Callable] = None
         self._connected = False
         self._debug = "CUBEVIS_DEBUG" in os.environ
@@ -357,8 +357,6 @@ class CommsTransport(TransportBase):
         # context is still open.  display_bridge() is intentionally NOT a
         # separate public call anymore — construction = display.
         from .. import BokehInit
-        logger.debug(">>>>>>>>>>------------->> adding birdge")
-        logger.debug('----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------')
         BokehInit.get_app_context().add_preflight_callable(self.display_bridge)
 
     # ------------------------------------------------------------------
@@ -398,29 +396,30 @@ class CommsTransport(TransportBase):
             self._comm_objs = []
         self._comm_objs.append(comm)
 
+        def _invoke_callback(msg):
+            if self._callback:
+                # the comm.on_msg callback mechanism is synchronous by design. It expects
+                # a standard function and does not await the result
+                asyncio.create_task(self._callback(msg))
+
+            else:
+                logger.error(f"_recv: no callback is available")
+
         def _recv(msg):
             logger.debug(f"CommsTransport._recv: {msg}")
 
             data = msg.get("content", {}).get("data", {})
+
+            # first check if it is a CommsTransport message
             if data.get("type") == "cubevis_message":
                 from ...utils import deserialize
                 try:
                     raw = data.get("data", "{}")
+
                     if isinstance( raw, str ):
                         actual_message = deserialize(raw)
                         logger.debug(f"CommsTransport._recv app message: {actual_message}")
-                        if self._callback:
-                            # the comm.on_msg callback mechanism is synchronous by design. It expects
-                            # a standard function and does not await the result
-                            async def _async_recv_wrapper(msg):
-                                try:
-                                    await self._callback(msg)
-                                except Exception as e:
-                                    logger.error(f"Error in async comms handler: {e}", exc_info=True)
-
-                            asyncio.create_task(_async_recv_wrapper(actual_message))
-                        else:
-                            logger.error(f"_recv: no callback is available")
+                        _invoke_callback(actual_message)
                     else:
                         logger.error(f"_recv: data does not seem to be in a serialized format")
 
@@ -428,7 +427,9 @@ class CommsTransport(TransportBase):
                     logger.warning(f"CommsTransport._recv: deserialize failed: {e}, raw={raw[:200]}")
 
             else:
-                logger.debug(f"CommsTransport._recv out of band message: {data}")
+                # when testing simple messages are sent directly using
+                # the Jupyter/Colab comm object
+                _invoke_callback(data)
 
         self._connected = True
         comm.on_msg(_recv)
@@ -451,7 +452,15 @@ class CommsTransport(TransportBase):
 
         In Colab, also enables the custom widget manager automatically.
         """
-        logger.debug(">>>>>>>>>>------------->> display_bridge called", stack_info=True)
+        if self._bridge_started.get( self._comm_mgr_id, False ):
+            logger.debug( f"display_bridge: already started for {self._comm_mgr_id}" )
+            return
+
+        logger.debug( f"display_bridge: starting for {self._comm_mgr_id}" )
+
+        # prevent restarting a particular Jupyter/Colab comm
+        self._bridge_started[self._comm_mgr_id] = True
+
         # Colab: enable CDN widget manager before any widget is displayed
         if self._is_colab():
             try:
@@ -654,8 +663,6 @@ class CommsTransport(TransportBase):
         if self._bridge is None:
             raise RuntimeError( "display_bridge() must be called before connect()." )
 
-        logger.debug( ">>>>>>>>>>------------->> connect called", stack_info=True )
-
         deadline = asyncio.get_event_loop( ).time( ) + timeout
         while not self._conn_event.is_set( ):
             if asyncio.get_event_loop( ).time( ) > deadline:
@@ -671,7 +678,22 @@ class CommsTransport(TransportBase):
         return self._connected
 
     def set_message_callback(self, callback: Callable) -> None:
-        self._callback = callback
+        import inspect
+        # Determine the execution style ONCE
+        is_async = inspect.iscoroutinefunction(callback)
+
+        @wraps(callback)
+        async def wrapper(msg):
+            try:
+                if is_async:
+                    await callback(msg)
+                else:
+                    callback(msg)
+            except Exception as e:
+                logger.error(f"set_message_callback.wrapper error: {e}")
+
+        # Store the wrapper as the internal callback
+        self._callback = wrapper
 
     async def send_message(self, message: Dict[str, Any]) -> None:
         from ...utils import serialize

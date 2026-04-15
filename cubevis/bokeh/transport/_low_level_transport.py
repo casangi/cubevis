@@ -434,18 +434,18 @@ class CommsTransport(TransportBase):
                 from pathlib import Path
                 file_path = Path.home() / "debug.txt"
                 with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"{self} calling a regular function with {data}")
+                    f.write(f"<<001>> {self} calling a regular function with {data}\n")
                 try:
                     _invoke_callback(data)
                 except Exception as e:
                     from pathlib import Path
                     file_path = Path.home() / "debug.txt"
                     with open( file_path, "a", encoding="utf-8") as f:
-                        f.write( f"{self} error calling function: {e}")
+                        f.write( f"<<002>> {self} error calling function: {e}\n")
 
                 logger.debug(f"{self} CommsTransport._recv: where are we {data}, {self._callback}")
                 with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"{self} after calling a regular function with {data}")
+                    f.write(f"<<003>> {self} after calling a regular function with {data}\n")
 
         self._connected = True
         comm.on_msg(_recv)
@@ -703,20 +703,20 @@ class CommsTransport(TransportBase):
             from pathlib import Path
             file_path = Path.home() / "debug.txt"
             with open(file_path, "a", encoding="utf-8") as f:
-                f.write(f"{self} in wrapper function with {msg}")
+                f.write(f"<<004>> {self} in wrapper function with {msg}\n")
             try:
                 if is_async:
                     with open(file_path, "a", encoding="utf-8") as f:
-                        f.write(f"{self} invoking coroutine with {msg}")
+                        f.write(f"<<005>> {self} invoking coroutine with {msg}\n")
                     await callback(msg)
                 else:
                     with open(file_path, "a", encoding="utf-8") as f:
-                        f.write(f"{self} invoking wrapped function with {msg}")
+                        f.write(f"<<006>> {self} invoking wrapped function with {msg}\n")
                     callback(msg)
             except Exception as e:
                 logger.error(f"set_message_callback.wrapper error: {e}")
                 with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"{self} error encountered {e}")
+                    f.write(f"<<007>> {self} error encountered {e}\n")
 
         # Store the wrapper as the internal callback
         self._callback = wrapper

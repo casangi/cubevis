@@ -438,7 +438,7 @@ class CommsTransport(TransportBase):
                 try:
                     _invoke_callback(data)
                 except Exception as e:
-                    with open( file_path, "w", encoding="utf-8") as f:
+                    with open( file_path, "a", encoding="utf-8") as f:
                         f.write( f"{self} error calling function: {e}")
                 with open(file_path, "a", encoding="utf-8") as f:
                     f.write(f"{self} after calling a regular function with {data}")

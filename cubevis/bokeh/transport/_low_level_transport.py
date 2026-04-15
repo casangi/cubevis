@@ -406,7 +406,7 @@ class CommsTransport(TransportBase):
                 logger.error(f"_recv: no callback is available")
 
         def _recv(msg):
-            logger.debug(f"CommsTransport._recv: {msg}")
+            logger.debug(f"{self} CommsTransport._recv: {msg}")
 
             data = msg.get("content", {}).get("data", {})
 
@@ -430,7 +430,7 @@ class CommsTransport(TransportBase):
             else:
                 # when testing simple messages are sent directly using
                 # the Jupyter/Colab comm object
-                logger.debug(f"CommsTransport._recv: unexpected message {data}, {self._callback}")
+                logger.debug(f"{self} CommsTransport._recv: unexpected message {data}, {self._callback}")
                 from pathlib import Path
                 file_path = Path.home() / "debug.txt"
                 with open(file_path, "w", encoding="utf-8") as f:
@@ -698,11 +698,23 @@ class CommsTransport(TransportBase):
         async def wrapper(msg):
             try:
                 if is_async:
+                    from pathlib import Path
+                    file_path = Path.home() / "debug.txt"
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(f"{self} invoking coroutine with {msg}")
                     await callback(msg)
                 else:
+                    from pathlib import Path
+                    file_path = Path.home() / "debug.txt"
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(f"{self} invoking function with {msg}")
                     callback(msg)
             except Exception as e:
                 logger.error(f"set_message_callback.wrapper error: {e}")
+                from pathlib import Path
+                file_path = Path.home() / "debug.txt"
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(f"{self} error encountered {e}")
 
         # Store the wrapper as the internal callback
         self._callback = wrapper

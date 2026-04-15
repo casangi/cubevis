@@ -433,14 +433,14 @@ class CommsTransport(TransportBase):
                 logger.debug(f"{self} CommsTransport._recv: unexpected message {data}, {self._callback}")
                 from pathlib import Path
                 file_path = Path.home() / "debug.txt"
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(file_path, "a", encoding="utf-8") as f:
                     f.write(f"{self} calling a regular function with {data}")
                 try:
                     _invoke_callback(data)
                 except Exception as e:
                     with open( file_path, "w", encoding="utf-8") as f:
                         f.write( f"{self} error calling function: {e}")
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(file_path, "a", encoding="utf-8") as f:
                     f.write(f"{self} after calling a regular function with {data}")
 
         self._connected = True
@@ -696,24 +696,22 @@ class CommsTransport(TransportBase):
 
         @wraps(callback)
         async def wrapper(msg):
+            from pathlib import Path
+            file_path = Path.home() / "debug.txt"
+            with open(file_path, "a", encoding="utf-8") as f:
+                f.write(f"{self} in wrapper function with {msg}")
             try:
                 if is_async:
-                    from pathlib import Path
-                    file_path = Path.home() / "debug.txt"
-                    with open(file_path, "w", encoding="utf-8") as f:
+                    with open(file_path, "a", encoding="utf-8") as f:
                         f.write(f"{self} invoking coroutine with {msg}")
                     await callback(msg)
                 else:
-                    from pathlib import Path
-                    file_path = Path.home() / "debug.txt"
-                    with open(file_path, "w", encoding="utf-8") as f:
-                        f.write(f"{self} invoking function with {msg}")
+                    with open(file_path, "a", encoding="utf-8") as f:
+                        f.write(f"{self} invoking wrapped function with {msg}")
                     callback(msg)
             except Exception as e:
                 logger.error(f"set_message_callback.wrapper error: {e}")
-                from pathlib import Path
-                file_path = Path.home() / "debug.txt"
-                with open(file_path, "w", encoding="utf-8") as f:
+                with open(file_path, "a", encoding="utf-8") as f:
                     f.write(f"{self} error encountered {e}")
 
         # Store the wrapper as the internal callback

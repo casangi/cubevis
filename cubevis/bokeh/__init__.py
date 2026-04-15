@@ -52,10 +52,8 @@ class BokehInit:
     def get_app_context(cls):
         """Get the registered application context"""
         if cls._app_context is None:
-            raise RuntimeError(
-                "No BokehAppContext has been registered. "
-                "Call BokehInit.set_app_context() first."
-            )
+            from .models import BokehAppContext
+            cls._app_context = BokehAppContext( )
         return cls._app_context
 
     def __init_subclass__(cls, **kwargs):

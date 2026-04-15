@@ -19,7 +19,7 @@ from .. import BokehInit
 
 logger = logging.getLogger(__name__)
 
-PreflightFunc: TypeAlias = Union[Callable[[Showable], None], Callable[[], None]]
+PreflightFunc: TypeAlias = Callable[[], None]
 
 class BokehAppContext(LayoutDOM):
     """
@@ -77,12 +77,58 @@ class BokehAppContext(LayoutDOM):
         value = re.sub(r'[^\w\s-]', '', value.lower())
         return re.sub(r'[-\s]+', '-', value).strip('-_')
 
-    @property
-    def preflight_callables(self) -> list[PreflightFunc]:
-        return self._preflight_callables.copy( )
+    def run_preflight_callables(self):
+        callables = list(self._preflight_callables)
+        self._preflight_callables.clear()
+        for func in callables:
+            try:
+                func( )
+            except Exception as e:
+                logger.warning(f"run_preflight_callables: {func} failed: {e}")
 
     def add_preflight_callable( self, func: PreflightFunc ):
         self._preflight_callables.append(func)
+        self._register_auto_drain_if_needed( )
+
+    def _register_auto_drain_if_needed(self):
+        """
+        If running in a Jupyter/Colab kernel with no Showable present,
+        register a one-shot post_execute hook to drain preflight callables
+        in the main thread at the end of the current cell.
+        """
+        # Avoid double-registration
+        if getattr(self, '_auto_drain_registered', False):
+            return
+
+        try:
+            from IPython import get_ipython
+            ip = get_ipython()
+            if ip is None:
+                return  # Not in a kernel, nothing to do
+        except ImportError:
+            return
+
+        self._auto_drain_registered = True
+
+        def _drain_once():
+            # Only drain if Showable hasn't already done it
+            if not self._preflight_callables:
+                return
+
+            self.run_preflight_callables( )
+
+            # Unregister ourselves after the first drain
+            try:
+                ip.events.unregister('post_execute', _drain_and_unregister)
+            except Exception:
+                pass
+
+            self._auto_drain_registered = False  # Allow re-registration next time
+
+        def _drain_and_unregister():
+            _drain_once()
+
+        ip.events.register('post_execute', _drain_and_unregister)
 
     def __init__( self, ui=None, title=str(uuid4( )), prefix=None, **kwargs ):
         logger.debug(f"\tBokehAppContext::__init__(ui={type(ui).__name__ if ui else None}, {kwargs}): {id(self)}")
@@ -117,7 +163,9 @@ class BokehAppContext(LayoutDOM):
 
         # Register this context as the singleton
         BokehInit.set_app_context(self)
-        self.comm_mgr.registered(self)
+
+        if self.comm_mgr:
+            self.comm_mgr.registered(self)
 
     def _sphinx_height_hint(self):
         """Delegate height hint to the wrapped UI element"""

@@ -235,12 +235,7 @@ class Showable(LayoutDOM,BokehInit):
             try:
                 ## Preflight callables are called before backend startup
                 ## Importantly, these functions MUST be called in the main thread
-                for func in BokehInit.get_app_context( ).preflight_callables:
-                    sig = inspect.signature(func)
-                    if len(sig.parameters) == 0:
-                        func( )
-                    else:
-                        func(self)
+                BokehInit.get_app_context( ).run_preflight_callables( )
                 self._backend_startup_callback()
                 logger.debug(f"\tShowable::_start_backend(): Executed startup callback for {id(self)}")
                 self._backend_startup_count = 1

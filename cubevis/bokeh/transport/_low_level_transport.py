@@ -342,8 +342,10 @@ class CommsTransport(TransportBase):
     """
 
     def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
+        from tornado.ioloop import IOLoop
         logger.debug( f'CommsTransport.__init__: {comm_mgr_id}' )
         super().__init__(comm_mgr_id, abort)
+        self._main_ioloop = IOLoop.current()
         self._bridge = None
         self._bridge_started = { }                   # key is self._comm_mgr_id
         self._callback: Optional[Callable] = None
@@ -400,8 +402,9 @@ class CommsTransport(TransportBase):
             if self._callback:
                 # the comm.on_msg callback mechanism is synchronous by design. It expects
                 # a standard function and does not await the result
-                asyncio.create_task(self._callback(msg))
-
+                self._main_ioloop.add_callback(
+                    lambda: asyncio.ensure_future(self._callback(msg))
+                )
             else:
                 logger.error(f"_recv: no callback is available")
 

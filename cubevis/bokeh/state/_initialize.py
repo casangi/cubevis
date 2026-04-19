@@ -133,12 +133,18 @@ def get_js_loading_selection( ):
     return prefer_local, prefer_network
 
 def is_jupyter():
-    """Check if running in Jupyter environment"""
+    """Returns True if running in a Notebook or Google Colab."""
     try:
         from IPython import get_ipython
-        return get_ipython() is not None
-    except ImportError:
-        return False
+        shell = get_ipython().__class__.__name__
+        if shell == 'ZMQInteractiveShell':
+            return True   # Jupyter notebook or qtconsole
+        elif shell == 'TerminalInteractiveShell':
+            return False  # Terminal running IPython
+        else:
+            return False  # Other type (standard Python shell)
+    except (ImportError, NameError):
+        return False      # Probably standard Python interpreter
 
 def resolve_js_library_paths():
     """Resolve paths to all required JavaScript libraries based on environment and availability.

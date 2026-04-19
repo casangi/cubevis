@@ -59,7 +59,10 @@ def github_js_tag( ):
     if _CUBEVIS_JS_TAG is None:
         release = cubevis_release_version( )
         if release is not None:
-            _CUBEVIS_JS_TAG = f"v{release}"
+            if '.dev' in release and 'CUBEVIS_JS_TAG' in environ:
+                _CUBEVIS_JS_TAG = environ['CUBEVIS_JS_TAG']
+            else:
+                _CUBEVIS_JS_TAG = f"v{release}"
         else:
             if 'CUBEVIS_JS_TAG' in environ:
                 _CUBEVIS_JS_TAG = environ['CUBEVIS_JS_TAG']

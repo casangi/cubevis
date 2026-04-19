@@ -426,16 +426,6 @@ class Showable(LayoutDOM,BokehInit):
         state = curstate()
 
         if state.notebook:
-            from bokeh.io import show as bokeh_show
-            
-            # 1. Ensure the backend is ready
-            if start_backend:
-                self._start_backend()
-            
-            # 2. Let Bokeh handle the display logic instead of manual HTML
-            # This ensures the 'dfs' payload is correctly populated and sent.
-            return bokeh_show(self)
-
             # In Jupyter, display directly using IPython.display
             from IPython.display import display, HTML
 

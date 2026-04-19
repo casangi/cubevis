@@ -124,14 +124,18 @@ export class CommMgr extends Model {
     constructor(attrs?: Partial<CommMgr.Attrs>) {
         super(attrs)
         this.context = new HandlerContext(this)
+        console.log("CommMgr constructor:", this)
     }
     
     initialize(): void {
         super.initialize()
-        
-        console.log(`CommMgr initializing: ${this.comm_mgr_id}`)
-        
-        // Initialize transport based on properties
+        try {
+            console.log("CommMgr initialize:", this)
+            console.log(`CommMgr initializing: ${this.comm_mgr_id}`)
+        } catch (error) {
+            console.error("An error occurred:", error.message)
+        }
+          // Initialize transport based on properties
         this.initializeTransport()
 
         //

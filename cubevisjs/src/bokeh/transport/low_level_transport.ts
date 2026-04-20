@@ -427,6 +427,7 @@ export class CommsTransport implements TransportBase {
                     console.log(`CommsTransport.retrieveComm: opening colab channel for ${target_id}`)
                     const channel = await google.colab.kernel.comms.open(target_id, {})
                     if (channel) {
+                        console.log(`<1> CommsTransport.retrieveComm: created Colab comm for ${target_id}`, channel)
                         // Wrap the native Colab channel to match the JupyterLab IComm interface
                         const colabComm: any = {
                             send(data: any) { channel.send(data) },
@@ -445,7 +446,9 @@ export class CommsTransport implements TransportBase {
                                 colabComm.onClose({})
                             }
                         })()
-                        console.log(`CommsTransport.retrieveComm: created Colab comm for ${target_id}`, colabComm)
+                        console.log(`<2> CommsTransport.retrieveComm: created Colab comm for ${target_id}`, channel)
+                        console.log(`<3> CommsTransport.retrieveComm: created Colab comm for ${target_id}`, colabComm)
+                        console.log(`<4> CommsTransport.retrieveComm: created Colab comm for ${target_id}`, window)
                         return colabComm
                     }
                 } catch(e) {

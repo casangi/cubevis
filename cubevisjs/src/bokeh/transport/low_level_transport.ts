@@ -425,30 +425,31 @@ export class CommsTransport implements TransportBase {
             if (isColab) {
                 try {
                     console.log(`CommsTransport.retrieveComm: opening colab channel for ${target_id}`)
+
                     const channel = await google.colab.kernel.comms.open(target_id, {})
                     if (channel) {
-                        console.log(`<1> CommsTransport.retrieveComm: created Colab comm for ${target_id}`, channel)
-                        // Wrap the native Colab channel to match the JupyterLab IComm interface
+                    
+                        const messages = channel.messages  // capture ONCE before any logging
+                  
                         const colabComm: any = {
-                            send(data: any) { channel.send(data) },
+                            send: (data: any) => channel.send(data),
                             onMsg: null as any,
                             onClose: null as any,
-                        };
+                        }
+
+                        console.log(`<1> CommsTransport.retrieveComm: created Colab comm for ${target_id}`)
+
                         // Pump incoming messages to onMsg
-                        (async () => {
-                            for await (const message of channel.messages) {
+                        ;(async () => {
+                            for await (const message of messages) {  // use captured iterator
                                 if (typeof colabComm.onMsg === "function") {
-                                    colabComm.onMsg({ content: { data: message.data || {} } })
+                                    colabComm.onMsg({ content: { data: message.data ?? {} } })
                                 }
                             }
-                            // Channel closed — fire onClose if set
                             if (typeof colabComm.onClose === "function") {
                                 colabComm.onClose({})
                             }
                         })()
-                        console.log(`<2> CommsTransport.retrieveComm: created Colab comm for ${target_id}`, channel)
-                        console.log(`<3> CommsTransport.retrieveComm: created Colab comm for ${target_id}`, colabComm)
-                        console.log(`<4> CommsTransport.retrieveComm: created Colab comm for ${target_id}`, window)
                         return colabComm
                     }
                 } catch(e) {

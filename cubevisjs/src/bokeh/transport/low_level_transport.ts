@@ -409,6 +409,7 @@ export class CommsTransport implements TransportBase {
         const target_id = this.comm_mgr.comm_mgr_id
         const comm = window["cubevis_" + target_id]?.comm
 
+        console.log(`CommsTransport.retrieveComm: starting for ${target_id}`, comm)
         if ( comm ) {
             console.log(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`, comm)
             const el = window["cubevis_" + target_id].dbg_el;
@@ -420,8 +421,10 @@ export class CommsTransport implements TransportBase {
             return comm
         } else {
             const isColab = typeof google !== "undefined" && google?.colab?.kernel?.comms
+            console.log(`CommsTransport.retrieveComm: colab for ${target_id}: ${isColab}`)
             if (isColab) {
                 try {
+                    console.log(`CommsTransport.retrieveComm: opening colab channel for ${target_id}`)
                     const channel = await google.colab.kernel.comms.open(target_id, {})
                     if (channel) {
                         // Wrap the native Colab channel to match the JupyterLab IComm interface

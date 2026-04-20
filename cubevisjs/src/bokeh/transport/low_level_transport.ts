@@ -431,9 +431,8 @@ export class CommsTransport implements TransportBase {
 
                     const channel = await google.colab.kernel.comms.open(target_id, {})
                     if (channel) {
-                    
-                        const messages = channel.messages  // capture ONCE before any logging
-                  
+                        const messages = channel.messages  // capture before anything else
+
                         const colabComm: any = {
                             send: (data: any) => channel.send(data),
                             onMsg: null as any,
@@ -442,20 +441,29 @@ export class CommsTransport implements TransportBase {
 
                         console.log(`<1> CommsTransport.retrieveComm: created Colab comm for ${target_id}`)
 
-                        // Pump incoming messages to onMsg
-                        ;(async () => {
-                            for await (const message of messages) {  // use captured iterator
-                                console.log( `CommsTransport pump: received message for ${target_id}`, 
-                                             typeof message.data, Object.keys(message.data || {}) )
-                                if (typeof colabComm.onMsg === "function") {
-                                    colabComm.onMsg({ content: { data: message.data ?? {} } })
+                        // Named function — not an IIFE — to survive minification
+                        const pumpMessages = async () => {
+                            console.log(`CommsTransport pump: starting for ${target_id}`)
+                            try {
+                                for await (const message of messages) {
+                                    console.log(`CommsTransport pump: got message for ${target_id}`)
+                                    if (typeof colabComm.onMsg === "function") {
+                                        colabComm.onMsg({ content: { data: message.data ?? {} } })
+                                    }
                                 }
+                            } catch(e) {
+                                console.error(`CommsTransport pump: error for ${target_id}`, String(e))
                             }
                             console.log(`CommsTransport pump: iterator exhausted for ${target_id}`)
                             if (typeof colabComm.onClose === "function") {
                                 colabComm.onClose({})
                             }
-                        })()
+                        }
+
+                        // Explicitly void the promise so it runs detached
+                        void pumpMessages()
+
+                        console.log(`<2> CommsTransport.retrieveComm: pump started for ${target_id}`)
                         return colabComm
                     }
                 } catch(e) {

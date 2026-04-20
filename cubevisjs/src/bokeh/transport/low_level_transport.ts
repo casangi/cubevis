@@ -410,70 +410,70 @@ export class CommsTransport implements TransportBase {
      */
     private async retrieveComm(): Promise<any> {
         const target_id = this.comm_mgr.comm_mgr_id
-        const comm = window["cubevis_" + target_id]?.comm
+        const cachedComm = window["cubevis_" + target_id]?.comm
 
-        console.log(`CommsTransport.retrieveComm: starting for ${target_id}`, comm)
-        if ( comm ) {
-            console.log(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`, comm)
+        console.log(`CommsTransport.retrieveComm: starting for ${target_id}`, cachedComm)
+        if ( cachedComm ) {
+            console.log(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`, cachedComm)
             const el = window["cubevis_" + target_id].dbg_el;
             if ( el ) {
                 el.insertAdjacentHTML( 'beforeend',
                                        `<div style="padding:5px;background:#ccf">` +
                                          `✅ Comm Retrieved (${target_id})</div>` )
             }
-            return comm
-        } else {
-            const isColab = typeof google !== "undefined" && google?.colab?.kernel?.comms
-            console.log(`CommsTransport.retrieveComm: colab for ${target_id}: ${isColab}`)
-            if (isColab) {
-                try {
-                    console.log(`CommsTransport.retrieveComm: opening colab channel for ${target_id}`)
+            return cachedComm
+        }
 
-                    const channel = await google.colab.kernel.comms.open(target_id, {})
-                    if (channel) {
-                        const messages = channel.messages  // capture before anything else
+        const isColab = typeof google !== "undefined" && google?.colab?.kernel?.comms
+        console.log(`CommsTransport.retrieveComm: colab for ${target_id}: ${isColab}`)
+        if (isColab) {
+            try {
+                console.log(`CommsTransport.retrieveComm: opening colab channel for ${target_id}`)
 
-                        const colabComm: any = {
-                            send: (data: any) => channel.send(data),
-                            onMsg: null as any,
-                            onClose: null as any,
-                        }
-
-                        console.log(`<1> CommsTransport.retrieveComm: created Colab comm for ${target_id}`)
-
-                        // Named function — not an IIFE — to survive minification
-                        const pumpMessages = async () => {
-                            console.log(`CommsTransport pump: starting for ${target_id}`)
-                            try {
-                                for await (const message of messages) {
-                                    console.log(`CommsTransport pump: got message for ${target_id}`)
-                                    if (typeof colabComm.onMsg === "function") {
-                                        colabComm.onMsg({ content: { data: message.data ?? {} } })
-                                    }
-                                }
-                            } catch(e) {
-                                console.error(`CommsTransport pump: error for ${target_id}`, String(e))
-                            }
-                            console.log(`CommsTransport pump: iterator exhausted for ${target_id}`)
-                            if (typeof colabComm.onClose === "function") {
-                                colabComm.onClose({})
-                            }
-                        }
-
-                        // Explicitly void the promise so it runs detached
-                        void pumpMessages()
-
-                        console.log(`<2> CommsTransport.retrieveComm: pump started for ${target_id}`)
-                        return colabComm
-                    }
-                } catch(e) {
-                    console.log(`CommsTransport.retrieveComm: Colab comm creation failed`, e)
-                    return null
+                // 1. Open the channel. In Colab, this triggers the Python _on_comm_open
+                const channel = await google.colab.kernel.comms.open(target_id, {})
+              
+                const colabComm: any = {
+                    // When Python sends data, Colab provides it as message.data
+                    // We wrap it so your existing JS logic sees { content: { data: ... } }
+                    send: (data: any) => channel.send(data),
+                    on_msg: (callback: Function) => { colabComm.onMsg = callback },
+                    on_close: (callback: Function) => { colabComm.onClose = callback },
+                    onMsg: null as any,
+                    onClose: null as any,
+                    close: () => channel.close()
                 }
+
+                console.log(`<1> CommsTransport.retrieveComm: created colabComm for ${target_id}`)
+
+                // 2. Pump incoming messages to onMsg
+               ;(async () => {
+                    try {
+                        // channel.messages is an async iterator of {data: any, buffers: any[]}
+                        for await (const message of channel.messages) {
+                            console.log( `CommsTransport pump: received message for ${target_id}`, message )
+                            if (typeof colabComm.onMsg === "function") {
+                                // MATCH JUPYTER STRUCTURE: your JS handlers likely expect this
+                                colabComm.onMsg({
+                                    content: { data: message.data },
+                                    buffers: message.buffers || []
+                                })
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Colab Comm stream error:", e)
+                    } finally {
+                        if (typeof colabComm.onClose === "function") colabComm.onClose({})
+                    }
+                })( )
+
+                console.log(`<1> CommsTransport.retrieveComm: returning colabComm for ${target_id}`)
+                return colabComm
+            } catch (e) {
+                console.error("Failed to open Colab Comm:", e)
             }
         }
-        console.log(`CommsTransport.retrieveComm: Colab comm creation failed, no viable path`)
-        return null
+        return null;
     }
 
     // --------------------------------------------------------------------------

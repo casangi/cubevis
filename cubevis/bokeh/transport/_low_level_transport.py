@@ -732,6 +732,10 @@ class CommsTransport(TransportBase):
         self._callback = wrapper
 
     async def send_message(self, message: Dict[str, Any]) -> None:
+        from pathlib import Path
+        file_path = Path.home() / "debug.txt"
+        with open(file_path, "a") as f:
+            f.write(f"<<send_message>> sending to {len(self._comm_objs)} comms: {str(message)[:100]}\n")
         from ...utils import serialize
         if not self._connected:
             raise RuntimeError("CommsTransport: not connected")
@@ -750,7 +754,11 @@ class CommsTransport(TransportBase):
             for c in list(colab_comms):
                 try:
                     c.send(envelope)
+                    with open(file_path, "a", encoding="utf-8") as f:
+                        f.write(f"<<send_message>> sent OK\n")
                 except Exception as e:
+                    with open(file_path, "a") as f:
+                        f.write(f"<<send_message>> FAILED: {e}\n")
                     logger.warning(f"CommsTransport.send_message: comm send failed: {e}")
         else:
             raise RuntimeError("CommsTransport: not connected (no comm available)")

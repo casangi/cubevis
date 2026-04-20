@@ -445,10 +445,13 @@ export class CommsTransport implements TransportBase {
                         // Pump incoming messages to onMsg
                         ;(async () => {
                             for await (const message of messages) {  // use captured iterator
+                                console.log( `CommsTransport pump: received message for ${target_id}`, 
+                                             typeof message.data, Object.keys(message.data || {}) )
                                 if (typeof colabComm.onMsg === "function") {
                                     colabComm.onMsg({ content: { data: message.data ?? {} } })
                                 }
                             }
+                            console.log(`CommsTransport pump: iterator exhausted for ${target_id}`)
                             if (typeof colabComm.onClose === "function") {
                                 colabComm.onClose({})
                             }

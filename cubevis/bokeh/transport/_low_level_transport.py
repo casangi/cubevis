@@ -410,6 +410,13 @@ class CommsTransport(TransportBase):
 
         def _recv(msg):
             logger.debug(f"{self} CommsTransport._recv: {msg}")
+            from pathlib import Path
+            with open(Path.home() / "debug.txt", "a") as f:
+                f.write(f"<<_recv>> raw msg keys: {list(msg.keys())}\n")
+                content = msg.get("content", {})
+                f.write(f"<<_recv>> content keys: {list(content.keys())}\n")
+                data = content.get("data", {})
+                f.write(f"<<_recv>> data type: {type(data).__name__}, value: {str(data)[:200]}\n")
 
             data = msg.get("content", {}).get("data", {})
 

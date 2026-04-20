@@ -362,7 +362,7 @@ export class CommsTransport implements TransportBase {
             console.log(`Jupyter comm opened: ${this.targetName}`)
 
             // Send explicit handshake so the backend knows we're ready
-            this.comm.send({
+            const envelope = {
                 type: 'cubevis_message',
                 comm_mgr_id: this.comm_mgr.comm_mgr_id,
                 data: serialize({
@@ -370,7 +370,10 @@ export class CommsTransport implements TransportBase {
                     comm_mgr_id: this.comm_mgr.comm_mgr_id,
                     frontend_ready: true
                 })
-            })
+            }
+
+            console.log(`CommsTransport.connect: sending handshake type=${envelope.type} comm_mgr_id=${envelope.comm_mgr_id}`)
+            this.comm.send(envelope)
 
         } catch (e) {
             console.error("Error initializing Comms:", e)

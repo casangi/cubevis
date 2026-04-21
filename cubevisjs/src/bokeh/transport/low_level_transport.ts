@@ -430,42 +430,50 @@ export class CommsTransport implements TransportBase {
             try {
                 console.log(`CommsTransport.retrieveComm: opening colab channel for ${target_id}`)
 
-                // 1. Open the channel. In Colab, this triggers the Python _on_comm_open
-                const channel = await google.colab.kernel.comms.open(target_id, {})
-              
+                // 1. Create the object structure BEFORE opening the channel
                 const colabComm: any = {
-                    // When Python sends data, Colab provides it as message.data
-                    // We wrap it so your existing JS logic sees { content: { data: ... } }
-                    send: (data: any) => channel.send(data),
-                    on_msg: (callback: Function) => { colabComm.onMsg = callback },
-                    on_close: (callback: Function) => { colabComm.onClose = callback },
+                    send: (data: any) => {
+                        // Safety check if channel isn't ready yet, though open is awaited
+                        if (colabComm._channel) colabComm._channel.send(data)
+                    },
+                    on_msg: (callback: Function) => { colabComm.onMsg = callback; },
+                    on_close: (callback: Function) => { colabComm.onClose = callback; },
                     onMsg: null as any,
                     onClose: null as any,
-                    close: () => channel.close()
+                    close: () => colabComm._channel?.close(),
+                    _channel: null as any
                 }
 
-                console.log(`<1> CommsTransport.retrieveComm: created colabComm for ${target_id}`)
-
-                // 2. Pump incoming messages to onMsg
-               ;(async () => {
+                // 2. Define the pump logic in a reusable way
+                const startPump = async (channel: any) => {
+                    colabComm._channel = channel
                     try {
-                        // channel.messages is an async iterator of {data: any, buffers: any[]}
                         for await (const message of channel.messages) {
-                            console.log( `CommsTransport pump: received message for ${target_id}`, message )
+                            console.log(`CommsTransport pump: message for ${target_id}`, message.data)
                             if (typeof colabComm.onMsg === "function") {
-                                // MATCH JUPYTER STRUCTURE: your JS handlers likely expect this
                                 colabComm.onMsg({
                                     content: { data: message.data },
                                     buffers: message.buffers || []
-                                })
+                                });
                             }
                         }
-                    } catch (e) {
-                        console.error("Colab Comm stream error:", e)
                     } finally {
                         if (typeof colabComm.onClose === "function") colabComm.onClose({})
                     }
-                })( )
+                }
+
+                // 3. IMPORTANT: Register target BEFORE opening.
+                // This catches messages if the kernel responds instantly to the open request.
+              google.colab.kernel.comms.registerTarget(target_id, (channel: any) => {
+                    console.log("CommsTransport: Handled via registerTarget")
+                    startPump(channel)
+                })
+
+                // 4. Open the channel. In Colab, this triggers the Python _on_comm_open
+                const channel = await google.colab.kernel.comms.open(target_id, {})
+
+                // Start pumping immediately
+                startPump(channel)
 
                 console.log(`<1> CommsTransport.retrieveComm: returning colabComm for ${target_id}`)
                 return colabComm

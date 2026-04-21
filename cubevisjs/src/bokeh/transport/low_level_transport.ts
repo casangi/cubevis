@@ -428,7 +428,7 @@ export class CommsTransport implements TransportBase {
         console.log(`CommsTransport.retrieveComm: colab for ${target_id}: ${isColab}`)
         if (isColab) {
             try {
-                console.log(`CommsTransport.retrieveComm: opening colab channel for ${target_id}`)
+                console.log(`CommsTransport.retrieveComm: connecting colab channel for ${target_id}`)
 
                 // 1. Create the object structure BEFORE opening the channel
                 const colabComm: any = {
@@ -441,15 +441,23 @@ export class CommsTransport implements TransportBase {
                     onMsg: null as any,
                     onClose: null as any,
                     close: () => colabComm._channel?.close(),
-                    _channel: null as any
+                    _channel: null as any,
+                    _pumpStarted: false
                 }
 
                 // 2. Define the pump logic in a reusable way
                 const startPump = async (channel: any) => {
+                    if (colabComm._pumpStarted) {
+                        console.log(`CommsTransport pump already started for ${target_id}`)
+                        return; // Prevent double-draining the stream
+                    }
+                    console.log(`CommsTransport pump starting for ${target_id}`)
+                    colabComm._pumpStarted = true
                     colabComm._channel = channel
+
                     try {
                         for await (const message of channel.messages) {
-                            console.log(`CommsTransport pump: message for ${target_id}`, message.data)
+                            console.log(`CommsTransport pump: message for ${target_id}`, message)
                             if (typeof colabComm.onMsg === "function") {
                                 colabComm.onMsg({
                                     content: { data: message.data },

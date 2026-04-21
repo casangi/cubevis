@@ -432,17 +432,18 @@ export class CommsTransport implements TransportBase {
 
                 // 1. Create the object structure BEFORE opening the channel
                 const colabComm: any = {
+                    _channel: null as any,
+                    _pumpStarted: false,
+                    onMsg: null as any,
+                    onClose: null as any,
+                    // Standard Jupyter API methods
                     send: (data: any) => {
-                        // Safety check if channel isn't ready yet, though open is awaited
-                        if (colabComm._channel) colabComm._channel.send(data)
+                        if (colabComm._channel) colabComm._channel.send(data);
+                        else console.warn("CommsTransport: send() called before channel ready");
                     },
                     on_msg: (callback: Function) => { colabComm.onMsg = callback; },
                     on_close: (callback: Function) => { colabComm.onClose = callback; },
-                    onMsg: null as any,
-                    onClose: null as any,
-                    close: () => colabComm._channel?.close(),
-                    _channel: null as any,
-                    _pumpStarted: false
+                    close: () => colabComm._channel?.close()
                 }
 
                 // 2. Define the pump logic in a reusable way
@@ -456,14 +457,8 @@ export class CommsTransport implements TransportBase {
                     colabComm._channel = channel
 
                     try {
-                        // Use the messages property directly
-                        const messageStream = channel.messages;
-                        while (true) {
-                            const {value: message, done} = await messageStream.next();
-                            if (done) break;
-
-                            console.log("%cJS Received Message:", "color: green; font-weight: bold", message);
-
+                        for await (const message of channel.messages) {
+                            console.log("%cJS Received:", "color: #00ff00", message.data)
                             if (typeof colabComm.onMsg === "function") {
                                 colabComm.onMsg({
                                     content: { data: message.data },
@@ -474,6 +469,7 @@ export class CommsTransport implements TransportBase {
                     } catch (e) {
                         console.error("Pump error:", e);
                     } finally {
+                        console.log("CommsTransport: pump closed")
                         if (typeof colabComm.onClose === "function") colabComm.onClose({})
                     }
                 }

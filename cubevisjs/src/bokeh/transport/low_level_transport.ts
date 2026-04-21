@@ -427,72 +427,67 @@ export class CommsTransport implements TransportBase {
         const isColab = typeof google !== "undefined" && google?.colab?.kernel?.comms
         console.log(`CommsTransport.retrieveComm: colab for ${target_id}: ${isColab}`)
         if (isColab) {
-            try {
-                console.log(`CommsTransport.retrieveComm: connecting colab channel for ${target_id}`)
-
-                // 1. Create the object structure BEFORE opening the channel
-                const colabComm: any = {
-                    _channel: null as any,
-                    _pumpStarted: false,
-                    onMsg: null as any,
-                    onClose: null as any,
-                    // Standard Jupyter API methods
-                    send: (data: any) => {
-                        if (colabComm._channel) colabComm._channel.send(data);
-                        else console.warn("CommsTransport: send() called before channel ready");
-                    },
-                    on_msg: (callback: Function) => { colabComm.onMsg = callback; },
-                    on_close: (callback: Function) => { colabComm.onClose = callback; },
-                    close: () => colabComm._channel?.close()
-                }
-
-                // 2. Define the pump logic in a reusable way
-                const startPump = async (channel: any) => {
-                    if (colabComm._pumpStarted) {
-                        console.log(`CommsTransport pump already started for ${target_id}`)
-                        return; // Prevent double-draining the stream
-                    }
-                    console.log(`CommsTransport pump starting for ${target_id}`)
-                    colabComm._pumpStarted = true
-                    colabComm._channel = channel
-
-                    try {
-                        for await (const message of channel.messages) {
-                            console.log("%cJS Received:", "color: #00ff00", message.data)
-                            if (typeof colabComm.onMsg === "function") {
-                                colabComm.onMsg({
-                                    content: { data: message.data },
-                                    buffers: message.buffers || []
-                                });
-                            }
-                        }
-                    } catch (e) {
-                        console.error("Pump error:", e);
-                    } finally {
-                        console.log("CommsTransport: pump closed")
-                        if (typeof colabComm.onClose === "function") colabComm.onClose({})
-                    }
-                }
-
-                // 3. IMPORTANT: Register target BEFORE opening.
-                // This catches messages if the kernel responds instantly to the open request.
-                google.colab.kernel.comms.registerTarget(target_id, (channel: any) => {
-                    console.log("CommsTransport: Handled via registerTarget")
-                    startPump(channel)
-                })
-
-                // 4. Open the channel. In Colab, this triggers the Python _on_comm_open
-                const channel = await google.colab.kernel.comms.open(target_id, {})
-
-                // Start pumping immediately
-                startPump(channel)
-
-                console.log(`<1> CommsTransport.retrieveComm: returning colabComm for ${target_id}`)
-                return colabComm
-            } catch (e) {
-                console.error("Failed to open Colab Comm:", e)
+            // 1. Create the object structure BEFORE opening the channel
+            const colabComm: any = {
+                _channel: null as any,
+                _pumpStarted: false,
+                onMsg: null as any,
+                onClose: null as any,
+                // Standard Jupyter API methods
+                send: (data: any) => {
+                    if (colabComm._channel) colabComm._channel.send(data);
+                    else console.warn("CommsTransport: send() called before channel ready");
+                },
+                on_msg: (callback: Function) => { colabComm.onMsg = callback; },
+                on_close: (callback: Function) => { colabComm.onClose = callback; },
+                close: () => colabComm._channel?.close()
             }
+
+            // 2. Define the pump logic in a reusable way
+            const startPump = async (channel: any) => {
+                if ( colabComm._pumpStarted || ! channel ) {
+                    console.log(`CommsTransport pump already started for ${target_id}`)
+                    return; // Prevent double-draining the stream
+                }
+
+                console.log(`%c[Colab] Connected: ${channel.comm_id}`, "color: #4285f4; font-weight: bold")
+
+                colabComm._pumpStarted = true
+                colabComm._channel = channel
+
+                try {
+                    for await (const message of channel.messages) {
+                        console.log("%c[Colab] Inbound Data:", "color: #34a853", message.data);
+                        if (typeof colabComm.onMsg === "function") {
+                            colabComm.onMsg({
+                                content: { data: message.data },
+                                buffers: message.buffers || []
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.error("Pump error:", e);
+                } finally {
+                    console.log("CommsTransport: pump closed")
+                    if (typeof colabComm.onClose === "function") colabComm.onClose({})
+                }
+            }
+
+            // 3. RACE PREVENTION: Listen for the kernel's response BEFORE triggering it
+            // Some Colab environments prefer registerTarget for cross-cell comms
+            google.colab.kernel.comms.registerTarget(target_id, (channel: any) => {
+                console.log("CommsTransport: Channel caught via registerTarget");
+                startPump(channel);
+            });
+
+            // 4. Trigger Python's _on_comm_open
+            // We don't 'await' the open() here so we can return the object immediately 
+            // for the 'on_msg' handler to be attached by the caller.
+            google.colab.kernel.comms.open(target_id, {}).then(startPump);
+
+            return colabComm;
         }
+
         return null;
     }
 

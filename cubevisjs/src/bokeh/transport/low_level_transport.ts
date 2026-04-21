@@ -456,8 +456,14 @@ export class CommsTransport implements TransportBase {
                     colabComm._channel = channel
 
                     try {
-                        for await (const message of channel.messages) {
-                            console.log(`CommsTransport pump: message for ${target_id}`, message)
+                        // Use the messages property directly
+                        const messageStream = channel.messages;
+                        while (true) {
+                            const {value: message, done} = await messageStream.next();
+                            if (done) break;
+
+                            console.log("%cJS Received Message:", "color: green; font-weight: bold", message);
+
                             if (typeof colabComm.onMsg === "function") {
                                 colabComm.onMsg({
                                     content: { data: message.data },
@@ -465,6 +471,8 @@ export class CommsTransport implements TransportBase {
                                 });
                             }
                         }
+                    } catch (e) {
+                        console.error("Pump error:", e);
                     } finally {
                         if (typeof colabComm.onClose === "function") colabComm.onClose({})
                     }
@@ -472,7 +480,7 @@ export class CommsTransport implements TransportBase {
 
                 // 3. IMPORTANT: Register target BEFORE opening.
                 // This catches messages if the kernel responds instantly to the open request.
-              google.colab.kernel.comms.registerTarget(target_id, (channel: any) => {
+                google.colab.kernel.comms.registerTarget(target_id, (channel: any) => {
                     console.log("CommsTransport: Handled via registerTarget")
                     startPump(channel)
                 })

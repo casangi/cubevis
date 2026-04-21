@@ -428,55 +428,57 @@ export class CommsTransport implements TransportBase {
         console.log(`CommsTransport.retrieveComm: colab for ${target_id}: ${isColab}`)
         if (isColab) {
 
-            try {
-                console.log(`[Colab] Initiating handshake for ${target_id}...`)
+            console.log(`[Colab] Creating Proxy for ${target_id}`)
 
-                // 1. AWAIT the channel - this triggers the Python _on_comm_open 
-                // and allows self._conn_event.set() to fire in Python connect()
-                const channel = await google.colab.kernel.comms.open(target_id, {})
-
-                // 2. Build the wrapper
-                const colabComm: any = {
-                    _channel: channel,
-                    onMsg: null as any,
-                    onClose: null as any,
-                    // Standard Jupyter API methods
-                    send: (data: any) => channel.send(data),
-                    on_msg: (cb: Function) => { colabComm.onMsg = cb },
-                    on_close: (cb: Function) => { colabComm.onClose = cb },
-                    close: () => channel.close()
-                }
-
-                // 3. Start the Pump (Async)
-               ;(async () => {
-                    console.log(`%c[Colab] Pump Active: ${channel.comm_id}`, "color: #4285f4; font-weight: bold")
-                    try {
-                        for await (const message of channel.messages) {
-                            console.log("%c[Colab] Inbound:", "color: #34a853", message.data)
-                            if (typeof colabComm.onMsg === "function") {
-                                colabComm.onMsg({
-                                    content: { data: message.data },
-                                    buffers: message.buffers || []
-                                })
-                            }
-                        }
-                    } catch (e) {
-                        console.error("Pump error:", e)
-                    } finally {
-                        console.log("CommsTransport: pump closed")
-                        if (typeof colabComm.onClose === "function") colabComm.onClose({})
+            // 1. Create the proxy object.
+            // This is returned IMMEDIATELY to the caller.
+            const colabComm: any = {
+                _channel: null as any,
+                _pumpStarted: false,
+                onMsg: null as any,
+                onClose: null as any,
+                // Standard Jupyter API methods
+                send: (data: any) => {
+                    if (colabComm._channel) {
+                        colabComm._channel.send(data)
+                    } else {
+                        // Buffer/Retry logic: if channel isn't ready, wait a bit
+                        console.warn("[Colab] Channel not ready, retrying send in 100ms...")
+                        setTimeout(() => colabComm.send(data), 100)
                     }
-                })( )
-
-                return colabComm
-
-            } catch (e) {
-                console.error("[Colab] retrieveComm failed:", e)
-                return null
+                },
+                on_msg: (cb: Function) => { colabComm.onMsg = cb },
+                on_close: (cb: Function) => { colabComm.onClose = cb },
+                close: () => colabComm._channel?.close()
             }
+
+            // 2. Open the channel in the background (Non-blocking)
+           ;(async () => {
+                try {
+                    console.log(`[Colab] Opening Background Channel...`)
+                    const channel = await google.colab.kernel.comms.open(target_id, {})
+                    colabComm._channel = channel
+
+                    console.log(`%c[Colab] Pump Active: ${channel.comm_id}`, "color: #4285f4; font-weight: bold")
+
+                    for await (const message of channel.messages) {
+                        console.log("%c[Colab] Inbound:", "color: #34a853", message.data)
+                        if (typeof colabComm.onMsg === "function") {
+                            colabComm.onMsg({
+                                content: { data: message.data },
+                                buffers: message.buffers || []
+                            })
+                        }
+                    }
+                } catch (e) {
+                    console.error("[Colab] Background Connection Failed:", e)
+                }
+            })( )
+
+            // 3. RETURN IMMEDIATELY
+           return colabComm
         }
 
-        console.error("retrieveComm failed, no cached channel is available and this is not Colab")
         return null
     }
 

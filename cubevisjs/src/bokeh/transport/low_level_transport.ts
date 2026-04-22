@@ -425,7 +425,7 @@ export class CommsTransport implements TransportBase {
         }
 
         const isColab = typeof google !== "undefined" && google?.colab?.kernel?.comms
-        console.log(`CommsTransport.retrieveComm: colab for ${target_id}: ${isColab}`)
+        console.log(`CommsTransport.retrieveComm: colab for ${target_id}:`,  isColab )
         if (isColab) {
 
             console.log(`[Colab] Creating Proxy for ${target_id}`)
@@ -459,7 +459,9 @@ export class CommsTransport implements TransportBase {
                     const channel = await google.colab.kernel.comms.open(target_id, {})
                     colabComm._channel = channel
 
-                    console.log(`%c[Colab] Pump Active: ${channel.comm_id}`, "color: #4285f4; font-weight: bold")
+                    console.group("%c[Colab] Pump Active", "color: #4285f4; font-weight: bold")
+                    console.dir(channel)
+                    console.groupEnd( )
 
                     for await (const message of channel.messages) {
                         console.log("%c[Colab] Inbound:", "color: #34a853", message.data)

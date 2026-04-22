@@ -452,33 +452,41 @@ export class CommsTransport implements TransportBase {
                 close: () => colabComm._channel?.close()
             }
 
-            // 2. Open the channel in the background (Non-blocking)
-           ;(async () => {
+            // This function encapsulates the message loop
+            const startPumping = async (channel: any) => {
+                if (colabComm._channel) return; // Prevent double-pump
+                colabComm._channel = channel;
+                console.log(`%c[Colab] Pump Starting for ${typeof channel}`, "color: #4285f4; font-weight: bold");
+
                 try {
-                    console.log(`[Colab] Opening Background Channel...`)
-                    const channel = await google.colab.kernel.comms.open(target_id, {})
-                    colabComm._channel = channel
-
-                    console.log(`%c[Colab] Pump Active: ${typeof channel}`, "color: #4285f4; font-weight: bold")
-
+                    // consuming the messages as an AsyncIterable
                     for await (const message of channel.messages) {
-                        console.log("%c[Colab] Inbound:", "color: #34a853", message.data)
-                        if (typeof colabComm.onMsg === "function") {
+                        console.log("%c[Colab] Inbound:", "color: #34a853", message.data);
+                        if (colabComm.onMsg) {
                             colabComm.onMsg({
                                 content: { data: message.data },
                                 buffers: message.buffers || []
-                            })
-                        } else {
-                            console.error('[Colab] Error no onMsg function is available')
+                            });
                         }
                     }
                 } catch (e) {
-                    console.error("[Colab] Background Connection Failed:", e)
+                    console.error("[Colab] Pump loop failed:", e);
                 }
-            })( )
+            }
 
-            // 3. RETURN IMMEDIATELY
-           return colabComm
+            // 1. Pre-emptively register to catch the Kernel's first response
+            google.colab.kernel.comms.registerTarget(target_id, (channel: any) => {
+                console.log("CommsTransport: Caught via registerTarget");
+                startPumping(channel);
+            });
+
+            // 2. Open the channel in the background
+            google.colab.kernel.comms.open(target_id, {}).then((channel: any) => {
+                console.log("CommsTransport: Caught via .open().then()");
+                startPumping(channel);
+            });
+
+            return colabComm;
         }
 
         return null

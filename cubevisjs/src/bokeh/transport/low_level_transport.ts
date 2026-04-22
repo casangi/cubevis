@@ -442,9 +442,8 @@ export class CommsTransport implements TransportBase {
                     if (colabComm._channel) {
                         colabComm._channel.send(data)
                     } else {
-                        // Buffer/Retry logic: if channel isn't ready, wait a bit
-                        console.warn("[Colab] Channel not ready, retrying send in 100ms...")
-                        setTimeout(() => colabComm.send(data), 100)
+                        // Should not happen — channel is awaited before returning
+                        console.error("[Colab] send() called before channel was ready")
                     }
                 },
                 on_msg: (cb: Function) => { colabComm.onMsg = cb },
@@ -452,44 +451,49 @@ export class CommsTransport implements TransportBase {
                 close: () => colabComm._channel?.close()
             }
 
-            // This function encapsulates the message loop
-            const startPumping = async (channel: any) => {
-                if (colabComm._channel === channel) return; // Already pumping this channel
-                if (colabComm._channel) {
-                    console.warn("[Colab] startPumping called with a different channel — replacing");
-                }
-                colabComm._channel = channel;
-                console.log(`%c[Colab] Pump Starting for ${typeof channel}`, "color: #4285f4; font-weight: bold");
-
-                try {
-                    // consuming the messages as an AsyncIterable
-                    for await (const message of channel.messages) {
-                        console.log("%c[Colab] Inbound:", "color: #34a853", message.data);
-                        if (colabComm.onMsg) {
-                            colabComm.onMsg({
-                                content: { data: message.data },
-                                buffers: message.buffers || []
-                            });
-                        }
-                    }
-                } catch (e) {
-                    console.error("[Colab] Pump loop failed:", e);
-                }
-            }
-
-            // Open the channel. comms.open() triggers _on_comm_open on the
-            // Python side (Python has called register_target), giving Python a
-            // comm with _recv wired. The returned channel is our JS->Python and
-            // Python->JS pipe for this iframe.
+            // Open the channel and wait for it to be ready before returning.
+            //
+            // We MUST await the channel here rather than using .then(), because:
+            //   1. connect() calls send() immediately after retrieveComm() returns.
+            //   2. The Colab channel.messages async iterator only yields messages
+            //      received AFTER the for-await loop begins — any messages sent
+            //      by Python before the pump starts are silently dropped.
+            //   3. Therefore the pump must be running before connect() sends the
+            //      handshake, which means the channel must exist before we return.
+            //
             // Note: do NOT call google.colab.kernel.comms.registerTarget() here.
-            // That API is for receiving Python-INITIATED comm opens, which never
-            // happen in this architecture (Python only listens, JS always opens).
-            // Calling registerTarget would shadow Python's registered target and
-            // intercept the very comm_open message Python is waiting for.
-            google.colab.kernel.comms.open(target_id, {}).then((channel: any) => {
-                console.log("CommsTransport: channel opened via .open().then()");
-                startPumping(channel);
-            });
+            // That API fires when Python initiates a comm open. Python never does
+            // this — Python only calls register_target() and waits for JS to open.
+            // Calling registerTarget() here would shadow Python's registered target.
+            try {
+                const channel = await google.colab.kernel.comms.open(target_id, {});
+                console.log("CommsTransport: channel opened, starting pump");
+                colabComm._channel = channel;
+
+                // Start the pump loop BEFORE returning so it is running when
+                // connect() sends the handshake and Python replies.
+                (async () => {
+                    console.log(`%c[Colab] Pump Starting`, "color: #4285f4; font-weight: bold");
+                    try {
+                        for await (const message of channel.messages) {
+                            console.log("%c[Colab] Inbound:", "color: #34a853", message.data);
+                            if (colabComm.onMsg) {
+                                colabComm.onMsg({
+                                    content: { data: message.data },
+                                    buffers: message.buffers || []
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        console.error("[Colab] Pump loop failed:", e);
+                    }
+                    console.log("[Colab] Pump loop ended");
+                })();
+
+            } catch (e) {
+                console.error("[Colab] comms.open() failed:", e);
+                throw e;
+            }
 
             return colabComm;
         }

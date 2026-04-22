@@ -454,7 +454,10 @@ export class CommsTransport implements TransportBase {
 
             // This function encapsulates the message loop
             const startPumping = async (channel: any) => {
-                if (colabComm._channel) return; // Prevent double-pump
+                if (colabComm._channel === channel) return; // Already pumping this channel
+                if (colabComm._channel) {
+                    console.warn("[Colab] startPumping called with a different channel — replacing");
+                }
                 colabComm._channel = channel;
                 console.log(`%c[Colab] Pump Starting for ${typeof channel}`, "color: #4285f4; font-weight: bold");
 
@@ -474,15 +477,17 @@ export class CommsTransport implements TransportBase {
                 }
             }
 
-            // 1. Pre-emptively register to catch the Kernel's first response
-            google.colab.kernel.comms.registerTarget(target_id, (channel: any) => {
-                console.log("CommsTransport: Caught via registerTarget");
-                startPumping(channel);
-            });
-
-            // 2. Open the channel in the background
+            // Open the channel. comms.open() triggers _on_comm_open on the
+            // Python side (Python has called register_target), giving Python a
+            // comm with _recv wired. The returned channel is our JS->Python and
+            // Python->JS pipe for this iframe.
+            // Note: do NOT call google.colab.kernel.comms.registerTarget() here.
+            // That API is for receiving Python-INITIATED comm opens, which never
+            // happen in this architecture (Python only listens, JS always opens).
+            // Calling registerTarget would shadow Python's registered target and
+            // intercept the very comm_open message Python is waiting for.
             google.colab.kernel.comms.open(target_id, {}).then((channel: any) => {
-                console.log("CommsTransport: Caught via .open().then()");
+                console.log("CommsTransport: channel opened via .open().then()");
                 startPumping(channel);
             });
 

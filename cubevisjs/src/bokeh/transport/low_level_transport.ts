@@ -410,86 +410,66 @@ export class CommsTransport implements TransportBase {
      */
     private async retrieveComm(): Promise<any> {
         const target_id = this.comm_mgr.comm_mgr_id
-        const cachedComm = window["cubevis_" + target_id]?.comm
+        if (typeof google === "undefined" || !google?.colab?.kernel?.comms) return null
 
-        console.log(`CommsTransport.retrieveComm: starting for ${target_id}`, cachedComm)
-        if ( cachedComm ) {
-            console.log(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`, cachedComm)
-            const el = window["cubevis_" + target_id].dbg_el
-            if ( el ) {
-                el.insertAdjacentHTML( 'beforeend',
-                                       `<div style="padding:5px;background:#ccf">` +
-                                         `✅ Comm Retrieved (${target_id})</div>` )
-            }
-            return cachedComm
+        console.log(`[Colab] Creating Event-Based Proxy for ${target_id}`)
+
+        const colabComm: any = {
+            _channel: null as any,
+            onMsg: null as any,
+            onClose: null as any,
+            send: (data: any) => {
+                if (colabComm._channel) {
+                    colabComm._channel.send(data)
+                } else {
+                    console.warn("[Colab] Channel not ready, retrying...")
+                    setTimeout(() => colabComm.send(data), 100)
+                }
+            },
+            on_msg: (cb: Function) => { colabComm.onMsg = cb },
+            on_close: (cb: Function) => { colabComm.onClose = cb },
+            close: () => colabComm._channel?.close()
         }
 
-        const isColab = typeof google !== "undefined" && google?.colab?.kernel?.comms
-        console.log(`CommsTransport.retrieveComm: colab for ${target_id}:`,  isColab )
-        if (isColab) {
+        // This handles the connection and starts listening immediately
+        const connectAndListen = async (channel: any) => {
+            if (colabComm._channel) return
+            colabComm._channel = channel
 
-            console.log(`[Colab] Creating Proxy for ${target_id}`)
+            console.log(`%c[Colab] Connected: ${channel.comm_id}`, "color: #4285f4; font-weight: bold")
 
-            // 1. Create the proxy object.
-            // This is returned IMMEDIATELY to the caller.
-            const colabComm: any = {
-                _channel: null as any,
-                _pumpStarted: false,
-                onMsg: null as any,
-                onClose: null as any,
-                // Standard Jupyter API methods
-                send: (data: any) => {
-                    if (colabComm._channel) {
-                        colabComm._channel.send(data)
-                    } else {
-                        // Buffer/Retry logic: if channel isn't ready, wait a bit
-                        console.warn("[Colab] Channel not ready, retrying send in 100ms...")
-                        setTimeout(() => colabComm.send(data), 100)
-                    }
-                },
-                on_msg: (cb: Function) => { colabComm.onMsg = cb },
-                on_close: (cb: Function) => { colabComm.onClose = cb },
-                close: () => colabComm._channel?.close()
-            }
+            // Use a manual loop that starts the very instant we get the channel
+            const messageIterator = channel.messages[Symbol.asyncIterator]()
 
-            // This function encapsulates the message loop
-            const startPumping = async (channel: any) => {
-                if (colabComm._channel) return; // Prevent double-pump
-                colabComm._channel = channel;
-                console.log(`%c[Colab] Pump Starting for ${typeof channel}`, "color: #4285f4; font-weight: bold");
-
+            const pump = async () => {
                 try {
-                    // consuming the messages as an AsyncIterable
-                    for await (const message of channel.messages) {
-                        console.log("%c[Colab] Inbound:", "color: #34a853", message.data);
+                    while (true) {
+                        const { value: message, done } = await messageIterator.next()
+                        if (done) break
+
+                        console.log("%c[Colab] Inbound:", "color: #34a853", message.data)
                         if (colabComm.onMsg) {
                             colabComm.onMsg({
                                 content: { data: message.data },
                                 buffers: message.buffers || []
-                            });
+                            })
                         }
                     }
                 } catch (e) {
-                    console.error("[Colab] Pump loop failed:", e);
+                    console.error("[Colab] Manual Pump Error:", e)
                 }
             }
 
-            // 1. Pre-emptively register to catch the Kernel's first response
-            google.colab.kernel.comms.registerTarget(target_id, (channel: any) => {
-                console.log("CommsTransport: Caught via registerTarget");
-                startPumping(channel);
-            });
-
-            // 2. Open the channel in the background
-            google.colab.kernel.comms.open(target_id, {}).then((channel: any) => {
-                console.log("CommsTransport: Caught via .open().then()");
-                startPumping(channel);
-            });
-
-            return colabComm;
+            pump() // Start the background loop immediately
         }
 
-        return null
+        // Register listeners BEFORE opening the channel
+        google.colab.kernel.comms.registerTarget(target_id, connectAndListen)
+
+        // Trigger the kernel connection
+        google.colab.kernel.comms.open(target_id, {}).then(connectAndListen)
+
+        return colabComm
     }
 
     // --------------------------------------------------------------------------

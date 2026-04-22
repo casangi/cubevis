@@ -459,9 +459,7 @@ export class CommsTransport implements TransportBase {
                     const channel = await google.colab.kernel.comms.open(target_id, {})
                     colabComm._channel = channel
 
-                    console.group("%c[Colab] Pump Active", "color: #4285f4; font-weight: bold")
-                    console.dir(channel)
-                    console.groupEnd( )
+                    console.log(`%c[Colab] Pump Active: ${typeof channel}`, "color: #4285f4; font-weight: bold")
 
                     for await (const message of channel.messages) {
                         console.log("%c[Colab] Inbound:", "color: #34a853", message.data)
@@ -470,6 +468,8 @@ export class CommsTransport implements TransportBase {
                                 content: { data: message.data },
                                 buffers: message.buffers || []
                             })
+                        } else {
+                            console.error('[Colab] Error no onMsg function is available')
                         }
                     }
                 } catch (e) {

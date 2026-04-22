@@ -755,7 +755,7 @@ class CommsTransport(TransportBase):
                 try:
                     c.send(envelope)
                     with open(file_path, "a", encoding="utf-8") as f:
-                        f.write(f"<<send_message>> sent OK\n")
+                        f.write(f"<<send_message>> sent OK: {envelope}\n")
                 except Exception as e:
                     with open(file_path, "a") as f:
                         f.write(f"<<send_message>> FAILED: {e}\n")

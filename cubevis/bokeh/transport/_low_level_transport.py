@@ -392,11 +392,24 @@ class CommsTransport(TransportBase):
         """
         logger.debug(f"CommsTransport._on_comm_open: comm opened for {self._comm_mgr_id}")
 
-        # Track all open comms for Python->JS broadcast (Colab needs this
+        # <<1ST-TRY>> Track all open comms for Python->JS broadcast (Colab needs this
         # because each iframe opener is a separate channel)
-        if not hasattr(self, '_comm_objs'):
-            self._comm_objs = []
-        self._comm_objs.append(comm)
+        # if not hasattr(self, '_comm_objs'):
+        #     self._comm_objs = []
+        #
+        # self._comm_objs.append(comm)
+
+        # <<2ND-TRY>> If we already have comms, the old ones are likely from dead iframes
+        # In Colab, we usually only care about the LATEST one to open.
+        if hasattr(self, '_comm_objs') and len(self._comm_objs) > 0:
+            logger.debug("Closing previous comm objects to avoid duplicity")
+            for old_comm in self._comm_objs:
+                try:
+                    old_comm.close()
+                except:
+                    pass
+        self._comm_objs = [comm] # Only keep the fresh one
+        self._comm = comm        # Update the primary pointer
 
         def _invoke_callback(msg):
             if self._callback:

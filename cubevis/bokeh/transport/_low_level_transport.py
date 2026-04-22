@@ -377,29 +377,38 @@ class CommsTransport(TransportBase):
     # ------------------------------------------------------------------
     def _on_comm_open(self, comm, msg):
         """
-        Called each time any JS context opens a comm to our target_name.
+        Called by the kernel when JS opens a comm to one of our registered targets.
 
-        On JupyterLab: called once, from the widget's render() function.
-        On Colab: called once per iframe that calls comms.open(targetId).
-          - First call: the widget render() in the bridge iframe.
-          - Subsequent calls: any %%javascript cell or app iframe that
-            independently opens a channel to communicate with Python.
-            Each gets its own comm and its own _recv wired up, so messages
-            from all of them reach the Python callback.
-            The LAST opener's comm is stored as self._comm for Python->JS
-            sends (send_message). On Colab, Python->JS is sent to ALL open
-            comms via _comm_objs so every listener receives it.
+        We register two targets in Colab:
+          target_id        — JS->Python channel (one per opener, _recv wired on each)
+          target_id+"_reply" — Python->JS channel (one per app iframe, stored for sends)
+
+        On JupyterLab only one target is registered (target_id) and it handles both
+        directions via the single kernel comm.
         """
-        logger.debug(f"CommsTransport._on_comm_open: comm opened for {self._comm_mgr_id}")
+        target_name = msg.get("content", {}).get("target_name", self._comm_mgr_id)
+        logger.debug(f"CommsTransport._on_comm_open: comm opened for target={target_name}")
 
-        # Keep ALL open comms and broadcast Python->JS to all of them.
-        # On Colab each iframe that calls comms.open(targetId) gets its own
-        # channel — the widget iframe, the app iframe, test cells, etc.
-        # Closing old comms would kill the pump loop in those iframes.
+        if target_name == self._comm_mgr_id + "_reply":
+            # This is the dedicated Python->JS reply channel for one app iframe.
+            # Store it for send_message(). On Colab there may be multiple (one per
+            # app iframe that connected), so keep all and send to the latest only —
+            # each app iframe has its own reply channel and only cares about its own.
+            if not hasattr(self, '_reply_comms'):
+                self._reply_comms = []
+            self._reply_comms.append(comm)
+            logger.debug(f"CommsTransport._on_comm_open: reply comm registered, total={len(self._reply_comms)}")
+            # No _recv needed on the reply channel — Python only sends here, never receives.
+            # Signal connection on first reply comm (JupyterLab uses main channel for this)
+            self._connected = True
+            self._conn_event.set()
+            return
+
+        # Main JS->Python channel: wire _recv and track for JupyterLab sends
         if not hasattr(self, '_comm_objs'):
             self._comm_objs = []
         self._comm_objs.append(comm)
-        self._comm = comm   # also track last for single-comm (JupyterLab) case
+        self._comm = comm
 
         def _invoke_callback(msg):
             if self._callback:
@@ -460,9 +469,14 @@ class CommsTransport(TransportBase):
                 with open(file_path, "a", encoding="utf-8") as f:
                     f.write(f"<<003>> {self} after calling a regular function with {data}\n")
 
-        self._connected = True
         comm.on_msg(_recv)
-        self._conn_event.set()
+
+        # Mark connected and unblock connect() on first JS->Python open
+        # (for JupyterLab this is the only channel; for Colab the _reply
+        # channel open also signals, but JupyterLab never opens _reply)
+        if not self._connected:
+            self._connected = True
+            self._conn_event.set()
 
     # ------------------------------------------------------------------
     # Phase 1: synchronous – must run inside the cell output context
@@ -650,27 +664,35 @@ class CommsTransport(TransportBase):
 
         self._bridge = CommBridge(target_id=self._comm_mgr_id)
 
-        # Register the Python-side comm target before display() so it is ready
-        # the moment JS render() fires and calls comm.open().
+        # Register comm targets before display() so they are ready the moment
+        # JS render() fires. On Colab we register two targets:
+        #   target_id          — JS->Python (any opener)
+        #   target_id+"_reply" — Python->JS (one per app iframe)
+        # On JupyterLab only target_id is needed (single bidirectional comm).
+        targets_to_register = [self._comm_mgr_id]
+        if self._is_colab():
+            targets_to_register.append(self._comm_mgr_id + "_reply")
+
         comm_class_name, _ = _get_comm_class()
-        if comm_class_name == "create_comm":
-            try:
-                import comm as _comm_pkg
-                _comm_pkg.get_comm_manager().register_target(
-                    self._comm_mgr_id, self._on_comm_open
-                )
-            except Exception as e:
-                logger.warning(f"CommsTransport: comm target registration failed: {e}")
-        else:
-            try:
-                from IPython import get_ipython
-                shell = get_ipython()
-                if shell is not None:
-                    shell.kernel.comm_manager.register_target(
-                        self._comm_mgr_id, self._on_comm_open
+        for target in targets_to_register:
+            if comm_class_name == "create_comm":
+                try:
+                    import comm as _comm_pkg
+                    _comm_pkg.get_comm_manager().register_target(
+                        target, self._on_comm_open
                     )
-            except Exception as e:
-                logger.warning(f"CommsTransport: comm target registration failed: {e}")
+                except Exception as e:
+                    logger.warning(f"CommsTransport: comm target registration failed for {target}: {e}")
+            else:
+                try:
+                    from IPython import get_ipython
+                    shell = get_ipython()
+                    if shell is not None:
+                        shell.kernel.comm_manager.register_target(
+                            target, self._on_comm_open
+                        )
+                except Exception as e:
+                    logger.warning(f"CommsTransport: comm target registration failed for {target}: {e}")
 
         display(self._bridge)
         logger.debug(f"CommsTransport.display_bridge: widget displayed for {self._comm_mgr_id}")
@@ -749,19 +771,32 @@ class CommsTransport(TransportBase):
             "data": serialize(message)          # Bokeh-serialize the payload
         }
 
-        colab_comms = getattr(self, '_comm_objs', None)
-        if colab_comms:
-            # Colab: broadcast to every iframe that has opened a channel.
-            # This ensures the app iframe, the widget iframe, and any test
-            # cell that opened its own comm all receive Python->JS messages.
-            for c in list(colab_comms):
+        # On Colab: send via dedicated _reply_comms (Python->JS channels).
+        # Each app iframe opened its own _reply channel; send to the most recent
+        # one (the active app instance). Earlier ones may be stale page loads.
+        # On JupyterLab: single bidirectional _comm_objs channel.
+        reply_comms = getattr(self, '_reply_comms', None)
+        if reply_comms:
+            # Colab path: use the last registered reply comm (most recent opener)
+            target_comm = reply_comms[-1]
+            try:
+                target_comm.send(envelope)
+                with open(file_path, "a", encoding="utf-8") as f:
+                    f.write(f"<<send_message>> sent OK via reply_comm: {envelope}\n")
+            except Exception as e:
+                with open(file_path, "a") as f:
+                    f.write(f"<<send_message>> FAILED via reply_comm: {e}\n")
+                logger.warning(f"CommsTransport.send_message: reply comm send failed: {e}")
+        elif getattr(self, '_comm_objs', None):
+            # JupyterLab path: single bidirectional comm
+            for c in list(self._comm_objs):
                 try:
                     c.send(envelope)
                     with open(file_path, "a", encoding="utf-8") as f:
-                        f.write(f"<<send_message>> sent OK: {envelope}\n")
+                        f.write(f"<<send_message>> sent OK via comm_obj: {envelope}\n")
                 except Exception as e:
                     with open(file_path, "a") as f:
-                        f.write(f"<<send_message>> FAILED: {e}\n")
+                        f.write(f"<<send_message>> FAILED via comm_obj: {e}\n")
                     logger.warning(f"CommsTransport.send_message: comm send failed: {e}")
         else:
             raise RuntimeError("CommsTransport: not connected (no comm available)")
@@ -777,6 +812,12 @@ class CommsTransport(TransportBase):
                 c.close()
             except Exception:
                 pass
+        for c in getattr(self, '_reply_comms', []):
+            try:
+                c.close()
+            except Exception:
+                pass
         self._comm_objs = []
+        self._reply_comms = []
         self._connected = False
         self._bridge = None

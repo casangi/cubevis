@@ -427,75 +427,99 @@ export class CommsTransport implements TransportBase {
         const isColab = typeof google !== "undefined" && google?.colab?.kernel?.comms
         console.log(`CommsTransport.retrieveComm: colab for ${target_id}:`,  isColab )
         if (isColab) {
+            console.log(`[Colab] Opening channels for ${target_id}`)
 
-            console.log(`[Colab] Creating Proxy for ${target_id}`)
+            // Colab isolates each cell output in its own iframe, so window is not
+            // shared across cells. The kernel comm API IS shared (it goes through
+            // the kernel websocket), so all cross-iframe communication must flow
+            // through kernel comms.
+            //
+            // We use TWO channels to avoid the Colab routing ambiguity where only
+            // the first channel opened per target reliably receives Python->JS:
+            //
+            //   channel_js2py  (target_id):         JS -> Python only
+            //     JS calls channel_js2py.send(data)
+            //     Python _recv fires on the matching comm
+            //
+            //   channel_py2js  (target_id + "_reply"): Python -> JS only
+            //     Python calls reply_comm.send(envelope)
+            //     Colab routes it to channel_py2js.messages here
+            //     The pump calls colabComm.onMsg with the payload
+            //
+            // Python registers both targets. The widget bridge uses its own
+            // channel on target_id for its own JS->Python traffic; that channel
+            // is separate and does not interfere with channel_py2js here.
 
-            // 1. Create the proxy object.
-            // This is returned IMMEDIATELY to the caller.
+            const reply_target = target_id + "_reply"
+
             const colabComm: any = {
-                _channel: null as any,
-                _pumpStarted: false,
+                _js2py: null as any,   // channel for JS->Python sends
+                _py2js: null as any,   // channel for Python->JS receives
                 onMsg: null as any,
                 onClose: null as any,
-                // Standard Jupyter API methods
                 send: (data: any) => {
-                    if (colabComm._channel) {
-                        colabComm._channel.send(data)
+                    if (colabComm._js2py) {
+                        colabComm._js2py.send(data)
                     } else {
-                        // Should not happen — channel is awaited before returning
-                        console.error("[Colab] send() called before channel was ready")
+                        console.error("[Colab] send() called before js2py channel was ready")
                     }
                 },
                 on_msg: (cb: Function) => { colabComm.onMsg = cb },
                 on_close: (cb: Function) => { colabComm.onClose = cb },
-                close: () => colabComm._channel?.close()
+                close: () => {
+                    colabComm._js2py?.close()
+                    colabComm._py2js?.close()
+                }
             }
 
-            // Open the channel and wait for it to be ready before returning.
-            //
-            // We MUST await the channel here rather than using .then(), because:
-            //   1. connect() calls send() immediately after retrieveComm() returns.
-            //   2. The Colab channel.messages async iterator only yields messages
-            //      received AFTER the for-await loop begins — any messages sent
-            //      by Python before the pump starts are silently dropped.
-            //   3. Therefore the pump must be running before connect() sends the
-            //      handshake, which means the channel must exist before we return.
-            //
-            // Note: do NOT call google.colab.kernel.comms.registerTarget() here.
-            // That API fires when Python initiates a comm open. Python never does
-            // this — Python only calls register_target() and waits for JS to open.
-            // Calling registerTarget() here would shadow Python's registered target.
+            // Open js2py channel: this triggers _on_comm_open on Python,
+            // which wires _recv so Python can receive JS->Python messages.
             try {
-                const channel = await google.colab.kernel.comms.open(target_id, {});
-                console.log("CommsTransport: channel opened, starting pump");
-                colabComm._channel = channel;
+                colabComm._js2py = await google.colab.kernel.comms.open(target_id, {})
+                console.log("[Colab] js2py channel open")
+            } catch (e) {
+                console.error("[Colab] Failed to open js2py channel:", e)
+                throw e
+            }
 
-                // Start the pump loop BEFORE returning so it is running when
-                // connect() sends the handshake and Python replies.
-                (async () => {
-                    console.log(`%c[Colab] Pump Starting`, "color: #4285f4; font-weight: bold");
+            // Open py2js channel: Python registers this target and uses it
+            // exclusively for sending replies back to this iframe.
+            // We await this too so the pump is running before connect() sends
+            // the handshake — preventing Python's reply from arriving before
+            // the iterator is consuming channel.messages.
+            try {
+                colabComm._py2js = await google.colab.kernel.comms.open(reply_target, {})
+                console.log("[Colab] py2js channel open, starting pump")
+
+                // Fire-and-forget pump. The async IIFE body runs up to its first
+                // await synchronously (establishing the iterator), then suspends.
+                // This means the iterator is established before retrieveComm()
+                // returns and before connect() assigns onMsg, so no messages
+                // can be missed.
+                ;(async () => {
+                    console.log(`%c[Colab] Pump Starting on ${reply_target}`, "color: #4285f4; font-weight: bold")
                     try {
-                        for await (const message of channel.messages) {
-                            console.log("%c[Colab] Inbound:", "color: #34a853", message.data);
+                        for await (const message of colabComm._py2js.messages) {
+                            console.log("%c[Colab] Inbound:", "color: #34a853", message.data)
                             if (colabComm.onMsg) {
                                 colabComm.onMsg({
                                     content: { data: message.data },
                                     buffers: message.buffers || []
-                                });
+                                })
                             }
                         }
                     } catch (e) {
-                        console.error("[Colab] Pump loop failed:", e);
+                        console.error("[Colab] Pump loop failed:", e)
                     }
-                    console.log("[Colab] Pump loop ended");
-                })();
+                    console.log("[Colab] Pump loop ended")
+                })()
 
             } catch (e) {
-                console.error("[Colab] comms.open() failed:", e);
-                throw e;
+                console.error("[Colab] Failed to open py2js channel:", e)
+                throw e
             }
 
-            return colabComm;
+            return colabComm
         }
 
         return null

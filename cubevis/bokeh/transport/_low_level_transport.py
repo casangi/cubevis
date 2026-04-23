@@ -525,8 +525,10 @@ class CommsTransport(TransportBase):
         #     For Colab Python->JS, self._comm may be None; send_message() falls
         #     back to self._bridge.send() which delivers via the anywidget channel.
 
-        esm = r"""
-            function render({ model, el }) {
+        import time as _time
+        _esm_version = "// cubevis-esm:" + str(int(_time.time())) + "\n"
+        esm = _esm_version + r"""
+            function render({ model, el }) {"
                 const isDebug  = """ + is_debug_js + r""";
                 const targetId = model.get("target_id");
 
@@ -593,47 +595,45 @@ class CommsTransport(TransportBase):
                         const colabComms = google?.colab?.kernel?.comms;
                         if (!colabComms || typeof colabComms.open !== "function") return false;
 
-                        // Open the single kernel comm. This widget bridge iframe is the
-                        // sole owner of the kernel comm — all other iframes communicate
-                        // via BroadcastChannel and this bridge relays for them.
+                        // Confirmed: Colab's channel.messages iterator does NOT receive
+                        // messages sent by Python via ipykernel comm.send(). It only ever
+                        // yields the initial comm_open acknowledgment. We therefore use
+                        // TWO separate channels for the two directions:
+                        //
+                        //   JS -> Python : kernel comm (channel.send → Python _recv)
+                        //   Python -> JS : anywidget model channel (self._bridge.send →
+                        //                  model.on("msg:custom") here → bc_rx broadcast →
+                        //                  CommsTransport bc_rx.onmessage)
+                        //
+                        // The anywidget model channel IS proven to deliver Python→JS
+                        // reliably. BroadcastChannel then carries it across iframes.
+
+                        // JS->Python: kernel comm
                         const channel = await colabComms.open(targetId, {});
 
-                        // TX bus: other iframes post JS->Python messages here;
-                        // this bridge receives them and forwards to the kernel comm.
+                        // TX bus: other iframes post JS->Python here; bridge relays to kernel
                         const bc_tx = new BroadcastChannel(`cubevis_tx_${targetId}`);
                         bc_tx.onmessage = (event) => {
                             if (isDebug) console.log("CUBEVIS DEBUG: bc_tx relay to kernel:", event.data);
                             channel.send(event.data);
                         };
 
-                        // RX bus: when Python sends a message it arrives here via
-                        // channel.messages; broadcast it so all iframes can receive it.
+                        // RX bus: Python->JS messages arrive via anywidget model,
+                        // then get broadcast here so all iframes receive them.
                         const bc_rx = new BroadcastChannel(`cubevis_rx_${targetId}`);
 
+                        // Python->JS: Python calls self._bridge.send(envelope), which
+                        // delivers to model.on("msg:custom") here. We broadcast it on
+                        // bc_rx so CommsTransport (and any other iframe) receives it.
+                        model.on("msg:custom", (msg) => {
+                            if (isDebug) console.log("CUBEVIS DEBUG: model→bc_rx:", msg);
+                            bc_rx.postMessage(msg);
+                        });
+
                         const comm = {
-                            // Direct JS->Python from within this iframe (test cells etc.)
                             send(data) { channel.send(data); },
-                            // Python->JS: set comm.onMsg to receive in this iframe too
                             onMsg: null,
                         };
-
-                        // Pump Python->JS: kernel → bc_rx broadcast + local onMsg
-                        (async () => {
-                            console.log("CUBEVIS: pump starting, waiting for channel.messages");
-                            let count = 0;
-                            for await (const message of channel.messages) {
-                                count++;
-                                const data = message.data || {};
-                                console.log(`CUBEVIS: kernel→bc_rx #${count}:`, data);
-                                // Broadcast to all other iframes (CommsTransport, test cells)
-                                bc_rx.postMessage(data);
-                                // Also deliver locally if onMsg is set
-                                if (typeof comm.onMsg === "function") {
-                                    comm.onMsg({ content: { data } });
-                                }
-                            }
-                            console.warn("CUBEVIS: channel.messages iterator ENDED after", count, "messages");
-                        })();
 
                         attachComm(comm);
                         return true;
@@ -766,23 +766,33 @@ class CommsTransport(TransportBase):
             "data": serialize(message)          # Bokeh-serialize the payload
         }
 
-        # Send to the widget bridge comm (comm_A, the first opener).
-        # On JupyterLab this is the sole bidirectional comm.
-        # On Colab this is the bridge iframe's kernel comm; the bridge ESM
-        # receives via comm.onMsg and broadcasts to bc_rx so all iframes
-        # (including CommsTransport's) receive the message via BroadcastChannel.
-        comm_objs = getattr(self, '_comm_objs', None)
-        if not comm_objs:
-            raise RuntimeError("CommsTransport: not connected (no comm available)")
-        target_comm = comm_objs[0]   # always the widget bridge comm
-        try:
-            target_comm.send(envelope)
-            with open(file_path, "a", encoding="utf-8") as f:
-                f.write(f"<<send_message>> sent OK: {envelope}\n")
-        except Exception as e:
-            with open(file_path, "a") as f:
-                f.write(f"<<send_message>> FAILED: {e}\n")
-            logger.warning(f"CommsTransport.send_message: comm send failed: {e}")
+        if self._is_colab():
+            # On Colab, Python->JS goes via the anywidget model channel.
+            # self._bridge.send() → model.on("msg:custom") in widget ESM →
+            # bc_rx.postMessage() → CommsTransport bc_rx.onmessage.
+            # This is the only Python->JS path that reliably works in Colab;
+            # ipykernel comm.send() does not deliver to channel.messages in JS.
+            try:
+                self._bridge.send(envelope)
+                with open(file_path, "a", encoding="utf-8") as f:
+                    f.write(f"<<send_message>> sent via bridge model: {str(envelope)[:120]}\n")
+            except Exception as e:
+                with open(file_path, "a") as f:
+                    f.write(f"<<send_message>> bridge.send FAILED: {e}\n")
+                logger.warning(f"CommsTransport.send_message: bridge.send failed: {e}")
+        else:
+            # JupyterLab: single bidirectional kernel comm
+            comm_objs = getattr(self, '_comm_objs', None)
+            if not comm_objs:
+                raise RuntimeError("CommsTransport: not connected (no comm available)")
+            try:
+                comm_objs[0].send(envelope)
+                with open(file_path, "a", encoding="utf-8") as f:
+                    f.write(f"<<send_message>> sent via comm: {str(envelope)[:120]}\n")
+            except Exception as e:
+                with open(file_path, "a") as f:
+                    f.write(f"<<send_message>> comm.send FAILED: {e}\n")
+                logger.warning(f"CommsTransport.send_message: comm send failed: {e}")
 
     async def run(self) -> None:
         """Keep the transport alive until disconnected."""

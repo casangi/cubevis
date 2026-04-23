@@ -622,13 +622,23 @@ class CommsTransport(TransportBase):
                         // then get broadcast here so all iframes receive them.
                         const bc_rx = new BroadcastChannel(`cubevis_rx_${targetId}`);
 
-                        // Python->JS: Python calls self._bridge.send(envelope), which
-                        // delivers to model.on("msg:custom") here. We broadcast it on
-                        // bc_rx so CommsTransport (and any other iframe) receives it.
-                        model.on("msg:custom", (msg) => {
-                            if (isDebug) console.log("CUBEVIS DEBUG: model→bc_rx:", msg);
+                        // Python->JS: Python calls self._bridge.send(envelope).
+                        // In JupyterLab this fires as model.on("msg:custom").
+                        // In Colab's CDN widget manager the event may be named
+                        // differently.  Register both known variants.
+                        const _py2js_relay = (msg) => {
+                            console.log("CUBEVIS: model msg received, relaying to bc_rx:", msg);
                             bc_rx.postMessage(msg);
-                        });
+                        };
+                        // Standard anywidget / JupyterLab event name
+                        model.on("msg:custom", _py2js_relay);
+                        // Some Colab widget manager versions use this instead
+                        if (typeof model.on_msg === "function") {
+                            model.on_msg(_py2js_relay);
+                        }
+                        console.log("CUBEVIS: registered msg:custom handler, model type:", typeof model,
+                                    "model.on type:", typeof model.on,
+                                    "model.on_msg type:", typeof model.on_msg);
 
                         const comm = {
                             send(data) { channel.send(data); },

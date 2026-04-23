@@ -619,9 +619,12 @@ class CommsTransport(TransportBase):
 
                         // Pump Python->JS: kernel → bc_rx broadcast + local onMsg
                         (async () => {
+                            console.log("CUBEVIS: pump starting, waiting for channel.messages");
+                            let count = 0;
                             for await (const message of channel.messages) {
+                                count++;
                                 const data = message.data || {};
-                                if (isDebug) console.log("CUBEVIS DEBUG: kernel→bc_rx:", data);
+                                console.log(`CUBEVIS: kernel→bc_rx #${count}:`, data);
                                 // Broadcast to all other iframes (CommsTransport, test cells)
                                 bc_rx.postMessage(data);
                                 // Also deliver locally if onMsg is set
@@ -629,6 +632,7 @@ class CommsTransport(TransportBase):
                                     comm.onMsg({ content: { data } });
                                 }
                             }
+                            console.warn("CUBEVIS: channel.messages iterator ENDED after", count, "messages");
                         })();
 
                         attachComm(comm);

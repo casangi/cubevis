@@ -622,23 +622,25 @@ class CommsTransport(TransportBase):
                         // then get broadcast here so all iframes receive them.
                         const bc_rx = new BroadcastChannel(`cubevis_rx_${targetId}`);
 
-                        // Python->JS: Python calls self._bridge.send(envelope).
-                        // In JupyterLab this fires as model.on("msg:custom").
-                        // In Colab's CDN widget manager the event may be named
-                        // differently.  Register both known variants.
-                        const _py2js_relay = (msg) => {
-                            console.log("CUBEVIS: model msg received, relaying to bc_rx:", msg);
-                            bc_rx.postMessage(msg);
-                        };
-                        // Standard anywidget / JupyterLab event name
-                        model.on("msg:custom", _py2js_relay);
-                        // Some Colab widget manager versions use this instead
-                        if (typeof model.on_msg === "function") {
-                            model.on_msg(_py2js_relay);
-                        }
-                        console.log("CUBEVIS: registered msg:custom handler, model type:", typeof model,
-                                    "model.on type:", typeof model.on,
-                                    "model.on_msg type:", typeof model.on_msg);
+                        // Python->JS via traitlet sync.
+                        // Python sets self._bridge.py2js_msg = json.dumps({seq, envelope}).
+                        // Colab syncs the change, firing model.on("change:py2js_msg") here.
+                        // We unpack the envelope and broadcast it on bc_rx.
+                        model.on("change:py2js_msg", () => {
+                            const raw = model.get("py2js_msg");
+                            if (!raw) return;
+                            console.log("CUBEVIS: py2js_msg changed:", raw);
+                            try {
+                                const parsed = JSON.parse(raw);
+                                // envelope is the cubevis_message dict
+                                const envelope = parsed.envelope ?? parsed;
+                                console.log("CUBEVIS: broadcasting envelope on bc_rx:", envelope);
+                                bc_rx.postMessage(envelope);
+                            } catch(e) {
+                                console.error("CUBEVIS: failed to parse py2js_msg:", e, raw);
+                            }
+                        });
+                        console.log("CUBEVIS: registered change:py2js_msg handler");
 
                         const comm = {
                             send(data) { channel.send(data); },
@@ -671,9 +673,14 @@ class CommsTransport(TransportBase):
             export default { render };
         """
 
+        import time as _time2
         class CommBridge(anywidget.AnyWidget):
             _esm = esm
             target_id = traitlets.Unicode("").tag(sync=True)
+            # py2js_msg: set by Python to deliver messages to JS via traitlet sync.
+            # Colab's CDN widget manager reliably delivers traitlet changes to JS
+            # via model.on("change:py2js_msg") — unlike msg:custom or channel.messages.
+            py2js_msg = traitlets.Unicode("").tag(sync=True)
 
         self._bridge = CommBridge(target_id=self._comm_mgr_id)
 
@@ -777,19 +784,25 @@ class CommsTransport(TransportBase):
         }
 
         if self._is_colab():
-            # On Colab, Python->JS goes via the anywidget model channel.
-            # self._bridge.send() → model.on("msg:custom") in widget ESM →
-            # bc_rx.postMessage() → CommsTransport bc_rx.onmessage.
-            # This is the only Python->JS path that reliably works in Colab;
-            # ipykernel comm.send() does not deliver to channel.messages in JS.
+            # On Colab, Python->JS via traitlet sync — the only reliable delivery
+            # mechanism in Colab's CDN widget manager.
+            # Setting py2js_msg triggers model.on("change:py2js_msg") in the
+            # widget ESM, which extracts the envelope and broadcasts on bc_rx.
+            if not hasattr(self, '_py2js_counter'):
+                self._py2js_counter = 0
+            self._py2js_counter += 1
+            import json as _json
+            # Wrap envelope with a sequence number so repeated identical messages
+            # still trigger a traitlet change event.
+            tagged = _json.dumps({"seq": self._py2js_counter, "envelope": envelope})
             try:
-                self._bridge.send(envelope)
+                self._bridge.py2js_msg = tagged
                 with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"<<send_message>> sent via bridge model: {str(envelope)[:120]}\n")
+                    f.write(f"<<send_message>> set py2js_msg seq={self._py2js_counter}\n")
             except Exception as e:
                 with open(file_path, "a") as f:
-                    f.write(f"<<send_message>> bridge.send FAILED: {e}\n")
-                logger.warning(f"CommsTransport.send_message: bridge.send failed: {e}")
+                    f.write(f"<<send_message>> py2js_msg FAILED: {e}\n")
+                logger.warning(f"CommsTransport.send_message: py2js_msg set failed: {e}")
         else:
             # JupyterLab: single bidirectional kernel comm
             comm_objs = getattr(self, '_comm_objs', None)

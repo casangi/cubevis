@@ -528,7 +528,7 @@ class CommsTransport(TransportBase):
         import time as _time
         _esm_version = "// cubevis-esm:" + str(int(_time.time())) + "\n"
         esm = _esm_version + r"""
-            function render({ model, el }) {"
+            function render({ model, el }) {
                 const isDebug  = """ + is_debug_js + r""";
                 const targetId = model.get("target_id");
 

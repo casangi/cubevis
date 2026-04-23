@@ -454,7 +454,6 @@ export class CommsTransport implements TransportBase {
 
             const colabComm: any = {
                 _js2py: null as any,   // channel for JS->Python sends
-                _py2js: null as any,   // channel for Python->JS receives
                 onMsg: null as any,
                 onClose: null as any,
                 send: (data: any) => {
@@ -466,14 +465,10 @@ export class CommsTransport implements TransportBase {
                 },
                 on_msg: (cb: Function) => { colabComm.onMsg = cb },
                 on_close: (cb: Function) => { colabComm.onClose = cb },
-                close: () => {
-                    colabComm._js2py?.close()
-                    colabComm._py2js?.close()
-                }
+                close: () => { colabComm._js2py?.close() }
             }
 
-            // Open js2py channel: this triggers _on_comm_open on Python,
-            // which wires _recv so Python can receive JS->Python messages.
+            // JS->Python channel: JS opens → Python _on_comm_open fires → _recv wired.
             try {
                 colabComm._js2py = await google.colab.kernel.comms.open(target_id, {})
                 console.log("[Colab] js2py channel open")
@@ -482,42 +477,64 @@ export class CommsTransport implements TransportBase {
                 throw e
             }
 
-            // Open py2js channel: Python registers this target and uses it
-            // exclusively for sending replies back to this iframe.
-            // We await this too so the pump is running before connect() sends
-            // the handshake — preventing Python's reply from arriving before
-            // the iterator is consuming channel.messages.
-            try {
-                colabComm._py2js = await google.colab.kernel.comms.open(reply_target, {})
-                console.log("[Colab] py2js channel open, starting pump")
+            // Python->JS channel: Python INITIATES the open (calls comm.open() on
+            // its side), Colab routes it to this registerTarget handler.
+            //
+            // This is the inversion of the normal pattern. JS-initiated comms
+            // (comms.open()) give JS a channel whose .messages iterator receives
+            // Python sends — but we've found Colab only routes to the FIRST opener
+            // per target, making a second JS-initiated channel on _reply unreliable.
+            //
+            // Python-initiated comms work differently: Python calls comm.open(),
+            // which sends a comm_open to JS. Colab routes that to the registerTarget
+            // handler, giving JS a channel object. Messages Python sends via
+            // comm.send() are then delivered to that channel's .messages iterator
+            // reliably, because Colab tracks the comm_id from the Python-initiated
+            // open in its routing table.
+            //
+            // We set up the registerTarget handler BEFORE signalling Python to open
+            // (via the js2py handshake send below), so the handler is in place when
+            // Python's comm_open arrives.
+            await new Promise<void>((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    reject(new Error("[Colab] Timed out waiting for Python to open py2js channel"))
+                }, 10000)
 
-                // Fire-and-forget pump. The async IIFE body runs up to its first
-                // await synchronously (establishing the iterator), then suspends.
-                // This means the iterator is established before retrieveComm()
-                // returns and before connect() assigns onMsg, so no messages
-                // can be missed.
-                ;(async () => {
-                    console.log(`%c[Colab] Pump Starting on ${reply_target}`, "color: #4285f4; font-weight: bold")
-                    try {
-                        for await (const message of colabComm._py2js.messages) {
-                            console.log("%c[Colab] Inbound:", "color: #34a853", message.data)
-                            if (colabComm.onMsg) {
-                                colabComm.onMsg({
-                                    content: { data: message.data },
-                                    buffers: message.buffers || []
-                                })
+                google.colab.kernel.comms.registerTarget(reply_target, (channel: any) => {
+                    clearTimeout(timeout)
+                    console.log("[Colab] py2js channel received from Python, starting pump")
+
+                    // Pump Python->JS messages to colabComm.onMsg
+                    ;(async () => {
+                        console.log(`%c[Colab] Pump Starting on ${reply_target}`, "color: #4285f4; font-weight: bold")
+                        try {
+                            for await (const message of channel.messages) {
+                                console.log("%c[Colab] Inbound:", "color: #34a853", message.data)
+                                if (colabComm.onMsg) {
+                                    colabComm.onMsg({
+                                        content: { data: message.data },
+                                        buffers: message.buffers || []
+                                    })
+                                }
                             }
+                        } catch (e) {
+                            console.error("[Colab] Pump loop failed:", e)
                         }
-                    } catch (e) {
-                        console.error("[Colab] Pump loop failed:", e)
-                    }
-                    console.log("[Colab] Pump loop ended")
-                })()
+                        console.log("[Colab] Pump loop ended")
+                    })()
 
-            } catch (e) {
-                console.error("[Colab] Failed to open py2js channel:", e)
-                throw e
-            }
+                    resolve()
+                })
+
+                // Signal Python (via the js2py channel) that it should now open
+                // the reply channel. Python receives this in _recv, sees the
+                // "open_reply_channel" type, and calls its reply comm's open().
+                colabComm._js2py.send({
+                    type: "cubevis_open_reply",
+                    reply_target: reply_target
+                })
+                console.log("[Colab] Sent open_reply_channel signal to Python")
+            })
 
             return colabComm
         }

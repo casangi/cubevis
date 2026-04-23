@@ -386,25 +386,9 @@ class CommsTransport(TransportBase):
         On JupyterLab only one target is registered (target_id) and it handles both
         directions via the single kernel comm.
         """
-        target_name = msg.get("content", {}).get("target_name", self._comm_mgr_id)
-        logger.debug(f"CommsTransport._on_comm_open: comm opened for target={target_name}")
+        logger.debug(f"CommsTransport._on_comm_open: comm opened for {self._comm_mgr_id}")
 
-        if target_name == self._comm_mgr_id + "_reply":
-            # This is the dedicated Python->JS reply channel for one app iframe.
-            # Store it for send_message(). On Colab there may be multiple (one per
-            # app iframe that connected), so keep all and send to the latest only —
-            # each app iframe has its own reply channel and only cares about its own.
-            if not hasattr(self, '_reply_comms'):
-                self._reply_comms = []
-            self._reply_comms.append(comm)
-            logger.debug(f"CommsTransport._on_comm_open: reply comm registered, total={len(self._reply_comms)}")
-            # No _recv needed on the reply channel — Python only sends here, never receives.
-            # Signal connection on first reply comm (JupyterLab uses main channel for this)
-            self._connected = True
-            self._conn_event.set()
-            return
-
-        # Main JS->Python channel: wire _recv and track for JupyterLab sends
+        # JS->Python channel: wire _recv and track
         if not hasattr(self, '_comm_objs'):
             self._comm_objs = []
         self._comm_objs.append(comm)
@@ -431,6 +415,15 @@ class CommsTransport(TransportBase):
                 f.write(f"<<_recv>> data type: {type(data).__name__}, value: {str(data)[:200]}\n")
 
             data = msg.get("content", {}).get("data", {})
+
+            # Handle the signal from JS asking Python to open the reply channel.
+            # JS registered a target handler and now needs Python to initiate the
+            # comm_open so Colab routes Python->JS messages to that handler.
+            if data.get("type") == "cubevis_open_reply":
+                reply_target = data.get("reply_target", self._comm_mgr_id + "_reply")
+                logger.debug(f"CommsTransport._recv: opening reply channel on {reply_target}")
+                self._open_reply_channel(reply_target)
+                return
 
             # first check if it is a CommsTransport message
             if data.get("type") == "cubevis_message":
@@ -471,12 +464,48 @@ class CommsTransport(TransportBase):
 
         comm.on_msg(_recv)
 
-        # Mark connected and unblock connect() on first JS->Python open
-        # (for JupyterLab this is the only channel; for Colab the _reply
-        # channel open also signals, but JupyterLab never opens _reply)
         if not self._connected:
             self._connected = True
             self._conn_event.set()
+
+    # ------------------------------------------------------------------
+    # Open the Python-initiated reply channel (Colab Python->JS)
+    # ------------------------------------------------------------------
+    def _open_reply_channel(self, reply_target: str) -> None:
+        """
+        Open a Python-initiated comm to reply_target so that Colab's JS
+        registerTarget handler receives a channel whose .messages iterator
+        reliably delivers Python's comm.send() calls.
+
+        Called when _recv receives a "cubevis_open_reply" signal from JS.
+        JS registered a target handler BEFORE sending that signal, so the
+        handler is in place when this comm_open arrives.
+        """
+        from pathlib import Path
+        comm_class_name, _ = _get_comm_class()
+        try:
+            if comm_class_name == "create_comm":
+                from comm import create_comm
+                reply_comm = create_comm(target_name=reply_target)
+                reply_comm.open()
+            else:
+                from IPython import get_ipython
+                shell = get_ipython()
+                from ipykernel.comm import Comm
+                reply_comm = Comm(target_name=reply_target)
+                reply_comm.open()
+
+            if not hasattr(self, '_reply_comms'):
+                self._reply_comms = []
+            self._reply_comms.append(reply_comm)
+            logger.debug(f"CommsTransport._open_reply_channel: opened {reply_target}, "
+                        f"total reply comms={len(self._reply_comms)}")
+            with open(Path.home() / "debug.txt", "a") as f:
+                f.write(f"<<reply_channel>> opened {reply_target}, comm_id={reply_comm.comm_id}\n")
+        except Exception as e:
+            logger.error(f"CommsTransport._open_reply_channel: failed: {e}")
+            with open(Path.home() / "debug.txt", "a") as f:
+                f.write(f"<<reply_channel>> FAILED: {e}\n")
 
     # ------------------------------------------------------------------
     # Phase 1: synchronous – must run inside the cell output context
@@ -664,35 +693,27 @@ class CommsTransport(TransportBase):
 
         self._bridge = CommBridge(target_id=self._comm_mgr_id)
 
-        # Register comm targets before display() so they are ready the moment
-        # JS render() fires. On Colab we register two targets:
-        #   target_id          — JS->Python (any opener)
-        #   target_id+"_reply" — Python->JS (one per app iframe)
-        # On JupyterLab only target_id is needed (single bidirectional comm).
-        targets_to_register = [self._comm_mgr_id]
-        if self._is_colab():
-            targets_to_register.append(self._comm_mgr_id + "_reply")
-
+        # Register the JS->Python comm target. Python opens the reply channel
+        # dynamically when JS signals it (cubevis_open_reply in _recv).
         comm_class_name, _ = _get_comm_class()
-        for target in targets_to_register:
-            if comm_class_name == "create_comm":
-                try:
-                    import comm as _comm_pkg
-                    _comm_pkg.get_comm_manager().register_target(
-                        target, self._on_comm_open
+        if comm_class_name == "create_comm":
+            try:
+                import comm as _comm_pkg
+                _comm_pkg.get_comm_manager().register_target(
+                    self._comm_mgr_id, self._on_comm_open
+                )
+            except Exception as e:
+                logger.warning(f"CommsTransport: comm target registration failed: {e}")
+        else:
+            try:
+                from IPython import get_ipython
+                shell = get_ipython()
+                if shell is not None:
+                    shell.kernel.comm_manager.register_target(
+                        self._comm_mgr_id, self._on_comm_open
                     )
-                except Exception as e:
-                    logger.warning(f"CommsTransport: comm target registration failed for {target}: {e}")
-            else:
-                try:
-                    from IPython import get_ipython
-                    shell = get_ipython()
-                    if shell is not None:
-                        shell.kernel.comm_manager.register_target(
-                            target, self._on_comm_open
-                        )
-                except Exception as e:
-                    logger.warning(f"CommsTransport: comm target registration failed for {target}: {e}")
+            except Exception as e:
+                logger.warning(f"CommsTransport: comm target registration failed: {e}")
 
         display(self._bridge)
         logger.debug(f"CommsTransport.display_bridge: widget displayed for {self._comm_mgr_id}")

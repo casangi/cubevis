@@ -639,13 +639,19 @@ class CommsTransport(TransportBase):
                         //   2. bc_rx.postMessage(msg) — for cross-iframe delivery
                         const bc_rx = new BroadcastChannel(`cubevis_rx_${targetId}`);
                         model.on("msg:custom", (msg) => {
-                            if (isDebug) console.log("CUBEVIS DEBUG: model→rx:", msg);
+                            // This fires when Python calls self._bridge.send(envelope)
+                            console.log("CUBEVIS: msg:custom fired!", msg);
                             // Same-iframe: call registered callback directly
                             const cb = window[`cubevis_rx_cb_${targetId}`];
-                            if (typeof cb === "function") cb(msg);
+                            console.log("CUBEVIS: window cb type=", typeof cb);
+                            if (typeof cb === "function") {
+                                console.log("CUBEVIS: calling window cb");
+                                cb(msg);
+                            }
                             // Cross-iframe: broadcast for other contexts
                             bc_rx.postMessage(msg);
                         });
+                        console.log("CUBEVIS: msg:custom handler registered on model");
 
                         const comm = {
                             // Direct JS->Python from this iframe

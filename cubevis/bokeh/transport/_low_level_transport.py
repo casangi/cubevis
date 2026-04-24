@@ -355,11 +355,21 @@ class CommsTransport(TransportBase):
         # This may be set and read in different threads/event loops
         # so asyncio.Event( ) will not work.
         self._conn_event = threading.Event()
-        # Build and display the bridge immediately while the cell output
-        # context is still open.  display_bridge() is intentionally NOT a
-        # separate public call anymore — construction = display.
+        # In Colab: display the bridge immediately from __init__.
+        # CommsTransport is constructed during a cell's execution (the setup
+        # cell), so that cell's output context is open. The bridge must render
+        # in its OWN cell iframe — separate from the Bokeh app cell — because
+        # BroadcastChannel does not deliver to the posting context itself.
+        # If the bridge and CommsTransport share an iframe, bc_rx.postMessage()
+        # in the bridge ESM never reaches CommsTransport's bc_rx.onmessage.
+        #
+        # In JupyterLab: use the preflight mechanism so the bridge renders
+        # in the Bokeh app cell (single iframe, no BroadcastChannel needed).
         from .. import BokehInit
-        BokehInit.get_app_context().add_preflight_callable(self.display_bridge)
+        if self._is_colab():
+            self.display_bridge()
+        else:
+            BokehInit.get_app_context().add_preflight_callable(self.display_bridge)
 
     # ------------------------------------------------------------------
     # Environment detection
@@ -775,42 +785,21 @@ class CommsTransport(TransportBase):
         }
 
         if self._is_colab():
-            # Colab: Python->JS via google.colab.output.eval_js().
-            # eval_js() executes JS in the notebook frame (a different browsing
-            # context from cell iframes), so BroadcastChannel.postMessage() from
-            # there DOES deliver to bc_rx listeners in cell iframes.
-            # This is the only reliable Python->JS path in Colab — kernel comm
-            # sends don't arrive at channel.messages, and anywidget msg:custom
-            # doesn't fire because the CDN manager doesn't route comm_msg after
-            # comm_open.
-            import json as _json
+            # Colab: Python->JS via anywidget model channel (self._bridge.send).
+            # The bridge widget renders in its OWN cell iframe (separate from the
+            # Bokeh app cell where CommsTransport runs). So:
+            #   self._bridge.send(envelope)
+            #   → anywidget delivers msg:custom to bridge ESM (different iframe)
+            #   → model.on("msg:custom") fires, calls bc_rx.postMessage(envelope)
+            #   → CommsTransport bc_rx.onmessage fires (different context → works!)
             try:
-                from google.colab import output as _colab_output
-                cb_name = f"cubevis_rx_cb_{self._comm_mgr_id}"
-                bc_name = f"cubevis_rx_{self._comm_mgr_id}"
-                env_json = _json.dumps(envelope)
-                # Try both delivery paths since we don't know which iframe eval_js runs in:
-                # 1. window callback - works if eval_js runs in the same iframe as CommsTransport
-                # 2. BroadcastChannel - works if eval_js runs in a DIFFERENT iframe
-                js_code = (
-                    f"(()=>{{"
-                    f"const msg={env_json};"
-                    f"const cb=window[{_json.dumps(cb_name)}];"
-                    f"console.log('CUBEVIS eval_js: window cb type='+typeof cb+' key={cb_name}');"
-                    f"if(typeof cb==='function'){{console.log('CUBEVIS eval_js: calling cb');cb(msg);}}"
-                    f"const bc=new BroadcastChannel({_json.dumps(bc_name)});"
-                    f"bc.postMessage(msg);"
-                    f"bc.close();"
-                    f"console.log('CUBEVIS eval_js: bc posted');"
-                    f"}})();"
-                )
-                _colab_output.eval_js(js_code, ignore_result=True)
+                self._bridge.send(envelope)
                 with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"<<send_message>> sent via eval_js (cb+bc): {str(envelope)[:120]}\n")
+                    f.write(f"<<send_message>> sent via bridge.send: {str(envelope)[:120]}\n")
             except Exception as e:
                 with open(file_path, "a") as f:
-                    f.write(f"<<send_message>> eval_js FAILED: {e}\n")
-                logger.warning(f"CommsTransport.send_message: eval_js failed: {e}")
+                    f.write(f"<<send_message>> bridge.send FAILED: {e}\n")
+                logger.warning(f"CommsTransport.send_message: bridge.send failed: {e}")
         else:
             # JupyterLab: single bidirectional kernel comm
             comm_objs = getattr(self, '_comm_objs', None)

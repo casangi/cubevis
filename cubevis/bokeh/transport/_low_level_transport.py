@@ -527,10 +527,15 @@ class CommsTransport(TransportBase):
 
         import time as _time
         _esm_ts = str(int(_time.time()))
+        from pathlib import Path as _Path
+        with open(_Path.home() / "debug.txt", "a") as _dbf:
+            _dbf.write(f"<<display_bridge>> called, esm_ts={_esm_ts}, is_colab={self._is_colab()}\n")
         esm = "// cubevis-esm:" + _esm_ts + "\n" + r"""
             function render({ model, el }) {
                 const isDebug  = """ + is_debug_js + r""";
                 const targetId = model.get("target_id");
+                // ESM version marker — if this log appears, the new ESM is running
+                console.log("CUBEVIS ESM v2 render() called for", targetId);
 
                 if (isDebug) {
                     el.innerHTML = `<div style="padding:5px;background:#dfd;border:1px solid #4caf50">` +

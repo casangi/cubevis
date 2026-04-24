@@ -786,15 +786,27 @@ class CommsTransport(TransportBase):
             import json as _json
             try:
                 from google.colab import output as _colab_output
-                channel_name = f"cubevis_rx_{self._comm_mgr_id}"
+                cb_name = f"cubevis_rx_cb_{self._comm_mgr_id}"
+                bc_name = f"cubevis_rx_{self._comm_mgr_id}"
+                env_json = _json.dumps(envelope)
+                # Try both delivery paths since we don't know which iframe eval_js runs in:
+                # 1. window callback - works if eval_js runs in the same iframe as CommsTransport
+                # 2. BroadcastChannel - works if eval_js runs in a DIFFERENT iframe
                 js_code = (
-                    f"(()=>{{const bc=new BroadcastChannel({_json.dumps(channel_name)});"
-                    f"bc.postMessage({_json.dumps(envelope)});"
-                    f"bc.close();}})();"
+                    f"(()=>{{"
+                    f"const msg={env_json};"
+                    f"const cb=window[{_json.dumps(cb_name)}];"
+                    f"console.log('CUBEVIS eval_js: window cb type='+typeof cb+' key={cb_name}');"
+                    f"if(typeof cb==='function'){{console.log('CUBEVIS eval_js: calling cb');cb(msg);}}"
+                    f"const bc=new BroadcastChannel({_json.dumps(bc_name)});"
+                    f"bc.postMessage(msg);"
+                    f"bc.close();"
+                    f"console.log('CUBEVIS eval_js: bc posted');"
+                    f"}})();"
                 )
                 _colab_output.eval_js(js_code, ignore_result=True)
                 with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"<<send_message>> sent via eval_js bc_rx: {str(envelope)[:120]}\n")
+                    f.write(f"<<send_message>> sent via eval_js (cb+bc): {str(envelope)[:120]}\n")
             except Exception as e:
                 with open(file_path, "a") as f:
                     f.write(f"<<send_message>> eval_js FAILED: {e}\n")

@@ -622,10 +622,18 @@ class CommsTransport(TransportBase):
                             channel.send(event.data);
                         };
 
-                        // RX bus: Python->JS via anywidget model → broadcast
+                        // RX bus: Python->JS via anywidget model → deliver to listeners.
+                        // Two delivery paths:
+                        //   1. window["cubevis_rx_cb_"+id](msg) — for same-iframe delivery
+                        //      (BroadcastChannel does NOT deliver to sender's own context)
+                        //   2. bc_rx.postMessage(msg) — for cross-iframe delivery
                         const bc_rx = new BroadcastChannel(`cubevis_rx_${targetId}`);
                         model.on("msg:custom", (msg) => {
-                            if (isDebug) console.log("CUBEVIS DEBUG: model→bc_rx:", msg);
+                            if (isDebug) console.log("CUBEVIS DEBUG: model→rx:", msg);
+                            // Same-iframe: call registered callback directly
+                            const cb = window[`cubevis_rx_cb_${targetId}`];
+                            if (typeof cb === "function") cb(msg);
+                            // Cross-iframe: broadcast for other contexts
                             bc_rx.postMessage(msg);
                         });
 

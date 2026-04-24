@@ -457,16 +457,27 @@ export class CommsTransport implements TransportBase {
                 send: (data: any) => { bc_tx.postMessage(data) },
                 on_msg:   (cb: Function) => { colabComm.onMsg = cb },
                 on_close: (cb: Function) => { colabComm.onClose = cb },
-                close:    () => { bc_tx.close(); bc_rx.close() }
-            }
-
-            // Python->JS: widget bridge posts to bc_rx when it receives from Python
-            bc_rx.onmessage = (event: MessageEvent) => {
-                console.log("%c[Colab] bc_rx inbound:", "color: #34a853", event.data)
-                if (colabComm.onMsg) {
-                    colabComm.onMsg({ content: { data: event.data }, buffers: [] })
+                close:    () => {
+                    bc_tx.close()
+                    bc_rx.close()
+                    delete (window as any)[`cubevis_rx_cb_${target_id}`]
                 }
             }
+
+            // Python->JS delivery handler — called by either path:
+            const onRx = (msg: any) => {
+                console.log("%c[Colab] rx inbound:", "color: #34a853", msg)
+                if (colabComm.onMsg) {
+                    colabComm.onMsg({ content: { data: msg }, buffers: [] })
+                }
+            }
+
+            // Path 1: same-iframe — widget bridge calls window callback directly
+            // (BroadcastChannel does NOT fire in the sender's own context)
+            ;(window as any)[`cubevis_rx_cb_${target_id}`] = onRx
+
+            // Path 2: cross-iframe — widget bridge posts on bc_rx
+            bc_rx.onmessage = (event: MessageEvent) => onRx(event.data)
 
             console.log("[Colab] BroadcastChannel transport ready")
             return colabComm

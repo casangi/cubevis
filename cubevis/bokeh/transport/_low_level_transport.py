@@ -365,11 +365,16 @@ class CommsTransport(TransportBase):
         #
         # In JupyterLab: use the preflight mechanism so the bridge renders
         # in the Bokeh app cell (single iframe, no BroadcastChannel needed).
+        # Use the preflight mechanism for both JupyterLab and Colab.
+        # display_bridge() must run in the same cell as ic.show() so that
+        # Colab's CDN widget manager routes comm_msg to the bridge model
+        # (Colab only routes comm_msg to widgets in the currently-executing
+        # cell's output context). This ensures model.on("msg:custom") fires
+        # when Python calls self._bridge.send().
+        # The window["cubevis_rx_cb_..."] callback then delivers to CommsTransport
+        # which shares the same window (same iframe, same cell output).
         from .. import BokehInit
-        if self._is_colab():
-            self.display_bridge()
-        else:
-            BokehInit.get_app_context().add_preflight_callable(self.display_bridge)
+        BokehInit.get_app_context().add_preflight_callable(self.display_bridge)
 
     # ------------------------------------------------------------------
     # Environment detection

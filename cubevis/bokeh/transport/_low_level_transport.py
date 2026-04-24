@@ -707,7 +707,25 @@ class CommsTransport(TransportBase):
             except Exception as e:
                 logger.warning(f"CommsTransport: comm target registration failed: {e}")
 
-        display(self._bridge)
+        # Wrap the bridge in an ipywidgets.Output so it renders in its own
+        # sandboxed iframe even when display_bridge() is called from the same
+        # cell as the Bokeh app. Each Output widget gets its own iframe in
+        # Colab, giving the bridge a separate browsing context from CommsTransport.
+        # This ensures BroadcastChannel messages from the bridge ESM are
+        # delivered to CommsTransport's bc_rx.onmessage (different context).
+        if self._is_colab():
+            try:
+                import ipywidgets as _ipyw
+                _out = _ipyw.Output()
+                with _out:
+                    display(self._bridge)
+                display(_out)
+                logger.debug(f"CommsTransport.display_bridge: bridge wrapped in Output widget for {self._comm_mgr_id}")
+            except ImportError:
+                display(self._bridge)
+                logger.debug(f"CommsTransport.display_bridge: bridge displayed directly (no ipywidgets) for {self._comm_mgr_id}")
+        else:
+            display(self._bridge)
         logger.debug(f"CommsTransport.display_bridge: widget displayed for {self._comm_mgr_id}")
 
     # ------------------------------------------------------------------

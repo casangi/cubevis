@@ -656,15 +656,9 @@ class CommsTransport(TransportBase):
             export default { render };
         """
 
-        # Give each CommBridge a unique _model_name so anywidget never serves
-        # a cached ESM from a previous session with the same class name.
-        _model_name = f"CommBridge_{_esm_ts}"
-
-        CommBridge = type(_model_name, (anywidget.AnyWidget,), {
-            "_esm": esm,
-            "target_id": traitlets.Unicode("").tag(sync=True),
-            "_model_name": traitlets.Unicode(_model_name).tag(sync=True),
-        })
+        class CommBridge(anywidget.AnyWidget):
+            _esm = esm
+            target_id = traitlets.Unicode("").tag(sync=True)
 
         self._bridge = CommBridge(target_id=self._comm_mgr_id)
 

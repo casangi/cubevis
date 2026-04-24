@@ -775,18 +775,30 @@ class CommsTransport(TransportBase):
         }
 
         if self._is_colab():
-            # Colab: Python->JS via anywidget model channel (the only reliable path).
-            # self._bridge.send(envelope) → model.on("msg:custom") in widget ESM →
-            # bc_rx.postMessage(envelope) → any iframe listening on bc_rx receives it.
-            # Kernel comm.send() does NOT deliver to JS channel.messages in Colab.
+            # Colab: Python->JS via google.colab.output.eval_js().
+            # eval_js() executes JS in the notebook frame (a different browsing
+            # context from cell iframes), so BroadcastChannel.postMessage() from
+            # there DOES deliver to bc_rx listeners in cell iframes.
+            # This is the only reliable Python->JS path in Colab — kernel comm
+            # sends don't arrive at channel.messages, and anywidget msg:custom
+            # doesn't fire because the CDN manager doesn't route comm_msg after
+            # comm_open.
+            import json as _json
             try:
-                self._bridge.send(envelope)
+                from google.colab import output as _colab_output
+                channel_name = f"cubevis_rx_{self._comm_mgr_id}"
+                js_code = (
+                    f"(()=>{{const bc=new BroadcastChannel({_json.dumps(channel_name)});"
+                    f"bc.postMessage({_json.dumps(envelope)});"
+                    f"bc.close();}})();"
+                )
+                _colab_output.eval_js(js_code, ignore_result=True)
                 with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"<<send_message>> sent via bridge.send: {str(envelope)[:120]}\n")
+                    f.write(f"<<send_message>> sent via eval_js bc_rx: {str(envelope)[:120]}\n")
             except Exception as e:
                 with open(file_path, "a") as f:
-                    f.write(f"<<send_message>> bridge.send FAILED: {e}\n")
-                logger.warning(f"CommsTransport.send_message: bridge.send failed: {e}")
+                    f.write(f"<<send_message>> eval_js FAILED: {e}\n")
+                logger.warning(f"CommsTransport.send_message: eval_js failed: {e}")
         else:
             # JupyterLab: single bidirectional kernel comm
             comm_objs = getattr(self, '_comm_objs', None)

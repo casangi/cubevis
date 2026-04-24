@@ -427,115 +427,48 @@ export class CommsTransport implements TransportBase {
         const isColab = typeof google !== "undefined" && google?.colab?.kernel?.comms
         console.log(`CommsTransport.retrieveComm: colab for ${target_id}:`,  isColab )
         if (isColab) {
-            console.log(`[Colab] Opening channels for ${target_id}`)
+            console.log(`[Colab] Setting up BroadcastChannel transport for ${target_id}`)
 
-            // Colab isolates each cell output in its own iframe, so window is not
-            // shared across cells. The kernel comm API IS shared (it goes through
-            // the kernel websocket), so all cross-iframe communication must flow
-            // through kernel comms.
+            // Colab isolates each cell output in its own iframe so window is not shared.
+            // BroadcastChannel is same-origin and works across all Colab output iframes.
             //
-            // We use TWO channels to avoid the Colab routing ambiguity where only
-            // the first channel opened per target reliably receives Python->JS:
+            // The widget bridge ESM holds the single kernel comm and acts as relay:
             //
-            //   channel_js2py  (target_id):         JS -> Python only
-            //     JS calls channel_js2py.send(data)
-            //     Python _recv fires on the matching comm
+            //   JS -> Python:
+            //     CommsTransport posts to bc_tx ("cubevis_tx_<id>")
+            //     Widget bridge bc_tx.onmessage → channel.send() → Python _recv
             //
-            //   channel_py2js  (target_id + "_reply"): Python -> JS only
-            //     Python calls reply_comm.send(envelope)
-            //     Colab routes it to channel_py2js.messages here
-            //     The pump calls colabComm.onMsg with the payload
+            //   Python -> JS:
+            //     Python calls self._bridge.send(envelope) → anywidget model →
+            //     model.on("msg:custom") in widget ESM → bc_rx.postMessage(envelope)
+            //     CommsTransport bc_rx.onmessage → colabComm.onMsg → handleJupyterMessage
             //
-            // Python registers both targets. The widget bridge uses its own
-            // channel on target_id for its own JS->Python traffic; that channel
-            // is separate and does not interfere with channel_py2js here.
+            // Kernel comm.send() does NOT deliver to JS channel.messages in Colab
+            // (confirmed by diagnostic testing). The anywidget model channel is the
+            // only reliable Python->JS path in Colab.
 
-            const reply_target = target_id + "_reply"
+            const bc_tx = new BroadcastChannel(`cubevis_tx_${target_id}`)
+            const bc_rx = new BroadcastChannel(`cubevis_rx_${target_id}`)
 
             const colabComm: any = {
-                _js2py: null as any,   // channel for JS->Python sends
-                onMsg: null as any,
-                onClose: null as any,
-                send: (data: any) => {
-                    if (colabComm._js2py) {
-                        colabComm._js2py.send(data)
-                    } else {
-                        console.error("[Colab] send() called before js2py channel was ready")
-                    }
-                },
-                on_msg: (cb: Function) => { colabComm.onMsg = cb },
+                onMsg:    null as any,
+                onClose:  null as any,
+                // JS->Python: post to tx bus; widget bridge relays to kernel
+                send: (data: any) => { bc_tx.postMessage(data) },
+                on_msg:   (cb: Function) => { colabComm.onMsg = cb },
                 on_close: (cb: Function) => { colabComm.onClose = cb },
-                close: () => { colabComm._js2py?.close() }
+                close:    () => { bc_tx.close(); bc_rx.close() }
             }
 
-            // JS->Python channel: JS opens → Python _on_comm_open fires → _recv wired.
-            try {
-                colabComm._js2py = await google.colab.kernel.comms.open(target_id, {})
-                console.log("[Colab] js2py channel open")
-            } catch (e) {
-                console.error("[Colab] Failed to open js2py channel:", e)
-                throw e
+            // Python->JS: widget bridge posts to bc_rx when it receives from Python
+            bc_rx.onmessage = (event: MessageEvent) => {
+                console.log("%c[Colab] bc_rx inbound:", "color: #34a853", event.data)
+                if (colabComm.onMsg) {
+                    colabComm.onMsg({ content: { data: event.data }, buffers: [] })
+                }
             }
 
-            // Python->JS channel: Python INITIATES the open (calls comm.open() on
-            // its side), Colab routes it to this registerTarget handler.
-            //
-            // This is the inversion of the normal pattern. JS-initiated comms
-            // (comms.open()) give JS a channel whose .messages iterator receives
-            // Python sends — but we've found Colab only routes to the FIRST opener
-            // per target, making a second JS-initiated channel on _reply unreliable.
-            //
-            // Python-initiated comms work differently: Python calls comm.open(),
-            // which sends a comm_open to JS. Colab routes that to the registerTarget
-            // handler, giving JS a channel object. Messages Python sends via
-            // comm.send() are then delivered to that channel's .messages iterator
-            // reliably, because Colab tracks the comm_id from the Python-initiated
-            // open in its routing table.
-            //
-            // We set up the registerTarget handler BEFORE signalling Python to open
-            // (via the js2py handshake send below), so the handler is in place when
-            // Python's comm_open arrives.
-            await new Promise<void>((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    reject(new Error("[Colab] Timed out waiting for Python to open py2js channel"))
-                }, 10000)
-
-                google.colab.kernel.comms.registerTarget(reply_target, (channel: any) => {
-                    clearTimeout(timeout)
-                    console.log("[Colab] py2js channel received from Python, starting pump")
-
-                    // Pump Python->JS messages to colabComm.onMsg
-                    ;(async () => {
-                        console.log(`%c[Colab] Pump Starting on ${reply_target}`, "color: #4285f4; font-weight: bold")
-                        try {
-                            for await (const message of channel.messages) {
-                                console.log("%c[Colab] Inbound:", "color: #34a853", message.data)
-                                if (colabComm.onMsg) {
-                                    colabComm.onMsg({
-                                        content: { data: message.data },
-                                        buffers: message.buffers || []
-                                    })
-                                }
-                            }
-                        } catch (e) {
-                            console.error("[Colab] Pump loop failed:", e)
-                        }
-                        console.log("[Colab] Pump loop ended")
-                    })()
-
-                    resolve()
-                })
-
-                // Signal Python (via the js2py channel) that it should now open
-                // the reply channel. Python receives this in _recv, sees the
-                // "open_reply_channel" type, and calls its reply comm's open().
-                colabComm._js2py.send({
-                    type: "cubevis_open_reply",
-                    reply_target: reply_target
-                })
-                console.log("[Colab] Sent open_reply_channel signal to Python")
-            })
-
+            console.log("[Colab] BroadcastChannel transport ready")
             return colabComm
         }
 

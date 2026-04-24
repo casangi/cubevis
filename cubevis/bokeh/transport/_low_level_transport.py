@@ -416,15 +416,6 @@ class CommsTransport(TransportBase):
 
             data = msg.get("content", {}).get("data", {})
 
-            # Handle the signal from JS asking Python to open the reply channel.
-            # JS registered a target handler and now needs Python to initiate the
-            # comm_open so Colab routes Python->JS messages to that handler.
-            if data.get("type") == "cubevis_open_reply":
-                reply_target = data.get("reply_target", self._comm_mgr_id + "_reply")
-                logger.debug(f"CommsTransport._recv: opening reply channel on {reply_target}")
-                self._open_reply_channel(reply_target)
-                return
-
             # first check if it is a CommsTransport message
             if data.get("type") == "cubevis_message":
                 from ...utils import deserialize
@@ -467,45 +458,6 @@ class CommsTransport(TransportBase):
         if not self._connected:
             self._connected = True
             self._conn_event.set()
-
-    # ------------------------------------------------------------------
-    # Open the Python-initiated reply channel (Colab Python->JS)
-    # ------------------------------------------------------------------
-    def _open_reply_channel(self, reply_target: str) -> None:
-        """
-        Open a Python-initiated comm to reply_target so that Colab's JS
-        registerTarget handler receives a channel whose .messages iterator
-        reliably delivers Python's comm.send() calls.
-
-        Called when _recv receives a "cubevis_open_reply" signal from JS.
-        JS registered a target handler BEFORE sending that signal, so the
-        handler is in place when this comm_open arrives.
-        """
-        from pathlib import Path
-        comm_class_name, _ = _get_comm_class()
-        try:
-            if comm_class_name == "create_comm":
-                from comm import create_comm
-                reply_comm = create_comm(target_name=reply_target)
-                reply_comm.open()
-            else:
-                from IPython import get_ipython
-                shell = get_ipython()
-                from ipykernel.comm import Comm
-                reply_comm = Comm(target_name=reply_target)
-                reply_comm.open()
-
-            if not hasattr(self, '_reply_comms'):
-                self._reply_comms = []
-            self._reply_comms.append(reply_comm)
-            logger.debug(f"CommsTransport._open_reply_channel: opened {reply_target}, "
-                        f"total reply comms={len(self._reply_comms)}")
-            with open(Path.home() / "debug.txt", "a") as f:
-                f.write(f"<<reply_channel>> opened {reply_target}, comm_id={reply_comm.comm_id}\n")
-        except Exception as e:
-            logger.error(f"CommsTransport._open_reply_channel: failed: {e}")
-            with open(Path.home() / "debug.txt", "a") as f:
-                f.write(f"<<reply_channel>> FAILED: {e}\n")
 
     # ------------------------------------------------------------------
     # Phase 1: synchronous – must run inside the cell output context
@@ -573,7 +525,9 @@ class CommsTransport(TransportBase):
         #     For Colab Python->JS, self._comm may be None; send_message() falls
         #     back to self._bridge.send() which delivers via the anywidget channel.
 
-        esm = r"""
+        import time as _time
+        _esm_ts = str(int(_time.time()))
+        esm = "// cubevis-esm:" + _esm_ts + "\n" + r"""
             function render({ model, el }) {
                 const isDebug  = """ + is_debug_js + r""";
                 const targetId = model.get("target_id");
@@ -641,25 +595,40 @@ class CommsTransport(TransportBase):
                         const colabComms = google?.colab?.kernel?.comms;
                         if (!colabComms || typeof colabComms.open !== "function") return false;
 
+                        // The widget bridge iframe is the sole owner of the kernel comm.
+                        // Colab's channel.messages does NOT deliver Python's comm.send()
+                        // calls (proven by diagnostic testing). Instead we use two
+                        // BroadcastChannels as a same-origin cross-iframe bus:
+                        //
+                        //   bc_tx ("cubevis_tx_<id>"): JS -> Python
+                        //     Any iframe posts here; bridge receives and calls channel.send()
+                        //
+                        //   bc_rx ("cubevis_rx_<id>"): Python -> JS
+                        //     Python calls self._bridge.send() → anywidget model →
+                        //     model.on("msg:custom") here → bc_rx.postMessage()
+                        //     Any iframe listening on bc_rx receives the reply.
+
                         const channel = await colabComms.open(targetId, {});
 
-                        // Wrap channel in a comm-shaped object so app code can use
-                        // comm.send(data) and comm.onMsg = fn uniformly.
-                        const comm = {
-                            // JS -> Python: goes through the kernel comm (_recv fires)
-                            send(data) { channel.send(data); },
-                            // Python -> JS: set by app/notebook code to receive messages
-                            onMsg: null,
+                        // TX bus: relay JS->Python from any iframe to the kernel
+                        const bc_tx = new BroadcastChannel(`cubevis_tx_${targetId}`);
+                        bc_tx.onmessage = (event) => {
+                            if (isDebug) console.log("CUBEVIS DEBUG: bc_tx relay to kernel:", event.data);
+                            channel.send(event.data);
                         };
 
-                        // Pump Python->JS messages from channel.messages to comm.onMsg
-                        (async () => {
-                            for await (const message of channel.messages) {
-                                if (typeof comm.onMsg === "function") {
-                                    comm.onMsg({ content: { data: message.data || {} } });
-                                }
-                            }
-                        })();
+                        // RX bus: Python->JS via anywidget model → broadcast
+                        const bc_rx = new BroadcastChannel(`cubevis_rx_${targetId}`);
+                        model.on("msg:custom", (msg) => {
+                            if (isDebug) console.log("CUBEVIS DEBUG: model→bc_rx:", msg);
+                            bc_rx.postMessage(msg);
+                        });
+
+                        const comm = {
+                            // Direct JS->Python from this iframe
+                            send(data) { channel.send(data); },
+                            onMsg: null,
+                        };
 
                         attachComm(comm);
                         return true;
@@ -694,7 +663,7 @@ class CommsTransport(TransportBase):
         self._bridge = CommBridge(target_id=self._comm_mgr_id)
 
         # Register the JS->Python comm target. Python opens the reply channel
-        # dynamically when JS signals it (cubevis_open_reply in _recv).
+        # JS->Python only; Python->JS travels via anywidget model → bc_rx.
         comm_class_name, _ = _get_comm_class()
         if comm_class_name == "create_comm":
             try:
@@ -792,35 +761,32 @@ class CommsTransport(TransportBase):
             "data": serialize(message)          # Bokeh-serialize the payload
         }
 
-        # On Colab: send via dedicated _reply_comms (Python->JS channels).
-        # Each app iframe opened its own _reply channel; send to the most recent
-        # one (the active app instance). Earlier ones may be stale page loads.
-        # On JupyterLab: single bidirectional _comm_objs channel.
-        reply_comms = getattr(self, '_reply_comms', None)
-        if reply_comms:
-            # Colab path: use the last registered reply comm (most recent opener)
-            target_comm = reply_comms[-1]
+        if self._is_colab():
+            # Colab: Python->JS via anywidget model channel (the only reliable path).
+            # self._bridge.send(envelope) → model.on("msg:custom") in widget ESM →
+            # bc_rx.postMessage(envelope) → any iframe listening on bc_rx receives it.
+            # Kernel comm.send() does NOT deliver to JS channel.messages in Colab.
             try:
-                target_comm.send(envelope)
+                self._bridge.send(envelope)
                 with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"<<send_message>> sent OK via reply_comm: {envelope}\n")
+                    f.write(f"<<send_message>> sent via bridge.send: {str(envelope)[:120]}\n")
             except Exception as e:
                 with open(file_path, "a") as f:
-                    f.write(f"<<send_message>> FAILED via reply_comm: {e}\n")
-                logger.warning(f"CommsTransport.send_message: reply comm send failed: {e}")
-        elif getattr(self, '_comm_objs', None):
-            # JupyterLab path: single bidirectional comm
-            for c in list(self._comm_objs):
-                try:
-                    c.send(envelope)
-                    with open(file_path, "a", encoding="utf-8") as f:
-                        f.write(f"<<send_message>> sent OK via comm_obj: {envelope}\n")
-                except Exception as e:
-                    with open(file_path, "a") as f:
-                        f.write(f"<<send_message>> FAILED via comm_obj: {e}\n")
-                    logger.warning(f"CommsTransport.send_message: comm send failed: {e}")
+                    f.write(f"<<send_message>> bridge.send FAILED: {e}\n")
+                logger.warning(f"CommsTransport.send_message: bridge.send failed: {e}")
         else:
-            raise RuntimeError("CommsTransport: not connected (no comm available)")
+            # JupyterLab: single bidirectional kernel comm
+            comm_objs = getattr(self, '_comm_objs', None)
+            if not comm_objs:
+                raise RuntimeError("CommsTransport: not connected (no comm available)")
+            try:
+                comm_objs[0].send(envelope)
+                with open(file_path, "a", encoding="utf-8") as f:
+                    f.write(f"<<send_message>> sent via comm: {str(envelope)[:120]}\n")
+            except Exception as e:
+                with open(file_path, "a") as f:
+                    f.write(f"<<send_message>> comm.send FAILED: {e}\n")
+                logger.warning(f"CommsTransport.send_message: comm send failed: {e}")
 
     async def run(self) -> None:
         """Keep the transport alive until disconnected."""
@@ -833,12 +799,6 @@ class CommsTransport(TransportBase):
                 c.close()
             except Exception:
                 pass
-        for c in getattr(self, '_reply_comms', []):
-            try:
-                c.close()
-            except Exception:
-                pass
         self._comm_objs = []
-        self._reply_comms = []
         self._connected = False
         self._bridge = None

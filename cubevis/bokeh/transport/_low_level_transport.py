@@ -814,21 +814,40 @@ class CommsTransport(TransportBase):
         }
 
         if self._is_colab():
-            # Colab: Python->JS via anywidget model channel (self._bridge.send).
-            # The bridge widget renders in its OWN cell iframe (separate from the
-            # Bokeh app cell where CommsTransport runs). So:
-            #   self._bridge.send(envelope)
-            #   → anywidget delivers msg:custom to bridge ESM (different iframe)
-            #   → model.on("msg:custom") fires, calls bc_rx.postMessage(envelope)
-            #   → CommsTransport bc_rx.onmessage fires (different context → works!)
+            # Colab: Python->JS via google.colab.output.eval_js() (blocking/synchronous).
+            # eval_js executes JS in the output context of whichever cell triggered the
+            # current kernel execution. For spectrum clicks, that's the Bokeh app cell —
+            # the same iframe where CommsTransport registered window["cubevis_rx_cb_..."].
+            # The window callback delivers directly to colabComm.onMsg → handleJupyterMessage.
+            # BroadcastChannel is also posted for any cross-iframe listeners.
+            import json as _json
             try:
-                self._bridge.send(envelope)
+                from google.colab import output as _colab_output
+                cb_name = f"cubevis_rx_cb_{self._comm_mgr_id}"
+                bc_name = f"cubevis_rx_{self._comm_mgr_id}"
+                env_json = _json.dumps(envelope)
+                js_code = (
+                    f"(()=>{{"
+                    f"const msg={env_json};"
+                    f"const cb=window[{_json.dumps(cb_name)}];"
+                    f"if(typeof cb==='function'){{"
+                    f"  console.log('CUBEVIS eval_js: calling window cb');"
+                    f"  cb(msg);"
+                    f"}} else {{"
+                    f"  console.log('CUBEVIS eval_js: no window cb, posting to bc');"
+                    f"}}"
+                    f"try{{const bc=new BroadcastChannel({_json.dumps(bc_name)});bc.postMessage(msg);bc.close();}}catch(e){{}}"
+                    f"}})();"
+                )
+                # Use blocking eval_js (ignore_result=False) so it executes in the
+                # correct cell output context (the currently-executing cell's iframe)
+                _colab_output.eval_js(js_code)
                 with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"<<send_message>> sent via bridge.send: {str(envelope)[:120]}\n")
+                    f.write(f"<<send_message>> sent via eval_js: {str(envelope)[:120]}\n")
             except Exception as e:
                 with open(file_path, "a") as f:
-                    f.write(f"<<send_message>> bridge.send FAILED: {e}\n")
-                logger.warning(f"CommsTransport.send_message: bridge.send failed: {e}")
+                    f.write(f"<<send_message>> eval_js FAILED: {e}\n")
+                logger.warning(f"CommsTransport.send_message: eval_js failed: {e}")
         else:
             # JupyterLab: single bidirectional kernel comm
             comm_objs = getattr(self, '_comm_objs', None)

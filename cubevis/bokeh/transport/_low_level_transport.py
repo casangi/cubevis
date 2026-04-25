@@ -803,6 +803,7 @@ class CommsTransport(TransportBase):
         file_path = Path.home() / "debug.txt"
         with open(file_path, "a") as f:
             f.write(f"<<send_message>> sending to {len(self._comm_objs)} comms: {str(message)[:100]}\n")
+            f.write(f"<<send_message>> is_colab={self._is_colab()} bridge={self._bridge is not None}\n")
         from ...utils import serialize
         if not self._connected:
             raise RuntimeError("CommsTransport: not connected")

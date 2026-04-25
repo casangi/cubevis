@@ -356,6 +356,7 @@ class CommsTransport(TransportBase):
         # so asyncio.Event( ) will not work.
         self._conn_event = threading.Event()
         self._last_parent_header: dict = {}  # parent header of last received comm_msg
+        self._last_parent_ident: list = []   # ident of last received comm_msg
         # In Colab: display the bridge immediately from __init__.
         # CommsTransport is constructed during a cell's execution (the setup
         # cell), so that cell's output context is open. The bridge must render
@@ -430,8 +431,10 @@ class CommsTransport(TransportBase):
                 data = content.get("data", {})
                 f.write(f"<<_recv>> data type: {type(data).__name__}, value: {str(data)[:200]}\n")
 
-            # Store parent header for eval_js context targeting
+            # Store parent header AND idents for eval_js context targeting.
+            # kernel.set_parent(ident, parent) needs both to route output correctly.
             self._last_parent_header = msg.get("parent_header", {})
+            self._last_parent_ident = msg.get("ident", [])
 
             data = msg.get("content", {}).get("data", {})
 
@@ -863,9 +866,11 @@ class CommsTransport(TransportBase):
                         _ip2 = _gip()
                         if _ip2 is not None and hasattr(_ip2, 'kernel'):
                             try:
-                                _ip2.kernel.set_parent(_parent_header)
-                            except Exception:
-                                pass
+                                _parent_ident = getattr(self, '_last_parent_ident', [])
+                                _ip2.kernel.set_parent(_parent_ident, _parent_header)
+                            except Exception as _se:
+                                with open(file_path, "a") as _f:
+                                    _f.write(f"<<send_message>> set_parent failed: {_se}\n")
                         _colab_output.eval_js(js_code, ignore_result=True)
                         with open(file_path, "a") as f:
                             f.write(f"<<send_message>> eval_js dispatched parent={bool(_parent_header)}\n")

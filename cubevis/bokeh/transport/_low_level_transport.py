@@ -822,8 +822,12 @@ class CommsTransport(TransportBase):
             # The window callback delivers directly to colabComm.onMsg → handleJupyterMessage.
             # BroadcastChannel is also posted for any cross-iframe listeners.
             import json as _json
+            with open(file_path, "a") as f:
+                f.write(f"<<send_message>> attempting eval_js\n")
             try:
                 from google.colab import output as _colab_output
+                with open(file_path, "a") as f:
+                    f.write(f"<<send_message>> google.colab imported OK\n")
                 cb_name = f"cubevis_rx_cb_{self._comm_mgr_id}"
                 bc_name = f"cubevis_rx_{self._comm_mgr_id}"
                 env_json = _json.dumps(envelope)
@@ -840,19 +844,12 @@ class CommsTransport(TransportBase):
                     f"try{{const bc=new BroadcastChannel({_json.dumps(bc_name)});bc.postMessage(msg);bc.close();}}catch(e){{}}"
                     f"}})();"
                 )
-                # Use non-blocking eval_js (ignore_result=True) to avoid deadlocking
-                # the kernel IOLoop. Blocking eval_js() waits for a JS response but
-                # the kernel thread is occupied processing the comm_msg that triggered
-                # send_message(), so the response can never arrive — deadlock.
-                # With ignore_result=True, eval_js posts the JS and returns immediately.
-                # The JS executes in some Colab iframe; BroadcastChannel delivers to
-                # CommsTransport's bc_rx.onmessage in the Bokeh app iframe.
                 _colab_output.eval_js(js_code, ignore_result=True)
-                with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"<<send_message>> sent via eval_js: {str(envelope)[:120]}\n")
+                with open(file_path, "a") as f:
+                    f.write(f"<<send_message>> eval_js called OK\n")
             except Exception as e:
                 with open(file_path, "a") as f:
-                    f.write(f"<<send_message>> eval_js FAILED: {e}\n")
+                    f.write(f"<<send_message>> eval_js FAILED: {type(e).__name__}: {e}\n")
                 logger.warning(f"CommsTransport.send_message: eval_js failed: {e}")
         else:
             # JupyterLab: single bidirectional kernel comm

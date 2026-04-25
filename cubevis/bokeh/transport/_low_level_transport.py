@@ -355,6 +355,7 @@ class CommsTransport(TransportBase):
         # This may be set and read in different threads/event loops
         # so asyncio.Event( ) will not work.
         self._conn_event = threading.Event()
+        self._last_parent_header: dict = {}  # parent header of last received comm_msg
         # In Colab: display the bridge immediately from __init__.
         # CommsTransport is constructed during a cell's execution (the setup
         # cell), so that cell's output context is open. The bridge must render
@@ -428,6 +429,9 @@ class CommsTransport(TransportBase):
                 f.write(f"<<_recv>> content keys: {list(content.keys())}\n")
                 data = content.get("data", {})
                 f.write(f"<<_recv>> data type: {type(data).__name__}, value: {str(data)[:200]}\n")
+
+            # Store parent header for eval_js context targeting
+            self._last_parent_header = msg.get("parent_header", {})
 
             data = msg.get("content", {}).get("data", {})
 
@@ -846,32 +850,41 @@ class CommsTransport(TransportBase):
                     f"}})();"
                 )
 
+                _parent_header = getattr(self, '_last_parent_header', {})
+
                 def _do_eval_js():
                     try:
+                        # Restore the kernel's parent header so eval_js targets the
+                        # correct cell output context. Colab routes eval_js to the
+                        # cell whose comm_msg triggered this execution. Without restoring
+                        # the parent header in the add_callback context, eval_js has no
+                        # output target and silently does nothing.
+                        from IPython import get_ipython as _gip
+                        _ip2 = _gip()
+                        if _ip2 is not None and hasattr(_ip2, 'kernel'):
+                            try:
+                                _ip2.kernel.set_parent(_parent_header)
+                            except Exception:
+                                pass
                         _colab_output.eval_js(js_code, ignore_result=True)
                         with open(file_path, "a") as f:
-                            f.write(f"<<send_message>> eval_js dispatched from main thread\n")
+                            f.write(f"<<send_message>> eval_js dispatched parent={bool(_parent_header)}\n")
                     except Exception as ex:
                         with open(file_path, "a") as f:
-                            f.write(f"<<send_message>> eval_js in main thread FAILED: {ex}\n")
+                            f.write(f"<<send_message>> eval_js FAILED: {type(ex).__name__}: {ex}\n")
 
-                # Try to run on the IPython kernel's main IOLoop thread
-                # This is where eval_js actually works in Colab
                 try:
                     from IPython import get_ipython
                     _ip = get_ipython()
                     if _ip is not None and hasattr(_ip, 'kernel') and hasattr(_ip.kernel, 'io_loop'):
                         _ip.kernel.io_loop.add_callback(_do_eval_js)
                         with open(file_path, "a") as f:
-                            f.write(f"<<send_message>> eval_js scheduled on kernel io_loop\n")
+                            f.write(f"<<send_message>> eval_js scheduled on io_loop\n")
                     else:
-                        # Fallback: call directly (works in simple test / user cell context)
                         _do_eval_js()
-                        with open(file_path, "a") as f:
-                            f.write(f"<<send_message>> eval_js called directly (fallback)\n")
                 except Exception as e2:
                     with open(file_path, "a") as f:
-                        f.write(f"<<send_message>> io_loop scheduling FAILED: {e2}\n")
+                        f.write(f"<<send_message>> scheduling FAILED: {e2}\n")
                     _do_eval_js()
 
             except Exception as e:

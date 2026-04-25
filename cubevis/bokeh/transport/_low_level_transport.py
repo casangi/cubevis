@@ -839,9 +839,14 @@ class CommsTransport(TransportBase):
                     f"try{{const bc=new BroadcastChannel({_json.dumps(bc_name)});bc.postMessage(msg);bc.close();}}catch(e){{}}"
                     f"}})();"
                 )
-                # Use blocking eval_js (ignore_result=False) so it executes in the
-                # correct cell output context (the currently-executing cell's iframe)
-                _colab_output.eval_js(js_code)
+                # Use non-blocking eval_js (ignore_result=True) to avoid deadlocking
+                # the kernel IOLoop. Blocking eval_js() waits for a JS response but
+                # the kernel thread is occupied processing the comm_msg that triggered
+                # send_message(), so the response can never arrive — deadlock.
+                # With ignore_result=True, eval_js posts the JS and returns immediately.
+                # The JS executes in some Colab iframe; BroadcastChannel delivers to
+                # CommsTransport's bc_rx.onmessage in the Bokeh app iframe.
+                _colab_output.eval_js(js_code, ignore_result=True)
                 with open(file_path, "a", encoding="utf-8") as f:
                     f.write(f"<<send_message>> sent via eval_js: {str(envelope)[:120]}\n")
             except Exception as e:

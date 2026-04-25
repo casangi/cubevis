@@ -822,12 +822,13 @@ class CommsTransport(TransportBase):
             # The window callback delivers directly to colabComm.onMsg → handleJupyterMessage.
             # BroadcastChannel is also posted for any cross-iframe listeners.
             import json as _json
-            with open(file_path, "a") as f:
-                f.write(f"<<send_message>> attempting eval_js\n")
+            # eval_js only works when called from the main IPython kernel thread.
+            # When send_message is called from a Tornado IOLoop callback (as in the
+            # full app), eval_js with ignore_result=True silently does nothing.
+            # Fix: schedule the eval_js call on the kernel's main asyncio loop using
+            # IPython's kernel.io_loop, which runs on the main thread where eval_js works.
             try:
                 from google.colab import output as _colab_output
-                with open(file_path, "a") as f:
-                    f.write(f"<<send_message>> google.colab imported OK\n")
                 cb_name = f"cubevis_rx_cb_{self._comm_mgr_id}"
                 bc_name = f"cubevis_rx_{self._comm_mgr_id}"
                 env_json = _json.dumps(envelope)
@@ -844,9 +845,35 @@ class CommsTransport(TransportBase):
                     f"try{{const bc=new BroadcastChannel({_json.dumps(bc_name)});bc.postMessage(msg);bc.close();}}catch(e){{}}"
                     f"}})();"
                 )
-                _colab_output.eval_js(js_code, ignore_result=True)
-                with open(file_path, "a") as f:
-                    f.write(f"<<send_message>> eval_js called OK\n")
+
+                def _do_eval_js():
+                    try:
+                        _colab_output.eval_js(js_code, ignore_result=True)
+                        with open(file_path, "a") as f:
+                            f.write(f"<<send_message>> eval_js dispatched from main thread\n")
+                    except Exception as ex:
+                        with open(file_path, "a") as f:
+                            f.write(f"<<send_message>> eval_js in main thread FAILED: {ex}\n")
+
+                # Try to run on the IPython kernel's main IOLoop thread
+                # This is where eval_js actually works in Colab
+                try:
+                    from IPython import get_ipython
+                    _ip = get_ipython()
+                    if _ip is not None and hasattr(_ip, 'kernel') and hasattr(_ip.kernel, 'io_loop'):
+                        _ip.kernel.io_loop.add_callback(_do_eval_js)
+                        with open(file_path, "a") as f:
+                            f.write(f"<<send_message>> eval_js scheduled on kernel io_loop\n")
+                    else:
+                        # Fallback: call directly (works in simple test / user cell context)
+                        _do_eval_js()
+                        with open(file_path, "a") as f:
+                            f.write(f"<<send_message>> eval_js called directly (fallback)\n")
+                except Exception as e2:
+                    with open(file_path, "a") as f:
+                        f.write(f"<<send_message>> io_loop scheduling FAILED: {e2}\n")
+                    _do_eval_js()
+
             except Exception as e:
                 with open(file_path, "a") as f:
                     f.write(f"<<send_message>> eval_js FAILED: {type(e).__name__}: {e}\n")

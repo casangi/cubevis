@@ -435,12 +435,26 @@ class CommsTransport(TransportBase):
             self._last_parent_header = msg.get("parent_header", {})
             if not self._last_parent_header:
                 try:
+                    import pathlib as _pl
                     from IPython import get_ipython as _gip2
                     _ip3 = _gip2()
                     if _ip3 is not None and hasattr(_ip3, 'kernel'):
-                        self._last_parent_header = _ip3.kernel._shell_parent.get({})
-                except Exception:
-                    pass
+                        k = _ip3.kernel
+                        _has_g = hasattr(k, '_get_shell_context_var')
+                        _has_s = hasattr(k, '_shell_parent')
+                        with open(_pl.Path.home() / "debug.txt", "a") as _f:
+                            _f.write(f"<<ph>> has_get={_has_g} has_shell={_has_s}\n")
+                        if _has_g and _has_s:
+                            _ph = k._get_shell_context_var(k._shell_parent)
+                            with open(_pl.Path.home() / "debug.txt", "a") as _f:
+                                _f.write(f"<<ph>> ctx_var: type={type(_ph).__name__} bool={bool(_ph)}\n")
+                            self._last_parent_header = _ph
+                        elif _has_s:
+                            self._last_parent_header = k._shell_parent.get({})
+                except Exception as _phe:
+                    import pathlib as _pl2
+                    with open(_pl2.Path.home() / "debug.txt", "a") as _f:
+                        _f.write(f"<<ph>> exception: {_phe}\n")
 
             data = msg.get("content", {}).get("data", {})
 

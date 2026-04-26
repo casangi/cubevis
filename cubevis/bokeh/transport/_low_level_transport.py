@@ -454,6 +454,19 @@ class CommsTransport(TransportBase):
                             self._last_parent_header = _ph
                         elif _has_s:
                             self._last_parent_header = k._shell_parent.get({})
+                        # Colab kernel: use _parent_header directly (plain dict, not ContextVar)
+                        elif hasattr(k, '_parent_header'):
+                            _ph2 = k._parent_header
+                            with open(_pl.Path.home() / "debug.txt", "a") as _f:
+                                _f.write(f"<<ph>> _parent_header: type={type(_ph2).__name__} bool={bool(_ph2)}\n")
+                            self._last_parent_header = _ph2
+                            if hasattr(k, '_parent_ident'):
+                                self._last_parent_ident = k._parent_ident
+                        elif hasattr(k, 'get_parent'):
+                            _ph3 = k.get_parent()
+                            with open(_pl.Path.home() / "debug.txt", "a") as _f:
+                                _f.write(f"<<ph>> get_parent(): type={type(_ph3).__name__} bool={bool(_ph3)}\n")
+                            self._last_parent_header = _ph3
                 except Exception as _phe:
                     import pathlib as _pl2
                     with open(_pl2.Path.home() / "debug.txt", "a") as _f:
@@ -891,10 +904,19 @@ class CommsTransport(TransportBase):
                             try:
                                 k2 = _ip2.kernel
                                 if hasattr(k2, '_get_shell_context_var') and hasattr(k2, '_shell_parent_ident'):
+                                    # Standard ipykernel
                                     _parent_ident = k2._get_shell_context_var(k2._shell_parent_ident)
-                                else:
-                                    _parent_ident = []
-                                k2.set_parent(_parent_ident, _parent_header)
+                                    k2.set_parent(_parent_ident, _parent_header)
+                                elif hasattr(k2, '_parent_header'):
+                                    # Colab kernel: set _parent_header/_parent_ident directly
+                                    k2._parent_header = _parent_header
+                                    _parent_ident = getattr(self, '_last_parent_ident', {})
+                                    if _parent_ident:
+                                        k2._parent_ident = _parent_ident
+                                elif hasattr(k2, 'set_parent'):
+                                    k2.set_parent(_parent_header)
+                                with open(file_path, "a") as _spf:
+                                    _spf.write(f"<<send_message>> set_parent done (colab={hasattr(k2,'_parent_header')})\n")
                             except Exception as _spe:
                                 with open(file_path, "a") as _spf:
                                     _spf.write(f"<<send_message>> set_parent err: {_spe}\n")

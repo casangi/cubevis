@@ -872,12 +872,12 @@ class CommsTransport(TransportBase):
                         _ip2 = _gip()
                         if _ip2 is not None and hasattr(_ip2, 'kernel') and _parent_header:
                             try:
-                                # Get the current shell ident from the kernel directly
-                                try:
-                                    _parent_ident = _ip2.kernel._shell_parent_ident.get()
-                                except Exception:
+                                k2 = _ip2.kernel
+                                if hasattr(k2, '_get_shell_context_var') and hasattr(k2, '_shell_parent_ident'):
+                                    _parent_ident = k2._get_shell_context_var(k2._shell_parent_ident)
+                                else:
                                     _parent_ident = []
-                                _ip2.kernel.set_parent(_parent_ident, _parent_header)
+                                k2.set_parent(_parent_ident, _parent_header)
                             except Exception as _spe:
                                 with open(file_path, "a") as _spf:
                                     _spf.write(f"<<send_message>> set_parent err: {_spe}\n")

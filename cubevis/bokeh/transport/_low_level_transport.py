@@ -356,7 +356,6 @@ class CommsTransport(TransportBase):
         # so asyncio.Event( ) will not work.
         self._conn_event = threading.Event()
         self._last_parent_header: dict = {}  # parent header of last received comm_msg
-        self._last_parent_ident: list = []   # ident of last received comm_msg
         # In Colab: display the bridge immediately from __init__.
         # CommsTransport is constructed during a cell's execution (the setup
         # cell), so that cell's output context is open. The bridge must render
@@ -431,10 +430,17 @@ class CommsTransport(TransportBase):
                 data = content.get("data", {})
                 f.write(f"<<_recv>> data type: {type(data).__name__}, value: {str(data)[:200]}\n")
 
-            # Store parent header AND idents for eval_js context targeting.
-            # kernel.set_parent(ident, parent) needs both to route output correctly.
+            # Store parent header for eval_js context targeting.
+            # Try the msg dict first; fall back to reading from the kernel directly.
             self._last_parent_header = msg.get("parent_header", {})
-            self._last_parent_ident = msg.get("ident", [])
+            if not self._last_parent_header:
+                try:
+                    from IPython import get_ipython as _gip2
+                    _ip3 = _gip2()
+                    if _ip3 is not None and hasattr(_ip3, 'kernel'):
+                        self._last_parent_header = _ip3.kernel._shell_parent.get({})
+                except Exception:
+                    pass
 
             data = msg.get("content", {}).get("data", {})
 
@@ -864,13 +870,17 @@ class CommsTransport(TransportBase):
                         # output target and silently does nothing.
                         from IPython import get_ipython as _gip
                         _ip2 = _gip()
-                        if _ip2 is not None and hasattr(_ip2, 'kernel'):
+                        if _ip2 is not None and hasattr(_ip2, 'kernel') and _parent_header:
                             try:
-                                _parent_ident = getattr(self, '_last_parent_ident', [])
+                                # Get the current shell ident from the kernel directly
+                                try:
+                                    _parent_ident = _ip2.kernel._shell_parent_ident.get()
+                                except Exception:
+                                    _parent_ident = []
                                 _ip2.kernel.set_parent(_parent_ident, _parent_header)
-                            except Exception as _se:
-                                with open(file_path, "a") as _f:
-                                    _f.write(f"<<send_message>> set_parent failed: {_se}\n")
+                            except Exception as _spe:
+                                with open(file_path, "a") as _spf:
+                                    _spf.write(f"<<send_message>> set_parent err: {_spe}\n")
                         _colab_output.eval_js(js_code, ignore_result=True)
                         with open(file_path, "a") as f:
                             f.write(f"<<send_message>> eval_js dispatched parent={bool(_parent_header)}\n")

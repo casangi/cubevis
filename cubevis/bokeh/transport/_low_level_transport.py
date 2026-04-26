@@ -442,8 +442,11 @@ class CommsTransport(TransportBase):
                         k = _ip3.kernel
                         _has_g = hasattr(k, '_get_shell_context_var')
                         _has_s = hasattr(k, '_shell_parent')
+                        _ktype = type(k).__name__
+                        _kmod = type(k).__module__
                         with open(_pl.Path.home() / "debug.txt", "a") as _f:
-                            _f.write(f"<<ph>> has_get={_has_g} has_shell={_has_s}\n")
+                            _f.write(f"<<ph>> kernel type={_ktype} module={_kmod} has_get={_has_g} has_shell={_has_s}\n")
+                            _f.write(f"<<ph>> kernel attrs: {[a for a in dir(k) if 'parent' in a.lower() or 'shell' in a.lower()][:10]}\n")
                         if _has_g and _has_s:
                             _ph = k._get_shell_context_var(k._shell_parent)
                             with open(_pl.Path.home() / "debug.txt", "a") as _f:

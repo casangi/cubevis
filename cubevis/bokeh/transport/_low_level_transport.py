@@ -908,15 +908,26 @@ class CommsTransport(TransportBase):
                                     _parent_ident = k2._get_shell_context_var(k2._shell_parent_ident)
                                     k2.set_parent(_parent_ident, _parent_header)
                                 elif hasattr(k2, '_parent_header'):
-                                    # Colab kernel: set _parent_header/_parent_ident directly
-                                    k2._parent_header = _parent_header
-                                    _parent_ident = getattr(self, '_last_parent_ident', {})
-                                    if _parent_ident:
-                                        k2._parent_ident = _parent_ident
+                                    # Colab kernel: _parent_header is read-only property backed by _parents dict
+                                    # Try setting via _parents dict first
+                                    _set_ok = False
+                                    if hasattr(k2, '_parents') and isinstance(k2._parents, dict):
+                                        for _ch in ('shell', 'control', 'stdin'):
+                                            if _ch in k2._parents:
+                                                k2._parents[_ch] = _parent_header
+                                                _set_ok = True
+                                        if not _set_ok:
+                                            # Set for all known channels
+                                            k2._parents['shell'] = _parent_header
+                                            _set_ok = True
+                                    if not _set_ok and hasattr(k2, 'set_parent'):
+                                        k2.set_parent(_parent_header)
+                                    with open(file_path, "a") as _spf:
+                                        _spf.write(f"<<send_message>> set_parent via _parents ok={_set_ok} keys={list(k2._parents.keys()) if hasattr(k2,'_parents') else 'n/a'}\n")
                                 elif hasattr(k2, 'set_parent'):
                                     k2.set_parent(_parent_header)
-                                with open(file_path, "a") as _spf:
-                                    _spf.write(f"<<send_message>> set_parent done (colab={hasattr(k2,'_parent_header')})\n")
+                                    with open(file_path, "a") as _spf:
+                                        _spf.write(f"<<send_message>> set_parent via set_parent\n")
                             except Exception as _spe:
                                 with open(file_path, "a") as _spf:
                                     _spf.write(f"<<send_message>> set_parent err: {_spe}\n")

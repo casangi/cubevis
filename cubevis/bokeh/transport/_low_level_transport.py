@@ -431,54 +431,31 @@ class CommsTransport(TransportBase):
                 data = content.get("data", {})
                 f.write(f"<<_recv>> data type: {type(data).__name__}, value: {str(data)[:200]}\n")
 
-            # Store parent header for eval_js context targeting.
-            # Try the msg dict first; fall back to reading from the kernel directly.
-            self._last_parent_header = msg.get("parent_header", {})
-            if not self._last_parent_header:
-                try:
-                    import pathlib as _pl
-                    from IPython import get_ipython as _gip2
-                    _ip3 = _gip2()
-                    if _ip3 is not None and hasattr(_ip3, 'kernel'):
-                        k = _ip3.kernel
-                        _has_g = hasattr(k, '_get_shell_context_var')
-                        _has_s = hasattr(k, '_shell_parent')
-                        _ktype = type(k).__name__
-                        _kmod = type(k).__module__
-                        with open(_pl.Path.home() / "debug.txt", "a") as _f:
-                            _f.write(f"<<ph>> kernel type={_ktype} module={_kmod} has_get={_has_g} has_shell={_has_s}\n")
-                            _f.write(f"<<ph>> kernel attrs: {[a for a in dir(k) if 'parent' in a.lower() or 'shell' in a.lower()][:10]}\n")
-                        if _has_g and _has_s:
-                            _ph = k._get_shell_context_var(k._shell_parent)
-                            with open(_pl.Path.home() / "debug.txt", "a") as _f:
-                                _f.write(f"<<ph>> ctx_var: type={type(_ph).__name__} bool={bool(_ph)}\n")
-                            self._last_parent_header = _ph
-                        elif _has_s:
-                            self._last_parent_header = k._shell_parent.get({})
-                        # Colab kernel: use _parent_header directly (plain dict, not ContextVar)
-                        elif hasattr(k, '_parent_header'):
-                            _ph2 = k._parent_header
-                            with open(_pl.Path.home() / "debug.txt", "a") as _f:
-                                _f.write(f"<<ph>> _parent_header: type={type(_ph2).__name__} bool={bool(_ph2)}\n")
-                            self._last_parent_header = _ph2
-                            if hasattr(k, '_parent_ident'):
-                                self._last_parent_ident = k._parent_ident
-                        elif hasattr(k, 'get_parent'):
-                            _ph3 = k.get_parent()
-                            with open(_pl.Path.home() / "debug.txt", "a") as _f:
-                                _f.write(f"<<ph>> get_parent(): type={type(_ph3).__name__} bool={bool(_ph3)}\n")
-                            self._last_parent_header = _ph3
-                except Exception as _phe:
-                    import pathlib as _pl2
-                    with open(_pl2.Path.home() / "debug.txt", "a") as _f:
-                        _f.write(f"<<ph>> exception: {_phe}\n")
+            # Capture parent header only for non-poll messages.
+            # Poll messages use the bridge iframe context (captured by Colab kernel automatically).
+            _data_peek = msg.get("content", {}).get("data", {})
+            _is_poll_msg = isinstance(_data_peek, dict) and _data_peek.get("type") == "cubevis_poll"
+            if not _is_poll_msg:
+                self._last_parent_header = msg.get("parent_header", {})
+                if not self._last_parent_header:
+                    try:
+                        from IPython import get_ipython as _gip2
+                        _ip3 = _gip2()
+                        if _ip3 is not None and hasattr(_ip3, 'kernel'):
+                            k = _ip3.kernel
+                            if hasattr(k, '_parent_header'):
+                                self._last_parent_header = k._parent_header
+                                if hasattr(k, '_parent_ident'):
+                                    self._last_parent_ident = k._parent_ident
+                    except Exception:
+                        pass
 
             data = msg.get("content", {}).get("data", {})
 
             # Handle poll from widget bridge: deliver pending reply via eval_js.
             # eval_js runs in the bridge iframe (different from Bokeh app iframe),
             # so BroadcastChannel delivers to bc_rx.onmessage in the app iframe. ✓
-            if isinstance(data, dict) and data.get("type") == "cubevis_poll":
+            if _is_poll_msg:
                 _pending = getattr(self, "_colab_pending_reply", {})
                 if _pending:
                     import json as _pj
@@ -720,7 +697,7 @@ class CommsTransport(TransportBase):
                         // BroadcastChannel from here delivers to the Bokeh app's bc_rx. ✓
                         setInterval(() => {
                             channel.send({ type: "cubevis_poll", target_id: targetId });
-                        }, 250);
+                        }, 50);
 
                         // RX bus: Python->JS via anywidget model → deliver to listeners.
                         // Two delivery paths:

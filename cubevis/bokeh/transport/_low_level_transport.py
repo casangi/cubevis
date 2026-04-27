@@ -895,58 +895,64 @@ class CommsTransport(TransportBase):
                 # The Bokeh session has its own always-active WebSocket to the browser.
                 # Changing a Bokeh model property sends a patch_doc message over that
                 # WebSocket — completely bypassing Colab's cell output routing.
-                _sent = False
+                # Use the CommMgr Bokeh model's reply property.
+                # CommMgr is a Bokeh Model — setting its reply property sends a
+                # patch_doc message over the always-active Bokeh WebSocket.
+                # The JS CommMgr watches this property and delivers to handleJupyterMessage.
+                import json as _json2
                 try:
-                    from .. import BokehInit as _BI
-                    _app = _BI.get_app_context()
-                    if _app is not None and hasattr(_app, 'bokeh_doc'):
-                        _doc = _app.bokeh_doc
-                    else:
-                        from bokeh.io import curdoc as _curdoc
-                        _doc = _curdoc()
-                    if _doc is not None:
-                        # Store reply in a Bokeh DataModel string property
-                        # that CommsTransport JS side watches via model.change
-                        _reply_key = f"cubevis_reply_{self._comm_mgr_id}"
-                        _existing = [m for m in _doc.roots if getattr(m, 'name', None) == _reply_key]
-                        if _existing:
-                            _model = _existing[0]
-                        else:
-                            from bokeh.models import TextInput as _TI
-                            _model = _TI(name=_reply_key, value="", title="cubevis_reply")
-                            _doc.add_root(_model)
-                        import json as _json2
-                        _model.value = _json2.dumps({"seq": id(envelope), "envelope": envelope})
-                        _sent = True
+                    # CommMgr model is stored in self._comm_objs[0]'s document
+                    # Access via the registered CommMgr Python object
+                    from .._comm_mgr import CommMgr as _CMgr
+                    _comm_mgr_obj = None
+                    # Search registered Bokeh models for our CommMgr
+                    try:
+                        from .. import BokehInit as _BI
+                        _app = _BI.get_app_context()
+                        if _app is not None:
+                            _doc = getattr(_app, 'document', None) or getattr(_app, 'bokeh_doc', None)
+                            if _doc is None:
+                                from bokeh.io import curdoc as _curdoc
+                                _doc = _curdoc()
+                            if _doc is not None:
+                                for _root in _doc.roots:
+                                    if isinstance(_root, _CMgr) and getattr(_root, 'comm_mgr_id', None) == self._comm_mgr_id:
+                                        _comm_mgr_obj = _root
+                                        break
+                    except Exception as _de:
                         with open(file_path, "a") as _f:
-                            _f.write(f"<<send_message>> sent via Bokeh doc model\n")
+                            _f.write(f"<<send_message>> doc search err: {_de}\n")
+
+                    if _comm_mgr_obj is not None and hasattr(_comm_mgr_obj, 'reply'):
+                        _comm_mgr_obj.reply = _json2.dumps({"seq": id(envelope), "data": envelope})
+                        with open(file_path, "a") as _f:
+                            _f.write(f"<<send_message>> sent via CommMgr.reply property\n")
+                    else:
+                        # CommMgr has no reply property yet - fall back to TextInput approach
+                        from .. import BokehInit as _BI2
+                        _app2 = _BI2.get_app_context()
+                        _doc2 = getattr(_app2, 'document', None) or getattr(_app2, 'bokeh_doc', None)
+                        if _doc2 is None:
+                            from bokeh.io import curdoc as _curdoc2
+                            _doc2 = _curdoc2()
+                        if _doc2 is not None:
+                            _reply_key = f"cubevis_reply_{self._comm_mgr_id}"
+                            _existing = [m for m in _doc2.roots if getattr(m, 'name', None) == _reply_key]
+                            if _existing:
+                                _model = _existing[0]
+                            else:
+                                from bokeh.models import TextInput as _TI
+                                _model = _TI(name=_reply_key, value="", title="cubevis_reply")
+                                _doc2.add_root(_model)
+                            _model.value = _json2.dumps({"seq": id(envelope), "data": envelope})
+                            with open(file_path, "a") as _f:
+                                _f.write(f"<<send_message>> sent via TextInput (no reply prop)\n")
+                        else:
+                            with open(file_path, "a") as _f:
+                                _f.write(f"<<send_message>> no doc available\n")
                 except Exception as _be:
                     with open(file_path, "a") as _f:
-                        _f.write(f"<<send_message>> Bokeh doc approach: {type(_be).__name__}: {_be}\n")
-
-                if not _sent:
-                    # Fallback: display(Javascript) via IOLoop
-                    def _do_display_js(_ph=_parent_header, _jc=js_code, _fp=file_path):
-                        try:
-                            from IPython import get_ipython as _gip2
-                            _ip3 = _gip2()
-                            if _ip3 is not None and hasattr(_ip3, 'kernel') and _ph:
-                                k3 = _ip3.kernel
-                                if hasattr(k3, '_parents') and isinstance(k3._parents, dict):
-                                    for _ch3 in list(k3._parents.keys()) or ['shell']:
-                                        k3._parents[_ch3] = _ph
-                            from IPython.display import display as _ipy_display2, Javascript as _JS2
-                            _ipy_display2(_JS2(_jc))
-                            with open(_fp, "a") as _f3:
-                                _f3.write(f"<<send_message>> display(JS) fallback parent={bool(_ph)}\n")
-                        except Exception as _ex3:
-                            with open(_fp, "a") as _f3:
-                                _f3.write(f"<<send_message>> display(JS) fallback FAILED: {_ex3}\n")
-                    try:
-                        from tornado.ioloop import IOLoop as _IOLoop
-                        _IOLoop.current().add_callback(_do_display_js)
-                    except Exception:
-                        _do_display_js()
+                        _f.write(f"<<send_message>> Bokeh model err: {type(_be).__name__}: {_be}\n")
 
             except Exception as e:
                 with open(file_path, "a") as f:

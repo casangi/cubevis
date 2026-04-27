@@ -356,6 +356,7 @@ class CommsTransport(TransportBase):
         # so asyncio.Event( ) will not work.
         self._conn_event = threading.Event()
         self._last_parent_header: dict = {}  # parent header of last received comm_msg
+        self._colab_pending_reply: dict = {}  # pending reply for poll delivery
         # In Colab: display the bridge immediately from __init__.
         # CommsTransport is constructed during a cell's execution (the setup
         # cell), so that cell's output context is open. The bridge must render
@@ -473,6 +474,39 @@ class CommsTransport(TransportBase):
                         _f.write(f"<<ph>> exception: {_phe}\n")
 
             data = msg.get("content", {}).get("data", {})
+
+            # Handle poll from widget bridge: deliver pending reply via eval_js.
+            # eval_js runs in the bridge iframe (different from Bokeh app iframe),
+            # so BroadcastChannel delivers to bc_rx.onmessage in the app iframe. ✓
+            if isinstance(data, dict) and data.get("type") == "cubevis_poll":
+                _pending = getattr(self, "_colab_pending_reply", {})
+                if _pending:
+                    import json as _pj
+                    import pathlib as _plib
+                    _fp2 = _plib.Path.home() / "debug.txt"
+                    try:
+                        from google.colab import output as _co
+                        _cb = f"cubevis_rx_cb_{self._comm_mgr_id}"
+                        _bc = f"cubevis_rx_{self._comm_mgr_id}"
+                        _env_s = _pj.dumps(_pending)
+                        _js = (f"(()=>{{const msg={_env_s};"
+                               f"const cb=window[{_pj.dumps(_cb)}];"
+                               f"if(typeof cb==='function'){{"
+                               f"  console.log('CUBEVIS poll-deliver: window cb');cb(msg);"
+                               f"}} else {{"
+                               f"  console.log('CUBEVIS poll-deliver: no window cb, posting bc');"
+                               f"}}"
+                               f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
+                               f"bc.postMessage(msg);bc.close();}}catch(e){{}}" 
+                               f"}})();")
+                        _co.eval_js(_js, ignore_result=True)
+                        self._colab_pending_reply = {}
+                        with open(_fp2, "a") as _df:
+                            _df.write(f"<<poll>> delivered reply via eval_js\n")
+                    except Exception as _pe:
+                        with open(_fp2, "a") as _df:
+                            _df.write(f"<<poll>> delivery failed: {_pe}\n")
+                return
 
             # first check if it is a CommsTransport message
             if data.get("type") == "cubevis_message":
@@ -679,6 +713,14 @@ class CommsTransport(TransportBase):
                             if (isDebug) console.log("CUBEVIS DEBUG: bc_tx relay to kernel:", event.data);
                             channel.send(event.data);
                         };
+
+                        // Poll Python every 250ms for pending replies.
+                        // eval_js called from _recv (triggered by this poll) runs in THIS
+                        // bridge iframe — a different iframe from the Bokeh app cell.
+                        // BroadcastChannel from here delivers to the Bokeh app's bc_rx. ✓
+                        setInterval(() => {
+                            channel.send({ type: "cubevis_poll", target_id: targetId });
+                        }, 250);
 
                         // RX bus: Python->JS via anywidget model → deliver to listeners.
                         // Two delivery paths:
@@ -893,66 +935,14 @@ class CommsTransport(TransportBase):
 
                 # Try Bokeh document approach: update a Bokeh model property.
                 # The Bokeh session has its own always-active WebSocket to the browser.
-                # Changing a Bokeh model property sends a patch_doc message over that
-                # WebSocket — completely bypassing Colab's cell output routing.
-                # Use the CommMgr Bokeh model's reply property.
-                # CommMgr is a Bokeh Model — setting its reply property sends a
-                # patch_doc message over the always-active Bokeh WebSocket.
-                # The JS CommMgr watches this property and delivers to handleJupyterMessage.
-                import json as _json2
-                try:
-                    # CommMgr model is stored in self._comm_objs[0]'s document
-                    # Access via the registered CommMgr Python object
-                    from .._comm_mgr import CommMgr as _CMgr
-                    _comm_mgr_obj = None
-                    # Search registered Bokeh models for our CommMgr
-                    try:
-                        from .. import BokehInit as _BI
-                        _app = _BI.get_app_context()
-                        if _app is not None:
-                            _doc = getattr(_app, 'document', None) or getattr(_app, 'bokeh_doc', None)
-                            if _doc is None:
-                                from bokeh.io import curdoc as _curdoc
-                                _doc = _curdoc()
-                            if _doc is not None:
-                                for _root in _doc.roots:
-                                    if isinstance(_root, _CMgr) and getattr(_root, 'comm_mgr_id', None) == self._comm_mgr_id:
-                                        _comm_mgr_obj = _root
-                                        break
-                    except Exception as _de:
-                        with open(file_path, "a") as _f:
-                            _f.write(f"<<send_message>> doc search err: {_de}\n")
-
-                    if _comm_mgr_obj is not None and hasattr(_comm_mgr_obj, 'reply'):
-                        _comm_mgr_obj.reply = _json2.dumps({"seq": id(envelope), "data": envelope})
-                        with open(file_path, "a") as _f:
-                            _f.write(f"<<send_message>> sent via CommMgr.reply property\n")
-                    else:
-                        # CommMgr has no reply property yet - fall back to TextInput approach
-                        from .. import BokehInit as _BI2
-                        _app2 = _BI2.get_app_context()
-                        _doc2 = getattr(_app2, 'document', None) or getattr(_app2, 'bokeh_doc', None)
-                        if _doc2 is None:
-                            from bokeh.io import curdoc as _curdoc2
-                            _doc2 = _curdoc2()
-                        if _doc2 is not None:
-                            _reply_key = f"cubevis_reply_{self._comm_mgr_id}"
-                            _existing = [m for m in _doc2.roots if getattr(m, 'name', None) == _reply_key]
-                            if _existing:
-                                _model = _existing[0]
-                            else:
-                                from bokeh.models import TextInput as _TI
-                                _model = _TI(name=_reply_key, value="", title="cubevis_reply")
-                                _doc2.add_root(_model)
-                            _model.value = _json2.dumps({"seq": id(envelope), "data": envelope})
-                            with open(file_path, "a") as _f:
-                                _f.write(f"<<send_message>> sent via TextInput (no reply prop)\n")
-                        else:
-                            with open(file_path, "a") as _f:
-                                _f.write(f"<<send_message>> no doc available\n")
-                except Exception as _be:
-                    with open(file_path, "a") as _f:
-                        _f.write(f"<<send_message>> Bokeh model err: {type(_be).__name__}: {_be}\n")
+                # Store reply for delivery via poll mechanism.
+                # The widget bridge polls Python every 250ms via channel.send({type:"cubevis_poll"}).
+                # Python's _recv handles the poll synchronously and calls eval_js there.
+                # eval_js runs in the widget bridge iframe context (different from Bokeh app iframe),
+                # so BroadcastChannel delivers to CommsTransport's bc_rx.onmessage. ✓
+                self._colab_pending_reply = envelope
+                with open(file_path, "a") as _f:
+                    _f.write(f"<<send_message>> reply stored for poll delivery\n")
 
             except Exception as e:
                 with open(file_path, "a") as f:

@@ -891,38 +891,56 @@ class CommsTransport(TransportBase):
 
                 _parent_header = getattr(self, '_last_parent_header', {})
 
-                # Set the kernel's parent context NOW (synchronously, before eval_js).
-                # Must happen on the same call stack as eval_js — doing it in add_callback
-                # is too late because the kernel moves to a new execution context first.
+                # Use IPython.display.Javascript to publish JS to the frontend.
+                # This goes through the kernel's IOPub channel as a display_data message,
+                # NOT through eval_js's request/response mechanism.
+                # It works from any thread because IOPub is thread-safe, and Colab routes
+                # display_data to the cell output based on the parent_header.
+                # We set _parents['shell'] to the captured comm_msg parent BEFORE publishing,
+                # so the display_data goes to the Bokeh app cell's output iframe.
                 try:
                     from IPython import get_ipython as _gip
                     _ip2 = _gip()
                     if _ip2 is not None and hasattr(_ip2, 'kernel') and _parent_header:
                         k2 = _ip2.kernel
-                        if hasattr(k2, '_get_shell_context_var') and hasattr(k2, '_shell_parent_ident'):
-                            _parent_ident = k2._get_shell_context_var(k2._shell_parent_ident)
-                            k2.set_parent(_parent_ident, _parent_header)
-                            with open(file_path, "a") as _spf:
-                                _spf.write(f"<<send_message>> set_parent via ipykernel\n")
-                        elif hasattr(k2, '_parents') and isinstance(k2._parents, dict):
+                        if hasattr(k2, '_parents') and isinstance(k2._parents, dict):
+                            _orig_parents = dict(k2._parents)
                             for _ch in list(k2._parents.keys()) or ['shell']:
                                 k2._parents[_ch] = _parent_header
                             with open(file_path, "a") as _spf:
-                                _spf.write(f"<<send_message>> set_parent via _parents keys={list(k2._parents.keys())}\n")
+                                _spf.write(f"<<send_message>> set _parents for display\n")
+                        elif hasattr(k2, '_get_shell_context_var') and hasattr(k2, '_shell_parent_ident'):
+                            _parent_ident = k2._get_shell_context_var(k2._shell_parent_ident)
+                            k2.set_parent(_parent_ident, _parent_header)
+                            _orig_parents = None
                 except Exception as _spe:
+                    _orig_parents = None
                     with open(file_path, "a") as _spf:
                         _spf.write(f"<<send_message>> set_parent err: {_spe}\n")
 
-                # Call eval_js synchronously on the current thread.
-                # This is the same thread that processed the incoming comm_msg,
-                # so the kernel's output context is still pointed at the right cell.
                 try:
-                    _colab_output.eval_js(js_code, ignore_result=True)
+                    from IPython.display import display as _ipy_display, Javascript as _JS
+                    _ipy_display(_JS(js_code))
                     with open(file_path, "a") as f:
-                        f.write(f"<<send_message>> eval_js called sync parent={bool(_parent_header)}\n")
+                        f.write(f"<<send_message>> display(Javascript) called parent={bool(_parent_header)}\n")
                 except Exception as ex:
                     with open(file_path, "a") as f:
-                        f.write(f"<<send_message>> eval_js FAILED: {type(ex).__name__}: {ex}\n")
+                        f.write(f"<<send_message>> display(Javascript) FAILED: {type(ex).__name__}: {ex}\n")
+                    # Fallback to eval_js
+                    try:
+                        _colab_output.eval_js(js_code, ignore_result=True)
+                        with open(file_path, "a") as f:
+                            f.write(f"<<send_message>> eval_js fallback called\n")
+                    except Exception as ex2:
+                        with open(file_path, "a") as f:
+                            f.write(f"<<send_message>> eval_js fallback FAILED: {ex2}\n")
+
+                # Restore original parents if we changed them
+                try:
+                    if _orig_parents is not None and hasattr(_ip2, 'kernel'):
+                        _ip2.kernel._parents.update(_orig_parents)
+                except Exception:
+                    pass
 
             except Exception as e:
                 with open(file_path, "a") as f:

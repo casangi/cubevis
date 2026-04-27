@@ -465,29 +465,37 @@ class CommsTransport(TransportBase):
                         from google.colab import output as _co
                         _cb = f"cubevis_rx_cb_{self._comm_mgr_id}"
                         _bc = f"cubevis_rx_{self._comm_mgr_id}"
+                        _del_fn = f"_cubevis_pollDelivered_{self._comm_mgr_id}"
                         _env_s = _pj.dumps(_pending)
                         _js = (f"(()=>{{const msg={_env_s};"
                                f"const cb=window[{_pj.dumps(_cb)}];"
                                f"if(typeof cb==='function'){{"
                                f"  console.log('CUBEVIS poll-deliver: window cb');cb(msg);"
                                f"}} else {{"
-                               f"  console.log('CUBEVIS poll-deliver: no window cb, posting bc');"
+                               f"  console.log('CUBEVIS poll-deliver: posting bc');"
                                f"}}"
                                f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
-                               f"bc.postMessage(msg);bc.close();}}catch(e){{}}" 
+                               f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
+                               f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
                                f"}})();")
                         _co.eval_js(_js, ignore_result=True)
                         self._colab_pending_reply = {}
                         with open(_fp2, "a") as _df:
                             _df.write(f"<<poll>> delivered reply via eval_js\n")
-                        # Signal JS to stop polling (no more pending replies)
-                        # Inject a stop command into the poll response JS
-                        _stop_js = (f"if(window['_cubevis_stopPoll_{self._comm_mgr_id}'])"
-                                    f"window['_cubevis_stopPoll_{self._comm_mgr_id}']();")
-                        _co.eval_js(_stop_js, ignore_result=True)
                     except Exception as _pe:
                         with open(_fp2, "a") as _df:
                             _df.write(f"<<poll>> delivery failed: {_pe}\n")
+                else:
+                    # Nothing pending: tell JS to count this as an empty poll
+                    import json as _pj2
+                    _empty_fn = f"_cubevis_pollEmpty_{self._comm_mgr_id}"
+                    try:
+                        from google.colab import output as _co2
+                        _js2 = (f"if(window[{_pj2.dumps(_empty_fn)}])"
+                                f"window[{_pj2.dumps(_empty_fn)}]();")
+                        _co2.eval_js(_js2, ignore_result=True)
+                    except Exception:
+                        pass
                 return
 
             # first check if it is a CommsTransport message
@@ -703,8 +711,11 @@ class CommsTransport(TransportBase):
                         // context, then BroadcastChannel delivers to the Bokeh app iframe. ✓
                         let _pollActive = false;
                         let _pollTimer = null;
+                        let _emptyPolls = 0;
+                        const _MAX_EMPTY = 4; // stop after 4 consecutive empty polls (~200ms idle)
 
                         function _startPoll() {
+                            _emptyPolls = 0; // reset idle counter on new request
                             if (_pollActive) return;
                             _pollActive = true;
                             function _doPoll() {
@@ -715,10 +726,19 @@ class CommsTransport(TransportBase):
                             _doPoll();
                         }
 
-                        function _stopPoll() {
-                            _pollActive = false;
-                            if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
+                        // Python calls these via eval_js to control the poll loop
+                        function _onPollDelivered() {
+                            _emptyPolls = 0; // reply delivered, reset idle counter
                         }
+                        function _onPollEmpty() {
+                            _emptyPolls += 1;
+                            if (_emptyPolls >= _MAX_EMPTY) {
+                                _pollActive = false;
+                                if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
+                            }
+                        }
+                        window[`_cubevis_pollDelivered_${targetId}`] = _onPollDelivered;
+                        window[`_cubevis_pollEmpty_${targetId}`] = _onPollEmpty;
 
                         // Hook into bc_tx: start polling whenever JS sends a message to Python
                         const _origBcTxOnmessage = bc_tx.onmessage;
@@ -728,7 +748,6 @@ class CommsTransport(TransportBase):
                         };
 
                         // Register stop function for Python to call after delivering reply
-                        window[`_cubevis_stopPoll_${targetId}`] = _stopPoll;
 
                         // RX bus: Python->JS via anywidget model → deliver to listeners.
                         // Two delivery paths:

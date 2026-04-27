@@ -891,36 +891,62 @@ class CommsTransport(TransportBase):
 
                 _parent_header = getattr(self, '_last_parent_header', {})
 
-                # Schedule display(Javascript) on the Bokeh/kernel IOLoop.
-                # The IOLoop callback runs on the main kernel thread where display()
-                # is associated with the correct cell output context.
-                # We pass the parent_header so set_parent can restore the context.
-                def _do_display_js(_ph=_parent_header, _jc=js_code, _fp=file_path):
-                    try:
-                        from IPython import get_ipython as _gip2
-                        _ip3 = _gip2()
-                        if _ip3 is not None and hasattr(_ip3, 'kernel') and _ph:
-                            k3 = _ip3.kernel
-                            if hasattr(k3, '_parents') and isinstance(k3._parents, dict):
-                                for _ch3 in list(k3._parents.keys()) or ['shell']:
-                                    k3._parents[_ch3] = _ph
-                        from IPython.display import display as _ipy_display2, Javascript as _JS2
-                        _ipy_display2(_JS2(_jc))
-                        with open(_fp, "a") as _f3:
-                            _f3.write(f"<<send_message>> display(JS) on IOLoop parent={bool(_ph)}\n")
-                    except Exception as _ex3:
-                        with open(_fp, "a") as _f3:
-                            _f3.write(f"<<send_message>> IOLoop display(JS) FAILED: {_ex3}\n")
-
+                # Try Bokeh document approach: update a Bokeh model property.
+                # The Bokeh session has its own always-active WebSocket to the browser.
+                # Changing a Bokeh model property sends a patch_doc message over that
+                # WebSocket — completely bypassing Colab's cell output routing.
+                _sent = False
                 try:
-                    from tornado.ioloop import IOLoop as _IOLoop
-                    _IOLoop.current().add_callback(_do_display_js)
-                    with open(file_path, "a") as f:
-                        f.write(f"<<send_message>> display(Javascript) scheduled on IOLoop\n")
-                except Exception as ex:
-                    with open(file_path, "a") as f:
-                        f.write(f"<<send_message>> IOLoop scheduling FAILED: {ex}\n")
-                    _do_display_js()  # fallback: call directly
+                    from .. import BokehInit as _BI
+                    _app = _BI.get_app_context()
+                    if _app is not None and hasattr(_app, 'bokeh_doc'):
+                        _doc = _app.bokeh_doc
+                    else:
+                        from bokeh.io import curdoc as _curdoc
+                        _doc = _curdoc()
+                    if _doc is not None:
+                        # Store reply in a Bokeh DataModel string property
+                        # that CommsTransport JS side watches via model.change
+                        _reply_key = f"cubevis_reply_{self._comm_mgr_id}"
+                        _existing = [m for m in _doc.roots if getattr(m, 'name', None) == _reply_key]
+                        if _existing:
+                            _model = _existing[0]
+                        else:
+                            from bokeh.models import TextInput as _TI
+                            _model = _TI(name=_reply_key, value="", title="cubevis_reply")
+                            _doc.add_root(_model)
+                        import json as _json2
+                        _model.value = _json2.dumps({"seq": id(envelope), "envelope": envelope})
+                        _sent = True
+                        with open(file_path, "a") as _f:
+                            _f.write(f"<<send_message>> sent via Bokeh doc model\n")
+                except Exception as _be:
+                    with open(file_path, "a") as _f:
+                        _f.write(f"<<send_message>> Bokeh doc approach: {type(_be).__name__}: {_be}\n")
+
+                if not _sent:
+                    # Fallback: display(Javascript) via IOLoop
+                    def _do_display_js(_ph=_parent_header, _jc=js_code, _fp=file_path):
+                        try:
+                            from IPython import get_ipython as _gip2
+                            _ip3 = _gip2()
+                            if _ip3 is not None and hasattr(_ip3, 'kernel') and _ph:
+                                k3 = _ip3.kernel
+                                if hasattr(k3, '_parents') and isinstance(k3._parents, dict):
+                                    for _ch3 in list(k3._parents.keys()) or ['shell']:
+                                        k3._parents[_ch3] = _ph
+                            from IPython.display import display as _ipy_display2, Javascript as _JS2
+                            _ipy_display2(_JS2(_jc))
+                            with open(_fp, "a") as _f3:
+                                _f3.write(f"<<send_message>> display(JS) fallback parent={bool(_ph)}\n")
+                        except Exception as _ex3:
+                            with open(_fp, "a") as _f3:
+                                _f3.write(f"<<send_message>> display(JS) fallback FAILED: {_ex3}\n")
+                    try:
+                        from tornado.ioloop import IOLoop as _IOLoop
+                        _IOLoop.current().add_callback(_do_display_js)
+                    except Exception:
+                        _do_display_js()
 
             except Exception as e:
                 with open(file_path, "a") as f:

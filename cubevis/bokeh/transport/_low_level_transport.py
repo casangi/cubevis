@@ -711,11 +711,22 @@ class CommsTransport(TransportBase):
                         // context, then BroadcastChannel delivers to the Bokeh app iframe. ✓
                         let _pollActive = false;
                         let _pollTimer = null;
-                        let _emptyPolls = 0;
-                        const _MAX_EMPTY = 4; // stop after 4 consecutive empty polls (~200ms idle)
+                        let _idleTimer = null;
+                        const _IDLE_MS = 2000; // stop after 2s with no new requests
+
+                        function _stopPollLoop() {
+                            _pollActive = false;
+                            if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
+                            if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = null; }
+                        }
+
+                        function _resetIdleTimer() {
+                            if (_idleTimer) clearTimeout(_idleTimer);
+                            _idleTimer = setTimeout(_stopPollLoop, _IDLE_MS);
+                        }
 
                         function _startPoll() {
-                            _emptyPolls = 0; // reset idle counter on new request
+                            _resetIdleTimer(); // any new request resets the idle timeout
                             if (_pollActive) return;
                             _pollActive = true;
                             function _doPoll() {
@@ -726,19 +737,10 @@ class CommsTransport(TransportBase):
                             _doPoll();
                         }
 
-                        // Python calls these via eval_js to control the poll loop
-                        function _onPollDelivered() {
-                            _emptyPolls = 0; // reply delivered, reset idle counter
-                        }
-                        function _onPollEmpty() {
-                            _emptyPolls += 1;
-                            if (_emptyPolls >= _MAX_EMPTY) {
-                                _pollActive = false;
-                                if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
-                            }
-                        }
-                        window[`_cubevis_pollDelivered_${targetId}`] = _onPollDelivered;
-                        window[`_cubevis_pollEmpty_${targetId}`] = _onPollEmpty;
+                        // Python notifies JS when a reply was delivered (resets idle timer)
+                        window[`_cubevis_pollDelivered_${targetId}`] = _resetIdleTimer;
+                        // Python notifies JS when poll was empty (no-op - idle timer handles stopping)
+                        window[`_cubevis_pollEmpty_${targetId}`] = () => {};
 
                         // Hook into bc_tx: start polling whenever JS sends a message to Python
                         const _origBcTxOnmessage = bc_tx.onmessage;

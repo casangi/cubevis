@@ -466,9 +466,32 @@ class CommsTransport(TransportBase):
                     self._colab_pending_reply = {}  # clear immediately
                     _mgr_id = self._comm_mgr_id
 
-                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _fp=_fp2):
+                    # Capture parent header NOW before _recv returns and kernel moves on
+                    _ph_now = {}
+                    try:
+                        from IPython import get_ipython as _gip_t
+                        _ip_t = _gip_t()
+                        if _ip_t and hasattr(_ip_t, 'kernel'):
+                            _k_t = _ip_t.kernel
+                            if hasattr(_k_t, '_parents') and isinstance(_k_t._parents, dict):
+                                _ph_now = dict(_k_t._parents)  # snapshot current parent state
+                    except Exception:
+                        pass
+
+                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _fp=_fp2, _ph=_ph_now):
                         """Call eval_js from a background thread so _recv returns immediately."""
                         try:
+                            # Restore parent header context in thread so eval_js targets bridge iframe
+                            if _ph:
+                                try:
+                                    from IPython import get_ipython as _gip_t2
+                                    _ip_t2 = _gip_t2()
+                                    if _ip_t2 and hasattr(_ip_t2, 'kernel'):
+                                        _k_t2 = _ip_t2.kernel
+                                        if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
+                                            _k_t2._parents.update(_ph)
+                                except Exception:
+                                    pass
                             from google.colab import output as _co
                             _cb = f"cubevis_rx_cb_{_mid}"
                             _bc = f"cubevis_rx_{_mid}"

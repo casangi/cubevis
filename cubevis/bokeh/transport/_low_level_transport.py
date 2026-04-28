@@ -485,17 +485,7 @@ class CommsTransport(TransportBase):
                     except Exception as _pe:
                         with open(_fp2, "a") as _df:
                             _df.write(f"<<poll>> delivery failed: {_pe}\n")
-                else:
-                    # Nothing pending: tell JS to count this as an empty poll
-                    import json as _pj2
-                    _empty_fn = f"_cubevis_pollEmpty_{self._comm_mgr_id}"
-                    try:
-                        from google.colab import output as _co2
-                        _js2 = (f"if(window[{_pj2.dumps(_empty_fn)}])"
-                                f"window[{_pj2.dumps(_empty_fn)}]();")
-                        _co2.eval_js(_js2, ignore_result=True)
-                    except Exception:
-                        pass
+                # nothing pending - JS manages idle timeout itself
                 return
 
             # first check if it is a CommsTransport message
@@ -711,36 +701,30 @@ class CommsTransport(TransportBase):
                         // context, then BroadcastChannel delivers to the Bokeh app iframe. ✓
                         let _pollActive = false;
                         let _pollTimer = null;
-                        let _idleTimer = null;
-                        const _IDLE_MS = 2000; // stop after 2s with no new requests
-
-                        function _stopPollLoop() {
-                            _pollActive = false;
-                            if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
-                            if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = null; }
-                        }
-
-                        function _resetIdleTimer() {
-                            if (_idleTimer) clearTimeout(_idleTimer);
-                            _idleTimer = setTimeout(_stopPollLoop, _IDLE_MS);
-                        }
+                        let _lastRequestTime = 0;
+                        const _IDLE_MS = 2000; // stop polling 2s after last request
 
                         function _startPoll() {
-                            _resetIdleTimer(); // any new request resets the idle timeout
+                            _lastRequestTime = Date.now();
                             if (_pollActive) return;
                             _pollActive = true;
                             function _doPoll() {
                                 if (!_pollActive) return;
+                                if (Date.now() - _lastRequestTime > _IDLE_MS) {
+                                    _pollActive = false;
+                                    _pollTimer = null;
+                                    return; // idle timeout - stop loop
+                                }
                                 channel.send({ type: "cubevis_poll", target_id: targetId });
                                 _pollTimer = setTimeout(_doPoll, 50);
                             }
                             _doPoll();
                         }
 
-                        // Python notifies JS when a reply was delivered (resets idle timer)
-                        window[`_cubevis_pollDelivered_${targetId}`] = _resetIdleTimer;
-                        // Python notifies JS when poll was empty (no-op - idle timer handles stopping)
-                        window[`_cubevis_pollEmpty_${targetId}`] = () => {};
+                        // Python notifies JS after delivering a reply - resets idle timer
+                        window[`_cubevis_pollDelivered_${targetId}`] = () => {
+                            _lastRequestTime = Date.now();
+                        };
 
                         // Hook into bc_tx: start polling whenever JS sends a message to Python
                         const _origBcTxOnmessage = bc_tx.onmessage;

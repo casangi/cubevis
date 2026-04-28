@@ -459,29 +459,40 @@ class CommsTransport(TransportBase):
                 _pending = getattr(self, "_colab_pending_reply", {})
                 if _pending:
                     import pathlib as _plib
+                    import threading as _thr
+                    import json as _pj
                     _fp2 = _plib.Path.home() / "debug.txt"
-                    _snapshot = dict(_pending)  # copy before async delay
-                    self._colab_pending_reply = {}  # clear immediately so next poll won't re-deliver
-                    _bridge_ref = self._bridge
+                    _snapshot = dict(_pending)
+                    self._colab_pending_reply = {}  # clear immediately
                     _mgr_id = self._comm_mgr_id
-                    def _deliver_reply(_snap=_snapshot, _br=_bridge_ref, _mid=_mgr_id, _fp=_fp2):
+
+                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _fp=_fp2):
+                        """Call eval_js from a background thread so _recv returns immediately."""
                         try:
-                            if _br is not None:
-                                _br.send({
-                                    "type": "cubevis_reply",
-                                    "comm_mgr_id": _mid,
-                                    "envelope": _snap
-                                })
-                                with open(_fp, "a") as _df:
-                                    _df.write(f"<<poll>> delivered via bridge.send (async)\n")
+                            from google.colab import output as _co
+                            _cb = f"cubevis_rx_cb_{_mid}"
+                            _bc = f"cubevis_rx_{_mid}"
+                            _del_fn = f"_cubevis_pollDelivered_{_mid}"
+                            _env_s = _pj.dumps(_snap)
+                            _js = (f"(()=>{{const msg={_env_s};"
+                                   f"const cb=window[{_pj.dumps(_cb)}];"
+                                   f"if(typeof cb==='function'){{"
+                                   f"  console.log('CUBEVIS poll-deliver: window cb');cb(msg);"
+                                   f"}} else {{"
+                                   f"  console.log('CUBEVIS poll-deliver: posting bc');"
+                                   f"}}"
+                                   f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
+                                   f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
+                                   f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
+                                   f"}})();")
+                            _co.eval_js(_js, ignore_result=True)
+                            with open(_fp, "a") as _df:
+                                _df.write(f"<<poll>> delivered via thread eval_js\n")
                         except Exception as _pe:
                             with open(_fp, "a") as _df:
-                                _df.write(f"<<poll>> async delivery failed: {_pe}\n")
-                    try:
-                        from tornado.ioloop import IOLoop as _IL
-                        _IL.current().add_callback(_deliver_reply)
-                    except Exception:
-                        _deliver_reply()  # fallback: call directly if no IOLoop
+                                _df.write(f"<<poll>> thread eval_js failed: {_pe}\n")
+
+                    _thr.Thread(target=_deliver_in_thread, daemon=True).start()
                 # nothing pending - JS manages idle timeout itself
                 return
 

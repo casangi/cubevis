@@ -452,39 +452,36 @@ class CommsTransport(TransportBase):
 
             data = msg.get("content", {}).get("data", {})
 
-            # Handle poll from widget bridge: deliver pending reply via eval_js.
-            # eval_js runs in the bridge iframe (different from Bokeh app iframe),
-            # so BroadcastChannel delivers to bc_rx.onmessage in the app iframe. ✓
+            # Handle poll from widget bridge.
+            # Delivery is scheduled on the IOLoop so _recv returns immediately,
+            # keeping the kernel free to process incoming messages.
             if _is_poll_msg:
                 _pending = getattr(self, "_colab_pending_reply", {})
                 if _pending:
-                    import json as _pj
                     import pathlib as _plib
                     _fp2 = _plib.Path.home() / "debug.txt"
+                    _snapshot = dict(_pending)  # copy before async delay
+                    self._colab_pending_reply = {}  # clear immediately so next poll won't re-deliver
+                    _bridge_ref = self._bridge
+                    _mgr_id = self._comm_mgr_id
+                    def _deliver_reply(_snap=_snapshot, _br=_bridge_ref, _mid=_mgr_id, _fp=_fp2):
+                        try:
+                            if _br is not None:
+                                _br.send({
+                                    "type": "cubevis_reply",
+                                    "comm_mgr_id": _mid,
+                                    "envelope": _snap
+                                })
+                                with open(_fp, "a") as _df:
+                                    _df.write(f"<<poll>> delivered via bridge.send (async)\n")
+                        except Exception as _pe:
+                            with open(_fp, "a") as _df:
+                                _df.write(f"<<poll>> async delivery failed: {_pe}\n")
                     try:
-                        from google.colab import output as _co
-                        _cb = f"cubevis_rx_cb_{self._comm_mgr_id}"
-                        _bc = f"cubevis_rx_{self._comm_mgr_id}"
-                        _del_fn = f"_cubevis_pollDelivered_{self._comm_mgr_id}"
-                        _env_s = _pj.dumps(_pending)
-                        _js = (f"(()=>{{const msg={_env_s};"
-                               f"const cb=window[{_pj.dumps(_cb)}];"
-                               f"if(typeof cb==='function'){{"
-                               f"  console.log('CUBEVIS poll-deliver: window cb');cb(msg);"
-                               f"}} else {{"
-                               f"  console.log('CUBEVIS poll-deliver: posting bc');"
-                               f"}}"
-                               f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
-                               f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
-                               f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
-                               f"}})();")
-                        _co.eval_js(_js, ignore_result=True)
-                        self._colab_pending_reply = {}
-                        with open(_fp2, "a") as _df:
-                            _df.write(f"<<poll>> delivered reply via eval_js\n")
-                    except Exception as _pe:
-                        with open(_fp2, "a") as _df:
-                            _df.write(f"<<poll>> delivery failed: {_pe}\n")
+                        from tornado.ioloop import IOLoop as _IL
+                        _IL.current().add_callback(_deliver_reply)
+                    except Exception:
+                        _deliver_reply()  # fallback: call directly if no IOLoop
                 # nothing pending - JS manages idle timeout itself
                 return
 
@@ -742,17 +739,27 @@ class CommsTransport(TransportBase):
                         //   2. bc_rx.postMessage(msg) — for cross-iframe delivery
                         const bc_rx = new BroadcastChannel(`cubevis_rx_${targetId}`);
                         model.on("msg:custom", (msg) => {
-                            // This fires when Python calls self._bridge.send(envelope)
-                            console.log("CUBEVIS: msg:custom fired!", msg);
+                            // This fires when Python calls self._bridge.send(payload)
+                            // If it's a cubevis_reply, extract the envelope and route it.
+                            // Otherwise treat msg as the envelope directly (legacy path).
+                            const envelope = (msg && msg.type === "cubevis_reply")
+                                ? msg.envelope : msg;
+                            if (msg && msg.type === "cubevis_reply") {
+                                console.log("CUBEVIS poll-deliver: bridge.send reply → bc_rx");
+                                // Reset idle so poll keeps running for follow-up replies
+                                _lastRequestTime = Date.now();
+                            }
                             // Same-iframe: call registered callback directly
                             const cb = window[`cubevis_rx_cb_${targetId}`];
-                            console.log("CUBEVIS: window cb type=", typeof cb);
                             if (typeof cb === "function") {
-                                console.log("CUBEVIS: calling window cb");
-                                cb(msg);
+                                cb(envelope);
                             }
-                            // Cross-iframe: broadcast for other contexts
-                            bc_rx.postMessage(msg);
+                            // Cross-iframe: broadcast to Bokeh app iframe
+                            try {
+                                const bc = new BroadcastChannel(`cubevis_rx_${targetId}`);
+                                bc.postMessage(envelope);
+                                bc.close();
+                            } catch(e) {}
                         });
                         console.log("CUBEVIS: msg:custom handler registered on model");
 

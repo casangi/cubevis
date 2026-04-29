@@ -356,7 +356,6 @@ class CommsTransport(TransportBase):
         # so asyncio.Event( ) will not work.
         self._conn_event = threading.Event()
         self._last_parent_header: dict = {}  # parent header of last received comm_msg
-        self._colab_pending_reply: dict = {}  # pending reply for poll delivery
         # In Colab: display the bridge immediately from __init__.
         # CommsTransport is constructed during a cell's execution (the setup
         # cell), so that cell's output context is open. The bridge must render
@@ -456,14 +455,13 @@ class CommsTransport(TransportBase):
             # Delivery is scheduled on the IOLoop so _recv returns immediately,
             # keeping the kernel free to process incoming messages.
             if _is_poll_msg:
-                _pending = getattr(self, "_colab_pending_reply", {})
+                _pending = getattr(self, "_colab_pending_replies", [])
                 if _pending:
                     import pathlib as _plib
                     import threading as _thr
                     import json as _pj
                     _fp2 = _plib.Path.home() / "debug.txt"
-                    _snapshot = dict(_pending)
-                    self._colab_pending_reply = {}  # clear immediately
+                    _snapshot = _pending.pop(0)  # take first reply, leave rest queued
                     _mgr_id = self._comm_mgr_id
 
                     # Capture parent header NOW before _recv returns and kernel moves on
@@ -478,10 +476,10 @@ class CommsTransport(TransportBase):
                     except Exception:
                         pass
 
-                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _fp=_fp2, _ph=_ph_now):
+                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _fp=_fp2, _ph=_ph_now, _self=self):
                         """Call eval_js from a background thread so _recv returns immediately."""
                         try:
-                            # Restore parent header context in thread so eval_js targets bridge iframe
+                            # Restore parent header so eval_js targets bridge iframe context
                             if _ph:
                                 try:
                                     from IPython import get_ipython as _gip_t2
@@ -493,10 +491,15 @@ class CommsTransport(TransportBase):
                                 except Exception:
                                     pass
                             from google.colab import output as _co
+                            import json as _pj
                             _cb = f"cubevis_rx_cb_{_mid}"
                             _bc = f"cubevis_rx_{_mid}"
                             _del_fn = f"_cubevis_pollDelivered_{_mid}"
+                            _stop_fn = f"_cubevis_stopPoll_{_mid}"
                             _env_s = _pj.dumps(_snap)
+                            # After delivering, stop poll only if nothing more is pending
+                            _has_more = bool(getattr(_self, '_colab_pending_replies', []))
+                            _stop_call = f"" if _has_more else f"if(window[{_pj.dumps(_stop_fn)}])window[{_pj.dumps(_stop_fn)}]();"
                             _js = (f"(()=>{{const msg={_env_s};"
                                    f"const cb=window[{_pj.dumps(_cb)}];"
                                    f"if(typeof cb==='function'){{"
@@ -507,6 +510,7 @@ class CommsTransport(TransportBase):
                                    f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
                                    f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
                                    f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
+                                   f"{_stop_call}"
                                    f"}})();")
                             _co.eval_js(_js, ignore_result=True)
                             with open(_fp, "a") as _df:
@@ -521,6 +525,20 @@ class CommsTransport(TransportBase):
 
             # first check if it is a CommsTransport message
             if data.get("type") == "cubevis_message":
+                # Signal JS to start polling — Python is processing a request.
+                # Called from a thread so _recv returns immediately.
+                if self._is_colab() and getattr(self, '_bridge', None) is not None:
+                    _mgr = self._comm_mgr_id
+                    def _signal_start(_m=_mgr):
+                        try:
+                            from google.colab import output as _co
+                            import json as _jss
+                            _fn = f"_cubevis_startPoll_{_m}"
+                            _co.eval_js(f"if(window[{_jss.dumps(_fn)}])window[{_jss.dumps(_fn)}]();", ignore_result=True)
+                        except Exception:
+                            pass
+                    import threading as _thr2
+                    _thr2.Thread(target=_signal_start, daemon=True).start()
                 from ...utils import deserialize
                 logger.debug(f"CommsTransport._recv: expected message {data}, {self._callback}")
                 try:
@@ -732,26 +750,16 @@ class CommsTransport(TransportBase):
                         // context, then BroadcastChannel delivers to the Bokeh app iframe. ✓
                         let _pollActive = false;
                         let _pollTimer = null;
-                        let _lastRequestTime = 0;
-                        const _IDLE_MS = 180000; // stop polling 3min after last request
-
                         let _consecutiveEmpty = 0;
 
                         function _startPoll() {
-                            _lastRequestTime = Date.now();
                             _consecutiveEmpty = 0;
                             if (_pollActive) return;
                             _pollActive = true;
                             function _doPoll() {
                                 if (!_pollActive) return;
-                                if (Date.now() - _lastRequestTime > _IDLE_MS) {
-                                    _pollActive = false;
-                                    _pollTimer = null;
-                                    return; // idle timeout - stop loop
-                                }
                                 channel.send({ type: "cubevis_poll", target_id: targetId });
-                                // Back off poll interval when empty: 50ms → 100ms → 200ms → 500ms max
-                                // This reduces kernel load during long computations.
+                                // Backoff: 50ms → 500ms for consecutive empty polls
                                 const _interval = Math.min(500, 50 * Math.pow(2, Math.min(_consecutiveEmpty, 3)));
                                 _pollTimer = setTimeout(_doPoll, _interval);
                                 _consecutiveEmpty++;
@@ -759,13 +767,17 @@ class CommsTransport(TransportBase):
                             _doPoll();
                         }
 
-                        // Python calls this after delivering a reply - resets backoff
-                        window[`_cubevis_pollDelivered_${targetId}`] = () => {
-                            _lastRequestTime = Date.now();
-                            _consecutiveEmpty = 0;
-                        };
+                        function _stopPoll() {
+                            _pollActive = false;
+                            if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
+                        }
 
-
+                        // Python controls the poll loop via threaded eval_js (non-blocking).
+                        // No idle timeout - Python explicitly stops when nothing is pending.
+                        window[`_cubevis_startPoll_${targetId}`] = _startPoll;
+                        window[`_cubevis_stopPoll_${targetId}`]  = _stopPoll;
+                        // After delivery, reset backoff so next reply is fast
+                        window[`_cubevis_pollDelivered_${targetId}`] = () => { _consecutiveEmpty = 0; };
 
                         // Hook into bc_tx: start polling whenever JS sends a message to Python
                         const _origBcTxOnmessage = bc_tx.onmessage;
@@ -790,8 +802,8 @@ class CommsTransport(TransportBase):
                                 ? msg.envelope : msg;
                             if (msg && msg.type === "cubevis_reply") {
                                 console.log("CUBEVIS poll-deliver: bridge.send reply → bc_rx");
-                                // Reset idle so poll keeps running for follow-up replies
-                                _lastRequestTime = Date.now();
+                                // Reset backoff after delivery
+                                if (typeof _consecutiveEmpty !== 'undefined') _consecutiveEmpty = 0;
                             }
                             // Same-iframe: call registered callback directly
                             const cb = window[`cubevis_rx_cb_${targetId}`];
@@ -1004,9 +1016,9 @@ class CommsTransport(TransportBase):
                 # Python's _recv handles the poll synchronously and calls eval_js there.
                 # eval_js runs in the widget bridge iframe context (different from Bokeh app iframe),
                 # so BroadcastChannel delivers to CommsTransport's bc_rx.onmessage. ✓
-                self._colab_pending_reply = envelope
+                self._colab_pending_replies.append(envelope)
                 with open(file_path, "a") as _f:
-                    _f.write(f"<<send_message>> reply stored for poll delivery\n")
+                    _f.write(f"<<send_message>> reply queued (depth={len(self._colab_pending_replies)})\n")
 
             except Exception as e:
                 with open(file_path, "a") as f:

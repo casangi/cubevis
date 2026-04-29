@@ -1022,28 +1022,28 @@ class CommsTransport(TransportBase):
                 # so bc_tx.onmessage never fired and _startPoll was never called.
                 # Start the poll now so this reply gets delivered.
                 if _if == 0 and getattr(self, '_bridge', None) is not None:
-                    _mgr_sp = self._comm_mgr_id
-                    # Use the bridge cell's parent header (captured at display_bridge time)
-                    # so eval_js runs in the bridge iframe context, not the caller's context
-                    _ph_sp = getattr(self, '_colab_bridge_parents', {})
-                    def _start_poll_thread(_m=_mgr_sp, _ph=_ph_sp):
-                        try:
-                            if _ph:
-                                from IPython import get_ipython as _gip_sp2
-                                _ip_sp2 = _gip_sp2()
-                                if _ip_sp2 and hasattr(_ip_sp2, 'kernel'):
-                                    _k_sp2 = _ip_sp2.kernel
-                                    if hasattr(_k_sp2, '_parents') and isinstance(_k_sp2._parents, dict):
-                                        _k_sp2._parents.update(_ph)
-                            from google.colab import output as _co_sp
-                            import json as _jssp
-                            _fn = f"_cubevis_startPoll_{_m}"
-                            _co_sp.eval_js(f"if(window[{_jssp.dumps(_fn)}])window[{_jssp.dumps(_fn)}]();",
-                                           ignore_result=True)
-                        except Exception:
-                            pass
-                    import threading as _thr_sp
-                    _thr_sp.Thread(target=_start_poll_thread, daemon=True).start()
+                    # External channel path: call eval_js synchronously to start poll.
+                    # This is safe because send_message hasn't yielded to the event loop yet,
+                    # so the kernel is free to process the eval_js round-trip.
+                    try:
+                        from google.colab import output as _co_sp
+                        import json as _jssp
+                        _ph_sp = getattr(self, '_colab_bridge_parents', {})
+                        if _ph_sp:
+                            from IPython import get_ipython as _gip_sp
+                            _ip_sp = _gip_sp()
+                            if _ip_sp and hasattr(_ip_sp, 'kernel'):
+                                _k_sp = _ip_sp.kernel
+                                if hasattr(_k_sp, '_parents') and isinstance(_k_sp._parents, dict):
+                                    _k_sp._parents.update(_ph_sp)
+                        _fn = f"_cubevis_startPoll_{self._comm_mgr_id}"
+                        _co_sp.eval_js(f"if(window[{_jssp.dumps(_fn)}])window[{_jssp.dumps(_fn)}]();",
+                                       ignore_result=True)
+                        with open(file_path, "a") as _f:
+                            _f.write(f"<<send_message>> startPoll triggered (inflight=0 path)\n")
+                    except Exception as _spe:
+                        with open(file_path, "a") as _f:
+                            _f.write(f"<<send_message>> startPoll failed: {_spe}\n")
 
             except Exception as e:
                 with open(file_path, "a") as f:

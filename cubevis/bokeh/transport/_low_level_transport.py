@@ -356,6 +356,7 @@ class CommsTransport(TransportBase):
         # so asyncio.Event( ) will not work.
         self._conn_event = threading.Event()
         self._last_parent_header: dict = {}  # parent header of last received comm_msg
+        self._colab_pending_replies: list = []  # FIFO queue of pending Colab replies
         # In Colab: display the bridge immediately from __init__.
         # CommsTransport is constructed during a cell's execution (the setup
         # cell), so that cell's output context is open. The bridge must render
@@ -525,20 +526,7 @@ class CommsTransport(TransportBase):
 
             # first check if it is a CommsTransport message
             if data.get("type") == "cubevis_message":
-                # Signal JS to start polling — Python is processing a request.
-                # Called from a thread so _recv returns immediately.
-                if self._is_colab() and getattr(self, '_bridge', None) is not None:
-                    _mgr = self._comm_mgr_id
-                    def _signal_start(_m=_mgr):
-                        try:
-                            from google.colab import output as _co
-                            import json as _jss
-                            _fn = f"_cubevis_startPoll_{_m}"
-                            _co.eval_js(f"if(window[{_jss.dumps(_fn)}])window[{_jss.dumps(_fn)}]();", ignore_result=True)
-                        except Exception:
-                            pass
-                    import threading as _thr2
-                    _thr2.Thread(target=_signal_start, daemon=True).start()
+                # Poll is started by JS bc_tx.onmessage hook when the request was sent
                 from ...utils import deserialize
                 logger.debug(f"CommsTransport._recv: expected message {data}, {self._callback}")
                 try:
@@ -1016,6 +1004,8 @@ class CommsTransport(TransportBase):
                 # Python's _recv handles the poll synchronously and calls eval_js there.
                 # eval_js runs in the widget bridge iframe context (different from Bokeh app iframe),
                 # so BroadcastChannel delivers to CommsTransport's bc_rx.onmessage. ✓
+                if not hasattr(self, "_colab_pending_replies"):
+                    self._colab_pending_replies = []
                 self._colab_pending_replies.append(envelope)
                 with open(file_path, "a") as _f:
                     _f.write(f"<<send_message>> reply queued (depth={len(self._colab_pending_replies)})\n")

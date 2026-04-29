@@ -1022,33 +1022,19 @@ class CommsTransport(TransportBase):
                 # so bc_tx.onmessage never fired and _startPoll was never called.
                 # Start the poll now so this reply gets delivered.
                 if _if == 0 and getattr(self, '_bridge', None) is not None:
-                    # External channel (no bc_tx hook): deliver reply directly via eval_js
-                    # while the kernel is still synchronously executing send_message.
-                    # This avoids the deadlock where await blocks the kernel from processing polls.
-                    import json as _pj_d
+                    # External channel path: deliver via bridge.send() which is a true
+                    # fire-and-forget ZMQ push — no kernel round-trip, no blocking.
+                    # bridge.send() works here because we ARE in the active kernel
+                    # execution context (the async def body running in the user cell).
                     try:
-                        from google.colab import output as _co_d
-                        _ph_d = getattr(self, '_colab_bridge_parents', {})
-                        if _ph_d:
-                            from IPython import get_ipython as _gip_d
-                            _ip_d = _gip_d()
-                            if _ip_d and hasattr(_ip_d, 'kernel'):
-                                _k_d = _ip_d.kernel
-                                if hasattr(_k_d, '_parents') and isinstance(_k_d._parents, dict):
-                                    _k_d._parents.update(_ph_d)
-                        _snap_d = self._colab_pending_replies.pop()  # take the reply we just stored
-                        _cb_d = f"cubevis_rx_cb_{self._comm_mgr_id}"
-                        _bc_d = f"cubevis_rx_{self._comm_mgr_id}"
-                        _env_s_d = _pj_d.dumps(_snap_d)
-                        _js_d = (f"(()=>{{const msg={_env_s_d};"
-                                 f"const cb=window[{_pj_d.dumps(_cb_d)}];"
-                                 f"if(typeof cb==='function'){{cb(msg);}}"
-                                 f"try{{const bc=new BroadcastChannel({_pj_d.dumps(_bc_d)});"
-                                 f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
-                                 f"}})();")
-                        _co_d.eval_js(_js_d, ignore_result=True)
+                        _snap_d = self._colab_pending_replies.pop()
+                        self._bridge.send({
+                            "type": "cubevis_reply",
+                            "comm_mgr_id": self._comm_mgr_id,
+                            "envelope": _snap_d
+                        })
                         with open(file_path, "a") as _f:
-                            _f.write(f"<<send_message>> direct eval_js delivery (inflight=0 path)\n")
+                            _f.write(f"<<send_message>> direct bridge.send delivery (inflight=0 path)\n")
                     except Exception as _spe:
                         with open(file_path, "a") as _f:
                             _f.write(f"<<send_message>> direct delivery failed: {_spe}\n")

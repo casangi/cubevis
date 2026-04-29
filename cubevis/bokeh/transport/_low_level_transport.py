@@ -733,10 +733,13 @@ class CommsTransport(TransportBase):
                         let _pollActive = false;
                         let _pollTimer = null;
                         let _lastRequestTime = 0;
-                        const _IDLE_MS = 2000; // stop polling 2s after last request
+                        const _IDLE_MS = 180000; // stop polling 3min after last request
+
+                        let _consecutiveEmpty = 0;
 
                         function _startPoll() {
                             _lastRequestTime = Date.now();
+                            _consecutiveEmpty = 0;
                             if (_pollActive) return;
                             _pollActive = true;
                             function _doPoll() {
@@ -747,15 +750,22 @@ class CommsTransport(TransportBase):
                                     return; // idle timeout - stop loop
                                 }
                                 channel.send({ type: "cubevis_poll", target_id: targetId });
-                                _pollTimer = setTimeout(_doPoll, 50);
+                                // Back off poll interval when empty: 50ms → 100ms → 200ms → 500ms max
+                                // This reduces kernel load during long computations.
+                                const _interval = Math.min(500, 50 * Math.pow(2, Math.min(_consecutiveEmpty, 3)));
+                                _pollTimer = setTimeout(_doPoll, _interval);
+                                _consecutiveEmpty++;
                             }
                             _doPoll();
                         }
 
-                        // Python notifies JS after delivering a reply - resets idle timer
+                        // Python calls this after delivering a reply - resets backoff
                         window[`_cubevis_pollDelivered_${targetId}`] = () => {
                             _lastRequestTime = Date.now();
+                            _consecutiveEmpty = 0;
                         };
+
+
 
                         // Hook into bc_tx: start polling whenever JS sends a message to Python
                         const _origBcTxOnmessage = bc_tx.onmessage;

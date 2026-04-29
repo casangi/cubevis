@@ -358,6 +358,7 @@ class CommsTransport(TransportBase):
         self._last_parent_header: dict = {}  # parent header of last received comm_msg
         self._colab_pending_replies: list = []  # FIFO queue of pending Colab replies
         self._colab_inflight: int = 0  # count of requests received but not yet replied
+        self._colab_bridge_parents: dict = {}  # parent header of the bridge cell
         # In Colab: display the bridge immediately from __init__.
         # CommsTransport is constructed during a cell's execution (the setup
         # cell), so that cell's output context is open. The bridge must render
@@ -466,17 +467,8 @@ class CommsTransport(TransportBase):
                     _snapshot = _pending.pop(0)  # take first reply, leave rest queued
                     _mgr_id = self._comm_mgr_id
 
-                    # Capture parent header NOW before _recv returns and kernel moves on
-                    _ph_now = {}
-                    try:
-                        from IPython import get_ipython as _gip_t
-                        _ip_t = _gip_t()
-                        if _ip_t and hasattr(_ip_t, 'kernel'):
-                            _k_t = _ip_t.kernel
-                            if hasattr(_k_t, '_parents') and isinstance(_k_t._parents, dict):
-                                _ph_now = dict(_k_t._parents)  # snapshot current parent state
-                    except Exception:
-                        pass
+                    # Use bridge cell parent header so eval_js runs in bridge iframe
+                    _ph_now = getattr(self, '_colab_bridge_parents', {})
 
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _fp=_fp2, _ph=_ph_now, _self=self):
                         """Call eval_js from a background thread so _recv returns immediately."""
@@ -642,6 +634,18 @@ class CommsTransport(TransportBase):
         from pathlib import Path as _Path
         with open(_Path.home() / "debug.txt", "a") as _dbf:
             _dbf.write(f"<<display_bridge>> called, esm_ts={_esm_ts}, is_colab={self._is_colab()}\n")
+            # Capture bridge parent header NOW while the bridge cell is the active output context
+            if self._is_colab():
+                try:
+                    from IPython import get_ipython as _gip_br
+                    _ip_br = _gip_br()
+                    if _ip_br and hasattr(_ip_br, 'kernel'):
+                        _k_br = _ip_br.kernel
+                        if hasattr(_k_br, '_parents') and isinstance(_k_br._parents, dict):
+                            self._colab_bridge_parents = dict(_k_br._parents)
+                            _dbf.write(f"<<display_bridge>> bridge parent captured: {bool(self._colab_bridge_parents)}\n")
+                except Exception as _bpe:
+                    _dbf.write(f"<<display_bridge>> parent capture failed: {_bpe}\n")
         esm = "// cubevis-esm:" + _esm_ts + "\n" + r"""
             function render({ model, el }) {
                 const isDebug  = """ + is_debug_js + r""";
@@ -1019,16 +1023,9 @@ class CommsTransport(TransportBase):
                 # Start the poll now so this reply gets delivered.
                 if _if == 0 and getattr(self, '_bridge', None) is not None:
                     _mgr_sp = self._comm_mgr_id
-                    _ph_sp = {}
-                    try:
-                        from IPython import get_ipython as _gip_sp
-                        _ip_sp = _gip_sp()
-                        if _ip_sp and hasattr(_ip_sp, 'kernel'):
-                            _k_sp = _ip_sp.kernel
-                            if hasattr(_k_sp, '_parents') and isinstance(_k_sp._parents, dict):
-                                _ph_sp = dict(_k_sp._parents)
-                    except Exception:
-                        pass
+                    # Use the bridge cell's parent header (captured at display_bridge time)
+                    # so eval_js runs in the bridge iframe context, not the caller's context
+                    _ph_sp = getattr(self, '_colab_bridge_parents', {})
                     def _start_poll_thread(_m=_mgr_sp, _ph=_ph_sp):
                         try:
                             if _ph:

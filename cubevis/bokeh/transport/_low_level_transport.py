@@ -1022,28 +1022,36 @@ class CommsTransport(TransportBase):
                 # so bc_tx.onmessage never fired and _startPoll was never called.
                 # Start the poll now so this reply gets delivered.
                 if _if == 0 and getattr(self, '_bridge', None) is not None:
-                    # External channel path: call eval_js synchronously to start poll.
-                    # This is safe because send_message hasn't yielded to the event loop yet,
-                    # so the kernel is free to process the eval_js round-trip.
+                    # External channel (no bc_tx hook): deliver reply directly via eval_js
+                    # while the kernel is still synchronously executing send_message.
+                    # This avoids the deadlock where await blocks the kernel from processing polls.
+                    import json as _pj_d
                     try:
-                        from google.colab import output as _co_sp
-                        import json as _jssp
-                        _ph_sp = getattr(self, '_colab_bridge_parents', {})
-                        if _ph_sp:
-                            from IPython import get_ipython as _gip_sp
-                            _ip_sp = _gip_sp()
-                            if _ip_sp and hasattr(_ip_sp, 'kernel'):
-                                _k_sp = _ip_sp.kernel
-                                if hasattr(_k_sp, '_parents') and isinstance(_k_sp._parents, dict):
-                                    _k_sp._parents.update(_ph_sp)
-                        _fn = f"_cubevis_startPoll_{self._comm_mgr_id}"
-                        _co_sp.eval_js(f"if(window[{_jssp.dumps(_fn)}])window[{_jssp.dumps(_fn)}]();",
-                                       ignore_result=True)
+                        from google.colab import output as _co_d
+                        _ph_d = getattr(self, '_colab_bridge_parents', {})
+                        if _ph_d:
+                            from IPython import get_ipython as _gip_d
+                            _ip_d = _gip_d()
+                            if _ip_d and hasattr(_ip_d, 'kernel'):
+                                _k_d = _ip_d.kernel
+                                if hasattr(_k_d, '_parents') and isinstance(_k_d._parents, dict):
+                                    _k_d._parents.update(_ph_d)
+                        _snap_d = self._colab_pending_replies.pop()  # take the reply we just stored
+                        _cb_d = f"cubevis_rx_cb_{self._comm_mgr_id}"
+                        _bc_d = f"cubevis_rx_{self._comm_mgr_id}"
+                        _env_s_d = _pj_d.dumps(_snap_d)
+                        _js_d = (f"(()=>{{const msg={_env_s_d};"
+                                 f"const cb=window[{_pj_d.dumps(_cb_d)}];"
+                                 f"if(typeof cb==='function'){{cb(msg);}}"
+                                 f"try{{const bc=new BroadcastChannel({_pj_d.dumps(_bc_d)});"
+                                 f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
+                                 f"}})();")
+                        _co_d.eval_js(_js_d, ignore_result=True)
                         with open(file_path, "a") as _f:
-                            _f.write(f"<<send_message>> startPoll triggered (inflight=0 path)\n")
+                            _f.write(f"<<send_message>> direct eval_js delivery (inflight=0 path)\n")
                     except Exception as _spe:
                         with open(file_path, "a") as _f:
-                            _f.write(f"<<send_message>> startPoll failed: {_spe}\n")
+                            _f.write(f"<<send_message>> direct delivery failed: {_spe}\n")
 
             except Exception as e:
                 with open(file_path, "a") as f:

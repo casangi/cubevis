@@ -357,6 +357,7 @@ class CommsTransport(TransportBase):
         self._conn_event = threading.Event()
         self._last_parent_header: dict = {}  # parent header of last received comm_msg
         self._colab_pending_replies: list = []  # FIFO queue of pending Colab replies
+        self._colab_inflight: int = 0  # count of requests received but not yet replied
         # In Colab: display the bridge immediately from __init__.
         # CommsTransport is constructed during a cell's execution (the setup
         # cell), so that cell's output context is open. The bridge must render
@@ -499,7 +500,8 @@ class CommsTransport(TransportBase):
                             _stop_fn = f"_cubevis_stopPoll_{_mid}"
                             _env_s = _pj.dumps(_snap)
                             # After delivering, stop poll only if nothing more is pending
-                            _has_more = bool(getattr(_self, '_colab_pending_replies', []))
+                            _inflight = getattr(_self, "_colab_inflight", 0)
+                            _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
                             _stop_call = f"" if _has_more else f"if(window[{_pj.dumps(_stop_fn)}])window[{_pj.dumps(_stop_fn)}]();"
                             _js = (f"(()=>{{const msg={_env_s};"
                                    f"const cb=window[{_pj.dumps(_cb)}];"
@@ -527,6 +529,7 @@ class CommsTransport(TransportBase):
             # first check if it is a CommsTransport message
             if data.get("type") == "cubevis_message":
                 # Poll is started by JS bc_tx.onmessage hook when the request was sent
+                self._colab_inflight = getattr(self, "_colab_inflight", 0) + 1
                 from ...utils import deserialize
                 logger.debug(f"CommsTransport._recv: expected message {data}, {self._callback}")
                 try:
@@ -1008,7 +1011,9 @@ class CommsTransport(TransportBase):
                     self._colab_pending_replies = []
                 self._colab_pending_replies.append(envelope)
                 with open(file_path, "a") as _f:
-                    _f.write(f"<<send_message>> reply queued (depth={len(self._colab_pending_replies)})\n")
+                    _if = max(0, getattr(self, "_colab_inflight", 1) - 1)
+                    self._colab_inflight = _if
+                    _f.write(f"<<send_message>> reply queued (depth={len(self._colab_pending_replies)} inflight={_if})\n")
 
             except Exception as e:
                 with open(file_path, "a") as f:

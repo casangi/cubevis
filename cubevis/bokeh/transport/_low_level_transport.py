@@ -359,6 +359,7 @@ class CommsTransport(TransportBase):
         self._colab_pending_replies: list = []  # FIFO queue of pending Colab replies
         self._colab_inflight: int = 0  # count of requests received but not yet replied
         self._colab_bridge_parents: dict = {}  # parent header of the bridge cell
+        self._colab_bridge_send_tested: bool = False  # one-shot binary send test
         # In Colab: display the bridge immediately from __init__.
         # CommsTransport is constructed during a cell's execution (the setup
         # cell), so that cell's output context is open. The bridge must render
@@ -458,6 +459,27 @@ class CommsTransport(TransportBase):
             # Delivery is scheduled on the IOLoop so _recv returns immediately,
             # keeping the kernel free to process incoming messages.
             if _is_poll_msg:
+                # ----------------------------------------------------------------
+                # ONE-SHOT TEST: call bridge.send() with a binary buffer synchronously
+                # from within _recv (the active comm dispatch context) to verify
+                # that msg:custom fires in the bridge ESM with binary buffers.
+                # This tests whether large data can be pushed P→JS via this path.
+                if not getattr(self, '_colab_bridge_send_tested', True) and self._bridge is not None:
+                    self._colab_bridge_send_tested = True
+                    import pathlib as _pt
+                    _fpt = _pt.Path.home() / "debug.txt"
+                    try:
+                        _test_buf = b"CUBEVIS_BINARY_TEST:" + (b"X" * 1024)  # 1KB test buffer
+                        self._bridge.send(
+                            {"type": "cubevis_binary_test", "size": len(_test_buf), "msg": "bridge.send() binary test from _recv"},
+                            buffers=[_test_buf]
+                        )
+                        with open(_fpt, "a") as _f:
+                            _f.write(f"<<bridge_test>> bridge.send() called with {len(_test_buf)} byte buffer\n")
+                    except Exception as _te:
+                        with open(_fpt, "a") as _f:
+                            _f.write(f"<<bridge_test>> bridge.send() FAILED: {_te}\n")
+                # ----------------------------------------------------------------
                 _pending = getattr(self, "_colab_pending_replies", [])
                 if _pending:
                     import pathlib as _plib
@@ -795,7 +817,23 @@ class CommsTransport(TransportBase):
                             // Otherwise treat msg as the envelope directly (legacy path).
                             const envelope = (msg && msg.type === "cubevis_reply")
                                 ? msg.envelope : msg;
-                            if (msg && msg.type === "cubevis_reply") {
+                            if (msg && msg.type === "cubevis_binary_test") {
+                                // Binary test: check if buffers arrived
+                                const bufCount = (buffers && buffers.length) || 0;
+                                const bufSize = bufCount > 0 ? buffers[0].byteLength : 0;
+                                console.log(`CUBEVIS binary test: msg received, buffers=${bufCount}, size=${bufSize}`);
+                                // Validate buffer content
+                                if (bufCount > 0) {
+                                    const view = new Uint8Array(buffers[0]);
+                                    const prefix = String.fromCharCode(...view.slice(0, 20));
+                                    console.log(`CUBEVIS binary test: buffer prefix="${prefix}"`);
+                                    console.log("CUBEVIS binary test: SUCCESS - bridge.send() with buffers works from _recv!");
+                                } else {
+                                    console.log("CUBEVIS binary test: FAIL - no buffers received");
+                                }
+                                return;
+                            }
+                    if (msg && msg.type === "cubevis_reply") {
                                 console.log("CUBEVIS poll-deliver: bridge.send reply → bc_rx");
                                 // Reset backoff after delivery
                                 if (typeof _consecutiveEmpty !== 'undefined') _consecutiveEmpty = 0;

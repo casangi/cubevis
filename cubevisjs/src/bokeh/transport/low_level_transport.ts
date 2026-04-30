@@ -594,7 +594,7 @@ export class CommsTransport implements TransportBase {
             if (tokens.length > 0) {
                 // Some binary arrays not yet arrived - defer until all tokens present
                 const allReady = tokens.every(t => (window as any)[`_cubevis_bin_${t}`] !== undefined)
-                console.log( `CUBEVIS handleJupyterMessage allReady: ${allReady}` )
+                console.log( `CUBEVIS handleJupyterMessage allReady==${allReady}:`, tokens )
                 if (!allReady) {
                     if (!(window as any)['_cubevis_deferred_msgs']) {
                         (window as any)['_cubevis_deferred_msgs'] = []

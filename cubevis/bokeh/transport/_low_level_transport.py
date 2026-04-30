@@ -473,15 +473,9 @@ class CommsTransport(TransportBase):
                     # Use bridge cell parent header so eval_js runs in bridge iframe
                     _ph_now = getattr(self, '_colab_bridge_parents', {})
 
-                    _pending_binary = getattr(self, '_colab_pending_binary', {})
-                    _binary_snapshot = {}
-                    if _pending_binary:
-                        _binary_snapshot = dict(_pending_binary)
-                        _pending_binary.clear()
-
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _fp=_fp2, _ph=_ph_now,
-                                           _self=self, _bins=_binary_snapshot):
-                        """Deliver envelope and binary arrays via eval_js from a background thread."""
+                                           _self=self):
+                        """Deliver envelope via eval_js from a background thread."""
                         try:
                             if _ph:
                                 try:
@@ -495,46 +489,6 @@ class CommsTransport(TransportBase):
                                     pass
                             from google.colab import output as _co
                             import json as _pj
-                            import base64 as _b64
-
-                            # Send each binary array via eval_js (base64-encoded)
-                            # BEFORE sending the envelope so tokens are ready.
-                            for _token, _arr in _bins.items():
-                                try:
-                                    import numpy as _np2
-                                    _raw = bytes(_arr.data) if _arr.flags['C_CONTIGUOUS']                                            else bytes(_np2.ascontiguousarray(_arr).data)
-                                    _b64str = _b64.b64encode(_raw).decode('ascii')
-                                    _dtype_s = str(_arr.dtype)
-                                    _shape_s = _pj.dumps(list(_arr.shape))
-                                    _tok_key = _pj.dumps(f'_cubevis_bin_{_token}')
-                                    _arr_cb  = _pj.dumps(f'cubevis_binary_arrived_{_mid}')
-                                    _arr_js = (
-                                        f"(()=>{{"
-                                        f"const b64='{_b64str}';"
-                                        f"const raw=atob(b64);"
-                                        f"const buf=new ArrayBuffer(raw.length);"
-                                        f"const u8=new Uint8Array(buf);"
-                                        f"for(let i=0;i<raw.length;i++)u8[i]=raw.charCodeAt(i);"
-                                        f"const dt={_pj.dumps(_dtype_s)};"
-                                        f"let ta;"
-                                        f"if(dt==='uint8'||dt==='bool')ta=new Uint8Array(buf);"
-                                        f"else if(dt==='float32')ta=new Float32Array(buf);"
-                                        f"else if(dt==='float64')ta=new Float64Array(buf);"
-                                        f"else if(dt==='int32')ta=new Int32Array(buf);"
-                                        f"else ta=new Uint8Array(buf);"
-                                        f"window[{_tok_key}]={{data:ta,dtype:dt,shape:{_shape_s}}};"
-                                        f"console.log('CUBEVIS binary via eval_js: token={_token}');"
-                                        f"const cb=window[{_arr_cb}];"
-                                        f"if(typeof cb==='function')cb();"
-                                        f"}})();"
-                                    )
-                                    _co.eval_js(_arr_js, ignore_result=True)
-                                    with open(_fp, "a") as _df:
-                                        _df.write(f"<<poll>> binary eval_js: token={_token} "
-                                                  f"dtype={_dtype_s} b64={len(_b64str)}\n")
-                                except Exception as _be:
-                                    with open(_fp, "a") as _df:
-                                        _df.write(f"<<poll>> binary eval_js FAILED {_token}: {_be}\n")
 
                             _cb = f"cubevis_rx_cb_{_mid}"
                             _bc = f"cubevis_rx_{_mid}"
@@ -1052,61 +1006,11 @@ class CommsTransport(TransportBase):
         if not self._connected:
             raise RuntimeError("CommsTransport: not connected")
 
-        # --- Large binary extraction (Colab only) ----------------------------
-        # Before Bokeh-serializing the message, extract any numpy arrays that
-        # exceed the eval_js size limit. They are sent as raw binary buffers via
-        # bridge.send() from _recv's poll handler, which has the correct comm
-        # context for non-blocking delivery. The envelope carries only tokens.
-        _colab_binary = {}  # token -> (array, dtype_str, shape, key_path)
-        if self._is_colab() and self._bridge is not None:
-            import numpy as _np
-            import uuid as _uuid
-            from pathlib import Path as _PP2
-            _fp_ex = _PP2.home() / "debug.txt"
-            with open(_fp_ex, "a") as _fex:
-                _fex.write(f"<<extract>> checking message type={type(message).__name__} "
-                           f"keys={list(message.keys()) if isinstance(message, dict) else 'N/A'}\n")
-
-            def _extract_arrays(obj, path=""):
-                """Recursively find numpy arrays above threshold; replace with tokens."""
-                if isinstance(obj, _np.ndarray):
-                    _THRESHOLD = getattr(self, "colab_binary_threshold", 65536)
-                    if obj.nbytes > _THRESHOLD:
-                        token = _uuid.uuid4().hex[:12]
-                        _colab_binary[token] = obj
-                        return {"__binary__": token, "dtype": str(obj.dtype),
-                                "shape": list(obj.shape)}
-                    return obj
-                elif isinstance(obj, dict):
-                    return {k: _extract_arrays(v, f"{path}.{k}") for k, v in obj.items()}
-                elif isinstance(obj, list):
-                    return [_extract_arrays(v, f"{path}[{i}]") for i, v in enumerate(obj)]
-                return obj
-
-            message = _extract_arrays(message)
-
-            from pathlib import Path as _P
-            with open(_P.home() / "debug.txt", "a") as _f:
-                _f.write(f"<<extract>> found {len(_colab_binary)} binary arrays\n")
-            if _colab_binary:
-                # Store pending binary data for delivery during next poll
-                if not hasattr(self, '_colab_pending_binary'):
-                    self._colab_pending_binary = {}
-                self._colab_pending_binary.update(_colab_binary)
-                with open(_P.home() / "debug.txt", "a") as _f:
-                    _f.write(f"<<send_message>> extracted {len(_colab_binary)} binary arrays "
-                             f"({sum(a.nbytes for a in _colab_binary.values())} bytes total)\n")
-        # ---------------------------------------------------------------------
-
         envelope = {
             "type": "cubevis_message",
             "comm_mgr_id": self._comm_mgr_id,
-            "data": serialize(message)          # Bokeh-serialize the (now lightweight) payload
+            "data": serialize(message)
         }
-        # If binary arrays were extracted, tell JS which tokens to wait for
-        # before calling handleJupyterMessage on this envelope.
-        if _colab_binary:
-            envelope["pending_binary_tokens"] = list(_colab_binary.keys())
 
         if self._is_colab():
             # Colab: Python->JS via google.colab.output.eval_js() (blocking/synchronous).

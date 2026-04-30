@@ -819,17 +819,25 @@ class CommsTransport(TransportBase):
                                 ? msg.envelope : msg;
                             if (msg && msg.type === "cubevis_binary_test") {
                                 // Binary test: check if buffers arrived
-                                const bufCount = (buffers && buffers.length) || 0;
-                                const bufSize = bufCount > 0 ? buffers[0].byteLength : 0;
-                                console.log(`CUBEVIS binary test: msg received, buffers=${bufCount}, size=${bufSize}`);
-                                // Validate buffer content
-                                if (bufCount > 0) {
-                                    const view = new Uint8Array(buffers[0]);
-                                    const prefix = String.fromCharCode(...view.slice(0, 20));
-                                    console.log(`CUBEVIS binary test: buffer prefix="${prefix}"`);
-                                    console.log("CUBEVIS binary test: SUCCESS - bridge.send() with buffers works from _recv!");
-                                } else {
-                                    console.log("CUBEVIS binary test: FAIL - no buffers received");
+                                try {
+                                    const bufs = buffers || [];
+                                    const bufCount = bufs.length;
+                                    const bufSize = bufCount > 0 ? bufs[0].byteLength : 0;
+                                    console.log("CUBEVIS binary test: msg received, buffers=" + bufCount + ", size=" + bufSize);
+                                    if (bufCount > 0) {
+                                        const view = new Uint8Array(bufs[0]);
+                                        // Build prefix string safely without spread
+                                        let prefix = "";
+                                        for (let i = 0; i < Math.min(20, view.length); i++) {
+                                            prefix += String.fromCharCode(view[i]);
+                                        }
+                                        console.log("CUBEVIS binary test: buffer prefix=" + prefix);
+                                        console.log("CUBEVIS binary test: SUCCESS - bridge.send() with buffers works from _recv!");
+                                    } else {
+                                        console.log("CUBEVIS binary test: FAIL - no buffers received");
+                                    }
+                                } catch(e) {
+                                    console.log("CUBEVIS binary test: ERROR - " + e);
                                 }
                                 return;
                             }

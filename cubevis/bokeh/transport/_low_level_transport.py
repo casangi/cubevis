@@ -470,10 +470,16 @@ class CommsTransport(TransportBase):
                     # Use bridge cell parent header so eval_js runs in bridge iframe
                     _ph_now = getattr(self, '_colab_bridge_parents', {})
 
-                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _fp=_fp2, _ph=_ph_now, _self=self):
-                        """Call eval_js from a background thread so _recv returns immediately."""
+                    _pending_binary = getattr(self, '_colab_pending_binary', {})
+                    _binary_snapshot = {}
+                    if _pending_binary:
+                        _binary_snapshot = dict(_pending_binary)
+                        _pending_binary.clear()
+
+                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _fp=_fp2, _ph=_ph_now,
+                                           _self=self, _bins=_binary_snapshot):
+                        """Deliver envelope and binary arrays via eval_js from a background thread."""
                         try:
-                            # Restore parent header so eval_js targets bridge iframe context
                             if _ph:
                                 try:
                                     from IPython import get_ipython as _gip_t2
@@ -486,12 +492,52 @@ class CommsTransport(TransportBase):
                                     pass
                             from google.colab import output as _co
                             import json as _pj
+                            import base64 as _b64
+
+                            # Send each binary array via eval_js (base64-encoded)
+                            # BEFORE sending the envelope so tokens are ready.
+                            for _token, _arr in _bins.items():
+                                try:
+                                    import numpy as _np2
+                                    _raw = bytes(_arr.data) if _arr.flags['C_CONTIGUOUS']                                            else bytes(_np2.ascontiguousarray(_arr).data)
+                                    _b64str = _b64.b64encode(_raw).decode('ascii')
+                                    _dtype_s = str(_arr.dtype)
+                                    _shape_s = _pj.dumps(list(_arr.shape))
+                                    _tok_key = _pj.dumps(f'_cubevis_bin_{_token}')
+                                    _arr_cb  = _pj.dumps(f'cubevis_binary_arrived_{_mid}')
+                                    _arr_js = (
+                                        f"(()=>{{"
+                                        f"const b64='{_b64str}';"
+                                        f"const raw=atob(b64);"
+                                        f"const buf=new ArrayBuffer(raw.length);"
+                                        f"const u8=new Uint8Array(buf);"
+                                        f"for(let i=0;i<raw.length;i++)u8[i]=raw.charCodeAt(i);"
+                                        f"const dt={_pj.dumps(_dtype_s)};"
+                                        f"let ta;"
+                                        f"if(dt==='uint8'||dt==='bool')ta=new Uint8Array(buf);"
+                                        f"else if(dt==='float32')ta=new Float32Array(buf);"
+                                        f"else if(dt==='float64')ta=new Float64Array(buf);"
+                                        f"else if(dt==='int32')ta=new Int32Array(buf);"
+                                        f"else ta=new Uint8Array(buf);"
+                                        f"window[{_tok_key}]={{data:ta,dtype:dt,shape:{_shape_s}}};"
+                                        f"console.log('CUBEVIS binary via eval_js: token={_token}');"
+                                        f"const cb=window[{_arr_cb}];"
+                                        f"if(typeof cb==='function')cb();"
+                                        f"}})();"
+                                    )
+                                    _co.eval_js(_arr_js, ignore_result=True)
+                                    with open(_fp, "a") as _df:
+                                        _df.write(f"<<poll>> binary eval_js: token={_token} "
+                                                  f"dtype={_dtype_s} b64={len(_b64str)}\n")
+                                except Exception as _be:
+                                    with open(_fp, "a") as _df:
+                                        _df.write(f"<<poll>> binary eval_js FAILED {_token}: {_be}\n")
+
                             _cb = f"cubevis_rx_cb_{_mid}"
                             _bc = f"cubevis_rx_{_mid}"
                             _del_fn = f"_cubevis_pollDelivered_{_mid}"
                             _stop_fn = f"_cubevis_stopPoll_{_mid}"
                             _env_s = _pj.dumps(_snap)
-                            # After delivering, stop poll only if nothing more is pending
                             _inflight = getattr(_self, "_colab_inflight", 0)
                             _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
                             _stop_call = f"" if _has_more else f"if(window[{_pj.dumps(_stop_fn)}])window[{_pj.dumps(_stop_fn)}]();"
@@ -515,51 +561,6 @@ class CommsTransport(TransportBase):
                                 _df.write(f"<<poll>> thread eval_js failed: {_pe}\n")
 
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
-                # --- Binary buffer delivery -----------------------------------------
-                # After (or instead of) a pending reply, check for binary arrays
-                # queued by send_message. Deliver each as a bridge.send() call
-                # with a raw binary buffer. Since we're inside _recv (active comm
-                # dispatch context), bridge.send() fires msg:custom reliably.
-                _pending_binary = getattr(self, '_colab_pending_binary', {})
-                if _pending_binary and self._bridge is not None:
-                    import pathlib as _plib3
-                    _fp3 = _plib3.Path.home() / "debug.txt"
-                    _tokens = list(_pending_binary.keys())
-                    # Restore bridge cell parent header before each bridge.send() so
-                    # msg:custom fires in the bridge iframe regardless of which cell's
-                    # comm triggered the current _recv invocation.
-                    _ph_bin = getattr(self, '_colab_bridge_parents', {})
-                    if _ph_bin:
-                        try:
-                            from IPython import get_ipython as _gip_bin
-                            _ip_bin = _gip_bin()
-                            if _ip_bin and hasattr(_ip_bin, 'kernel'):
-                                _k_bin = _ip_bin.kernel
-                                if hasattr(_k_bin, '_parents') and isinstance(_k_bin._parents, dict):
-                                    _k_bin._parents.update(_ph_bin)
-                        except Exception:
-                            pass
-                    for _token in _tokens:
-                        _arr = _pending_binary.pop(_token)
-                        try:
-                            # Send contiguous C-order bytes
-                            _buf = bytes(_arr.data) if _arr.flags['C_CONTIGUOUS']                                    else bytes(_arr.ascontiguousarray().data)
-                            self._bridge.send({
-                                "type": "cubevis_binary",
-                                "comm_mgr_id": self._comm_mgr_id,
-                                "token": _token,
-                                "dtype": str(_arr.dtype),
-                                "shape": list(_arr.shape),
-                                "nbytes": len(_buf)
-                            }, buffers=[_buf])
-                            with open(_fp3, "a") as _f:
-                                _f.write(f"<<poll>> binary sent: token={_token} "
-                                         f"dtype={_arr.dtype} shape={_arr.shape} "
-                                         f"bytes={len(_buf)}\n")
-                        except Exception as _be:
-                            with open(_fp3, "a") as _f:
-                                _f.write(f"<<poll>> binary FAILED: token={_token} err={_be}\n")
-                # -------------------------------------------------------------
                 # nothing pending - JS manages idle timeout itself
                 return
 

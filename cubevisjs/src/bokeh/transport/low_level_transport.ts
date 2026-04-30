@@ -547,6 +547,7 @@ export class CommsTransport implements TransportBase {
             } else if (dataWrapper.type) {
                 data = dataWrapper
             } else {
+                console.log("CUBEVIS dispatchMessage: no data, returning")
                 return
             }
 
@@ -555,7 +556,25 @@ export class CommsTransport implements TransportBase {
                 return
             }
 
+            // Log the deserialized data structure before substitution
+            console.log("CUBEVIS dispatchMessage: data keys=", Object.keys(data || {}))
+            const msg_keys = data && data.message ? Object.keys(data.message) : []
+            console.log("CUBEVIS dispatchMessage: message keys=", msg_keys)
+            if (data && data.message && data.message.chan) {
+                const chan = data.message.chan
+                console.log("CUBEVIS dispatchMessage: chan.img type=",
+                    chan.img ? (Array.isArray(chan.img) ? "array[" + chan.img.length + "]" : typeof chan.img) : "missing")
+                if (Array.isArray(chan.img) && chan.img.length > 0) {
+                    console.log("CUBEVIS dispatchMessage: chan.img[0]=", JSON.stringify(chan.img[0]).slice(0, 100))
+                }
+            }
+
             data = this.substituteBinary(data)
+
+            if (data && data.message && data.message.chan) {
+                console.log("CUBEVIS dispatchMessage: after substitution, chan.img[0] type=",
+                    typeof (data.message.chan.img && data.message.chan.img[0]))
+            }
 
             if (this.onMessageCallback) {
                 this.onMessageCallback(data)

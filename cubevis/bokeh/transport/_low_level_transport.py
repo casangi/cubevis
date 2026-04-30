@@ -525,6 +525,20 @@ class CommsTransport(TransportBase):
                     import pathlib as _plib3
                     _fp3 = _plib3.Path.home() / "debug.txt"
                     _tokens = list(_pending_binary.keys())
+                    # Restore bridge cell parent header before each bridge.send() so
+                    # msg:custom fires in the bridge iframe regardless of which cell's
+                    # comm triggered the current _recv invocation.
+                    _ph_bin = getattr(self, '_colab_bridge_parents', {})
+                    if _ph_bin:
+                        try:
+                            from IPython import get_ipython as _gip_bin
+                            _ip_bin = _gip_bin()
+                            if _ip_bin and hasattr(_ip_bin, 'kernel'):
+                                _k_bin = _ip_bin.kernel
+                                if hasattr(_k_bin, '_parents') and isinstance(_k_bin._parents, dict):
+                                    _k_bin._parents.update(_ph_bin)
+                        except Exception:
+                            pass
                     for _token in _tokens:
                         _arr = _pending_binary.pop(_token)
                         try:

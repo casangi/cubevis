@@ -359,7 +359,6 @@ class CommsTransport(TransportBase):
         self._colab_pending_replies: list = []  # FIFO queue of pending Colab replies
         self._colab_inflight: int = 0  # count of requests received but not yet replied
         self._colab_bridge_parents: dict = {}  # parent header of the bridge cell
-        self._colab_bridge_send_tested: bool = False  # one-shot binary send test
         # In Colab: display the bridge immediately from __init__.
         # CommsTransport is constructed during a cell's execution (the setup
         # cell), so that cell's output context is open. The bridge must render
@@ -459,27 +458,6 @@ class CommsTransport(TransportBase):
             # Delivery is scheduled on the IOLoop so _recv returns immediately,
             # keeping the kernel free to process incoming messages.
             if _is_poll_msg:
-                # ----------------------------------------------------------------
-                # ONE-SHOT TEST: call bridge.send() with a binary buffer synchronously
-                # from within _recv (the active comm dispatch context) to verify
-                # that msg:custom fires in the bridge ESM with binary buffers.
-                # This tests whether large data can be pushed P→JS via this path.
-                if not getattr(self, '_colab_bridge_send_tested', True) and self._bridge is not None:
-                    self._colab_bridge_send_tested = True
-                    import pathlib as _pt
-                    _fpt = _pt.Path.home() / "debug.txt"
-                    try:
-                        _test_buf = b"CUBEVIS_BINARY_TEST:" + (b"X" * 1024)  # 1KB test buffer
-                        self._bridge.send(
-                            {"type": "cubevis_binary_test", "size": len(_test_buf), "msg": "bridge.send() binary test from _recv"},
-                            buffers=[_test_buf]
-                        )
-                        with open(_fpt, "a") as _f:
-                            _f.write(f"<<bridge_test>> bridge.send() called with {len(_test_buf)} byte buffer\n")
-                    except Exception as _te:
-                        with open(_fpt, "a") as _f:
-                            _f.write(f"<<bridge_test>> bridge.send() FAILED: {_te}\n")
-                # ----------------------------------------------------------------
                 _pending = getattr(self, "_colab_pending_replies", [])
                 if _pending:
                     import pathlib as _plib
@@ -537,6 +515,37 @@ class CommsTransport(TransportBase):
                                 _df.write(f"<<poll>> thread eval_js failed: {_pe}\n")
 
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
+                # --- Binary buffer delivery -----------------------------------------
+                # After (or instead of) a pending reply, check for binary arrays
+                # queued by send_message. Deliver each as a bridge.send() call
+                # with a raw binary buffer. Since we're inside _recv (active comm
+                # dispatch context), bridge.send() fires msg:custom reliably.
+                _pending_binary = getattr(self, '_colab_pending_binary', {})
+                if _pending_binary and self._bridge is not None:
+                    import pathlib as _plib3
+                    _fp3 = _plib3.Path.home() / "debug.txt"
+                    _tokens = list(_pending_binary.keys())
+                    for _token in _tokens:
+                        _arr = _pending_binary.pop(_token)
+                        try:
+                            # Send contiguous C-order bytes
+                            _buf = bytes(_arr.data) if _arr.flags['C_CONTIGUOUS']                                    else bytes(_arr.ascontiguousarray().data)
+                            self._bridge.send({
+                                "type": "cubevis_binary",
+                                "comm_mgr_id": self._comm_mgr_id,
+                                "token": _token,
+                                "dtype": str(_arr.dtype),
+                                "shape": list(_arr.shape),
+                                "nbytes": len(_buf)
+                            }, buffers=[_buf])
+                            with open(_fp3, "a") as _f:
+                                _f.write(f"<<poll>> binary sent: token={_token} "
+                                         f"dtype={_arr.dtype} shape={_arr.shape} "
+                                         f"bytes={len(_buf)}\n")
+                        except Exception as _be:
+                            with open(_fp3, "a") as _f:
+                                _f.write(f"<<poll>> binary FAILED: token={_token} err={_be}\n")
+                # -------------------------------------------------------------
                 # nothing pending - JS manages idle timeout itself
                 return
 
@@ -811,33 +820,45 @@ class CommsTransport(TransportBase):
                         //      (BroadcastChannel does NOT deliver to sender's own context)
                         //   2. bc_rx.postMessage(msg) — for cross-iframe delivery
                         const bc_rx = new BroadcastChannel(`cubevis_rx_${targetId}`);
-                        model.on("msg:custom", (msg, buffers) => {
+                        model.on("msg:custom", (msg) => {
                             // This fires when Python calls self._bridge.send(payload)
                             // If it's a cubevis_reply, extract the envelope and route it.
                             // Otherwise treat msg as the envelope directly (legacy path).
                             const envelope = (msg && msg.type === "cubevis_reply")
                                 ? msg.envelope : msg;
-                            if (msg && msg.type === "cubevis_binary_test") {
-                                // Binary test: check if buffers arrived
+                            if (msg && msg.type === "cubevis_binary") {
+                                // Binary array delivery: reconstruct typed array from buffer
+                                // and store by token for substitution into pending envelopes.
                                 try {
                                     const bufs = buffers || [];
-                                    const bufCount = bufs.length;
-                                    const bufSize = bufCount > 0 ? bufs[0].byteLength : 0;
-                                    console.log("CUBEVIS binary test: msg received, buffers=" + bufCount + ", size=" + bufSize);
-                                    if (bufCount > 0) {
-                                        const view = new Uint8Array(bufs[0]);
-                                        // Build prefix string safely without spread
-                                        let prefix = "";
-                                        for (let i = 0; i < Math.min(20, view.length); i++) {
-                                            prefix += String.fromCharCode(view[i]);
+                                    if (bufs.length > 0) {
+                                        const buf = bufs[0];
+                                        let typedArr;
+                                        if (msg.dtype === "uint8" || msg.dtype === "bool") {
+                                            typedArr = new Uint8Array(buf);
+                                        } else if (msg.dtype === "float32") {
+                                            typedArr = new Float32Array(buf);
+                                        } else if (msg.dtype === "float64") {
+                                            typedArr = new Float64Array(buf);
+                                        } else if (msg.dtype === "int32") {
+                                            typedArr = new Int32Array(buf);
+                                        } else if (msg.dtype === "int64") {
+                                            typedArr = new BigInt64Array(buf);
+                                        } else {
+                                            typedArr = new Uint8Array(buf);
                                         }
-                                        console.log("CUBEVIS binary test: buffer prefix=" + prefix);
-                                        console.log("CUBEVIS binary test: SUCCESS - bridge.send() with buffers works from _recv!");
-                                    } else {
-                                        console.log("CUBEVIS binary test: FAIL - no buffers received");
+                                        // Store for substitution
+                                        window[`_cubevis_bin_${msg.token}`] = {
+                                            data: typedArr,
+                                            dtype: msg.dtype,
+                                            shape: msg.shape
+                                        };
+                                        console.log("CUBEVIS binary received: token=" + msg.token +
+                                            " dtype=" + msg.dtype + " shape=" + JSON.stringify(msg.shape) +
+                                            " bytes=" + msg.nbytes);
                                     }
                                 } catch(e) {
-                                    console.log("CUBEVIS binary test: ERROR - " + e);
+                                    console.log("CUBEVIS binary error: " + e);
                                 }
                                 return;
                             }
@@ -1004,17 +1025,55 @@ class CommsTransport(TransportBase):
         from pathlib import Path
         file_path = Path.home() / "debug.txt"
         with open(file_path, "a") as f:
-            #f.write(f"<<send_message>> sending to {len(self._comm_objs)} comms: {str(message)[:100]}\n")
-            f.write(f"<<send_message>>-> sending to {len(self._comm_objs)} comms: {str(message)}\n")
+            f.write(f"<<send_message>> sending to {len(self._comm_objs)} comms: {str(message)[:100]}\n")
             f.write(f"<<send_message>> is_colab={self._is_colab()} bridge={self._bridge is not None}\n")
         from ...utils import serialize
         if not self._connected:
             raise RuntimeError("CommsTransport: not connected")
 
+        # --- Large binary extraction (Colab only) ----------------------------
+        # Before Bokeh-serializing the message, extract any numpy arrays that
+        # exceed the eval_js size limit. They are sent as raw binary buffers via
+        # bridge.send() from _recv's poll handler, which has the correct comm
+        # context for non-blocking delivery. The envelope carries only tokens.
+        _colab_binary = {}  # token -> (array, dtype_str, shape, key_path)
+        if self._is_colab() and self._bridge is not None:
+            import numpy as _np
+            import uuid as _uuid
+
+            def _extract_arrays(obj, path=""):
+                """Recursively find numpy arrays above threshold; replace with tokens."""
+                if isinstance(obj, _np.ndarray):
+                    _THRESHOLD = 65536  # 64KB — anything larger goes binary
+                    if obj.nbytes > _THRESHOLD:
+                        token = _uuid.uuid4().hex[:12]
+                        _colab_binary[token] = obj
+                        return {"__binary__": token, "dtype": str(obj.dtype),
+                                "shape": list(obj.shape)}
+                    return obj
+                elif isinstance(obj, dict):
+                    return {k: _extract_arrays(v, f"{path}.{k}") for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [_extract_arrays(v, f"{path}[{i}]") for i, v in enumerate(obj)]
+                return obj
+
+            message = _extract_arrays(message)
+
+            if _colab_binary:
+                # Store pending binary data for delivery during next poll
+                if not hasattr(self, '_colab_pending_binary'):
+                    self._colab_pending_binary = {}
+                self._colab_pending_binary.update(_colab_binary)
+                from pathlib import Path as _P
+                with open(_P.home() / "debug.txt", "a") as _f:
+                    _f.write(f"<<send_message>> extracted {len(_colab_binary)} binary arrays "
+                             f"({sum(a.nbytes for a in _colab_binary.values())} bytes total)\n")
+        # ---------------------------------------------------------------------
+
         envelope = {
             "type": "cubevis_message",
             "comm_mgr_id": self._comm_mgr_id,
-            "data": serialize(message)          # Bokeh-serialize the payload
+            "data": serialize(message)          # Bokeh-serialize the (now lightweight) payload
         }
 
         if self._is_colab():

@@ -490,6 +490,27 @@ export class CommsTransport implements TransportBase {
     // Message handling
     // --------------------------------------------------------------------------
 
+    /** Recursively substitute __binary__ tokens with typed arrays from window._cubevis_bin_* */
+    private substituteBinary(obj: any): any {
+        if (obj && typeof obj === 'object' && '__binary__' in obj) {
+            const token = obj['__binary__']
+            const stored = (window as any)[`_cubevis_bin_${token}`]
+            if (stored) {
+                delete (window as any)[`_cubevis_bin_${token}`]
+                return stored  // {data: TypedArray, dtype: string, shape: number[]}
+            }
+            console.warn("CUBEVIS: missing binary token:", token)
+            return obj
+        }
+        if (Array.isArray(obj)) return obj.map((v: any) => this.substituteBinary(v))
+        if (obj && typeof obj === 'object') {
+            const out: any = {}
+            for (const k of Object.keys(obj)) out[k] = this.substituteBinary(obj[k])
+            return out
+        }
+        return obj
+    }
+
     private handleJupyterMessage(msg: any): void {
         try {
             const content = msg.content || {}
@@ -510,6 +531,9 @@ export class CommsTransport implements TransportBase {
                 data.type === 'comm_opened' || data.type === 'closing') {
                 return
             }
+
+            // Substitute any __binary__ tokens with their typed arrays
+            data = this.substituteBinary(data)
 
             if (this.onMessageCallback) {
                 this.onMessageCallback(data)

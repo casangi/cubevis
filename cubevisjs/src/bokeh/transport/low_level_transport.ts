@@ -590,6 +590,7 @@ export class CommsTransport implements TransportBase {
             const dataWrapper = content.data || {}
             const tokens: string[] = dataWrapper.pending_binary_tokens || []
 
+            console.log( `CUBEVIS handleJupyterMessage: ${tokens.length}` )
             if (tokens.length > 0) {
                 // Some binary arrays not yet arrived - defer until all tokens present
                 const allReady = tokens.every(t => (window as any)[`_cubevis_bin_${t}`] !== undefined)

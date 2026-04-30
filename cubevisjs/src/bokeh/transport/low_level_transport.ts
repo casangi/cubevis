@@ -500,18 +500,27 @@ export class CommsTransport implements TransportBase {
 
     /** Recursively substitute __binary__ tokens with typed arrays from window._cubevis_bin_* */
     private substituteBinary(obj: any): any {
+        // Never recurse into typed arrays or ArrayBuffers - pass them through unchanged
+        if (obj instanceof Uint8Array || obj instanceof Float32Array ||
+            obj instanceof Float64Array || obj instanceof Int32Array ||
+            obj instanceof Uint16Array || obj instanceof Int16Array ||
+            obj instanceof ArrayBuffer) {
+            return obj
+        }
         if (obj && typeof obj === 'object' && '__binary__' in obj) {
             const token = obj['__binary__']
             const stored = (window as any)[`_cubevis_bin_${token}`]
             if (stored) {
                 delete (window as any)[`_cubevis_bin_${token}`]
-                return stored  // {data: TypedArray, dtype: string, shape: number[]}
+                return stored
             }
             console.warn("CUBEVIS: missing binary token:", token)
             return obj
         }
         if (Array.isArray(obj)) return obj.map((v: any) => this.substituteBinary(v))
         if (obj && typeof obj === 'object') {
+            // Don't reconstruct typed arrays as plain objects
+            if (ArrayBuffer.isView(obj)) return obj
             const out: any = {}
             for (const k of Object.keys(obj)) out[k] = this.substituteBinary(obj[k])
             return out
@@ -565,7 +574,12 @@ export class CommsTransport implements TransportBase {
                 console.log("CUBEVIS dispatchMessage: chan.img type=",
                     chan.img ? (Array.isArray(chan.img) ? "array[" + chan.img.length + "]" : typeof chan.img) : "missing")
                 if (Array.isArray(chan.img) && chan.img.length > 0) {
-                    console.log("CUBEVIS dispatchMessage: chan.img[0]=", JSON.stringify(chan.img[0]).slice(0, 100))
+                    const img0 = chan.img[0]
+                    const ctor = img0 && img0.constructor ? img0.constructor.name : typeof img0
+                    console.log("CUBEVIS dispatchMessage: chan.img[0] constructor=", ctor)
+                    if (img0 && typeof img0 === 'object' && !ArrayBuffer.isView(img0)) {
+                        console.log("CUBEVIS dispatchMessage: chan.img[0] keys=", Object.keys(img0).slice(0,5))
+                    }
                 }
             }
 
@@ -590,11 +604,9 @@ export class CommsTransport implements TransportBase {
             const dataWrapper = content.data || {}
             const tokens: string[] = dataWrapper.pending_binary_tokens || []
 
-            console.log( `CUBEVIS handleJupyterMessage tokens: ${tokens.length}` )
             if (tokens.length > 0) {
                 // Some binary arrays not yet arrived - defer until all tokens present
                 const allReady = tokens.every(t => (window as any)[`_cubevis_bin_${t}`] !== undefined)
-                console.log( `CUBEVIS handleJupyterMessage allReady==${allReady}:`, tokens )
                 if (!allReady) {
                     if (!(window as any)['_cubevis_deferred_msgs']) {
                         (window as any)['_cubevis_deferred_msgs'] = []

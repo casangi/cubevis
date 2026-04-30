@@ -469,12 +469,20 @@ export class CommsTransport implements TransportBase {
                 console.log("%c[Colab] rx inbound:", "color: #34a853", msg)
                 if (colabComm.onMsg) {
                     colabComm.onMsg({ content: { data: msg }, buffers: [] })
+                    // After each message, check if any deferred messages are now ready
+                    // (binary tokens may have arrived since the envelope was deferred)
+                    this.checkDeferredMessages()
                 }
             }
 
             // Path 1: same-iframe — widget bridge calls window callback directly
             // (BroadcastChannel does NOT fire in the sender's own context)
             ;(window as any)[`cubevis_rx_cb_${target_id}`] = onRx
+            // Called by bridge ESM after storing a binary token,
+            // so deferred envelopes waiting for that token can be dispatched
+            ;(window as any)[`cubevis_binary_arrived_${target_id}`] = () => {
+                this.checkDeferredMessages()
+            }
 
             // Path 2: cross-iframe — widget bridge posts on bc_rx
             bc_rx.onmessage = (event: MessageEvent) => onRx(event.data)
@@ -511,7 +519,23 @@ export class CommsTransport implements TransportBase {
         return obj
     }
 
-    private handleJupyterMessage(msg: any): void {
+    /** Check if all binary tokens for a deferred message have arrived, and if so dispatch it. */
+    private checkDeferredMessages(): void {
+        const deferred: any[] = (window as any)['_cubevis_deferred_msgs'] || []
+        const remaining: any[] = []
+        for (const item of deferred) {
+            const tokens: string[] = item.tokens
+            const allReady = tokens.every(t => (window as any)[`_cubevis_bin_${t}`] !== undefined)
+            if (allReady) {
+                this.dispatchMessage(item.msg)
+            } else {
+                remaining.push(item)
+            }
+        }
+        ;(window as any)['_cubevis_deferred_msgs'] = remaining
+    }
+
+    private dispatchMessage(msg: any): void {
         try {
             const content = msg.content || {}
             const dataWrapper = content.data || {}
@@ -526,18 +550,40 @@ export class CommsTransport implements TransportBase {
                 return
             }
 
-            // Handle special messages
             if (data.type === 'ping' || data.type === 'heartbeat' ||
                 data.type === 'comm_opened' || data.type === 'closing') {
                 return
             }
 
-            // Substitute any __binary__ tokens with their typed arrays
             data = this.substituteBinary(data)
 
             if (this.onMessageCallback) {
                 this.onMessageCallback(data)
             }
+        } catch (e) {
+            console.error("Error dispatching message:", e)
+        }
+    }
+
+    private handleJupyterMessage(msg: any): void {
+        try {
+            const content = msg.content || {}
+            const dataWrapper = content.data || {}
+            const tokens: string[] = dataWrapper.pending_binary_tokens || []
+
+            if (tokens.length > 0) {
+                // Some binary arrays not yet arrived - defer until all tokens present
+                const allReady = tokens.every(t => (window as any)[`_cubevis_bin_${t}`] !== undefined)
+                if (!allReady) {
+                    if (!(window as any)['_cubevis_deferred_msgs']) {
+                        (window as any)['_cubevis_deferred_msgs'] = []
+                    }
+                    ;(window as any)['_cubevis_deferred_msgs'].push({ msg, tokens })
+                    return
+                }
+            }
+
+            this.dispatchMessage(msg)
 
         } catch (e) {
             console.error("Error handling Jupyter comm message:", e)

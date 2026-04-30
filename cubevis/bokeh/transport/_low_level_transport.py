@@ -856,6 +856,9 @@ class CommsTransport(TransportBase):
                                         console.log("CUBEVIS binary received: token=" + msg.token +
                                             " dtype=" + msg.dtype + " shape=" + JSON.stringify(msg.shape) +
                                             " bytes=" + msg.nbytes);
+                                        // Notify CommsTransport that a binary token arrived
+                                        const _arrivedCb = window[`cubevis_binary_arrived_${msg.comm_mgr_id}`];
+                                        if (typeof _arrivedCb === "function") _arrivedCb();
                                     }
                                 } catch(e) {
                                     console.log("CUBEVIS binary error: " + e);
@@ -1075,6 +1078,10 @@ class CommsTransport(TransportBase):
             "comm_mgr_id": self._comm_mgr_id,
             "data": serialize(message)          # Bokeh-serialize the (now lightweight) payload
         }
+        # If binary arrays were extracted, tell JS which tokens to wait for
+        # before calling handleJupyterMessage on this envelope.
+        if _colab_binary:
+            envelope["pending_binary_tokens"] = list(_colab_binary.keys())
 
         if self._is_colab():
             # Colab: Python->JS via google.colab.output.eval_js() (blocking/synchronous).

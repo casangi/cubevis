@@ -811,7 +811,7 @@ class CommsTransport(TransportBase):
                         //      (BroadcastChannel does NOT deliver to sender's own context)
                         //   2. bc_rx.postMessage(msg) — for cross-iframe delivery
                         const bc_rx = new BroadcastChannel(`cubevis_rx_${targetId}`);
-                        model.on("msg:custom", (msg) => {
+                        model.on("msg:custom", (msg, buffers) => {
                             // This fires when Python calls self._bridge.send(payload)
                             // If it's a cubevis_reply, extract the envelope and route it.
                             // Otherwise treat msg as the envelope directly (legacy path).

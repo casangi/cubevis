@@ -357,6 +357,9 @@ class CommsTransport(TransportBase):
         self._conn_event = threading.Event()
         self._last_parent_header: dict = {}  # parent header of last received comm_msg
         self._colab_pending_replies: list = []  # FIFO queue of pending Colab replies
+        # Threshold in bytes above which numpy arrays are sent as binary.
+        # Set to a small value (e.g. 1024) to test chunking with small images.
+        self.colab_binary_threshold: int = 65536  # 64KB default
         self._colab_inflight: int = 0  # count of requests received but not yet replied
         self._colab_bridge_parents: dict = {}  # parent header of the bridge cell
         # In Colab: display the bridge immediately from __init__.
@@ -1058,11 +1061,16 @@ class CommsTransport(TransportBase):
         if self._is_colab() and self._bridge is not None:
             import numpy as _np
             import uuid as _uuid
+            from pathlib import Path as _PP2
+            _fp_ex = _PP2.home() / "debug.txt"
+            with open(_fp_ex, "a") as _fex:
+                _fex.write(f"<<extract>> checking message type={type(message).__name__} "
+                           f"keys={list(message.keys()) if isinstance(message, dict) else 'N/A'}\n")
 
             def _extract_arrays(obj, path=""):
                 """Recursively find numpy arrays above threshold; replace with tokens."""
                 if isinstance(obj, _np.ndarray):
-                    _THRESHOLD = 65536  # 64KB — anything larger goes binary
+                    _THRESHOLD = getattr(self, "colab_binary_threshold", 65536)
                     if obj.nbytes > _THRESHOLD:
                         token = _uuid.uuid4().hex[:12]
                         _colab_binary[token] = obj
@@ -1077,12 +1085,14 @@ class CommsTransport(TransportBase):
 
             message = _extract_arrays(message)
 
+            from pathlib import Path as _P
+            with open(_P.home() / "debug.txt", "a") as _f:
+                _f.write(f"<<extract>> found {len(_colab_binary)} binary arrays\n")
             if _colab_binary:
                 # Store pending binary data for delivery during next poll
                 if not hasattr(self, '_colab_pending_binary'):
                     self._colab_pending_binary = {}
                 self._colab_pending_binary.update(_colab_binary)
-                from pathlib import Path as _P
                 with open(_P.home() / "debug.txt", "a") as _f:
                     _f.write(f"<<send_message>> extracted {len(_colab_binary)} binary arrays "
                              f"({sum(a.nbytes for a in _colab_binary.values())} bytes total)\n")

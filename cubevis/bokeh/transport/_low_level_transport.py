@@ -359,7 +359,9 @@ class CommsTransport(TransportBase):
         self._colab_pending_replies: list = []  # FIFO queue of pending Colab replies
         # Threshold in bytes above which numpy arrays are sent as binary.
         # Set to a small value (e.g. 1024) to test chunking with small images.
-        self.colab_binary_threshold: int = 65536  # 64KB default
+        self.colab_binary_threshold: int = 65536  # 64KB (unused - kept for compat)
+        # Max bytes per eval_js chunk. Lower for testing, raise if needed.
+        self.colab_chunk_size: int = 500_000  # 500KB default
         self._colab_inflight: int = 0  # count of requests received but not yet replied
         self._colab_bridge_parents: dict = {}  # parent header of the bridge cell
         # In Colab: display the bridge immediately from __init__.
@@ -498,21 +500,44 @@ class CommsTransport(TransportBase):
                             _inflight = getattr(_self, "_colab_inflight", 0)
                             _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
                             _stop_call = f"" if _has_more else f"if(window[{_pj.dumps(_stop_fn)}])window[{_pj.dumps(_stop_fn)}]();"
-                            _js = (f"(()=>{{const msg={_env_s};"
-                                   f"const cb=window[{_pj.dumps(_cb)}];"
-                                   f"if(typeof cb==='function'){{"
-                                   f"  console.log('CUBEVIS poll-deliver: window cb');cb(msg);"
-                                   f"}} else {{"
-                                   f"  console.log('CUBEVIS poll-deliver: posting bc');"
-                                   f"}}"
-                                   f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
-                                   f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
-                                   f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
-                                   f"{_stop_call}"
-                                   f"}})();")
-                            _co.eval_js(_js, ignore_result=True)
+
+                            # Chunk the serialized envelope string to stay within
+                            # eval_js limits. Each chunk is appended to a JS-side
+                            # accumulator array keyed by a session token. A final
+                            # eval_js call joins, JSON.parses, and posts to bc_rx.
+                            import uuid as _uuid_d
+                            _tok = _uuid_d.uuid4().hex[:16]
+                            _tok_key = _pj.dumps(f"_cubevis_ch_{_tok}")
+                            _CHUNK = getattr(_self, "colab_chunk_size", 500_000)
+                            _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
+
+                            # Initialise accumulator
+                            _co.eval_js(f"window[{_tok_key}]=[];", ignore_result=True)
+
+                            # Send each chunk
+                            for _ci, _chunk in enumerate(_chunks):
+                                _chunk_js = (f"window[{_tok_key}].push({_pj.dumps(_chunk)});")
+                                _co.eval_js(_chunk_js, ignore_result=True)
+
+                            # Finalise: join, parse, deliver, clean up
+                            _final_js = (
+                                f"(()=>{{"
+                                f"const s=window[{_tok_key}].join('');"
+                                f"delete window[{_tok_key}];"
+                                f"const msg=JSON.parse(s);"
+                                f"const cb=window[{_pj.dumps(_cb)}];"
+                                f"if(typeof cb==='function'){{cb(msg);}}"
+                                f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
+                                f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
+                                f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
+                                f"{_stop_call}"
+                                f"}})();"
+                            )
+                            _co.eval_js(_final_js, ignore_result=True)
+
                             with open(_fp, "a") as _df:
-                                _df.write(f"<<poll>> delivered via thread eval_js\n")
+                                _df.write(f"<<poll>> delivered via {len(_chunks)} chunk(s) "
+                                          f"({len(_env_s)} bytes)\n")
                         except Exception as _pe:
                             with open(_fp, "a") as _df:
                                 _df.write(f"<<poll>> thread eval_js failed: {_pe}\n")

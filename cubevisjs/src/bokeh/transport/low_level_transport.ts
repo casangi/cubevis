@@ -519,8 +519,11 @@ export class CommsTransport implements TransportBase {
         }
         if (Array.isArray(obj)) return obj.map((v: any) => this.substituteBinary(v))
         if (obj && typeof obj === 'object') {
-            // Don't reconstruct typed arrays as plain objects
+            // Only recurse into plain objects — leave class instances (Bokeh models,
+            // typed arrays, etc.) completely untouched to preserve their prototypes
+            // and methods (e.g. .get() on Bokeh models).
             if (ArrayBuffer.isView(obj)) return obj
+            if (Object.getPrototypeOf(obj) !== Object.prototype) return obj
             const out: any = {}
             for (const k of Object.keys(obj)) out[k] = this.substituteBinary(obj[k])
             return out
@@ -556,7 +559,6 @@ export class CommsTransport implements TransportBase {
             } else if (dataWrapper.type) {
                 data = dataWrapper
             } else {
-                console.log("CUBEVIS dispatchMessage: no data, returning")
                 return
             }
 
@@ -565,30 +567,9 @@ export class CommsTransport implements TransportBase {
                 return
             }
 
-            // Log the deserialized data structure before substitution
-            console.log("CUBEVIS dispatchMessage: data keys=", Object.keys(data || {}))
-            const msg_keys = data && data.message ? Object.keys(data.message) : []
-            console.log("CUBEVIS dispatchMessage: message keys=", msg_keys)
-            if (data && data.message && data.message.chan) {
-                const chan = data.message.chan
-                console.log("CUBEVIS dispatchMessage: chan.img type=",
-                    chan.img ? (Array.isArray(chan.img) ? "array[" + chan.img.length + "]" : typeof chan.img) : "missing")
-                if (Array.isArray(chan.img) && chan.img.length > 0) {
-                    const img0 = chan.img[0]
-                    const ctor = img0 && img0.constructor ? img0.constructor.name : typeof img0
-                    console.log("CUBEVIS dispatchMessage: chan.img[0] constructor=", ctor)
-                    if (img0 && typeof img0 === 'object' && !ArrayBuffer.isView(img0)) {
-                        console.log("CUBEVIS dispatchMessage: chan.img[0] keys=", Object.keys(img0).slice(0,5))
-                    }
-                }
-            }
+
 
             data = this.substituteBinary(data)
-
-            if (data && data.message && data.message.chan) {
-                console.log("CUBEVIS dispatchMessage: after substitution, chan.img[0] type=",
-                    typeof (data.message.chan.img && data.message.chan.img[0]))
-            }
 
             if (this.onMessageCallback) {
                 this.onMessageCallback(data)

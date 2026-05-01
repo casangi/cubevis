@@ -360,8 +360,10 @@ class CommsTransport(TransportBase):
         # Threshold in bytes above which numpy arrays are sent as binary.
         # Set to a small value (e.g. 1024) to test chunking with small images.
         self.colab_binary_threshold: int = 65536  # 64KB (unused - kept for compat)
-        # Max bytes per eval_js chunk. Lower for testing, raise if needed.
-        self.colab_chunk_size: int = 5000 if "CUBEVIS_DEBUG" in os.environ else 500_000  # 500KB default
+        # Max bytes per eval_js chunk. Lower for testing, raise if needed. This
+        # defaults to 500KB but it is set low when debugging is enabled to ensure
+        # that chunking is tested.
+        self.colab_chunk_size: int = 5000 if "CUBEVIS_DEBUG" in os.environ else 500_000
         self._colab_inflight: int = 0  # count of requests received but not yet replied
         self._colab_bridge_parents: dict = {}  # parent header of the bridge cell
         # In Colab: display the bridge immediately from __init__.

@@ -1493,6 +1493,9 @@ class CubeMask:
                                                                const appstate = Bokeh.find.appState(image)
                                                                const showable = Bokeh.find.showable(image)
                                                                appstate.cube_already_shutdown = false
+                                                               console.group( '--------------------appstate--------------------')
+                                                               console.log( appstate )
+                                                               console.groupEnd( )
                                                             ''' + self._js['mask-state-init'] +
                                                                    ( self._js['func-curmasks']( ) +
                                                                      self._js['key-state-funcs']

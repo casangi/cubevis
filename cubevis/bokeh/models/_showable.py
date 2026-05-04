@@ -251,11 +251,15 @@ class Showable(LayoutDOM,BokehInit):
             self._backend_startup_count += 1
             return
 
+        # Serialization is complete at this point
+        app_context = BokehInit.get_app_context()
+        ## Preflight callables are called before backend startup
+        ## Importantly, these functions MUST be called in the main thread
+        app_context.run_preflight_callables()
+        BokehInit.clear_app_context(app_context)
+
         if hasattr(self, '_backend_startup_callback'):
             try:
-                ## Preflight callables are called before backend startup
-                ## Importantly, these functions MUST be called in the main thread
-                BokehInit.get_app_context( ).run_preflight_callables( )
                 self._backend_startup_callback()
                 logger.debug(f"\tShowable::_start_backend(): Executed startup callback for {id(self)}")
                 self._backend_startup_count = 1

@@ -215,5 +215,8 @@ class BokehAppContext(LayoutDOM):
         # Save the plot
         save( self, filename=self.__htmlpath, resources=CDN, title=self.__title)
 
+        # serialization done, free up application context
+        BokehInit.clear_app_context(self)
+
         # Open in browser
         webbrowser.open('file://' + os.path.abspath(self.__htmlpath))

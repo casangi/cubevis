@@ -27,34 +27,44 @@
 ########################################################################
 '''This module contains the extensions and additions to the functionality
 provided by Bokeh'''
-
+import logging
 from .state import order_bokeh_js as _order_bokeh_js
 from .state import register_model as _register_model
 from .state._initialize import get_bokeh_js_paths
 from .state import set_cubevis_lib
 
+logger = logging.getLogger(__name__)
+
 class BokehInit:
     """Mixin for all cubevis models"""
 
-    _app_context = None  # Class-level storage for the singleton context
+    _app_context = [ ]   # Class-level storage for the current context
 
     @classmethod
     def set_app_context(cls, context):
         """Register the application context singleton"""
-        if cls._app_context is not None and context is not cls._app_context:
+        if context in cls._app_context:
             raise RuntimeError(
-                f"BokehAppContext already registered. Cannot register a different context. "
-                f"Existing: {id(cls._app_context)}, Attempted: {id(context)}"
+                f"this BokehAppContext has already been registered. Cannot register twice."
             )
-        cls._app_context = context
+        cls._app_context.append(context)
 
     @classmethod
     def get_app_context(cls):
         """Get the registered application context"""
-        if cls._app_context is None:
+        if not cls._app_context:
             from .models import BokehAppContext
-            cls._app_context = BokehAppContext( )
-        return cls._app_context
+            logger.warning( "creating a BokehAppContext due to a BokehInit.get_app_context( ) call" )
+            cls._app_context.append(BokehAppContext( ))
+        return cls._app_context[-1]
+
+    @classmethod
+    def clear_app_context(cls,context):
+        """Remove the registered application context"""
+        try:
+            cls._app_context.remove(context)
+        except ValueError:
+            pass  # already removed, fine
 
     def __init_subclass__(cls, **kwargs):
         """Auto-register subclasses"""

@@ -31,7 +31,10 @@ export class BokehAppContextView extends LayoutDOMView {
     this.connect(this.model.properties.app_state.change, () => {
       const session = (window as any).cubevisAppSession
       if (session?.applications[this.model.app_id]) {
-        session.applications[this.model.app_id].state = this.model.app_state
+        session.applications[this.model.app_id].state = {
+          ...this.model.app_state,
+          app_id: this.model.app_id
+        }
       }
     })
   }
@@ -98,7 +101,7 @@ export class BokehAppContext extends LayoutDOM {
     if (!session.applications[this.app_id]) {
       session.applications[this.app_id] = {
         appId: this.app_id,
-        state: this.app_state,
+        state: { ...this.app_state, app_id: this.app_id },
         createdAt: new Date().toISOString()
       }
       console.log(`Registered application: ${this.app_id}`)

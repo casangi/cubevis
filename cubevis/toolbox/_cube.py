@@ -1504,39 +1504,28 @@ class CubeMask:
                                                                       appstate.cube_done = ( final_polys=null, cb=null ) => {
                                                                           if ( appstate.cube_already_shutdown ) return
                                                                           function done_close_window( msg ) {
-                                                                              if ( msg.result === 'stopped' ) {""" +
-                                                                            # Don't close tab if running in a jupyter notebook
-                                                                            ##("""console.log("Running in jupyter notebook. Not closing window.")""" if self._is_notebook else
-                                                                            ##     """console.log("Running from script/terminal. Closing window.")
-                                                                            ##        window.close()"""
-                                                                            ##) +
-                                                                            ###
-                                                                            ###  Previously the Python is_interactive_jupyter( ) function was used
-                                                                            ###  to decide whether the window should be closed or not. However, to
-                                                                            ###  support the use of the regular iclean (i.e. display in a separate
-                                                                            ###  browser tab) the check is now whether a showable is available or
-                                                                            ###  not since Showable is the coupling between GUIs and Jupyter
-                                                                            ###  notebooks.
-                                                                            ###
-                                                                            """if ( showable ) {
-                                                                                     console.log("Running in jupyter notebook.\\nDisabling GUI via root Showable.")
-                                                                                     showable.disabled = true
-                                                                                     const data_pipes = Bokeh.activeDataPipes.getInstances( )
-                                                                                     console.log("Data pipes to be closed:", data_pipes)
-                                                                                 } else {
-                                                                                     console.log("Running from script/terminal. Closing window.")
-                                                                                     window.close()
-                                                                                 }
-                                                                              """ +
-                                                                    """
+                                                                              console.log('done_close_window: shutdown on', msg)
+                                                                              if ( msg.result === 'stopped' ) {
+                                                                                  if ( showable ) {
+                                                                                      console.log("Running in jupyter notebook.\\nDisabling GUI via root Showable.")
+                                                                                      showable.disabled = true
+                                                                                  } else {
+                                                                                      console.log("Running from script/terminal. Closing window.")
+                                                                                      window.close()
+                                                                                  }
                                                                               }
                                                                           }
+                                                                          console.log( 'appstate.cube_done: shutdown started' )
                                                                           appstate.cube_already_shutdown = true
-                                                                          ctrl.send( ids['done'],
-                                                                                     { action: 'done',
-                                                                                       value: { regions: final_polys ? final_polys : source.masks( ) },
-                                                                                       wtf: 'debugging' },
-                                                                                     (msg) => { if ( ! cb || cb && cb(msg) ) done_close_window(msg) } )
+                                                                          try {
+                                                                              ctrl.send( ids['done'],
+                                                                                         { action: 'done',
+                                                                                           value: { regions: final_polys ? final_polys : source.masks( ) },
+                                                                                         },
+                                                                                         (msg) => { if ( ! cb || cb && cb(msg) ) done_close_window(msg) } )
+                                                                          } catch (error) {
+                                                                              console.error( "appstate.cube_done: an error occurred, ", error.message )
+                                                                          }
                                                                       }
                                                                       // exported functions -- enable/disable masking, retrieve masks etc.
                                                                       source._masking_enabled = true

@@ -1,5 +1,6 @@
 import logging
 import inspect
+import concurrent.futures
 from bokeh.models.layouts import LayoutDOM
 from bokeh.models.ui import UIElement
 from bokeh.core.properties import Instance, String
@@ -9,6 +10,7 @@ from .. import BokehInit
 from ...utils import is_colab
 
 logger = logging.getLogger(__name__)
+_executor = concurrent.futures.ThreadPoolExecutor( )
 
 class Showable(LayoutDOM,BokehInit):
     """Wrap a UIElement to make any Bokeh UI component showable with show()
@@ -121,6 +123,9 @@ class Showable(LayoutDOM,BokehInit):
         # Let Bokeh handle document management through the normal flow
         super().__init__(**kwargs)
 
+        # state for get_future/get_result
+        self._future = None
+
         # Set the UI element
         if ui_element is not None:
             self.ui = ui_element
@@ -203,17 +208,32 @@ class Showable(LayoutDOM,BokehInit):
         # show() delegates to _get_notebook_html() for that.
         # The document setter handles it for the bokeh.plotting.show() path.
 
-    def get_future(self):
+    def get_future(self, callback=None):
         if self._result_retrieval is None:
-            raise RuntimeError( f"{self.name if self.name else 'this showable'} does not return a result" )
-        else:
-            return self._result_retrieval( )
+            raise RuntimeError(
+                f"{self.name if self.name else 'this showable'} does not return a result"
+            )
+        if getattr(self, '_future', None) is not None:
+            return self._future  # silently return the existing future
 
-    def get_result(self):
+        if callback is None:
+            callback = lambda result: print(f"Result: {result}")
+
+        self._future = _executor.submit(self._result_retrieval().result)
+        self._future.add_done_callback(
+            lambda f: callback(f.result()) if not f.cancelled() else None
+        )
+        return self._future
+
+    def get_result(self, default=None):
         if self._result_retrieval is None:
-            raise RuntimeError( f"{self.name if self.name else 'this showable'} does not return a result" )
-        else:
-            return self._result_retrieval( ).result( )
+            raise RuntimeError(
+                f"{self.name if self.name else 'this showable'} does not return a result"
+            )
+        future = getattr(self, '_future', None)
+        if future is None or not future.done():
+            return default
+        return future.result()
 
     def _start_backend(self):
         """Hook to start backend services when showing"""

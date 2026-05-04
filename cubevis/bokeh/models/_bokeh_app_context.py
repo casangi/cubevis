@@ -157,7 +157,7 @@ class BokehAppContext(LayoutDOM):
             kwargs['app_id'] = str(uuid4())
         # setting a unique well defined name for BokehAppContext
         # allows this object to be found by name in JavaScript
-        kwargs['name'] = "_GLOBAL_APP_CONTEXT_"
+        kwargs['name'] = f`_GLOBAL_APP_CONTEXT_{kwargs['app_id']}`
 
         super().__init__(**kwargs)
 

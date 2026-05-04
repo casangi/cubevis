@@ -188,39 +188,6 @@ export function v_sy_from_dy( view: PlotView, dy: [ number ] ) {
 //function isNotNullish<T>(value: T | null | undefined): value is T {
 //    return value !== null && value !== undefined;
 //}
-function find_model(
-    model: Model,
-    predicate: (m: Model) => boolean,
-    visited: Set<Model> = new Set()
-): Model | undefined {
-    if (visited.has(model)) return;
-    visited.add(model);
-
-    if (predicate(model)) return model;
-
-    // 'child' is used cubevis' Tip but also some Bokeh containers
-    // 'ui' is used by cubevis' Showable and BokehAppContext
-    const potentialChildrenProps = ['children', 'items', 'panes', 'tabs', 'child', 'ui'];
-
-    for (const propName of potentialChildrenProps) {
-        const children = (model as any)[propName];
-
-        if (children) {
-            // Unify handling for single children and arrays of children
-            const childrenArray = Array.isArray(children) ? children : [children];
-
-            for (const child of childrenArray) {
-                // Ensure the child is a Model instance before recursing
-                if (child instanceof Model && !visited.has(child)) {
-                    const result = find_model(child, predicate, visited);
-                    if (result) return result;
-                }
-            }
-        }
-    }
-
-    return;
-}
 
 function find_parent<T extends Model>(
     type_string: string
@@ -228,42 +195,37 @@ function find_parent<T extends Model>(
     return (model: Model): T | undefined => {
         // with Bokeh 3.6 there is a roots( ) function...
         // with Bokeh 3.8 there is a all_roots property...
-        const roots = model?.document?.all_roots ?? model?.document?.roots();
-        if (!roots) return undefined;
+        const roots = model.document?.all_roots ?? model.document?.roots()
+        if (!roots) return undefined
 
-        const potentialChildrenProps = ['children', 'items', 'panes', 'tabs', 'child', 'ui'];
+        const potentialChildrenProps = ['children', 'items', 'panes', 'tabs', 'child', 'ui']
 
-        // Recursively get the first matching type in the tree (or empty array if none)
-        const findParent = (node: HasProps): T[] => {
-            const nodeModel = node as Model;
+        function descend(node: Model, ancestor: T | undefined): T | undefined {
+            if (node.id === model.id) return ancestor
 
-            // If current node matches the type string, return it (stop searching deeper)
-            if (nodeModel?.type === type_string) {
-                return [nodeModel as T];
-            } else {
-                // Otherwise, search children
-                return potentialChildrenProps.flatMap(prop => {
-                    const children = (node as any)[prop];
-                    if (!children) return [];
+            const current_ancestor = node.type === type_string
+                ? node as T
+                : ancestor
 
-                    // Handle both single child and array of children
-                    const childArray = Array.isArray(children) ? children : [children];
-                    return childArray.flatMap(findParent);
-                });
-            }
-        };
-
-        // Get first parent from each root and find the one containing our model
-        const parents = roots.flatMap(findParent);
-
-        return parents.find((parent: T) =>
-            Boolean(find_model(parent as Model,
-                (candidate: Model) => {
-                    return candidate.id === model.id;
+            for (const prop of potentialChildrenProps) {
+                const children = (node as any)[prop]
+                if (!children) continue
+                const childArray = Array.isArray(children) ? children : [children]
+                for (const child of childArray) {
+                    if (!(child instanceof Model)) continue
+                    const result = descend(child, current_ancestor)
+                    if (result !== undefined) return result
                 }
-            ))
-        );
-    };
+            }
+            return undefined
+        }
+
+        for (const root of roots) {
+            const result = descend(root as Model, undefined)
+            if (result !== undefined) return result
+        }
+        return undefined
+    }
 }
 
 // "children" was created (and is visible as "Bokeh.find.children(...)") to allow
@@ -314,9 +276,17 @@ export function children<T extends Model>(
     };
 }
 
+export const app_context = find_parent<BokehAppContext>(
+    "cubevis.bokeh.models._bokeh_app_context.BokehAppContext"
+)
+
+const _context_cache = new WeakMap<Model, BokehAppContext>()
 export function context(model: Model): BokehAppContext | undefined {
-    const result = model.document?.get_model_by_name("_GLOBAL_APP_CONTEXT_") as BokehAppContext | undefined
-    if ( result && ! result.frontend_id ) { object_id(result) }
+    if (_context_cache.has(model))
+        return _context_cache.get(model)
+    const result = app_context(model)
+    if (result && !result.frontend_id) { object_id(result) }
+    if (result) _context_cache.set(model, result)
     return result
 }
 

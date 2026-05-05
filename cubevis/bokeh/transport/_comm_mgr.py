@@ -182,6 +182,8 @@ class CommMgr( Model, BokehInit ):
         if 'comm_mgr_id' not in kwargs:
             kwargs['comm_mgr_id'] = str(uuid4( ))
 
+        # JavaScript Comm object find their manager using this
+        kwargs['name'] = kwargs['comm_mgr_id']
         logger.debug(f"CommMgr.__init__: {args}, on_shutdown={on_shutdown}, on_error={on_error}, {kwargs}", stack_info=True)
         logger.debug(">>>>>>>>>>------------->> CommMgr.__init__")
 

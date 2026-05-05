@@ -12,7 +12,6 @@
 import {Model} from "@bokehjs/model"
 import * as p from "@bokehjs/core/properties"
 import {CustomJS} from "@bokehjs/models/callbacks/index"
-import * as find from "../util/find"
 
 // Import transport implementations
 import {TransportBase, WebSocketTransport, CommsTransport} from "./low_level_transport"
@@ -829,14 +828,11 @@ export class Comm extends Model {
      * which should have comm_mgr property.
      */
     private findCommMgr(): CommMgr | undefined {
-        const ctx = find.context(this)
-        if ( ctx ) {
-            if ( ctx.comm_mgr ) return ctx.comm_mgr
-            else console.warn("CommMgr not available from BokehAppContext object")
-        } else {
-            console.warn("Could not find BokehAppContext so CommMgr find failed")
+        const mgr = this.document?.get_model_by_name(this.comm_mgr_id) as CommMgr | undefined
+        if (!mgr) {
+            console.warn(`Comm ${this.description?.trim() || this.comm_id}: no CommMgr named ${this.comm_mgr_id} found`)
         }
-        return undefined
+        return mgr
     }
 
     /**

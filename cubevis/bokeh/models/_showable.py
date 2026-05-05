@@ -92,7 +92,7 @@ class Showable(LayoutDOM,BokehInit):
         # Start backend if needed
         if not hasattr(self, '_backend_started') or not self._backend_started:
             logger.debug( "Showable.document: starting backend" )
-            self._start_backend()
+            self._start_backend(deregister_after=False)
             self._backend_started = True
 
     def to_serializable(self, *args, **kwargs):
@@ -147,6 +147,9 @@ class Showable(LayoutDOM,BokehInit):
         self._result_retrieval = result_retrieval
 
         self._notebook_rendering = None
+
+        # BokehAppContext associated with this Showable.
+        self._app_context = None
 
     ui = Instance(UIElement, help="""
     A UI element, which can be plots, layouts, widgets, or any other UIElement.
@@ -235,7 +238,19 @@ class Showable(LayoutDOM,BokehInit):
             return default
         return future.result()
 
-    def _start_backend(self):
+    def _deregister(self):
+        if self._app_context is not None:
+            BokehInit.clear_app_context(self._app_context)
+            # remove_root on app_context no longer needed — _get_notebook_html
+            # clears all roots before each serialization
+            self._app_context = None
+        if self.document is not None:
+            try:
+                self.document.remove_root(self)
+            except ValueError:
+                pass
+
+    def _start_backend(self, deregister_after=False):
         """Hook to start backend services when showing"""
         # Override this in subclasses or set a callback
         if self._backend_started:
@@ -252,11 +267,12 @@ class Showable(LayoutDOM,BokehInit):
             return
 
         # Serialization is complete at this point
-        app_context = BokehInit.get_app_context()
+        # Capture the context that owns this Showable right now, before
+        # anything else can push/pop the context stack
+        self._app_context = BokehInit.get_app_context( )
         ## Preflight callables are called before backend startup
         ## Importantly, these functions MUST be called in the main thread
-        app_context.run_preflight_callables()
-        BokehInit.clear_app_context(app_context)
+        self._app_context.run_preflight_callables()
 
         if hasattr(self, '_backend_startup_callback'):
             try:
@@ -270,7 +286,14 @@ class Showable(LayoutDOM,BokehInit):
         # if hasattr(self, '_backend_manager'):
         #     self._backend_manager.start()
 
+        from pathlib import Path
+        with open(Path.home() / "debug.txt", "a", encoding="utf-8") as f:
+            f.write(f"<<014>> calling deregister for context {self._app_context}\n")
         logger.debug(f"\tShowable::_start_backend(): Backend startup hook called for {id(self)}")
+
+        # Serialization is complete and backend is launched — safe to deregister now
+        if deregister_after:
+            self._deregister()
 
     def set_backend_startup_callback(self, callback):
         """Set a callback to be called when show() is invoked"""
@@ -308,10 +331,25 @@ class Showable(LayoutDOM,BokehInit):
         Returns the HTML string to display, or None if not in a notebook.
         """
         from bokeh.embed import components, json_item
+        from bokeh.io import curdoc
         from bokeh.io.state import curstate
         from bokeh.resources import CDN
         import sys
         import json as json_lib
+
+        from pathlib import Path
+        with open(Path.home() / "debug.txt", "a", encoding="utf-8") as f:
+            f.write(f"<<015>> _get_notebook_html: beginning perge of all document contents in Showable({self})\n")
+
+        # Purge ALL existing roots from the shared notebook document before
+        # adding ours. In a non-server notebook, curdoc() persists across cells
+        # and accumulates stale roots from previous app instances.
+        current_doc = curdoc()
+        for root in list(current_doc.roots):
+            try:
+                current_doc.remove_root(root)
+            except Exception:
+                pass
 
         state = curstate()
 
@@ -397,7 +435,7 @@ class Showable(LayoutDOM,BokehInit):
             '''
 
             if start_backend:
-                self._start_backend()
+                self._start_backend(deregister_after=True)
 
             self._notebook_rendering = html
             return html
@@ -468,7 +506,7 @@ class Showable(LayoutDOM,BokehInit):
         # Fall back to standard Bokeh show for non-notebook environments
         from bokeh.io import show as bokeh_show
         if start_backend:
-            self._start_backend()
+            self._start_backend(deregister_after=True)
         bokeh_show(self)
 
     def __str__(self):

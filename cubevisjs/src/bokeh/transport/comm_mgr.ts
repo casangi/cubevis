@@ -129,6 +129,7 @@ export class CommMgr extends Model {
     
     initialize(): void {
         super.initialize()
+        console.log( "USING CUBEVISJS #0001" )
         try {
             console.log("CommMgr initialize:", this)
             // Initialize transport based on properties

@@ -12,6 +12,7 @@
 import {Model} from "@bokehjs/model"
 import * as p from "@bokehjs/core/properties"
 import {CustomJS} from "@bokehjs/models/callbacks/index"
+import * as find from "../util/find"
 
 // Import transport implementations
 import {TransportBase, WebSocketTransport, CommsTransport} from "./low_level_transport"
@@ -130,30 +131,31 @@ export class CommMgr extends Model {
         super.initialize()
         try {
             console.log("CommMgr initialize:", this)
-            console.log(`CommMgr initializing: ${this.comm_mgr_id}`)
+            // Initialize transport based on properties
+            this.initializeTransport()
+
+            //
+            // Run any initialization script
+            //
+            const _execute = () => {
+                console.group( "CommMgr init script execution" )
+                this.init_scripts.forEach(
+                    ([script, id, description], i) => {
+                        // Pass the current loop index 'i' into the cb_data object
+                        if ( description === null || description === undefined || description.trim().length === 0 )
+                            console.log(id)
+                        else
+                            console.log(description)
+                        script.execute( this, { index: i, id, description } )
+                    } )
+                console.groupEnd( )
+            }
+
+            _execute( )
+
         } catch (error) {
             console.error("An error occurred:", error.message)
         }
-          // Initialize transport based on properties
-        this.initializeTransport()
-
-        //
-        // Run any initialization script
-        //
-        const _execute = () => {
-            console.group( "CommMgr init script execution" )
-            this.init_scripts.forEach(
-                ([script, id, description], i) => {
-                    // Pass the current loop index 'i' into the cb_data object
-                    if ( description === null || description === undefined || description.trim().length === 0 )
-                        console.log(id)
-                    else
-                        console.log(description)
-                    script.execute( this, { index: i, id, description } )
-                } )
-            console.groupEnd( )
-        }
-        _execute( )
     }
 
     get state(): AppState {
@@ -208,6 +210,15 @@ export class CommMgr extends Model {
             if (this.transport_type === 'websocket' || this.transport_type === 'auto') {
                 this.scheduleReconnect()
             } else {
+                // Disable the GUI — no backend is available
+                const showable = find.showable(this)
+                if (showable) {
+                    console.log("CommMgr: no backend is available disabling our Showable")
+                    showable.disabled_message = "No active session — re-run the cell to restart"
+                    showable.disabled = true
+                } else {
+                    console.warn("CommMgr: entered error state but could not find Showable to disable")
+                }
                 throw e
             }
         }

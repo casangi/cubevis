@@ -213,18 +213,25 @@ export class CommMgr extends Model {
                 // Disable the GUI — no backend is available, but execution must be delayed
                 //                   until the GUI has actually been initialized and the
                 //                   Showable is available...
-                setTimeout(
-                    ( ) => {
-                        const showable = find.showable(this)
-                        if (showable) {
-                            console.log("CommMgr: no backend available, disabling Showable")
-                            showable.disabled_message = "No active session — re-run the cell to restart"
-                            showable.disabled = true
-                        } else {
-                            console.warn("CommMgr: entered error state but could not find Showable to disable")
+                setTimeout(() => {
+                    // with Bokeh 3.6 there is a roots( ) function...
+                    // with Bokeh 3.8 there is a all_roots property...
+                    const roots = this.document?.all_roots ?? this.document?.roots() ?? []
+                    for (const root of roots) {
+                        const comm_mgr = (root as any).comm_mgr
+                        if (comm_mgr === this) {
+                            // root is our BokehAppContext
+                            const showable = (root as any).ui ?? find.showable(root as any)
+                            if (showable) {
+                                console.log("CommMgr: no backend available, disabling Showable")
+                                showable.disabled_message = "No active session — re-run the cell to restart"
+                                showable.disabled = true
+                                return
+                            }
                         }
-                    }, 0
-                )
+                    }
+                    console.warn("CommMgr: entered error state but could not find Showable to disable")
+                }, 0)
                 throw e
             }
         }

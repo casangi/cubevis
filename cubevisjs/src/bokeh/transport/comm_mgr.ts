@@ -225,27 +225,17 @@ export class CommMgr extends Model {
                 setTimeout(() => {
                     // with Bokeh 3.6 there is a roots( ) function...
                     // with Bokeh 3.8 there is a all_roots property...
-                    console.log( "find showable #2:", find.showable(this) )
                     const roots = this.document?.all_roots ?? this.document?.roots() ?? []
-                    console.log( 'Searching roots:', roots )
                     for (const root of roots) {
-                        const comm_mgr = (root as any).comm_mgr
-                        console.log( 'root type:', (root as any).type,
-                                     'has comm_mgr:', !!comm_mgr,
-                                     'comm_mgr_id:', comm_mgr?.comm_mgr_id,
-                                     'this.comm_mgr_id:', this.comm_mgr_id,
-                                     'identity match:', comm_mgr === this )
-                        if (comm_mgr === this) {
-                            // root is our BokehAppContext
-                            const showable = (root as any).ui ?? find.showable(root as any)
-                            if (showable) {
-                                console.log("CommMgr: no backend available, disabling Showable")
-                                showable.disabled_message = "No active session — re-run the cell to restart"
-                                showable.disabled = true
-                                return
-                            }
+                        if ((root as any).type === "cubevis.bokeh.models._showable.Showable") {
+                            const showable = root as any
+                            console.log("CommMgr: no backend available, disabling Showable")
+                            showable.disabled_message = "No active session — re-run the cell to restart"
+                            showable.disabled = true
+                            return
                         }
                     }
+                    // Fallback: try find.showable from CommMgr itself
                     console.warn("CommMgr: entered error state but could not find Showable to disable")
                 }, 0)
                 //throw e

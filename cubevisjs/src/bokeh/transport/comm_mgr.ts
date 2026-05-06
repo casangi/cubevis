@@ -176,8 +176,10 @@ export class CommMgr extends Model {
             return
         }
         
+        console.log("<1>transport_type is:", this.transport_type)
         this.state = AppState.INITIALIZING
         
+        console.log("<2>transport_type is:", this.transport_type)
         try {
             // Determine transport type
             let transportType = this.transport_type
@@ -185,6 +187,7 @@ export class CommMgr extends Model {
                 transportType = this.detectTransport()
             }
             
+            console.log("<3>transport_type is:", this.transport_type)
             // Create appropriate transport
             if (transportType === 'websocket') {
                 if (!this.address) {
@@ -192,6 +195,7 @@ export class CommMgr extends Model {
                 }
                 await this.connectWebSocket()
             } else if (transportType === 'colab' || transportType === 'jupyter') {
+                console.log("<4>transport_type is:", this.transport_type)
                 this.transport = new CommsTransport(this)
                 await this.setupTransport()
             } else {
@@ -203,10 +207,12 @@ export class CommMgr extends Model {
             console.log(`CommMgr initialized with ${transportType} transport`)
 
         } catch (e) {
+            console.log("<5>transport_type is:", this.transport_type)
             console.error("Error initializing CommMgr transport:", e)
-            console.log("transport_type is:", this.transport_type)
+            console.log("<6>transport_type is:", this.transport_type)
             this.state = AppState.ERROR
 
+            console.log("<7>transport_type is:", this.transport_type)
             if (this.transport_type === 'websocket' || this.transport_type === 'auto') {
                 // Attempt reconnection for WebSocket
                 this.scheduleReconnect()

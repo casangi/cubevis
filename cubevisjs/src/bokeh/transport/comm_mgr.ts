@@ -217,6 +217,7 @@ export class CommMgr extends Model {
                     // with Bokeh 3.6 there is a roots( ) function...
                     // with Bokeh 3.8 there is a all_roots property...
                     const roots = this.document?.all_roots ?? this.document?.roots() ?? []
+                    console.log( 'Searching roots:', roots )
                     for (const root of roots) {
                         const comm_mgr = (root as any).comm_mgr
                         if (comm_mgr === this) {

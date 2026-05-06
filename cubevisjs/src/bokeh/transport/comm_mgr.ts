@@ -210,12 +210,14 @@ export class CommMgr extends Model {
                 // Attempt reconnection for WebSocket
                 this.scheduleReconnect()
             } else {
+                console.log( "find showable #1:", find.showable(this) )
                 // Disable the GUI — no backend is available, but execution must be delayed
                 //                   until the GUI has actually been initialized and the
                 //                   Showable is available...
                 setTimeout(() => {
                     // with Bokeh 3.6 there is a roots( ) function...
                     // with Bokeh 3.8 there is a all_roots property...
+                    console.log( "find showable #2:", find.showable(this) )
                     const roots = this.document?.all_roots ?? this.document?.roots() ?? []
                     console.log( 'Searching roots:', roots )
                     for (const root of roots) {
@@ -233,7 +235,7 @@ export class CommMgr extends Model {
                     }
                     console.warn("CommMgr: entered error state but could not find Showable to disable")
                 }, 0)
-                throw e
+                //throw e
             }
         }
     }

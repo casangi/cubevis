@@ -230,6 +230,11 @@ export class CommMgr extends Model {
                     console.log( 'Searching roots:', roots )
                     for (const root of roots) {
                         const comm_mgr = (root as any).comm_mgr
+                        console.log( 'root type:', (root as any).type,
+                                     'has comm_mgr:', !!comm_mgr,
+                                     'comm_mgr_id:', comm_mgr?.comm_mgr_id,
+                                     'this.comm_mgr_id:', this.comm_mgr_id,
+                                     'identity match:', comm_mgr === this )
                         if (comm_mgr === this) {
                             // root is our BokehAppContext
                             const showable = (root as any).ui ?? find.showable(root as any)

@@ -204,6 +204,7 @@ export class CommMgr extends Model {
 
         } catch (e) {
             console.error("Error initializing CommMgr transport:", e)
+            console.log("transport_type is:", this.transport_type)
             this.state = AppState.ERROR
 
             if (this.transport_type === 'websocket' || this.transport_type === 'auto') {

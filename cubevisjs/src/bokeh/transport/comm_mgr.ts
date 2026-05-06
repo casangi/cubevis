@@ -201,24 +201,30 @@ export class CommMgr extends Model {
             this.initialized = true
             this.state = AppState.RUNNING
             console.log(`CommMgr initialized with ${transportType} transport`)
-            
+
         } catch (e) {
             console.error("Error initializing CommMgr transport:", e)
             this.state = AppState.ERROR
 
-            // Attempt reconnection for WebSocket
             if (this.transport_type === 'websocket' || this.transport_type === 'auto') {
+                // Attempt reconnection for WebSocket
                 this.scheduleReconnect()
             } else {
-                // Disable the GUI — no backend is available
-                const showable = find.showable(this)
-                if (showable) {
-                    console.log("CommMgr: no backend is available disabling our Showable")
-                    showable.disabled_message = "No active session — re-run the cell to restart"
-                    showable.disabled = true
-                } else {
-                    console.warn("CommMgr: entered error state but could not find Showable to disable")
-                }
+                // Disable the GUI — no backend is available, but execution must be delayed
+                //                   until the GUI has actually been initialized and the
+                //                   Showable is available...
+                setTimeout(
+                    ( ) => {
+                        const showable = find.showable(this)
+                        if (showable) {
+                            console.log("CommMgr: no backend available, disabling Showable")
+                            showable.disabled_message = "No active session — re-run the cell to restart"
+                            showable.disabled = true
+                        } else {
+                            console.warn("CommMgr: entered error state but could not find Showable to disable")
+                        }
+                    }, 0
+                )
                 throw e
             }
         }

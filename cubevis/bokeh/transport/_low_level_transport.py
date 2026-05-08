@@ -17,8 +17,6 @@ from abc import ABC, abstractmethod
 from bokeh.models import Div, CustomJS
 from typing import Optional, Callable, Dict, Any
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
-from ...utils import deserialize, serialize
-
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +158,8 @@ class WebSocketTransport(TransportBase):
         Waits for initialization message from frontend and validates it.
         Sends acknowledgment back.
         """
+        from ...utils import deserialize, serialize
+
         try:
             logger.debug( "WebSocket waiting for initialization (comm_mgr_id=%s)", self._comm_mgr_id )
 
@@ -561,11 +561,22 @@ class CommsTransport(TransportBase):
                 # when testing simple messages are sent directly using
                 # the Jupyter/Colab comm object
                 logger.debug( "CommsTransport._recv: %s", LazySummarize(data) )
-                try:
-                    _invoke_callback(data)
-                    logger.debug( "CommsTransport._recv: callback successful" )
-                except Exception as e:
-                    logger.exception( "CommsTransport._recv: error invoking callback function" )
+
+                # Skip transport-layer control messages — these are handled by
+                # the transport itself and must not be forwarded to the
+                # application callback.  Without this guard, comm_opened in
+                # particular causes Python to send a response whose request_id
+                # the JS CommMgr has never registered, producing a flood of
+                # "Received response for unknown request" warnings.
+                _msg_type = data.get("type", "") if isinstance(data, dict) else ""
+                if _msg_type in ("comm_opened", "ping", "heartbeat", "closing"):
+                    logger.debug("CommsTransport._recv: skipping control message type=%s", _msg_type)
+                else:
+                    try:
+                        _invoke_callback(data)
+                        logger.debug( "CommsTransport._recv: callback successful" )
+                    except Exception:
+                        logger.exception( "CommsTransport._recv: error invoking callback function" )
 
         comm.on_msg(_recv)
 
@@ -1003,6 +1014,7 @@ class CommsTransport(TransportBase):
         self._callback = wrapper
 
     async def send_message(self, message: Dict[str, Any]) -> None:
+        from ...utils import serialize
         # Use lazy formatting to avoid string building/summarizing unless DEBUG is on
         from ...utils import LazySummarize
         logger.debug(
@@ -1018,7 +1030,6 @@ class CommsTransport(TransportBase):
             # otherwise the raised exception will be the only record.
             raise RuntimeError("CommsTransport: not connected")
 
-        from ...utils import serialize
         envelope = {
             "type": "cubevis_message",
             "comm_mgr_id": self._comm_mgr_id,
@@ -1071,8 +1082,8 @@ class CommsTransport(TransportBase):
                 self._colab_pending_replies.append(envelope)
                 _if = max(0, getattr(self, "_colab_inflight", 1) - 1)
                 self._colab_inflight = _if
-                with open(file_path, "a") as _f:
-                    _f.write(f"<<send_message>> reply queued (depth={len(self._colab_pending_replies)} inflight={_if})\n")
+                logger.debug("<<send_message>> reply queued (depth=%d inflight=%d)",
+                             len(self._colab_pending_replies), _if)
                 # If inflight==0, the request came via an external channel (not bc_tx),
                 # so bc_tx.onmessage never fired and _startPoll was never called.
                 # Start the poll now so this reply gets delivered.
@@ -1088,16 +1099,12 @@ class CommsTransport(TransportBase):
                             "comm_mgr_id": self._comm_mgr_id,
                             "envelope": _snap_d
                         })
-                        with open(file_path, "a") as _f:
-                            _f.write(f"<<send_message>> direct bridge.send delivery (inflight=0 path)\n")
+                        logger.debug("<<send_message>> direct bridge.send delivery (inflight=0 path)")
                     except Exception as _spe:
-                        with open(file_path, "a") as _f:
-                            _f.write(f"<<send_message>> direct delivery failed: {_spe}\n")
+                        logger.exception("<<send_message>> direct delivery failed")
 
             except Exception as e:
-                with open(file_path, "a") as f:
-                    f.write(f"<<send_message>> eval_js FAILED: {type(e).__name__}: {e}\n")
-                logger.warning(f"CommsTransport.send_message: eval_js failed: {e}")
+                logger.warning("CommsTransport.send_message: eval_js failed: %s", e)
         else:
             # JupyterLab: single bidirectional kernel comm
             comm_objs = getattr(self, '_comm_objs', None)
@@ -1105,12 +1112,9 @@ class CommsTransport(TransportBase):
                 raise RuntimeError("CommsTransport: not connected (no comm available)")
             try:
                 comm_objs[0].send(envelope)
-                with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"<<send_message>> sent via comm: {str(envelope)[:120]}\n")
+                logger.debug("<<send_message>> sent via comm")
             except Exception as e:
-                with open(file_path, "a") as f:
-                    f.write(f"<<send_message>> comm.send FAILED: {e}\n")
-                logger.warning(f"CommsTransport.send_message: comm send failed: {e}")
+                logger.warning("CommsTransport.send_message: comm send failed: %s", e)
 
     async def run(self) -> None:
         """Keep the transport alive until disconnected."""

@@ -327,9 +327,6 @@ export class CommsTransport implements TransportBase {
 
     async connect(): Promise<void> {
 
-        console.group( '------------------------------connect------------------------------' )
-        console.log( this.getAppContext( ) )
-        console.groupEnd( )
         try {
             // Register handlers BEFORE opening the comm so we
             // never miss a fast reply from the Python kernel.
@@ -373,6 +370,9 @@ export class CommsTransport implements TransportBase {
                 })
             }
 
+            console.group( '------------------------------connect------------------------------' )
+            console.log( this.getAppContext( ) )
+            console.groupEnd( )
             this.comm.send(envelope)
 
         } catch (e) {

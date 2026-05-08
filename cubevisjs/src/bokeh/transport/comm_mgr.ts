@@ -58,6 +58,7 @@ class HandlerContext {
 interface QueuedMessage {
     messageId: string
     message: any
+    requestId: string
     callback?: (response: any) => void
 }
 
@@ -468,6 +469,7 @@ export class CommMgr extends Model {
             this.sendQueue.get(commId)!.push({
                 messageId,
                 message,
+                requestId,
                 callback
             })
 
@@ -497,6 +499,7 @@ export class CommMgr extends Model {
             this.sendQueue.get(commId)!.push({
                 messageId,
                 message,
+                requestId,
                 callback
             })
             
@@ -570,7 +573,6 @@ private sendImmediate(
         
         // Get next message
         const item = queue.shift()!
-        const requestId = this.generateId()
         
         console.debug(
             `Processing queued message for ${commId}.${item.messageId} ` +
@@ -578,7 +580,7 @@ private sendImmediate(
         )
         
         // Send it
-        this.sendImmediate(commId, item.messageId, item.message, requestId, item.callback)
+        this.sendImmediate(commId, item.messageId, item.message, item.requestId, item.callback)
     }
     
     /**

@@ -653,6 +653,8 @@ class CommsTransport(TransportBase):
                 # Automatically captures the stack trace and the error message
                 logger.exception("<<display_bridge>> parent capture failed")
 
+        import time as _time
+        _esm_ts = str(int(_time.time()))
         esm = "// cubevis-esm:" + _esm_ts + "\n" + r"""
             function render({ model, el }) {
                 const isDebug  = """ + is_debug_js + r""";

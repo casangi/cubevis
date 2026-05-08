@@ -12,7 +12,6 @@
 import {Model} from "@bokehjs/model"
 import * as p from "@bokehjs/core/properties"
 import {CustomJS} from "@bokehjs/models/callbacks/index"
-import * as find from "../util/find"
 
 // Import transport implementations
 import {TransportBase, WebSocketTransport, CommsTransport} from "./low_level_transport"
@@ -124,14 +123,13 @@ export class CommMgr extends Model {
     constructor(attrs?: Partial<CommMgr.Attrs>) {
         super(attrs)
         this.context = new HandlerContext(this)
-        console.log("CommMgr constructor:", this)
     }
     
     initialize(): void {
         super.initialize()
-        console.log( "USING CUBEVISJS #0001" )
+
         try {
-            console.log("CommMgr initialize:", this)
+
             // Initialize transport based on properties
             this.initializeTransport()
 
@@ -177,10 +175,8 @@ export class CommMgr extends Model {
             return
         }
         
-        console.log("<1>transport_type is:", this.transport_type)
         this.state = AppState.INITIALIZING
         
-        console.log("<2>transport_type is:", this.transport_type)
         try {
             // Determine transport type
             let transportType = this.transport_type
@@ -188,7 +184,6 @@ export class CommMgr extends Model {
                 transportType = this.detectTransport()
             }
             
-            console.log("<3>transport_type is:", this.transport_type)
             // Create appropriate transport
             if (transportType === 'websocket') {
                 if (!this.address) {
@@ -196,7 +191,6 @@ export class CommMgr extends Model {
                 }
                 await this.connectWebSocket()
             } else if (transportType === 'colab' || transportType === 'jupyter') {
-                console.log("<4>transport_type is:", this.transport_type)
                 this.transport = new CommsTransport(this)
                 await this.setupTransport()
             } else {
@@ -205,20 +199,17 @@ export class CommMgr extends Model {
             
             this.initialized = true
             this.state = AppState.RUNNING
-            console.log(`CommMgr initialized with ${transportType} transport`)
+            console.debug(`CommMgr initialized with ${transportType} transport`)
 
         } catch (e) {
-            console.log("<5>transport_type is:", this.transport_type)
             console.error("Error initializing CommMgr transport:", e)
-            console.log("<6>transport_type is:", this.transport_type)
             this.state = AppState.ERROR
 
-            console.log("<7>transport_type is:", this.transport_type)
             if (this.transport_type === 'websocket' || this.transport_type === 'auto') {
                 // Attempt reconnection for WebSocket
                 this.scheduleReconnect()
             } else {
-                console.log( "find showable #1:", find.showable(this) )
+
                 // Disable the GUI — no backend is available, but execution must be delayed
                 //                   until the GUI has actually been initialized and the
                 //                   Showable is available...
@@ -247,7 +238,7 @@ export class CommMgr extends Model {
      * Connect WebSocket with reconnection support.
      */
     private async connectWebSocket(): Promise<void> {
-        console.log(`Connecting WebSocket (attempt ${this.reconnectAttempts + 1})...`)
+        console.debug(`Connecting WebSocket (attempt ${this.reconnectAttempts + 1})...`)
 
         try {
             this.transport = new WebSocketTransport(
@@ -261,7 +252,7 @@ export class CommMgr extends Model {
             this.reconnectAttempts = 0
             this.reconnectDelay = 1000
 
-            console.log("WebSocket connected successfully")
+            console.debug("WebSocket connected successfully")
 
         } catch (e) {
             console.error("WebSocket connection failed:", e)
@@ -301,16 +292,13 @@ export class CommMgr extends Model {
         }
 
         try {
-            console.log("Transport event loop starting...")
 
             // Run transport until it closes
             await this.transport.run()
 
-            console.log("Transport event loop completed")
-
             // Transport closed - attempt reconnection if still active
             if (this.shouldReconnect && this.state !== AppState.STOPPED) {
-                console.log("Transport closed, attempting reconnection...")
+                console.debug("Transport closed, attempting reconnection...")
                 this.scheduleReconnect()  // ← This should be called!
             } else {
                 console.log("Not reconnecting (shouldReconnect=" + this.shouldReconnect + ", state=" + this.state + ")")
@@ -321,7 +309,7 @@ export class CommMgr extends Model {
 
             // Attempt reconnection on error
             if (this.shouldReconnect && this.state !== AppState.STOPPED) {
-                console.log("Transport error, attempting reconnection...")
+                console.debug("Transport error, attempting reconnection...")
                 this.scheduleReconnect()
             }
         }
@@ -412,7 +400,7 @@ export class CommMgr extends Model {
             this.sendQueue.set(commId, [])
             const desc = comm.description?.trim()
             const logMsg = desc ? `${desc} (${commId})` : commId
-            console.log(`Registered comm: ${logMsg}`)
+            console.debug(`Registered comm: ${logMsg}`)
         }
     }
     
@@ -455,7 +443,6 @@ export class CommMgr extends Model {
         const commId = comm.comm_id
         const requestId = this.generateId()
 
-        console.log( `CommMgr.send(messageId: ${messageId}, requestId: ${requestId}):`, message, callback )
         // Check if transport is connected
         if (!this.transport || !this.transport.isConnected()) {
 
@@ -486,7 +473,7 @@ export class CommMgr extends Model {
 
             // Trigger reconnection if not already happening
             if (this.shouldReconnect && !this.reconnectTimer) {
-                console.log("Triggering reconnection due to queued message")
+                console.debug("Triggering reconnection due to queued message")
                 this.scheduleReconnect()
             }
 
@@ -496,11 +483,10 @@ export class CommMgr extends Model {
         // Check if this comm has a pending request
         if (this.pending.has(commId)) {
             // Queue this message
-            console.log( 'CommMgr.send: queuing message' )
+
             if (comm.squash_queue) {
                 // Squash mode: remove any queued message with same message_id
                 const queue = this.sendQueue.get(commId)!
-                console.log( 'CommMgr.send: squash queue' )
                 this.sendQueue.set(
                     commId,
                     queue.filter(item => item.messageId !== messageId)
@@ -520,7 +506,6 @@ export class CommMgr extends Model {
             )
         } else {
             // Send immediately
-            console.log( 'CommMgr.send: sending message', message )
             this.sendImmediate(commId, messageId, message, requestId, callback)
         }
     }
@@ -529,11 +514,9 @@ export class CommMgr extends Model {
      * Flush all queued messages after reconnection.
      */
     private async flushAllQueues(): Promise<void> {
-        console.log("Flushing queued messages after reconnection...")
 
         for (const [commId, queue] of this.sendQueue.entries()) {
             if (queue.length > 0 && !this.pending.has(commId)) {
-                console.log(`Flushing ${queue.length} messages for comm ${commId}`)
                 this.processNextQueued(commId)
             }
         }
@@ -549,7 +532,7 @@ private sendImmediate(
         requestId: string,
         callback?: (response: any) => void
     ): void {
-        console.log( `CommMgr.sendImmediate(commId: ${commId}):`, message )
+
         const msg = {
             comm_id: commId,
             message_id: messageId,
@@ -568,7 +551,6 @@ private sendImmediate(
         
         // Send through transport
         if (this.transport && this.transport.isConnected()) {
-            console.log( `CommMgr.sendImmediate(commId: ${commId}): sending message` )
             this.transport.send(msg)
             console.debug(`Sent message: ${commId}.${messageId} (request_id=${requestId})`)
         } else {
@@ -754,7 +736,7 @@ private sendImmediate(
     }
 
     async shutdown(): Promise<void> {
-        console.log("Shutting down CommMgr")
+        console.debug("Shutting down CommMgr")
 
         // Prevent reconnection
         this.shouldReconnect = false
@@ -835,7 +817,7 @@ export class Comm extends Model {
     initialize(): void {
         super.initialize()
 
-        console.log(`Comm initializing: ${this.description?.trim() || this.comm_id} [squash:${this.squash_queue}]`);
+        console.debug(`Comm initializing: ${this.description?.trim() || this.comm_id} [squash:${this.squash_queue}]`);
 
         // Find CommMgr
         this._mgr = this.findCommMgr()
@@ -890,7 +872,6 @@ export class Comm extends Model {
      */
     send(messageId: string, message: any, callback?: (response: any) => void): void {
         if (this._mgr) {
-            console.log( `Comm.send(messageId: ${messageId}):`, message, callback )
             this._mgr.send(this, messageId, message, callback)
         } else {
             console.error(`Comm ${this.description?.trim() || this.comm_id}: Cannot send, CommMgr not found`)

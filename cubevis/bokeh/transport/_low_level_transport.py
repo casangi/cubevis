@@ -158,10 +158,10 @@ class WebSocketTransport(TransportBase):
         Waits for initialization message from frontend and validates it.
         Sends acknowledgment back.
         """
-        from ...utils import deserialize, serialize
+        from ...utils import deserialize, serialize, LazySummarize
         
         try:
-            logger.debug(f"WebSocket waiting for initialization (comm_mgr_id={self._comm_mgr_id})")
+            logger.debug( "WebSocket waiting for initialization (comm_mgr_id=%s)", self._comm_mgr_id )
 
             # Wait for initialization message
             init_message = await self.websocket.recv()
@@ -431,15 +431,7 @@ class CommsTransport(TransportBase):
                 logger.error(f"_recv: no callback is available")
 
         def _recv(msg):
-            logger.debug(f"{self} CommsTransport._recv: {msg}")
-            from pathlib import Path
-            with open(Path.home() / "debug.txt", "a") as f:
-                f.write(f"<<_recv>> raw msg keys: {list(msg.keys())}\n")
-                content = msg.get("content", {})
-                f.write(f"<<_recv>> content keys: {list(content.keys())}\n")
-                data = content.get("data", {})
-                f.write(f"<<_recv>> data type: {type(data).__name__}, value: {str(data)[:200]}\n")
-
+            logger.debug( "CommsTransport._recv: %s", LazySummarize(msg) )
             # Capture parent header only for non-poll messages.
             # Poll messages use the bridge iframe context (captured by Colab kernel automatically).
             _data_peek = msg.get("content", {}).get("data", {})
@@ -457,7 +449,7 @@ class CommsTransport(TransportBase):
                                 if hasattr(k, '_parent_ident'):
                                     self._last_parent_ident = k._parent_ident
                     except Exception:
-                        pass
+                        logger.exception( "CommsTransport._recv error encountered" )
 
             data = msg.get("content", {}).get("data", {})
 
@@ -470,15 +462,13 @@ class CommsTransport(TransportBase):
                     import pathlib as _plib
                     import threading as _thr
                     import json as _pj
-                    _fp2 = _plib.Path.home() / "debug.txt"
                     _snapshot = _pending.pop(0)  # take first reply, leave rest queued
                     _mgr_id = self._comm_mgr_id
 
                     # Use bridge cell parent header so eval_js runs in bridge iframe
                     _ph_now = getattr(self, '_colab_bridge_parents', {})
 
-                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _fp=_fp2, _ph=_ph_now,
-                                           _self=self):
+                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
                         try:
                             if _ph:
@@ -537,12 +527,10 @@ class CommsTransport(TransportBase):
                             )
                             _co.eval_js(_final_js, ignore_result=True)
 
-                            with open(_fp, "a") as _df:
-                                _df.write(f"<<poll>> delivered via {len(_chunks)} chunk(s) "
-                                          f"({len(_env_s)} bytes)\n")
-                        except Exception as _pe:
-                            with open(_fp, "a") as _df:
-                                _df.write(f"<<poll>> thread eval_js failed: {_pe}\n")
+                            logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
+
+                        except Exception:
+                            logger.exception( "<<poll>> thread eval_js failed" )
 
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
                 # nothing pending - JS manages idle timeout itself
@@ -570,22 +558,12 @@ class CommsTransport(TransportBase):
             else:
                 # when testing simple messages are sent directly using
                 # the Jupyter/Colab comm object
-                logger.debug(f"{self} CommsTransport._recv: UNEXPECTED message {data}, {self._callback}")
-                from pathlib import Path
-                file_path = Path.home() / "debug.txt"
-                with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"<<001>> {self} calling a regular function with {data}\n")
+                logger.debug( "CommsTransport._recv: %s", LazySummarize(data) )
                 try:
                     _invoke_callback(data)
+                    logger.debug( "CommsTransport._recv: callback successful" )
                 except Exception as e:
-                    from pathlib import Path
-                    file_path = Path.home() / "debug.txt"
-                    with open( file_path, "a", encoding="utf-8") as f:
-                        f.write( f"<<002>> {self} error calling function: {e}\n")
-
-                logger.debug(f"{self} CommsTransport._recv: where are we {data}, {self._callback}")
-                with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"<<003>> {self} after calling a regular function with {data}\n")
+                    logger.exception( "CommsTransport._recv: error invoking callback function" )
 
         comm.on_msg(_recv)
 
@@ -659,23 +637,22 @@ class CommsTransport(TransportBase):
         #     For Colab Python->JS, self._comm may be None; send_message() falls
         #     back to self._bridge.send() which delivers via the anywidget channel.
 
-        import time as _time
-        _esm_ts = str(int(_time.time()))
-        from pathlib import Path as _Path
-        with open(_Path.home() / "debug.txt", "a") as _dbf:
-            _dbf.write(f"<<display_bridge>> called, esm_ts={_esm_ts}, is_colab={self._is_colab()}\n")
-            # Capture bridge parent header NOW while the bridge cell is the active output context
-            if self._is_colab():
-                try:
-                    from IPython import get_ipython as _gip_br
-                    _ip_br = _gip_br()
-                    if _ip_br and hasattr(_ip_br, 'kernel'):
-                        _k_br = _ip_br.kernel
-                        if hasattr(_k_br, '_parents') and isinstance(_k_br._parents, dict):
-                            self._colab_bridge_parents = dict(_k_br._parents)
-                            _dbf.write(f"<<display_bridge>> bridge parent captured: {bool(self._colab_bridge_parents)}\n")
-                except Exception as _bpe:
-                    _dbf.write(f"<<display_bridge>> parent capture failed: {_bpe}\n")
+        logger.debug("<<display_bridge>> called (is_colab=%s)", self._is_colab())
+
+        if self._is_colab():
+            try:
+                from IPython import get_ipython as _gip_br
+                _ip_br = _gip_br()
+                if _ip_br and hasattr(_ip_br, 'kernel'):
+                    _k_br = _ip_br.kernel
+                    if hasattr(_k_br, '_parents') and isinstance(_k_br._parents, dict):
+                        # Using dict() creates a shallow copy, which is good practice here
+                        self._colab_bridge_parents = dict(_k_br._parents)
+                        logger.debug("<<display_bridge>> bridge parent captured: %s", bool(self._colab_bridge_parents))
+            except Exception:
+                # Automatically captures the stack trace and the error message
+                logger.exception("<<display_bridge>> parent capture failed")
+
         esm = "// cubevis-esm:" + _esm_ts + "\n" + r"""
             function render({ model, el }) {
                 const isDebug  = """ + is_debug_js + r""";
@@ -1002,37 +979,40 @@ class CommsTransport(TransportBase):
 
         @wraps(callback)
         async def wrapper(msg):
-            from pathlib import Path
-            file_path = Path.home() / "debug.txt"
-            with open(file_path, "a", encoding="utf-8") as f:
-                f.write(f"<<004>> {self} in wrapper function with {msg}\n")
+            logger.debug(
+                "%s wrapper: invoking %s callback with %s",
+                self,
+                "async" if is_async else "sync",
+                LazySummarize(msg)
+            )
+
             try:
                 if is_async:
-                    with open(file_path, "a", encoding="utf-8") as f:
-                        f.write(f"<<005>> {self} invoking coroutine with {msg}\n")
                     await callback(msg)
                 else:
-                    with open(file_path, "a", encoding="utf-8") as f:
-                        f.write(f"<<006>> {self} invoking wrapped function with {msg}\n")
                     callback(msg)
-            except Exception as e:
-                logger.error(f"set_message_callback.wrapper error: {e}")
-                with open(file_path, "a", encoding="utf-8") as f:
-                    f.write(f"<<007>> {self} error encountered {e}\n")
+            except Exception:
+                logger.exception("set_message_callback.wrapper error")
 
         # Store the wrapper as the internal callback
         self._callback = wrapper
 
     async def send_message(self, message: Dict[str, Any]) -> None:
-        from pathlib import Path
-        file_path = Path.home() / "debug.txt"
-        with open(file_path, "a") as f:
-            f.write(f"<<send_message>> sending to {len(self._comm_objs)} comms: {str(message)[:100]}\n")
-            f.write(f"<<send_message>> is_colab={self._is_colab()} bridge={self._bridge is not None}\n")
-        from ...utils import serialize
+        # Use lazy formatting to avoid string building/summarizing unless DEBUG is on
+        logger.debug(
+            "<<send_message>> to %d comms (is_colab=%s, bridge=%s): %s",
+            len(self._comm_objs),
+            self._is_colab(),
+            self._bridge is not None,
+            LazySummarize(message)
+        )
+
         if not self._connected:
+            # Note: Log the error before raising if you want it in the persistent log,
+            # otherwise the raised exception will be the only record.
             raise RuntimeError("CommsTransport: not connected")
 
+        from ...utils import serialize
         envelope = {
             "type": "cubevis_message",
             "comm_mgr_id": self._comm_mgr_id,

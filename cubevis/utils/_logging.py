@@ -83,3 +83,27 @@ def get_logger():
 	else:
 		_Logging.logger = logging.getLogger(__name__)
 	return _Logging.logger
+
+class LazySummarize
+    def __init__(self, data):
+        self.data = data
+
+    def _summarize(self, data):
+        if isinstance(data, dict):
+            # Recursively build the "{ k: v, ... }" string
+            parts = [f"{k}: {self._summarize(v)}" for k, v in data.items()]
+            return "{ " + ", ".join(parts) + " }"
+
+        elif isinstance(data, (list, tuple)):
+            # Summarize the first element if it exists to show type
+            sample = f" of {self._summarize(data[0])}" if data else ""
+            return f"{type(data).__name__}[{len(data)}]{sample}"
+
+        elif hasattr(data, 'shape'): # Catch numpy/pandas without importing
+            return f"array(shape={data.shape})"
+
+        else:
+            return type(data).__name__
+
+    def __str__(self):
+        return self._summarize(self.data)

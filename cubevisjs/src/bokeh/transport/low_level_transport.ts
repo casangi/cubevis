@@ -106,13 +106,11 @@ export class WebSocketTransport implements TransportBase {
     
     setMessageCallback(callback: (msg: any) => void): void {
         this.onMessageCallback = callback
-        console.debug(`Message callback set for WebSocket ${this.comm_mgr.comm_mgr_id}`)
     }
     
     async connect(): Promise<void> {
         const [host, port] = this.address
         const ws_address = `ws://${host}:${port}`
-        console.log("WebSocket connecting to:", ws_address)
         
         return new Promise((resolve, reject) => {
             if (this.websocket !== undefined) {
@@ -130,7 +128,7 @@ export class WebSocketTransport implements TransportBase {
             // Don't set onmessage here - that's for run()
             
             this.websocket.onopen = async () => {
-                console.log("WebSocket connected, performing handshake...")
+                console.debug("WebSocket connected, performing handshake...")
                 this.connected = true
                 
                 try {
@@ -163,7 +161,7 @@ export class WebSocketTransport implements TransportBase {
                         const data = deserialize(event.data as string)
                         
                         if (data.type === 'initialized') {
-                            console.log('WebSocket initialized:', data)
+                            console.debug('WebSocket initialized:', data)
                             this.initialized = true
                             
                             // Remove this handler
@@ -231,7 +229,6 @@ export class WebSocketTransport implements TransportBase {
      * Blocks until connection closes.
      */
     async run(): Promise<void> {
-        console.log(`WebSocket event loop starting for ${this.comm_mgr.comm_mgr_id}`)
         
         return new Promise((resolve, reject) => {
             if (!this.websocket) {
@@ -256,7 +253,7 @@ export class WebSocketTransport implements TransportBase {
             
             // Set up close handler
             this.websocket.onclose = (event: CloseEvent) => {
-                console.log(
+                console.debug(
                     `WebSocket closed: code=${event.code}, ` +
                     `reason=${event.reason || 'none'}, ` +
                     `clean=${event.wasClean}`
@@ -325,14 +322,12 @@ export class CommsTransport implements TransportBase {
     }
     
     async connect(): Promise<void> {
-        console.log("Comms connecting for comm_mgr:", this.comm_mgr.comm_mgr_id)
         
         try {
             // Register handlers BEFORE opening the comm so we
             // never miss a fast reply from the Python kernel.
             // We create the comm object first, wire up handlers, then open it.
             this.comm = await this.retrieveComm()
-            console.log("CommsTransport.connect:", this.comm)
 
             if (!this.comm) {
                 throw new Error("Could not create Jupyter comm")
@@ -359,7 +354,6 @@ export class CommsTransport implements TransportBase {
 //          }
 
             this.isOpen = true
-            console.log(`Jupyter comm opened: ${this.targetName}`)
 
             // Send explicit handshake so the backend knows we're ready
             const envelope = {
@@ -372,7 +366,6 @@ export class CommsTransport implements TransportBase {
                 })
             }
 
-            console.log(`CommsTransport.connect: sending handshake type=${envelope.type} comm_mgr_id=${envelope.comm_mgr_id}`)
             this.comm.send(envelope)
 
         } catch (e) {
@@ -382,15 +375,12 @@ export class CommsTransport implements TransportBase {
     }
     
     async run(): Promise<void> {
-        console.log(`Comms event loop starting for ${this.comm_mgr.comm_mgr_id}`)
-        console.log(new Error().stack)
 
         // Keep alive until shutdown
         while (this.shouldRun && this.isOpen) {
             await new Promise(resolve => setTimeout(resolve, 100))
         }
 
-        console.log(`Comms event loop ended for ${this.comm_mgr.comm_mgr_id}`)
     }
     
     // --------------------------------------------------------------------------
@@ -412,7 +402,6 @@ export class CommsTransport implements TransportBase {
         const target_id = this.comm_mgr.comm_mgr_id
         const cachedComm = window["cubevis_" + target_id]?.comm
 
-        console.log(`CommsTransport.retrieveComm: starting for ${target_id}`, cachedComm)
         if ( cachedComm ) {
             console.log(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`, cachedComm)
             const el = window["cubevis_" + target_id].dbg_el
@@ -425,9 +414,7 @@ export class CommsTransport implements TransportBase {
         }
 
         const isColab = typeof google !== "undefined" && google?.colab?.kernel?.comms
-        console.log(`CommsTransport.retrieveComm: colab for ${target_id}:`,  isColab )
         if (isColab) {
-            console.log(`[Colab] Setting up BroadcastChannel transport for ${target_id}`)
 
             // Colab isolates each cell output in its own iframe so window is not shared.
             // BroadcastChannel is same-origin and works across all Colab output iframes.
@@ -466,7 +453,6 @@ export class CommsTransport implements TransportBase {
 
             // Python->JS delivery handler — called by either path:
             const onRx = (msg: any) => {
-                console.log("%c[Colab] rx inbound:", "color: #34a853", msg)
                 if (colabComm.onMsg) {
                     colabComm.onMsg({ content: { data: msg }, buffers: [] })
                     // After each message, check if any deferred messages are now ready
@@ -487,7 +473,6 @@ export class CommsTransport implements TransportBase {
             // Path 2: cross-iframe — widget bridge posts on bc_rx
             bc_rx.onmessage = (event: MessageEvent) => onRx(event.data)
 
-            console.log("[Colab] BroadcastChannel transport ready")
             return colabComm
         }
 
@@ -605,7 +590,7 @@ export class CommsTransport implements TransportBase {
     }
 
     private handleCommClose(_msg: any): void {
-        console.log(`Jupyter comm closed for ${this.targetName}`)
+        console.debug(`Jupyter comm closed for ${this.targetName}`)
         this.isOpen = false
         this.shouldRun = false
     }
@@ -646,7 +631,8 @@ export class CommsTransport implements TransportBase {
                 })
 
                 this.comm.close()
-                console.log(`Closed Jupyter comm for ${this.targetName}`)
+                console.debug(`Closed Jupyter comm for ${this.targetName}`)
+
             } catch (e) {
                 console.error("Error closing Jupyter comm:", e)
             } finally {

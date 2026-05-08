@@ -282,14 +282,11 @@ class Showable(LayoutDOM,BokehInit):
             except Exception as e:
                 logger.error(f"\tShowable::_start_backend(): Error in startup callback: {e}")
 
-        # Example: Start asyncio backend
-        # if hasattr(self, '_backend_manager'):
-        #     self._backend_manager.start()
-
-        from pathlib import Path
-        with open(Path.home() / "debug.txt", "a", encoding="utf-8") as f:
-            f.write(f"<<014>> calling deregister for context {self._app_context}\n")
-        logger.debug(f"\tShowable::_start_backend(): Backend startup hook called for {id(self)}")
+        logger.debug(
+            "Showable::_start_backend(): Calling deregister for context %s (id=%s)",
+            self._app_context,
+            id(self)
+        )
 
         # Serialization is complete and backend is launched — safe to deregister now
         if deregister_after:
@@ -337,9 +334,7 @@ class Showable(LayoutDOM,BokehInit):
         import sys
         import json as json_lib
 
-        from pathlib import Path
-        with open(Path.home() / "debug.txt", "a", encoding="utf-8") as f:
-            f.write(f"<<015>> _get_notebook_html: beginning perge of all document contents in Showable({self})\n")
+        logger.debug( "Showable._get_notebook_html: beginning purge of all document contents in Showable(%s)", self )
 
         # Purge ALL existing roots from the shared notebook document before
         # adding ours. In a non-server notebook, curdoc() persists across cells

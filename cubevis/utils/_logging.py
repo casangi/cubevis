@@ -84,7 +84,7 @@ def get_logger():
 		_Logging.logger = logging.getLogger(__name__)
 	return _Logging.logger
 
-class LazySummarize
+class LazySummarize:
     def __init__(self, data):
         self.data = data
 

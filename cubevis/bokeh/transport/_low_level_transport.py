@@ -1,6 +1,6 @@
 ########################################################################
 # Python Transport Implementations
-# 
+#
 # Complete implementations of Colab Comms and Jupyter Comms transports
 # for use with CommMgr.
 ########################################################################
@@ -17,6 +17,8 @@ from abc import ABC, abstractmethod
 from bokeh.models import Div, CustomJS
 from typing import Optional, Callable, Dict, Any
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+from ...utils import deserialize, serialize
+
 
 logger = logging.getLogger(__name__)
 
@@ -77,48 +79,48 @@ def _get_comm_class():
 # ============================================================================
 class TransportBase(ABC):
     """Abstract base class for communication transports."""
-    
+
     def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
         self._comm_mgr_id = comm_mgr_id
         self.abort = abort
-        
+
     @abstractmethod
     async def connect(self) -> None:
         """Connect and initialize the transport."""
         pass
-    
+
     @abstractmethod
     async def send_message(self, message: Dict[str, Any]) -> None:
         """Send a message through this transport."""
         pass
-    
+
     @abstractmethod
     def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]):
         """Set callback for incoming messages (used by all transports)."""
         pass
-    
+
     @abstractmethod
     async def run(self) -> None:
         """
         Run the transport event loop.
-        
+
         For WebSocket: iterates over incoming messages
         For Colab/Jupyter: keeps event loop alive for callbacks
-        
+
         Blocks until shutdown or connection closes.
         """
         pass
-    
+
     @abstractmethod
     async def close(self) -> None:
         """Close the transport connection."""
         pass
-    
+
     @abstractmethod
     def is_connected(self) -> bool:
         """Check if transport is currently connected."""
         pass
-    
+
 # ============================================================================
 # WebSocket Transport
 # ============================================================================
@@ -129,14 +131,14 @@ class WebSocketTransport(TransportBase):
     - Initial handshaking (validate frontend/backend)
     - Event loop (iterating over messages)
     - Connection lifecycle
-    
+
     Usage (same as Colab/Jupyter):
         transport = WebSocketTransport(comm_mgr_id, websocket)
         transport.set_message_callback(route_message)
         await transport.connect()  # Performs handshake
         await transport.run()      # Runs until connection closes
     """
-    
+
     def __init__(self, comm_mgr_id: str, websocket, abort: Optional[Callable] = None):
         logger.debug( f'WebSocketTransport.__init__: {comm_mgr_id}' )
         super().__init__(comm_mgr_id, abort)
@@ -150,40 +152,38 @@ class WebSocketTransport(TransportBase):
         """Set callback for incoming messages."""
         self._message_callback = callback
         logger.debug(f"Message callback set for WebSocket {self._comm_mgr_id}")
-    
+
     async def connect(self) -> None:
         """
         Perform WebSocket handshake.
-        
+
         Waits for initialization message from frontend and validates it.
         Sends acknowledgment back.
         """
-        from ...utils import deserialize, serialize, LazySummarize
-        
         try:
             logger.debug( "WebSocket waiting for initialization (comm_mgr_id=%s)", self._comm_mgr_id )
 
             # Wait for initialization message
             init_message = await self.websocket.recv()
             msg = deserialize(init_message)
-            
+
             if msg.get('id') == 'initialize' and msg.get('direction') == 'j2p':
                 frontend_id = msg.get('frontend_id')
                 backend_id = msg.get('backend_id')
                 received_comm_mgr_id = msg.get('comm_mgr_id')
-                
+
                 logger.debug(
                     f"WebSocket initialization received: "
                     f"frontend={frontend_id}, backend={backend_id}, "
                     f"comm_mgr={received_comm_mgr_id}"
                 )
-                
+
                 # Validate against BokehAppContext
                 from .. import BokehInit
                 app = BokehInit.get_app_context()
-                
+
                 warnings = []
-                
+
                 if app:
                     # Check backend_id
                     if backend_id and backend_id != app.backend_id:
@@ -193,7 +193,7 @@ class WebSocketTransport(TransportBase):
                         )
                         logger.warning(warning)
                         warnings.append(warning)
-                    
+
                     # Check for duplicate frontend (multi-tab detection)
                     if frontend_id:
                         if app.frontend_id and app.frontend_id != frontend_id:
@@ -203,7 +203,7 @@ class WebSocketTransport(TransportBase):
                             )
                             logger.warning(warning)
                             warnings.append(warning)
-                            
+
                             # Send warning message
                             await self.websocket.send(serialize({
                                 'type': 'warning',
@@ -215,7 +215,7 @@ class WebSocketTransport(TransportBase):
                             # Set frontend_id
                             app.frontend_id = frontend_id
                             logger.debug(f"Set frontend_id: {frontend_id}")
-                
+
                 # Send acknowledgment
                 await self.websocket.send(serialize({
                     'type': 'initialized',
@@ -224,43 +224,43 @@ class WebSocketTransport(TransportBase):
                     'message': 'WebSocket connection established',
                     'warnings': warnings
                 }))
-                
+
                 self._connected = True
                 self._initialized = True
                 logger.debug(f"WebSocket initialized for comm_mgr_id={self._comm_mgr_id}")
-                
+
             else:
                 raise RuntimeError(
                     f"First message was not initialization: {msg.get('id')}"
                 )
-                
+
         except Exception as e:
             logger.error(f"Error during WebSocket initialization: {e}")
             if self.abort:
                 self.abort(e)
             raise
-    
+
     async def send_message(self, message: Dict[str, Any]) -> None:
         """Send a message through the WebSocket."""
         if not self._connected:
             raise RuntimeError("WebSocket not connected")
-        
+
         from ...utils import serialize
         await self.websocket.send(serialize(message))
-    
+
     async def run(self) -> None:
         """
         Run the WebSocket event loop.
-        
+
         Listens for messages until connection closes.
         ConnectionClosedError can happen when laptop sleeps and is NOT re-raised.
         """
         if not self._initialized:
             raise RuntimeError("Must call connect() before run()")
-        
+
         if not self._message_callback:
             raise RuntimeError("Must call set_message_callback() before run()")
-        
+
         from ...utils import deserialize
         self._should_run = True
         logger.debug(f"WebSocket event loop starting for {self._comm_mgr_id}")
@@ -283,7 +283,7 @@ class WebSocketTransport(TransportBase):
             # Normal close - don't treat as error
             logger.debug(f"WebSocket connection closed: {e}")
             # Don't re-raise - this is expected when laptop sleeps
-            
+
         except Exception as e:
             logger.error(f"WebSocket event loop error: {e}")
             if self.abort:
@@ -294,7 +294,7 @@ class WebSocketTransport(TransportBase):
             self._connected = False
             self._initialized = False
             self._should_run = False
-    
+
     async def close(self) -> None:
         """Close the WebSocket connection."""
         self._should_run = False
@@ -431,6 +431,7 @@ class CommsTransport(TransportBase):
                 logger.error(f"_recv: no callback is available")
 
         def _recv(msg):
+            from ...utils import LazySummarize
             logger.debug( "CommsTransport._recv: %s", LazySummarize(msg) )
             # Capture parent header only for non-poll messages.
             # Poll messages use the bridge iframe context (captured by Colab kernel automatically).
@@ -449,7 +450,8 @@ class CommsTransport(TransportBase):
                                 if hasattr(k, '_parent_ident'):
                                     self._last_parent_ident = k._parent_ident
                     except Exception:
-                        logger.exception( "CommsTransport._recv error encountered" )
+                        #logger.exception( "CommsTransport._recv error encountered" )
+                        pass
 
             data = msg.get("content", {}).get("data", {})
 
@@ -981,6 +983,7 @@ class CommsTransport(TransportBase):
 
         @wraps(callback)
         async def wrapper(msg):
+            from ...utils import LazySummarize
             logger.debug(
                 "%s wrapper: invoking %s callback with %s",
                 self,
@@ -1001,6 +1004,7 @@ class CommsTransport(TransportBase):
 
     async def send_message(self, message: Dict[str, Any]) -> None:
         # Use lazy formatting to avoid string building/summarizing unless DEBUG is on
+        from ...utils import LazySummarize
         logger.debug(
             "<<send_message>> to %d comms (is_colab=%s, bridge=%s): %s",
             len(self._comm_objs),

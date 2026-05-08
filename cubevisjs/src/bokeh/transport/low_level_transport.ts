@@ -321,8 +321,15 @@ export class CommsTransport implements TransportBase {
         this.onMessageCallback = callback
     }
     
+    private getAppContext(): any {
+        return find.context(this.comm_mgr)
+    }
+
     async connect(): Promise<void> {
-        
+
+        console.group( '------------------------------connect------------------------------' )
+        console.log( this.getAppContext( ) )
+        console.groupEnd( )
         try {
             // Register handlers BEFORE opening the comm so we
             // never miss a fast reply from the Python kernel.

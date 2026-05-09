@@ -476,7 +476,7 @@ class CommsTransport(TransportBase):
                         """Deliver envelope via eval_js from a background thread."""
                         with _kernel_update_lock:
                             try:
-                                old_parents = kernel._parents.copy()
+                                old_parents = None
                                 if _ph:
                                     try:
                                         from IPython import get_ipython as _gip_t2
@@ -484,6 +484,7 @@ class CommsTransport(TransportBase):
                                         if _ip_t2 and hasattr(_ip_t2, 'kernel'):
                                             _k_t2 = _ip_t2.kernel
                                             if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
+                                                old_parents = _k_t2._parents.copy( )
                                                 _k_t2._parents.update(_ph)
                                     except Exception:
                                         pass
@@ -540,14 +541,15 @@ class CommsTransport(TransportBase):
                                 logger.exception( "<<poll>> thread eval_js failed" )
                             finally:
                                 # Check if the kernel is still "pointing" at our bridge
-                                try:
-                                    current_parents = kernel._parents
-                                    if current_parents == _ph:
-                                        kernel._parents.update(old_parents)
-                                    else:
-                                        logger.debug("Kernel state changed by main thread; skipping restoration.")
-                                except Exception:
-                                    pass
+                                if old_parents:
+                                    try:
+                                        current_parents = kernel._parents
+                                        if current_parents == _ph:
+                                            kernel._parents.update(old_parents)
+                                        else:
+                                            logger.debug("Kernel state changed by main thread; skipping restoration.")
+                                    except Exception:
+                                        pass
 
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
                 # nothing pending - JS manages idle timeout itself

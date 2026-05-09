@@ -530,6 +530,8 @@ class CommsTransport(TransportBase):
                             _co.eval_js(_final_js, ignore_result=True)
 
                             logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
+                            if ( len(_env_s) == 412 ):
+                                logger.debug( msg )
 
                         except Exception:
                             logger.exception( "<<poll>> thread eval_js failed" )

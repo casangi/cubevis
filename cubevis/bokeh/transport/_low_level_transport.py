@@ -580,6 +580,28 @@ class CommsTransport(TransportBase):
 
         comm.on_msg(_recv)
 
+        # Refresh the bridge iframe parent header every time a comm opens.
+        # _on_comm_open fires in the bridge cell's kernel execution context,
+        # so kernel._parents here reflects the live bridge iframe — not the
+        # stale context captured during display_bridge() in the setup cell.
+        # This ensures that on a second (or later) GUI run the eval_js call
+        # in _deliver_in_thread targets the correct bridge iframe, not the
+        # one from the previous run.
+        if self._is_colab():
+            try:
+                from IPython import get_ipython as _gip_open
+                _ip_open = _gip_open()
+                if _ip_open is not None and hasattr(_ip_open, 'kernel'):
+                    _k_open = _ip_open.kernel
+                    if hasattr(_k_open, '_parents') and isinstance(_k_open._parents, dict):
+                        self._colab_bridge_parents = dict(_k_open._parents)
+                        logger.debug(
+                            "_on_comm_open: refreshed _colab_bridge_parents (captured=%s)",
+                            bool(self._colab_bridge_parents)
+                        )
+            except Exception:
+                logger.exception("_on_comm_open: failed to refresh _colab_bridge_parents")
+
         if not self._connected:
             self._connected = True
             self._conn_event.set()

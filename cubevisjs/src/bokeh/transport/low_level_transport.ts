@@ -408,6 +408,8 @@ export class CommsTransport implements TransportBase {
     private async retrieveComm(): Promise<any> {
         const target_id = this.comm_mgr.comm_mgr_id
         const cachedComm = window["cubevis_" + target_id]?.comm
+        console.log(`retrieveComm: target_id=${target_id} window keys=`,
+          Object.keys(window).filter(k => k.startsWith('cubevis_')))
 
         if ( cachedComm ) {
             console.log(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`, cachedComm)

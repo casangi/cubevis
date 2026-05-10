@@ -441,11 +441,13 @@ class CommsTransport(TransportBase):
             try:
                 stack = "".join(traceback.format_stack()[-5:])
 
+                _log_inflight = getattr(_self, "_colab_inflight", 0)
+                _log_pending_replies = len(getattr(_self, "_colab_pending_replies", []))
                 if stack in logged:
                     with log_file.open(mode="a", encoding="utf-8") as f:
-                        f.write(f"{self._comm_mgr_id} already logged\n")
+                        f.write(f"{self._comm_mgr_id} already logged, inflight: {_log_inflight}, pending replies: {_log_pending_replies}\n")
                 else:
-                    log_msg = f"_recv called on CommMgr {self._comm_mgr_id}\n{stack}\n"
+                    log_msg = f"_recv called on CommMgr {self._comm_mgr_id}, inflight: {_log_inflight}, pending replies: {_log_pending_replies}\n{stack}\n"
                     with log_file.open(mode="a", encoding="utf-8") as f:
                         f.write("-" * 120 + "\n")
                         f.write(log_msg)
@@ -541,6 +543,10 @@ class CommsTransport(TransportBase):
                             _co.eval_js(f"window[{_tok_key}]=[];", ignore_result=True)
 
                             # Send each chunk
+                            if len(_chunks) > 0:
+                                log_file = Path("~/debug.txt").expanduser()
+                                with log_file.open(mode="a", encoding="utf-8") as f:
+                                    f.write(f"\t>>>>>>------tok-key---------->> {self._comm_mgr_id}: {_tok_key} -> {len(_chunks)}")
                             for _ci, _chunk in enumerate(_chunks):
                                 _chunk_js = (f"window[{_tok_key}].push({_pj.dumps(_chunk)});")
                                 _co.eval_js(_chunk_js, ignore_result=True)
@@ -851,6 +857,13 @@ class CommsTransport(TransportBase):
                         window[`_cubevis_stopPoll_${targetId}`]  = _stopPoll;
                         // After delivery, reset backoff so next reply is fast
                         window[`_cubevis_pollDelivered_${targetId}`] = () => { _consecutiveEmpty = 0; };
+                        // Teardown hook
+                        window[`_cubevis_teardown_${targetId}`] = () => {
+                            _stopPoll()
+                            bc_tx.close()
+                            bc_rx.close()
+                            channel.close?.()
+                        }
 
                         // Hook into bc_tx: start polling whenever JS sends a message to Python
                         const _origBcTxOnmessage = bc_tx.onmessage;
@@ -1184,5 +1197,20 @@ class CommsTransport(TransportBase):
             except Exception:
                 pass
         self._comm_objs = []
+
+        ### clean up the JavaScript bridge state here
+        #if self._is_colab():
+        #    try:
+        #        from google.colab import output as _co
+        #        import json as _json
+        #        teardown_fn = f"_cubevis_teardown_{self._comm_mgr_id}"
+        #        _co.eval_js(
+        #            f"if(window[{_json.dumps(teardown_fn)}])"
+        #            f"  window[{_json.dumps(teardown_fn)}]();",
+        #            ignore_result=True
+        #        )
+        #    except Exception:
+        #        logger.exception("CommsTransport.close: teardown eval_js failed")
+
         self._connected = False
         self._bridge = None

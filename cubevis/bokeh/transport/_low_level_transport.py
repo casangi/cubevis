@@ -432,7 +432,20 @@ class CommsTransport(TransportBase):
 
         def _recv(msg):
             from ...utils import LazySummarize
-            logger.debug( "CommsTransport._recv: %s", LazySummarize(msg) )
+            import traceback
+            from pathlib import Path
+            logger.debug( "------------------------------------------------------------------------------------------------------------------------" )
+            stack = "".join(traceback.format_stack()[-5:])
+            msg = f"_recv called on CommMgr {self._comm_mgr_id}\n{stack}\n"
+            log_file = Path("~/debug.txt").expanduser()
+            with log_file.open(mode="a", encoding="utf-8") as f:
+                f.write("------------------------------------------------------------------------------------------------------------------------\n")
+                f.write(msg)
+                f.write("------------------------------------------------------------------------------------------------------------------------\n")
+            logger.debug( "_recv called on CommMgr %s\n%s", self._comm_mgr_id,
+                          ''.join(traceback.format_stack()[-5:]) )
+            logger.debug( "------------------------------------------------------------------------------------------------------------------------" )
+            #logger.debug( "CommsTransport._recv: %s", LazySummarize(msg) )
             # Capture parent header only for non-poll messages.
             # Poll messages use the bridge iframe context (captured by Colab kernel automatically).
             _data_peek = msg.get("content", {}).get("data", {})

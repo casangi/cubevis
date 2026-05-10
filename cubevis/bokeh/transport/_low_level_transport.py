@@ -434,23 +434,36 @@ class CommsTransport(TransportBase):
             from ...utils import LazySummarize
             import traceback
             from pathlib import Path
-            logged = getattr( self, '_logged_stack_traces', { })
+
+            logged = getattr(self, '_logged_stack_traces', {})
+            log_file = Path("~/debug.txt").expanduser()
+
             try:
-                log_file = Path("~/debug.txt").expanduser()
                 stack = "".join(traceback.format_stack()[-5:])
+
                 if stack in logged:
                     with log_file.open(mode="a", encoding="utf-8") as f:
-                        log_file.write(f"{self._comm_mgr_id} already logged\n")
+                        f.write(f"{self._comm_mgr_id} already logged\n")
                 else:
                     msg = f"_recv called on CommMgr {self._comm_mgr_id}\n{stack}\n"
                     with log_file.open(mode="a", encoding="utf-8") as f:
-                        f.write("------------------------------------------------------------------------------------------------------------------------\n")
+                        f.write("-" * 120 + "\n")
                         f.write(msg)
-                        f.write("------------------------------------------------------------------------------------------------------------------------\n")
+                        f.write("-" * 120 + "\n")
+
                 logged[stack] = True
                 self._logged_stack_traces = logged
-            except:
-                pass
+
+            except Exception:
+                error_msg = f"LOGGING ERROR in CommMgr {getattr(self, '_comm_mgr_id', 'unknown')}:\n{traceback.format_exc()}\n"
+                try:
+                    with log_file.open(mode="a", encoding="utf-8") as f:
+                        f.write("!!! ERROR IN DEBUG LOGGING !!!\n")
+                        f.write(error_msg)
+                        f.write("-" * 120 + "\n")
+                except:
+                    print(error_msg)
+
             #logger.debug( "CommsTransport._recv: %s", LazySummarize(msg) )
             # Capture parent header only for non-poll messages.
             # Poll messages use the bridge iframe context (captured by Colab kernel automatically).

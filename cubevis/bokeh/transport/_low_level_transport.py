@@ -441,8 +441,8 @@ class CommsTransport(TransportBase):
             try:
                 stack = "".join(traceback.format_stack()[-5:])
 
-                _log_inflight = getattr(_self, "_colab_inflight", 0)
-                _log_pending_replies = len(getattr(_self, "_colab_pending_replies", []))
+                _log_inflight = getattr(self, "_colab_inflight", 0)
+                _log_pending_replies = len(getattr(self, "_colab_pending_replies", []))
                 if stack in logged:
                     with log_file.open(mode="a", encoding="utf-8") as f:
                         f.write(f"{self._comm_mgr_id} already logged, inflight: {_log_inflight}, pending replies: {_log_pending_replies}\n")

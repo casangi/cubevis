@@ -447,7 +447,8 @@ class CommsTransport(TransportBase):
                         f.write("------------------------------------------------------------------------------------------------------------------------\n")
                         f.write(msg)
                         f.write("------------------------------------------------------------------------------------------------------------------------\n")
-                logged{stack} = True
+                logged[stack] = True
+                self._logged_stack_traces = logged
             except:
                 pass
             #logger.debug( "CommsTransport._recv: %s", LazySummarize(msg) )

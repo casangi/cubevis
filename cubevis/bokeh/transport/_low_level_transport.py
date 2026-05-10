@@ -445,10 +445,10 @@ class CommsTransport(TransportBase):
                     with log_file.open(mode="a", encoding="utf-8") as f:
                         f.write(f"{self._comm_mgr_id} already logged\n")
                 else:
-                    msg = f"_recv called on CommMgr {self._comm_mgr_id}\n{stack}\n"
+                    log_msg = f"_recv called on CommMgr {self._comm_mgr_id}\n{stack}\n"
                     with log_file.open(mode="a", encoding="utf-8") as f:
                         f.write("-" * 120 + "\n")
-                        f.write(msg)
+                        f.write(log_msg)
                         f.write("-" * 120 + "\n")
 
                 logged[stack] = True

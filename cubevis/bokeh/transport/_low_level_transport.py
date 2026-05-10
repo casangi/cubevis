@@ -434,13 +434,22 @@ class CommsTransport(TransportBase):
             from ...utils import LazySummarize
             import traceback
             from pathlib import Path
-            stack = "".join(traceback.format_stack()[-5:])
-            msg = f"_recv called on CommMgr {self._comm_mgr_id}\n{stack}\n"
-            log_file = Path("~/debug.txt").expanduser()
-            with log_file.open(mode="a", encoding="utf-8") as f:
-                f.write("------------------------------------------------------------------------------------------------------------------------\n")
-                f.write(msg)
-                f.write("------------------------------------------------------------------------------------------------------------------------\n")
+            logged = getattr( self, '_logged_stack_traces', { })
+            try:
+                log_file = Path("~/debug.txt").expanduser()
+                stack = "".join(traceback.format_stack()[-5:])
+                if stack in logged:
+                    with log_file.open(mode="a", encoding="utf-8") as f:
+                        log_file.write(f"{self._comm_mgr_id} already logged\n")
+                else:
+                    msg = f"_recv called on CommMgr {self._comm_mgr_id}\n{stack}\n"
+                    with log_file.open(mode="a", encoding="utf-8") as f:
+                        f.write("------------------------------------------------------------------------------------------------------------------------\n")
+                        f.write(msg)
+                        f.write("------------------------------------------------------------------------------------------------------------------------\n")
+                logged{stack} = True
+            except:
+                pass
             #logger.debug( "CommsTransport._recv: %s", LazySummarize(msg) )
             # Capture parent header only for non-poll messages.
             # Poll messages use the bridge iframe context (captured by Colab kernel automatically).

@@ -28,6 +28,7 @@ __all__ = [
 
 import itertools
 LOG_COUNT_001 = itertools.count(start=1)
+_COLAB_JS_EVAL_LOCK = threading.Lock( )
 
 # ============================================================================
 # Helper: resolve the correct Comm class for the current environment
@@ -360,7 +361,6 @@ class CommsTransport(TransportBase):
         self._conn_event = threading.Event()
         self._last_parent_header: dict = {}  # parent header of last received comm_msg
         self._colab_pending_replies: list = []  # FIFO queue of pending Colab replies
-        self._colab_js_eval_lock = threading.Lock( )
         # Threshold in bytes above which numpy arrays are sent as binary.
         # Set to a small value (e.g. 1024) to test chunking with small images.
         self.colab_binary_threshold: int = 65536  # 64KB (unused - kept for compat)
@@ -510,7 +510,8 @@ class CommsTransport(TransportBase):
 
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
-                        with self._colab_js_eval_lock:
+                        with _COLAB_JS_EVAL_LOCK:
+                            _saved_parents = dict(_k_t2._parents)
                             try:
                                 if _ph:
                                     try:
@@ -583,6 +584,9 @@ class CommsTransport(TransportBase):
 
                             except Exception:
                                 logger.exception( "<<poll>> thread eval_js failed" )
+                            finally:
+                                _k_t2._parents.clear()
+                                _k_t2._parents.update(_saved_parents)
 
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
                 # nothing pending - JS manages idle timeout itself

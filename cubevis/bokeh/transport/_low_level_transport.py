@@ -26,6 +26,9 @@ __all__ = [
     'CommsTransport',
 ]
 
+import itertools
+LOG_COUNT_001 = itertools.count(start=1)
+
 # ============================================================================
 # Helper: resolve the correct Comm class for the current environment
 # ============================================================================
@@ -543,13 +546,18 @@ class CommsTransport(TransportBase):
                             _co.eval_js(f"window[{_tok_key}]=[];", ignore_result=True)
 
                             # Send each chunk
-                            if len(_chunks) > 0:
-                                log_file = Path("~/debug.txt").expanduser()
-                                with log_file.open(mode="a", encoding="utf-8") as f:
-                                    f.write(f"\t>>>>>>------tok-key---------->> {self._comm_mgr_id}: {_tok_key} -> {len(_chunks)}")
                             for _ci, _chunk in enumerate(_chunks):
                                 _chunk_js = (f"window[{_tok_key}].push({_pj.dumps(_chunk)});")
                                 _co.eval_js(_chunk_js, ignore_result=True)
+
+                             try:
+                                 with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                                     f.write(f"-<{next(LOG_COUNT_001)}> _deliver_in_thread _ph: {_ph}\n")
+                                     if len(_chunks) > 0:
+                                         f.write(f"\t>>>>>>------tok-key---------->> {self._comm_mgr_id}: {_tok_key} -> {len(_chunks)}")
+                                     f.flush()
+                             except Exception as e:
+                                 print(f"Failed to write to debug file: {e}")
 
                             # Finalise: join, parse, deliver, clean up
                             _final_js = (

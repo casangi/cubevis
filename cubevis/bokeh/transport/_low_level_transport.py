@@ -508,7 +508,13 @@ class CommsTransport(TransportBase):
 
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
-                        logger.debug( f"-<{next(LOG_COUNT_001)} _deliver_in_thread _ph: {_ph}, self._colab_bridge_parents: {self._colab_bridge_parents}" )
+                        try:
+                            with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                                f.write(f"-<{next(LOG_COUNT_001)}> _deliver_in_thread _ph: {_ph}\n")
+                                f.flush()
+                        except Exception as e:
+                            print(f"Failed to write to debug file: {e}")
+
                         try:
                             if _ph:
                                 try:

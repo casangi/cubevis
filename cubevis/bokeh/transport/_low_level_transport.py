@@ -795,7 +795,6 @@ class CommsTransport(TransportBase):
                 //   themselves to get their own channel — _on_comm_open fires again,
                 //   _recv is wired to the new comm, and send_message() broadcasts
                 //   Python->JS to all open comms including the new one.
-                let MESSAGE_COUNTER = 0
                 async function tryColabPath() {
                     try {
                         const colabComms = google?.colab?.kernel?.comms;
@@ -885,7 +884,7 @@ class CommsTransport(TransportBase):
                             // This fires when Python calls self._bridge.send(payload)
                             // If it's a cubevis_reply, extract the envelope and route it.
                             // Otherwise treat msg as the envelope directly (legacy path).
-                            console.log( `<${++MESSAGE_COUNTER}>`, msg )
+                            console.log( `<<X>>`, msg )
                             const envelope = (msg && msg.type === "cubevis_reply")
                                 ? msg.envelope : msg;
                             if (msg && msg.type === "cubevis_binary") {

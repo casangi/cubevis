@@ -511,8 +511,10 @@ class CommsTransport(TransportBase):
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
                         with _COLAB_JS_EVAL_LOCK:
-                            _saved_parents = dict(_k_t2._parents)
+                            _k_t2 = None
+                            _saved_parents = { }
                             try:
+
                                 if _ph:
                                     try:
                                         from IPython import get_ipython as _gip_t2
@@ -520,6 +522,7 @@ class CommsTransport(TransportBase):
                                         if _ip_t2 and hasattr(_ip_t2, 'kernel'):
                                             _k_t2 = _ip_t2.kernel
                                             if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
+                                                _saved_parents = dict(_k_t2._parents)
                                                 _k_t2._parents.update(_ph)
                                     except Exception:
                                         pass
@@ -585,8 +588,9 @@ class CommsTransport(TransportBase):
                             except Exception:
                                 logger.exception( "<<poll>> thread eval_js failed" )
                             finally:
-                                _k_t2._parents.clear()
-                                _k_t2._parents.update(_saved_parents)
+                                if _k_t2 is not None and hasattr(_k_t2, '_parents'):
+                                    _k_t2._parents.clear()
+                                    _k_t2._parents.update(_saved_parents)
 
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
                 # nothing pending - JS manages idle timeout itself

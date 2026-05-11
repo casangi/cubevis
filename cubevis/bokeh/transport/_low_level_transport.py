@@ -1214,3 +1214,4 @@ class CommsTransport(TransportBase):
 
         self._connected = False
         self._bridge = None
+        logger.debug("********************CommsTransport*close******************************")

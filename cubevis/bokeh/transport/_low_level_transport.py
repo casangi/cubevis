@@ -26,6 +26,8 @@ __all__ = [
     'CommsTransport',
 ]
 
+import itertools
+LOG_COUNT_001 = itertools.count(start=1)
 # ============================================================================
 # Helper: resolve the correct Comm class for the current environment
 # ============================================================================
@@ -506,6 +508,7 @@ class CommsTransport(TransportBase):
 
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
+                        logger.debug( f"-<{next(LOG_COUNT_001)} _deliver_in_thread _ph: {_ph}, self._colab_bridge_parents: {self._colab_bridge_parents}" )
                         try:
                             if _ph:
                                 try:
@@ -627,7 +630,7 @@ class CommsTransport(TransportBase):
         # This ensures that on a second (or later) GUI run the eval_js call
         # in _deliver_in_thread targets the correct bridge iframe, not the
         # one from the previous run.
-        if self._is_colab():
+        if self._is_colab() and not getattr(self, '_colab_bridge_parents', {}):
             try:
                 from IPython import get_ipython as _gip_open
                 _ip_open = _gip_open()
@@ -635,10 +638,7 @@ class CommsTransport(TransportBase):
                     _k_open = _ip_open.kernel
                     if hasattr(_k_open, '_parents') and isinstance(_k_open._parents, dict):
                         self._colab_bridge_parents = dict(_k_open._parents)
-                        logger.debug(
-                            "_on_comm_open: refreshed _colab_bridge_parents (captured=%s)",
-                            bool(self._colab_bridge_parents)
-                        )
+                        logger.debug("_on_comm_open: set _colab_bridge_parents (display_bridge had none)")
             except Exception:
                 logger.exception("_on_comm_open: failed to refresh _colab_bridge_parents")
 

@@ -26,8 +26,6 @@ __all__ = [
     'CommsTransport',
 ]
 
-import itertools
-LOG_COUNT_001 = itertools.count(start=1)
 # ============================================================================
 # Helper: resolve the correct Comm class for the current environment
 # ============================================================================
@@ -509,13 +507,6 @@ class CommsTransport(TransportBase):
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
                         try:
-                            with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                                f.write(f"-<{next(LOG_COUNT_001)}> _deliver_in_thread _ph: {_ph}\n")
-                                f.flush()
-                        except Exception as e:
-                            print(f"Failed to write to debug file: {e}")
-
-                        try:
                             if _ph:
                                 try:
                                     from IPython import get_ipython as _gip_t2
@@ -636,7 +627,7 @@ class CommsTransport(TransportBase):
         # This ensures that on a second (or later) GUI run the eval_js call
         # in _deliver_in_thread targets the correct bridge iframe, not the
         # one from the previous run.
-        if self._is_colab(): # and not getattr(self, '_colab_bridge_parents', {}):
+        if self._is_colab():
             try:
                 from IPython import get_ipython as _gip_open
                 _ip_open = _gip_open()
@@ -644,7 +635,10 @@ class CommsTransport(TransportBase):
                     _k_open = _ip_open.kernel
                     if hasattr(_k_open, '_parents') and isinstance(_k_open._parents, dict):
                         self._colab_bridge_parents = dict(_k_open._parents)
-                        logger.debug("_on_comm_open: set _colab_bridge_parents (display_bridge had none)")
+                        logger.debug(
+                            "_on_comm_open: refreshed _colab_bridge_parents (captured=%s)",
+                            bool(self._colab_bridge_parents)
+                        )
             except Exception:
                 logger.exception("_on_comm_open: failed to refresh _colab_bridge_parents")
 

@@ -360,6 +360,7 @@ class CommsTransport(TransportBase):
         self._conn_event = threading.Event()
         self._last_parent_header: dict = {}  # parent header of last received comm_msg
         self._colab_pending_replies: list = []  # FIFO queue of pending Colab replies
+        self._colab_js_eval_lock = threading.Lock( )
         # Threshold in bytes above which numpy arrays are sent as binary.
         # Set to a small value (e.g. 1024) to test chunking with small images.
         self.colab_binary_threshold: int = 65536  # 64KB (unused - kept for compat)
@@ -509,78 +510,79 @@ class CommsTransport(TransportBase):
 
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
-                        try:
-                            if _ph:
-                                try:
-                                    from IPython import get_ipython as _gip_t2
-                                    _ip_t2 = _gip_t2()
-                                    if _ip_t2 and hasattr(_ip_t2, 'kernel'):
-                                        _k_t2 = _ip_t2.kernel
-                                        if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
-                                            _k_t2._parents.update(_ph)
-                                except Exception:
-                                    pass
-                            from google.colab import output as _co
-                            import json as _pj
-
-                            _cb = f"cubevis_rx_cb_{_mid}"
-                            _bc = f"cubevis_rx_{_mid}"
-                            _del_fn = f"_cubevis_pollDelivered_{_mid}"
-                            _stop_fn = f"_cubevis_stopPoll_{_mid}"
-                            _env_s = _pj.dumps(_snap)
-                            _inflight = getattr(_self, "_colab_inflight", 0)
-                            _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
-                            _stop_call = f"" if _has_more else f"if(window[{_pj.dumps(_stop_fn)}])window[{_pj.dumps(_stop_fn)}]();"
-
-                            # Chunk the serialized envelope string to stay within
-                            # eval_js limits. Each chunk is appended to a JS-side
-                            # accumulator array keyed by a session token. A final
-                            # eval_js call joins, JSON.parses, and posts to bc_rx.
-                            import uuid as _uuid_d
-                            _tok = _uuid_d.uuid4().hex[:16]
-                            _tok_key = _pj.dumps(f"_cubevis_ch_{_tok}")
-                            _CHUNK = getattr(_self, "colab_chunk_size", 500_000)
-                            _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
-
-                            # Initialise accumulator
-                            _co.eval_js(f"window[{_tok_key}]=[];", ignore_result=True)
-
-                            # Send each chunk
-                            for _ci, _chunk in enumerate(_chunks):
-                                _chunk_js = (f"window[{_tok_key}].push({_pj.dumps(_chunk)});")
-                                _co.eval_js(_chunk_js, ignore_result=True)
-
+                        with self._colab_js_eval_lock:
                             try:
-                                with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                                    f.write(f"-<{next(LOG_COUNT_001)}> _deliver_in_thread _ph: {_ph}\n")
-                                    if len(_chunks) > 0:
-                                        f.write(f"\t>>>>>>------tok-key---------->> {self._comm_mgr_id}: {_tok_key} -> {len(_chunks)}")
-                                    f.flush()
-                            except Exception as e:
-                                print(f"Failed to write to debug file: {e}")
+                                if _ph:
+                                    try:
+                                        from IPython import get_ipython as _gip_t2
+                                        _ip_t2 = _gip_t2()
+                                        if _ip_t2 and hasattr(_ip_t2, 'kernel'):
+                                            _k_t2 = _ip_t2.kernel
+                                            if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
+                                                _k_t2._parents.update(_ph)
+                                    except Exception:
+                                        pass
+                                from google.colab import output as _co
+                                import json as _pj
 
-                            # Finalise: join, parse, deliver, clean up
-                            _final_js = (
-                                f"(()=>{{"
-                                f"const s=window[{_tok_key}].join('');"
-                                f"delete window[{_tok_key}];"
-                                f"const msg=JSON.parse(s);"
-                                f"const cb=window[{_pj.dumps(_cb)}];"
-                                f"if(typeof cb==='function'){{cb(msg);}}"
-                                f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
-                                f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
-                                f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
-                                f"{_stop_call}"
-                                f"}})();"
-                            )
-                            _co.eval_js(_final_js, ignore_result=True)
+                                _cb = f"cubevis_rx_cb_{_mid}"
+                                _bc = f"cubevis_rx_{_mid}"
+                                _del_fn = f"_cubevis_pollDelivered_{_mid}"
+                                _stop_fn = f"_cubevis_stopPoll_{_mid}"
+                                _env_s = _pj.dumps(_snap)
+                                _inflight = getattr(_self, "_colab_inflight", 0)
+                                _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
+                                _stop_call = f"" if _has_more else f"if(window[{_pj.dumps(_stop_fn)}])window[{_pj.dumps(_stop_fn)}]();"
 
-                            logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
-                            if ( len(_env_s) == 412 ):
-                                logger.debug( msg )
+                                # Chunk the serialized envelope string to stay within
+                                # eval_js limits. Each chunk is appended to a JS-side
+                                # accumulator array keyed by a session token. A final
+                                # eval_js call joins, JSON.parses, and posts to bc_rx.
+                                import uuid as _uuid_d
+                                _tok = _uuid_d.uuid4().hex[:16]
+                                _tok_key = _pj.dumps(f"_cubevis_ch_{_tok}")
+                                _CHUNK = getattr(_self, "colab_chunk_size", 500_000)
+                                _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
 
-                        except Exception:
-                            logger.exception( "<<poll>> thread eval_js failed" )
+                                # Initialise accumulator
+                                _co.eval_js(f"window[{_tok_key}]=[];", ignore_result=True)
+
+                                # Send each chunk
+                                for _ci, _chunk in enumerate(_chunks):
+                                    _chunk_js = (f"window[{_tok_key}].push({_pj.dumps(_chunk)});")
+                                    _co.eval_js(_chunk_js, ignore_result=True)
+
+                                try:
+                                    with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                                        f.write(f"-<{next(LOG_COUNT_001)}> _deliver_in_thread _ph: {_ph}\n")
+                                        if len(_chunks) > 0:
+                                            f.write(f"\t>>>>>>------tok-key---------->> {self._comm_mgr_id}: {_tok_key} -> {len(_chunks)}")
+                                        f.flush()
+                                except Exception as e:
+                                    print(f"Failed to write to debug file: {e}")
+
+                                # Finalise: join, parse, deliver, clean up
+                                _final_js = (
+                                    f"(()=>{{"
+                                    f"const s=window[{_tok_key}].join('');"
+                                    f"delete window[{_tok_key}];"
+                                    f"const msg=JSON.parse(s);"
+                                    f"const cb=window[{_pj.dumps(_cb)}];"
+                                    f"if(typeof cb==='function'){{cb(msg);}}"
+                                    f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
+                                    f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
+                                    f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
+                                    f"{_stop_call}"
+                                    f"}})();"
+                                )
+                                _co.eval_js(_final_js, ignore_result=True)
+
+                                logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
+                                if ( len(_env_s) == 412 ):
+                                    logger.debug( msg )
+
+                            except Exception:
+                                logger.exception( "<<poll>> thread eval_js failed" )
 
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
                 # nothing pending - JS manages idle timeout itself

@@ -568,6 +568,9 @@ class CommsTransport(TransportBase):
                                 # Finalise: join, parse, deliver, clean up
                                 _final_js = (
                                     f"(()=>{{console.log('hello world');"
+                                    f"const arr=window[{_tok_key}];"
+                                    f"const arrLen=arr ? arr.length : -1;"
+                                    f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
                                     f"const s=window[{_tok_key}].join('');"
                                     f"delete window[{_tok_key}];"
                                     f"const msg=JSON.parse(s);"

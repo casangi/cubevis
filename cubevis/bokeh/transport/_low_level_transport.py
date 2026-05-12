@@ -567,7 +567,7 @@ class CommsTransport(TransportBase):
 
                                 # Finalise: join, parse, deliver, clean up
                                 _final_js = (
-                                    f"(()=>{{"
+                                    f"(()=>{{console.log('hello world');"
                                     f"const s=window[{_tok_key}].join('');"
                                     f"delete window[{_tok_key}];"
                                     f"const msg=JSON.parse(s);"

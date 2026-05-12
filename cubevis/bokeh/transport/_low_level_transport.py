@@ -581,6 +581,12 @@ class CommsTransport(TransportBase):
                                 )
                                 _co.eval_js(_final_js, ignore_result=True)
 
+                                # Give the browser time to flush the JS queue before restoring _parents.
+                                # Only needed for multi-chunk deliveries where ordering matters.
+                                if len(_chunks) > 1:
+                                    import time as _time_mod
+                                    _time_mod.sleep(0.05)  # 50ms — well above eval_js round-trip of 0.2ms
+
                                 logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
                                 if ( len(_env_s) == 412 ):
                                     logger.debug( msg )

@@ -547,6 +547,7 @@ class CommsTransport(TransportBase):
                                 _tok_key = _pj.dumps(f"_cubevis_ch_{_tok}")
                                 _CHUNK = getattr(_self, "colab_chunk_size", 500_000)
                                 _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
+                                _is_multi_chunk = len(_chunks) > 1
 
                                 # Initialise accumulator
                                 _co.eval_js(f"window[{_tok_key}]=[];", ignore_result=True)
@@ -581,12 +582,6 @@ class CommsTransport(TransportBase):
                                 )
                                 _co.eval_js(_final_js, ignore_result=True)
 
-                                # Give the browser time to flush the JS queue before restoring _parents.
-                                # Only needed for multi-chunk deliveries where ordering matters.
-                                if len(_chunks) > 1:
-                                    import time as _time_mod
-                                    _time_mod.sleep(0.05)  # 50ms — well above eval_js round-trip of 0.2ms
-
                                 logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
                                 if ( len(_env_s) == 412 ):
                                     logger.debug( msg )
@@ -597,6 +592,12 @@ class CommsTransport(TransportBase):
                                 if _k_t2 is not None and hasattr(_k_t2, '_parents'):
                                     _k_t2._parents.clear()
                                     _k_t2._parents.update(_saved_parents)
+
+                        # Outside the lock: let browser flush JS queue before next delivery
+                        # can overwrite _parents. Only needed for multi-chunk messages.
+                        if _is_multi_chunk:
+                            import time as _time_mod
+                            _time_mod.sleep(0.05)
 
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
                 # nothing pending - JS manages idle timeout itself

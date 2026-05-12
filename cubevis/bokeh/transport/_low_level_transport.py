@@ -579,7 +579,12 @@ class CommsTransport(TransportBase):
                                     f"{_stop_call}"
                                     f"}})();"
                                 )
-                                _co.eval_js(_final_js, ignore_result=True)
+
+                                # Finalizer: synchronous only for multi-chunk to ensure all chunks
+                                # have been dispatched before _parents is restored in finally block.
+                                # Single-chunk is atomic so ignore_result=True is safe there.
+                                _use_ignore = len(_chunks) <= 1
+                                _co.eval_js(_final_js, ignore_result=_use_ignore)
 
                                 logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
                                 if ( len(_env_s) == 412 ):

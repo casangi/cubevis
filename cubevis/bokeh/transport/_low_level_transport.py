@@ -508,6 +508,15 @@ class CommsTransport(TransportBase):
                     # Use bridge cell parent header so eval_js runs in bridge iframe
                     _ph_now = getattr(self, '_colab_bridge_parents', {})
 
+                    def _eval_js_with_context(_co, js, _k, _ph, _saved, ignore_result=True):
+                        if _k is not None and _ph:
+                            _k._parents.clear()
+                            _k._parents.update(_ph)
+                        _co.eval_js(js, ignore_result=ignore_result)
+                        if _k is not None and _saved:
+                            _k._parents.clear()
+                            _k._parents.update(_saved)
+
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
                         with _COLAB_JS_EVAL_LOCK:
@@ -549,12 +558,12 @@ class CommsTransport(TransportBase):
                                 _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
 
                                 # Initialise accumulator
-                                _co.eval_js(f"window[{_tok_key}]=[];", ignore_result=True)
+                                _eval_js_with_context(_co, f"window[{_tok_key}]=[];", _k_t2, _ph, _saved_parents)
 
                                 # Send each chunk
                                 for _ci, _chunk in enumerate(_chunks):
                                     _chunk_js = (f"window[{_tok_key}].push({_pj.dumps(_chunk)});")
-                                    _co.eval_js(_chunk_js, ignore_result=True)
+                                    _eval_js_with_context(_co, f"window[{_tok_key}].push(...);", _k_t2, _ph, _saved_parents)
 
                                 try:
                                     with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
@@ -584,7 +593,7 @@ class CommsTransport(TransportBase):
                                     f"{_stop_call}"
                                     f"}})();"
                                 )
-                                _co.eval_js(_final_js, ignore_result=(len(_chunks) <= 1))
+                                _eval_js_with_context(_co, _final_js, _k_t2, _ph, _saved_parents, ignore_result=(len(_chunks) <= 1))
 
                                 logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
                                 if ( len(_env_s) == 412 ):

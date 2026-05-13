@@ -1271,9 +1271,12 @@ class CommsTransport(TransportBase):
                 else:
                     _co.eval_js(teardown_js, ignore_result=False)
 
+                logger.debug("CommsTransport.close: JS teardown called for %s", self._comm_mgr_id)
                 import time
                 time.sleep(0.1)  # let any in-flight bc_tx polls drain
-                logger.debug("CommsTransport.close: JS teardown called for %s", self._comm_mgr_id)
+                with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                    f.write(f"CommsTransport.close: JS teardown completed for {self._comm_mgr_id}\n")
+                    f.flush()
             except Exception:
                 logger.exception("CommsTransport.close: teardown eval_js failed")
 

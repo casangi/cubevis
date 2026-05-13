@@ -455,6 +455,9 @@ class CommsTransport(TransportBase):
             import traceback
             from pathlib import Path
 
+            if getattr(self, '_closed', False):
+                return
+
             with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
                 import traceback
                 f.write("------------------------- _recv Stack Trace -------------------------\n")

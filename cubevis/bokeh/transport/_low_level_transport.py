@@ -1265,11 +1265,14 @@ class CommsTransport(TransportBase):
                     _saved = dict(_k_c._parents)
                     _k_c._parents.clear()
                     _k_c._parents.update(_ph_c)
-                    _co.eval_js(teardown_js, ignore_result=True)
+                    _co.eval_js(teardown_js, ignore_result=False)
                     _k_c._parents.clear()
                     _k_c._parents.update(_saved)
                 else:
-                    _co.eval_js(teardown_js, ignore_result=True)
+                    _co.eval_js(teardown_js, ignore_result=False)
+
+                import time
+                time.sleep(0.1)  # let any in-flight bc_tx polls drain
                 logger.debug("CommsTransport.close: JS teardown called for %s", self._comm_mgr_id)
             except Exception:
                 logger.exception("CommsTransport.close: teardown eval_js failed")

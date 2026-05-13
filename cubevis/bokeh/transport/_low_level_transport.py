@@ -30,6 +30,16 @@ import itertools
 LOG_COUNT_001 = itertools.count(start=1)
 _COLAB_JS_EVAL_LOCK = threading.Lock( )
 
+def _dbg_write(msg: str) -> None:
+    """Append msg to ~/debug.txt, swallowing errors."""
+    try:
+        import os
+        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+            f.write(msg)
+            f.flush()
+    except Exception:
+        pass
+
 # ============================================================================
 # Helper: resolve the correct Comm class for the current environment
 # ============================================================================
@@ -1258,36 +1268,44 @@ class CommsTransport(TransportBase):
         # Tear down the JS bridge — stops bc_tx polling which prevents
         # _parents contamination during subsequent GUI sessions
         if self._is_colab():
-            try:
-                from google.colab import output as _co
-                import json as _json
-                from IPython import get_ipython as _gip_c
-                _ip_c = _gip_c()
-                _k_c = _ip_c.kernel if (_ip_c and hasattr(_ip_c, 'kernel')) else None
-                _ph_c = getattr(self, '_colab_bridge_parents', {})
-                teardown_fn = f"_cubevis_teardown_{self._comm_mgr_id}"
-                teardown_js = (
-                    f"if(window[{_json.dumps(teardown_fn)}])"
-                    f"  window[{_json.dumps(teardown_fn)}]();"
-                )
-                if _k_c is not None and _ph_c and hasattr(_k_c, '_parents'):
-                    _saved = dict(_k_c._parents)
-                    _k_c._parents.clear()
-                    _k_c._parents.update(_ph_c)
-                    _co.eval_js(teardown_js, ignore_result=True)
-                    _k_c._parents.clear()
-                    _k_c._parents.update(_saved)
-                else:
-                    _co.eval_js(teardown_js, ignore_result=True)
+            import json as _json
+            _ph_c  = getattr(self, '_colab_bridge_parents', {})
+            _mid_c = self._comm_mgr_id
+            teardown_fn = f"_cubevis_teardown_{_mid_c}"
+            teardown_js = (
+                f"if(window[{_json.dumps(teardown_fn)}])"
+                f"  window[{_json.dumps(teardown_fn)}]();"
+            )
 
-                logger.debug("CommsTransport.close: JS teardown called for %s", self._comm_mgr_id)
-                import time
-                time.sleep(0.1)  # let any in-flight bc_tx polls drain
-                with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                    f.write(f"CommsTransport.close: JS teardown completed for {self._comm_mgr_id}\n")
-                    f.flush()
-            except Exception:
-                logger.exception("CommsTransport.close: teardown eval_js failed")
+            _done = threading.Event()
+
+            def _do_teardown():
+                try:
+                    from google.colab import output as _co
+                    from IPython import get_ipython as _gip_c
+                    _ip_c = _gip_c()
+                    _k_c  = _ip_c.kernel if (_ip_c and hasattr(_ip_c, 'kernel')) else None
+                    if _k_c is not None and _ph_c and hasattr(_k_c, '_parents'):
+                        _saved = dict(_k_c._parents)
+                        _k_c._parents.clear()
+                        _k_c._parents.update(_ph_c)
+                        _co.eval_js(teardown_js, ignore_result=True)
+                        _k_c._parents.clear()
+                        _k_c._parents.update(_saved)
+                    else:
+                        _co.eval_js(teardown_js, ignore_result=True)
+                    _dbg_write(f"close: JS teardown completed for {_mid_c}\n")
+                except Exception:
+                    logger.exception("close: teardown eval_js failed")
+                finally:
+                    _done.set()
+
+            self._main_ioloop.add_callback(_do_teardown)
+            # Wait for teardown to complete on the main kernel thread.
+            # Use a thread-safe Event since close() runs in a background thread.
+            _done.wait(timeout=2.0)
+            if not _done.is_set():
+                _dbg_write(f"close: teardown timed out for {_mid_c}\n")
 
         self._comm_objs = []
         self._connected = False

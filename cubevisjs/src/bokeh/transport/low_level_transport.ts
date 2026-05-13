@@ -29,6 +29,8 @@ declare global {
     }
 }
 
+let MESSAGE_COUNTER = 0;
+
 // ============================================================================
 // Transport Base Interface
 // ============================================================================
@@ -106,13 +108,11 @@ export class WebSocketTransport implements TransportBase {
     
     setMessageCallback(callback: (msg: any) => void): void {
         this.onMessageCallback = callback
-        console.debug(`Message callback set for WebSocket ${this.comm_mgr.comm_mgr_id}`)
     }
     
     async connect(): Promise<void> {
         const [host, port] = this.address
         const ws_address = `ws://${host}:${port}`
-        console.log("WebSocket connecting to:", ws_address)
         
         return new Promise((resolve, reject) => {
             if (this.websocket !== undefined) {
@@ -130,7 +130,7 @@ export class WebSocketTransport implements TransportBase {
             // Don't set onmessage here - that's for run()
             
             this.websocket.onopen = async () => {
-                console.log("WebSocket connected, performing handshake...")
+                console.debug("WebSocket connected, performing handshake...")
                 this.connected = true
                 
                 try {
@@ -163,7 +163,7 @@ export class WebSocketTransport implements TransportBase {
                         const data = deserialize(event.data as string)
                         
                         if (data.type === 'initialized') {
-                            console.log('WebSocket initialized:', data)
+                            console.debug('WebSocket initialized:', data)
                             this.initialized = true
                             
                             // Remove this handler
@@ -231,7 +231,6 @@ export class WebSocketTransport implements TransportBase {
      * Blocks until connection closes.
      */
     async run(): Promise<void> {
-        console.log(`WebSocket event loop starting for ${this.comm_mgr.comm_mgr_id}`)
         
         return new Promise((resolve, reject) => {
             if (!this.websocket) {
@@ -256,7 +255,7 @@ export class WebSocketTransport implements TransportBase {
             
             // Set up close handler
             this.websocket.onclose = (event: CloseEvent) => {
-                console.log(
+                console.debug(
                     `WebSocket closed: code=${event.code}, ` +
                     `reason=${event.reason || 'none'}, ` +
                     `clean=${event.wasClean}`
@@ -303,316 +302,67 @@ export class WebSocketTransport implements TransportBase {
 }
 
 // ============================================================================
-// Colab Comms Transport
+// Jupyter and Colab Comms Transport
 // ============================================================================
 
 /**
- * Colab Comms-based transport for Google Colab environment.
- * 
- * Uses Colab's native comm protocol for efficient bidirectional communication.
- * Handles large data like images and arrays efficiently.
- * 
- * Key features:
- * - Native Colab comm protocol (not eval_js)
- * - Efficient large data transfer
- * - Automatic Bokeh serialization support
- * - Bidirectional message passing
+ * Jupyter and Colab Comms transport created from Python with `anywidget`.
  */
-export class ColabCommsTransport implements TransportBase {
-    private comm?: any
-    private targetName: string
-    private registered: boolean = false
-    private onMessageCallback?: (msg: any) => void
-    private shouldRun: boolean = false
-    
-    constructor(private comm_mgr: CommMgr) {
-        this.targetName = `cubevis_comm_mgr_${comm_mgr.comm_mgr_id}`
-    }
-    
-    setMessageCallback(callback: (msg: any) => void): void {
-        this.onMessageCallback = callback
-    }
-    
-    async connect(): Promise<void> {
-        console.log("Colab Comms connecting for comm_mgr:", this.comm_mgr.comm_mgr_id)
-        
-        // Verify Colab environment
-        if (!window.google || !window.google.colab || !window.google.colab.kernel) {
-            throw new Error("Colab environment not detected")
-        }
-        
-        const kernel = window.google.colab.kernel
-        if (!kernel.comms) {
-            throw new Error("Colab kernel.comms not available")
-        }
-        
-        try {
-            // Register comm target to receive comms from backend
-            kernel.comms.registerTarget(
-                this.targetName,
-                (comm: any, openMsg: any) => {
-                    this.handleCommOpen(comm, openMsg)
-                }
-            )
-            
-            console.log(`Registered Colab comm target: ${this.targetName}`)
-            
-            // Open a comm to the backend
-            this.comm = await kernel.comms.open(
-                this.targetName,
-                {
-                    data: serialize({
-                        type: 'initialization',
-                        comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                        frontend_ready: true
-                    })
-                }
-            )
-            
-            if (!this.comm) {
-                throw new Error(`Failed to open Colab comm to ${this.targetName}`)
-            }
-            
-            // Register message handler
-            this.comm.onMsg = (msg: any) => {
-                this.handleMessage(msg)
-            }
-            
-            // Register close handler
-            this.comm.onClose = (msg: any) => {
-                this.handleClose(msg)
-            }
-            
-            this.registered = true
-            
-            console.log(`Colab comm opened: ${this.targetName}`)
-            
-        } catch (e) {
-            console.error("Error initializing Colab Comms:", e)
-            throw e
-        }
-    }
-    
-    async run(): Promise<void> {
-        this.shouldRun = true
-        console.log(`Colab Comms event loop starting for ${this.comm_mgr.comm_mgr_id}`)
-        
-        // Keep alive until shutdown
-        while (this.shouldRun && this.registered) {
-            await new Promise(resolve => setTimeout(resolve, 100))
-        }
-        
-        console.log(`Colab Comms event loop ended for ${this.comm_mgr.comm_mgr_id}`)
-    }
-    
-    private handleCommOpen(comm: any, _openMsg: any): void {
-        console.log(`Backend opened Colab comm to ${this.targetName}`)
-        
-        if (this.comm && this.comm !== comm) {
-            console.log("Replacing existing comm with new one from backend")
-            try {
-                this.comm.close()
-            } catch (e) {
-                console.warn("Error closing old comm:", e)
-            }
-        }
-        
-        this.comm = comm
-        this.registered = true
-        
-        this.comm.onMsg = (msg: any) => {
-            this.handleMessage(msg)
-        }
-        
-        this.comm.onClose = (msg: any) => {
-            this.handleClose(msg)
-        }
-        
-        this.comm.send({
-            data: serialize({
-                type: 'comm_opened',
-                comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                frontend_ready: true
-            })
-        })
-    }
-    
-    private handleMessage(msg: any): void {
-        try {
-            const msgData = msg.data || msg
-            
-            let data
-            if (typeof msgData === 'string') {
-                data = deserialize(msgData)
-            } else {
-                data = msgData
-            }
-            
-            console.debug("Received Colab comm message:", data.type || typeof data)
-            
-            // Handle special message types
-            if (typeof data === 'object' && data !== null) {
-                const msgType = data.type
-                
-                if (msgType === 'ping') {
-                    if (this.comm) {
-                        this.comm.send({
-                            data: serialize({
-                                type: 'pong',
-                                comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                                timestamp: Date.now()
-                            })
-                        })
-                    }
-                    return
-                }
-                
-                if (msgType === 'heartbeat') {
-                    console.debug(`Heartbeat received for ${this.comm_mgr.comm_mgr_id}`)
-                    return
-                }
-                
-                if (msgType === 'comm_opened' || msgType === 'closing') {
-                    console.log(`Backend message: ${msgType}`)
-                    return
-                }
-            }
-            
-            // Call the message callback
-            if (this.onMessageCallback) {
-                this.onMessageCallback(data)
-            }
-            
-        } catch (e) {
-            console.error("Error handling Colab comm message:", e)
-        }
-    }
-    
-    private handleClose(_msg: any): void {
-        console.log(`Colab comm closed for ${this.targetName}`)
-        this.registered = false
-        this.shouldRun = false
-        this.comm = undefined
-    }
-    
-    send(message: any): void {
-        if (!this.registered || !this.comm) {
-            console.warn("Colab Comm not initialized, message not sent:", message)
-            return
-        }
-        
-        try {
-            const serialized = serialize(message)
-            this.comm.send({ data: serialized })
-            console.debug(`Sent message via Colab comm ${this.targetName}`)
-        } catch (e) {
-            console.error("Error sending message via Colab Comm:", e)
-        }
-    }
-    
-    close(): void {
-        this.shouldRun = false
-        if (this.comm && this.registered) {
-            try {
-                this.comm.send({
-                    data: serialize({
-                        type: 'closing',
-                        comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                        message: 'Frontend closing comm'
-                    })
-                })
-                
-                this.comm.close()
-                console.log(`Closed Colab comm for ${this.targetName}`)
-            } catch (e) {
-                console.error("Error closing Colab comm:", e)
-            } finally {
-                this.comm = undefined
-                this.registered = false
-            }
-        }
-    }
-    
-    isConnected(): boolean {
-        return this.registered && this.comm !== undefined
-    }
-}
-
-// ============================================================================
-// Jupyter Comms Transport
-// ============================================================================
-
-/**
- * Jupyter Comms transport for Classic Notebook and JupyterLab.
- * 
- * Enables connection to Jupyter kernels for persistent, reconnectable sessions.
- * 
- * Key features:
- * - Works with Classic Notebook 6.x AND JupyterLab 3.x / 4.x
- * - Session persistence across browser sessions
- * - Reconnection support
- * - Multi-client kernel access
- * - Efficient data transfer via Bokeh serialization
- * 
- * Environment support matrix:
- *   Classic Notebook 6  — comm via Jupyter.notebook.kernel.comm_manager.new_comm()
- *   JupyterLab 3        — comm via @jupyter-widgets/base CommManager.new_comm()
- *   JupyterLab 4        — comm via kernel.createComm() (@jupyter/services kernel)
- */
-export class JupyterCommsTransport implements TransportBase {
+export class CommsTransport implements TransportBase {
     private comm?: any
     private targetName: string
     private isOpen: boolean = false
     private onMessageCallback?: (msg: any) => void
-    private heartbeatInterval?: number
     private shouldRun: boolean = true
     
     constructor(private comm_mgr: CommMgr) {
-        this.targetName = `cubevis_comm_mgr_${comm_mgr.comm_mgr_id}`
+        this.targetName = `comm_${comm_mgr.comm_mgr_id}`
     }
     
     setMessageCallback(callback: (msg: any) => void): void {
         this.onMessageCallback = callback
     }
     
+    private getAppContext(): any {
+        return find.context(this.comm_mgr)
+    }
+
     async connect(): Promise<void> {
-        console.log("Jupyter Comms connecting for comm_mgr:", this.comm_mgr.comm_mgr_id)
-        
+
         try {
             // Register handlers BEFORE opening the comm so we
             // never miss a fast reply from the Python kernel.
             // We create the comm object first, wire up handlers, then open it.
-            this.comm = await this.createComm()
+            this.comm = await this.retrieveComm()
 
             if (!this.comm) {
                 throw new Error("Could not create Jupyter comm")
             }
 
             // handlers wired before any open/send call
-            this.comm.on_msg((msg: any) => {
+            this.comm.onMsg = (msg: any) => {
                 this.handleJupyterMessage(msg)
-            })
-
-            this.comm.on_close((msg: any) => {
-                this.handleCommClose(msg)
-            })
-
-            // Now open the comm — this sends the comm_open message to the kernel
-            if (typeof this.comm.open === 'function') {
-                // @jupyter/services IComm (JupyterLab 4) and ipywidgets Comm both
-                // expose open(). Classic Notebook's new_comm() opens implicitly.
-                this.comm.open({
-                    comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                    type: 'initialization',
-                    frontend_ready: true
-                })
             }
 
+            this.comm.onClose = (msg: any) => {
+                this.handleCommClose(msg)
+            }
+
+//          // Now open the comm — this sends the comm_open message to the kernel
+//          if (typeof this.comm.open === 'function') {
+//              // @jupyter/services IComm (JupyterLab 4) and ipywidgets Comm both
+//              // expose open(). Classic Notebook's new_comm() opens implicitly.
+//              this.comm.open({
+//                  comm_mgr_id: this.comm_mgr.comm_mgr_id,
+//                  type: 'initialization',
+//                  frontend_ready: true
+//              })
+//          }
+
             this.isOpen = true
-            console.log(`Jupyter comm opened: ${this.targetName}`)
 
             // Send explicit handshake so the backend knows we're ready
-            this.comm.send({
+            const envelope = {
                 type: 'cubevis_message',
                 comm_mgr_id: this.comm_mgr.comm_mgr_id,
                 data: serialize({
@@ -620,25 +370,26 @@ export class JupyterCommsTransport implements TransportBase {
                     comm_mgr_id: this.comm_mgr.comm_mgr_id,
                     frontend_ready: true
                 })
-            })
+            }
 
-            this.startHeartbeat()
+            console.group( '------------------------------connect------------------------------' )
+            console.log( this.getAppContext( ) )
+            console.groupEnd( )
+            this.comm.send(envelope)
 
         } catch (e) {
-            console.error("Error initializing Jupyter Comms:", e)
+            console.error("Error initializing Comms:", e)
             throw e
         }
     }
     
     async run(): Promise<void> {
-        console.log(`Jupyter Comms event loop starting for ${this.comm_mgr.comm_mgr_id}`)
-        
+
         // Keep alive until shutdown
         while (this.shouldRun && this.isOpen) {
             await new Promise(resolve => setTimeout(resolve, 100))
         }
-        
-        console.log(`Jupyter Comms event loop ended for ${this.comm_mgr.comm_mgr_id}`)
+
     }
     
     // --------------------------------------------------------------------------
@@ -646,170 +397,98 @@ export class JupyterCommsTransport implements TransportBase {
     // --------------------------------------------------------------------------
 
     /**
-     * Create a Jupyter comm object using the best available API for the
-     * current environment.
+     * Retrieve a Colab or Jupyter comm object injected with `anywidget` from Python.
+     * Colab.
      *
      * Resolution order:
-     *   1. Classic Notebook 6 / JupyterLab 3 — commManager.new_comm()
-     *   2. JupyterLab 4                       — kernel.createComm()
-     *   3. ipywidgets Comm constructor         — last-resort fallback
+     *   1. See if injected comm is available directly (Jupyter Lab and Colab when
+     *      retrieved from within the cell where the injection occurred)
+     *   2. Colab open second comm using the same `comm_mgr_id` (Colab when retrieved
+     *      from a cell that is not the cell where the injection occurred). Messages
+     *      are delivered to all comms opened to the same identifier.
      */
-    private async createComm(): Promise<any> {
-        // Path 1: Classic Notebook 6 / JupyterLab 3 via @jupyter-widgets/base
-        try {
-            const commManager = await this.findCommManager()
-            if (commManager && typeof commManager.new_comm === 'function') {
-                // new_comm() on these managers creates but does NOT immediately
-                // send the comm_open — we call open() ourselves after wiring handlers.
-                const comm = commManager.new_comm(this.targetName, {})
-                console.log("Created comm via commManager.new_comm() (Classic/JupyterLab 3)")
-                return comm
+    private async retrieveComm(): Promise<any> {
+        const target_id = this.comm_mgr.comm_mgr_id
+        const cachedComm = window["cubevis_" + target_id]?.comm
+        console.log(`retrieveComm: target_id=${target_id} window keys=`,
+          Object.keys(window).filter(k => k.startsWith('cubevis_')))
+
+        if ( cachedComm ) {
+            console.log(`CommsTransport.retrieveComm: retrieved comm for ${target_id}`, cachedComm)
+            const el = window["cubevis_" + target_id].dbg_el
+            if ( el ) {
+                el.insertAdjacentHTML( 'beforeend',
+                                       `<div style="padding:5px;background:#ccf">` +
+                                         `✅ Comm Retrieved (${target_id})</div>` )
             }
-        } catch (e) {
-            console.debug("commManager.new_comm path failed:", e)
+            return cachedComm
         }
 
-        // Path 2: JupyterLab 4 — kernel object exposed by the lab extension system
-        // JupyterLab 4 removed CommManager from @jupyter-widgets/base.
-        // The live kernel is available via jupyterapp.serviceManager or the
-        // global `kernel` object injected by the notebook widget.
-        try {
-            const kernel = await this.findJupyterLabKernel()
-            if (kernel && typeof kernel.createComm === 'function') {
-                const comm = kernel.createComm(this.targetName)
-                console.log("Created comm via kernel.createComm() (JupyterLab 4)")
-                return comm
-            }
-        } catch (e) {
-            console.debug("kernel.createComm path failed:", e)
-        }
+        const isColab = typeof google !== "undefined" && google?.colab?.kernel?.comms
+        if (isColab) {
 
-        // Path 3: ipywidgets Comm constructor loaded via RequireJS (fallback)
-        try {
-            const WidgetsComm = await this.loadWidgetsComm()
-            if (WidgetsComm) {
-                const comm = new WidgetsComm({ target_name: this.targetName })
-                console.log("Created comm via ipywidgets Comm constructor (fallback)")
-                return comm
-            }
-        } catch (e) {
-            console.debug("ipywidgets Comm fallback failed:", e)
-        }
+            // Colab isolates each cell output in its own iframe so window is not shared.
+            // BroadcastChannel is same-origin and works across all Colab output iframes.
+            //
+            // The widget bridge ESM holds the single kernel comm and acts as relay:
+            //
+            //   JS -> Python:
+            //     CommsTransport posts to bc_tx ("cubevis_tx_<id>")
+            //     Widget bridge bc_tx.onmessage → channel.send() → Python _recv
+            //
+            //   Python -> JS:
+            //     Python calls self._bridge.send(envelope) → anywidget model →
+            //     model.on("msg:custom") in widget ESM → bc_rx.postMessage(envelope)
+            //     CommsTransport bc_rx.onmessage → colabComm.onMsg → handleJupyterMessage
+            //
+            // Kernel comm.send() does NOT deliver to JS channel.messages in Colab
+            // (confirmed by diagnostic testing). The anywidget model channel is the
+            // only reliable Python->JS path in Colab.
 
-        throw new Error(
-            `Could not create a Jupyter comm for target '${this.targetName}'. ` +
-            "Ensure @jupyter-widgets/base or @jupyter/services is available."
-        )
-    }
+            const bc_tx = new BroadcastChannel(`cubevis_tx_${target_id}`)
+            const bc_rx = new BroadcastChannel(`cubevis_rx_${target_id}`)
 
-
-    /**
-     * Find the comm manager for Classic Notebook 6 / JupyterLab 3.
-     */
-    private async findCommManager(): Promise<any> {
-        // Classic Notebook 6
-        if ((window as any).Jupyter?.notebook?.kernel?.comm_manager) {
-            console.debug("Found comm_manager via window.Jupyter (Classic Notebook)")
-            return (window as any).Jupyter.notebook.kernel.comm_manager
-        }
-
-        // Some JupyterLab 3 builds expose the kernel on window.kernel
-        if ((window as any).kernel?.comm_manager) {
-            console.debug("Found comm_manager via window.kernel")
-            return (window as any).kernel.comm_manager
-        }
-
-        // JupyterLab 3 via @jupyter-widgets/base CommManager
-        // Try RequireJS (present in JupyterLab 3).
-        if (typeof (window as any).require !== 'undefined') {
-            try {
-                const widgets: any = await new Promise((resolve, reject) => {
-                    (window as any).require(
-                        ['@jupyter-widgets/base'],
-                        (base: any) => resolve(base),
-                        (err: any) => reject(err)
-                    )
-                })
-                if (widgets?.CommManager) {
-                    const mgr = widgets.CommManager.get_comm_manager?.()
-                    if (mgr) {
-                        console.debug("Found comm_manager via RequireJS @jupyter-widgets/base")
-                        return mgr
-                    }
+            const colabComm: any = {
+                onMsg:    null as any,
+                onClose:  null as any,
+                // JS->Python: post to tx bus; widget bridge relays to kernel
+                send: (data: any) => { bc_tx.postMessage(data) },
+                on_msg:   (cb: Function) => { colabComm.onMsg = cb },
+                on_close: (cb: Function) => { colabComm.onClose = cb },
+                close:    () => {
+                    bc_tx.close()
+                    bc_rx.close()
+                    delete (window as any)[`cubevis_rx_cb_${target_id}`]
                 }
-            } catch (e) {
-                console.debug("RequireJS @jupyter-widgets/base failed:", e)
             }
-        }
 
-        return null
-    }
-
-    /**
-     * Find the live kernel object in JupyterLab 4.
-     *
-     * JupyterLab 4 exposes the kernel through the application's
-     * service manager rather than through @jupyter-widgets/base.
-     */
-    private async findJupyterLabKernel(): Promise<any> {
-        // JupyterLab 4: window.jupyterapp is the JupyterFrontEnd application
-        const jupyterapp = (window as any).jupyterapp
-        if (jupyterapp) {
-            // Active session's kernel via the sessions manager
-            try {
-                const sessions = jupyterapp.serviceManager?.sessions
-                if (sessions) {
-                    const running = [...sessions.running()]
-                    if (running.length > 0) {
-                        const connection = await sessions.connectTo({ model: running[0] })
-                        const kernel = connection?.kernel
-                        if (kernel && typeof kernel.createComm === 'function') {
-                            console.debug("Found kernel via jupyterapp.serviceManager.sessions")
-                            return kernel
-                        }
-                    }
+            // Python->JS delivery handler — called by either path:
+            const onRx = (msg: any) => {
+                const envelope = (msg && msg.type === "cubevis_reply") ? msg.envelope : msg
+                console.log(`<${++MESSAGE_COUNTER}> CUBEVIS onRx: request_id=${envelope?.request_id} type=${envelope?.type}`)
+                if (colabComm.onMsg) {
+                    colabComm.onMsg({ content: { data: msg }, buffers: [] })
+                    // After each message, check if any deferred messages are now ready
+                    // (binary tokens may have arrived since the envelope was deferred)
+                    this.checkDeferredMessages()
                 }
-            } catch (e) {
-                console.debug("jupyterapp.serviceManager path failed:", e)
             }
-        }
 
-        // JupyterLab 4 also often exposes the kernel directly on window
-        if ((window as any).kernel?.createComm) {
-            console.debug("Found kernel via window.kernel.createComm")
-            return (window as any).kernel
-        }
-
-        // IPython kernel shim (some JupyterLab 3 / extension-provided kernels)
-        if ((window as any).IPython?.kernel?.createComm) {
-            console.debug("Found kernel via window.IPython.kernel")
-            return (window as any).IPython.kernel
-        }
-
-        return null
-    }
-    
-
-    /**
-     * Load the ipywidgets Comm constructor as a last-resort fallback.
-     */
-    private async loadWidgetsComm(): Promise<any> {
-        if (typeof (window as any).require !== 'undefined') {
-            try {
-                const widgets: any = await new Promise((resolve, reject) => {
-                    (window as any).require(
-                        ['@jupyter-widgets/base'],
-                        (base: any) => resolve(base),
-                        (err: any) => reject(err)
-                    )
-                })
-                if (widgets?.Comm) {
-                    return widgets.Comm
-                }
-            } catch (e) {
-                console.debug("loadWidgetsComm RequireJS failed:", e)
+            // Path 1: same-iframe — widget bridge calls window callback directly
+            // (BroadcastChannel does NOT fire in the sender's own context)
+            ;(window as any)[`cubevis_rx_cb_${target_id}`] = onRx
+            // Called by bridge ESM after storing a binary token,
+            // so deferred envelopes waiting for that token can be dispatched
+            ;(window as any)[`cubevis_binary_arrived_${target_id}`] = () => {
+                this.checkDeferredMessages()
             }
+
+            // Path 2: cross-iframe — widget bridge posts on bc_rx
+            bc_rx.onmessage = (event: MessageEvent) => onRx(event.data)
+
+            return colabComm
         }
+
         return null
     }
 
@@ -817,7 +496,56 @@ export class JupyterCommsTransport implements TransportBase {
     // Message handling
     // --------------------------------------------------------------------------
 
-    private handleJupyterMessage(msg: any): void {
+    /** Recursively substitute __binary__ tokens with typed arrays from window._cubevis_bin_* */
+    private substituteBinary(obj: any): any {
+        // Never recurse into typed arrays or ArrayBuffers - pass them through unchanged
+        if (obj instanceof Uint8Array || obj instanceof Float32Array ||
+            obj instanceof Float64Array || obj instanceof Int32Array ||
+            obj instanceof Uint16Array || obj instanceof Int16Array ||
+            obj instanceof ArrayBuffer) {
+            return obj
+        }
+        if (obj && typeof obj === 'object' && '__binary__' in obj) {
+            const token = obj['__binary__']
+            const stored = (window as any)[`_cubevis_bin_${token}`]
+            if (stored) {
+                delete (window as any)[`_cubevis_bin_${token}`]
+                return stored
+            }
+            console.warn("CUBEVIS: missing binary token:", token)
+            return obj
+        }
+        if (Array.isArray(obj)) return obj.map((v: any) => this.substituteBinary(v))
+        if (obj && typeof obj === 'object') {
+            // Only recurse into plain objects — leave class instances (Bokeh models,
+            // typed arrays, etc.) completely untouched to preserve their prototypes
+            // and methods (e.g. .get() on Bokeh models).
+            if (ArrayBuffer.isView(obj)) return obj
+            if (Object.getPrototypeOf(obj) !== Object.prototype) return obj
+            const out: any = {}
+            for (const k of Object.keys(obj)) out[k] = this.substituteBinary(obj[k])
+            return out
+        }
+        return obj
+    }
+
+    /** Check if all binary tokens for a deferred message have arrived, and if so dispatch it. */
+    private checkDeferredMessages(): void {
+        const deferred: any[] = (window as any)['_cubevis_deferred_msgs'] || []
+        const remaining: any[] = []
+        for (const item of deferred) {
+            const tokens: string[] = item.tokens
+            const allReady = tokens.every(t => (window as any)[`_cubevis_bin_${t}`] !== undefined)
+            if (allReady) {
+                this.dispatchMessage(item.msg)
+            } else {
+                remaining.push(item)
+            }
+        }
+        ;(window as any)['_cubevis_deferred_msgs'] = remaining
+    }
+
+    private dispatchMessage(msg: any): void {
         try {
             const content = msg.content || {}
             const dataWrapper = content.data || {}
@@ -832,15 +560,42 @@ export class JupyterCommsTransport implements TransportBase {
                 return
             }
 
-            // Handle special messages
             if (data.type === 'ping' || data.type === 'heartbeat' ||
                 data.type === 'comm_opened' || data.type === 'closing') {
                 return
             }
 
+
+
+            data = this.substituteBinary(data)
+
             if (this.onMessageCallback) {
                 this.onMessageCallback(data)
             }
+        } catch (e) {
+            console.error("Error dispatching message:", e)
+        }
+    }
+
+    private handleJupyterMessage(msg: any): void {
+        try {
+            const content = msg.content || {}
+            const dataWrapper = content.data || {}
+            const tokens: string[] = dataWrapper.pending_binary_tokens || []
+
+            if (tokens.length > 0) {
+                // Some binary arrays not yet arrived - defer until all tokens present
+                const allReady = tokens.every(t => (window as any)[`_cubevis_bin_${t}`] !== undefined)
+                if (!allReady) {
+                    if (!(window as any)['_cubevis_deferred_msgs']) {
+                        (window as any)['_cubevis_deferred_msgs'] = []
+                    }
+                    ;(window as any)['_cubevis_deferred_msgs'].push({ msg, tokens })
+                    return
+                }
+            }
+
+            this.dispatchMessage(msg)
 
         } catch (e) {
             console.error("Error handling Jupyter comm message:", e)
@@ -848,10 +603,9 @@ export class JupyterCommsTransport implements TransportBase {
     }
 
     private handleCommClose(_msg: any): void {
-        console.log(`Jupyter comm closed for ${this.targetName}`)
+        console.debug(`Jupyter comm closed for ${this.targetName}`)
         this.isOpen = false
         this.shouldRun = false
-        this.stopHeartbeat()
     }
 
     // --------------------------------------------------------------------------
@@ -877,7 +631,6 @@ export class JupyterCommsTransport implements TransportBase {
 
     close(): void {
         this.shouldRun = false
-        this.stopHeartbeat()
 
         if (this.comm && this.isOpen) {
             try {
@@ -891,7 +644,8 @@ export class JupyterCommsTransport implements TransportBase {
                 })
 
                 this.comm.close()
-                console.log(`Closed Jupyter comm for ${this.targetName}`)
+                console.debug(`Closed Jupyter comm for ${this.targetName}`)
+
             } catch (e) {
                 console.error("Error closing Jupyter comm:", e)
             } finally {
@@ -903,32 +657,5 @@ export class JupyterCommsTransport implements TransportBase {
 
     isConnected(): boolean {
         return this.comm !== undefined && this.isOpen
-    }
-
-    // --------------------------------------------------------------------------
-    // Heartbeat
-    // --------------------------------------------------------------------------
-
-    private startHeartbeat(intervalMs: number = 30000): void {
-        if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval)
-        }
-
-        this.heartbeatInterval = window.setInterval(() => {
-            if (this.isConnected()) {
-                this.send({
-                    type: 'heartbeat',
-                    comm_mgr_id: this.comm_mgr.comm_mgr_id,
-                    timestamp: Date.now()
-                })
-            }
-        }, intervalMs)
-    }
-
-    private stopHeartbeat(): void {
-        if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval)
-            this.heartbeatInterval = undefined
-        }
     }
 }

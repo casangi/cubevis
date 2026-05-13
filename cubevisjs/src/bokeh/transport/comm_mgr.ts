@@ -12,10 +12,9 @@
 import {Model} from "@bokehjs/model"
 import * as p from "@bokehjs/core/properties"
 import {CustomJS} from "@bokehjs/models/callbacks/index"
-import * as find from "../util/find"
 
 // Import transport implementations
-import {TransportBase, WebSocketTransport, ColabCommsTransport, JupyterCommsTransport} from "./low_level_transport"
+import {TransportBase, WebSocketTransport, CommsTransport} from "./low_level_transport"
 
 // Enums
 enum AppState {
@@ -59,6 +58,7 @@ class HandlerContext {
 interface QueuedMessage {
     messageId: string
     message: any
+    requestId: string
     callback?: (response: any) => void
 }
 
@@ -128,29 +128,34 @@ export class CommMgr extends Model {
     
     initialize(): void {
         super.initialize()
-        
-        console.log(`CommMgr initializing: ${this.comm_mgr_id}`)
-        
-        // Initialize transport based on properties
-        this.initializeTransport()
 
-        //
-        // Run any initialization script
-        //
-        const _execute = () => {
-            console.group( "CommMgr init script execution" )
-            this.init_scripts.forEach(
-                ([script, id, description], i) => {
-                    // Pass the current loop index 'i' into the cb_data object
-                    if ( description === null || description === undefined || description.trim().length === 0 )
-                        console.log(id)
-                    else
-                        console.log(description)
-                    script.execute( this, { index: i, id, description } )
-                } )
-            console.groupEnd( )
+        try {
+
+            // Initialize transport based on properties
+            this.initializeTransport()
+
+            //
+            // Run any initialization script
+            //
+            const _execute = () => {
+                console.group( "CommMgr init script execution" )
+                this.init_scripts.forEach(
+                    ([script, id, description], i) => {
+                        // Pass the current loop index 'i' into the cb_data object
+                        if ( description === null || description === undefined || description.trim().length === 0 )
+                            console.log(id)
+                        else
+                            console.log(description)
+                        script.execute( this, { index: i, id, description } )
+                    } )
+                console.groupEnd( )
+            }
+
+            _execute( )
+
+        } catch (error) {
+            console.error("An error occurred:", error.message)
         }
-        _execute( )
     }
 
     get state(): AppState {
@@ -186,11 +191,8 @@ export class CommMgr extends Model {
                     throw new Error("WebSocket transport requires address")
                 }
                 await this.connectWebSocket()
-            } else if (transportType === 'colab') {
-                this.transport = new ColabCommsTransport(this)
-                await this.setupTransport()
-            } else if (transportType === 'jupyter') {
-                this.transport = new JupyterCommsTransport(this)
+            } else if (transportType === 'colab' || transportType === 'jupyter') {
+                this.transport = new CommsTransport(this)
                 await this.setupTransport()
             } else {
                 throw new Error(`Unknown transport type: ${transportType}`)
@@ -198,17 +200,37 @@ export class CommMgr extends Model {
             
             this.initialized = true
             this.state = AppState.RUNNING
-            console.log(`CommMgr initialized with ${transportType} transport`)
-            
+            console.debug(`CommMgr initialized with ${transportType} transport`)
+
         } catch (e) {
             console.error("Error initializing CommMgr transport:", e)
             this.state = AppState.ERROR
 
-            // Attempt reconnection for WebSocket
             if (this.transport_type === 'websocket' || this.transport_type === 'auto') {
+                // Attempt reconnection for WebSocket
                 this.scheduleReconnect()
             } else {
-                throw e
+
+                // Disable the GUI — no backend is available, but execution must be delayed
+                //                   until the GUI has actually been initialized and the
+                //                   Showable is available...
+                setTimeout(() => {
+                    // with Bokeh 3.6 there is a roots( ) function...
+                    // with Bokeh 3.8 there is a all_roots property...
+                    const roots = this.document?.all_roots ?? this.document?.roots() ?? []
+                    for (const root of roots) {
+                        if ((root as any).type === "cubevis.bokeh.models._showable.Showable") {
+                            const showable = root as any
+                            console.log("CommMgr: no backend available, disabling Showable")
+                            showable.disabled_message = "No active session — re-run the cell to restart"
+                            showable.disabled = true
+                            return
+                        }
+                    }
+                    // Fallback: try find.showable from CommMgr itself
+                    console.warn("CommMgr: entered error state but could not find Showable to disable")
+                }, 0)
+                //throw e
             }
         }
     }
@@ -217,7 +239,7 @@ export class CommMgr extends Model {
      * Connect WebSocket with reconnection support.
      */
     private async connectWebSocket(): Promise<void> {
-        console.log(`Connecting WebSocket (attempt ${this.reconnectAttempts + 1})...`)
+        console.debug(`Connecting WebSocket (attempt ${this.reconnectAttempts + 1})...`)
 
         try {
             this.transport = new WebSocketTransport(
@@ -231,7 +253,7 @@ export class CommMgr extends Model {
             this.reconnectAttempts = 0
             this.reconnectDelay = 1000
 
-            console.log("WebSocket connected successfully")
+            console.debug("WebSocket connected successfully")
 
         } catch (e) {
             console.error("WebSocket connection failed:", e)
@@ -271,16 +293,13 @@ export class CommMgr extends Model {
         }
 
         try {
-            console.log("Transport event loop starting...")
 
             // Run transport until it closes
             await this.transport.run()
 
-            console.log("Transport event loop completed")
-
             // Transport closed - attempt reconnection if still active
             if (this.shouldReconnect && this.state !== AppState.STOPPED) {
-                console.log("Transport closed, attempting reconnection...")
+                console.debug("Transport closed, attempting reconnection...")
                 this.scheduleReconnect()  // ← This should be called!
             } else {
                 console.log("Not reconnecting (shouldReconnect=" + this.shouldReconnect + ", state=" + this.state + ")")
@@ -291,7 +310,7 @@ export class CommMgr extends Model {
 
             // Attempt reconnection on error
             if (this.shouldReconnect && this.state !== AppState.STOPPED) {
-                console.log("Transport error, attempting reconnection...")
+                console.debug("Transport error, attempting reconnection...")
                 this.scheduleReconnect()
             }
         }
@@ -382,7 +401,7 @@ export class CommMgr extends Model {
             this.sendQueue.set(commId, [])
             const desc = comm.description?.trim()
             const logMsg = desc ? `${desc} (${commId})` : commId
-            console.log(`Registered comm: ${logMsg}`)
+            console.debug(`Registered comm: ${logMsg}`)
         }
     }
     
@@ -450,12 +469,13 @@ export class CommMgr extends Model {
             this.sendQueue.get(commId)!.push({
                 messageId,
                 message,
+                requestId,
                 callback
             })
 
             // Trigger reconnection if not already happening
             if (this.shouldReconnect && !this.reconnectTimer) {
-                console.log("Triggering reconnection due to queued message")
+                console.debug("Triggering reconnection due to queued message")
                 this.scheduleReconnect()
             }
 
@@ -465,6 +485,7 @@ export class CommMgr extends Model {
         // Check if this comm has a pending request
         if (this.pending.has(commId)) {
             // Queue this message
+
             if (comm.squash_queue) {
                 // Squash mode: remove any queued message with same message_id
                 const queue = this.sendQueue.get(commId)!
@@ -478,6 +499,7 @@ export class CommMgr extends Model {
             this.sendQueue.get(commId)!.push({
                 messageId,
                 message,
+                requestId,
                 callback
             })
             
@@ -495,11 +517,9 @@ export class CommMgr extends Model {
      * Flush all queued messages after reconnection.
      */
     private async flushAllQueues(): Promise<void> {
-        console.log("Flushing queued messages after reconnection...")
 
         for (const [commId, queue] of this.sendQueue.entries()) {
             if (queue.length > 0 && !this.pending.has(commId)) {
-                console.log(`Flushing ${queue.length} messages for comm ${commId}`)
                 this.processNextQueued(commId)
             }
         }
@@ -515,6 +535,7 @@ private sendImmediate(
         requestId: string,
         callback?: (response: any) => void
     ): void {
+
         const msg = {
             comm_id: commId,
             message_id: messageId,
@@ -552,7 +573,6 @@ private sendImmediate(
         
         // Get next message
         const item = queue.shift()!
-        const requestId = this.generateId()
         
         console.debug(
             `Processing queued message for ${commId}.${item.messageId} ` +
@@ -560,7 +580,7 @@ private sendImmediate(
         )
         
         // Send it
-        this.sendImmediate(commId, item.messageId, item.message, requestId, item.callback)
+        this.sendImmediate(commId, item.messageId, item.message, item.requestId, item.callback)
     }
     
     /**
@@ -718,7 +738,7 @@ private sendImmediate(
     }
 
     async shutdown(): Promise<void> {
-        console.log("Shutting down CommMgr")
+        console.debug("Shutting down CommMgr")
 
         // Prevent reconnection
         this.shouldReconnect = false
@@ -799,7 +819,7 @@ export class Comm extends Model {
     initialize(): void {
         super.initialize()
 
-        console.log(`Comm initializing: ${this.description?.trim() || this.comm_id} [squash:${this.squash_queue}]`);
+        console.debug(`Comm initializing: ${this.description?.trim() || this.comm_id} [squash:${this.squash_queue}]`);
 
         // Find CommMgr
         this._mgr = this.findCommMgr()
@@ -822,14 +842,11 @@ export class Comm extends Model {
      * which should have comm_mgr property.
      */
     private findCommMgr(): CommMgr | undefined {
-        const ctx = find.context(this)
-        if ( ctx ) {
-            if ( ctx.comm_mgr ) return ctx.comm_mgr
-            else console.warn("CommMgr not available from BokehAppContext object")
-        } else {
-            console.warn("Could not find BokehAppContext so CommMgr find failed")
+        const mgr = this.document?.get_model_by_name(this.comm_mgr_id) as CommMgr | undefined
+        if (!mgr) {
+            console.warn(`Comm ${this.description?.trim() || this.comm_id}: no CommMgr named ${this.comm_mgr_id} found`)
         }
-        return undefined
+        return mgr
     }
 
     /**

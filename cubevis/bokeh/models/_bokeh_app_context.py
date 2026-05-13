@@ -1,5 +1,7 @@
 import logging
-from bokeh.core.properties import String, Dict, Any, Nullable, Instance
+from typing import TypeAlias, Callable, Union
+from bokeh.models import CustomJS
+from bokeh.core.properties import String, Dict, Any, Nullable, Instance, List, Tuple
 from bokeh.models.layouts import LayoutDOM
 from bokeh.models.ui import UIElement
 from bokeh.resources import CDN
@@ -10,11 +12,14 @@ import webbrowser
 import os
 import re
 
+### Showable is only needed for type hints
+from . import Showable
 from ..transport import CommMgr
-
 from .. import BokehInit
 
 logger = logging.getLogger(__name__)
+
+PreflightFunc: TypeAlias = Callable[[], None]
 
 class BokehAppContext(LayoutDOM):
     """
@@ -38,6 +43,12 @@ class BokehAppContext(LayoutDOM):
     for each cubevis application.
     """ )
     app_state = Dict(String, Any, default={})
+
+    init_scripts = List(
+        Tuple(Instance(CustomJS), String, String),
+        default=[],
+        help="initialization scripts with associated metadata set with add_init_script(...)"
+    )
     
     ## Class-level session ID shared across all apps in the same Python session
     _backend_id = None
@@ -66,6 +77,59 @@ class BokehAppContext(LayoutDOM):
         value = re.sub(r'[^\w\s-]', '', value.lower())
         return re.sub(r'[-\s]+', '-', value).strip('-_')
 
+    def run_preflight_callables(self):
+        callables = list(self._preflight_callables)
+        self._preflight_callables.clear()
+        for func in callables:
+            try:
+                func( )
+            except Exception as e:
+                logger.warning(f"run_preflight_callables: {func} failed: {e}")
+
+    def add_preflight_callable( self, func: PreflightFunc ):
+        self._preflight_callables.append(func)
+        self._register_auto_drain_if_needed( )
+
+    def _register_auto_drain_if_needed(self):
+        """
+        If running in a Jupyter/Colab kernel with no Showable present,
+        register a one-shot post_execute hook to drain preflight callables
+        in the main thread at the end of the current cell.
+        """
+        # Avoid double-registration
+        if getattr(self, '_auto_drain_registered', False):
+            return
+
+        try:
+            from IPython import get_ipython
+            ip = get_ipython()
+            if ip is None:
+                return  # Not in a kernel, nothing to do
+        except ImportError:
+            return
+
+        self._auto_drain_registered = True
+
+        def _drain_once():
+            # Only drain if Showable hasn't already done it
+            if not self._preflight_callables:
+                return
+
+            self.run_preflight_callables( )
+
+            # Unregister ourselves after the first drain
+            try:
+                ip.events.unregister('post_execute', _drain_and_unregister)
+            except Exception:
+                pass
+
+            self._auto_drain_registered = False  # Allow re-registration next time
+
+        def _drain_and_unregister():
+            _drain_once()
+
+        ip.events.register('post_execute', _drain_and_unregister)
+
     def __init__( self, ui=None, title=str(uuid4( )), prefix=None, **kwargs ):
         logger.debug(f"\tBokehAppContext::__init__(ui={type(ui).__name__ if ui else None}, {kwargs}): {id(self)}")
 
@@ -76,6 +140,10 @@ class BokehAppContext(LayoutDOM):
         self.__title = title
         self.__workdir = TemporaryDirectory(prefix=prefix)
         self.__htmlpath = os.path.join( self.__workdir.name, f'''{self._slugify(self.__title)}.html''' )
+
+        ## list of functions to be called before launching the Bokeh GUI application
+        self._preflight_callables: list[PreflightFunc] = [ ]
+
 
         if ui is not None and 'ui' in kwargs:
             raise RuntimeError( "'ui' supplied as both a positional parameter and a keyword parameter" )
@@ -89,12 +157,15 @@ class BokehAppContext(LayoutDOM):
             kwargs['app_id'] = str(uuid4())
         # setting a unique well defined name for BokehAppContext
         # allows this object to be found by name in JavaScript
-        kwargs['name'] = "_GLOBAL_APP_CONTEXT_"
+        kwargs['name'] = f"_GLOBAL_APP_CONTEXT_{kwargs['app_id']}"
 
         super().__init__(**kwargs)
 
         # Register this context as the singleton
         BokehInit.set_app_context(self)
+
+        if self.comm_mgr:
+            self.comm_mgr.registered(self)
 
     def _sphinx_height_hint(self):
         """Delegate height hint to the wrapped UI element"""
@@ -102,6 +173,23 @@ class BokehAppContext(LayoutDOM):
         if self.ui and hasattr(self.ui, '_sphinx_height_hint'):
             return self.ui._sphinx_height_hint()
         return None
+
+    def add_init_script(self, code, description='', args=None):
+        """
+        Helper to append a CustomJS script to the init_scripts list.
+        """
+        # Create the new CustomJS instance
+        new_script = CustomJS(code=code, args=args or {})
+
+        # 1. Access current scripts (default to empty list if None)
+        current_scripts = list(self.init_scripts) if self.init_scripts else []
+
+        # 2. Append the new script
+        new_entry = (new_script, self.comm_id, description)
+        current_scripts.append(new_entry)
+
+        # 3. REASSIGN to trigger synchronization
+        self.init_scripts = current_scripts
 
     def update_app_state(self, state_updates):
         """
@@ -126,6 +214,9 @@ class BokehAppContext(LayoutDOM):
 
         # Save the plot
         save( self, filename=self.__htmlpath, resources=CDN, title=self.__title)
+
+        # serialization done, free up application context
+        BokehInit.clear_app_context(self)
 
         # Open in browser
         webbrowser.open('file://' + os.path.abspath(self.__htmlpath))

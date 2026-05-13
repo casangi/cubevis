@@ -77,17 +77,19 @@ class Task:
         except RuntimeError:
             # No running loop - safe to use asyncio.run() (CLI context)
             return asyncio.run(coro)
-        else:
-            # Running loop exists (Jupyter context)
-            try:
-                import nest_asyncio
-                nest_asyncio.apply()
-                return asyncio.run(coro)
-            except ImportError:
-                # Fallback: run in a new thread with its own event loop
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    return pool.submit(asyncio.run, coro).result()
+
+        # Jupyter: schedule as a background task and return immediately.
+        # The kernel event loop stays free to process comm messages, IOPub, etc.
+        # nest_asyncio is NOT used — it would re-enter and block the loop anyway.
+        task = loop.create_task(coro)
+        self._background_task = task  # prevent GC
+
+        def _on_done(t):
+            if not t.cancelled() and t.exception() is not None:
+                logger.error(f"Background task failed: {t.exception()}")
+
+        task.add_done_callback(_on_done)
+        return task  # caller gets a Task, not a completed result
 
     def run_sync(self) -> Any:
         """Run synchronously until completion or stop signal."""

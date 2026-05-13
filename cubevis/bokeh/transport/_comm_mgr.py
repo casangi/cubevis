@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import TYPE_CHECKING
 from typing import Optional, Callable, Dict, Any, List, Tuple
 import asyncio
 import inspect
@@ -17,7 +18,10 @@ from bokeh.model import Model
 from bokeh.models import CustomJS
 from bokeh.core.properties import List
 from bokeh.core.properties import String, Bool, Tuple, Int, Nullable, Instance
+from ...utils import find_ws_address
 from .. import BokehInit
+if TYPE_CHECKING:
+    from .. import BokehAppContext
 
 class ShutdownReason(Enum):
     """Reason for shutdown"""
@@ -30,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 class AppState(Enum):
     """Application lifecycle states."""
+    CONSTRUCTED = "constructed"
     INITIALIZING = "initializing"
     RUNNING = "running"
     SHUTTING_DOWN = "shutting_down"
@@ -167,7 +172,7 @@ class CommMgr( Model, BokehInit ):
     init_scripts = List(
         Tuple(Instance(CustomJS), String, String),
         default=[],
-        help="initialization scripts with associated metadata"
+        help="initialization scripts with associated metadata set from Comm object"
     )
 
     def __init__( self, *args,
@@ -176,6 +181,10 @@ class CommMgr( Model, BokehInit ):
                   **kwargs ):
         if 'comm_mgr_id' not in kwargs:
             kwargs['comm_mgr_id'] = str(uuid4( ))
+
+        # JavaScript Comm object find their manager using this
+        kwargs['name'] = kwargs['comm_mgr_id']
+        logger.debug(f"CommMgr.__init__: {args}, on_shutdown={on_shutdown}, on_error={on_error}, {kwargs}", stack_info=True)
 
         super( ).__init__( *args, **kwargs )
 
@@ -194,7 +203,7 @@ class CommMgr( Model, BokehInit ):
         self._lock = asyncio.Lock()
 
         # State management
-        self._state = AppState.INITIALIZING
+        self._state = AppState.CONSTRUCTED
         self._state_lock = asyncio.Lock()                 # REMOVED
         self._shutdown_requested = False
         self._pending_user_shutdown_reason = ''
@@ -217,6 +226,28 @@ class CommMgr( Model, BokehInit ):
         self._initialized = False
 
         logger.debug(f"Communications manager created: {self.comm_mgr_id}")
+
+    def registered( self, context: BokehAppContext ) -> None:
+        '''This is called when this CommMgr is registered with BokehAppContext.
+        '''
+        # Websocket address management (if not set with parameters)
+        if self.transport_type == 'websocket':
+            if not self.address:
+                self.address = find_ws_address( )
+                logger.debug( f"CommMgr.__init__: websocket address initialized to '{self.address}'" )
+        else:
+            if self.address:
+                raise RuntimeError( 'CommMgr.__init__: address set for non-websocket transport' )
+            if self.transport_type == 'colab' or self.transport_type == 'jupyter':
+                from ._low_level_transport import CommsTransport
+                # Create transport with error handler
+                def transport_abort(error):
+                    self.report_error(error, fatal=True)
+                ### CommsTransport is created here to allow for registration of
+                ### preflight callables which enable the anywidget bridge.
+                self._transport = CommsTransport(self.comm_mgr_id, abort=transport_abort)
+
+        logger.debug(f"Communications manager registered: {self.comm_mgr_id}")
 
     @property
     def state(self) -> AppState:
@@ -254,6 +285,7 @@ class CommMgr( Model, BokehInit ):
             logger.warning(f"Comm '{comm_id}' already exists, returning existing")
             return self._comms[comm_id]
 
+        logger.debug(f"CommMgr.open: {description}")
         comm = Comm(comm_id=comm_id, comm_mgr_id=self.comm_mgr_id, squash_queue=squash_queue, description=description)
         comm._mgr = self  # Set internal reference
         self._comms[comm_id] = comm
@@ -457,21 +489,12 @@ class CommMgr( Model, BokehInit ):
             self.transport_type = self._detect_transport()
             logger.debug(f"Auto-detected transport type: {self.transport_type}")
 
-        # Create transport with error handler
-        def transport_abort(error):
-            self.report_error(error, fatal=True)
-
-        from ._low_level_transport import ColabCommsTransport, JupyterCommsTransport
+        logger.debug(f"CommMgr.initialize: {self.transport_type}")
 
         # Create and initialize non-WebSocket transports
-        if self.transport_type == 'colab':
-            self._transport = ColabCommsTransport(self.comm_mgr_id, abort=transport_abort)
-            self._transport.set_message_callback(self._route_message)
-            await self._transport.connect()
-            self._initialized = True
-            self.state = AppState.RUNNING
-        elif self.transport_type == 'jupyter':
-            self._transport = JupyterCommsTransport(self.comm_mgr_id, abort=transport_abort)
+        if self.transport_type == 'colab' or self.transport_type == 'jupyter':
+            if not self._transport:
+                raise RuntimeError(f"transport should be set earlier for {self.transport_type}")
             self._transport.set_message_callback(self._route_message)
             await self._transport.connect()
             self._initialized = True
@@ -529,7 +552,8 @@ class CommMgr( Model, BokehInit ):
 
             elif self.transport_type in ('colab', 'jupyter'):
                 # Already initialized
-                pass
+                if self.state == AppState.CONSTRUCTED:
+                    await self.initialize( )
 
             # Flush any queued messages
             await self._flush_all_queues()
@@ -603,6 +627,13 @@ class CommMgr( Model, BokehInit ):
             if self._transport:
                 try:
                     await self._transport.close()
+                    if self._on_shutdown and not self._shutdown_callback_called:
+                        try:
+                            # Pass the enum value for better type safety
+                            self._on_shutdown(reason={ShutdownReason.TRANSPORT_CLOSED}, description="comm manager transport closed")
+                            self._shutdown_callback_called = True
+                        except Exception as e:
+                            logger.error(f"Error calling shutdown function: {e}")
                 except Exception as e:
                     logger.error(f"Error closing transport: {e}")
 

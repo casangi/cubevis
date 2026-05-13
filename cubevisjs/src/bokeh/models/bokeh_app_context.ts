@@ -1,5 +1,6 @@
 import {LayoutDOM, LayoutDOMView} from "@bokehjs/models/layouts/layout_dom"
 import {UIElement} from "@bokehjs/models/ui/ui_element"
+import {CustomJS} from "@bokehjs/models/callbacks/index"
 import type * as p from "@bokehjs/core/properties"
 import {object_id} from "../util/find"
 
@@ -30,7 +31,12 @@ export class BokehAppContextView extends LayoutDOMView {
     this.connect(this.model.properties.app_state.change, () => {
       const session = (window as any).cubevisAppSession
       if (session?.applications[this.model.app_id]) {
-        session.applications[this.model.app_id].state = this.model.app_state
+        session.applications[this.model.app_id].state = {
+          ...this.model.app_state,
+          frontend_id: this.model.frontend_id,
+          backend_id: this.model.backend_id,
+          app_id: this.model.app_id
+        }
       }
     })
   }
@@ -45,6 +51,7 @@ export namespace BokehAppContext {
     backend_id: p.Property<string>
     frontend_id: p.Property<string | null>
     app_state: p.Property<any>
+    init_scripts: p.Property<[CustomJS, string, string][]>
   }
 }
 
@@ -57,12 +64,19 @@ export class BokehAppContext extends LayoutDOM {
   static __module__ = "cubevis.bokeh.models._bokeh_app_context"
 
   constructor(attrs?: Partial<BokehAppContext.Attrs>) {
+    console.log("BokehAppContext.constructor <A>")
     super(attrs)
   }
 
   override initialize(): void {
     super.initialize()
     
+    try {
+      console.log("BokehAppContext.initialize <B>",this.init_scripts,this.app_state)
+    } catch (error) {
+      console.error("An error occurred:", error);
+    }
+
     // frontend_id must be set by the frontend not preset by the backend
     const frontend_identifier = object_id(this)
     if ( this.frontend_id !== null && this.frontend_id !== frontend_identifier ) {
@@ -89,23 +103,44 @@ export class BokehAppContext extends LayoutDOM {
     if (!session.applications[this.app_id]) {
       session.applications[this.app_id] = {
         appId: this.app_id,
-        state: this.app_state,
+        state: { ...this.app_state,
+                 backend_id: this.backend_id,
+                 frontend_id: this.frontend_id,
+                 app_id: this.app_id },
         createdAt: new Date().toISOString()
       }
       console.log(`Registered application: ${this.app_id}`)
     }
+    //
+    // Run any initialization script
+    //
+    const _execute = () => {
+        console.group( "BokehAppContext init script execution" )
+        this.init_scripts.forEach(
+            ([script, id, description], i) => {
+                // Pass the current loop index 'i' into the cb_data object
+                if ( description === null || description === undefined || description.trim().length === 0 )
+                    console.log(id)
+                else
+                    console.log(description)
+                script.execute( this, { index: i, id, description } )
+            } )
+        console.groupEnd( )
+    }
+    _execute( )
   }
 
   static {
     this.prototype.default_view = BokehAppContextView
 
-    this.define<BokehAppContext.Props>(({Ref, Nullable, Dict, String, Unknown}) => ({
+    this.define<BokehAppContext.Props>(({Ref, Tuple, Nullable, Array, Dict, String, Unknown}) => ({
       ui: [ Nullable(Ref(UIElement)), null ],
       app_id: [String, ""],
       comm_mgr: [ Nullable(Ref(CommMgr)), null ],
       backend_id: [String, ""],
       frontend_id: [Nullable(String), null],
       app_state: [ Dict(Unknown), {} ],
+      init_scripts:   [ Array(Tuple(Ref(CustomJS), String, String)), [] ],
     }))
   }
 }

@@ -38,7 +38,7 @@ from itertools import groupby, chain
 from socket import socket
 from os import path as __path
 from ._ResourceManager import _ResourceManager
-from ._logging import get_logger
+from ._logging import get_logger, LazySummarize
 from ._regions import polygon_indexes
 from ._docenum import DocEnum
 from ._copydoc import copydoc

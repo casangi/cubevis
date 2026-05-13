@@ -12,9 +12,6 @@ import time
 import logging
 import importlib
 from enum import Enum
-import queue as _queue_mod
-# Delivery queue item: named tuple for clarity
-from typing import NamedTuple
 from functools import wraps
 from abc import ABC, abstractmethod
 from bokeh.models import Div, CustomJS
@@ -29,120 +26,9 @@ __all__ = [
     'CommsTransport',
 ]
 
-def _dbg_write(msg: str) -> None:
-    """Append msg to ~/debug.txt, swallowing errors."""
-    try:
-        import os
-        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-            f.write(msg)
-            f.flush()
-    except Exception:
-        pass
-
-class _DeliveryItem(NamedTuple):
-    comm_mgr_id:    str    # which GUI this delivery is for
-    snapshot:       dict   # the reply envelope to deliver
-    bridge_parents: dict   # _colab_bridge_parents for this GUI
-    chunk_size:     int    # colab_chunk_size for this GUI
-    cb_name:        str    # cubevis_rx_cb_{id}
-    bc_name:        str    # cubevis_rx_{id}
-    del_fn:         str    # _cubevis_pollDelivered_{id}
-    stop_fn:        str    # _cubevis_stopPoll_{id}
-    has_more:       bool   # whether more replies are pending after this one
-
-_COLAB_DELIVERY_QUEUE: _queue_mod.Queue = _queue_mod.Queue()
-
-async def _colab_delivery_drainer():
-    """
-    Drains _COLAB_DELIVERY_QUEUE serially on the main kernel IOLoop thread.
-    One delivery completes fully (including synchronous eval_js finalizer)
-    before the next begins. Runs forever until the queue is exhausted,
-    then exits — restarted lazily on next enqueue.
-    """
-    from google.colab import output as _co
-    from IPython import get_ipython as _gip
-    import json as _pj
-    import uuid as _uuid_d
-
-    _ip = _gip()
-    _k  = _ip.kernel if (_ip and hasattr(_ip, 'kernel')) else None
-
-    def _eval( js, ph, ignore_result=True ):
-        if _k is not None and ph and hasattr(_k, '_parents'):
-            _saved = dict(_k._parents)
-            _k._parents.clear()
-            _k._parents.update(ph)
-            _co.eval_js(js, ignore_result=ignore_result)
-            _k._parents.clear()
-            _k._parents.update(_saved)
-        else:
-            _co.eval_js(js, ignore_result=ignore_result)
-
-    while True:
-        try:
-            item: _DeliveryItem = _COLAB_DELIVERY_QUEUE.get_nowait()
-        except _queue_mod.Empty:
-            break
-
-        try:
-            _ph      = item.bridge_parents
-            _CHUNK   = item.chunk_size
-            _env_s   = _pj.dumps(item.snapshot)
-            _tok     = _uuid_d.uuid4().hex[:16]
-            _tok_key = _pj.dumps(f"_cubevis_ch_{_tok}")
-            _chunks  = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
-
-            _stop_call = (
-                "" if item.has_more
-                else f"if(window[{_pj.dumps(item.stop_fn)}])"
-                     f"window[{_pj.dumps(item.stop_fn)}]();"
-            )
-
-            _final_js = (
-                f"(()=>{{"
-                f"const arr=window[{_tok_key}];"
-                f"const arrLen=arr?arr.length:-1;"
-                f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
-                f"if(!arr||arr.length===0){{"
-                f"console.error('CUBEVIS: empty accumulator tok={_tok}');return;}}"
-                f"const s=arr.join('');"
-                f"delete window[{_tok_key}];"
-                f"const msg=JSON.parse(s);"
-                f"const cb=window[{_pj.dumps(item.cb_name)}];"
-                f"if(typeof cb==='function'){{cb(msg);}}"
-                f"try{{const bc=new BroadcastChannel({_pj.dumps(item.bc_name)});"
-                f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
-                f"if(window[{_pj.dumps(item.del_fn)}])"
-                f"window[{_pj.dumps(item.del_fn)}]();"
-                f"{_stop_call}"
-                f"}})();"
-            )
-
-            _eval( f"window[{_tok_key}]=[];", _ph )
-            for _chunk in _chunks:
-                _eval( f"window[{_tok_key}].push({_pj.dumps(_chunk)});", _ph )
-
-            # Finalizer is synchronous — safe because we are on the main
-            # kernel thread. Guarantees JS executes before next delivery begins.
-            _eval( _final_js, _ph, ignore_result=False )
-
-            _dbg_write(
-                f"_colab_delivery_drainer: {item.comm_mgr_id} "
-                f"tok={_tok} chunks={len(_chunks)} bytes={len(_env_s)}\n"
-            )
-            logger.debug(
-                "<<deliver>> %s %d chunk(s) %d bytes",
-                item.comm_mgr_id, len(_chunks), len(_env_s)
-            )
-
-        except Exception:
-            logger.exception(
-                "_colab_delivery_drainer: delivery failed for %s",
-                item.comm_mgr_id
-            )
-            _dbg_write(
-                f"_colab_delivery_drainer: EXCEPTION for {item.comm_mgr_id}\n"
-            )
+import itertools
+LOG_COUNT_001 = itertools.count(start=1)
+_COLAB_JS_EVAL_LOCK = threading.Lock( )
 
 # ============================================================================
 # Helper: resolve the correct Comm class for the current environment
@@ -628,32 +514,112 @@ class CommsTransport(TransportBase):
             if _is_poll_msg:
                 _pending = getattr(self, "_colab_pending_replies", [])
                 if _pending:
+                    import pathlib as _plib
+                    import threading as _thr
                     import json as _pj
-                    _snapshot  = _pending.pop(0)
-                    _inflight  = getattr(self, "_colab_inflight", 0)
-                    _has_more  = bool(_pending) or _inflight > 0
-                    _mid       = self._comm_mgr_id
+                    _snapshot = _pending.pop(0)  # take first reply, leave rest queued
+                    _mgr_id = self._comm_mgr_id
 
-                    _item = _DeliveryItem(
-                        comm_mgr_id    = _mid,
-                        snapshot       = _snapshot,
-                        bridge_parents = dict(getattr(self, '_colab_bridge_parents', {})),
-                        chunk_size     = getattr(self, 'colab_chunk_size', 500_000),
-                        cb_name        = f"cubevis_rx_cb_{_mid}",
-                        bc_name        = f"cubevis_rx_{_mid}",
-                        del_fn         = f"_cubevis_pollDelivered_{_mid}",
-                        stop_fn        = f"_cubevis_stopPoll_{_mid}",
-                        has_more       = _has_more,
-                    )
-                    _COLAB_DELIVERY_QUEUE.put(_item)
-                    _dbg_write(
-                        f"poll: enqueued delivery for {_mid} "
-                        f"queue_depth={_COLAB_DELIVERY_QUEUE.qsize()}\n"
-                    )
+                    # Use bridge cell parent header so eval_js runs in bridge iframe
+                    _ph_now = getattr(self, '_colab_bridge_parents', {})
 
-                    self._main_ioloop.add_callback(
-                        lambda: asyncio.ensure_future(_colab_delivery_drainer())
-                    )
+                    def _eval_js_with_context(_co, js, _k, _ph, ignore_result=True):
+                        if _k is not None and _ph:
+                            _saved = dict(_k._parents)  # capture current state fresh each time
+                            _k._parents.clear()
+                            _k._parents.update(_ph)
+                            _co.eval_js(js, ignore_result=ignore_result)
+                            _k._parents.clear()
+                            _k._parents.update(_saved)
+                        else:
+                            _co.eval_js(js, ignore_result=ignore_result)
+
+                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
+                        """Deliver envelope via eval_js from a background thread."""
+                        with _COLAB_JS_EVAL_LOCK:
+                            _k_t2 = None
+                            _saved_parents = { }
+                            try:
+
+                                if _ph:
+                                    try:
+                                        from IPython import get_ipython as _gip_t2
+                                        _ip_t2 = _gip_t2()
+                                        if _ip_t2 and hasattr(_ip_t2, 'kernel'):
+                                            _k_t2 = _ip_t2.kernel
+                                            if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
+                                                _saved_parents = dict(_k_t2._parents)
+                                                _k_t2._parents.update(_ph)
+                                    except Exception:
+                                        pass
+                                from google.colab import output as _co
+                                import json as _pj
+
+                                _cb = f"cubevis_rx_cb_{_mid}"
+                                _bc = f"cubevis_rx_{_mid}"
+                                _del_fn = f"_cubevis_pollDelivered_{_mid}"
+                                _stop_fn = f"_cubevis_stopPoll_{_mid}"
+                                _env_s = _pj.dumps(_snap)
+                                _inflight = getattr(_self, "_colab_inflight", 0)
+                                _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
+                                _stop_call = f"" if _has_more else f"if(window[{_pj.dumps(_stop_fn)}])window[{_pj.dumps(_stop_fn)}]();"
+
+                                # Chunk the serialized envelope string to stay within
+                                # eval_js limits. Each chunk is appended to a JS-side
+                                # accumulator array keyed by a session token. A final
+                                # eval_js call joins, JSON.parses, and posts to bc_rx.
+                                import uuid as _uuid_d
+                                _tok = _uuid_d.uuid4().hex[:16]
+                                _tok_key = _pj.dumps(f"_cubevis_ch_{_tok}")
+                                _CHUNK = getattr(_self, "colab_chunk_size", 500_000)
+                                _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
+
+                                # Initialise accumulator
+                                _eval_js_with_context(_co, f"window[{_tok_key}]=[];", _k_t2, _ph)
+
+                                # Send each chunk
+                                for _ci, _chunk in enumerate(_chunks):
+                                    _eval_js_with_context(_co, f"window[{_tok_key}].push({_pj.dumps(_chunk)});", _k_t2, _ph)
+
+                                try:
+                                    with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                                        f.write(f"-<{next(LOG_COUNT_001)}> _deliver_in_thread _ph: {_ph}\n")
+                                        if len(_chunks) > 0:
+                                            f.write(f"\t>>>>>>------tok-key---------->> {self._comm_mgr_id}: {_tok_key} -> {len(_chunks)}")
+                                        f.flush()
+                                except Exception as e:
+                                    print(f"Failed to write to debug file: {e}")
+
+                                # Finalise: join, parse, deliver, clean up
+                                _final_js = (
+                                    f"(()=>{{console.log('hello world');"
+                                    f"if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);"
+                                    "console.log(`window: ${window.name}`);"
+                                    f"const arr=window[{_tok_key}];"
+                                    f"const arrLen=arr ? arr.length : -1;"
+                                    f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
+                                    f"const s=window[{_tok_key}].join('');"
+                                    f"delete window[{_tok_key}];"
+                                    f"const msg=JSON.parse(s);"
+                                    f"const cb=window[{_pj.dumps(_cb)}];"
+                                    f"if(typeof cb==='function'){{cb(msg);}}"
+                                    f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
+                                    f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
+                                    f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
+                                    f"{_stop_call}"
+                                    f"}})();"
+                                )
+                                _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=True)
+
+                                logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
+                                if ( len(_env_s) == 412 ):
+                                    logger.debug( msg )
+
+                            except Exception:
+                                logger.exception( "<<poll>> thread eval_js failed" )
+
+                    _thr.Thread(target=_deliver_in_thread, daemon=True).start()
+                # nothing pending - JS manages idle timeout itself
                 return
 
             # first check if it is a CommsTransport message
@@ -1292,36 +1258,36 @@ class CommsTransport(TransportBase):
         # Tear down the JS bridge — stops bc_tx polling which prevents
         # _parents contamination during subsequent GUI sessions
         if self._is_colab():
-            import json as _json
-            teardown_fn = f"_cubevis_teardown_{self._comm_mgr_id}"
-            teardown_js = (
-                f"if(window[{_json.dumps(teardown_fn)}])"
-                f"  window[{_json.dumps(teardown_fn)}]();"
-            )
-            _ph_c = getattr(self, '_colab_bridge_parents', {})
-            _mid_c = self._comm_mgr_id
+            try:
+                from google.colab import output as _co
+                import json as _json
+                from IPython import get_ipython as _gip_c
+                _ip_c = _gip_c()
+                _k_c = _ip_c.kernel if (_ip_c and hasattr(_ip_c, 'kernel')) else None
+                _ph_c = getattr(self, '_colab_bridge_parents', {})
+                teardown_fn = f"_cubevis_teardown_{self._comm_mgr_id}"
+                teardown_js = (
+                    f"if(window[{_json.dumps(teardown_fn)}])"
+                    f"  window[{_json.dumps(teardown_fn)}]();"
+                )
+                if _k_c is not None and _ph_c and hasattr(_k_c, '_parents'):
+                    _saved = dict(_k_c._parents)
+                    _k_c._parents.clear()
+                    _k_c._parents.update(_ph_c)
+                    _co.eval_js(teardown_js, ignore_result=True)
+                    _k_c._parents.clear()
+                    _k_c._parents.update(_saved)
+                else:
+                    _co.eval_js(teardown_js, ignore_result=True)
 
-            def _do_teardown():
-                try:
-                    from google.colab import output as _co
-                    from IPython import get_ipython as _gip_c
-                    _ip_c = _gip_c()
-                    _k_c = _ip_c.kernel if (_ip_c and hasattr(_ip_c, 'kernel')) else None
-                    if _k_c is not None and _ph_c and hasattr(_k_c, '_parents'):
-                        _saved = dict(_k_c._parents)
-                        _k_c._parents.clear()
-                        _k_c._parents.update(_ph_c)
-                        _co.eval_js(teardown_js, ignore_result=False)
-                        _k_c._parents.clear()
-                        _k_c._parents.update(_saved)
-                    else:
-                        _co.eval_js(teardown_js, ignore_result=False)
-                    _dbg_write(f"close: JS teardown completed for {_mid_c}\n")
-                except Exception:
-                    logger.exception("close: teardown eval_js failed")
-
-            self._main_ioloop.add_callback(_do_teardown)
-            await asyncio.sleep(0.2)  # let teardown execute before returning
+                logger.debug("CommsTransport.close: JS teardown called for %s", self._comm_mgr_id)
+                import time
+                time.sleep(0.1)  # let any in-flight bc_tx polls drain
+                with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                    f.write(f"CommsTransport.close: JS teardown completed for {self._comm_mgr_id}\n")
+                    f.flush()
+            except Exception:
+                logger.exception("CommsTransport.close: teardown eval_js failed")
 
         self._comm_objs = []
         self._connected = False

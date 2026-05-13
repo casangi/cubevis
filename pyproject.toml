@@ -19,6 +19,9 @@ requires-python = ">=3.11"
 readme = "README.rst"
 license = {text = "LGPL"}
 
+[project.optional-dependencies]
+notebook = ["anywidget"]
+
 [project.urls]
 "Homepage" = "https://github.com/casangi/cubevis?tab=readme-ov-file#cubevis---visualization-tools-for-casa-images"
 "Source" = "https://github.com/casangi/cubevis"

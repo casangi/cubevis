@@ -35,6 +35,7 @@ from .state import set_cubevis_lib
 
 logger = logging.getLogger(__name__)
 
+import os  ##### debug.txt
 class BokehInit:
     """Mixin for all cubevis models"""
 
@@ -48,6 +49,9 @@ class BokehInit:
                 f"this BokehAppContext has already been registered. Cannot register twice."
             )
         cls._app_context.append(context)
+        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+            f.write(f">>>----------> pushed BokehAppContext {context.app_id} [{len(cls._app_context)}]\n")
+            f.flush()
 
     @classmethod
     def get_app_context(cls):
@@ -65,6 +69,9 @@ class BokehInit:
             cls._app_context.remove(context)
         except ValueError:
             pass  # already removed, fine
+        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+            f.write(f">>>----------> popped BokehAppContext {context.app_id} [{len(cls._app_context)}]\n")
+            f.flush()
 
     def __init_subclass__(cls, **kwargs):
         """Auto-register subclasses"""

@@ -23,6 +23,8 @@ from .. import BokehInit
 if TYPE_CHECKING:
     from .. import BokehAppContext
 
+import os ### debug.txt
+
 class ShutdownReason(Enum):
     """Reason for shutdown"""
     REQUESTED = "shutdown_requested"      # User called requestShutdown()
@@ -632,6 +634,26 @@ class CommMgr( Model, BokehInit ):
             if self._transport:
                 try:
                     await self._transport.close()
+                    with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                        f.write(f"CommMgr*process_messages*{self.comm_mgr_id}: {self._shutdown_callback_called}/{self._on_shutdown}\n")
+                        f.flush()
+                    if self._on_shutdown and not self._shutdown_callback_called:
+                        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                            f.write(f"calling {self._on_shutdown}\n")
+                            f.write(f"\twith {ShutdownReason.TRANSPORT_CLOSED}\n")
+                            f.flush()
+                        try:
+                            # Pass the enum value for better type safety
+                            self._on_shutdown(reason={ShutdownReason.TRANSPORT_CLOSED}, description="comm manager transport closed")
+                            self._shutdown_callback_called = True
+                            with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                                f.write(f"called {self._on_shutdown}\n")
+                                f.flush()
+                        except Exception as e:
+                            with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                                f.write(f"Error calling shutdown function: {e}\n")
+                                f.flush()
+                            logger.error(f"Error calling shutdown function: {e}")
                 except Exception as e:
                     logger.error(f"Error closing transport: {e}")
 

@@ -149,6 +149,7 @@ class WebSocketTransport(TransportBase):
         self._connected = False
         self._initialized = False
         self._should_run = False
+        self._closed = False
 
     def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]):
         """Set callback for incoming messages."""
@@ -301,6 +302,9 @@ class WebSocketTransport(TransportBase):
 
     async def close(self) -> None:
         """Close the WebSocket connection."""
+        if self._closed:
+            return
+
         self._should_run = False
         if self.websocket and self._connected:
             try:
@@ -311,6 +315,7 @@ class WebSocketTransport(TransportBase):
             finally:
                 self._connected = False
                 self._initialized = False
+        self._closed = True
 
     def is_connected(self) -> bool:
         """Check if WebSocket is connected and initialized."""
@@ -354,6 +359,7 @@ class CommsTransport(TransportBase):
         self._bridge_started = { }                   # key is self._comm_mgr_id
         self._callback: Optional[Callable] = None
         self._connected = False
+        self._closed = False
         self._debug = "CUBEVIS_DEBUG" in os.environ
         # _conn_event is set once Comm connection is established
         # This may be set and read in different threads/event loops
@@ -1228,28 +1234,55 @@ class CommsTransport(TransportBase):
         while self._connected:
             await asyncio.sleep(0.1)
 
+
     async def close(self) -> None:
+        # Close all Comms
+        if self._closed:
+            return
+
         for c in getattr(self, '_comm_objs', []):
             try:
                 c.close()
             except Exception:
                 pass
+
+        # Tear down the JS bridge — stops bc_tx polling which prevents
+        # _parents contamination during subsequent GUI sessions
+        if self._is_colab():
+            try:
+                from google.colab import output as _co
+                import json as _json
+                from IPython import get_ipython as _gip_c
+                _ip_c = _gip_c()
+                _k_c = _ip_c.kernel if (_ip_c and hasattr(_ip_c, 'kernel')) else None
+                _ph_c = getattr(self, '_colab_bridge_parents', {})
+                teardown_fn = f"_cubevis_teardown_{self._comm_mgr_id}"
+                teardown_js = (
+                    f"if(window[{_json.dumps(teardown_fn)}])"
+                    f"  window[{_json.dumps(teardown_fn)}]();"
+                )
+                if _k_c is not None and _ph_c and hasattr(_k_c, '_parents'):
+                    _saved = dict(_k_c._parents)
+                    _k_c._parents.clear()
+                    _k_c._parents.update(_ph_c)
+                    _co.eval_js(teardown_js, ignore_result=True)
+                    _k_c._parents.clear()
+                    _k_c._parents.update(_saved)
+                else:
+                    _co.eval_js(teardown_js, ignore_result=True)
+                logger.debug("CommsTransport.close: JS teardown called for %s", self._comm_mgr_id)
+            except Exception:
+                logger.exception("CommsTransport.close: teardown eval_js failed")
+
         self._comm_objs = []
-
-        ### clean up the JavaScript bridge state here
-        #if self._is_colab():
-        #    try:
-        #        from google.colab import output as _co
-        #        import json as _json
-        #        teardown_fn = f"_cubevis_teardown_{self._comm_mgr_id}"
-        #        _co.eval_js(
-        #            f"if(window[{_json.dumps(teardown_fn)}])"
-        #            f"  window[{_json.dumps(teardown_fn)}]();",
-        #            ignore_result=True
-        #        )
-        #    except Exception:
-        #        logger.exception("CommsTransport.close: teardown eval_js failed")
-
         self._connected = False
         self._bridge = None
+        self._closed = True
+
+        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+            import traceback
+            f.write(f"********************CommsTransport*close*{self._comm_mgr_id}*****************************\n")
+            f.write("------------------------- Current Stack Trace -------------------------\n")
+            traceback.print_stack(file=f)
+            f.flush()
         logger.debug(f"********************CommsTransport*close*{self._comm_mgr_id}*****************************")

@@ -445,6 +445,15 @@ class CommsTransport(TransportBase):
             import traceback
             from pathlib import Path
 
+            with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                import traceback
+                f.write("------------------------- _recv Stack Trace -------------------------\n")
+                f.write(f"Is _recv running on the main thread? {threading.current_thread() is threading.main_thread()}\n")
+                f.write("---------------------------------------------------------------------\n")
+                traceback.print_stack(file=f)
+                f.write("---------------------------------------------------------------------\n")
+                f.flush()
+
             logged = getattr(self, '_logged_stack_traces', {})
             log_file = Path("~/debug.txt").expanduser()
 
@@ -1265,11 +1274,11 @@ class CommsTransport(TransportBase):
                     _saved = dict(_k_c._parents)
                     _k_c._parents.clear()
                     _k_c._parents.update(_ph_c)
-                    _co.eval_js(teardown_js, ignore_result=False)
+                    _co.eval_js(teardown_js, ignore_result=True)
                     _k_c._parents.clear()
                     _k_c._parents.update(_saved)
                 else:
-                    _co.eval_js(teardown_js, ignore_result=False)
+                    _co.eval_js(teardown_js, ignore_result=True)
 
                 logger.debug("CommsTransport.close: JS teardown called for %s", self._comm_mgr_id)
                 import time

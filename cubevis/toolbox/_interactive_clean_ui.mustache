@@ -265,9 +265,6 @@ class InteractiveCleanUI:
             logger.debug( f"InteractiveCleanUI...error_handler: {args}, {kwargs}" )
 
         def shutdown_handler( reason, description ):
-            with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                f.write(f"InteractiveCleanUI.shutdown_handler: {reason}, {description}\n")
-                f.flush()
             logger.debug("InteractiveCleanUI...shutdown_handler: calling stop function")
             self.__stop( )
             BokehInit.clear_app_context(self._app_context)

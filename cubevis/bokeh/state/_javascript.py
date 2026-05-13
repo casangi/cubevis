@@ -130,10 +130,9 @@ def cubevisjs_url( ):
     prefer_local, prefer_network = get_js_loading_selection( )
     if prefer_network or 'CUBEVIS_JS_TAG' in environ:
         url = f"https://cdn.jsdelivr.net/gh/casangi/cubevis@{github_js_tag( )}/cubevis/__js__/bokeh-{bokeh_major_minor( )}/cubevisjs.min.js"
-        logger.debug(f"cubevisjs_url: {url}")
+        logger.debug(f"cubevisjs_url<1>: {url}")
         return url
     else:
         url = f"file://{cubevisjs_path( )}"
-        logger.debug(f"cubevisjs_url: {_CUBEVIS_JS_TAG}")
-        logger.debug(f"cubevisjs_url: {url}")
+        logger.debug(f"cubevisjs_url<2>: {url}")
         return url

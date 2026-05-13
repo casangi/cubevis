@@ -26,12 +26,10 @@ __all__ = [
     'CommsTransport',
 ]
 
-import itertools
-LOG_COUNT_001 = itertools.count(start=1)
 _COLAB_JS_EVAL_LOCK = threading.Lock( )
 
 def _dbg_write(msg: str) -> None:
-    """Append msg to ~/debug.txt, swallowing errors."""
+    """Append msg to ~/debug.txt, swallowing errors.
     try:
         import os
         with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
@@ -39,6 +37,8 @@ def _dbg_write(msg: str) -> None:
             f.flush()
     except Exception:
         pass
+    """
+    pass
 
 # ============================================================================
 # Helper: resolve the correct Comm class for the current environment
@@ -458,46 +458,6 @@ class CommsTransport(TransportBase):
             if getattr(self, '_closed', False):
                 return
 
-            with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                import traceback
-                f.write("------------------------- _recv Stack Trace -------------------------\n")
-                f.write(f"Is _recv running on the main thread? {threading.current_thread() is threading.main_thread()}\n")
-                f.write("---------------------------------------------------------------------\n")
-                traceback.print_stack(file=f)
-                f.write("---------------------------------------------------------------------\n")
-                f.flush()
-
-            logged = getattr(self, '_logged_stack_traces', {})
-            log_file = Path("~/debug.txt").expanduser()
-
-            try:
-                stack = "".join(traceback.format_stack()[-5:])
-
-                _log_inflight = getattr(self, "_colab_inflight", 0)
-                _log_pending_replies = len(getattr(self, "_colab_pending_replies", []))
-                if stack in logged:
-                    with log_file.open(mode="a", encoding="utf-8") as f:
-                        f.write(f"{self._comm_mgr_id} already logged, inflight: {_log_inflight}, pending replies: {_log_pending_replies}\n")
-                else:
-                    log_msg = f"_recv called on CommMgr {self._comm_mgr_id}, inflight: {_log_inflight}, pending replies: {_log_pending_replies}\n{stack}\n"
-                    with log_file.open(mode="a", encoding="utf-8") as f:
-                        f.write("-" * 120 + "\n")
-                        f.write(log_msg)
-                        f.write("-" * 120 + "\n")
-
-                logged[stack] = True
-                self._logged_stack_traces = logged
-
-            except Exception:
-                error_msg = f"LOGGING ERROR in CommMgr {getattr(self, '_comm_mgr_id', 'unknown')}:\n{traceback.format_exc()}\n"
-                try:
-                    with log_file.open(mode="a", encoding="utf-8") as f:
-                        f.write("!!! ERROR IN DEBUG LOGGING !!!\n")
-                        f.write(error_msg)
-                        f.write("-" * 120 + "\n")
-                except:
-                    print(error_msg)
-
             #logger.debug( "CommsTransport._recv: %s", LazySummarize(msg) )
             # Capture parent header only for non-poll messages.
             # Poll messages use the bridge iframe context (captured by Colab kernel automatically).
@@ -594,23 +554,14 @@ class CommsTransport(TransportBase):
                                 for _ci, _chunk in enumerate(_chunks):
                                     _eval_js_with_context(_co, f"window[{_tok_key}].push({_pj.dumps(_chunk)});", _k_t2, _ph)
 
-                                try:
-                                    with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                                        f.write(f"-<{next(LOG_COUNT_001)}> _deliver_in_thread _ph: {_ph}\n")
-                                        if len(_chunks) > 0:
-                                            f.write(f"\t>>>>>>------tok-key---------->> {self._comm_mgr_id}: {_tok_key} -> {len(_chunks)}")
-                                        f.flush()
-                                except Exception as e:
-                                    print(f"Failed to write to debug file: {e}")
-
                                 # Finalise: join, parse, deliver, clean up
                                 _final_js = (
-                                    f"(()=>{{console.log('hello world');"
-                                    f"if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);"
-                                    "console.log(`window: ${window.name}`);"
+                                    f"(()=>{{"
+                                    #f"if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);"
+                                    #"console.log(`window: ${window.name}`);"
                                     f"const arr=window[{_tok_key}];"
                                     f"const arrLen=arr ? arr.length : -1;"
-                                    f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
+                                    #f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
                                     f"const s=window[{_tok_key}].join('');"
                                     f"delete window[{_tok_key}];"
                                     f"const msg=JSON.parse(s);"
@@ -692,14 +643,15 @@ class CommsTransport(TransportBase):
                     _k_open = _ip_open.kernel
                     if hasattr(_k_open, '_parents') and isinstance(_k_open._parents, dict):
                         self._colab_bridge_parents = dict(_k_open._parents)
-                        from google.colab import output as _co
-                        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                            window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
-                            f.write(f">>> on_comm_open capture for window {window_name} >>> {self._colab_bridge_parents}\n")
-                        logger.debug(
-                            "_on_comm_open: refreshed _colab_bridge_parents (captured=%s)",
-                            bool(self._colab_bridge_parents)
-                        )
+
+                        #from google.colab import output as _co
+                        #with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                        #    window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
+                        #    f.write(f">>> on_comm_open capture for window {window_name} >>> {self._colab_bridge_parents}\n")
+                        #logger.debug(
+                        #    "_on_comm_open: refreshed _colab_bridge_parents (captured=%s)",
+                        #    bool(self._colab_bridge_parents)
+                        #)
             except Exception:
                 logger.exception("_on_comm_open: failed to refresh _colab_bridge_parents")
 
@@ -784,11 +736,12 @@ class CommsTransport(TransportBase):
                     if hasattr(_k_br, '_parents') and isinstance(_k_br._parents, dict):
                         # Using dict() creates a shallow copy, which is good practice here
                         self._colab_bridge_parents = dict(_k_br._parents)
-                        from google.colab import output as _co
-                        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                            window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
-                            f.write(f">>> display_bridge capture for window {window_name} >>> {self._colab_bridge_parents}\n")
-                        logger.debug("<<display_bridge>> bridge parent captured: %s", bool(self._colab_bridge_parents))
+
+                        #from google.colab import output as _co
+                        #with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                        #    window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
+                        #    f.write(f">>> display_bridge capture for window {window_name} >>> {self._colab_bridge_parents}\n")
+                        #logger.debug("<<display_bridge>> bridge parent captured: %s", bool(self._colab_bridge_parents))
             except Exception:
                 # Automatically captures the stack trace and the error message
                 logger.exception("<<display_bridge>> parent capture failed")
@@ -799,8 +752,6 @@ class CommsTransport(TransportBase):
             function render({ model, el }) {
                 const isDebug  = """ + is_debug_js + r""";
                 const targetId = model.get("target_id");
-                // ESM version marker — if this log appears, the new ESM is running
-                console.log("CUBEVIS ESM v2 render() called for", targetId);
 
                 if (isDebug) {
                     el.innerHTML = `<div style="padding:5px;background:#dfd;border:1px solid #4caf50">` +
@@ -818,8 +769,7 @@ class CommsTransport(TransportBase):
                     if (isDebug) {
                         el.innerHTML = `<div style="padding:5px;background:#ccf;border:1px solid #2196f3">` +
                                        `✅ Bridge Connected (${targetId})</div>`;
-                        console.log("CUBEVIS DEBUG: Comm stored for", targetId);
-                        console.log("CUBEVIS DEBUG: Comm stored in", window);
+                        console.log("CUBEVIS DEBUG: Comm stored for", targetId, window);
                     }
                 }
 
@@ -949,7 +899,6 @@ class CommsTransport(TransportBase):
                             // This fires when Python calls self._bridge.send(payload)
                             // If it's a cubevis_reply, extract the envelope and route it.
                             // Otherwise treat msg as the envelope directly (legacy path).
-                            console.log( `<<X>>`, msg )
                             const envelope = (msg && msg.type === "cubevis_reply")
                                 ? msg.envelope : msg;
                             if (msg && msg.type === "cubevis_binary") {
@@ -979,9 +928,6 @@ class CommsTransport(TransportBase):
                                             dtype: msg.dtype,
                                             shape: msg.shape
                                         };
-                                        console.log("CUBEVIS binary received: token=" + msg.token +
-                                            " dtype=" + msg.dtype + " shape=" + JSON.stringify(msg.shape) +
-                                            " bytes=" + msg.nbytes);
                                         // Notify CommsTransport that a binary token arrived
                                         const _arrivedCb = window[`cubevis_binary_arrived_${msg.comm_mgr_id}`];
                                         if (typeof _arrivedCb === "function") _arrivedCb();
@@ -1008,7 +954,6 @@ class CommsTransport(TransportBase):
                                 bc.close();
                             } catch(e) {}
                         });
-                        console.log("CUBEVIS: msg:custom handler registered on model");
 
                         const comm = {
                             // Direct JS->Python from this iframe
@@ -1194,7 +1139,6 @@ class CommsTransport(TransportBase):
                     f"const msg={env_json};"
                     f"const cb=window[{_json.dumps(cb_name)}];"
                     f"if(typeof cb==='function'){{"
-                    f"  console.log('CUBEVIS eval_js: calling window cb');"
                     f"  cb(msg);"
                     f"}} else {{"
                     f"  console.log('CUBEVIS eval_js: no window cb, posting to bc');"
@@ -1315,10 +1259,4 @@ class CommsTransport(TransportBase):
         self._bridge = None
         self._closed = True
 
-        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-            import traceback
-            f.write(f"********************CommsTransport*close*{self._comm_mgr_id}*****************************\n")
-            f.write("------------------------- Current Stack Trace -------------------------\n")
-            traceback.print_stack(file=f)
-            f.flush()
         logger.debug(f"********************CommsTransport*close*{self._comm_mgr_id}*****************************")

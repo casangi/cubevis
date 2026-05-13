@@ -23,8 +23,6 @@ from .. import BokehInit
 if TYPE_CHECKING:
     from .. import BokehAppContext
 
-import os ### debug.txt
-
 class ShutdownReason(Enum):
     """Reason for shutdown"""
     REQUESTED = "shutdown_requested"      # User called requestShutdown()
@@ -187,7 +185,6 @@ class CommMgr( Model, BokehInit ):
         # JavaScript Comm object find their manager using this
         kwargs['name'] = kwargs['comm_mgr_id']
         logger.debug(f"CommMgr.__init__: {args}, on_shutdown={on_shutdown}, on_error={on_error}, {kwargs}", stack_info=True)
-        logger.debug(">>>>>>>>>>------------->> CommMgr.__init__")
 
         super( ).__init__( *args, **kwargs )
 
@@ -233,7 +230,6 @@ class CommMgr( Model, BokehInit ):
     def registered( self, context: BokehAppContext ) -> None:
         '''This is called when this CommMgr is registered with BokehAppContext.
         '''
-        logger.debug(">>>>>>>>>>------------->> CommMgr.registered", stack_info=True)
         # Websocket address management (if not set with parameters)
         if self.transport_type == 'websocket':
             if not self.address:
@@ -519,10 +515,7 @@ class CommMgr( Model, BokehInit ):
         On normal close, cleans up and returns (allows reconnection).
         Only shuts down CommMgr for user request or fatal errors.
         """
-        logger.debug("************************************************************************************************************************")
-        logger.debug(f"CommMgr.process_messages  starting ({self.comm_mgr_id})")
-        logger.debug(f"CommMgr.process_messages: transport_type {self.transport_type}")
-        logger.debug("************************************************************************************************************************")
+        logger.debug(f"CommMgr.process_messages starting ({self.comm_mgr_id})")
 
         # Determine why we stopped
         shutdown_reason = None
@@ -634,25 +627,12 @@ class CommMgr( Model, BokehInit ):
             if self._transport:
                 try:
                     await self._transport.close()
-                    with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                        f.write(f"CommMgr*process_messages*{self.comm_mgr_id}: {self._shutdown_callback_called}/{self._on_shutdown}\n")
-                        f.flush()
                     if self._on_shutdown and not self._shutdown_callback_called:
-                        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                            f.write(f"calling {self._on_shutdown}\n")
-                            f.write(f"\twith {ShutdownReason.TRANSPORT_CLOSED}\n")
-                            f.flush()
                         try:
                             # Pass the enum value for better type safety
                             self._on_shutdown(reason={ShutdownReason.TRANSPORT_CLOSED}, description="comm manager transport closed")
                             self._shutdown_callback_called = True
-                            with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                                f.write(f"called {self._on_shutdown}\n")
-                                f.flush()
                         except Exception as e:
-                            with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                                f.write(f"Error calling shutdown function: {e}\n")
-                                f.flush()
                             logger.error(f"Error calling shutdown function: {e}")
                 except Exception as e:
                     logger.error(f"Error closing transport: {e}")

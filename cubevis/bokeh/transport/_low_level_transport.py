@@ -584,7 +584,7 @@ class CommsTransport(TransportBase):
                                     f"{_stop_call}"
                                     f"}})();"
                                 )
-                                _co.eval_js(_final_js, ignore_result=True)
+                                _co.eval_js(_final_js, ignore_result=(len(_chunks) <= 1))
 
                                 logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
                                 if ( len(_env_s) == 412 ):

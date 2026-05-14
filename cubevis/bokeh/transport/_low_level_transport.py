@@ -1222,6 +1222,8 @@ class CommsTransport(TransportBase):
             _mid_c = self._comm_mgr_id
             teardown_fn = f"_cubevis_teardown_{_mid_c}"
             teardown_js = (
+                f"if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);"
+                "console.log(`teardown for window: ${window.name}`);"
                 f"if(window[{_json.dumps(teardown_fn)}])"
                 f"  window[{_json.dumps(teardown_fn)}]();"
             )

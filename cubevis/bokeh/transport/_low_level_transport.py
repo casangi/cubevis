@@ -557,11 +557,11 @@ class CommsTransport(TransportBase):
                                 # Finalise: join, parse, deliver, clean up
                                 _final_js = (
                                     f"(()=>{{"
-                                    #f"if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);"
-                                    #"console.log(`window: ${window.name}`);"
+                                    f"if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);"
+                                    "console.log(`window: ${window.name}`);"
                                     f"const arr=window[{_tok_key}];"
                                     f"const arrLen=arr ? arr.length : -1;"
-                                    #f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
+                                    f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
                                     f"const s=window[{_tok_key}].join('');"
                                     f"delete window[{_tok_key}];"
                                     f"const msg=JSON.parse(s);"
@@ -644,14 +644,14 @@ class CommsTransport(TransportBase):
                     if hasattr(_k_open, '_parents') and isinstance(_k_open._parents, dict):
                         self._colab_bridge_parents = dict(_k_open._parents)
 
-                        #from google.colab import output as _co
-                        #with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                        #    window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
-                        #    f.write(f">>> on_comm_open capture for window {window_name} >>> {self._colab_bridge_parents}\n")
-                        #logger.debug(
-                        #    "_on_comm_open: refreshed _colab_bridge_parents (captured=%s)",
-                        #    bool(self._colab_bridge_parents)
-                        #)
+                        from google.colab import output as _co
+                        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                            window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
+                            f.write(f">>> on_comm_open capture for window {window_name} >>> {self._colab_bridge_parents}\n")
+                        logger.debug(
+                            "_on_comm_open: refreshed _colab_bridge_parents (captured=%s)",
+                            bool(self._colab_bridge_parents)
+                        )
             except Exception:
                 logger.exception("_on_comm_open: failed to refresh _colab_bridge_parents")
 
@@ -737,11 +737,11 @@ class CommsTransport(TransportBase):
                         # Using dict() creates a shallow copy, which is good practice here
                         self._colab_bridge_parents = dict(_k_br._parents)
 
-                        #from google.colab import output as _co
-                        #with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                        #    window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
-                        #    f.write(f">>> display_bridge capture for window {window_name} >>> {self._colab_bridge_parents}\n")
-                        #logger.debug("<<display_bridge>> bridge parent captured: %s", bool(self._colab_bridge_parents))
+                        from google.colab import output as _co
+                        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                            window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
+                            f.write(f">>> display_bridge capture for window {window_name} >>> {self._colab_bridge_parents}\n")
+                        logger.debug("<<display_bridge>> bridge parent captured: %s", bool(self._colab_bridge_parents))
             except Exception:
                 # Automatically captures the stack trace and the error message
                 logger.exception("<<display_bridge>> parent capture failed")
@@ -812,6 +812,7 @@ class CommsTransport(TransportBase):
                 //   Python->JS to all open comms including the new one.
                 async function tryColabPath() {
                     try {
+                        if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
                         const colabComms = google?.colab?.kernel?.comms;
                         if (!colabComms || typeof colabComms.open !== "function") return false;
 
@@ -899,6 +900,7 @@ class CommsTransport(TransportBase):
                             // This fires when Python calls self._bridge.send(payload)
                             // If it's a cubevis_reply, extract the envelope and route it.
                             // Otherwise treat msg as the envelope directly (legacy path).
+                            console.log( `<<X>> window: ${window.name}`, msg )
                             const envelope = (msg && msg.type === "cubevis_reply")
                                 ? msg.envelope : msg;
                             if (msg && msg.type === "cubevis_binary") {

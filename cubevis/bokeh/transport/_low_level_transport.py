@@ -1252,9 +1252,11 @@ class CommsTransport(TransportBase):
                     _done.set()
 
             self._main_ioloop.add_callback(_do_teardown)
-            # Wait for teardown to complete on the main kernel thread.
-            # Use a thread-safe Event since close() runs in a background thread.
-            _done.wait(timeout=2.0)
+            # Poll without blocking the event loop
+            for _ in range(40):  # up to 2 seconds
+                if _done.is_set():
+                    break
+                await asyncio.sleep(0.05)
             if not _done.is_set():
                 _dbg_write(f"close: teardown timed out for {_mid_c}\n")
 

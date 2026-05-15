@@ -30,6 +30,7 @@ _COLAB_JS_EVAL_LOCK = threading.Lock( )
 
 def _dbg_write(msg: str) -> None:
     """Append msg to ~/debug.txt, swallowing errors.
+    """
     try:
         import os
         with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
@@ -37,8 +38,6 @@ def _dbg_write(msg: str) -> None:
             f.flush()
     except Exception:
         pass
-    """
-    pass
 
 # ============================================================================
 # Helper: resolve the correct Comm class for the current environment
@@ -1205,6 +1204,7 @@ class CommsTransport(TransportBase):
 
     async def close(self) -> None:
         # Close all Comms
+        logger.debug(f"CommsTransport.close: called for {self._comm_mgr_id} closed={self._closed}")
         if self._closed:
             return
 
@@ -1259,6 +1259,8 @@ class CommsTransport(TransportBase):
                 await asyncio.sleep(0.05)
             if not _done.is_set():
                 _dbg_write(f"close: teardown timed out for {_mid_c}\n")
+
+            logger.debug(f"CommsTransport.close: teardown done={_done.is_set()} for {self._comm_mgr_id}")
 
         self._comm_objs = []
         self._connected = False

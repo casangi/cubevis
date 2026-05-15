@@ -643,10 +643,10 @@ class CommsTransport(TransportBase):
                     if hasattr(_k_open, '_parents') and isinstance(_k_open._parents, dict):
                         self._colab_bridge_parents = dict(_k_open._parents)
 
-                        from google.colab import output as _co
-                        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                            window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
-                            f.write(f">>> on_comm_open capture for window {window_name} >>> {self._colab_bridge_parents}\n")
+                        #from google.colab import output as _co
+                        #with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                        #    window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
+                        #    f.write(f">>> on_comm_open capture for window {window_name} >>> {self._colab_bridge_parents}\n")
                         logger.debug(
                             "_on_comm_open: refreshed _colab_bridge_parents (captured=%s)",
                             bool(self._colab_bridge_parents)
@@ -736,10 +736,10 @@ class CommsTransport(TransportBase):
                         # Using dict() creates a shallow copy, which is good practice here
                         self._colab_bridge_parents = dict(_k_br._parents)
 
-                        from google.colab import output as _co
-                        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                            window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
-                            f.write(f">>> display_bridge capture for window {window_name} >>> {self._colab_bridge_parents}\n")
+                        #from google.colab import output as _co
+                        #with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                        #    window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
+                        #    f.write(f">>> display_bridge capture for window {window_name} >>> {self._colab_bridge_parents}\n")
                         logger.debug("<<display_bridge>> bridge parent captured: %s", bool(self._colab_bridge_parents))
             except Exception:
                 # Automatically captures the stack trace and the error message

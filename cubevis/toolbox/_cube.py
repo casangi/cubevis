@@ -146,7 +146,7 @@ class CubeMask:
                                         hover_line_alpha="Line alpha for region with cursor focus",
                                         hover_line_dash="Line dash for region with cursor focus" )
 
-        _dbg_write( "CubeMask>>>>>-------------> anyone there?" )
+        _dbg_write( "CubeMask>>>>>-------------> anyone there?\n" )
         self._image_path = image                               # path to image cube to be displayed
         self._mask_path = mask                                 # path to bitmask cube (if any)
         self._region_controls={'coord':{'initialized': False}, # ONLY USED WITH NO MASK CUBE
@@ -510,9 +510,9 @@ class CubeMask:
                 self._pipe['control'].register( self._ids['mask-mod'], mod_mask )
 
 
-            _dbg_write( f"<_cube:001> setting callback for 'done with {self._pipe['control']}" )
+            _dbg_write( f"<_cube:001> setting callback for 'done with {self._pipe['control']}\n" )
             self._pipe['control'].register( self._ids['done'], receive_return_value )
-            _dbg_write( "<_cube:002> setting callback for 'done" )
+            _dbg_write( "<_cube:002> setting callback for 'done\n" )
             self._init_image_source( )
 
             ### fetch stokes labels for all stokes drop

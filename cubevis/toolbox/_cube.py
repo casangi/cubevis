@@ -72,6 +72,17 @@ import numpy as np
 _hatches = [str(p) for p in _hatch_patterns]
 _dashes = [str(p) for p in _dash_patterns]
 
+def _dbg_write(msg: str) -> None:
+    """Append msg to ~/debug.txt, swallowing errors.
+    """
+    try:
+        import os
+        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+            f.write(msg)
+            f.flush()
+    except Exception:
+        pass
+
 class CubeMask:
     '''Class which provides a common implementation of Bokeh widget behavior for
     interactive clean and make mask'''
@@ -244,6 +255,12 @@ class CubeMask:
     def __stop( self ):
         '''stop interactive masking
         '''
+        import traceback
+        _dbg_write( f"CubeMask.__stop:\n"
+                    "----------------------------------------------------------------------------------------------------\n"
+                    "".join(traceback.format_stack())
+                    "----------------------------------------------------------------------------------------------------\n"
+                   )
         pass
 
     def _init_pipes( self ):

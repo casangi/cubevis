@@ -255,12 +255,6 @@ class CubeMask:
     def __stop( self ):
         '''stop interactive masking
         '''
-        import traceback
-        _dbg_write( f"CubeMask.__stop:\n"
-                    "----------------------------------------------------------------------------------------------------\n"
-                    "".join(traceback.format_stack())
-                    "----------------------------------------------------------------------------------------------------\n"
-                   )
         pass
 
     def _init_pipes( self ):
@@ -361,6 +355,12 @@ class CubeMask:
             self._channel_callback = channelcb
 
             async def receive_return_value( msg, context, self=self ):
+                import traceback
+                _dbg_write( f"CubeMask.receive_return_value:\n"
+                            "----------------------------------------------------------------------------------------------------\n"
+                            "".join(traceback.format_stack())
+                            "----------------------------------------------------------------------------------------------------\n"
+                           )
                 self._result = self.jsmask_to_raw( msg['value'] )
                 self.__stop( )
                 return dict( result='stopped', update={ } )

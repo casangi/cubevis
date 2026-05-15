@@ -146,6 +146,7 @@ class CubeMask:
                                         hover_line_alpha="Line alpha for region with cursor focus",
                                         hover_line_dash="Line dash for region with cursor focus" )
 
+        _dbg_write( "CubeMask>>>>>-------------> anyone there?" )
         self._image_path = image                               # path to image cube to be displayed
         self._mask_path = mask                                 # path to bitmask cube (if any)
         self._region_controls={'coord':{'initialized': False}, # ONLY USED WITH NO MASK CUBE

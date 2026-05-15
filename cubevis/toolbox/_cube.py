@@ -509,7 +509,9 @@ class CubeMask:
                 self._pipe['control'].register( self._ids['mask-mod'], mod_mask )
 
 
+            _dbg_write( f"<_cube:001> setting callback for 'done with {self._pipe['control']}" )
             self._pipe['control'].register( self._ids['done'], receive_return_value )
+            _dbg_write( "<_cube:002> setting callback for 'done" )
             self._init_image_source( )
 
             ### fetch stokes labels for all stokes drop

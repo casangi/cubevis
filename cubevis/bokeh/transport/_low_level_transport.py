@@ -496,15 +496,11 @@ class CommsTransport(TransportBase):
                     _ph_now = getattr(self, '_colab_bridge_parents', {})
 
                     def _eval_js_with_context(_co, js, _k, _ph, ignore_result=True):
-                        if _k is not None and _ph:
-                            _saved = dict(_k._parents)  # capture current state fresh each time
+                        if _k is not None and _ph and hasattr(_k, '_parents'):
                             _k._parents.clear()
                             _k._parents.update(_ph)
                             _co.eval_js(js, ignore_result=ignore_result)
-                            _k._parents.clear()
-                            _k._parents.update(_saved)
-                        else:
-                            _co.eval_js(js, ignore_result=ignore_result)
+                            # No restore — let _parents be whatever the kernel sets it to naturally
 
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
@@ -1237,14 +1233,9 @@ class CommsTransport(TransportBase):
                     _ip_c = _gip_c()
                     _k_c  = _ip_c.kernel if (_ip_c and hasattr(_ip_c, 'kernel')) else None
                     if _k_c is not None and _ph_c and hasattr(_k_c, '_parents'):
-                        _saved = dict(_k_c._parents)
                         _k_c._parents.clear()
                         _k_c._parents.update(_ph_c)
-                        _co.eval_js(teardown_js, ignore_result=True)
-                        _k_c._parents.clear()
-                        _k_c._parents.update(_saved)
-                    else:
-                        _co.eval_js(teardown_js, ignore_result=True)
+                    _co.eval_js(teardown_js, ignore_result=True)
                     _dbg_write(f"close: JS teardown completed for {_mid_c}\n")
                 except Exception:
                     logger.exception("close: teardown eval_js failed")

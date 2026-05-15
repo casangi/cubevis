@@ -75,6 +75,17 @@ USE_MULTIPLE_GCLEAN_HACK=False
 
 logger = logging.getLogger(__name__)
 
+def _dbg_write(msg: str) -> None:
+    """Append msg to ~/debug.txt, swallowing errors.
+    """
+    try:
+        import os
+        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+            f.write(msg)
+            f.flush()
+    except Exception:
+        pass
+
 class InteractiveCleanUI:
     '''InteractiveCleanUI(...) implements interactive clean using Bokeh
     '''
@@ -266,6 +277,14 @@ class InteractiveCleanUI:
 
         def shutdown_handler( reason, description ):
             logger.debug("InteractiveCleanUI...shutdown_handler: calling stop function")
+
+            import traceback
+            _dbg_write( f"shutdown_handler( {reason}, {description} ):\n"
+                        "----------------------------------------------------------------------------------------------------\n"
+                        "".join(traceback.format_stack())
+                        "----------------------------------------------------------------------------------------------------\n"
+                       )
+
             self.__stop( )
             BokehInit.clear_app_context(self._app_context)
 

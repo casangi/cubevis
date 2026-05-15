@@ -359,7 +359,7 @@ class CubeMask:
                 import traceback
                 _dbg_write( f"CubeMask.receive_return_value:\n"
                             "----------------------------------------------------------------------------------------------------\n"
-                            "".join(traceback.format_stack())
+                            f"{''.join(traceback.format_stack())}"
                             "----------------------------------------------------------------------------------------------------\n"
                            )
                 self._result = self.jsmask_to_raw( msg['value'] )

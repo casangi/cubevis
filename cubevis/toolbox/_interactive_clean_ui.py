@@ -276,10 +276,11 @@ class InteractiveCleanUI:
 
         def shutdown_handler( reason, description ):
             logger.debug("InteractiveCleanUI...shutdown_handler: calling stop function")
+
             import traceback
             _dbg_write( f"shutdown_handler( {reason}, {description} ):\n"
                         "----------------------------------------------------------------------------------------------------\n"
-                        "".join(traceback.format_stack())
+                        f"{''.join(traceback.format_stack())}"
                         "----------------------------------------------------------------------------------------------------\n"
                        )
 

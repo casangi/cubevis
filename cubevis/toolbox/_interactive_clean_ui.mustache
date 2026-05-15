@@ -281,7 +281,7 @@ class InteractiveCleanUI:
             import traceback
             _dbg_write( f"shutdown_handler( {reason}, {description} ):\n"
                         "----------------------------------------------------------------------------------------------------\n"
-                        "".join(traceback.format_stack())
+                        f"{''.join(traceback.format_stack())}"
                         "----------------------------------------------------------------------------------------------------\n"
                        )
 

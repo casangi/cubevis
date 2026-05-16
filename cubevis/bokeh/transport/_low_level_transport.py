@@ -547,12 +547,10 @@ class CommsTransport(TransportBase):
                                 _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
 
                                 # Initialise accumulator
-                                _dbg_write(f"_deliver: mid={_mid[:8]} inflight={_inflight} chunks={len(_chunks)} tok={_tok}\n")
                                 _eval_js_with_context(_co, f"window[{_tok_key}]=[];", _k_t2, _ph)
 
                                 # Send each chunk
                                 for _ci, _chunk in enumerate(_chunks):
-                                    _dbg_write(f"_deliver: mid={_mid[:8]} inflight={_inflight} chunks={len(_chunks)} tok={_tok}\n")
                                     _eval_js_with_context(_co, f"window[{_tok_key}].push({_pj.dumps(_chunk)});", _k_t2, _ph)
 
                                 # Finalise: join, parse, deliver, clean up
@@ -574,7 +572,6 @@ class CommsTransport(TransportBase):
                                     f"{_stop_call}"
                                     f"}})();"
                                 )
-                                _dbg_write(f"_deliver: mid={_mid[:8]} inflight={_inflight} chunks={len(_chunks)} tok={_tok}\n")
                                 _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=True)
 
                                 logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )

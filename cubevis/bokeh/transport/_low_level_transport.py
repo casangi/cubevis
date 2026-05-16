@@ -521,6 +521,11 @@ class CommsTransport(TransportBase):
                                             _k_t2 = _ip_t2.kernel
                                             if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
                                                 _saved_parents = dict(_k_t2._parents)
+                                                # Detect contamination: log if saved context doesn't match _ph
+                                                _saved_msg_id = (_saved_parents.get('shell', {}) or {}).get('header', {}).get('msg_id', 'unknown')
+                                                _ph_msg_id = (_ph.get('shell', {}) or {}).get('header', {}).get('msg_id', 'unknown')
+                                                if _saved_msg_id != _ph_msg_id:
+                                                    _dbg_write(f"_deliver_in_thread: _parents mismatch at save — saved={_saved_msg_id} expected_ph={_ph_msg_id}\n")
                                     except Exception:
                                         pass
                                 from google.colab import output as _co

@@ -496,11 +496,13 @@ class CommsTransport(TransportBase):
                     _ph_now = getattr(self, '_colab_bridge_parents', {})
 
                     def _eval_js_with_context(_co, js, _k, _ph, ignore_result=True):
+                        """Set _parents to _ph and call eval_js.
+                        Caller holds _COLAB_JS_EVAL_LOCK and is responsible for
+                        the outer save/restore of _parents around the full delivery."""
                         if _k is not None and _ph and hasattr(_k, '_parents'):
                             _k._parents.clear()
                             _k._parents.update(_ph)
-                            _co.eval_js(js, ignore_result=ignore_result)
-                            # No restore — let _parents be whatever the kernel sets it to naturally
+                        _co.eval_js(js, ignore_result=ignore_result)
 
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
@@ -508,7 +510,9 @@ class CommsTransport(TransportBase):
                             _k_t2 = None
                             _saved_parents = { }
                             try:
-
+                                # Resolve kernel and save _parents ONCE before any eval_js.
+                                # _eval_js_with_context sets _ph before each call but does
+                                # not restore — the single restore in finally is sufficient.
                                 if _ph:
                                     try:
                                         from IPython import get_ipython as _gip_t2
@@ -517,7 +521,6 @@ class CommsTransport(TransportBase):
                                             _k_t2 = _ip_t2.kernel
                                             if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
                                                 _saved_parents = dict(_k_t2._parents)
-                                                _k_t2._parents.update(_ph)
                                     except Exception:
                                         pass
                                 from google.colab import output as _co
@@ -576,6 +579,13 @@ class CommsTransport(TransportBase):
 
                             except Exception:
                                 logger.exception( "<<poll>> thread eval_js failed" )
+                            finally:
+                                # Restore _parents once after all eval_js calls complete.
+                                # This single restore prevents our _ph from persisting
+                                # and contaminating subsequent kernel operations.
+                                if _k_t2 is not None and _saved_parents and hasattr(_k_t2, '_parents'):
+                                    _k_t2._parents.clear()
+                                    _k_t2._parents.update(_saved_parents)
 
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
                 # nothing pending - JS manages idle timeout itself

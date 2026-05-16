@@ -510,9 +510,10 @@ class CommsTransport(TransportBase):
                             _k_t2 = None
                             _saved_parents = { }
                             try:
-                                # Resolve kernel and save _parents ONCE before any eval_js.
-                                # _eval_js_with_context sets _ph before each call but does
-                                # not restore — the single restore in finally is sufficient.
+                                # Resolve kernel and save _parents for diagnostic logging.
+                                # _eval_js_with_context sets _ph before each call.
+                                # No restore after delivery — letting _parents settle
+                                # naturally avoids reintroducing stale context.
                                 if _ph:
                                     try:
                                         from IPython import get_ipython as _gip_t2
@@ -521,16 +522,6 @@ class CommsTransport(TransportBase):
                                             _k_t2 = _ip_t2.kernel
                                             if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
                                                 _saved_parents = dict(_k_t2._parents)
-                                                # Detect contamination: log if saved context doesn't match _ph
-                                                _saved_shell = (_saved_parents.get('shell', {}) or {})
-                                                _ph_shell = (_ph.get('shell', {}) or {})
-                                                _dbg_write(
-                                                    f"_deliver_in_thread save:\n"
-                                                    f"  saved: msg_type={_saved_shell.get('msg_type')} msg_id={_saved_shell.get('header',{}).get('msg_id','?')}\n"
-                                                    f"         cell_id={_saved_shell.get('metadata',{}).get('colab',{}).get('cell_id','?')}\n"
-                                                    f"  _ph:   msg_type={_ph_shell.get('msg_type')} msg_id={_ph_shell.get('header',{}).get('msg_id','?')}\n"
-                                                    f"         cell_id={_ph_shell.get('metadata',{}).get('colab',{}).get('cell_id','?')}\n"
-                                                )
                                     except Exception:
                                         pass
                                 from google.colab import output as _co
@@ -589,13 +580,6 @@ class CommsTransport(TransportBase):
 
                             except Exception:
                                 logger.exception( "<<poll>> thread eval_js failed" )
-                            finally:
-                                # Restore _parents once after all eval_js calls complete.
-                                # This single restore prevents our _ph from persisting
-                                # and contaminating subsequent kernel operations.
-                                if _k_t2 is not None and _saved_parents and hasattr(_k_t2, '_parents'):
-                                    _k_t2._parents.clear()
-                                    _k_t2._parents.update(_saved_parents)
 
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
                 # nothing pending - JS manages idle timeout itself

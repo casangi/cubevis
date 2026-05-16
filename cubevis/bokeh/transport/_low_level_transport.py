@@ -581,6 +581,8 @@ class CommsTransport(TransportBase):
                             except Exception:
                                 logger.exception( "<<poll>> thread eval_js failed" )
 
+                    _ph_msg_id = (_ph_now.get('shell', {}) or {}).get('header', {}).get('msg_id', '?')[:8]
+                    _dbg_write(f"_deliver: mid={_mid[:8]} chunks={len(_chunks)} tok={_tok} ph={_ph_msg_id}\n")
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
                 # nothing pending - JS manages idle timeout itself
                 return

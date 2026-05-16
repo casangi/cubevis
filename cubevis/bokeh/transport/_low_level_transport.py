@@ -880,7 +880,7 @@ class CommsTransport(TransportBase):
                             _stopPoll()
                             bc_tx.close()
                             bc_rx.close()
-                            // channel.close?.() // channel.close generates a message to Python
+                            channel.close?.()
                         }
 
                         // Hook into bc_tx: start polling whenever JS sends a message to Python

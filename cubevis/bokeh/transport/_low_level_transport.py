@@ -1242,7 +1242,7 @@ class CommsTransport(TransportBase):
                     if _k_c is not None and _ph_c and hasattr(_k_c, '_parents'):
                         _k_c._parents.clear()
                         _k_c._parents.update(_ph_c)
-                    _co.eval_js(teardown_js, ignore_result=False)
+                    _co.eval_js(teardown_js, ignore_result=True)
                     _dbg_write(f"close: JS teardown completed for {_mid_c}\n")
                 except Exception:
                     logger.exception("close: teardown eval_js failed")

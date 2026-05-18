@@ -376,6 +376,8 @@ class CommsTransport(TransportBase):
         self._conn_event = threading.Event()
         self._last_parent_header: dict = {}  # parent header of last received comm_msg
         self._colab_pending_replies: list = []  # FIFO queue of pending Colab replies
+        self._colab_msg_id_history = [] # temporary place to collect message ids for debugging
+
         # Threshold in bytes above which numpy arrays are sent as binary.
         # Set to a small value (e.g. 1024) to test chunking with small images.
         self.colab_binary_threshold: int = 65536  # 64KB (unused - kept for compat)
@@ -500,6 +502,7 @@ class CommsTransport(TransportBase):
                         Caller holds _COLAB_JS_EVAL_LOCK and is responsible for
                         the outer save/restore of _parents around the full delivery."""
                         #_dbg_write( f"_eval_js_with_context: msg_id={_ph['shell']['header']['msg_id'][:8]}" )
+                        self._colab_msg_id_history.append(_ph['shell']['header']['msg_id'][:8])
                         if _k is not None and _ph and hasattr(_k, '_parents'):
                             _k._parents.clear()
                             _k._parents.update(_ph)
@@ -1260,6 +1263,11 @@ class CommsTransport(TransportBase):
                 _dbg_write(f"close: teardown timed out for {_mid_c}\n")
 
             logger.debug(f"CommsTransport.close: teardown done={_done.is_set()} for {self._comm_mgr_id}")
+            _debug_write( "history of message ids\n"
+                          "------------------------------------------------------------------------------------------------------------------------\n"
+                          f'''{"\n".join(self._colab_msg_id_history)}\n'''
+                          "------------------------------------------------------------------------------------------------------------------------\n"
+                         )
 
         self._comm_objs = []
         self._connected = False

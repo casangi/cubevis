@@ -492,15 +492,8 @@ class CommsTransport(TransportBase):
                     _snapshot = _pending.pop(0)  # take first reply, leave rest queued
                     _mgr_id = self._comm_mgr_id
 
-                    # Use the current kernel _parents (set by this incoming message) as delivery context
-                    # This is more reliable than _colab_bridge_parents since it's current
-                    from IPython import get_ipython as _gip_r
-                    _ip_r = _gip_r()
-                    if _ip_r and hasattr(_ip_r, 'kernel') and hasattr(_ip_r.kernel, '_parents'):
-                        _ph_now = dict(_ip_r.kernel._parents)
-                    else:
-                        # Use bridge cell parent header so eval_js runs in bridge iframe
-                        _ph_now = getattr(self, '_colab_bridge_parents', {})
+                    # Use bridge cell parent header so eval_js runs in bridge iframe
+                    _ph_now = getattr(self, '_colab_bridge_parents', {})
 
                     def _eval_js_with_context(_co, js, _k, _ph, ignore_result=True):
                         """Set _parents to _ph and call eval_js.

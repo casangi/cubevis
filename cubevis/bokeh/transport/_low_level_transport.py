@@ -506,6 +506,7 @@ class CommsTransport(TransportBase):
                         """Set _parents to _ph and call eval_js.
                         Caller holds _COLAB_JS_EVAL_LOCK and is responsible for
                         the outer save/restore of _parents around the full delivery."""
+                        _dbg_write( f"_eval_js_with_context: msg_id={_ph['shell']['header']['msg_id'][:8]}" )
                         if _k is not None and _ph and hasattr(_k, '_parents'):
                             _k._parents.clear()
                             _k._parents.update(_ph)

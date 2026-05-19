@@ -1235,6 +1235,13 @@ class CommsTransport(TransportBase):
                 f"  window[{_json.dumps(teardown_fn)}]();"
             )
 
+            _debug_write( "In CommsTransport.close( )\n" )
+            _debug_write( "history of message ids\n"
+                          "------------------------------------------------------------------------------------------------------------------------\n"
+                          f'''{"\n".join(self._colab_msg_id_history)}\n'''
+                          "------------------------------------------------------------------------------------------------------------------------\n"
+                         )
+
             _done = threading.Event()
 
             def _do_teardown():
@@ -1263,11 +1270,6 @@ class CommsTransport(TransportBase):
                 _dbg_write(f"close: teardown timed out for {_mid_c}\n")
 
             logger.debug(f"CommsTransport.close: teardown done={_done.is_set()} for {self._comm_mgr_id}")
-            _debug_write( "history of message ids\n"
-                          "------------------------------------------------------------------------------------------------------------------------\n"
-                          f'''{"\n".join(self._colab_msg_id_history)}\n'''
-                          "------------------------------------------------------------------------------------------------------------------------\n"
-                         )
 
         self._comm_objs = []
         self._connected = False

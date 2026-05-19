@@ -697,6 +697,7 @@ class CommMgr( Model, BokehInit ):
                 _dbg_write( f"CommMgr.shutdown: <calling> have transport.close( )\n" )
                 await self._transport.close()
             except Exception as e:
+                _dbg_write( f"CommMgr.shutdown: <oops> in transport.close( ): {e}\n" )
                 logger.error(f"Error closing transport during shutdown: {e}")
 
         _dbg_write( f"CommMgr.shutdown: <3> clearing state\n" )

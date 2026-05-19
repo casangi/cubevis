@@ -576,7 +576,7 @@ class CommsTransport(TransportBase):
                                     f"{_stop_call}"
                                     f"}})();"
                                 )
-                                _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=True)
+                                _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=False)
 
                                 logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
                                 if ( len(_env_s) == 412 ):

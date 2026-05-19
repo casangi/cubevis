@@ -23,6 +23,17 @@ from .. import BokehInit
 if TYPE_CHECKING:
     from .. import BokehAppContext
 
+def _dbg_write(msg: str) -> None:
+    """Append msg to ~/debug.txt, swallowing errors.
+    """
+    try:
+        import os
+        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+            f.write(msg)
+            f.flush()
+    except Exception:
+        pass
+
 class ShutdownReason(Enum):
     """Reason for shutdown"""
     REQUESTED = "shutdown_requested"      # User called requestShutdown()
@@ -676,15 +687,19 @@ class CommMgr( Model, BokehInit ):
                 logger.error(f"Error in shutdown callback: {e}")
                 traceback.print_exc()
 
+        _dbg_write( "CommMgr.shutdown: <1> setting state\n" )
         self.state = AppState.SHUTTING_DOWN
 
         # Close transport if still connected
+        _dbg_write( f"CommMgr.shutdown: <2> have transport? {self._transport}\n" )
         if self._transport:
             try:
+                _dbg_write( f"CommMgr.shutdown: <calling> have transport.close( )\n" )
                 await self._transport.close()
             except Exception as e:
                 logger.error(f"Error closing transport during shutdown: {e}")
 
+        _dbg_write( f"CommMgr.shutdown: <3> clearing state\n" )
         # Clear all state
         self._handlers.clear()
         self._pending.clear()
@@ -692,6 +707,7 @@ class CommMgr( Model, BokehInit ):
         self._send_queue.clear()
         self._comms.clear()
 
+        _dbg_write( f"CommMgr.shutdown: <4> stopped\n" )
         self.state = AppState.STOPPED
         logger.debug("Communications shutdown complete")
 

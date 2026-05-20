@@ -510,6 +510,11 @@ class CommsTransport(TransportBase):
 
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
+
+                        if getattr(_self, '_closed', False):
+                            # transport closed — discard this delivery
+                            return
+
                         with _COLAB_JS_EVAL_LOCK:
                             _k_t2 = None
                             _saved_parents = { }

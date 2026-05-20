@@ -891,6 +891,8 @@ class CommsTransport(TransportBase):
                         // Teardown hook
                         window[`_cubevis_teardown_${targetId}`] = () => {
                             _stopPoll()
+                            // Clean up any stale chunk accumulators - revist if concurrent Colab Comm use is needed
+                            Object.keys(window).filter(k => k.startsWith('_cubevis_ch_')).forEach(k => delete window[k])
                             bc_tx.close()
                             bc_rx.close()
                             channel.close?.()

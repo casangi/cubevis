@@ -1221,15 +1221,16 @@ class CommsTransport(TransportBase):
     async def close(self) -> None:
         # Close all Comms
         logger.debug(f"CommsTransport.close: called for {self._comm_mgr_id} closed={self._closed}")
+        if self._closed:
+            return
+        self._closed = True
+
         _dbg_write( "In CommsTransport.close( )\n" )
         _dbg_write( "history of message ids\n"
                     "------------------------------------------------------------------------------------------------------------------------\n"
                     f'''{"\n".join(self._colab_msg_id_history)}\n'''
                     "------------------------------------------------------------------------------------------------------------------------\n"
                    )
-
-        if self._closed:
-            return
 
         for c in getattr(self, '_comm_objs', []):
             try:
@@ -1283,6 +1284,5 @@ class CommsTransport(TransportBase):
         self._comm_objs = []
         self._connected = False
         self._bridge = None
-        self._closed = True
 
         logger.debug(f"********************CommsTransport*close*{self._comm_mgr_id}*****************************")

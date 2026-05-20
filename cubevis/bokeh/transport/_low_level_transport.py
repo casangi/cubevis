@@ -516,6 +516,10 @@ class CommsTransport(TransportBase):
                             return
 
                         with _COLAB_JS_EVAL_LOCK:
+                            # Check again after acquiring lock — close() may have run while we waited
+                            if getattr(_self, '_closed', False):
+                                return
+
                             _k_t2 = None
                             _saved_parents = { }
                             try:

@@ -1068,6 +1068,16 @@ class CommsTransport(TransportBase):
         Must be called after display_bridge(). Raises RuntimeError on timeout.
         """
         _dbg_write( f"entering CommsTransport.connect: _connected={self._connected}, _bridge={self._bridge}\n" )
+        # Test Python->JS via anywidget model channel
+        if self._is_colab() and and self._connected and self._bridge is not None:
+            try:
+                self._bridge.send({"type": "cubevis_test_bridge", "value": "ping"})
+                _dbg_write( "<1>CommsTransport.connect: sent test bridge message\n" )
+                logger.debug("<1>CommsTransport.connect: sent test bridge message")
+            except Exception as e:
+                _dbg_write( f"<1>CommsTransport.connect: bridge test send failed: {e}\n" )
+                logger.warning("<1>CommsTransport.connect: bridge test send failed: %s", e)
+
         if self._connected: return
 
         if self._bridge is None:
@@ -1083,11 +1093,11 @@ class CommsTransport(TransportBase):
         if self._is_colab() and self._bridge is not None:
             try:
                 self._bridge.send({"type": "cubevis_test_bridge", "value": "ping"})
-                _dbg_write( "CommsTransport.connect: sent test bridge message\n" )
-                logger.debug("CommsTransport.connect: sent test bridge message")
+                _dbg_write( "<2>CommsTransport.connect: sent test bridge message\n" )
+                logger.debug("<2>CommsTransport.connect: sent test bridge message")
             except Exception as e:
-                _dbg_write( f"CommsTransport.connect: bridge test send failed: {e}\n" )
-                logger.warning("CommsTransport.connect: bridge test send failed: %s", e)
+                _dbg_write( f"<2>CommsTransport.connect: bridge test send failed: {e}\n" )
+                logger.warning("<2>CommsTransport.connect: bridge test send failed: %s", e)
 
         logger.debug("CommsTransport.connect: handshake complete")
 

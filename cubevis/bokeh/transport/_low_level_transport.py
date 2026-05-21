@@ -1082,8 +1082,10 @@ class CommsTransport(TransportBase):
         if self._is_colab() and self._bridge is not None:
             try:
                 self._bridge.send({"type": "cubevis_test_bridge", "value": "ping"})
+                _dbg_write( "CommsTransport.connect: sent test bridge message\n" )
                 logger.debug("CommsTransport.connect: sent test bridge message")
             except Exception as e:
+                _dbg_write( f"CommsTransport.connect: bridge test send failed: {e}\n" )
                 logger.warning("CommsTransport.connect: bridge test send failed: %s", e)
 
         logger.debug("CommsTransport.connect: handshake complete")

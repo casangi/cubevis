@@ -571,7 +571,7 @@ class CommsTransport(TransportBase):
                                     #"console.log(`window: ${window.name}`);"
                                     f"const arr=window[{_tok_key}];"
                                     f"const arrLen=arr ? arr.length : -1;"
-                                    #f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
+                                    f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
                                     f"const s=window[{_tok_key}].join('');"
                                     f"delete window[{_tok_key}];"
                                     f"const msg=JSON.parse(s);"

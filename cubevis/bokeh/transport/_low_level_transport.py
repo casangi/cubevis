@@ -29,7 +29,7 @@ __all__ = [
 _COLAB_JS_EVAL_LOCK = threading.Lock( )
 
 def _dbg_write(msg: str) -> None:
-    """Append msg to ~/debug.txt, swallowing errors.
+    """Append msg to ~/debug.txt, swallowing errors."""
     try:
         import os
         with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
@@ -37,8 +37,6 @@ def _dbg_write(msg: str) -> None:
             f.flush()
     except Exception:
         pass
-    """
-    pass
 
 # ============================================================================
 # Helper: resolve the correct Comm class for the current environment
@@ -1165,10 +1163,8 @@ class CommsTransport(TransportBase):
             # Colab: Python->JS via anywidget bridge model channel.
             # self._bridge.send() delivers via the anywidget msg:custom event in the
             # bridge ESM, which posts to bc_rx BroadcastChannel for cross-iframe delivery
-            # to the Bokeh app iframe where CommsTransport's bc_rx.onmessage is registered.
-            # This path avoids eval_js, _parents manipulation, and background thread
-            # complexity entirely — send_message runs on the main kernel IOLoop thread
-            # so self._bridge.send() is always in the correct execution context.
+            # to the Bokeh app iframe. This avoids eval_js, _parents, and threading complexity.
+            _dbg_write(f"send_message: bridge.send called for {self._comm_mgr_id}\n")
             try:
                 self._bridge.send({
                     "type": "cubevis_reply",
@@ -1177,8 +1173,10 @@ class CommsTransport(TransportBase):
                 })
                 _if = max(0, getattr(self, "_colab_inflight", 1) - 1)
                 self._colab_inflight = _if
+                _dbg_write(f"send_message: bridge.send OK inflight={_if}\n")
                 logger.debug("<<send_message>> bridge.send (inflight=%d)", _if)
             except Exception as e:
+                _dbg_write(f"send_message: bridge.send FAILED: {e}\n")
                 logger.warning("CommsTransport.send_message: bridge.send failed: %s", e)
         else:
             # JupyterLab: single bidirectional kernel comm

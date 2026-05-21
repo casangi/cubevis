@@ -1162,73 +1162,24 @@ class CommsTransport(TransportBase):
         }
 
         if self._is_colab():
-            # Colab: Python->JS via google.colab.output.eval_js() (blocking/synchronous).
-            # eval_js executes JS in the output context of whichever cell triggered the
-            # current kernel execution. For spectrum clicks, that's the Bokeh app cell —
-            # the same iframe where CommsTransport registered window["cubevis_rx_cb_..."].
-            # The window callback delivers directly to colabComm.onMsg → handleJupyterMessage.
-            # BroadcastChannel is also posted for any cross-iframe listeners.
-            import json as _json
-            # eval_js only works when called from the main IPython kernel thread.
-            # When send_message is called from a Tornado IOLoop callback (as in the
-            # full app), eval_js with ignore_result=True silently does nothing.
-            # Fix: schedule the eval_js call on the kernel's main asyncio loop using
-            # IPython's kernel.io_loop, which runs on the main thread where eval_js works.
+            # Colab: Python->JS via anywidget bridge model channel.
+            # self._bridge.send() delivers via the anywidget msg:custom event in the
+            # bridge ESM, which posts to bc_rx BroadcastChannel for cross-iframe delivery
+            # to the Bokeh app iframe where CommsTransport's bc_rx.onmessage is registered.
+            # This path avoids eval_js, _parents manipulation, and background thread
+            # complexity entirely — send_message runs on the main kernel IOLoop thread
+            # so self._bridge.send() is always in the correct execution context.
             try:
-                from google.colab import output as _colab_output
-                cb_name = f"cubevis_rx_cb_{self._comm_mgr_id}"
-                bc_name = f"cubevis_rx_{self._comm_mgr_id}"
-                env_json = _json.dumps(envelope)
-                js_code = (
-                    f"(()=>{{"
-                    f"const msg={env_json};"
-                    f"const cb=window[{_json.dumps(cb_name)}];"
-                    f"if(typeof cb==='function'){{"
-                    f"  cb(msg);"
-                    f"}} else {{"
-                    f"  console.log('CUBEVIS eval_js: no window cb, posting to bc');"
-                    f"}}"
-                    f"try{{const bc=new BroadcastChannel({_json.dumps(bc_name)});bc.postMessage(msg);bc.close();}}catch(e){{}}"
-                    f"}})();"
-                )
-
-                _parent_header = getattr(self, '_last_parent_header', {})
-
-                # Try Bokeh document approach: update a Bokeh model property.
-                # The Bokeh session has its own always-active WebSocket to the browser.
-                # Store reply for delivery via poll mechanism.
-                # The widget bridge polls Python every 250ms via channel.send({type:"cubevis_poll"}).
-                # Python's _recv handles the poll synchronously and calls eval_js there.
-                # eval_js runs in the widget bridge iframe context (different from Bokeh app iframe),
-                # so BroadcastChannel delivers to CommsTransport's bc_rx.onmessage. ✓
-                if not hasattr(self, "_colab_pending_replies"):
-                    self._colab_pending_replies = []
-                self._colab_pending_replies.append(envelope)
+                self._bridge.send({
+                    "type": "cubevis_reply",
+                    "comm_mgr_id": self._comm_mgr_id,
+                    "envelope": envelope
+                })
                 _if = max(0, getattr(self, "_colab_inflight", 1) - 1)
                 self._colab_inflight = _if
-                logger.debug("<<send_message>> reply queued (depth=%d inflight=%d)",
-                             len(self._colab_pending_replies), _if)
-                # If inflight==0, the request came via an external channel (not bc_tx),
-                # so bc_tx.onmessage never fired and _startPoll was never called.
-                # Start the poll now so this reply gets delivered.
-                if _if == 0 and getattr(self, '_bridge', None) is not None:
-                    # External channel path: deliver via bridge.send() which is a true
-                    # fire-and-forget ZMQ push — no kernel round-trip, no blocking.
-                    # bridge.send() works here because we ARE in the active kernel
-                    # execution context (the async def body running in the user cell).
-                    try:
-                        _snap_d = self._colab_pending_replies.pop()
-                        self._bridge.send({
-                            "type": "cubevis_reply",
-                            "comm_mgr_id": self._comm_mgr_id,
-                            "envelope": _snap_d
-                        })
-                        logger.debug("<<send_message>> direct bridge.send delivery (inflight=0 path)")
-                    except Exception as _spe:
-                        logger.exception("<<send_message>> direct delivery failed")
-
+                logger.debug("<<send_message>> bridge.send (inflight=%d)", _if)
             except Exception as e:
-                logger.warning("CommsTransport.send_message: eval_js failed: %s", e)
+                logger.warning("CommsTransport.send_message: bridge.send failed: %s", e)
         else:
             # JupyterLab: single bidirectional kernel comm
             comm_objs = getattr(self, '_comm_objs', None)

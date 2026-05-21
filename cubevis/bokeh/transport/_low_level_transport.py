@@ -1067,6 +1067,7 @@ class CommsTransport(TransportBase):
 
         Must be called after display_bridge(). Raises RuntimeError on timeout.
         """
+        _dbg_write( f"entering CommsTransport.connect: _connected={self._connected}, _bridge={self._bridge}\n" )
         if self._connected: return
 
         if self._bridge is None:

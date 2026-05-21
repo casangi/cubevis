@@ -1291,6 +1291,13 @@ class CommsTransport(TransportBase):
                 finally:
                     _done.set()
 
+            # In close(), before self._main_ioloop.add_callback(_do_teardown):
+            # Wait for any in-flight delivery to complete to try to avoid the lingering
+            # chunked delivery errors...
+            acquired = _COLAB_JS_EVAL_LOCK.acquire(timeout=2.0)
+            if acquired:
+                _COLAB_JS_EVAL_LOCK.release()
+
             self._main_ioloop.add_callback(_do_teardown)
             # Poll without blocking the event loop
             for _ in range(40):  # up to 2 seconds

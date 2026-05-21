@@ -72,17 +72,6 @@ import numpy as np
 _hatches = [str(p) for p in _hatch_patterns]
 _dashes = [str(p) for p in _dash_patterns]
 
-def _dbg_write(msg: str) -> None:
-    """Append msg to ~/debug.txt, swallowing errors.
-    """
-    try:
-        import os
-        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-            f.write(msg)
-            f.flush()
-    except Exception:
-        pass
-
 class CubeMask:
     '''Class which provides a common implementation of Bokeh widget behavior for
     interactive clean and make mask'''
@@ -146,7 +135,6 @@ class CubeMask:
                                         hover_line_alpha="Line alpha for region with cursor focus",
                                         hover_line_dash="Line dash for region with cursor focus" )
 
-        _dbg_write( "CubeMask>>>>>-------------> anyone there?\n" )
         self._image_path = image                               # path to image cube to be displayed
         self._mask_path = mask                                 # path to bitmask cube (if any)
         self._region_controls={'coord':{'initialized': False}, # ONLY USED WITH NO MASK CUBE
@@ -356,12 +344,6 @@ class CubeMask:
             self._channel_callback = channelcb
 
             async def receive_return_value( msg, context, self=self ):
-                import traceback
-                _dbg_write( f"CubeMask.receive_return_value:\n"
-                            "----------------------------------------------------------------------------------------------------\n"
-                            f"{''.join(traceback.format_stack())}"
-                            "----------------------------------------------------------------------------------------------------\n"
-                           )
                 self._result = self.jsmask_to_raw( msg['value'] )
                 self.__stop( )
                 return dict( result='stopped', update={ } )
@@ -510,9 +492,7 @@ class CubeMask:
                 self._pipe['control'].register( self._ids['mask-mod'], mod_mask )
 
 
-            _dbg_write( f"<_cube:001> setting callback for 'done with {self._pipe['control']}\n" )
             self._pipe['control'].register( self._ids['done'], receive_return_value )
-            _dbg_write( "<_cube:002> setting callback for 'done\n" )
             self._init_image_source( )
 
             ### fetch stokes labels for all stokes drop

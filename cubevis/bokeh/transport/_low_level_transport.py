@@ -377,6 +377,7 @@ class CommsTransport(TransportBase):
         self._conn_event = threading.Event()
         self._last_parent_header: dict = {}  # parent header of last received comm_msg
         self._colab_pending_replies: list = []  # FIFO queue of pending Colab replies
+
         # Threshold in bytes above which numpy arrays are sent as binary.
         # Set to a small value (e.g. 1024) to test chunking with small images.
         self.colab_binary_threshold: int = 65536  # 64KB (unused - kept for compat)
@@ -497,23 +498,33 @@ class CommsTransport(TransportBase):
                     _ph_now = getattr(self, '_colab_bridge_parents', {})
 
                     def _eval_js_with_context(_co, js, _k, _ph, ignore_result=True):
-                        if _k is not None and _ph:
-                            _saved = dict(_k._parents)  # capture current state fresh each time
+                        """Set _parents to _ph and call eval_js.
+                        Caller holds _COLAB_JS_EVAL_LOCK and is responsible for
+                        the outer save/restore of _parents around the full delivery."""
+                        if _k is not None and _ph and hasattr(_k, '_parents'):
                             _k._parents.clear()
                             _k._parents.update(_ph)
-                            _co.eval_js(js, ignore_result=ignore_result)
-                            _k._parents.clear()
-                            _k._parents.update(_saved)
-                        else:
-                            _co.eval_js(js, ignore_result=ignore_result)
+                        _co.eval_js(js, ignore_result=ignore_result)
 
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
+
+                        if getattr(_self, '_closed', False):
+                            # transport closed — discard this delivery
+                            return
+
                         with _COLAB_JS_EVAL_LOCK:
+                            # Check again after acquiring lock — close() may have run while we waited
+                            if getattr(_self, '_closed', False):
+                                return
+
                             _k_t2 = None
                             _saved_parents = { }
                             try:
-
+                                # Resolve kernel and save _parents for diagnostic logging.
+                                # _eval_js_with_context sets _ph before each call.
+                                # No restore after delivery — letting _parents settle
+                                # naturally avoids reintroducing stale context.
                                 if _ph:
                                     try:
                                         from IPython import get_ipython as _gip_t2
@@ -522,7 +533,6 @@ class CommsTransport(TransportBase):
                                             _k_t2 = _ip_t2.kernel
                                             if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
                                                 _saved_parents = dict(_k_t2._parents)
-                                                _k_t2._parents.update(_ph)
                                     except Exception:
                                         pass
                                 from google.colab import output as _co
@@ -561,7 +571,7 @@ class CommsTransport(TransportBase):
                                     #"console.log(`window: ${window.name}`);"
                                     f"const arr=window[{_tok_key}];"
                                     f"const arrLen=arr ? arr.length : -1;"
-                                    #f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
+                                    f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
                                     f"const s=window[{_tok_key}].join('');"
                                     f"delete window[{_tok_key}];"
                                     f"const msg=JSON.parse(s);"
@@ -573,11 +583,14 @@ class CommsTransport(TransportBase):
                                     f"{_stop_call}"
                                     f"}})();"
                                 )
-                                _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=True)
+                                _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=False)
 
                                 logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
                                 if ( len(_env_s) == 412 ):
                                     logger.debug( msg )
+
+                                #_ph_msg_id = (_ph.get('shell', {}) or {}).get('header', {}).get('msg_id', '?')[:8]
+                                #_dbg_write(f"_deliver: mid={_mid[:8]} chunks={len(_chunks)} tok={_tok} ph={_ph_msg_id}\n")
 
                             except Exception:
                                 logger.exception( "<<poll>> thread eval_js failed" )
@@ -725,7 +738,7 @@ class CommsTransport(TransportBase):
         #     For Colab Python->JS, self._comm may be None; send_message() falls
         #     back to self._bridge.send() which delivers via the anywidget channel.
 
-        logger.debug("<<display_bridge>> called (is_colab=%s)", self._is_colab())
+        #logger.debug("<<display_bridge>> called (is_colab=%s)", self._is_colab())
 
         if self._is_colab():
             try:
@@ -812,6 +825,7 @@ class CommsTransport(TransportBase):
                 //   Python->JS to all open comms including the new one.
                 async function tryColabPath() {
                     try {
+                        //if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
                         const colabComms = google?.colab?.kernel?.comms;
                         if (!colabComms || typeof colabComms.open !== "function") return false;
 
@@ -875,6 +889,8 @@ class CommsTransport(TransportBase):
                         // Teardown hook
                         window[`_cubevis_teardown_${targetId}`] = () => {
                             _stopPoll()
+                            // Clean up any stale chunk accumulators - revist if concurrent Colab Comm use is needed
+                            Object.keys(window).filter(k => k.startsWith('_cubevis_ch_')).forEach(k => delete window[k])
                             bc_tx.close()
                             bc_rx.close()
                             channel.close?.()
@@ -899,6 +915,7 @@ class CommsTransport(TransportBase):
                             // This fires when Python calls self._bridge.send(payload)
                             // If it's a cubevis_reply, extract the envelope and route it.
                             // Otherwise treat msg as the envelope directly (legacy path).
+                            console.log( `<<X>> window: ${window.name}`, msg )
                             const envelope = (msg && msg.type === "cubevis_reply")
                                 ? msg.envelope : msg;
                             if (msg && msg.type === "cubevis_binary") {
@@ -1048,6 +1065,22 @@ class CommsTransport(TransportBase):
 
         Must be called after display_bridge(). Raises RuntimeError on timeout.
         """
+        ####################################################################################################
+        ### This is the last Python => JavaScript test to check for bi-directional communications over.  ###
+        ### Colab Comm objects. It was successful so the next iteration will be to explore this a little ###
+        ### further to see if the use of Colab's eval_js is not actually required.                       ###
+        ####################################################################################################
+        #_dbg_write( f"entering CommsTransport.connect: _connected={self._connected}, _bridge={self._bridge}\n" )
+        ## Test Python->JS via anywidget model channel
+        #if self._is_colab() and self._connected and self._bridge is not None:
+        #    try:
+        #        self._bridge.send({"type": "cubevis_test_bridge", "value": "ping"})
+        #        _dbg_write( "<1>CommsTransport.connect: sent test bridge message\n" )
+        #        logger.debug("<1>CommsTransport.connect: sent test bridge message")
+        #    except Exception as e:
+        #        _dbg_write( f"<1>CommsTransport.connect: bridge test send failed: {e}\n" )
+        #        logger.warning("<1>CommsTransport.connect: bridge test send failed: %s", e)
+
         if self._connected: return
 
         if self._bridge is None:
@@ -1059,6 +1092,18 @@ class CommsTransport(TransportBase):
                 raise RuntimeError( f"CommsTransport: JS handshake timed out after {timeout}s" )
             await asyncio.sleep( 0.1 )
 
+        ## Test Python->JS via anywidget model channel
+        #if self._is_colab() and self._bridge is not None:
+        #    try:
+        #        self._bridge.send({"type": "cubevis_test_bridge", "value": "ping"})
+        #        _dbg_write( "<2>CommsTransport.connect: sent test bridge message\n" )
+        #        logger.debug("<2>CommsTransport.connect: sent test bridge message")
+        #    except Exception as e:
+        #        _dbg_write( f"<2>CommsTransport.connect: bridge test send failed: {e}\n" )
+        #        logger.warning("<2>CommsTransport.connect: bridge test send failed: %s", e)
+
+        # this is often never reached for Colab because self._connected is already True and
+        # self._bridge is already set (see short circuits above)
         logger.debug("CommsTransport.connect: handshake complete")
 
     # ------------------------------------------------------------------
@@ -1203,8 +1248,10 @@ class CommsTransport(TransportBase):
 
     async def close(self) -> None:
         # Close all Comms
+        logger.debug(f"CommsTransport.close: called for {self._comm_mgr_id} closed={self._closed}")
         if self._closed:
             return
+        self._closed = True
 
         for c in getattr(self, '_comm_objs', []):
             try:
@@ -1220,6 +1267,8 @@ class CommsTransport(TransportBase):
             _mid_c = self._comm_mgr_id
             teardown_fn = f"_cubevis_teardown_{_mid_c}"
             teardown_js = (
+                #f"if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);"
+                #"console.log(`teardown for window: ${window.name}`);"
                 f"if(window[{_json.dumps(teardown_fn)}])"
                 f"  window[{_json.dumps(teardown_fn)}]();"
             )
@@ -1233,30 +1282,35 @@ class CommsTransport(TransportBase):
                     _ip_c = _gip_c()
                     _k_c  = _ip_c.kernel if (_ip_c and hasattr(_ip_c, 'kernel')) else None
                     if _k_c is not None and _ph_c and hasattr(_k_c, '_parents'):
-                        _saved = dict(_k_c._parents)
                         _k_c._parents.clear()
                         _k_c._parents.update(_ph_c)
-                        _co.eval_js(teardown_js, ignore_result=True)
-                        _k_c._parents.clear()
-                        _k_c._parents.update(_saved)
-                    else:
-                        _co.eval_js(teardown_js, ignore_result=True)
+                    _co.eval_js(teardown_js, ignore_result=True)
                     _dbg_write(f"close: JS teardown completed for {_mid_c}\n")
                 except Exception:
                     logger.exception("close: teardown eval_js failed")
                 finally:
                     _done.set()
 
+            # In close(), before self._main_ioloop.add_callback(_do_teardown):
+            # Wait for any in-flight delivery to complete to try to avoid the lingering
+            # chunked delivery errors...
+            acquired = _COLAB_JS_EVAL_LOCK.acquire(timeout=2.0)
+            if acquired:
+                _COLAB_JS_EVAL_LOCK.release()
+
             self._main_ioloop.add_callback(_do_teardown)
-            # Wait for teardown to complete on the main kernel thread.
-            # Use a thread-safe Event since close() runs in a background thread.
-            _done.wait(timeout=2.0)
+            # Poll without blocking the event loop
+            for _ in range(40):  # up to 2 seconds
+                if _done.is_set():
+                    break
+                await asyncio.sleep(0.05)
             if not _done.is_set():
                 _dbg_write(f"close: teardown timed out for {_mid_c}\n")
+
+            logger.debug(f"CommsTransport.close: teardown done={_done.is_set()} for {self._comm_mgr_id}")
 
         self._comm_objs = []
         self._connected = False
         self._bridge = None
-        self._closed = True
 
         logger.debug(f"********************CommsTransport*close*{self._comm_mgr_id}*****************************")

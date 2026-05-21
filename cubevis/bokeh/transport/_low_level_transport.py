@@ -1078,6 +1078,14 @@ class CommsTransport(TransportBase):
                 raise RuntimeError( f"CommsTransport: JS handshake timed out after {timeout}s" )
             await asyncio.sleep( 0.1 )
 
+        # Test Python->JS via anywidget model channel
+        if self._is_colab() and self._bridge is not None:
+            try:
+                self._bridge.send({"type": "cubevis_test_bridge", "value": "ping"})
+                logger.debug("CommsTransport.connect: sent test bridge message")
+            except Exception as e:
+                logger.warning("CommsTransport.connect: bridge test send failed: %s", e)
+
         logger.debug("CommsTransport.connect: handshake complete")
 
     # ------------------------------------------------------------------

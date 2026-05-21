@@ -1069,7 +1069,7 @@ class CommsTransport(TransportBase):
         """
         _dbg_write( f"entering CommsTransport.connect: _connected={self._connected}, _bridge={self._bridge}\n" )
         # Test Python->JS via anywidget model channel
-        if self._is_colab() and and self._connected and self._bridge is not None:
+        if self._is_colab() and self._connected and self._bridge is not None:
             try:
                 self._bridge.send({"type": "cubevis_test_bridge", "value": "ping"})
                 _dbg_write( "<1>CommsTransport.connect: sent test bridge message\n" )

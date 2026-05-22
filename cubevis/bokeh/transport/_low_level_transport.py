@@ -1161,20 +1161,34 @@ class CommsTransport(TransportBase):
 
         if self._is_colab():
             # Colab: Python->JS via anywidget bridge model channel.
-            # self._bridge.send() delivers via the anywidget msg:custom event in the
-            # bridge ESM, which posts to bc_rx BroadcastChannel for cross-iframe delivery
-            # to the Bokeh app iframe. This avoids eval_js, _parents, and threading complexity.
-            _dbg_write(f"send_message: bridge.send called for {self._comm_mgr_id}\n")
+            # self._bridge.send() delivers via msg:custom → bc_rx → Bokeh app iframe.
+            # We temporarily set kernel._parents to _colab_bridge_parents so Colab
+            # routes the comm_msg to the bridge iframe output context. This is a fast
+            # ZMQ write — no blocking, no eval_js round-trip, no background threads.
             try:
-                self._bridge.send({
-                    "type": "cubevis_reply",
-                    "comm_mgr_id": self._comm_mgr_id,
-                    "envelope": envelope
-                })
-                _if = max(0, getattr(self, "_colab_inflight", 1) - 1)
-                self._colab_inflight = _if
-                _dbg_write(f"send_message: bridge.send OK inflight={_if}\n")
-                logger.debug("<<send_message>> bridge.send (inflight=%d)", _if)
+                from IPython import get_ipython as _gip_s
+                _ip_s = _gip_s()
+                _k_s = _ip_s.kernel if (_ip_s and hasattr(_ip_s, 'kernel')) else None
+                _ph_s = getattr(self, '_colab_bridge_parents', {})
+                _saved_s = {}
+                if _k_s is not None and _ph_s and hasattr(_k_s, '_parents'):
+                    _saved_s = dict(_k_s._parents)
+                    _k_s._parents.clear()
+                    _k_s._parents.update(_ph_s)
+                try:
+                    self._bridge.send({
+                        "type": "cubevis_reply",
+                        "comm_mgr_id": self._comm_mgr_id,
+                        "envelope": envelope
+                    })
+                    _if = max(0, getattr(self, "_colab_inflight", 1) - 1)
+                    self._colab_inflight = _if
+                    _dbg_write(f"send_message: bridge.send OK inflight={_if}\n")
+                    logger.debug("<<send_message>> bridge.send (inflight=%d)", _if)
+                finally:
+                    if _k_s is not None and _saved_s and hasattr(_k_s, '_parents'):
+                        _k_s._parents.clear()
+                        _k_s._parents.update(_saved_s)
             except Exception as e:
                 _dbg_write(f"send_message: bridge.send FAILED: {e}\n")
                 logger.warning("CommsTransport.send_message: bridge.send failed: %s", e)

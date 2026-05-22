@@ -645,26 +645,9 @@ class CommsTransport(TransportBase):
         # stale context captured during display_bridge() in the setup cell.
         # This ensures that on a second (or later) GUI run the eval_js call
         # in _deliver_in_thread targets the correct bridge iframe, not the
-        # one from the previous run.
-        if self._is_colab():
-            try:
-                from IPython import get_ipython as _gip_open
-                _ip_open = _gip_open()
-                if _ip_open is not None and hasattr(_ip_open, 'kernel'):
-                    _k_open = _ip_open.kernel
-                    if hasattr(_k_open, '_parents') and isinstance(_k_open._parents, dict):
-                        self._colab_bridge_parents = dict(_k_open._parents)
-
-                        #from google.colab import output as _co
-                        #with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                        #    window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
-                        #    f.write(f">>> on_comm_open capture for window {window_name} >>> {self._colab_bridge_parents}\n")
-                        #logger.debug(
-                        #    "_on_comm_open: refreshed _colab_bridge_parents (captured=%s)",
-                        #    bool(self._colab_bridge_parents)
-                        #)
-            except Exception:
-                logger.exception("_on_comm_open: failed to refresh _colab_bridge_parents")
+        # _colab_bridge_parents is captured in display_bridge() with execute_request
+        # context — do NOT overwrite here with comm_open context, which Colab will
+        # not route to a cell output for comm_msg delivery.
 
         if not self._connected:
             self._connected = True
@@ -1170,9 +1153,6 @@ class CommsTransport(TransportBase):
                 _ip_s = _gip_s()
                 _k_s = _ip_s.kernel if (_ip_s and hasattr(_ip_s, 'kernel')) else None
                 _ph_s = getattr(self, '_colab_bridge_parents', {})
-                _ph_s_type = (_ph_s.get('shell', {}) or {}).get('msg_type', '?')
-                _ph_s_id = (_ph_s.get('shell', {}) or {}).get('header', {}).get('msg_id', '?')[:8]
-                _dbg_write(f"send_message: _ph_s msg_type={_ph_s_type} msg_id={_ph_s_id}\n")
                 _saved_s = {}
                 if _k_s is not None and _ph_s and hasattr(_k_s, '_parents'):
                     _saved_s = dict(_k_s._parents)

@@ -600,7 +600,7 @@ class CommsTransport(TransportBase):
                                         f"}})();"
                                     )
                                     _ok = _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=False)
-                                    _dbg_write(f"_ok={_ok!r}\\n")
+                                    _dbg_write(f"_ok={_ok!r}\n")
                                     if _ok:
                                         _delivered = True
                                         if _attempt > 0:

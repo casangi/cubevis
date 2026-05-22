@@ -448,11 +448,18 @@ export class CommsTransport implements TransportBase {
             const bc_tx = new BroadcastChannel(`cubevis_tx_${target_id}`)
             const bc_rx = new BroadcastChannel(`cubevis_rx_${target_id}`)
 
+            // Last message sent per comm — used for transport-level retry
+            // on delivery failure (e.g. arrLen=-1 from eval_js routing race)
+            let lastSentMsg: any = null
+
             const colabComm: any = {
                 onMsg:    null as any,
                 onClose:  null as any,
                 // JS->Python: post to tx bus; widget bridge relays to kernel
-                send: (data: any) => { bc_tx.postMessage(data) },
+                send: (data: any) => {
+                    lastSentMsg = data   // track for retry
+                    bc_tx.postMessage(data)
+                },
                 on_msg:   (cb: Function) => { colabComm.onMsg = cb },
                 on_close: (cb: Function) => { colabComm.onClose = cb },
                 close:    () => {
@@ -464,6 +471,15 @@ export class CommsTransport implements TransportBase {
 
             // Python->JS delivery handler — called by either path:
             const onRx = (msg: any) => {
+                // Transport-level delivery failure — retry transparently without
+                // involving CommMgr. Caused by eval_js routing race (arrLen=-1).
+                if (msg && msg.type === "cubevis_delivery_failed") {
+                    console.warn(`CUBEVIS: delivery failed tok=${msg.tok}, retrying`)
+                    if (lastSentMsg !== null) {
+                        bc_tx.postMessage(lastSentMsg)
+                    }
+                    return
+                }
                 const envelope = (msg && msg.type === "cubevis_reply") ? msg.envelope : msg
                 console.log(`<${++MESSAGE_COUNTER}> CUBEVIS onRx: request_id=${envelope?.request_id} type=${envelope?.type}`)
                 if (colabComm.onMsg) {

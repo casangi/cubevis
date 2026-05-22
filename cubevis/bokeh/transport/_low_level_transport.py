@@ -1170,6 +1170,9 @@ class CommsTransport(TransportBase):
                 _ip_s = _gip_s()
                 _k_s = _ip_s.kernel if (_ip_s and hasattr(_ip_s, 'kernel')) else None
                 _ph_s = getattr(self, '_colab_bridge_parents', {})
+                _ph_s_type = (_ph_s.get('shell', {}) or {}).get('msg_type', '?')
+                _ph_s_id = (_ph_s.get('shell', {}) or {}).get('header', {}).get('msg_id', '?')[:8]
+                _dbg_write(f"send_message: _ph_s msg_type={_ph_s_type} msg_id={_ph_s_id}\n")
                 _saved_s = {}
                 if _k_s is not None and _ph_s and hasattr(_k_s, '_parents'):
                     _saved_s = dict(_k_s._parents)

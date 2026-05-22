@@ -500,11 +500,12 @@ class CommsTransport(TransportBase):
                     def _eval_js_with_context(_co, js, _k, _ph, ignore_result=True):
                         """Set _parents to _ph and call eval_js.
                         Caller holds _COLAB_JS_EVAL_LOCK and is responsible for
-                        the outer save/restore of _parents around the full delivery."""
+                        the outer save/restore of _parents around the full delivery.
+                        Returns the eval_js result when ignore_result=False."""
                         if _k is not None and _ph and hasattr(_k, '_parents'):
                             _k._parents.clear()
                             _k._parents.update(_ph)
-                        _co.eval_js(js, ignore_result=ignore_result)
+                        return _co.eval_js(js, ignore_result=ignore_result)
 
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
@@ -550,52 +551,59 @@ class CommsTransport(TransportBase):
                                 # Chunk the serialized envelope string to stay within
                                 # eval_js limits. Each chunk is appended to a JS-side
                                 # accumulator array keyed by a session token. A final
-                                # eval_js call joins, JSON.parses, and posts to bc_rx.
+                                # eval_js call (ignore_result=False) joins, parses,
+                                # delivers, and returns True on success or False on
+                                # failure (e.g. arrLen=-1 from _parents routing race).
+                                # On failure, retry up to _MAX_RETRIES times with a
+                                # fresh token — entirely within this thread, transparent
+                                # to CommMgr. No request resend needed.
                                 import uuid as _uuid_d
-                                _tok = _uuid_d.uuid4().hex[:16]
-                                _tok_key = _pj.dumps(f"_cubevis_ch_{_tok}")
                                 _CHUNK = getattr(_self, "colab_chunk_size", 500_000)
                                 _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
+                                _MAX_RETRIES = 3
+                                _delivered = False
 
-                                # Initialise accumulator
-                                _eval_js_with_context(_co, f"window[{_tok_key}]=[];", _k_t2, _ph)
+                                for _attempt in range(_MAX_RETRIES):
+                                    _tok = _uuid_d.uuid4().hex[:16]
+                                    _tok_key = _pj.dumps(f"_cubevis_ch_{_tok}")
 
-                                # Send each chunk
-                                for _ci, _chunk in enumerate(_chunks):
-                                    _eval_js_with_context(_co, f"window[{_tok_key}].push({_pj.dumps(_chunk)});", _k_t2, _ph)
+                                    # Initialise accumulator
+                                    _eval_js_with_context(_co, f"window[{_tok_key}]=[];", _k_t2, _ph)
 
-                                # Finalise: join, parse, deliver, clean up
-                                _final_js = (
-                                    f"(()=>{{"
-                                    #f"if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);"
-                                    #"console.log(`window: ${window.name}`);"
-                                    f"const arr=window[{_tok_key}];"
-                                    f"const arrLen=arr ? arr.length : -1;"
-                                    f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
-                                    f"if(!arr||arr.length===0){{"
-                                    f"  console.error('CUBEVIS: delivery failed tok={_tok}');"
-                                    f"  try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
-                                    f"  bc.postMessage({{type:'cubevis_delivery_failed',tok:'{_tok}'}});bc.close();}}catch(e){{}}"
-                                    f"  return;}}"
-                                    f"const s=window[{_tok_key}].join('');"
-                                    f"delete window[{_tok_key}];"
-                                    f"const msg=JSON.parse(s);"
-                                    f"const cb=window[{_pj.dumps(_cb)}];"
-                                    f"if(typeof cb==='function'){{cb(msg);}}"
-                                    f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
-                                    f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
-                                    f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
-                                    f"{_stop_call}"
-                                    f"}})();"
-                                )
-                                _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=False)
+                                    # Send each chunk
+                                    for _chunk in _chunks:
+                                        _eval_js_with_context(_co, f"window[{_tok_key}].push({_pj.dumps(_chunk)});", _k_t2, _ph)
 
-                                logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
-                                if ( len(_env_s) == 412 ):
-                                    logger.debug( msg )
+                                    # Finalise: join, parse, deliver, clean up.
+                                    # Returns true on success, false if accumulator missing.
+                                    _final_js = (
+                                        f"(()=>{{"
+                                        f"const arr=window[{_tok_key}];"
+                                        f"const arrLen=arr ? arr.length : -1;"
+                                        f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
+                                        f"if(!arr||arr.length===0){{return false;}}"
+                                        f"const s=arr.join('');"
+                                        f"delete window[{_tok_key}];"
+                                        f"const msg=JSON.parse(s);"
+                                        f"const cb=window[{_pj.dumps(_cb)}];"
+                                        f"if(typeof cb==='function'){{cb(msg);}}"
+                                        f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
+                                        f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
+                                        f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
+                                        f"{_stop_call}"
+                                        f"return true;"
+                                        f"}})();"
+                                    )
+                                    _ok = _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=False)
+                                    if _ok:
+                                        _delivered = True
+                                        break
+                                    logger.warning("<<poll>> delivery failed (attempt %d/%d), retrying", _attempt + 1, _MAX_RETRIES)
 
-                                #_ph_msg_id = (_ph.get('shell', {}) or {}).get('header', {}).get('msg_id', '?')[:8]
-                                #_dbg_write(f"_deliver: mid={_mid[:8]} chunks={len(_chunks)} tok={_tok} ph={_ph_msg_id}\n")
+                                if _delivered:
+                                    logger.debug("<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s))
+                                else:
+                                    logger.error("<<poll>> delivery failed after %d attempts (%s bytes)", _MAX_RETRIES, len(_env_s))
 
                             except Exception:
                                 logger.exception( "<<poll>> thread eval_js failed" )

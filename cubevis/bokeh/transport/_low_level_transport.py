@@ -560,18 +560,18 @@ class CommsTransport(TransportBase):
                                 _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
                                 _chunk_bc = _pj.dumps("cubevis_chunk")
 
-                                # Ensure the BroadcastChannel exists in whichever window
-                                # eval_js lands in — reused across all deliveries
-                                _eval_js_with_context(
-                                    _co,
-                                    f"if(!window._cubevis_chunk_bc)window._cubevis_chunk_bc=new BroadcastChannel({_chunk_bc});",
-                                    _k_t2, _ph
-                                )
+                                # Use a fresh BroadcastChannel sender per message.
+                                # Must NOT reuse window._cubevis_chunk_bc (the ESM's
+                                # receiver) — BroadcastChannel does not deliver a message
+                                # back to the same object that sent it. A new sender
+                                # object per postMessage guarantees the ESM listener
+                                # receives all messages regardless of which iframe
+                                # eval_js lands in.
 
                                 # Signal start of chunked delivery
                                 _eval_js_with_context(
                                     _co,
-                                    f"window._cubevis_chunk_bc.postMessage({{tok:'{_tok}',type:'init',total:{len(_chunks)}}});",
+                                    f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'init',total:{len(_chunks)}}});",
                                     _k_t2, _ph
                                 )
 
@@ -579,14 +579,14 @@ class CommsTransport(TransportBase):
                                 for _ci, _chunk in enumerate(_chunks):
                                     _eval_js_with_context(
                                         _co,
-                                        f"window._cubevis_chunk_bc.postMessage({{tok:'{_tok}',type:'chunk',idx:{_ci},data:{_pj.dumps(_chunk)}}});",
+                                        f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'chunk',idx:{_ci},data:{_pj.dumps(_chunk)}}});",
                                         _k_t2, _ph
                                     )
 
                                 # Signal completion — bridge ESM assembles and delivers
                                 _eval_js_with_context(
                                     _co,
-                                    f"window._cubevis_chunk_bc.postMessage({{tok:'{_tok}',type:'done',"
+                                    f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'done',"
                                     f"del_fn:{_pj.dumps(_del_fn)},stop_fn:{_pj.dumps(_stop_fn) if not _has_more else 'null'}}});",
                                     _k_t2, _ph
                                 )

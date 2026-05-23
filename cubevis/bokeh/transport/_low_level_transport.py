@@ -29,7 +29,7 @@ __all__ = [
 _COLAB_JS_EVAL_LOCK = threading.Lock( )
 
 def _dbg_write(msg: str) -> None:
-    """Append msg to ~/debug.txt, swallowing errors."""
+    """Append msg to ~/debug.txt, swallowing errors.
     try:
         import os
         with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
@@ -37,6 +37,8 @@ def _dbg_write(msg: str) -> None:
             f.flush()
     except Exception:
         pass
+    """
+    pass
 
 # ============================================================================
 # Helper: resolve the correct Comm class for the current environment
@@ -549,9 +551,11 @@ class CommsTransport(TransportBase):
                                 # eval_js limits. Each chunk is appended to a JS-side
                                 # accumulator array keyed by a session token. A final
                                 # eval_js call (ignore_result=False) returns True on
-                                # success or False on failure (arrLen=-1 routing race).
-                                # On failure, retry up to _MAX_RETRIES times with a
-                                # fresh token — transparent to CommMgr.
+                                # success, False on failure (arrLen=-1 routing race).
+                                # The lock is released before the blocking finalizer call
+                                # so other polls (e.g. the finish reply) can proceed
+                                # during the ~77ms wait. Each retry uses a fresh token
+                                # so accumulator keys never collide. Transparent to CommMgr.
                                 import uuid as _uuid_d
                                 _CHUNK = getattr(_self, "colab_chunk_size", 500_000)
                                 _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
@@ -563,7 +567,6 @@ class CommsTransport(TransportBase):
                                     _tok_key = _pj.dumps(f"_cubevis_ch_{_tok}")
 
                                     if _attempt > 0:
-                                        # Log retry attempt in both Python and JS for traceability
                                         logger.debug( "<<poll>> retrying delivery attempt %d/%d (%s bytes)",
                                                       _attempt + 1, _MAX_RETRIES, len(_env_s) )
                                         _eval_js_with_context(
@@ -581,6 +584,8 @@ class CommsTransport(TransportBase):
 
                                     # Finalise: join, parse, deliver, clean up.
                                     # Returns true on success, false if accumulator missing.
+                                    # Release the lock before blocking so other polls
+                                    # (e.g. finish reply) can be processed during the wait.
                                     _final_js = (
                                         f"(()=>{{"
                                         f"const arr=window[{_tok_key}];"
@@ -599,8 +604,14 @@ class CommsTransport(TransportBase):
                                         f"return true;"
                                         f"}})();"
                                     )
-                                    _ok = _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=False)
-                                    _dbg_write(f"_ok={_ok!r}\n")
+                                    # Release lock during blocking call so other threads
+                                    # can deliver the finish reply while we wait (~77ms).
+                                    _COLAB_JS_EVAL_LOCK.release()
+                                    try:
+                                        _ok = _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=False)
+                                    finally:
+                                        _COLAB_JS_EVAL_LOCK.acquire()
+
                                     if _ok:
                                         _delivered = True
                                         if _attempt > 0:

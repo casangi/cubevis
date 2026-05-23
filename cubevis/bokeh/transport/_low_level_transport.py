@@ -547,18 +547,18 @@ class CommsTransport(TransportBase):
                                 _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
                                 _stop_call = f"" if _has_more else f"if(window[{_pj.dumps(_stop_fn)}])window[{_pj.dumps(_stop_fn)}]();"
 
-                                # Deliver via 'cubevis_chunk' BroadcastChannel.
-                                # BroadcastChannel works cross-iframe on the same origin,
-                                # so _parents routing of eval_js no longer affects delivery.
-                                # The bridge ESM listens on 'cubevis_chunk', assembles
-                                # chunks by tok, and posts the complete message to bc_rx.
+                                # Deliver via a session-specific BroadcastChannel
+                                # named 'cubevis_chunk_<comm_mgr_id>'. BroadcastChannel
+                                # works cross-iframe on the same origin so _parents routing
+                                # of eval_js no longer affects delivery. Using a per-session
+                                # name prevents cross-talk between concurrent GUI sessions.
                                 # Each eval_js is fire-and-forget (ignore_result=True) —
                                 # no blocking, no lock contention, no routing sensitivity.
                                 import uuid as _uuid_d
                                 _tok = _uuid_d.uuid4().hex[:16]
                                 _CHUNK = getattr(_self, "colab_chunk_size", 500_000)
                                 _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
-                                _chunk_bc = _pj.dumps("cubevis_chunk")
+                                _chunk_bc = _pj.dumps(f"cubevis_chunk_{_mid}")
 
                                 # Use a fresh BroadcastChannel sender per message.
                                 # Must NOT reuse window._cubevis_chunk_bc (the ESM's
@@ -891,12 +891,11 @@ class CommsTransport(TransportBase):
                         // Python's eval_js sends init/chunk/done messages on 'cubevis_chunk'.
                         // Because BroadcastChannel works cross-iframe on same origin,
                         // _parents routing of eval_js calls no longer affects delivery.
-                        if (!window._cubevis_chunk_bc) {
-                            window._cubevis_chunk_bc = new BroadcastChannel('cubevis_chunk');
-                            window._cubevis_chunk_bc_bufs = {};
-                        }
-                        const _chunkBufs = window._cubevis_chunk_bc_bufs;
-                        window._cubevis_chunk_bc.addEventListener('message', (event) => {
+                        // Per-session chunk channel — named by targetId so multiple
+                        // GUI sessions on the same page don't cross-deliver chunks.
+                        const _chunkBc = new BroadcastChannel(`cubevis_chunk_${targetId}`);
+                        const _chunkBufs = {};
+                        _chunkBc.addEventListener('message', (event) => {
                             const {tok, type, data, idx, total, del_fn, stop_fn} = event.data;
                             if (!tok) return;
                             if (type === 'init') {
@@ -941,8 +940,9 @@ class CommsTransport(TransportBase):
                         // Teardown hook
                         window[`_cubevis_teardown_${targetId}`] = () => {
                             _stopPoll()
-                            // Clean up any pending chunk buffers for this session
+                            // Clean up chunk channel and any pending buffers
                             Object.keys(_chunkBufs).forEach(k => delete _chunkBufs[k])
+                            _chunkBc.close()
                             bc_tx.close()
                             bc_rx.close()
                             channel.close?.()

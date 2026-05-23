@@ -504,7 +504,7 @@ class CommsTransport(TransportBase):
                         if _k is not None and _ph and hasattr(_k, '_parents'):
                             _k._parents.clear()
                             _k._parents.update(_ph)
-                        return _co.eval_js(js, ignore_result=ignore_result)
+                        _co.eval_js(js, ignore_result=ignore_result)
 
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
                         """Deliver envelope via eval_js from a background thread."""
@@ -547,81 +547,51 @@ class CommsTransport(TransportBase):
                                 _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
                                 _stop_call = f"" if _has_more else f"if(window[{_pj.dumps(_stop_fn)}])window[{_pj.dumps(_stop_fn)}]();"
 
-                                # Chunk the serialized envelope string to stay within
-                                # eval_js limits. Each chunk is appended to a JS-side
-                                # accumulator array keyed by a session token. A final
-                                # eval_js call (ignore_result=False) returns True on
-                                # success, False on failure (arrLen=-1 routing race).
-                                # The lock is released before the blocking finalizer call
-                                # so other polls (e.g. the finish reply) can proceed
-                                # during the ~77ms wait. Each retry uses a fresh token
-                                # so accumulator keys never collide. Transparent to CommMgr.
+                                # Deliver via 'cubevis_chunk' BroadcastChannel.
+                                # BroadcastChannel works cross-iframe on the same origin,
+                                # so _parents routing of eval_js no longer affects delivery.
+                                # The bridge ESM listens on 'cubevis_chunk', assembles
+                                # chunks by tok, and posts the complete message to bc_rx.
+                                # Each eval_js is fire-and-forget (ignore_result=True) —
+                                # no blocking, no lock contention, no routing sensitivity.
                                 import uuid as _uuid_d
+                                _tok = _uuid_d.uuid4().hex[:16]
                                 _CHUNK = getattr(_self, "colab_chunk_size", 500_000)
                                 _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
-                                _MAX_RETRIES = 3
-                                _delivered = False
+                                _chunk_bc = _pj.dumps("cubevis_chunk")
 
-                                for _attempt in range(_MAX_RETRIES):
-                                    _tok = _uuid_d.uuid4().hex[:16]
-                                    _tok_key = _pj.dumps(f"_cubevis_ch_{_tok}")
+                                # Ensure the BroadcastChannel exists in whichever window
+                                # eval_js lands in — reused across all deliveries
+                                _eval_js_with_context(
+                                    _co,
+                                    f"if(!window._cubevis_chunk_bc)window._cubevis_chunk_bc=new BroadcastChannel({_chunk_bc});",
+                                    _k_t2, _ph
+                                )
 
-                                    if _attempt > 0:
-                                        logger.debug( "<<poll>> retrying delivery attempt %d/%d (%s bytes)",
-                                                      _attempt + 1, _MAX_RETRIES, len(_env_s) )
-                                        _eval_js_with_context(
-                                            _co,
-                                            f"console.log('CUBEVIS: retrying delivery attempt {_attempt+1}/{_MAX_RETRIES} tok={_tok}');",
-                                            _k_t2, _ph
-                                        )
+                                # Signal start of chunked delivery
+                                _eval_js_with_context(
+                                    _co,
+                                    f"window._cubevis_chunk_bc.postMessage({{tok:'{_tok}',type:'init',total:{len(_chunks)}}});",
+                                    _k_t2, _ph
+                                )
 
-                                    # Initialise accumulator
-                                    _eval_js_with_context(_co, f"window[{_tok_key}]=[];", _k_t2, _ph)
-
-                                    # Send each chunk
-                                    for _chunk in _chunks:
-                                        _eval_js_with_context(_co, f"window[{_tok_key}].push({_pj.dumps(_chunk)});", _k_t2, _ph)
-
-                                    # Finalise: join, parse, deliver, clean up.
-                                    # Returns true on success, false if accumulator missing.
-                                    # Release the lock before blocking so other polls
-                                    # (e.g. finish reply) can be processed during the wait.
-                                    _final_js = (
-                                        f"(()=>{{"
-                                        f"const arr=window[{_tok_key}];"
-                                        f"if(!arr||arr.length===0){{"
-                                        f"  console.warn('CUBEVIS: chunk accumulator missing tok={_tok} — transport retrying');"
-                                        f"  return false;}}"
-                                        f"const s=arr.join('');"
-                                        f"delete window[{_tok_key}];"
-                                        f"const msg=JSON.parse(s);"
-                                        f"const cb=window[{_pj.dumps(_cb)}];"
-                                        f"if(typeof cb==='function'){{cb(msg);}}"
-                                        f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
-                                        f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
-                                        f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
-                                        f"{_stop_call}"
-                                        f"return true;"
-                                        f"}})();"
+                                # Send each chunk with its index for ordered reassembly
+                                for _ci, _chunk in enumerate(_chunks):
+                                    _eval_js_with_context(
+                                        _co,
+                                        f"window._cubevis_chunk_bc.postMessage({{tok:'{_tok}',type:'chunk',idx:{_ci},data:{_pj.dumps(_chunk)}}});",
+                                        _k_t2, _ph
                                     )
-                                    # Release lock during blocking call so other threads
-                                    # can deliver the finish reply while we wait (~77ms).
-                                    _COLAB_JS_EVAL_LOCK.release()
-                                    try:
-                                        _ok = _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=False)
-                                    finally:
-                                        _COLAB_JS_EVAL_LOCK.acquire()
 
-                                    if _ok:
-                                        _delivered = True
-                                        if _attempt > 0:
-                                            logger.debug("<<poll>> delivery succeeded on attempt %d/%d", _attempt + 1, _MAX_RETRIES)
-                                        break
+                                # Signal completion — bridge ESM assembles and delivers
+                                _eval_js_with_context(
+                                    _co,
+                                    f"window._cubevis_chunk_bc.postMessage({{tok:'{_tok}',type:'done',"
+                                    f"del_fn:{_pj.dumps(_del_fn)},stop_fn:{_pj.dumps(_stop_fn) if not _has_more else 'null'}}});",
+                                    _k_t2, _ph
+                                )
 
-                                if _delivered:
-                                    logger.debug("<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s))
-                                else:
-                                    logger.error("<<poll>> delivery failed after %d attempts (%s bytes)", _MAX_RETRIES, len(_env_s))
+                                logger.debug("<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s))
 
                             except Exception:
                                 logger.exception( "<<poll>> thread eval_js failed" )
@@ -917,11 +887,62 @@ class CommsTransport(TransportBase):
                         window[`_cubevis_stopPoll_${targetId}`]  = _stopPoll;
                         // After delivery, reset backoff so next reply is fast
                         window[`_cubevis_pollDelivered_${targetId}`] = () => { _consecutiveEmpty = 0; };
+                        // Chunk delivery via BroadcastChannel — routing-independent.
+                        // Python's eval_js sends init/chunk/done messages on 'cubevis_chunk'.
+                        // Because BroadcastChannel works cross-iframe on same origin,
+                        // _parents routing of eval_js calls no longer affects delivery.
+                        if (!window._cubevis_chunk_bc) {
+                            window._cubevis_chunk_bc = new BroadcastChannel('cubevis_chunk');
+                            window._cubevis_chunk_bc_bufs = {};
+                        }
+                        const _chunkBufs = window._cubevis_chunk_bc_bufs;
+                        window._cubevis_chunk_bc.addEventListener('message', (event) => {
+                            const {tok, type, data, idx, total, del_fn, stop_fn} = event.data;
+                            if (!tok) return;
+                            if (type === 'init') {
+                                _chunkBufs[tok] = {chunks: new Array(total), received: 0, total, done: false, del_fn, stop_fn};
+                            } else if (type === 'chunk') {
+                                const buf = _chunkBufs[tok];
+                                if (buf && idx !== undefined) {
+                                    buf.chunks[idx] = data;
+                                    buf.received++;
+                                }
+                            } else if (type === 'done') {
+                                // done may arrive before all chunks — store metadata and check
+                                const buf = _chunkBufs[tok];
+                                if (buf) {
+                                    buf.done = true;
+                                    buf.del_fn = del_fn;
+                                    buf.stop_fn = stop_fn;
+                                }
+                            }
+                            // Attempt assembly whenever a message arrives —
+                            // proceeds only when done flag is set and all chunks received
+                            const buf = _chunkBufs[tok];
+                            if (buf && buf.done && buf.received === buf.total) {
+                                delete _chunkBufs[tok];
+                                try {
+                                    const msg = JSON.parse(buf.chunks.join(''));
+                                    const cb = window[`cubevis_rx_cb_${targetId}`];
+                                    if (typeof cb === 'function') cb(msg);
+                                    try {
+                                        const bc = new BroadcastChannel(`cubevis_rx_${targetId}`);
+                                        bc.postMessage(msg);
+                                        bc.close();
+                                    } catch(e) {}
+                                    if (buf.del_fn && window[buf.del_fn]) window[buf.del_fn]();
+                                    if (buf.stop_fn && window[buf.stop_fn]) window[buf.stop_fn]();
+                                } catch(e) {
+                                    console.error(`CUBEVIS: chunk assembly error tok=${tok}:`, e);
+                                }
+                            }
+                        });
+
                         // Teardown hook
                         window[`_cubevis_teardown_${targetId}`] = () => {
                             _stopPoll()
-                            // Clean up any stale chunk accumulators - revist if concurrent Colab Comm use is needed
-                            Object.keys(window).filter(k => k.startsWith('_cubevis_ch_')).forEach(k => delete window[k])
+                            // Clean up any pending chunk buffers for this session
+                            Object.keys(_chunkBufs).forEach(k => delete _chunkBufs[k])
                             bc_tx.close()
                             bc_rx.close()
                             channel.close?.()

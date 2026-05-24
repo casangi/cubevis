@@ -510,77 +510,50 @@ class CommsTransport(TransportBase):
                     _snapshot = _pending.pop(0)  # take first reply, leave rest queued
                     _mgr_id = self._comm_mgr_id
 
-                    # Use bridge cell parent header so eval_js runs in bridge iframe
-                    _ph_now = getattr(self, '_colab_bridge_parents', {})
+                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _self=self):
+                        """Deliver envelope via eval_js + BroadcastChannel.
 
-                    def _eval_js_with_context(_co, js, _k, _ph, ignore_result=True):
-                        """Set _parents to _ph and call eval_js.
-                        the outer save/restore of _parents around the full delivery."""
-                        if _k is not None and _ph and hasattr(_k, '_parents'):
-                            _k._parents.clear()
-                            _k._parents.update(_ph)
-                        _co.eval_js(js, ignore_result=ignore_result)
-
-                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
-                        """Deliver envelope via eval_js + BroadcastChannel from a background thread."""
-
+                        Uses a session-specific BroadcastChannel so eval_js iframe
+                        routing (_parents) is irrelevant — BroadcastChannel delivers
+                        cross-iframe to the bridge ESM listener regardless of which
+                        iframe eval_js targets.
+                        """
                         if getattr(_self, '_closed', False):
                             return
 
-                        _k_t2 = None
-                        _saved_parents = {}
                         try:
-                            # Resolve kernel and capture _parents for _eval_js_with_context
-                            if _ph:
-                                try:
-                                    from IPython import get_ipython as _gip_t2
-                                    _ip_t2 = _gip_t2()
-                                    if _ip_t2 and hasattr(_ip_t2, 'kernel'):
-                                        _k_t2 = _ip_t2.kernel
-                                        if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
-                                            _saved_parents = dict(_k_t2._parents)
-                                except Exception:
-                                    pass
-
                             from google.colab import output as _co
                             import json as _pj
+                            import uuid as _uuid_d
 
                             _del_fn   = f"_cubevis_pollDelivered_{_mid}"
                             _stop_fn  = f"_cubevis_stopPoll_{_mid}"
                             _env_s    = _pj.dumps(_snap)
                             _inflight = getattr(_self, "_colab_inflight", 0)
                             _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
-
-                            # Deliver via session-specific BroadcastChannel.
-                            # Named per comm_mgr_id so concurrent sessions don't cross-deliver.
-                            # BroadcastChannel is origin-wide so _parents routing is irrelevant.
-                            import uuid as _uuid_d
                             _tok      = _uuid_d.uuid4().hex[:16]
                             _CHUNK    = getattr(_self, "colab_chunk_size", 500_000)
                             _chunks   = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
                             _chunk_bc = _pj.dumps(f"cubevis_chunk_{_mid}")
 
-                            # Signal start
-                            _eval_js_with_context(
-                                _co,
+                            # Signal start of delivery
+                            _co.eval_js(
                                 f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'init',total:{len(_chunks)}}});",
-                                _k_t2, _ph
+                                ignore_result=True
                             )
 
                             # Send each chunk with index for ordered reassembly
                             for _ci, _chunk in enumerate(_chunks):
-                                _eval_js_with_context(
-                                    _co,
+                                _co.eval_js(
                                     f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'chunk',idx:{_ci},data:{_pj.dumps(_chunk)}}});",
-                                    _k_t2, _ph
+                                    ignore_result=True
                                 )
 
                             # Signal completion — bridge ESM assembles and delivers
-                            _eval_js_with_context(
-                                _co,
+                            _co.eval_js(
                                 f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'done',"
                                 f"del_fn:{_pj.dumps(_del_fn)},stop_fn:{_pj.dumps(_stop_fn) if not _has_more else 'null'}}});",
-                                _k_t2, _ph
+                                ignore_result=True
                             )
 
                             logger.debug("<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s))

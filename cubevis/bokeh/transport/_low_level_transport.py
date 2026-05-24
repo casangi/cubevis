@@ -155,7 +155,6 @@ class WebSocketTransport(TransportBase):
     def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]):
         """Set callback for incoming messages."""
         self._message_callback = callback
-        logger.debug(f"Message callback set for WebSocket {self._comm_mgr_id}")
 
     async def connect(self) -> None:
         """
@@ -567,7 +566,7 @@ class CommsTransport(TransportBase):
                                 f"del_fn:{_pj.dumps(_del_fn)},stop_fn:{_pj.dumps(_stop_fn) if not _has_more else 'null'}}});",
                                 ignore_result=True
                             )
-                            logger.debug("<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s))
+                            #logger.debug("<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s))
 
                         except Exception:
                             logger.exception("<<poll>> thread eval_js failed")
@@ -581,13 +580,13 @@ class CommsTransport(TransportBase):
                 # Poll is started by JS bc_tx.onmessage hook when the request was sent
                 self._colab_inflight = getattr(self, "_colab_inflight", 0) + 1
                 from ...utils import deserialize
-                logger.debug(f"CommsTransport._recv: expected message {data}, {self._callback}")
+                #logger.debug(f"CommsTransport._recv: expected message {data}, {self._callback}")
                 try:
                     raw = data.get("data", "{}")
 
                     if isinstance( raw, str ):
                         actual_message = deserialize(raw)
-                        logger.debug(f"CommsTransport._recv app message: {actual_message}")
+                        #logger.debug(f"CommsTransport._recv app message: {actual_message}")
                         _invoke_callback(actual_message)
                     else:
                         logger.error(f"_recv: data does not seem to be in a serialized format")
@@ -598,7 +597,7 @@ class CommsTransport(TransportBase):
             else:
                 # when testing simple messages are sent directly using
                 # the Jupyter/Colab comm object
-                logger.debug( "CommsTransport._recv: %s", LazySummarize(data) )
+                #logger.debug( "CommsTransport._recv: %s", LazySummarize(data) )
 
                 # Skip transport-layer control messages — these are handled by
                 # the transport itself and must not be forwarded to the
@@ -608,7 +607,8 @@ class CommsTransport(TransportBase):
                 # "Received response for unknown request" warnings.
                 _msg_type = data.get("type", "") if isinstance(data, dict) else ""
                 if _msg_type in ("comm_opened", "ping", "heartbeat", "closing"):
-                    logger.debug("CommsTransport._recv: skipping control message type=%s", _msg_type)
+                    #logger.debug("CommsTransport._recv: skipping control message type=%s", _msg_type)
+                    pass
                 else:
                     try:
                         _invoke_callback(data)
@@ -673,7 +673,7 @@ class CommsTransport(TransportBase):
             try:
                 from google.colab import output as _colab_out
                 _colab_out.enable_custom_widget_manager()
-                logger.debug("CommsTransport: Colab custom widget manager enabled")
+                #logger.debug("CommsTransport: Colab custom widget manager enabled")
             except Exception as e:
                 logger.warning(f"CommsTransport: could not enable Colab widget manager: {e}")
 
@@ -1065,7 +1065,7 @@ class CommsTransport(TransportBase):
                 logger.debug(f"CommsTransport.display_bridge: bridge displayed directly (no ipywidgets) for {self._comm_mgr_id}")
         else:
             display(self._bridge)
-        logger.debug(f"CommsTransport.display_bridge: widget displayed for {self._comm_mgr_id}")
+            logger.debug(f"CommsTransport.display_bridge: widget displayed for {self._comm_mgr_id}")
 
     # ------------------------------------------------------------------
     # Phase 2: async – wait for the JS handshake to complete
@@ -1099,7 +1099,7 @@ class CommsTransport(TransportBase):
 
         # this is often never reached for Colab because self._connected is already True and
         # self._bridge is already set (see short circuits above)
-        logger.debug("CommsTransport.connect: handshake complete")
+        #logger.debug("CommsTransport.connect: handshake complete")
 
     # ------------------------------------------------------------------
     # TransportBase interface
@@ -1137,13 +1137,13 @@ class CommsTransport(TransportBase):
         from ...utils import serialize
         # Use lazy formatting to avoid string building/summarizing unless DEBUG is on
         from ...utils import LazySummarize
-        logger.debug(
-            "<<send_message>> to %d comms (is_colab=%s, bridge=%s): %s",
-            len(self._comm_objs),
-            self._is_colab(),
-            self._bridge is not None,
-            LazySummarize(message)
-        )
+        #logger.debug(
+        #    "<<send_message>> to %d comms (is_colab=%s, bridge=%s): %s",
+        #    len(self._comm_objs),
+        #    self._is_colab(),
+        #    self._bridge is not None,
+        #    LazySummarize(message)
+        #)
 
         if not self._connected:
             # Note: Log the error before raising if you want it in the persistent log,
@@ -1200,8 +1200,8 @@ class CommsTransport(TransportBase):
                 self._colab_pending_replies.append(envelope)
                 _if = max(0, getattr(self, "_colab_inflight", 1) - 1)
                 self._colab_inflight = _if
-                logger.debug("<<send_message>> reply queued (depth=%d inflight=%d)",
-                             len(self._colab_pending_replies), _if)
+                #logger.debug("<<send_message>> reply queued (depth=%d inflight=%d)",
+                #             len(self._colab_pending_replies), _if)
                 # If inflight==0, the request came via an external channel (not bc_tx),
                 # so bc_tx.onmessage never fired and _startPoll was never called.
                 # Start the poll now so this reply gets delivered.
@@ -1217,7 +1217,7 @@ class CommsTransport(TransportBase):
                             "comm_mgr_id": self._comm_mgr_id,
                             "envelope": _snap_d
                         })
-                        logger.debug("<<send_message>> direct bridge.send delivery (inflight=0 path)")
+                        #logger.debug("<<send_message>> direct bridge.send delivery (inflight=0 path)")
                     except Exception as _spe:
                         logger.exception("<<send_message>> direct delivery failed")
 
@@ -1230,7 +1230,7 @@ class CommsTransport(TransportBase):
                 raise RuntimeError("CommsTransport: not connected (no comm available)")
             try:
                 comm_objs[0].send(envelope)
-                logger.debug("<<send_message>> sent via comm")
+                #logger.debug("<<send_message>> sent via comm")
             except Exception as e:
                 logger.warning("CommsTransport.send_message: comm send failed: %s", e)
 
@@ -1242,7 +1242,7 @@ class CommsTransport(TransportBase):
 
     async def close(self) -> None:
         # Close all Comms
-        logger.debug(f"CommsTransport.close: called for {self._comm_mgr_id} closed={self._closed}")
+        #logger.debug(f"CommsTransport.close: called for {self._comm_mgr_id} closed={self._closed}")
         if self._closed:
             return
         self._closed = True
@@ -1289,10 +1289,9 @@ class CommsTransport(TransportBase):
                     break
                 await asyncio.sleep(0.05)
 
-            logger.debug(f"CommsTransport.close: teardown done={_done.is_set()} for {self._comm_mgr_id}")
+            #logger.debug(f"CommsTransport.close: teardown done={_done.is_set()} for {self._comm_mgr_id}")
 
         self._comm_objs = []
         self._connected = False
         self._bridge = None
 
-        logger.debug(f"********************CommsTransport*close*{self._comm_mgr_id}*****************************")

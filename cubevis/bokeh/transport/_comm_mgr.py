@@ -184,7 +184,7 @@ class CommMgr( Model, BokehInit ):
 
         # JavaScript Comm object find their manager using this
         kwargs['name'] = kwargs['comm_mgr_id']
-        logger.debug(f"CommMgr.__init__: {args}, on_shutdown={on_shutdown}, on_error={on_error}, {kwargs}", stack_info=True)
+        logger.debug(f"CommMgr.__init__: {args}, on_shutdown={on_shutdown}, on_error={on_error}, {kwargs}")
 
         super( ).__init__( *args, **kwargs )
 
@@ -224,8 +224,6 @@ class CommMgr( Model, BokehInit ):
         self._context = HandlerContext(self)
 
         self._initialized = False
-
-        logger.debug(f"Communications manager created: {self.comm_mgr_id}")
 
     def registered( self, context: BokehAppContext ) -> None:
         '''This is called when this CommMgr is registered with BokehAppContext.

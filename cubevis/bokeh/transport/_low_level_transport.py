@@ -28,14 +28,8 @@ __all__ = [
 
 
 def _dbg_write(msg: str) -> None:
-    """Diagnostic helper."""
-    try:
-        import os
-        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-            f.write(msg)
-            f.flush()
-    except Exception:
-        pass
+    """Diagnostic helper. To enable, replace pass with a file write to ~/debug.txt."""
+    pass
 
 # ============================================================================
 # Helper: resolve the correct Comm class for the current environment
@@ -551,32 +545,28 @@ class CommsTransport(TransportBase):
                             _chunks   = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
                             _chunk_bc = _pj.dumps(f"cubevis_chunk_{_mid}")
 
-                            _dbg_write(f"_deliver: mid={_mid[:8]} tok={_tok} chunks={len(_chunks)} bytes={len(_env_s)}\n")
-
                             # Signal start of delivery
                             _co.eval_js(
-                                f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'init',total:{len(_chunks)}}});"
-                                f"console.log('CUBEVIS init tok={_tok} total={len(_chunks)}');",
+                                #f"console.log('CUBEVIS init tok={_tok} total={len(_chunks)}');"
+                                f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'init',total:{len(_chunks)}}});",
                                 ignore_result=True
                             )
 
                             # Send each chunk with index for ordered reassembly
                             for _ci, _chunk in enumerate(_chunks):
                                 _co.eval_js(
-                                    f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'chunk',idx:{_ci},data:{_pj.dumps(_chunk)}}});"
-                                    f"console.log('CUBEVIS chunk tok={_tok} idx={_ci}');",
+                                    #f"console.log('CUBEVIS chunk tok={_tok} idx={_ci}');"
+                                    f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'chunk',idx:{_ci},data:{_pj.dumps(_chunk)}}});",
                                     ignore_result=True
                                 )
 
                             # Signal completion — bridge ESM assembles and delivers
                             _co.eval_js(
+                                #f"console.log('CUBEVIS done tok={_tok}');"
                                 f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'done',"
-                                f"del_fn:{_pj.dumps(_del_fn)},stop_fn:{_pj.dumps(_stop_fn) if not _has_more else 'null'}}});"
-                                f"console.log('CUBEVIS done tok={_tok}');",
+                                f"del_fn:{_pj.dumps(_del_fn)},stop_fn:{_pj.dumps(_stop_fn) if not _has_more else 'null'}}});",
                                 ignore_result=True
                             )
-
-                            _dbg_write(f"_deliver: done tok={_tok}\n")
                             logger.debug("<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s))
 
                         except Exception:
@@ -870,7 +860,7 @@ class CommsTransport(TransportBase):
                         _chunkBc.addEventListener('message', (event) => {
                             const {tok, type, data, idx, total, del_fn, stop_fn} = event.data;
                             if (!tok) return;
-                            console.log(`CUBEVIS chunkBc received: type=${type} tok=${tok} idx=${idx} total=${total}`);
+                            //console.log(`CUBEVIS chunkBc received: type=${type} tok=${tok} idx=${idx} total=${total}`);
                             if (type === 'init') {
                                 _chunkBufs[tok] = {chunks: new Array(total), received: 0, total, done: false, del_fn, stop_fn};
                             } else if (type === 'chunk') {
@@ -1191,7 +1181,6 @@ class CommsTransport(TransportBase):
                     f"if(typeof cb==='function'){{"
                     f"  cb(msg);"
                     f"}} else {{"
-                    f"  console.log('CUBEVIS eval_js: no window cb, posting to bc');"
                     f"}}"
                     f"try{{const bc=new BroadcastChannel({_json.dumps(bc_name)});bc.postMessage(msg);bc.close();}}catch(e){{}}"
                     f"}})();"

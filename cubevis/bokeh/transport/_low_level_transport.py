@@ -28,14 +28,13 @@ __all__ = [
 
 
 def _dbg_write(msg: str) -> None:
-    """Append msg to ~/debug.txt, swallowing errors.
-    try:
-        import os
-        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-            f.write(msg)
-            f.flush()
-    except Exception:
-        pass
+    """Diagnostic helper. To enable, replace pass with:
+        try:
+            import os
+            with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+                f.write(msg); f.flush()
+        except Exception:
+            pass
     """
     pass
 
@@ -634,13 +633,6 @@ class CommsTransport(TransportBase):
                         self._colab_bridge_parents = dict(_k_open._parents)
 
                         #from google.colab import output as _co
-                        #with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                        #    window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
-                        #    f.write(f">>> on_comm_open capture for window {window_name} >>> {self._colab_bridge_parents}\n")
-                        #logger.debug(
-                        #    "_on_comm_open: refreshed _colab_bridge_parents (captured=%s)",
-                        #    bool(self._colab_bridge_parents)
-                        #)
             except Exception:
                 logger.exception("_on_comm_open: failed to refresh _colab_bridge_parents")
 
@@ -714,7 +706,6 @@ class CommsTransport(TransportBase):
         #     For Colab Python->JS, self._comm may be None; send_message() falls
         #     back to self._bridge.send() which delivers via the anywidget channel.
 
-        #logger.debug("<<display_bridge>> called (is_colab=%s)", self._is_colab())
 
         if self._is_colab():
             try:
@@ -726,11 +717,6 @@ class CommsTransport(TransportBase):
                         # Using dict() creates a shallow copy, which is good practice here
                         self._colab_bridge_parents = dict(_k_br._parents)
 
-                        #from google.colab import output as _co
-                        #with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                        #    window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
-                        #    f.write(f">>> display_bridge capture for window {window_name} >>> {self._colab_bridge_parents}\n")
-                        #logger.debug("<<display_bridge>> bridge parent captured: %s", bool(self._colab_bridge_parents))
             except Exception:
                 # Automatically captures the stack trace and the error message
                 logger.exception("<<display_bridge>> parent capture failed")
@@ -801,7 +787,6 @@ class CommsTransport(TransportBase):
                 //   Python->JS to all open comms including the new one.
                 async function tryColabPath() {
                     try {
-                        //if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
                         const colabComms = google?.colab?.kernel?.comms;
                         if (!colabComms || typeof colabComms.open !== "function") return false;
 
@@ -942,7 +927,6 @@ class CommsTransport(TransportBase):
                             // This fires when Python calls self._bridge.send(payload)
                             // If it's a cubevis_reply, extract the envelope and route it.
                             // Otherwise treat msg as the envelope directly (legacy path).
-                            console.log( `<<X>> window: ${window.name}`, msg )
                             const envelope = (msg && msg.type === "cubevis_reply")
                                 ? msg.envelope : msg;
                             if (msg && msg.type === "cubevis_binary") {
@@ -1097,16 +1081,6 @@ class CommsTransport(TransportBase):
         ### Colab Comm objects. It was successful so the next iteration will be to explore this a little ###
         ### further to see if the use of Colab's eval_js is not actually required.                       ###
         ####################################################################################################
-        #_dbg_write( f"entering CommsTransport.connect: _connected={self._connected}, _bridge={self._bridge}\n" )
-        ## Test Python->JS via anywidget model channel
-        #if self._is_colab() and self._connected and self._bridge is not None:
-        #    try:
-        #        self._bridge.send({"type": "cubevis_test_bridge", "value": "ping"})
-        #        _dbg_write( "<1>CommsTransport.connect: sent test bridge message\n" )
-        #        logger.debug("<1>CommsTransport.connect: sent test bridge message")
-        #    except Exception as e:
-        #        _dbg_write( f"<1>CommsTransport.connect: bridge test send failed: {e}\n" )
-        #        logger.warning("<1>CommsTransport.connect: bridge test send failed: %s", e)
 
         if self._connected: return
 
@@ -1119,15 +1093,6 @@ class CommsTransport(TransportBase):
                 raise RuntimeError( f"CommsTransport: JS handshake timed out after {timeout}s" )
             await asyncio.sleep( 0.1 )
 
-        ## Test Python->JS via anywidget model channel
-        #if self._is_colab() and self._bridge is not None:
-        #    try:
-        #        self._bridge.send({"type": "cubevis_test_bridge", "value": "ping"})
-        #        _dbg_write( "<2>CommsTransport.connect: sent test bridge message\n" )
-        #        logger.debug("<2>CommsTransport.connect: sent test bridge message")
-        #    except Exception as e:
-        #        _dbg_write( f"<2>CommsTransport.connect: bridge test send failed: {e}\n" )
-        #        logger.warning("<2>CommsTransport.connect: bridge test send failed: %s", e)
 
         # this is often never reached for Colab because self._connected is already True and
         # self._bridge is already set (see short circuits above)
@@ -1294,8 +1259,6 @@ class CommsTransport(TransportBase):
             _mid_c = self._comm_mgr_id
             teardown_fn = f"_cubevis_teardown_{_mid_c}"
             teardown_js = (
-                #f"if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);"
-                #"console.log(`teardown for window: ${window.name}`);"
                 f"if(window[{_json.dumps(teardown_fn)}])"
                 f"  window[{_json.dumps(teardown_fn)}]();"
             )
@@ -1312,7 +1275,6 @@ class CommsTransport(TransportBase):
                         _k_c._parents.clear()
                         _k_c._parents.update(_ph_c)
                     _co.eval_js(teardown_js, ignore_result=True)
-                    _dbg_write(f"close: JS teardown completed for {_mid_c}\n")
                 except Exception:
                     logger.exception("close: teardown eval_js failed")
                 finally:
@@ -1324,8 +1286,6 @@ class CommsTransport(TransportBase):
                 if _done.is_set():
                     break
                 await asyncio.sleep(0.05)
-            if not _done.is_set():
-                _dbg_write(f"close: teardown timed out for {_mid_c}\n")
 
             logger.debug(f"CommsTransport.close: teardown done={_done.is_set()} for {self._comm_mgr_id}")
 

@@ -338,14 +338,34 @@ class CommsTransport(TransportBase):
 
     Message flow
     ------------
-    JS -> Python : JS calls comm.send(data)
-                   kernel routes comm_msg to Python comm.on_msg(_recv)
-                   _recv calls the user callback directly on the kernel thread
-                   (ipywidgets Output capture works on that thread)
+    JS → Python:
+                    JS calls channel.send(data) on the Colab comm object.
+                    The bridge ESM relays it via bc_tx BroadcastChannel to
+                    the kernel, which routes the comm_msg to Python _recv().
+                    _recv() invokes the user callback on the main kernel thread.
 
-    Python -> JS : Python calls self._comm.send(msg)
-                   kernel delivers to JS rawComm.onMsg handler
-                   (set by notebook / application code after connect())
+    Python → JS (JupyterLab):
+                    Python calls self._comm.send(msg).
+                    The kernel delivers it directly to the JS rawComm.onMsg
+                    handler registered by the application after connect().
+
+    Python → JS (Colab):
+                    Python calls google.colab.output.eval_js() to post
+                    init/chunk/done messages to a session-specific
+                    BroadcastChannel named 'cubevis_chunk_<comm_mgr_id>'.
+                    All messages use this path regardless of size — small
+                    messages produce a single chunk (total=1) while large
+                    messages are split into multiple chunks of up to
+                    colab_chunk_size bytes each (default 500KB).
+                    Because BroadcastChannel is same-origin and cross-iframe,
+                    delivery is independent of which iframe eval_js targets —
+                    the _parents routing race that affects eval_js does not
+                    affect BroadcastChannel delivery. The bridge ESM listens
+                    on this channel, assembles chunks by index regardless of
+                    arrival order, and once all chunks and the done signal
+                    have arrived posts the complete message to a second
+                    BroadcastChannel ('cubevis_rx_<comm_mgr_id>') which the
+                    Bokeh app iframe receives via bc_rx.onmessage.
 
     Notebook usage
     --------------
@@ -354,8 +374,6 @@ class CommsTransport(TransportBase):
         # The bridge widget is displayed automatically during __init__.
         # If CUBEVIS_DEBUG is set it shows connection status; otherwise it
         # is a zero-height invisible element with no visual footprint.
-        # ---- same or next cell ----
-        await transport.connect()    # waits for JS handshake; raises on timeout
     """
 
     def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):

@@ -810,7 +810,7 @@ class CommsTransport(TransportBase):
                         // TX bus: relay JS->Python from any iframe to the kernel
                         const bc_tx = new BroadcastChannel(`cubevis_tx_${targetId}`);
                         bc_tx.onmessage = (event) => {
-                            if (isDebug) console.log("CUBEVIS DEBUG: bc_tx relay to kernel:", event.data);
+                            //if (isDebug) console.log("CUBEVIS DEBUG: bc_tx relay to kernel:", event.data);
                             channel.send(event.data);
                         };
 

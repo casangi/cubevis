@@ -530,16 +530,16 @@ class CommsTransport(TransportBase):
                             # in a valid execution context. The exact iframe doesn't
                             # matter for delivery — BroadcastChannel handles routing —
                             # but without a valid context Colab may drop eval_js calls.
-                            #_ph_d = getattr(_self, '_colab_bridge_parents', {})
-                            #try:
-                            #    from IPython import get_ipython as _gip_d
-                            #    _ip_d = _gip_d()
-                            #    _k_d = _ip_d.kernel if (_ip_d and hasattr(_ip_d, 'kernel')) else None
-                            #    if _k_d is not None and _ph_d and hasattr(_k_d, '_parents'):
-                            #        _k_d._parents.clear()
-                            #        _k_d._parents.update(_ph_d)
-                            #except Exception:
-                            #    pass
+                            _ph_d = getattr(_self, '_colab_bridge_parents', {})
+                            try:
+                                from IPython import get_ipython as _gip_d
+                                _ip_d = _gip_d()
+                                _k_d = _ip_d.kernel if (_ip_d and hasattr(_ip_d, 'kernel')) else None
+                                if _k_d is not None and _ph_d and hasattr(_k_d, '_parents'):
+                                    _k_d._parents.clear()
+                                    _k_d._parents.update(_ph_d)
+                            except Exception:
+                                pass
 
                             _del_fn   = f"_cubevis_pollDelivered_{_mid}"
                             _stop_fn  = f"_cubevis_stopPoll_{_mid}"

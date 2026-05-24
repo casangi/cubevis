@@ -28,15 +28,14 @@ __all__ = [
 
 
 def _dbg_write(msg: str) -> None:
-    """Diagnostic helper. To enable, replace pass with:
-        try:
-            import os
-            with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                f.write(msg); f.flush()
-        except Exception:
-            pass
-    """
-    pass
+    """Diagnostic helper."""
+    try:
+        import os
+        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
+            f.write(msg)
+            f.flush()
+    except Exception:
+        pass
 
 # ============================================================================
 # Helper: resolve the correct Comm class for the current environment
@@ -338,6 +337,7 @@ class CommsTransport(TransportBase):
 
     Message flow
     ------------
+
     JS → Python:
                     JS calls channel.send(data) on the Colab comm object.
                     The bridge ESM relays it via bc_tx BroadcastChannel to
@@ -526,6 +526,21 @@ class CommsTransport(TransportBase):
                             import json as _pj
                             import uuid as _uuid_d
 
+                            # Set _parents to the bridge cell context so eval_js runs
+                            # in a valid execution context. The exact iframe doesn't
+                            # matter for delivery — BroadcastChannel handles routing —
+                            # but without a valid context Colab may drop eval_js calls.
+                            _ph_d = getattr(_self, '_colab_bridge_parents', {})
+                            try:
+                                from IPython import get_ipython as _gip_d
+                                _ip_d = _gip_d()
+                                _k_d = _ip_d.kernel if (_ip_d and hasattr(_ip_d, 'kernel')) else None
+                                if _k_d is not None and _ph_d and hasattr(_k_d, '_parents'):
+                                    _k_d._parents.clear()
+                                    _k_d._parents.update(_ph_d)
+                            except Exception:
+                                pass
+
                             _del_fn   = f"_cubevis_pollDelivered_{_mid}"
                             _stop_fn  = f"_cubevis_stopPoll_{_mid}"
                             _env_s    = _pj.dumps(_snap)
@@ -536,26 +551,32 @@ class CommsTransport(TransportBase):
                             _chunks   = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
                             _chunk_bc = _pj.dumps(f"cubevis_chunk_{_mid}")
 
+                            _dbg_write(f"_deliver: mid={_mid[:8]} tok={_tok} chunks={len(_chunks)} bytes={len(_env_s)}\n")
+
                             # Signal start of delivery
                             _co.eval_js(
-                                f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'init',total:{len(_chunks)}}});",
+                                f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'init',total:{len(_chunks)}}});"
+                                f"console.log('CUBEVIS init tok={_tok} total={len(_chunks)}');",
                                 ignore_result=True
                             )
 
                             # Send each chunk with index for ordered reassembly
                             for _ci, _chunk in enumerate(_chunks):
                                 _co.eval_js(
-                                    f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'chunk',idx:{_ci},data:{_pj.dumps(_chunk)}}});",
+                                    f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'chunk',idx:{_ci},data:{_pj.dumps(_chunk)}}});"
+                                    f"console.log('CUBEVIS chunk tok={_tok} idx={_ci}');",
                                     ignore_result=True
                                 )
 
                             # Signal completion — bridge ESM assembles and delivers
                             _co.eval_js(
                                 f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'done',"
-                                f"del_fn:{_pj.dumps(_del_fn)},stop_fn:{_pj.dumps(_stop_fn) if not _has_more else 'null'}}});",
+                                f"del_fn:{_pj.dumps(_del_fn)},stop_fn:{_pj.dumps(_stop_fn) if not _has_more else 'null'}}});"
+                                f"console.log('CUBEVIS done tok={_tok}');",
                                 ignore_result=True
                             )
 
+                            _dbg_write(f"_deliver: done tok={_tok}\n")
                             logger.debug("<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s))
 
                         except Exception:
@@ -849,6 +870,7 @@ class CommsTransport(TransportBase):
                         _chunkBc.addEventListener('message', (event) => {
                             const {tok, type, data, idx, total, del_fn, stop_fn} = event.data;
                             if (!tok) return;
+                            console.log(`CUBEVIS chunkBc received: type=${type} tok=${tok} idx=${idx} total=${total}`);
                             if (type === 'init') {
                                 _chunkBufs[tok] = {chunks: new Array(total), received: 0, total, done: false, del_fn, stop_fn};
                             } else if (type === 'chunk') {

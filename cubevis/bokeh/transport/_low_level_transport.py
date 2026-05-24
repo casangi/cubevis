@@ -26,7 +26,6 @@ __all__ = [
     'CommsTransport',
 ]
 
-_COLAB_JS_EVAL_LOCK = threading.Lock( )
 
 def _dbg_write(msg: str) -> None:
     """Append msg to ~/debug.txt, swallowing errors.
@@ -499,7 +498,6 @@ class CommsTransport(TransportBase):
 
                     def _eval_js_with_context(_co, js, _k, _ph, ignore_result=True):
                         """Set _parents to _ph and call eval_js.
-                        Caller holds _COLAB_JS_EVAL_LOCK and is responsible for
                         the outer save/restore of _parents around the full delivery."""
                         if _k is not None and _ph and hasattr(_k, '_parents'):
                             _k._parents.clear()
@@ -507,94 +505,71 @@ class CommsTransport(TransportBase):
                         _co.eval_js(js, ignore_result=ignore_result)
 
                     def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
-                        """Deliver envelope via eval_js from a background thread."""
+                        """Deliver envelope via eval_js + BroadcastChannel from a background thread."""
 
                         if getattr(_self, '_closed', False):
-                            # transport closed — discard this delivery
                             return
 
-                        with _COLAB_JS_EVAL_LOCK:
-                            # Check again after acquiring lock — close() may have run while we waited
-                            if getattr(_self, '_closed', False):
-                                return
+                        _k_t2 = None
+                        _saved_parents = {}
+                        try:
+                            # Resolve kernel and capture _parents for _eval_js_with_context
+                            if _ph:
+                                try:
+                                    from IPython import get_ipython as _gip_t2
+                                    _ip_t2 = _gip_t2()
+                                    if _ip_t2 and hasattr(_ip_t2, 'kernel'):
+                                        _k_t2 = _ip_t2.kernel
+                                        if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
+                                            _saved_parents = dict(_k_t2._parents)
+                                except Exception:
+                                    pass
 
-                            _k_t2 = None
-                            _saved_parents = { }
-                            try:
-                                # Resolve kernel and save _parents for diagnostic logging.
-                                # _eval_js_with_context sets _ph before each call.
-                                # No restore after delivery — letting _parents settle
-                                # naturally avoids reintroducing stale context.
-                                if _ph:
-                                    try:
-                                        from IPython import get_ipython as _gip_t2
-                                        _ip_t2 = _gip_t2()
-                                        if _ip_t2 and hasattr(_ip_t2, 'kernel'):
-                                            _k_t2 = _ip_t2.kernel
-                                            if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
-                                                _saved_parents = dict(_k_t2._parents)
-                                    except Exception:
-                                        pass
-                                from google.colab import output as _co
-                                import json as _pj
+                            from google.colab import output as _co
+                            import json as _pj
 
-                                _cb = f"cubevis_rx_cb_{_mid}"
-                                _bc = f"cubevis_rx_{_mid}"
-                                _del_fn = f"_cubevis_pollDelivered_{_mid}"
-                                _stop_fn = f"_cubevis_stopPoll_{_mid}"
-                                _env_s = _pj.dumps(_snap)
-                                _inflight = getattr(_self, "_colab_inflight", 0)
-                                _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
-                                _stop_call = f"" if _has_more else f"if(window[{_pj.dumps(_stop_fn)}])window[{_pj.dumps(_stop_fn)}]();"
+                            _del_fn   = f"_cubevis_pollDelivered_{_mid}"
+                            _stop_fn  = f"_cubevis_stopPoll_{_mid}"
+                            _env_s    = _pj.dumps(_snap)
+                            _inflight = getattr(_self, "_colab_inflight", 0)
+                            _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
 
-                                # Deliver via a session-specific BroadcastChannel
-                                # named 'cubevis_chunk_<comm_mgr_id>'. BroadcastChannel
-                                # works cross-iframe on the same origin so _parents routing
-                                # of eval_js no longer affects delivery. Using a per-session
-                                # name prevents cross-talk between concurrent GUI sessions.
-                                # Each eval_js is fire-and-forget (ignore_result=True) —
-                                # no blocking, no lock contention, no routing sensitivity.
-                                import uuid as _uuid_d
-                                _tok = _uuid_d.uuid4().hex[:16]
-                                _CHUNK = getattr(_self, "colab_chunk_size", 500_000)
-                                _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
-                                _chunk_bc = _pj.dumps(f"cubevis_chunk_{_mid}")
+                            # Deliver via session-specific BroadcastChannel.
+                            # Named per comm_mgr_id so concurrent sessions don't cross-deliver.
+                            # BroadcastChannel is origin-wide so _parents routing is irrelevant.
+                            import uuid as _uuid_d
+                            _tok      = _uuid_d.uuid4().hex[:16]
+                            _CHUNK    = getattr(_self, "colab_chunk_size", 500_000)
+                            _chunks   = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
+                            _chunk_bc = _pj.dumps(f"cubevis_chunk_{_mid}")
 
-                                # Use a fresh BroadcastChannel sender per message.
-                                # Must NOT reuse window._cubevis_chunk_bc (the ESM's
-                                # receiver) — BroadcastChannel does not deliver a message
-                                # back to the same object that sent it. A new sender
-                                # object per postMessage guarantees the ESM listener
-                                # receives all messages regardless of which iframe
-                                # eval_js lands in.
+                            # Signal start
+                            _eval_js_with_context(
+                                _co,
+                                f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'init',total:{len(_chunks)}}});",
+                                _k_t2, _ph
+                            )
 
-                                # Signal start of chunked delivery
+                            # Send each chunk with index for ordered reassembly
+                            for _ci, _chunk in enumerate(_chunks):
                                 _eval_js_with_context(
                                     _co,
-                                    f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'init',total:{len(_chunks)}}});",
+                                    f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'chunk',idx:{_ci},data:{_pj.dumps(_chunk)}}});",
                                     _k_t2, _ph
                                 )
 
-                                # Send each chunk with its index for ordered reassembly
-                                for _ci, _chunk in enumerate(_chunks):
-                                    _eval_js_with_context(
-                                        _co,
-                                        f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'chunk',idx:{_ci},data:{_pj.dumps(_chunk)}}});",
-                                        _k_t2, _ph
-                                    )
+                            # Signal completion — bridge ESM assembles and delivers
+                            _eval_js_with_context(
+                                _co,
+                                f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'done',"
+                                f"del_fn:{_pj.dumps(_del_fn)},stop_fn:{_pj.dumps(_stop_fn) if not _has_more else 'null'}}});",
+                                _k_t2, _ph
+                            )
 
-                                # Signal completion — bridge ESM assembles and delivers
-                                _eval_js_with_context(
-                                    _co,
-                                    f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'done',"
-                                    f"del_fn:{_pj.dumps(_del_fn)},stop_fn:{_pj.dumps(_stop_fn) if not _has_more else 'null'}}});",
-                                    _k_t2, _ph
-                                )
+                            logger.debug("<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s))
 
-                                logger.debug("<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s))
-
-                            except Exception:
-                                logger.exception( "<<poll>> thread eval_js failed" )
+                        except Exception:
+                            logger.exception("<<poll>> thread eval_js failed")
 
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
                 # nothing pending - JS manages idle timeout itself
@@ -1342,13 +1317,6 @@ class CommsTransport(TransportBase):
                     logger.exception("close: teardown eval_js failed")
                 finally:
                     _done.set()
-
-            # In close(), before self._main_ioloop.add_callback(_do_teardown):
-            # Wait for any in-flight delivery to complete to try to avoid the lingering
-            # chunked delivery errors...
-            acquired = _COLAB_JS_EVAL_LOCK.acquire(timeout=2.0)
-            if acquired:
-                _COLAB_JS_EVAL_LOCK.release()
 
             self._main_ioloop.add_callback(_do_teardown)
             # Poll without blocking the event loop

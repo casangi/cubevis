@@ -29,7 +29,7 @@ declare global {
     }
 }
 
-let MESSAGE_COUNTER = 0;
+//let MESSAGE_COUNTER = 0;
 
 // ============================================================================
 // Transport Base Interface
@@ -464,8 +464,8 @@ export class CommsTransport implements TransportBase {
 
             // Python->JS delivery handler — called by either path:
             const onRx = (msg: any) => {
-                const envelope = (msg && msg.type === "cubevis_reply") ? msg.envelope : msg
-                console.log(`<${++MESSAGE_COUNTER}> CUBEVIS onRx: request_id=${envelope?.request_id} type=${envelope?.type}`)
+                //const envelope = (msg && msg.type === "cubevis_reply") ? msg.envelope : msg
+                //console.log(`<${++MESSAGE_COUNTER}> CUBEVIS onRx: request_id=${envelope?.request_id} type=${envelope?.type}`)
                 if (colabComm.onMsg) {
                     colabComm.onMsg({ content: { data: msg }, buffers: [] })
                     // After each message, check if any deferred messages are now ready

@@ -48,7 +48,9 @@ _handler = _logging.StreamHandler()
 _formatter = _logging.Formatter('[%(name)s] %(levelname)s: %(message)s')
 _handler.setFormatter(_formatter)
 logger.addHandler(_handler)
+logger.propagate = False
 
+# avoid duplicate log messages
 if _os.getenv('CUBEVIS_DEBUG', '').lower() in ('1', 'true', 'yes', 'on'):
     logger.setLevel(_logging.DEBUG)
 else:

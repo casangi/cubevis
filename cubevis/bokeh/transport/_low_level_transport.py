@@ -26,18 +26,9 @@ __all__ = [
     'CommsTransport',
 ]
 
-_COLAB_JS_EVAL_LOCK = threading.Lock( )
 
 def _dbg_write(msg: str) -> None:
-    """Append msg to ~/debug.txt, swallowing errors.
-    try:
-        import os
-        with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-            f.write(msg)
-            f.flush()
-    except Exception:
-        pass
-    """
+    """Diagnostic helper. To enable, replace pass with a file write to ~/debug.txt."""
     pass
 
 # ============================================================================
@@ -164,7 +155,6 @@ class WebSocketTransport(TransportBase):
     def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]):
         """Set callback for incoming messages."""
         self._message_callback = callback
-        logger.debug(f"Message callback set for WebSocket {self._comm_mgr_id}")
 
     async def connect(self) -> None:
         """
@@ -340,14 +330,35 @@ class CommsTransport(TransportBase):
 
     Message flow
     ------------
-    JS -> Python : JS calls comm.send(data)
-                   kernel routes comm_msg to Python comm.on_msg(_recv)
-                   _recv calls the user callback directly on the kernel thread
-                   (ipywidgets Output capture works on that thread)
 
-    Python -> JS : Python calls self._comm.send(msg)
-                   kernel delivers to JS rawComm.onMsg handler
-                   (set by notebook / application code after connect())
+    JS → Python:
+                    JS calls channel.send(data) on the Colab comm object.
+                    The bridge ESM relays it via bc_tx BroadcastChannel to
+                    the kernel, which routes the comm_msg to Python _recv().
+                    _recv() invokes the user callback on the main kernel thread.
+
+    Python → JS (JupyterLab):
+                    Python calls self._comm.send(msg).
+                    The kernel delivers it directly to the JS rawComm.onMsg
+                    handler registered by the application after connect().
+
+    Python → JS (Colab):
+                    Python calls google.colab.output.eval_js() to post
+                    init/chunk/done messages to a session-specific
+                    BroadcastChannel named 'cubevis_chunk_<comm_mgr_id>'.
+                    All messages use this path regardless of size — small
+                    messages produce a single chunk (total=1) while large
+                    messages are split into multiple chunks of up to
+                    colab_chunk_size bytes each (default 500KB).
+                    Because BroadcastChannel is same-origin and cross-iframe,
+                    delivery is independent of which iframe eval_js targets —
+                    the _parents routing race that affects eval_js does not
+                    affect BroadcastChannel delivery. The bridge ESM listens
+                    on this channel, assembles chunks by index regardless of
+                    arrival order, and once all chunks and the done signal
+                    have arrived posts the complete message to a second
+                    BroadcastChannel ('cubevis_rx_<comm_mgr_id>') which the
+                    Bokeh app iframe receives via bc_rx.onmessage.
 
     Notebook usage
     --------------
@@ -356,8 +367,6 @@ class CommsTransport(TransportBase):
         # The bridge widget is displayed automatically during __init__.
         # If CUBEVIS_DEBUG is set it shows connection status; otherwise it
         # is a zero-height invisible element with no visual footprint.
-        # ---- same or next cell ----
-        await transport.connect()    # waits for JS handshake; raises on timeout
     """
 
     def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
@@ -494,106 +503,73 @@ class CommsTransport(TransportBase):
                     _snapshot = _pending.pop(0)  # take first reply, leave rest queued
                     _mgr_id = self._comm_mgr_id
 
-                    # Use bridge cell parent header so eval_js runs in bridge iframe
-                    _ph_now = getattr(self, '_colab_bridge_parents', {})
+                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _self=self):
+                        """Deliver envelope via eval_js + BroadcastChannel.
 
-                    def _eval_js_with_context(_co, js, _k, _ph, ignore_result=True):
-                        """Set _parents to _ph and call eval_js.
-                        Caller holds _COLAB_JS_EVAL_LOCK and is responsible for
-                        the outer save/restore of _parents around the full delivery."""
-                        if _k is not None and _ph and hasattr(_k, '_parents'):
-                            _k._parents.clear()
-                            _k._parents.update(_ph)
-                        _co.eval_js(js, ignore_result=ignore_result)
-
-                    def _deliver_in_thread(_snap=_snapshot, _mid=_mgr_id, _ph=_ph_now, _self=self):
-                        """Deliver envelope via eval_js from a background thread."""
-
+                        Uses a session-specific BroadcastChannel so eval_js iframe
+                        routing (_parents) is irrelevant — BroadcastChannel delivers
+                        cross-iframe to the bridge ESM listener regardless of which
+                        iframe eval_js targets.
+                        """
                         if getattr(_self, '_closed', False):
-                            # transport closed — discard this delivery
                             return
 
-                        with _COLAB_JS_EVAL_LOCK:
-                            # Check again after acquiring lock — close() may have run while we waited
-                            if getattr(_self, '_closed', False):
-                                return
+                        try:
+                            from google.colab import output as _co
+                            import json as _pj
+                            import uuid as _uuid_d
 
-                            _k_t2 = None
-                            _saved_parents = { }
+                            # Set _parents to the bridge cell context so eval_js runs
+                            # in a valid execution context. The exact iframe doesn't
+                            # matter for delivery — BroadcastChannel handles routing —
+                            # but without a valid context Colab may drop eval_js calls.
+                            _ph_d = getattr(_self, '_colab_bridge_parents', {})
                             try:
-                                # Resolve kernel and save _parents for diagnostic logging.
-                                # _eval_js_with_context sets _ph before each call.
-                                # No restore after delivery — letting _parents settle
-                                # naturally avoids reintroducing stale context.
-                                if _ph:
-                                    try:
-                                        from IPython import get_ipython as _gip_t2
-                                        _ip_t2 = _gip_t2()
-                                        if _ip_t2 and hasattr(_ip_t2, 'kernel'):
-                                            _k_t2 = _ip_t2.kernel
-                                            if hasattr(_k_t2, '_parents') and isinstance(_k_t2._parents, dict):
-                                                _saved_parents = dict(_k_t2._parents)
-                                    except Exception:
-                                        pass
-                                from google.colab import output as _co
-                                import json as _pj
-
-                                _cb = f"cubevis_rx_cb_{_mid}"
-                                _bc = f"cubevis_rx_{_mid}"
-                                _del_fn = f"_cubevis_pollDelivered_{_mid}"
-                                _stop_fn = f"_cubevis_stopPoll_{_mid}"
-                                _env_s = _pj.dumps(_snap)
-                                _inflight = getattr(_self, "_colab_inflight", 0)
-                                _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
-                                _stop_call = f"" if _has_more else f"if(window[{_pj.dumps(_stop_fn)}])window[{_pj.dumps(_stop_fn)}]();"
-
-                                # Chunk the serialized envelope string to stay within
-                                # eval_js limits. Each chunk is appended to a JS-side
-                                # accumulator array keyed by a session token. A final
-                                # eval_js call joins, JSON.parses, and posts to bc_rx.
-                                import uuid as _uuid_d
-                                _tok = _uuid_d.uuid4().hex[:16]
-                                _tok_key = _pj.dumps(f"_cubevis_ch_{_tok}")
-                                _CHUNK = getattr(_self, "colab_chunk_size", 500_000)
-                                _chunks = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
-
-                                # Initialise accumulator
-                                _eval_js_with_context(_co, f"window[{_tok_key}]=[];", _k_t2, _ph)
-
-                                # Send each chunk
-                                for _ci, _chunk in enumerate(_chunks):
-                                    _eval_js_with_context(_co, f"window[{_tok_key}].push({_pj.dumps(_chunk)});", _k_t2, _ph)
-
-                                # Finalise: join, parse, deliver, clean up
-                                _final_js = (
-                                    f"(()=>{{"
-                                    #f"if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);"
-                                    #"console.log(`window: ${window.name}`);"
-                                    f"const arr=window[{_tok_key}];"
-                                    f"const arrLen=arr ? arr.length : -1;"
-                                    f"console.log('CUBEVIS finalizer tok={_tok} arrLen='+arrLen);"
-                                    f"const s=window[{_tok_key}].join('');"
-                                    f"delete window[{_tok_key}];"
-                                    f"const msg=JSON.parse(s);"
-                                    f"const cb=window[{_pj.dumps(_cb)}];"
-                                    f"if(typeof cb==='function'){{cb(msg);}}"
-                                    f"try{{const bc=new BroadcastChannel({_pj.dumps(_bc)});"
-                                    f"bc.postMessage(msg);bc.close();}}catch(e){{}}"
-                                    f"if(window[{_pj.dumps(_del_fn)}])window[{_pj.dumps(_del_fn)}]();"
-                                    f"{_stop_call}"
-                                    f"}})();"
-                                )
-                                _eval_js_with_context(_co, _final_js, _k_t2, _ph, ignore_result=False)
-
-                                logger.debug( "<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s) )
-                                if ( len(_env_s) == 412 ):
-                                    logger.debug( msg )
-
-                                #_ph_msg_id = (_ph.get('shell', {}) or {}).get('header', {}).get('msg_id', '?')[:8]
-                                #_dbg_write(f"_deliver: mid={_mid[:8]} chunks={len(_chunks)} tok={_tok} ph={_ph_msg_id}\n")
-
+                                from IPython import get_ipython as _gip_d
+                                _ip_d = _gip_d()
+                                _k_d = _ip_d.kernel if (_ip_d and hasattr(_ip_d, 'kernel')) else None
+                                if _k_d is not None and _ph_d and hasattr(_k_d, '_parents'):
+                                    _k_d._parents.clear()
+                                    _k_d._parents.update(_ph_d)
                             except Exception:
-                                logger.exception( "<<poll>> thread eval_js failed" )
+                                pass
+
+                            _del_fn   = f"_cubevis_pollDelivered_{_mid}"
+                            _stop_fn  = f"_cubevis_stopPoll_{_mid}"
+                            _env_s    = _pj.dumps(_snap)
+                            _inflight = getattr(_self, "_colab_inflight", 0)
+                            _has_more = bool(getattr(_self, "_colab_pending_replies", [])) or _inflight > 0
+                            _tok      = _uuid_d.uuid4().hex[:16]
+                            _CHUNK    = getattr(_self, "colab_chunk_size", 500_000)
+                            _chunks   = [_env_s[i:i+_CHUNK] for i in range(0, len(_env_s), _CHUNK)]
+                            _chunk_bc = _pj.dumps(f"cubevis_chunk_{_mid}")
+
+                            # Signal start of delivery
+                            _co.eval_js(
+                                #f"console.log('CUBEVIS init tok={_tok} total={len(_chunks)}');"
+                                f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'init',total:{len(_chunks)}}});",
+                                ignore_result=True
+                            )
+
+                            # Send each chunk with index for ordered reassembly
+                            for _ci, _chunk in enumerate(_chunks):
+                                _co.eval_js(
+                                    #f"console.log('CUBEVIS chunk tok={_tok} idx={_ci}');"
+                                    f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'chunk',idx:{_ci},data:{_pj.dumps(_chunk)}}});",
+                                    ignore_result=True
+                                )
+
+                            # Signal completion — bridge ESM assembles and delivers
+                            _co.eval_js(
+                                #f"console.log('CUBEVIS done tok={_tok}');"
+                                f"(new BroadcastChannel({_chunk_bc})).postMessage({{tok:'{_tok}',type:'done',"
+                                f"del_fn:{_pj.dumps(_del_fn)},stop_fn:{_pj.dumps(_stop_fn) if not _has_more else 'null'}}});",
+                                ignore_result=True
+                            )
+                            #logger.debug("<<poll>> delivered via %s chunk(s) (%s bytes)", len(_chunks), len(_env_s))
+
+                        except Exception:
+                            logger.exception("<<poll>> thread eval_js failed")
 
                     _thr.Thread(target=_deliver_in_thread, daemon=True).start()
                 # nothing pending - JS manages idle timeout itself
@@ -604,13 +580,13 @@ class CommsTransport(TransportBase):
                 # Poll is started by JS bc_tx.onmessage hook when the request was sent
                 self._colab_inflight = getattr(self, "_colab_inflight", 0) + 1
                 from ...utils import deserialize
-                logger.debug(f"CommsTransport._recv: expected message {data}, {self._callback}")
+                #logger.debug(f"CommsTransport._recv: expected message {data}, {self._callback}")
                 try:
                     raw = data.get("data", "{}")
 
                     if isinstance( raw, str ):
                         actual_message = deserialize(raw)
-                        logger.debug(f"CommsTransport._recv app message: {actual_message}")
+                        #logger.debug(f"CommsTransport._recv app message: {actual_message}")
                         _invoke_callback(actual_message)
                     else:
                         logger.error(f"_recv: data does not seem to be in a serialized format")
@@ -621,7 +597,7 @@ class CommsTransport(TransportBase):
             else:
                 # when testing simple messages are sent directly using
                 # the Jupyter/Colab comm object
-                logger.debug( "CommsTransport._recv: %s", LazySummarize(data) )
+                #logger.debug( "CommsTransport._recv: %s", LazySummarize(data) )
 
                 # Skip transport-layer control messages — these are handled by
                 # the transport itself and must not be forwarded to the
@@ -631,7 +607,8 @@ class CommsTransport(TransportBase):
                 # "Received response for unknown request" warnings.
                 _msg_type = data.get("type", "") if isinstance(data, dict) else ""
                 if _msg_type in ("comm_opened", "ping", "heartbeat", "closing"):
-                    logger.debug("CommsTransport._recv: skipping control message type=%s", _msg_type)
+                    #logger.debug("CommsTransport._recv: skipping control message type=%s", _msg_type)
+                    pass
                 else:
                     try:
                         _invoke_callback(data)
@@ -658,13 +635,6 @@ class CommsTransport(TransportBase):
                         self._colab_bridge_parents = dict(_k_open._parents)
 
                         #from google.colab import output as _co
-                        #with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                        #    window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
-                        #    f.write(f">>> on_comm_open capture for window {window_name} >>> {self._colab_bridge_parents}\n")
-                        #logger.debug(
-                        #    "_on_comm_open: refreshed _colab_bridge_parents (captured=%s)",
-                        #    bool(self._colab_bridge_parents)
-                        #)
             except Exception:
                 logger.exception("_on_comm_open: failed to refresh _colab_bridge_parents")
 
@@ -703,7 +673,7 @@ class CommsTransport(TransportBase):
             try:
                 from google.colab import output as _colab_out
                 _colab_out.enable_custom_widget_manager()
-                logger.debug("CommsTransport: Colab custom widget manager enabled")
+                #logger.debug("CommsTransport: Colab custom widget manager enabled")
             except Exception as e:
                 logger.warning(f"CommsTransport: could not enable Colab widget manager: {e}")
 
@@ -738,7 +708,6 @@ class CommsTransport(TransportBase):
         #     For Colab Python->JS, self._comm may be None; send_message() falls
         #     back to self._bridge.send() which delivers via the anywidget channel.
 
-        #logger.debug("<<display_bridge>> called (is_colab=%s)", self._is_colab())
 
         if self._is_colab():
             try:
@@ -750,11 +719,6 @@ class CommsTransport(TransportBase):
                         # Using dict() creates a shallow copy, which is good practice here
                         self._colab_bridge_parents = dict(_k_br._parents)
 
-                        #from google.colab import output as _co
-                        #with open(os.path.expanduser("~/debug.txt"), "a", encoding="utf-8") as f:
-                        #    window_name = _co.eval_js("if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);window.name")
-                        #    f.write(f">>> display_bridge capture for window {window_name} >>> {self._colab_bridge_parents}\n")
-                        #logger.debug("<<display_bridge>> bridge parent captured: %s", bool(self._colab_bridge_parents))
             except Exception:
                 # Automatically captures the stack trace and the error message
                 logger.exception("<<display_bridge>> parent capture failed")
@@ -825,7 +789,6 @@ class CommsTransport(TransportBase):
                 //   Python->JS to all open comms including the new one.
                 async function tryColabPath() {
                     try {
-                        //if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
                         const colabComms = google?.colab?.kernel?.comms;
                         if (!colabComms || typeof colabComms.open !== "function") return false;
 
@@ -847,7 +810,7 @@ class CommsTransport(TransportBase):
                         // TX bus: relay JS->Python from any iframe to the kernel
                         const bc_tx = new BroadcastChannel(`cubevis_tx_${targetId}`);
                         bc_tx.onmessage = (event) => {
-                            if (isDebug) console.log("CUBEVIS DEBUG: bc_tx relay to kernel:", event.data);
+                            //if (isDebug) console.log("CUBEVIS DEBUG: bc_tx relay to kernel:", event.data);
                             channel.send(event.data);
                         };
 
@@ -886,11 +849,63 @@ class CommsTransport(TransportBase):
                         window[`_cubevis_stopPoll_${targetId}`]  = _stopPoll;
                         // After delivery, reset backoff so next reply is fast
                         window[`_cubevis_pollDelivered_${targetId}`] = () => { _consecutiveEmpty = 0; };
+                        // Chunk delivery via BroadcastChannel — routing-independent.
+                        // Python's eval_js sends init/chunk/done messages on 'cubevis_chunk'.
+                        // Because BroadcastChannel works cross-iframe on same origin,
+                        // _parents routing of eval_js calls no longer affects delivery.
+                        // Per-session chunk channel — named by targetId so multiple
+                        // GUI sessions on the same page don't cross-deliver chunks.
+                        const _chunkBc = new BroadcastChannel(`cubevis_chunk_${targetId}`);
+                        const _chunkBufs = {};
+                        _chunkBc.addEventListener('message', (event) => {
+                            const {tok, type, data, idx, total, del_fn, stop_fn} = event.data;
+                            if (!tok) return;
+                            //console.log(`CUBEVIS chunkBc received: type=${type} tok=${tok} idx=${idx} total=${total}`);
+                            if (type === 'init') {
+                                _chunkBufs[tok] = {chunks: new Array(total), received: 0, total, done: false, del_fn, stop_fn};
+                            } else if (type === 'chunk') {
+                                const buf = _chunkBufs[tok];
+                                if (buf && idx !== undefined) {
+                                    buf.chunks[idx] = data;
+                                    buf.received++;
+                                }
+                            } else if (type === 'done') {
+                                // done may arrive before all chunks — store metadata and check
+                                const buf = _chunkBufs[tok];
+                                if (buf) {
+                                    buf.done = true;
+                                    buf.del_fn = del_fn;
+                                    buf.stop_fn = stop_fn;
+                                }
+                            }
+                            // Attempt assembly whenever a message arrives —
+                            // proceeds only when done flag is set and all chunks received
+                            const buf = _chunkBufs[tok];
+                            if (buf && buf.done && buf.received === buf.total) {
+                                delete _chunkBufs[tok];
+                                try {
+                                    const msg = JSON.parse(buf.chunks.join(''));
+                                    const cb = window[`cubevis_rx_cb_${targetId}`];
+                                    if (typeof cb === 'function') cb(msg);
+                                    try {
+                                        const bc = new BroadcastChannel(`cubevis_rx_${targetId}`);
+                                        bc.postMessage(msg);
+                                        bc.close();
+                                    } catch(e) {}
+                                    if (buf.del_fn && window[buf.del_fn]) window[buf.del_fn]();
+                                    if (buf.stop_fn && window[buf.stop_fn]) window[buf.stop_fn]();
+                                } catch(e) {
+                                    console.error(`CUBEVIS: chunk assembly error tok=${tok}:`, e);
+                                }
+                            }
+                        });
+
                         // Teardown hook
                         window[`_cubevis_teardown_${targetId}`] = () => {
                             _stopPoll()
-                            // Clean up any stale chunk accumulators - revist if concurrent Colab Comm use is needed
-                            Object.keys(window).filter(k => k.startsWith('_cubevis_ch_')).forEach(k => delete window[k])
+                            // Clean up chunk channel and any pending buffers
+                            Object.keys(_chunkBufs).forEach(k => delete _chunkBufs[k])
+                            _chunkBc.close()
                             bc_tx.close()
                             bc_rx.close()
                             channel.close?.()
@@ -915,7 +930,6 @@ class CommsTransport(TransportBase):
                             // This fires when Python calls self._bridge.send(payload)
                             // If it's a cubevis_reply, extract the envelope and route it.
                             // Otherwise treat msg as the envelope directly (legacy path).
-                            console.log( `<<X>> window: ${window.name}`, msg )
                             const envelope = (msg && msg.type === "cubevis_reply")
                                 ? msg.envelope : msg;
                             if (msg && msg.type === "cubevis_binary") {
@@ -1051,7 +1065,7 @@ class CommsTransport(TransportBase):
                 logger.debug(f"CommsTransport.display_bridge: bridge displayed directly (no ipywidgets) for {self._comm_mgr_id}")
         else:
             display(self._bridge)
-        logger.debug(f"CommsTransport.display_bridge: widget displayed for {self._comm_mgr_id}")
+            logger.debug(f"CommsTransport.display_bridge: widget displayed for {self._comm_mgr_id}")
 
     # ------------------------------------------------------------------
     # Phase 2: async – wait for the JS handshake to complete
@@ -1070,16 +1084,6 @@ class CommsTransport(TransportBase):
         ### Colab Comm objects. It was successful so the next iteration will be to explore this a little ###
         ### further to see if the use of Colab's eval_js is not actually required.                       ###
         ####################################################################################################
-        #_dbg_write( f"entering CommsTransport.connect: _connected={self._connected}, _bridge={self._bridge}\n" )
-        ## Test Python->JS via anywidget model channel
-        #if self._is_colab() and self._connected and self._bridge is not None:
-        #    try:
-        #        self._bridge.send({"type": "cubevis_test_bridge", "value": "ping"})
-        #        _dbg_write( "<1>CommsTransport.connect: sent test bridge message\n" )
-        #        logger.debug("<1>CommsTransport.connect: sent test bridge message")
-        #    except Exception as e:
-        #        _dbg_write( f"<1>CommsTransport.connect: bridge test send failed: {e}\n" )
-        #        logger.warning("<1>CommsTransport.connect: bridge test send failed: %s", e)
 
         if self._connected: return
 
@@ -1092,19 +1096,10 @@ class CommsTransport(TransportBase):
                 raise RuntimeError( f"CommsTransport: JS handshake timed out after {timeout}s" )
             await asyncio.sleep( 0.1 )
 
-        ## Test Python->JS via anywidget model channel
-        #if self._is_colab() and self._bridge is not None:
-        #    try:
-        #        self._bridge.send({"type": "cubevis_test_bridge", "value": "ping"})
-        #        _dbg_write( "<2>CommsTransport.connect: sent test bridge message\n" )
-        #        logger.debug("<2>CommsTransport.connect: sent test bridge message")
-        #    except Exception as e:
-        #        _dbg_write( f"<2>CommsTransport.connect: bridge test send failed: {e}\n" )
-        #        logger.warning("<2>CommsTransport.connect: bridge test send failed: %s", e)
 
         # this is often never reached for Colab because self._connected is already True and
         # self._bridge is already set (see short circuits above)
-        logger.debug("CommsTransport.connect: handshake complete")
+        #logger.debug("CommsTransport.connect: handshake complete")
 
     # ------------------------------------------------------------------
     # TransportBase interface
@@ -1142,13 +1137,13 @@ class CommsTransport(TransportBase):
         from ...utils import serialize
         # Use lazy formatting to avoid string building/summarizing unless DEBUG is on
         from ...utils import LazySummarize
-        logger.debug(
-            "<<send_message>> to %d comms (is_colab=%s, bridge=%s): %s",
-            len(self._comm_objs),
-            self._is_colab(),
-            self._bridge is not None,
-            LazySummarize(message)
-        )
+        #logger.debug(
+        #    "<<send_message>> to %d comms (is_colab=%s, bridge=%s): %s",
+        #    len(self._comm_objs),
+        #    self._is_colab(),
+        #    self._bridge is not None,
+        #    LazySummarize(message)
+        #)
 
         if not self._connected:
             # Note: Log the error before raising if you want it in the persistent log,
@@ -1186,7 +1181,6 @@ class CommsTransport(TransportBase):
                     f"if(typeof cb==='function'){{"
                     f"  cb(msg);"
                     f"}} else {{"
-                    f"  console.log('CUBEVIS eval_js: no window cb, posting to bc');"
                     f"}}"
                     f"try{{const bc=new BroadcastChannel({_json.dumps(bc_name)});bc.postMessage(msg);bc.close();}}catch(e){{}}"
                     f"}})();"
@@ -1206,8 +1200,8 @@ class CommsTransport(TransportBase):
                 self._colab_pending_replies.append(envelope)
                 _if = max(0, getattr(self, "_colab_inflight", 1) - 1)
                 self._colab_inflight = _if
-                logger.debug("<<send_message>> reply queued (depth=%d inflight=%d)",
-                             len(self._colab_pending_replies), _if)
+                #logger.debug("<<send_message>> reply queued (depth=%d inflight=%d)",
+                #             len(self._colab_pending_replies), _if)
                 # If inflight==0, the request came via an external channel (not bc_tx),
                 # so bc_tx.onmessage never fired and _startPoll was never called.
                 # Start the poll now so this reply gets delivered.
@@ -1223,7 +1217,7 @@ class CommsTransport(TransportBase):
                             "comm_mgr_id": self._comm_mgr_id,
                             "envelope": _snap_d
                         })
-                        logger.debug("<<send_message>> direct bridge.send delivery (inflight=0 path)")
+                        #logger.debug("<<send_message>> direct bridge.send delivery (inflight=0 path)")
                     except Exception as _spe:
                         logger.exception("<<send_message>> direct delivery failed")
 
@@ -1236,7 +1230,7 @@ class CommsTransport(TransportBase):
                 raise RuntimeError("CommsTransport: not connected (no comm available)")
             try:
                 comm_objs[0].send(envelope)
-                logger.debug("<<send_message>> sent via comm")
+                #logger.debug("<<send_message>> sent via comm")
             except Exception as e:
                 logger.warning("CommsTransport.send_message: comm send failed: %s", e)
 
@@ -1248,7 +1242,7 @@ class CommsTransport(TransportBase):
 
     async def close(self) -> None:
         # Close all Comms
-        logger.debug(f"CommsTransport.close: called for {self._comm_mgr_id} closed={self._closed}")
+        #logger.debug(f"CommsTransport.close: called for {self._comm_mgr_id} closed={self._closed}")
         if self._closed:
             return
         self._closed = True
@@ -1267,8 +1261,6 @@ class CommsTransport(TransportBase):
             _mid_c = self._comm_mgr_id
             teardown_fn = f"_cubevis_teardown_{_mid_c}"
             teardown_js = (
-                #f"if (!window.name) window.name='window-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);"
-                #"console.log(`teardown for window: ${window.name}`);"
                 f"if(window[{_json.dumps(teardown_fn)}])"
                 f"  window[{_json.dumps(teardown_fn)}]();"
             )
@@ -1285,18 +1277,10 @@ class CommsTransport(TransportBase):
                         _k_c._parents.clear()
                         _k_c._parents.update(_ph_c)
                     _co.eval_js(teardown_js, ignore_result=True)
-                    _dbg_write(f"close: JS teardown completed for {_mid_c}\n")
                 except Exception:
                     logger.exception("close: teardown eval_js failed")
                 finally:
                     _done.set()
-
-            # In close(), before self._main_ioloop.add_callback(_do_teardown):
-            # Wait for any in-flight delivery to complete to try to avoid the lingering
-            # chunked delivery errors...
-            acquired = _COLAB_JS_EVAL_LOCK.acquire(timeout=2.0)
-            if acquired:
-                _COLAB_JS_EVAL_LOCK.release()
 
             self._main_ioloop.add_callback(_do_teardown)
             # Poll without blocking the event loop
@@ -1304,13 +1288,10 @@ class CommsTransport(TransportBase):
                 if _done.is_set():
                     break
                 await asyncio.sleep(0.05)
-            if not _done.is_set():
-                _dbg_write(f"close: teardown timed out for {_mid_c}\n")
 
-            logger.debug(f"CommsTransport.close: teardown done={_done.is_set()} for {self._comm_mgr_id}")
+            #logger.debug(f"CommsTransport.close: teardown done={_done.is_set()} for {self._comm_mgr_id}")
 
         self._comm_objs = []
         self._connected = False
         self._bridge = None
 
-        logger.debug(f"********************CommsTransport*close*{self._comm_mgr_id}*****************************")

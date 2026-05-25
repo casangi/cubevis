@@ -101,7 +101,6 @@ export class ShowableView extends LayoutDOMView {
     super.after_layout()
     // CRITICAL: Re-apply disabled state after layout is complete
     // This ensures the overlay appears correctly on notebook reload
-    console.log('Showable after_layout() - disabled:', this.model.disabled, 'shadow_el:', this.shadow_el != null)
     if (this.model.disabled) {
       this._update_disabled_state()
     }

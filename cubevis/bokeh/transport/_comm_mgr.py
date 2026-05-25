@@ -30,7 +30,7 @@ class ShutdownReason(Enum):
     ERROR = "error"                       # Fatal error occurred
 
 logger = logging.getLogger(__name__)
-#logger.propagate = False
+logger.propagate = False
 
 class AppState(Enum):
     """Application lifecycle states."""

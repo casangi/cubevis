@@ -30,7 +30,7 @@ class ShutdownReason(Enum):
     ERROR = "error"                       # Fatal error occurred
 
 logger = logging.getLogger(__name__)
-
+logger.propagate = False
 
 class AppState(Enum):
     """Application lifecycle states."""
@@ -283,14 +283,14 @@ class CommMgr( Model, BokehInit ):
             logger.warning(f"Comm '{comm_id}' already exists, returning existing")
             return self._comms[comm_id]
 
-        logger.debug(f"CommMgr.open: {description}")
+        #logger.debug(f"CommMgr.open: {description}")
         comm = Comm(comm_id=comm_id, comm_mgr_id=self.comm_mgr_id, squash_queue=squash_queue, description=description)
         comm._mgr = self  # Set internal reference
         self._comms[comm_id] = comm
         self._handlers[comm_id] = {}
         self._send_queue[comm_id] = []
 
-        logger.debug(f"Opened comm: {comm_id} (squash_queue={squash_queue})")
+        #logger.debug(f"Opened comm: {comm_id} (squash_queue={squash_queue})")
         return comm
 
     def _register_comm(self, comm: 'Comm'):
@@ -378,7 +378,7 @@ class CommMgr( Model, BokehInit ):
             logger.warning(f"Replacing handler for {comm_id}.{message_id}")
 
         self._handlers[comm_id][message_id] = callback
-        logger.debug(f"Registered handler: {comm_id}.{message_id}")
+        #logger.debug(f"Registered handler: {comm_id}.{message_id}")
 
     def unregister(self, comm: Comm, message_id: str) -> None:
         """Unregister a handler."""
@@ -503,7 +503,7 @@ class CommMgr( Model, BokehInit ):
         else:
             raise ValueError(f"Unknown transport type: {self.transport_type}")
 
-        logger.debug(f"Communications manager initialized with {self.transport_type}")
+        #logger.debug(f"Communications manager initialized with {self.transport_type}")
 
     async def process_messages(self, websocket=None):
         """

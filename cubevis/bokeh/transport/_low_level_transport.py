@@ -19,7 +19,6 @@ from typing import Optional, Callable, Dict, Any
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 logger = logging.getLogger(__name__)
-logger.propagate = False
 
 __all__ = [
     'TransportBase',

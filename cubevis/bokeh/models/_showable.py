@@ -233,7 +233,7 @@ class Showable(LayoutDOM,BokehInit):
             raise RuntimeError(
                 f"{self.name if self.name else 'this showable'} does not return a result"
             )
-        future = getattr(self, '_future', None)
+        future = self.get_future( )
         if future is None or not future.done():
             return default
         return future.result()

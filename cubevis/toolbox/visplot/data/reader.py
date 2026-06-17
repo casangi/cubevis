@@ -39,6 +39,7 @@ import logging
 from typing import Optional, Union
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from .axes import Axis, AxisType
@@ -412,6 +413,85 @@ class XArrayReader(abc.ABC):
             2D, Dask-backed DataArray with dimensions
             ``(axis1_label, axis2_label)`` and *quantity* values.
             Passed to Datashader ``Canvas.raster()``.
+        """
+
+    # ------------------------------------------------------------------ #
+    # Pixel hover probe                                                    #
+    # ------------------------------------------------------------------ #
+
+    @abc.abstractmethod
+    def probe_pixel(
+        self,
+        agg: xr.DataArray,
+        px: int,
+        py: int,
+        selection: SelectionSpec,
+        *,
+        scatter_df: Optional["pd.DataFrame"] = None,
+    ) -> dict:
+        """Return the un-pseudocoloured value and metadata for pixel (px, py).
+
+        This is the backend half of the Bokeh HoverTool callback.
+        ``VisibilityPlotter`` calls this on every ``mousemove`` event.
+
+        The method implements a two-layer reverse mapping:
+
+        * **Layer 1** — read the aggregated float64 value directly from
+          ``agg.values[py, px]`` and reverse-map ``(px, py)`` to the
+          data-space coordinate range it covers using the agg DataArray's
+          named coordinate arrays.
+        * **Layer 2** — translate that range to human-readable metadata
+          (field names, scan names, antenna pairs, frequency in GHz) via
+          a coordinate-only lookup against the open partitions.  No
+          VISIBILITY data is read.
+
+        Parameters
+        ----------
+        agg :
+            Float64 Datashader aggregation DataArray, shape (H, W), from
+            the most recent ``cvs.raster()`` or ``cvs.points()`` call.
+        px, py :
+            Zero-based canvas pixel coordinates.  Origin is bottom-left
+            (Bokeh image_rgba glyph convention).  ``py`` indexes rows
+            (y-axis), ``px`` indexes columns (x-axis).
+        selection :
+            The ``SelectionSpec`` that was active when ``agg`` was produced.
+            Used to narrow the partition scan for metadata retrieval.
+        scatter_df :
+            Flat pandas DataFrame returned by ``query_columns()`` (columns
+            ``"x"`` and ``"y"``).  When supplied, the method counts how
+            many individual scatter samples fell in this pixel by a boolean
+            index on the DataFrame — no MS re-read.  Pass ``None`` for
+            raster mode where the sample count is not meaningful.
+
+        Returns
+        -------
+        dict with keys:
+
+        ``"value"`` : float or None
+            Aggregated quantity at this pixel.  ``None`` if the pixel is
+            empty (NaN in agg).
+        ``"x_range"`` : tuple[float, float]
+            Data-space (min, max) of the x-axis covered by this pixel.
+        ``"y_range"`` : tuple[float, float]
+            Data-space (min, max) of the y-axis covered by this pixel.
+        ``"x_centre"`` : float
+            Data-space centre of the pixel on the x-axis.
+        ``"y_centre"`` : float
+            Data-space centre of the pixel on the y-axis.
+        ``"field_names"`` : list[str]
+            Field name(s) associated with this pixel's coordinate range.
+        ``"scan_names"`` : list[str]
+            Scan name(s) associated with this pixel's coordinate range.
+        ``"antenna_pairs"`` : list[tuple[str, str]]
+            Antenna pairs whose baseline_id falls within the pixel range.
+            Empty list if ``baseline_id`` is not a plot axis.
+        ``"freq_range_ghz"`` : tuple[float, float] or None
+            Frequency range in GHz covered by the pixel.  ``None`` if
+            frequency is not a plot axis.
+        ``"n_scatter_samples"`` : int or None
+            Number of individual scatter samples in this pixel.
+            ``None`` if ``scatter_df`` was not provided.
         """
 
     # ------------------------------------------------------------------ #

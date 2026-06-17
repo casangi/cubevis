@@ -42,8 +42,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from .axes import Axis, AxisType
-from .selection import SelectionSpec
+from ..axes import Axis, AxisType
+from ..selection import SelectionSpec
 
 log = logging.getLogger(__name__)
 

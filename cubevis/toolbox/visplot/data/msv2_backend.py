@@ -166,9 +166,11 @@ class MSv2Backend(XArrayReader):
                     engine=_XARRAY_MS_ENGINE,
                     partition_schema=self._partition_schema,
                     chunks=self._chunks,
-                    # xarray-ms maps DATA/CORRECTED_DATA/MODEL_DATA to
-                    # VISIBILITY in its MSv4 view via the column= kwarg
-                    column=self._data_column,
+                    # Note: xarray-ms 0.5.x does not expose a column= kwarg
+                    # at the open_datatree level.  DATA/CORRECTED_DATA/MODEL
+                    # selection is handled by _resolve_vis() which probes
+                    # available variable names in each partition Dataset.
+                    # self._data_column is kept for metadata() reporting.
                 )
             except Exception as exc:
                 raise RuntimeError(
@@ -213,15 +215,31 @@ class MSv2Backend(XArrayReader):
         return dt
 
     def _iter_visibility_partitions(self):
-        """Yield each leaf Dataset that has a non-empty time dimension.
+        """Yield each leaf Dataset that contains visibility data.
 
-        Skips subtree nodes that are metadata-only (antenna_xds,
-        field_and_source_base_xds, etc.) which have no time dim.
+        Filters to nodes that have both a non-empty time dimension and
+        a VISIBILITY (or DATA) data variable.  This excludes metadata
+        subtables (ANTENNA, FIELD, SOURCE, etc.) that xarray-ms attaches
+        as child nodes in the DataTree — those have data variables like
+        ANTENNA_POSITION but no VISIBILITY column.
+
+        Checking for VISIBILITY/DATA is more reliable than checking for
+        time>0 alone because some metadata subtables (e.g. ANTENNA) are
+        broadcast onto the time dimension and would otherwise pass through.
         """
         dt = self._require_open()
         for node in dt.subtree:
-            if node.has_data and node.ds.sizes.get("time", 0) > 0:
-                yield node.ds
+            if not node.has_data:
+                continue
+            ds = node.ds
+            if ds.sizes.get("time", 0) == 0:
+                continue
+            # Must contain a visibility data variable
+            if not any(v in ds.data_vars for v in ("VISIBILITY", "DATA",
+                                                     "CORRECTED_DATA",
+                                                     "MODEL_DATA")):
+                continue
+            yield ds
 
     def _flag_mask(self, ds: xr.Dataset) -> xr.DataArray:
         """Return boolean FLAG DataArray (True = flagged or padded).
@@ -329,19 +347,23 @@ class MSv2Backend(XArrayReader):
             ds = ds.isel(polarization=pol_mask.values)
 
         # --- baseline_id dimension ---
-        if sel.antenna_names is not None:
-            ant1 = ds.coords["baseline_antenna1_name"].values
-            ant2 = ds.coords["baseline_antenna2_name"].values
-            ant_set = set(sel.antenna_names)
-            bl_mask = np.isin(ant1, list(ant_set)) | np.isin(ant2, list(ant_set))
-            ds = ds.isel(baseline_id=bl_mask)
-
-        if sel.baselines is not None:
+        # baselines takes precedence over antenna_names.
+        # Guard with coord presence check — metadata subtables (ANTENNA etc.)
+        # share the baseline_id dim but lack baseline_antenna*_name coords.
+        _has_bl_coords = ("baseline_antenna1_name" in ds.coords and
+                          "baseline_antenna2_name" in ds.coords)
+        if sel.baselines is not None and _has_bl_coords:
             ant1 = ds.coords["baseline_antenna1_name"].values
             ant2 = ds.coords["baseline_antenna2_name"].values
             bl_mask = np.zeros(len(ant1), dtype=bool)
             for a1, a2 in sel.baselines:
                 bl_mask |= (ant1 == a1) & (ant2 == a2)
+            ds = ds.isel(baseline_id=bl_mask)
+        elif sel.antenna_names is not None and _has_bl_coords:
+            ant1 = ds.coords["baseline_antenna1_name"].values
+            ant2 = ds.coords["baseline_antenna2_name"].values
+            ant_set = set(sel.antenna_names)
+            bl_mask = np.isin(ant1, list(ant_set)) | np.isin(ant2, list(ant_set))
             ds = ds.isel(baseline_id=bl_mask)
 
         return ds
@@ -558,20 +580,32 @@ class MSv2Backend(XArrayReader):
         """Return a lazy DataArray for the requested axis and polarization.
 
         Masked with NaN at flagged/padded positions.
+
+        Uses dask.array.absolute() and dask.array.angle() directly for
+        AMPLITUDE and PHASE rather than xr.apply_ufunc().  This avoids
+        the ComplexWarning that fires during Dask's meta-inference pass
+        when apply_ufunc evaluates np.abs on a zero-element complex128
+        meta array.  The dask.array operations are complex-aware and
+        produce the correct float64 output dtype without any warnings.
         """
         vis_pol  = vis.sel(polarization=pol)
         flag_pol = flag.sel(polarization=pol)
 
         if axis == Axis.AMPLITUDE:
-            q = xr.apply_ufunc(
-                np.abs, vis_pol,
-                dask="parallelized", output_dtypes=[float]
+            # da.absolute() is complex-aware: |a+bj| -> sqrt(a²+b²), float64
+            q = xr.DataArray(
+                da.absolute(vis_pol.data),
+                coords={k: v for k, v in vis_pol.coords.items()},
+                dims=vis_pol.dims,
+                attrs=vis_pol.attrs,
             )
         elif axis == Axis.PHASE:
-            q = xr.apply_ufunc(
-                lambda x: np.degrees(np.angle(x)),
-                vis_pol,
-                dask="parallelized", output_dtypes=[float],
+            # da.angle() returns phase in radians; convert to degrees
+            q = xr.DataArray(
+                da.angle(vis_pol.data) * (180.0 / np.pi),
+                coords={k: v for k, v in vis_pol.coords.items()},
+                dims=vis_pol.dims,
+                attrs=vis_pol.attrs,
             )
         elif axis == Axis.REAL:
             q = vis_pol.real
@@ -729,15 +763,18 @@ class MSv2Backend(XArrayReader):
         flag_pol = flag.sel(polarization=polarization)
 
         if quantity == Axis.AMPLITUDE:
-            q = xr.apply_ufunc(
-                np.abs, vis_pol,
-                dask="parallelized", output_dtypes=[float]
+            q = xr.DataArray(
+                da.absolute(vis_pol.data),
+                coords={k: v for k, v in vis_pol.coords.items()},
+                dims=vis_pol.dims,
+                attrs=vis_pol.attrs,
             ).where(~flag_pol)
         elif quantity == Axis.PHASE:
-            q = xr.apply_ufunc(
-                lambda x: np.degrees(np.angle(x)),
-                vis_pol,
-                dask="parallelized", output_dtypes=[float],
+            q = xr.DataArray(
+                da.angle(vis_pol.data) * (180.0 / np.pi),
+                coords={k: v for k, v in vis_pol.coords.items()},
+                dims=vis_pol.dims,
+                attrs=vis_pol.attrs,
             ).where(~flag_pol)
         elif quantity == Axis.REAL:
             q = vis_pol.real.where(~flag_pol)
@@ -1036,6 +1073,13 @@ class MSv2Backend(XArrayReader):
                 )
                 freq_vals = ds.coords["frequency"].values
                 f_mask    = (freq_vals >= f_lo) & (freq_vals <= f_hi)
+                if not f_mask.any():
+                    # Pixel bin may not straddle any channel centre — find
+                    # the nearest channel instead so hover always reports
+                    # a frequency value.
+                    f_centre = (f_lo + f_hi) / 2
+                    nearest  = freq_vals[np.argmin(np.abs(freq_vals - f_centre))]
+                    f_mask   = freq_vals == nearest
                 if f_mask.any():
                     f_sub = freq_vals[f_mask]
                     freq_range_ghz = (
@@ -1090,11 +1134,19 @@ def _check_xarray_ms() -> None:
 def _collect_string_coord(
     ds: xr.Dataset, name: str, target: set
 ) -> None:
-    """Add unique non-empty string values of *name* from *ds* to *target*."""
-    coord = ds.coords.get(name) or ds.data_vars.get(name)
-    if coord is None:
+    """Add unique non-empty string values of *name* from *ds* to *target*.
+
+    Uses explicit key-in-mapping checks rather than truthiness tests to
+    avoid the xarray "truth value of array is ambiguous" ValueError that
+    fires when an xr.DataArray is used in a boolean context.
+    """
+    if name in ds.coords:
+        da = ds.coords[name]
+    elif name in ds.data_vars:
+        da = ds.data_vars[name]
+    else:
         return
-    vals = coord.values if hasattr(coord, "values") else coord.compute().values
+    vals = da.values if hasattr(da, "values") else da.compute().values
     target.update(str(v) for v in vals.ravel() if v)
 
 
@@ -1143,8 +1195,8 @@ def _count_selected_baselines(ds: xr.Dataset, sel: SelectionSpec) -> int:
     if sel.antenna_names is not None and "baseline_antenna1_name" in ds.coords:
         ant1 = ds.coords["baseline_antenna1_name"].values
         ant2 = ds.coords["baseline_antenna2_name"].values
-        ant_set = list(sel.antenna_names)
-        return int((np.isin(ant1, ant_set) | np.isin(ant2, ant_set)).sum())
+        return int((np.isin(ant1, list(sel.antenna_names)) |
+                    np.isin(ant2, list(sel.antenna_names))).sum())
     return total
 
 

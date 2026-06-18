@@ -78,10 +78,40 @@ class SelectionSpec:
     """``(t_min, t_max)`` MJD seconds, or ``None`` = all times."""
 
     baselines: Optional[list[tuple[str, str]]] = None
-    """``[(ant1_name, ant2_name), ...]``, or ``None`` = all baselines."""
+    """``[(ant1_name, ant2_name), ...]``, or ``None`` = all baselines.
+
+    Selects only the exact listed antenna pairs.  To select all baselines
+    *involving* one or more antennas (regardless of the other end), use
+    ``antenna_names`` instead.
+    """
+
+    antenna_names: Optional[list[str]] = None
+    """Antenna name strings, or ``None`` = all antennas.
+
+    Selects every baseline for which ``ant1`` OR ``ant2`` is in this list.
+    This is the natural PlotMS "select by antenna" operation and is more
+    convenient than listing every individual baseline pair.  If both
+    ``baselines`` and ``antenna_names`` are set, ``baselines`` takes
+    precedence and ``antenna_names`` is ignored.
+
+    Only meaningful for ``MSv2Backend`` and ``MSv4Backend``; not used by
+    calibration table readers.
+    """
 
     freq_range: Optional[tuple[float, float]] = None
     """``(f_min, f_max)`` in Hz, or ``None`` = all frequencies."""
+
+    channel_range: Optional[tuple[int, int]] = None
+    """``(c_start, c_end)`` integer channel indices (half-open), or ``None``.
+
+    Selects ``ds.isel(frequency=slice(c_start, c_end))``.  Takes
+    precedence over ``freq_range`` when both are set; use one or the
+    other.  Channel indices are zero-based within the partition's SPW.
+
+    This is more efficient than ``freq_range`` when the plotter knows
+    exactly which channel slice it wants (e.g. after a zoom), because
+    it avoids scanning the frequency coordinate array.
+    """
 
     correlation: Optional[list[str]] = None
     """Polarization product labels, or ``None`` = all correlations."""
@@ -99,7 +129,9 @@ class SelectionSpec:
             and self.spw is None
             and self.time_range is None
             and self.baselines is None
+            and self.antenna_names is None
             and self.freq_range is None
+            and self.channel_range is None
             and self.correlation is None
         )
 
@@ -111,7 +143,9 @@ class SelectionSpec:
             spw=list(self.spw) if self.spw is not None else None,
             time_range=self.time_range,
             baselines=list(self.baselines) if self.baselines is not None else None,
+            antenna_names=list(self.antenna_names) if self.antenna_names is not None else None,
             freq_range=self.freq_range,
+            channel_range=self.channel_range,
             correlation=list(self.correlation) if self.correlation is not None else None,
             data_column=self.data_column,
         )

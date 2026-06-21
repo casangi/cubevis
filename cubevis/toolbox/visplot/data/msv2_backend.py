@@ -663,8 +663,8 @@ class MSv2Backend(XArrayReader):
         quantity: Axis,
         selection: SelectionSpec,
         polarization: Optional[str] = None,
-    ) -> xr.DataArray:
-        """Return a 2D DataArray for raster mode.
+    ) -> tuple[xr.DataArray, tuple[float, float], tuple[float, float]]:
+        """Return a computed 2D DataArray and coordinate extents for raster mode.
 
         The DataArray is reduced to 2D by averaging over dimensions not
         in (y_dim, x_dim):
@@ -673,26 +673,40 @@ class MSv2Backend(XArrayReader):
           - freq×time        : single baseline must be selected via
                                ``selection.baselines``
 
-        The returned array is computed (not lazy) and passed directly to
-        ``datashader.Canvas.raster()``.
+        Returns
+        -------
+        agg : xr.DataArray
+            Computed 2D float64 DataArray (y_dim × x_dim), suitable for
+            ``datashader.Canvas.raster()``.
+        x_range : tuple[float, float]
+            ``(x_min, x_max)`` — full extent of the x coordinate in ``agg``.
+        y_range : tuple[float, float]
+            ``(y_min, y_max)`` — full extent of the y coordinate in ``agg``.
 
         Parameters
         ----------
         y_dim :
             Native axis for the y dimension (``Axis.TIME``,
-            ``Axis.FREQUENCY``, ``Axis.BASELINE_ID``).
+            ``Axis.FREQUENCY``, ``Axis.BASELINE``).
         x_dim :
-            Native axis for the x dimension.
+            Native axis for the x dimension — same vocabulary.
         quantity :
             Derived quantity to colour the raster (``Axis.AMPLITUDE``,
-            ``Axis.PHASE``, ``Axis.FLAG_FRACTION``).
+            ``Axis.PHASE``, ``Axis.REAL``, ``Axis.IMAGINARY``,
+            ``Axis.FLAG``).
         selection :
             Data selection constraints.
         polarization :
             Polarization label (e.g. ``"XX"``).  Required for
-            AMPLITUDE/PHASE/REAL/IMAGINARY; ignored for FLAG_FRACTION.
+            AMPLITUDE/PHASE/REAL/IMAGINARY; ignored for FLAG.
+            Defaults to first available correlation if ``None``.
         """
         self._require_open()
+
+        # Resolve dimension names up front — needed by both the empty
+        # fallback path and the concat path below.
+        y_name = _axis_to_dim(y_dim)
+        x_name = _axis_to_dim(x_dim)
 
         partitions_2d: list[xr.DataArray] = []
 
@@ -708,19 +722,51 @@ class MSv2Backend(XArrayReader):
         if not partitions_2d:
             log.warning("query_raster: no data matched selection in %s",
                         self._path)
-            return xr.DataArray(np.full((1, 1), np.nan, dtype=np.float32))
+            # Return a degenerate 1×1 NaN array.  Named coordinates are
+            # required so _data_to_pixel can look them up by dimension name.
+            # The _render() degenerate guard will bypass Canvas.raster()
+            # and return a blank transparent image instead.
+            empty = xr.DataArray(
+                np.full((1, 1), np.nan, dtype=np.float32),
+                dims=[y_name, x_name],
+                coords={
+                    y_name: np.array([0.0]),
+                    x_name: np.array([0.0]),
+                },
+            )
+            return empty, (0.0, 1.0), (0.0, 1.0)
 
         if len(partitions_2d) == 1:
-            return partitions_2d[0]
+            agg = partitions_2d[0]
+        else:
+            # Multiple partitions (different SPWs) share the same y_dim
+            # (e.g. time) but may have different sizes.  join='outer' pads
+            # the shorter axis with NaN; coords='minimal' avoids broadcasting
+            # non-index coordinates across the concat and suppresses the
+            # FutureWarning about upcoming xarray default changes.
+            # compat='override' silences the conflict check on non-index
+            # coordinates like 'field_name' that differ across SPW partitions
+            # — these coords are not used in the agg and are re-read from raw
+            # partitions by probe_pixel() when metadata is needed.
+            try:
+                agg = xr.concat(
+                    partitions_2d,
+                    dim=y_name,
+                    join="outer",
+                    coords="minimal",
+                    compat="override",
+                )
+            except Exception as exc:
+                log.warning("query_raster: could not concat partitions: %s", exc)
+                agg = partitions_2d[0]
 
-        # Multiple partitions sharing the same (y_dim, x_dim) axes —
-        # concatenate along y_dim then let Datashader handle the merge
-        y_name = _axis_to_dim(y_dim)
-        try:
-            return xr.concat(partitions_2d, dim=y_name)
-        except Exception as exc:
-            log.warning("query_raster: could not concat partitions: %s", exc)
-            return partitions_2d[0]
+        # Extract coordinate extents for Bokeh figure ranging
+        x_coords = agg.coords[x_name].values if x_name in agg.coords else np.array([0.0, 1.0])
+        y_coords = agg.coords[y_name].values if y_name in agg.coords else np.array([0.0, 1.0])
+        x_range  = (float(x_coords.min()), float(x_coords.max()))
+        y_range  = (float(y_coords.min()), float(y_coords.max()))
+
+        return agg, x_range, y_range
 
     def _raster_2d(
         self,
@@ -782,7 +828,7 @@ class MSv2Backend(XArrayReader):
             q = vis_pol.imag.where(~flag_pol)
         else:
             raise NotImplementedError(
-                f"Raster quantity {axis.name} not supported. "
+                f"Raster quantity {quantity.name} not supported. "
                 f"Use AMPLITUDE, PHASE, REAL, IMAGINARY, or FLAG."
             )
 

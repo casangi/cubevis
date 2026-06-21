@@ -13,10 +13,11 @@ import {BokehAppContext} from "./src/bokeh/models/bokeh_app_context"
 import {SharedDict} from "./src/bokeh/models/shared_dict"
 import {EditSpan} from "./src/bokeh/models/edit_span"
 import {EvTextInput} from "./src/bokeh/models/ev_text_input"
+import {VisibilityRaster} from "./src/bokeh/models/visibility_raster"
 import {EvPolyAnnotation} from "./src/bokeh/annotations/ev_poly_annotation"
 import *  as find from "./src/bokeh/util/find"
 import {register_models} from "@bokehjs/base"
 
-export { find, ImagePipe, ImageDataSource, SpectraDataSource, CommMgr, Comm, WcsTicks, DragTool, CBResetTool, Tip, TipButton, SharedDict, Showable, BokehAppContext, EditSpan, EvTextInput, EvPolyAnnotation, serialize, deserialize }
+export { find, ImagePipe, ImageDataSource, SpectraDataSource, CommMgr, Comm, WcsTicks, DragTool, CBResetTool, Tip, TipButton, SharedDict, Showable, BokehAppContext, EditSpan, EvTextInput, VisibilityRaster, EvPolyAnnotation, serialize, deserialize }
 
-register_models({ ImagePipe, ImageDataSource, SpectraDataSource, CommMgr, Comm, WcsTicks, DragTool, CBResetTool, Tip, TipButton, SharedDict, Showable, BokehAppContext, EditSpan, EvTextInput, EvPolyAnnotation })
+register_models({ ImagePipe, ImageDataSource, SpectraDataSource, CommMgr, Comm, WcsTicks, DragTool, CBResetTool, Tip, TipButton, SharedDict, Showable, BokehAppContext, EditSpan, EvTextInput, VisibilityRaster, EvPolyAnnotation })

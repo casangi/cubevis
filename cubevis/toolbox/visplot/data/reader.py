@@ -378,41 +378,60 @@ class XArrayReader(abc.ABC):
     @abc.abstractmethod
     def query_raster(
         self,
-        axis1: Axis,
-        axis2: Axis,
+        y_dim: Axis,
+        x_dim: Axis,
         quantity: Axis,
-        bounds: tuple[float, float, float, float],
-        shape: tuple[int, int],
         selection: SelectionSpec,
-    ) -> xr.DataArray:
-        """Return a 2D DataArray covering *bounds* at viewport pixel *shape*.
+        polarization: Optional[str] = None,
+    ) -> tuple[xr.DataArray, tuple[float, float], tuple[float, float]]:
+        """Return a computed 2D DataArray suitable for ``Canvas.raster()``.
+
+        The backend reduces the selected data to a 2D float64 array by
+        averaging over all dimensions not in ``(y_dim, x_dim)``.  The
+        caller (``VisibilityRaster``) is responsible for constructing the
+        Datashader ``Canvas``, calling ``Canvas.raster()``, applying the
+        colour map, and converting to RGBA for the Bokeh ``image_rgba``
+        glyph.
+
+        Separating the data reduction (backend) from the canvas sizing and
+        colour mapping (``VisibilityRaster``) keeps the backend free of
+        canvas-size knowledge and lets the caller re-colour without
+        re-reading data.
 
         Parameters
         ----------
-        axis1:
-            Axis for the first raster dimension (e.g. ``Axis.BASELINE``).
-        axis2:
-            Axis for the second raster dimension (e.g. ``Axis.TIME``).
-        quantity:
-            Axis whose values colour the raster cells (e.g.
-            ``Axis.AMPLITUDE``).
-        bounds:
-            ``(x_min, x_max, y_min, y_max)`` in native *axis1* / *axis2*
-            coordinate units.  The reader need not clip to the stored
-            data extent — out-of-bounds regions become NaN.
-        shape:
-            ``(n_rows, n_cols)`` output pixel shape, matching the
-            current Bokeh canvas size.
-        selection:
-            Additional data selection constraints beyond the viewport
-            bounds.
+        y_dim :
+            Native axis for the y (row) dimension.  Must be one of
+            ``Axis.TIME``, ``Axis.BASELINE``, ``Axis.FREQUENCY``,
+            ``Axis.CHANNEL``.
+        x_dim :
+            Native axis for the x (column) dimension — same vocabulary.
+        quantity :
+            Derived axis to render as colour.  Must be one of
+            ``Axis.AMPLITUDE``, ``Axis.PHASE``, ``Axis.REAL``,
+            ``Axis.IMAGINARY``, ``Axis.FLAG``.
+        selection :
+            Data selection constraints (field, scan, SPW, time range,
+            baselines, channel range, …).
+        polarization :
+            Polarization product label (e.g. ``"XX"``).  Required for
+            visibility-derived quantities; ignored for ``Axis.FLAG``.
+            If ``None`` and required, the backend logs a warning and
+            uses the first available correlation.
 
         Returns
         -------
-        xr.DataArray
-            2D, Dask-backed DataArray with dimensions
-            ``(axis1_label, axis2_label)`` and *quantity* values.
-            Passed to Datashader ``Canvas.raster()``.
+        agg : xr.DataArray
+            Computed (not lazy) 2D float64 DataArray with named
+            coordinates on both dimensions.  Shape is
+            ``(n_y_cells, n_x_cells)`` where the cell count comes from
+            the data grid, not the canvas pixel size.  Passed directly
+            to ``datashader.Canvas.raster()``.
+        x_range : tuple[float, float]
+            ``(x_min, x_max)`` — the full extent of the x coordinate in
+            the returned ``agg``.  Used to set the Bokeh figure x_range.
+        y_range : tuple[float, float]
+            ``(y_min, y_max)`` — the full extent of the y coordinate.
         """
 
     # ------------------------------------------------------------------ #
@@ -432,7 +451,9 @@ class XArrayReader(abc.ABC):
         """Return the un-pseudocoloured value and metadata for pixel (px, py).
 
         This is the backend half of the Bokeh HoverTool callback.
-        ``VisibilityPlotter`` calls this on every ``mousemove`` event.
+        ``VisibilityRaster`` calls this from the ``j2p`` 'probe' handler,
+        converting hover data-space ``{x, y}`` coordinates to pixel indices
+        before calling this method.
 
         The method implements a two-layer reverse mapping:
 
@@ -448,50 +469,51 @@ class XArrayReader(abc.ABC):
         Parameters
         ----------
         agg :
-            Float64 Datashader aggregation DataArray, shape (H, W), from
-            the most recent ``cvs.raster()`` or ``cvs.points()`` call.
+            Computed float64 2D DataArray, shape (H, W), returned by
+            the most recent ``query_raster()`` call.  Must have named
+            coordinate arrays on both dimensions so that pixel indices
+            can be reverse-mapped to data-space values.
         px, py :
-            Zero-based canvas pixel coordinates.  Origin is bottom-left
-            (Bokeh image_rgba glyph convention).  ``py`` indexes rows
-            (y-axis), ``px`` indexes columns (x-axis).
+            Zero-based canvas pixel indices derived from the hover
+            data-space coordinates.  ``py`` indexes rows (y-axis, dim 0),
+            ``px`` indexes columns (x-axis, dim 1).  Origin is the
+            lower-left corner of the agg array (Datashader convention).
+            ``VisibilityRaster._data_to_pixel()`` performs the conversion
+            from Bokeh hover ``{x, y}`` to ``(px, py)``.
         selection :
-            The ``SelectionSpec`` that was active when ``agg`` was produced.
+            The ``SelectionSpec`` active when ``agg`` was produced.
             Used to narrow the partition scan for metadata retrieval.
         scatter_df :
-            Flat pandas DataFrame returned by ``query_columns()`` (columns
-            ``"x"`` and ``"y"``).  When supplied, the method counts how
-            many individual scatter samples fell in this pixel by a boolean
-            index on the DataFrame — no MS re-read.  Pass ``None`` for
-            raster mode where the sample count is not meaningful.
+            Optional flat DataFrame (columns ``"x"``, ``"y"``) from
+            ``query_columns()``.  When supplied, the method counts scatter
+            samples in this pixel by a boolean index — no MS re-read.
+            Pass ``None`` for pure raster mode.
 
         Returns
         -------
         dict with keys:
 
         ``"value"`` : float or None
-            Aggregated quantity at this pixel.  ``None`` if the pixel is
-            empty (NaN in agg).
+            Aggregated quantity at this pixel.  ``None`` if empty (NaN).
         ``"x_range"`` : tuple[float, float]
-            Data-space (min, max) of the x-axis covered by this pixel.
+            Data-space (min, max) of the x-axis bin for this pixel.
         ``"y_range"`` : tuple[float, float]
-            Data-space (min, max) of the y-axis covered by this pixel.
+            Data-space (min, max) of the y-axis bin for this pixel.
         ``"x_centre"`` : float
-            Data-space centre of the pixel on the x-axis.
+            Data-space centre on the x-axis.
         ``"y_centre"`` : float
-            Data-space centre of the pixel on the y-axis.
+            Data-space centre on the y-axis.
         ``"field_names"`` : list[str]
             Field name(s) associated with this pixel's coordinate range.
         ``"scan_names"`` : list[str]
             Scan name(s) associated with this pixel's coordinate range.
         ``"antenna_pairs"`` : list[tuple[str, str]]
-            Antenna pairs whose baseline_id falls within the pixel range.
+            Antenna pairs in the pixel's baseline_id range.
             Empty list if ``baseline_id`` is not a plot axis.
         ``"freq_range_ghz"`` : tuple[float, float] or None
-            Frequency range in GHz covered by the pixel.  ``None`` if
-            frequency is not a plot axis.
+            Frequency range in GHz.  ``None`` if frequency is not an axis.
         ``"n_scatter_samples"`` : int or None
-            Number of individual scatter samples in this pixel.
-            ``None`` if ``scatter_df`` was not provided.
+            Scatter samples in this pixel; ``None`` if no ``scatter_df``.
         """
 
     # ------------------------------------------------------------------ #
@@ -761,29 +783,100 @@ class MSv4Backend(XArrayReader):
 
     def query_raster(
         self,
-        axis1: Axis,
-        axis2: Axis,
+        y_dim: Axis,
+        x_dim: Axis,
         quantity: Axis,
-        bounds: tuple[float, float, float, float],
-        shape: tuple[int, int],
         selection: SelectionSpec,
-    ) -> xr.DataArray:
+        polarization: Optional[str] = None,
+    ) -> tuple[xr.DataArray, tuple[float, float], tuple[float, float]]:
+        """MSv4 raster query — mirrors MSv2Backend.query_raster interface.
+
+        Reduces the selected data to a 2D float64 DataArray by averaging
+        over all dimensions not in ``(y_dim, x_dim)``, then returns it
+        along with the coordinate extents for Bokeh figure ranging.
+
+        .. note::
+            This is a functional stub.  Full MSv4 partitioning and the
+            ``_apply_selection`` / ``_raster_2d`` pipeline are deferred
+            until the MSv4 dataset is available for integration testing.
+            The method signature is final.
+        """
         self._require_open()
         datasets: list[xr.DataArray] = []
 
         for raw_ds in self._iter_partitions():
             ds = self._apply_selection(raw_ds, selection)
+            if ds.sizes.get("time", 0) == 0:
+                continue
+
+            # Derive the quantity and reduce to 2D
             q_vals = _compute_axis_values(ds, quantity, selection.data_column)
-            datasets.append(q_vals)
+
+            # Select polarization for visibility-derived quantities
+            if polarization is not None and "polarization" in q_vals.dims:
+                q_vals = q_vals.sel(polarization=polarization)
+
+            # Average over any remaining dimensions beyond (y_dim, x_dim)
+            from .msv2_backend import _axis_to_dim  # avoid circular at module level
+            y_name = _axis_to_dim(y_dim)
+            x_name = _axis_to_dim(x_dim)
+            reduce_dims = [d for d in q_vals.dims if d not in (y_name, x_name)]
+            if reduce_dims:
+                q_vals = q_vals.mean(dim=reduce_dims, skipna=True)
+
+            if set(q_vals.dims) == {y_name, x_name}:
+                datasets.append(q_vals.transpose(y_name, x_name).compute())
 
         if not datasets:
-            log.warning("query_raster: no partitions matched selection")
-            n_rows, n_cols = shape
-            return xr.DataArray(
-                np.full((n_rows, n_cols), np.nan),
+            log.warning("MSv4Backend.query_raster: no data matched selection")
+            empty = xr.DataArray(
+                np.full((1, 1), np.nan, dtype=np.float32),
                 attrs={"long_name": quantity.label},
             )
+            return empty, (0.0, 1.0), (0.0, 1.0)
 
-        # The caller (VisibilityRasterSource) runs Datashader on this
-        # DataArray.  The bounds/shape parameterisation is handled there.
-        return xr.concat(datasets, dim="time")
+        agg = xr.concat(datasets, dim=list(datasets[0].dims)[0])
+        x_coords = agg.coords[agg.dims[1]].values
+        y_coords = agg.coords[agg.dims[0]].values
+        x_range = (float(x_coords.min()), float(x_coords.max()))
+        y_range = (float(y_coords.min()), float(y_coords.max()))
+        return agg, x_range, y_range
+
+    def probe_pixel(
+        self,
+        agg: xr.DataArray,
+        px: int,
+        py: int,
+        selection: SelectionSpec,
+        *,
+        scatter_df=None,
+    ) -> dict:
+        """MSv4 pixel probe — functional stub; mirrors MSv2Backend.probe_pixel."""
+        if agg.ndim != 2:
+            raise ValueError(f"agg must be 2D; got {agg.ndim}D")
+        h, w = agg.shape
+        if not (0 <= px < w and 0 <= py < h):
+            raise IndexError(f"Pixel ({px},{py}) out of range for ({w}×{h})")
+
+        raw_val = float(agg.values[py, px])
+        value   = None if np.isnan(raw_val) else raw_val
+
+        x_coords = agg.coords[agg.dims[1]].values
+        y_coords = agg.coords[agg.dims[0]].values
+        x_centre = float(x_coords[px])
+        y_centre = float(y_coords[py])
+        dx = abs(float(x_coords[1] - x_coords[0])) / 2 if len(x_coords) > 1 else 0.0
+        dy = abs(float(y_coords[1] - y_coords[0])) / 2 if len(y_coords) > 1 else 0.0
+
+        return {
+            "value":             value,
+            "x_range":           (x_centre - dx, x_centre + dx),
+            "y_range":           (y_centre - dy, y_centre + dy),
+            "x_centre":          x_centre,
+            "y_centre":          y_centre,
+            "field_names":       [],
+            "scan_names":        [],
+            "antenna_pairs":     [],
+            "freq_range_ghz":    None,
+            "n_scatter_samples": None,
+        }

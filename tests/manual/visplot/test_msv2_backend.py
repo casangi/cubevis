@@ -781,7 +781,8 @@ class TestQueryRaster:
     def teardown_method(self):
         self.backend.close()
 
-    def _check_and_render(self, grid, y_dim, x_dim, label=""):
+    def _check_and_render(self, grid, y_dim, x_dim, label="",
+                          x_range=None, y_range=None):
         """Assert 2D shape, correct dims, finite pixels, Datashader renders."""
         y_name = _axis_to_dim(y_dim)
         x_name = _axis_to_dim(x_dim)
@@ -792,48 +793,57 @@ class TestQueryRaster:
         finite = grid.values[np.isfinite(grid.values)]
         assert len(finite) > 0, f"{label}: all raster values are NaN"
 
-        # Render through Datashader
-        cvs = ds.Canvas(plot_width=PLOT_W, plot_height=PLOT_H)
+        # Render through Datashader; pass coordinate extents when available
+        cvs_kwargs = dict(plot_width=PLOT_W, plot_height=PLOT_H)
+        if x_range is not None:
+            cvs_kwargs["x_range"] = x_range
+        if y_range is not None:
+            cvs_kwargs["y_range"] = y_range
+        cvs = ds.Canvas(**cvs_kwargs)
         agg = cvs.raster(grid, agg=ds_agg.mean())
         assert agg.shape == (PLOT_H, PLOT_W)
         assert int(np.isfinite(agg.values).sum()) > 0
         return finite
 
     def test_time_baseline_amplitude(self):  # RENDERED
-        grid = self.backend.query_raster(
+        grid, x_range, y_range = self.backend.query_raster(
             Axis.TIME, Axis.BASELINE, Axis.AMPLITUDE, self.sel,
             polarization=self.pols[0],
         )
         finite = self._check_and_render(grid, Axis.TIME, Axis.BASELINE,
-                                        "time×baseline amp")
+                                        "time×baseline amp",
+                                        x_range=x_range, y_range=y_range)
         assert (finite >= 0).all()
         print(f"  amp range: [{finite.min():.3f}, {finite.max():.3f}] Jy")
 
     def test_time_baseline_phase(self):  # RENDERED
-        grid = self.backend.query_raster(
+        grid, x_range, y_range = self.backend.query_raster(
             Axis.TIME, Axis.BASELINE, Axis.PHASE, self.sel,
             polarization=self.pols[0],
         )
         finite = self._check_and_render(grid, Axis.TIME, Axis.BASELINE,
-                                        "time×baseline phase")
+                                        "time×baseline phase",
+                                        x_range=x_range, y_range=y_range)
         assert (finite >= -180).all() and (finite <= 180).all()
 
     def test_time_baseline_flag_fraction(self):  # RENDERED
-        grid = self.backend.query_raster(
+        grid, x_range, y_range = self.backend.query_raster(
             Axis.TIME, Axis.BASELINE, Axis.FLAG, self.sel,
         )
         finite = self._check_and_render(grid, Axis.TIME, Axis.BASELINE,
-                                        "time×baseline flag")
+                                        "time×baseline flag",
+                                        x_range=x_range, y_range=y_range)
         assert (finite >= 0).all() and (finite <= 1).all()
         print(f"  flag fraction mean: {finite.mean():.4f}")
 
     def test_frequency_baseline_amplitude(self):  # RENDERED
-        grid = self.backend.query_raster(
+        grid, x_range, y_range = self.backend.query_raster(
             Axis.BASELINE, Axis.FREQUENCY, Axis.AMPLITUDE, self.sel,
             polarization=self.pols[0],
         )
         finite = self._check_and_render(grid, Axis.BASELINE, Axis.FREQUENCY,
-                                        "baseline×freq amp")
+                                        "baseline×freq amp",
+                                        x_range=x_range, y_range=y_range)
         assert (finite >= 0).all()
 
     def test_frequency_time_waterfall(self):  # RENDERED
@@ -853,18 +863,19 @@ class TestQueryRaster:
             channel_range=(0, 48),
             baselines=[(a1, a2)],
         )
-        grid = self.backend.query_raster(
+        grid, x_range, y_range = self.backend.query_raster(
             Axis.TIME, Axis.FREQUENCY, Axis.AMPLITUDE, sel_bl,
             polarization=self.pols[0],
         )
         finite = self._check_and_render(grid, Axis.TIME, Axis.FREQUENCY,
-                                        f"waterfall {a1}-{a2}")
+                                        f"waterfall {a1}-{a2}",
+                                        x_range=x_range, y_range=y_range)
         assert (finite >= 0).all()
         print(f"  waterfall {a1}–{a2}: grid={grid.shape}")
 
     def test_empty_selection_returns_valid_array(self):
         sel = SelectionSpec(time_range=(0.0, 1.0))
-        grid = self.backend.query_raster(
+        grid, x_range, y_range = self.backend.query_raster(
             Axis.TIME, Axis.BASELINE, Axis.AMPLITUDE, sel,
             polarization=self.pols[0],
         )
@@ -875,11 +886,14 @@ class TestQueryRaster:
         """Full science target raster < 5s."""
         sel_full = SelectionSpec(channel_range=(0, 48))
         t0 = time_mod.perf_counter()
-        grid = self.backend.query_raster(
+        grid, x_range, y_range = self.backend.query_raster(
             Axis.TIME, Axis.BASELINE, Axis.AMPLITUDE, sel_full,
             polarization=self.pols[0],
         )
-        cvs = ds.Canvas(plot_width=PLOT_W, plot_height=PLOT_H)
+        cvs = ds.Canvas(
+            plot_width=PLOT_W, plot_height=PLOT_H,
+            x_range=x_range, y_range=y_range,
+        )
         agg = cvs.raster(grid, agg=ds_agg.mean())
         elapsed = time_mod.perf_counter() - t0
         print(f"  Full raster: grid={grid.shape}, {elapsed:.2f}s")
@@ -1064,11 +1078,14 @@ class TestProbePixel:
 
     def _raster_agg(self):
         """Build a time×baseline amplitude raster agg for probe tests."""
-        grid = self.backend.query_raster(
+        grid, x_range, y_range = self.backend.query_raster(
             Axis.TIME, Axis.BASELINE, Axis.AMPLITUDE, self.sel,
             polarization=self.pols[0],
         )
-        cvs = ds.Canvas(plot_width=PLOT_W, plot_height=PLOT_H)
+        cvs = ds.Canvas(
+            plot_width=PLOT_W, plot_height=PLOT_H,
+            x_range=x_range, y_range=y_range,
+        )
         return cvs.raster(grid, agg=ds_agg.mean()), grid
 
     def _scatter_agg_and_df(self):
@@ -1227,11 +1244,14 @@ class TestProbePixel:
         a2   = str(ds_part.coords["baseline_antenna2_name"].values[vidx])
         sel_bl = SelectionSpec(channel_range=(0, 48), baselines=[(a1, a2)])
 
-        grid = self.backend.query_raster(
+        grid, x_range, y_range = self.backend.query_raster(
             Axis.TIME, Axis.FREQUENCY, Axis.AMPLITUDE, sel_bl,
             polarization=self.pols[0],
         )
-        cvs  = ds.Canvas(plot_width=PLOT_W, plot_height=PLOT_H)
+        cvs  = ds.Canvas(
+            plot_width=PLOT_W, plot_height=PLOT_H,
+            x_range=x_range, y_range=y_range,
+        )
         agg  = cvs.raster(grid, agg=ds_agg.mean())
         px, py = self._first_finite_pixel(agg)
         info = self.backend.probe_pixel(agg, px, py, sel_bl)
@@ -1253,11 +1273,14 @@ class TestProbePixel:
         a2   = str(ds_part.coords["baseline_antenna2_name"].values[vidx])
         sel_bl = SelectionSpec(channel_range=(0, 48), baselines=[(a1, a2)])
 
-        grid = self.backend.query_raster(
+        grid, x_range, y_range = self.backend.query_raster(
             Axis.TIME, Axis.FREQUENCY, Axis.AMPLITUDE, sel_bl,
             polarization=self.pols[0],
         )
-        cvs  = ds.Canvas(plot_width=PLOT_W, plot_height=PLOT_H)
+        cvs  = ds.Canvas(
+            plot_width=PLOT_W, plot_height=PLOT_H,
+            x_range=x_range, y_range=y_range,
+        )
         agg  = cvs.raster(grid, agg=ds_agg.mean())
         px, py = self._first_finite_pixel(agg)
         info = self.backend.probe_pixel(agg, px, py, sel_bl)

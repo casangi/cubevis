@@ -468,81 +468,111 @@ class XArrayReader(abc.ABC):
     # ------------------------------------------------------------------ #
 
     @abc.abstractmethod
-    def probe_pixel(
+    def probe_raster_pixel(
         self,
-        agg: xr.DataArray,
-        px: int,
-        py: int,
+        raw_grid: xr.DataArray,
+        gx: int,
+        gy: int,
         selection: SelectionSpec,
-        *,
-        scatter_df: Optional["pd.DataFrame"] = None,
     ) -> dict:
-        """Return the un-pseudocoloured value and metadata for pixel (px, py).
+        """Return metadata for a raster pixel at raw grid indices (gx, gy).
 
-        This is the backend half of the Bokeh HoverTool callback.
-        ``VisibilityRaster`` calls this from the ``j2p`` 'probe' handler,
-        converting hover data-space ``{x, y}`` coordinates to pixel indices
-        before calling this method.
+        Operates on the **raw backend grid** returned by ``query_raster()``
+        — the 2D float64 DataArray with named MS dimension coordinates
+        (e.g. ``"time"``, ``"baseline_id"``, ``"frequency"``).  It does
+        NOT accept a Datashader canvas agg with generic ``"x"``/``"y"``
+        dims.
 
-        The method implements a two-layer reverse mapping:
+        ``VisibilityRaster`` converts the hover data-space ``{x, y}``
+        coordinates to raw grid indices via ``_data_to_pixel()`` before
+        calling this method.
 
-        * **Layer 1** — read the aggregated float64 value directly from
-          ``agg.values[py, px]`` and reverse-map ``(px, py)`` to the
-          data-space coordinate range it covers using the agg DataArray's
-          named coordinate arrays.
-        * **Layer 2** — translate that range to human-readable metadata
-          (field names, scan names, antenna pairs, frequency in GHz) via
-          a coordinate-only lookup against the open partitions.  No
-          VISIBILITY data is read.
+        Layer 1 — value from raw grid
+            ``raw_grid.values[gy, gx]`` gives the pre-computed aggregated
+            quantity.  Named coordinate arrays provide the data-space range
+            for the cell.
+
+        Layer 2 — metadata from partition coordinate lookup
+            Field names, scan names, antenna pairs, and frequency in GHz
+            are retrieved by scanning partition coordinate arrays within the
+            cell's data-space range.  No VISIBILITY read occurs.
 
         Parameters
         ----------
-        agg :
-            Computed float64 2D DataArray, shape (H, W), returned by
-            the most recent ``query_raster()`` call.  Must have named
-            coordinate arrays on both dimensions so that pixel indices
-            can be reverse-mapped to data-space values.
-        px, py :
-            Zero-based canvas pixel indices derived from the hover
-            data-space coordinates.  ``py`` indexes rows (y-axis, dim 0),
-            ``px`` indexes columns (x-axis, dim 1).  Origin is the
-            lower-left corner of the agg array (Datashader convention).
-            ``VisibilityRaster._data_to_pixel()`` performs the conversion
-            from Bokeh hover ``{x, y}`` to ``(px, py)``.
+        raw_grid :
+            The 2D float64 DataArray returned by the most recent
+            ``query_raster()`` call.  Must have named MS coordinate arrays
+            on both dimensions (e.g. ``dims=("time", "baseline_id")``).
+        gx, gy :
+            Zero-based indices into ``raw_grid``.  ``gy`` indexes rows
+            (y-axis, dim 0); ``gx`` indexes columns (x-axis, dim 1).
+            Derived from hover ``{x, y}`` via ``_data_to_pixel()``.
         selection :
-            The ``SelectionSpec`` active when ``agg`` was produced.
-            Used to narrow the partition scan for metadata retrieval.
-        scatter_df :
-            Optional flat DataFrame (columns ``"x"``, ``"y"``) from
-            ``query_columns()``.  When supplied, the method counts scatter
-            samples in this pixel by a boolean index — no MS re-read.
-            Pass ``None`` for pure raster mode.
+            The ``SelectionSpec`` active when ``raw_grid`` was produced.
 
         Returns
         -------
         dict with keys:
 
         ``"value"`` : float or None
-            Aggregated quantity at this pixel.  ``None`` if empty (NaN).
+            Aggregated quantity at this cell.  ``None`` if NaN.
         ``"x_range"`` : tuple[float, float]
-            Data-space (min, max) of the x-axis bin for this pixel.
+            Data-space (min, max) of the x-axis for this cell.
         ``"y_range"`` : tuple[float, float]
-            Data-space (min, max) of the y-axis bin for this pixel.
+            Data-space (min, max) of the y-axis for this cell.
         ``"x_centre"`` : float
             Data-space centre on the x-axis.
         ``"y_centre"`` : float
             Data-space centre on the y-axis.
         ``"field_names"`` : list[str]
-            Field name(s) associated with this pixel's coordinate range.
         ``"scan_names"`` : list[str]
-            Scan name(s) associated with this pixel's coordinate range.
         ``"antenna_pairs"`` : list[tuple[str, str]]
-            Antenna pairs in the pixel's baseline_id range.
-            Empty list if ``baseline_id`` is not a plot axis.
         ``"freq_range_ghz"`` : tuple[float, float] or None
-            Frequency range in GHz.  ``None`` if frequency is not an axis.
-        ``"n_scatter_samples"`` : int or None
-            Scatter samples in this pixel; ``None`` if no ``scatter_df``.
+        """
+
+    @abc.abstractmethod
+    def probe_scatter_pixel(
+        self,
+        canvas_agg: xr.DataArray,
+        px: int,
+        py: int,
+        selection: SelectionSpec,
+        scatter_df: "pd.DataFrame",
+    ) -> dict:
+        """Return metadata for a scatter pixel at canvas indices (px, py).
+
+        Operates on the **Datashader canvas agg** returned by
+        ``cvs.points()``, which has generic ``"x"``/``"y"`` dimensions
+        and canvas-resolution coordinates.  Canvas pixel indices are valid
+        directly against this array without any coordinate conversion.
+
+        Parameters
+        ----------
+        canvas_agg :
+            Float64 Datashader aggregation DataArray from ``cvs.points()``,
+            shape (PLOT_H, PLOT_W), dims ``("y", "x")``.
+        px, py :
+            Zero-based canvas pixel indices.  ``py`` indexes rows (y-axis,
+            dim 0); ``px`` indexes columns (x-axis, dim 1).
+        selection :
+            The ``SelectionSpec`` active when ``scatter_df`` was produced.
+        scatter_df :
+            Flat DataFrame from ``query_columns()`` (columns ``"x"``,
+            ``"y"``).  Rows within the pixel bin are found by a boolean
+            index — no MS re-read.
+
+        Returns
+        -------
+        dict with keys:
+
+        ``"value"`` : float or None
+            Aggregated quantity at this pixel.  ``None`` if NaN.
+        ``"x_range"`` : tuple[float, float]
+        ``"y_range"`` : tuple[float, float]
+        ``"x_centre"`` : float
+        ``"y_centre"`` : float
+        ``"n_scatter_samples"`` : int
+            Number of scatter samples in this pixel bin.
         """
 
     # ------------------------------------------------------------------ #
@@ -877,31 +907,76 @@ class MSv4Backend(XArrayReader):
         agg, is_decimated = _decimate_agg(agg, y_name, x_name, max_cells)
         return agg, x_range, y_range, is_decimated
 
-    def probe_pixel(
+    def probe_raster_pixel(
         self,
-        agg: xr.DataArray,
+        raw_grid: xr.DataArray,
+        gx: int,
+        gy: int,
+        selection: SelectionSpec,
+    ) -> dict:
+        """MSv4 raster probe — functional stub; signature matches ABC."""
+        if raw_grid.ndim != 2:
+            raise ValueError(f"raw_grid must be 2D; got {raw_grid.ndim}D")
+        h, w = raw_grid.shape
+        if not (0 <= gx < w and 0 <= gy < h):
+            raise IndexError(f"Pixel ({gx},{gy}) out of range for ({w}×{h})")
+
+        raw_val  = float(raw_grid.values[gy, gx])
+        value    = None if np.isnan(raw_val) else raw_val
+
+        x_coords = raw_grid.coords[raw_grid.dims[1]].values
+        y_coords = raw_grid.coords[raw_grid.dims[0]].values
+        x_centre = float(x_coords[gx])
+        y_centre = float(y_coords[gy])
+        dx = abs(float(x_coords[-1] - x_coords[0])) / (2 * len(x_coords)) if len(x_coords) > 1 else 0.0
+        dy = abs(float(y_coords[-1] - y_coords[0])) / (2 * len(y_coords)) if len(y_coords) > 1 else 0.0
+
+        return {
+            "value":          value,
+            "x_range":        (x_centre - dx, x_centre + dx),
+            "y_range":        (y_centre - dy, y_centre + dy),
+            "x_centre":       x_centre,
+            "y_centre":       y_centre,
+            "field_names":    [],
+            "scan_names":     [],
+            "antenna_pairs":  [],
+            "freq_range_ghz": None,
+        }
+
+    def probe_scatter_pixel(
+        self,
+        canvas_agg: xr.DataArray,
         px: int,
         py: int,
         selection: SelectionSpec,
-        *,
-        scatter_df=None,
+        scatter_df: "pd.DataFrame",
     ) -> dict:
-        """MSv4 pixel probe — functional stub; mirrors MSv2Backend.probe_pixel."""
-        if agg.ndim != 2:
-            raise ValueError(f"agg must be 2D; got {agg.ndim}D")
-        h, w = agg.shape
+        """MSv4 scatter probe — functional stub; signature matches ABC."""
+        if canvas_agg.ndim != 2:
+            raise ValueError(f"canvas_agg must be 2D; got {canvas_agg.ndim}D")
+        h, w = canvas_agg.shape
         if not (0 <= px < w and 0 <= py < h):
             raise IndexError(f"Pixel ({px},{py}) out of range for ({w}×{h})")
 
-        raw_val = float(agg.values[py, px])
+        raw_val = float(canvas_agg.values[py, px])
         value   = None if np.isnan(raw_val) else raw_val
 
-        x_coords = agg.coords[agg.dims[1]].values
-        y_coords = agg.coords[agg.dims[0]].values
+        x_coords = canvas_agg.coords[canvas_agg.dims[1]].values
+        y_coords = canvas_agg.coords[canvas_agg.dims[0]].values
         x_centre = float(x_coords[px])
         y_centre = float(y_coords[py])
-        dx = abs(float(x_coords[1] - x_coords[0])) / 2 if len(x_coords) > 1 else 0.0
-        dy = abs(float(y_coords[1] - y_coords[0])) / 2 if len(y_coords) > 1 else 0.0
+        dx = abs(float(x_coords[-1] - x_coords[0])) / (2 * len(x_coords)) if len(x_coords) > 1 else 0.0
+        dy = abs(float(y_coords[-1] - y_coords[0])) / (2 * len(y_coords)) if len(y_coords) > 1 else 0.0
+
+        n_scatter = 0
+        if len(scatter_df) > 0:
+            xr_lo, xr_hi = x_centre - dx, x_centre + dx
+            yr_lo, yr_hi = y_centre - dy, y_centre + dy
+            mask = (
+                (scatter_df["x"] >= xr_lo) & (scatter_df["x"] <= xr_hi) &
+                (scatter_df["y"] >= yr_lo) & (scatter_df["y"] <= yr_hi)
+            )
+            n_scatter = int(mask.sum())
 
         return {
             "value":             value,
@@ -909,9 +984,5 @@ class MSv4Backend(XArrayReader):
             "y_range":           (y_centre - dy, y_centre + dy),
             "x_centre":          x_centre,
             "y_centre":          y_centre,
-            "field_names":       [],
-            "scan_names":        [],
-            "antenna_pairs":     [],
-            "freq_range_ghz":    None,
-            "n_scatter_samples": None,
+            "n_scatter_samples": n_scatter,
         }

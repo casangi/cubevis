@@ -806,7 +806,7 @@ class TestQueryRaster:
         return finite
 
     def test_time_baseline_amplitude(self):  # RENDERED
-        grid, x_range, y_range = self.backend.query_raster(
+        grid, x_range, y_range, _ = self.backend.query_raster(
             Axis.TIME, Axis.BASELINE, Axis.AMPLITUDE, self.sel,
             polarization=self.pols[0],
         )
@@ -817,7 +817,7 @@ class TestQueryRaster:
         print(f"  amp range: [{finite.min():.3f}, {finite.max():.3f}] Jy")
 
     def test_time_baseline_phase(self):  # RENDERED
-        grid, x_range, y_range = self.backend.query_raster(
+        grid, x_range, y_range, _ = self.backend.query_raster(
             Axis.TIME, Axis.BASELINE, Axis.PHASE, self.sel,
             polarization=self.pols[0],
         )
@@ -827,7 +827,7 @@ class TestQueryRaster:
         assert (finite >= -180).all() and (finite <= 180).all()
 
     def test_time_baseline_flag_fraction(self):  # RENDERED
-        grid, x_range, y_range = self.backend.query_raster(
+        grid, x_range, y_range, _ = self.backend.query_raster(
             Axis.TIME, Axis.BASELINE, Axis.FLAG, self.sel,
         )
         finite = self._check_and_render(grid, Axis.TIME, Axis.BASELINE,
@@ -837,7 +837,7 @@ class TestQueryRaster:
         print(f"  flag fraction mean: {finite.mean():.4f}")
 
     def test_frequency_baseline_amplitude(self):  # RENDERED
-        grid, x_range, y_range = self.backend.query_raster(
+        grid, x_range, y_range, _ = self.backend.query_raster(
             Axis.BASELINE, Axis.FREQUENCY, Axis.AMPLITUDE, self.sel,
             polarization=self.pols[0],
         )
@@ -863,7 +863,7 @@ class TestQueryRaster:
             channel_range=(0, 48),
             baselines=[(a1, a2)],
         )
-        grid, x_range, y_range = self.backend.query_raster(
+        grid, x_range, y_range, _ = self.backend.query_raster(
             Axis.TIME, Axis.FREQUENCY, Axis.AMPLITUDE, sel_bl,
             polarization=self.pols[0],
         )
@@ -875,7 +875,7 @@ class TestQueryRaster:
 
     def test_empty_selection_returns_valid_array(self):
         sel = SelectionSpec(time_range=(0.0, 1.0))
-        grid, x_range, y_range = self.backend.query_raster(
+        grid, x_range, y_range, _ = self.backend.query_raster(
             Axis.TIME, Axis.BASELINE, Axis.AMPLITUDE, sel,
             polarization=self.pols[0],
         )
@@ -886,7 +886,7 @@ class TestQueryRaster:
         """Full science target raster < 5s."""
         sel_full = SelectionSpec(channel_range=(0, 48))
         t0 = time_mod.perf_counter()
-        grid, x_range, y_range = self.backend.query_raster(
+        grid, x_range, y_range, _ = self.backend.query_raster(
             Axis.TIME, Axis.BASELINE, Axis.AMPLITUDE, sel_full,
             polarization=self.pols[0],
         )
@@ -1045,7 +1045,7 @@ class TestProbePixel:
     These tests verify the three distinct capabilities of probe_pixel():
 
     A. Layer 1 correctness: the float64 value returned matches
-       agg.values[py, px] and the coordinate ranges bracket the
+       canvas_agg.values[py, px] and the coordinate ranges bracket the
        known data-space centre.
 
     B. Layer 2 correctness: metadata fields (field_names, scan_names,
@@ -1077,8 +1077,19 @@ class TestProbePixel:
     # ------------------------------------------------------------------ #
 
     def _raster_agg(self):
-        """Build a time×baseline amplitude raster agg for probe tests."""
-        grid, x_range, y_range = self.backend.query_raster(
+        """Build a time×baseline amplitude raster agg for probe tests.
+
+        Returns
+        -------
+        canvas_agg : xr.DataArray
+            Datashader canvas output (dims 'x'/'y', shape PLOT_H×PLOT_W).
+            Use for value/bounds checks (pixel value == canvas_agg.values[py, px]).
+        raw_grid : xr.DataArray
+            Raw backend grid (dims 'time'/'baseline_id').
+            Pass to probe_pixel() — it needs named MS dimensions, not
+            Datashader's generic 'x'/'y' dims.
+        """
+        raw_grid, x_range, y_range, _ = self.backend.query_raster(
             Axis.TIME, Axis.BASELINE, Axis.AMPLITUDE, self.sel,
             polarization=self.pols[0],
         )
@@ -1086,7 +1097,8 @@ class TestProbePixel:
             plot_width=PLOT_W, plot_height=PLOT_H,
             x_range=x_range, y_range=y_range,
         )
-        return cvs.raster(grid, agg=ds_agg.mean()), grid
+        canvas_agg = cvs.raster(raw_grid, agg=ds_agg.mean())
+        return canvas_agg, raw_grid, x_range, y_range
 
     def _scatter_agg_and_df(self):
         """Build an amp-vs-time scatter agg + DataFrame for probe tests."""
@@ -1094,19 +1106,38 @@ class TestProbePixel:
         result = self.backend.query_columns(Axis.TIME, yaxes, self.sel)
         df     = result[(Axis.AMPLITUDE, self.pols[0])]
         cvs    = ds.Canvas(plot_width=PLOT_W, plot_height=PLOT_H)
-        agg    = cvs.points(df, "x", "y", agg=ds_agg.mean("y"))
-        return agg, df
+        canvas_agg    = cvs.points(df, "x", "y", agg=ds_agg.mean("y"))
+        return canvas_agg, df
 
-    def _first_finite_pixel(self, agg):
+    def _canvas_to_grid(self, canvas_agg, raw_grid, x_range, y_range, px, py):
+        """Convert canvas pixel (px,py) to raw_grid indices (gx,gy)."""
+        # x/y data-space coordinate at the canvas pixel centre
+        x_coords_c = canvas_agg.coords[canvas_agg.dims[1]].values
+        y_coords_c = canvas_agg.coords[canvas_agg.dims[0]].values
+        x_val = float(x_coords_c[px])
+        y_val = float(y_coords_c[py])
+        # Find nearest raw_grid coordinate
+        x_name = raw_grid.dims[1]
+        y_name = raw_grid.dims[0]
+        x_coords_g = raw_grid.coords[x_name].values
+        y_coords_g = raw_grid.coords[y_name].values
+        gx = int(np.argmin(np.abs(x_coords_g - x_val)))
+        gy = int(np.argmin(np.abs(y_coords_g - y_val)))
+        h, w = raw_grid.shape
+        gx = max(0, min(gx, w - 1))
+        gy = max(0, min(gy, h - 1))
+        return gx, gy
+
+    def _first_finite_pixel(self, canvas_agg):
         """Return (px, py) of the first finite-value pixel."""
-        ys, xs = np.where(np.isfinite(agg.values))
+        ys, xs = np.where(np.isfinite(canvas_agg.values))
         if len(ys) == 0:
-            pytest.skip("No finite pixels in agg — cannot test probe")
+            pytest.skip("No finite pixels in canvas_agg — cannot test probe")
         return int(xs[0]), int(ys[0])
 
-    def _first_nan_pixel(self, agg):
+    def _first_nan_pixel(self, canvas_agg):
         """Return (px, py) of the first NaN pixel, or None."""
-        ys, xs = np.where(np.isnan(agg.values))
+        ys, xs = np.where(np.isnan(canvas_agg.values))
         if len(ys) == 0:
             return None
         return int(xs[0]), int(ys[0])
@@ -1116,73 +1147,83 @@ class TestProbePixel:
     # ------------------------------------------------------------------ #
 
     def test_raster_value_matches_agg(self):
-        """probe_pixel value == agg.values[py, px] for a finite pixel."""
-        agg, _ = self._raster_agg()
-        px, py = self._first_finite_pixel(agg)
-        info   = self.backend.probe_pixel(agg, px, py, self.sel)
+        """probe_pixel value == canvas_agg.values[py, px] for a finite pixel."""
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
+        px, py = self._first_finite_pixel(canvas_agg)
+        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px, py)
+        info   = self.backend.probe_pixel(raw_grid, gx, gy, self.sel)
 
-        expected = float(agg.values[py, px])
+        expected = float(raw_grid.values[gy, gx])
         assert info["value"] is not None
         assert abs(info["value"] - expected) < 1e-6, (
-            f"probe value {info['value']:.6f} != agg[{py},{px}]={expected:.6f}"
+            f"probe value {info['value']:.6f} != raw_grid[{gy},{gx}]={expected:.6f}"
         )
 
     def test_raster_value_none_for_nan_pixel(self):
         """probe_pixel returns value=None for an empty (NaN) pixel."""
-        agg, _ = self._raster_agg()
-        nan_pix = self._first_nan_pixel(agg)
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
+        nan_pix = self._first_nan_pixel(canvas_agg)
         if nan_pix is None:
-            pytest.skip("No NaN pixels in raster agg")
+            pytest.skip("No NaN pixels in raster")
         px, py = nan_pix
-        info = self.backend.probe_pixel(agg, px, py, self.sel)
+        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px, py)
+        info = self.backend.probe_pixel(raw_grid, gx, gy, self.sel)
         assert info["value"] is None
 
     def test_x_centre_within_x_range(self):
         """x_centre must lie within x_range."""
-        agg, _ = self._raster_agg()
-        px, py = self._first_finite_pixel(agg)
-        info   = self.backend.probe_pixel(agg, px, py, self.sel)
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
+        px, py = self._first_finite_pixel(canvas_agg)
+        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px, py)
+        info   = self.backend.probe_pixel(raw_grid, gx, gy, self.sel)
         assert info["x_range"][0] <= info["x_centre"] <= info["x_range"][1], (
             f"x_centre {info['x_centre']} not in x_range {info['x_range']}"
         )
 
     def test_y_centre_within_y_range(self):
         """y_centre must lie within y_range."""
-        agg, _ = self._raster_agg()
-        px, py = self._first_finite_pixel(agg)
-        info   = self.backend.probe_pixel(agg, px, py, self.sel)
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
+        px, py = self._first_finite_pixel(canvas_agg)
+        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px, py)
+        info   = self.backend.probe_pixel(raw_grid, gx, gy, self.sel)
         assert info["y_range"][0] <= info["y_centre"] <= info["y_range"][1]
 
     def test_x_range_ordered(self):
-        agg, _ = self._raster_agg()
-        px, py = self._first_finite_pixel(agg)
-        info   = self.backend.probe_pixel(agg, px, py, self.sel)
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
+        px, py = self._first_finite_pixel(canvas_agg)
+        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px, py)
+        info   = self.backend.probe_pixel(raw_grid, gx, gy, self.sel)
         assert info["x_range"][0] <= info["x_range"][1]
 
     def test_y_range_ordered(self):
-        agg, _ = self._raster_agg()
-        px, py = self._first_finite_pixel(agg)
-        info   = self.backend.probe_pixel(agg, px, py, self.sel)
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
+        px, py = self._first_finite_pixel(canvas_agg)
+        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px, py)
+        info   = self.backend.probe_pixel(raw_grid, gx, gy, self.sel)
         assert info["y_range"][0] <= info["y_range"][1]
 
     def test_coordinate_ranges_differ_per_pixel(self):
         """Adjacent pixels must map to different data-space ranges."""
-        agg, _ = self._raster_agg()
-        px, py = self._first_finite_pixel(agg)
-        info0  = self.backend.probe_pixel(agg, px,     py, self.sel)
-        if px + 1 < PLOT_W:
-            info1 = self.backend.probe_pixel(agg, px + 1, py, self.sel)
-            assert info0["x_range"] != info1["x_range"], (
-                "Adjacent x pixels map to same data-space range"
-            )
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
+        px, py = self._first_finite_pixel(canvas_agg)
+        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px, py)
+        info0  = self.backend.probe_pixel(raw_grid, gx, gy, self.sel)
+        if px + 1 < canvas_agg.shape[1]:
+            gx1, gy1 = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px + 1, py)
+            if gx1 != gx:  # only meaningful if canvas pixels map to different grid cells
+                info1 = self.backend.probe_pixel(raw_grid, gx1, gy1, self.sel)
+                assert info0["x_range"] != info1["x_range"], (
+                    "Adjacent x pixels map to same data-space range"
+                )
 
     def test_out_of_range_pixel_raises(self):
         """Requesting a pixel outside the canvas dimensions must raise."""
-        agg, _ = self._raster_agg()
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
+        h_g, w_g = raw_grid.shape
         with pytest.raises(IndexError):
-            self.backend.probe_pixel(agg, PLOT_W, 0, self.sel)
+            self.backend.probe_pixel(raw_grid, w_g, 0, self.sel)
         with pytest.raises(IndexError):
-            self.backend.probe_pixel(agg, 0, PLOT_H, self.sel)
+            self.backend.probe_pixel(raw_grid, 0, h_g, self.sel)
 
     # ------------------------------------------------------------------ #
     # B. Layer 2 — metadata lookup                                        #
@@ -1190,9 +1231,10 @@ class TestProbePixel:
 
     def test_raster_metadata_keys_present(self):
         """All expected metadata keys are present in the probe result."""
-        agg, _ = self._raster_agg()
-        px, py = self._first_finite_pixel(agg)
-        info   = self.backend.probe_pixel(agg, px, py, self.sel)
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
+        px, py = self._first_finite_pixel(canvas_agg)
+        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px, py)
+        info   = self.backend.probe_pixel(raw_grid, gx, gy, self.sel)
         required = {
             "value", "x_range", "y_range", "x_centre", "y_centre",
             "field_names", "scan_names", "antenna_pairs",
@@ -1204,13 +1246,14 @@ class TestProbePixel:
 
     def test_raster_field_names_plausible(self):
         """field_names are non-empty strings when time is a plot axis."""
-        agg, _ = self._raster_agg()
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
         # Find a pixel whose y_range (time) has associated field data
         for py in range(PLOT_H):
             for px in range(PLOT_W):
-                if not np.isfinite(agg.values[py, px]):
+                if not np.isfinite(canvas_agg.values[py, px]):
                     continue
-                info = self.backend.probe_pixel(agg, px, py, self.sel)
+                gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px, py)
+                info = self.backend.probe_pixel(raw_grid, gx, gy, self.sel)
                 if info["field_names"]:
                     assert all(isinstance(f, str) and f
                                for f in info["field_names"])
@@ -1220,9 +1263,10 @@ class TestProbePixel:
 
     def test_raster_antenna_pairs_for_baseline_axis(self):
         """antenna_pairs are populated when baseline_id is a plot axis."""
-        agg, _ = self._raster_agg()
-        px, py = self._first_finite_pixel(agg)
-        info   = self.backend.probe_pixel(agg, px, py, self.sel)
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
+        px, py = self._first_finite_pixel(canvas_agg)
+        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px, py)
+        info   = self.backend.probe_pixel(raw_grid, gx, gy, self.sel)
         # time×baseline raster has baseline_id as x_dim
         assert len(info["antenna_pairs"]) > 0, (
             "antenna_pairs should be non-empty for time×baseline raster"
@@ -1244,7 +1288,7 @@ class TestProbePixel:
         a2   = str(ds_part.coords["baseline_antenna2_name"].values[vidx])
         sel_bl = SelectionSpec(channel_range=(0, 48), baselines=[(a1, a2)])
 
-        grid, x_range, y_range = self.backend.query_raster(
+        grid, x_range, y_range, _ = self.backend.query_raster(
             Axis.TIME, Axis.FREQUENCY, Axis.AMPLITUDE, sel_bl,
             polarization=self.pols[0],
         )
@@ -1252,9 +1296,10 @@ class TestProbePixel:
             plot_width=PLOT_W, plot_height=PLOT_H,
             x_range=x_range, y_range=y_range,
         )
-        agg  = cvs.raster(grid, agg=ds_agg.mean())
-        px, py = self._first_finite_pixel(agg)
-        info = self.backend.probe_pixel(agg, px, py, sel_bl)
+        canvas_agg  = cvs.raster(grid, agg=ds_agg.mean())
+        px, py = self._first_finite_pixel(canvas_agg)
+        gx, gy = self._canvas_to_grid(canvas_agg, grid, x_range, y_range, px, py)
+        info = self.backend.probe_pixel(grid, gx, gy, sel_bl)
         assert info["antenna_pairs"] == [], (
             "antenna_pairs should be empty for time×frequency raster"
         )
@@ -1273,7 +1318,7 @@ class TestProbePixel:
         a2   = str(ds_part.coords["baseline_antenna2_name"].values[vidx])
         sel_bl = SelectionSpec(channel_range=(0, 48), baselines=[(a1, a2)])
 
-        grid, x_range, y_range = self.backend.query_raster(
+        grid, x_range, y_range, _ = self.backend.query_raster(
             Axis.TIME, Axis.FREQUENCY, Axis.AMPLITUDE, sel_bl,
             polarization=self.pols[0],
         )
@@ -1281,9 +1326,10 @@ class TestProbePixel:
             plot_width=PLOT_W, plot_height=PLOT_H,
             x_range=x_range, y_range=y_range,
         )
-        agg  = cvs.raster(grid, agg=ds_agg.mean())
-        px, py = self._first_finite_pixel(agg)
-        info = self.backend.probe_pixel(agg, px, py, sel_bl)
+        canvas_agg  = cvs.raster(grid, agg=ds_agg.mean())
+        px, py = self._first_finite_pixel(canvas_agg)
+        gx, gy = self._canvas_to_grid(canvas_agg, grid, x_range, y_range, px, py)
+        info = self.backend.probe_pixel(grid, gx, gy, sel_bl)
         assert info["freq_range_ghz"] is not None
         f0, f1 = info["freq_range_ghz"]
         assert f0 <= f1
@@ -1293,16 +1339,18 @@ class TestProbePixel:
 
     def test_raster_no_freq_range_for_time_baseline(self):
         """freq_range_ghz is None for time×baseline raster (no freq axis)."""
-        agg, _ = self._raster_agg()
-        px, py = self._first_finite_pixel(agg)
-        info   = self.backend.probe_pixel(agg, px, py, self.sel)
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
+        px, py = self._first_finite_pixel(canvas_agg)
+        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px, py)
+        info   = self.backend.probe_pixel(raw_grid, gx, gy, self.sel)
         assert info["freq_range_ghz"] is None
 
     def test_no_scatter_samples_without_df(self):
         """n_scatter_samples is None when no scatter_df is provided."""
-        agg, _ = self._raster_agg()
-        px, py = self._first_finite_pixel(agg)
-        info   = self.backend.probe_pixel(agg, px, py, self.sel)
+        canvas_agg, raw_grid, x_range_raster, y_range_raster = self._raster_agg()
+        px, py = self._first_finite_pixel(canvas_agg)
+        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, x_range_raster, y_range_raster, px, py)
+        info   = self.backend.probe_pixel(raw_grid, gx, gy, self.sel)
         assert info["n_scatter_samples"] is None
 
     # ------------------------------------------------------------------ #
@@ -1310,22 +1358,22 @@ class TestProbePixel:
     # ------------------------------------------------------------------ #
 
     def test_scatter_probe_value_matches_agg(self):
-        """probe_pixel value matches agg.values[py,px] in scatter mode."""
-        agg, df = self._scatter_agg_and_df()
-        px, py  = self._first_finite_pixel(agg)
+        """probe_pixel value matches canvas_agg.values[py,px] in scatter mode."""
+        canvas_agg, df = self._scatter_agg_and_df()
+        px, py  = self._first_finite_pixel(canvas_agg)
         info    = self.backend.probe_pixel(
-            agg, px, py, self.sel, scatter_df=df
+            canvas_agg, px, py, self.sel, scatter_df=df
         )
-        expected = float(agg.values[py, px])
+        expected = float(canvas_agg.values[py, px])
         assert info["value"] is not None
         assert abs(info["value"] - expected) < 1e-6
 
     def test_scatter_sample_count_matches_manual_index(self):
         """n_scatter_samples matches a manual boolean-index count on df."""
-        agg, df = self._scatter_agg_and_df()
-        px, py  = self._first_finite_pixel(agg)
+        canvas_agg, df = self._scatter_agg_and_df()
+        px, py  = self._first_finite_pixel(canvas_agg)
         info    = self.backend.probe_pixel(
-            agg, px, py, self.sel, scatter_df=df
+            canvas_agg, px, py, self.sel, scatter_df=df
         )
         assert info["n_scatter_samples"] is not None
 
@@ -1346,13 +1394,13 @@ class TestProbePixel:
 
     def test_scatter_empty_pixel_has_zero_or_none_samples(self):
         """An empty (NaN) scatter pixel has n_scatter_samples == 0."""
-        agg, df = self._scatter_agg_and_df()
-        nan_pix = self._first_nan_pixel(agg)
+        canvas_agg, df = self._scatter_agg_and_df()
+        nan_pix = self._first_nan_pixel(canvas_agg)
         if nan_pix is None:
-            pytest.skip("No NaN pixels in scatter agg")
+            pytest.skip("No NaN pixels in scatter canvas_agg")
         px, py = nan_pix
         info   = self.backend.probe_pixel(
-            agg, px, py, self.sel, scatter_df=df
+            canvas_agg, px, py, self.sel, scatter_df=df
         )
         assert info["value"] is None
         assert info["n_scatter_samples"] == 0, (
@@ -1361,13 +1409,13 @@ class TestProbePixel:
 
     def test_scatter_sample_count_nonnegative(self):
         """n_scatter_samples is non-negative for all probed pixels."""
-        agg, df = self._scatter_agg_and_df()
+        canvas_agg, df = self._scatter_agg_and_df()
         # Sample a handful of pixels
-        ys, xs = np.where(np.isfinite(agg.values))
+        ys, xs = np.where(np.isfinite(canvas_agg.values))
         sample_indices = list(zip(xs[:5], ys[:5]))
         for px, py in sample_indices:
             info = self.backend.probe_pixel(
-                agg, int(px), int(py), self.sel, scatter_df=df
+                canvas_agg, int(px), int(py), self.sel, scatter_df=df
             )
             assert info["n_scatter_samples"] >= 0
 

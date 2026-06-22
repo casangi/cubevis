@@ -663,69 +663,61 @@ class MSv2Backend(XArrayReader):
         quantity: Axis,
         selection: SelectionSpec,
         polarization: Optional[str] = None,
-    ) -> tuple[xr.DataArray, tuple[float, float], tuple[float, float]]:
-        """Return a computed 2D DataArray and coordinate extents for raster mode.
+        max_cells: int = 2_000_000,
+    ) -> tuple[xr.DataArray, tuple[float, float], tuple[float, float], bool]:
+        """Return a computed 2D DataArray, coordinate extents, and decimation flag.
 
-        The DataArray is reduced to 2D by averaging over dimensions not
-        in (y_dim, x_dim):
-          - time×baseline_id : average over frequency (and pol)
-          - freq×baseline_id : average over time (and pol)
-          - freq×time        : single baseline must be selected via
-                               ``selection.baselines``
+        Reduces the selected data to a 2D float64 array by averaging over
+        dimensions not in (y_dim, x_dim), then decimates to at most
+        ``max_cells`` cells via a uniform stride applied before ``.compute()``
+        so Dask only reads the strided rows/columns from disk.
 
-        Returns
-        -------
-        agg : xr.DataArray
-            Computed 2D float64 DataArray (y_dim × x_dim), suitable for
-            ``datashader.Canvas.raster()``.
-        x_range : tuple[float, float]
-            ``(x_min, x_max)`` — full extent of the x coordinate in ``agg``.
-        y_range : tuple[float, float]
-            ``(y_min, y_max)`` — full extent of the y coordinate in ``agg``.
+        See ``XArrayReader.query_raster`` for the full two-level rendering
+        contract and parameter documentation.
 
-        Parameters
-        ----------
-        y_dim :
-            Native axis for the y dimension (``Axis.TIME``,
-            ``Axis.FREQUENCY``, ``Axis.BASELINE``).
-        x_dim :
-            Native axis for the x dimension — same vocabulary.
-        quantity :
-            Derived quantity to colour the raster (``Axis.AMPLITUDE``,
-            ``Axis.PHASE``, ``Axis.REAL``, ``Axis.IMAGINARY``,
-            ``Axis.FLAG``).
-        selection :
-            Data selection constraints.
-        polarization :
-            Polarization label (e.g. ``"XX"``).  Required for
-            AMPLITUDE/PHASE/REAL/IMAGINARY; ignored for FLAG.
-            Defaults to first available correlation if ``None``.
+        Axis combinations:
+          - TIME × BASELINE  : average over frequency (and pol)
+          - FREQUENCY × BASELINE : average over time (and pol)
+          - TIME × FREQUENCY : single baseline via ``selection.baselines``
         """
         self._require_open()
 
-        # Resolve dimension names up front — needed by both the empty
-        # fallback path and the concat path below.
+        # Resolve dimension names up front — needed by empty fallback and concat.
         y_name = _axis_to_dim(y_dim)
         x_name = _axis_to_dim(x_dim)
 
         partitions_2d: list[xr.DataArray] = []
+
+        # Track global coordinate extents across all partitions before any
+        # decimation, so x_range/y_range always reflect true data bounds.
+        all_x_vals: list[float] = []
+        all_y_vals: list[float] = []
 
         for raw_ds in self._iter_visibility_partitions():
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
                 continue
 
+            # Capture full coordinate extents before decimation
+            if x_name in ds.coords:
+                xv = ds.coords[x_name].values
+                all_x_vals.extend([float(xv.min()), float(xv.max())])
+            if y_name in ds.coords:
+                yv = ds.coords[y_name].values
+                all_y_vals.extend([float(yv.min()), float(yv.max())])
+
             arr = self._raster_2d(ds, y_dim, x_dim, quantity, polarization)
             if arr is not None:
+                # Decimate per-partition before .compute() so Dask only
+                # reads the strided rows from disk.  Each partition's stride
+                # is computed independently from its local cell count; the
+                # global stride is re-applied after concat if needed.
+                arr, _ = _decimate_agg(arr, y_name, x_name, max_cells)
                 partitions_2d.append(arr.compute())
 
         if not partitions_2d:
             log.warning("query_raster: no data matched selection in %s",
                         self._path)
-            # Return a degenerate 1×1 NaN array.  Named coordinates are
-            # required so _data_to_pixel can look them up by dimension name.
-            # The _render() degenerate guard will bypass Canvas.raster()
-            # and return a blank transparent image instead.
             empty = xr.DataArray(
                 np.full((1, 1), np.nan, dtype=np.float32),
                 dims=[y_name, x_name],
@@ -734,20 +726,11 @@ class MSv2Backend(XArrayReader):
                     x_name: np.array([0.0]),
                 },
             )
-            return empty, (0.0, 1.0), (0.0, 1.0)
+            return empty, (0.0, 1.0), (0.0, 1.0), False
 
         if len(partitions_2d) == 1:
             agg = partitions_2d[0]
         else:
-            # Multiple partitions (different SPWs) share the same y_dim
-            # (e.g. time) but may have different sizes.  join='outer' pads
-            # the shorter axis with NaN; coords='minimal' avoids broadcasting
-            # non-index coordinates across the concat and suppresses the
-            # FutureWarning about upcoming xarray default changes.
-            # compat='override' silences the conflict check on non-index
-            # coordinates like 'field_name' that differ across SPW partitions
-            # — these coords are not used in the agg and are re-read from raw
-            # partitions by probe_pixel() when metadata is needed.
             try:
                 agg = xr.concat(
                     partitions_2d,
@@ -760,13 +743,27 @@ class MSv2Backend(XArrayReader):
                 log.warning("query_raster: could not concat partitions: %s", exc)
                 agg = partitions_2d[0]
 
-        # Extract coordinate extents for Bokeh figure ranging
-        x_coords = agg.coords[x_name].values if x_name in agg.coords else np.array([0.0, 1.0])
-        y_coords = agg.coords[y_name].values if y_name in agg.coords else np.array([0.0, 1.0])
-        x_range  = (float(x_coords.min()), float(x_coords.max()))
-        y_range  = (float(y_coords.min()), float(y_coords.max()))
+        # Use pre-decimation extents collected partition-by-partition above.
+        # Do NOT derive extents from agg.coords here because: (a) the
+        # per-partition _decimate_agg pass may have already strided away the
+        # last coordinate value, and (b) the global pass below will do so again.
+        if all_x_vals:
+            x_range = (min(all_x_vals), max(all_x_vals))
+        else:
+            x_coords_full = agg.coords[x_name].values if x_name in agg.coords else np.array([0.0, 1.0])
+            x_range = (float(x_coords_full.min()), float(x_coords_full.max()))
+        if all_y_vals:
+            y_range = (min(all_y_vals), max(all_y_vals))
+        else:
+            y_coords_full = agg.coords[y_name].values if y_name in agg.coords else np.array([0.0, 1.0])
+            y_range = (float(y_coords_full.min()), float(y_coords_full.max()))
 
-        return agg, x_range, y_range
+        # Final decimation pass on the concatenated agg to enforce max_cells
+        # globally (the per-partition pass above may have been under-strict
+        # because each partition didn't know the total cell count).
+        agg, is_decimated = _decimate_agg(agg, y_name, x_name, max_cells)
+
+        return agg, x_range, y_range, is_decimated
 
     def _raster_2d(
         self,
@@ -1045,9 +1042,20 @@ class MSv2Backend(XArrayReader):
         x_centre = float(x_coords[px])
         y_centre = float(y_coords[py])
 
-        # Bin half-widths from uniform pixel spacing
-        dx = abs(float(x_coords[1] - x_coords[0])) / 2 if len(x_coords) > 1 else 0.0
-        dy = abs(float(y_coords[1] - y_coords[0])) / 2 if len(y_coords) > 1 else 0.0
+        # Bin half-widths: use the full coordinate span divided by the number
+        # of cells rather than the spacing between the first two coordinates.
+        # After decimation + concat across partitions, agg coordinates may not
+        # be uniformly spaced at the stride pitch, so x_coords[1]-x_coords[0]
+        # can severely underestimate the cell width and cause the baseline_id
+        # range lookup in Step 3 to find no matching partition rows.
+        if len(x_coords) > 1:
+            dx = abs(float(x_coords[-1] - x_coords[0])) / (2 * len(x_coords))
+        else:
+            dx = 0.0
+        if len(y_coords) > 1:
+            dy = abs(float(y_coords[-1] - y_coords[0])) / (2 * len(y_coords))
+        else:
+            dy = 0.0
 
         x_range = (x_centre - dx, x_centre + dx)
         y_range = (y_centre - dy, y_centre + dy)
@@ -1217,6 +1225,72 @@ def _axis_to_dim(axis: Axis) -> str:
             f"Supported: {[a.name for a in _MAP]}"
         )
     return dim
+
+
+
+def _decimate_agg(
+    agg: xr.DataArray,
+    y_name: str,
+    x_name: str,
+    max_cells: int,
+) -> tuple[xr.DataArray, bool]:
+    """Stride a 2D agg DataArray to fit within ``max_cells`` cells.
+
+    Computes the stride in each dimension that reduces the total cell count
+    to at most ``max_cells`` while preserving the aspect ratio of the grid.
+    The stride is applied via ``isel()`` *before* ``.compute()`` so that
+    Dask only reads the selected rows/columns from disk.
+
+    Parameters
+    ----------
+    agg :
+        Lazy or computed 2D DataArray, shape (n_y, n_x).
+    y_name, x_name :
+        Dimension names for the y (row) and x (column) axes.
+    max_cells :
+        Maximum allowed cells in the output.
+
+    Returns
+    -------
+    agg_out : xr.DataArray
+        Strided DataArray.  Identical to ``agg`` if no stride was needed.
+    is_decimated : bool
+        ``True`` if any stride > 1 was applied.
+    """
+    import math
+    n_y, n_x = agg.sizes[y_name], agg.sizes[x_name]
+    total = n_y * n_x
+
+    if total <= max_cells:
+        return agg, False
+
+    # Compute per-dimension strides preserving aspect ratio:
+    #   stride_y / stride_x ≈ n_y / n_x
+    # From: (n_y / stride_y) * (n_x / stride_x) <= max_cells
+    #       stride_y = stride_x * (n_y / n_x)
+    # Substituting: (n_x / stride_x)^2 * (n_y / n_x) <= max_cells
+    #   stride_x = ceil( sqrt(n_x^2 / (max_cells * n_x / n_y)) )
+    #            = ceil( sqrt(n_x * n_y / max_cells) )
+    scale = math.sqrt(total / max_cells)
+    stride_y = max(1, math.ceil(scale * math.sqrt(n_y / n_x)))
+    stride_x = max(1, math.ceil(scale * math.sqrt(n_x / n_y)))
+
+    # Clamp so we always keep at least 2 cells on each axis
+    stride_y = min(stride_y, n_y // 2 or 1)
+    stride_x = min(stride_x, n_x // 2 or 1)
+
+    log.debug(
+        "_decimate_agg: (%d, %d) -> stride (%d, %d) -> (~%d, ~%d)  max_cells=%d",
+        n_y, n_x, stride_y, stride_x,
+        math.ceil(n_y / stride_y), math.ceil(n_x / stride_x),
+        max_cells,
+    )
+
+    agg_out = agg.isel(
+        {y_name: slice(None, None, stride_y),
+         x_name: slice(None, None, stride_x)},
+    )
+    return agg_out, True
 
 
 def _count_selected_time(ds: xr.Dataset, sel: SelectionSpec) -> int:

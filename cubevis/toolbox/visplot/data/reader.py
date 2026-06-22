@@ -383,15 +383,31 @@ class XArrayReader(abc.ABC):
         quantity: Axis,
         selection: SelectionSpec,
         polarization: Optional[str] = None,
-    ) -> tuple[xr.DataArray, tuple[float, float], tuple[float, float]]:
+        max_cells: int = 2_000_000,
+    ) -> tuple[xr.DataArray, tuple[float, float], tuple[float, float], bool]:
         """Return a computed 2D DataArray suitable for ``Canvas.raster()``.
 
         The backend reduces the selected data to a 2D float64 array by
-        averaging over all dimensions not in ``(y_dim, x_dim)``.  The
-        caller (``VisibilityRaster``) is responsible for constructing the
-        Datashader ``Canvas``, calling ``Canvas.raster()``, applying the
-        colour map, and converting to RGBA for the Bokeh ``image_rgba``
-        glyph.
+        averaging over all dimensions not in ``(y_dim, x_dim)``, then
+        decimates the result to at most ``max_cells`` cells by applying a
+        uniform stride in each dimension.  The caller (``VisibilityRaster``)
+        is responsible for Datashader resampling, colour mapping, and RGBA
+        conversion.
+
+        Two-level rendering contract
+        ----------------------------
+        The ``is_decimated`` return value drives ``VisibilityRaster``'s
+        pan/zoom strategy:
+
+        * ``is_decimated=False`` — the agg contains every data point that
+          matched the selection.  Datashader resamples it for all zoom
+          levels; no backend re-query is ever needed on zoom-in.
+        * ``is_decimated=True`` — the agg was strided to fit within
+          ``max_cells``.  Detail exists in the MS that is not in the agg.
+          When the viewer zooms in past one agg cell (viewport pixel size <
+          agg cell size in data units), ``VisibilityRaster`` should call
+          ``query_raster`` again with a tightened ``SelectionSpec`` and a
+          higher ``max_cells`` to fetch the sub-window at full resolution.
 
         Separating the data reduction (backend) from the canvas sizing and
         colour mapping (``VisibilityRaster``) keeps the backend free of
@@ -418,20 +434,33 @@ class XArrayReader(abc.ABC):
             visibility-derived quantities; ignored for ``Axis.FLAG``.
             If ``None`` and required, the backend logs a warning and
             uses the first available correlation.
+        max_cells : int
+            Maximum number of cells (rows × columns) in the returned agg.
+            Defaults to 2,000,000 (≈16 MB at float64), which comfortably
+            covers a 1000×600 canvas with ~3× oversampling.  For very
+            large MSes the backend strides the reduced 2D grid to fit
+            within this budget before calling ``.compute()``, so that
+            only the strided rows/columns are read from disk via Dask.
 
         Returns
         -------
         agg : xr.DataArray
             Computed (not lazy) 2D float64 DataArray with named
-            coordinates on both dimensions.  Shape is
-            ``(n_y_cells, n_x_cells)`` where the cell count comes from
-            the data grid, not the canvas pixel size.  Passed directly
-            to ``datashader.Canvas.raster()``.
+            coordinates on both dimensions.  Shape is at most
+            ``(n_y_cells, n_x_cells)`` where ``n_y_cells * n_x_cells
+            <= max_cells``.  Passed directly to
+            ``datashader.Canvas.raster()``.
         x_range : tuple[float, float]
             ``(x_min, x_max)`` — the full extent of the x coordinate in
-            the returned ``agg``.  Used to set the Bokeh figure x_range.
+            the *original unreduced* data (not the strided agg).  Used to
+            set the Bokeh figure x_range so the axis reflects real data
+            bounds even when the agg is decimated.
         y_range : tuple[float, float]
             ``(y_min, y_max)`` — the full extent of the y coordinate.
+        is_decimated : bool
+            ``True`` if a stride > 1 was applied in either dimension,
+            meaning the agg does not contain every data point.  ``False``
+            when the full reduced grid fit within ``max_cells``.
         """
 
     # ------------------------------------------------------------------ #
@@ -788,38 +817,38 @@ class MSv4Backend(XArrayReader):
         quantity: Axis,
         selection: SelectionSpec,
         polarization: Optional[str] = None,
-    ) -> tuple[xr.DataArray, tuple[float, float], tuple[float, float]]:
+        max_cells: int = 2_000_000,
+    ) -> tuple[xr.DataArray, tuple[float, float], tuple[float, float], bool]:
         """MSv4 raster query — mirrors MSv2Backend.query_raster interface.
 
         Reduces the selected data to a 2D float64 DataArray by averaging
-        over all dimensions not in ``(y_dim, x_dim)``, then returns it
-        along with the coordinate extents for Bokeh figure ranging.
+        over all dimensions not in ``(y_dim, x_dim)``, decimates to
+        ``max_cells`` if needed, then returns the agg with coordinate
+        extents and a decimation flag.
 
         .. note::
-            This is a functional stub.  Full MSv4 partitioning and the
-            ``_apply_selection`` / ``_raster_2d`` pipeline are deferred
-            until the MSv4 dataset is available for integration testing.
-            The method signature is final.
+            This is a functional stub.  Full MSv4 partitioning, the
+            ``_apply_selection`` / ``_raster_2d`` pipeline, and Zarr-native
+            strided reads are deferred until the MSv4 dataset is available
+            for integration testing.  The method signature is final.
         """
         self._require_open()
         datasets: list[xr.DataArray] = []
+
+        from .msv2_backend import _axis_to_dim, _decimate_agg
+        y_name = _axis_to_dim(y_dim)
+        x_name = _axis_to_dim(x_dim)
 
         for raw_ds in self._iter_partitions():
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
                 continue
 
-            # Derive the quantity and reduce to 2D
             q_vals = _compute_axis_values(ds, quantity, selection.data_column)
 
-            # Select polarization for visibility-derived quantities
             if polarization is not None and "polarization" in q_vals.dims:
                 q_vals = q_vals.sel(polarization=polarization)
 
-            # Average over any remaining dimensions beyond (y_dim, x_dim)
-            from .msv2_backend import _axis_to_dim  # avoid circular at module level
-            y_name = _axis_to_dim(y_dim)
-            x_name = _axis_to_dim(x_dim)
             reduce_dims = [d for d in q_vals.dims if d not in (y_name, x_name)]
             if reduce_dims:
                 q_vals = q_vals.mean(dim=reduce_dims, skipna=True)
@@ -831,16 +860,22 @@ class MSv4Backend(XArrayReader):
             log.warning("MSv4Backend.query_raster: no data matched selection")
             empty = xr.DataArray(
                 np.full((1, 1), np.nan, dtype=np.float32),
+                dims=[y_name, x_name],
+                coords={y_name: np.array([0.0]), x_name: np.array([0.0])},
                 attrs={"long_name": quantity.label},
             )
-            return empty, (0.0, 1.0), (0.0, 1.0)
+            return empty, (0.0, 1.0), (0.0, 1.0), False
 
         agg = xr.concat(datasets, dim=list(datasets[0].dims)[0])
+
+        # Record full extents before decimation
         x_coords = agg.coords[agg.dims[1]].values
         y_coords = agg.coords[agg.dims[0]].values
         x_range = (float(x_coords.min()), float(x_coords.max()))
         y_range = (float(y_coords.min()), float(y_coords.max()))
-        return agg, x_range, y_range
+
+        agg, is_decimated = _decimate_agg(agg, y_name, x_name, max_cells)
+        return agg, x_range, y_range, is_decimated
 
     def probe_pixel(
         self,

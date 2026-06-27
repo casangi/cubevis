@@ -487,6 +487,27 @@ class XArrayReader(abc.ABC):
         coordinates to raw grid indices via ``_data_to_pixel()`` before
         calling this method.
 
+        Index semantics (important for flagging)
+        -----------------------------------------
+        ``(gx, gy)`` are **raw grid indices**, not canvas pixel indices.
+        The raw grid has shape ``(n_y_cells, n_x_cells)`` from the data,
+        which differs from the canvas shape ``(PLOT_H, PLOT_W)``.
+        ``VisibilityRaster._data_to_pixel()`` performs the conversion from
+        hover data-space ``{x, y}`` to ``(gx, gy)`` via argmin on the
+        grid's named coordinate arrays.
+
+        Flagging contract
+        -----------------
+        The returned ``"x_range"`` and ``"y_range"`` tuples contain the
+        data-space extents of the cell in native MS coordinate units
+        (MJD seconds for TIME, integer ID for BASELINE_ID, Hz for
+        FREQUENCY).  These can be used directly to construct a
+        ``SelectionSpec`` for a flag operation without any further
+        coordinate conversion.  Flagging should only be enabled when
+        ``VisibilityRaster._is_decimated`` is ``False`` — when the agg
+        was decimated, each cell covers multiple native data points and
+        the cell range is ambiguous.
+
         Layer 1 — value from raw grid
             ``raw_grid.values[gy, gx]`` gives the pre-computed aggregated
             quantity.  Named coordinate arrays provide the data-space range
@@ -518,6 +539,7 @@ class XArrayReader(abc.ABC):
             Aggregated quantity at this cell.  ``None`` if NaN.
         ``"x_range"`` : tuple[float, float]
             Data-space (min, max) of the x-axis for this cell.
+            Use directly in ``SelectionSpec`` for flagging.
         ``"y_range"`` : tuple[float, float]
             Data-space (min, max) of the y-axis for this cell.
         ``"x_centre"`` : float
@@ -546,11 +568,32 @@ class XArrayReader(abc.ABC):
         and canvas-resolution coordinates.  Canvas pixel indices are valid
         directly against this array without any coordinate conversion.
 
+        Index semantics (contrast with probe_raster_pixel)
+        ---------------------------------------------------
+        ``(px, py)`` are **canvas pixel indices** in the range
+        ``[0, PLOT_W)`` × ``[0, PLOT_H)``, not raw data grid indices.
+        This is the opposite convention from ``probe_raster_pixel`` which
+        takes raw grid indices ``(gx, gy)``.  The canvas agg from
+        ``cvs.points()`` has shape ``(PLOT_H, PLOT_W)`` so canvas indices
+        are valid directly.
+
+        Flagging note
+        -------------
+        Scatter probe is less directly usable for flagging than raster
+        probe because the ``canvas_agg`` aggregates multiple data points
+        into each pixel bin — ``n_scatter_samples`` tells you how many,
+        but not which specific MS rows they correspond to.  For flagging
+        individual visibility samples, zoom to a resolution where each
+        canvas pixel contains approximately one sample (adaptive canvas
+        is active), then use the ``scatter_df`` boolean index with the
+        returned ``x_range``/``y_range`` to identify the rows.
+
         Parameters
         ----------
         canvas_agg :
             Float64 Datashader aggregation DataArray from ``cvs.points()``,
-            shape (PLOT_H, PLOT_W), dims ``("y", "x")``.
+            shape ``(PLOT_H, PLOT_W)`` or smaller (adaptive canvas),
+            dims ``("y", "x")``.
         px, py :
             Zero-based canvas pixel indices.  ``py`` indexes rows (y-axis,
             dim 0); ``px`` indexes columns (x-axis, dim 1).

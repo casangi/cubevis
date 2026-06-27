@@ -207,9 +207,43 @@ y_range.end   = new_y1;
 """,
     ))
 
-    # Place the button in a toolbar row above the raster layout
+    # Place the buttons in a toolbar row above the raster layout
+    btn_bg = Button(
+        label       = "Light BG",
+        button_type = "default",
+        width       = 90,
+        styles      = {
+            "background": "#313244",
+            "color":      "#cdd6f4",
+            "border":     "1px solid #45475a",
+            "font-size":  "12px",
+        },
+    )
+    btn_bg.js_on_click(CustomJS(
+        args={"fig": fig, "btn": btn_bg},
+        code="""
+const is_dark  = fig.background_fill_color === 'black';
+const label_c  = is_dark ? '#333333' : '#cdd6f4';
+const grid_c   = is_dark ? '#cccccc' : '#45475a';
+fig.background_fill_color = is_dark ? 'white'   : 'black';
+fig.border_fill_color     = is_dark ? '#f0f0f0' : '#1e1e2e';
+for (const axis of [fig.below[0], fig.left[0]]) {
+    if (!axis) continue;
+    axis.axis_label_text_color  = label_c;
+    axis.major_label_text_color = label_c;
+    axis.axis_line_color        = label_c;
+    axis.major_tick_line_color  = label_c;
+    axis.minor_tick_line_color  = label_c;
+}
+for (const g of fig.center) {
+    if (g.grid_line_color !== undefined) g.grid_line_color = grid_c;
+}
+btn.label = is_dark ? 'Dark BG' : 'Light BG';
+""",
+    ))
+
     app_context.ui = bk_column(
-        bk_row(btn_1to1),
+        bk_row(btn_1to1, btn_bg),
         vr.layout,
     )
     log.info("Saving HTML and opening browser tab …")

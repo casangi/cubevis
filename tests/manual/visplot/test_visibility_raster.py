@@ -51,7 +51,8 @@ def _try_package_import():
     from cubevis.toolbox.visplot.axes import Axis, AxisType
     from cubevis.toolbox.visplot.selection import SelectionSpec
     from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend, _axis_to_dim
-    from cubevis.toolbox.visplot.visibility_raster import VisibilityRaster, _img_to_uint32
+    from cubevis.toolbox.visplot.visibility_raster import VisibilityRaster
+    from cubevis.toolbox.visplot.visibility_plot import _img_to_uint32
     return Axis, AxisType, SelectionSpec, MSv2Backend, _axis_to_dim, VisibilityRaster, _img_to_uint32
 
 
@@ -74,8 +75,11 @@ def _local_import():
     _load("cubevis.toolbox.visplot.reader",          here / "reader.py")
     backend_mod = _load("cubevis.toolbox.visplot.data.msv2_backend",
                         here / "msv2_backend.py")
+    _load("cubevis.toolbox.visplot.visibility_plot",
+                       here / "visibility_plot.py")
     vr_mod      = _load("cubevis.toolbox.visplot.visibility_raster",
                         here / "visibility_raster.py")
+    vp_mod      = sys.modules["cubevis.toolbox.visplot.visibility_plot"]
 
     return (
         axes_mod.Axis,
@@ -84,7 +88,7 @@ def _local_import():
         backend_mod.MSv2Backend,
         backend_mod._axis_to_dim,
         vr_mod.VisibilityRaster,
-        vr_mod._img_to_uint32,
+        vp_mod._img_to_uint32,
     )
 
 
@@ -225,14 +229,14 @@ class TestLifecycle:
 
     def test_without_datashader_raises_import_error(self):
         """If datashader is absent, constructor must raise ImportError."""
-        import cubevis.toolbox.visplot.visibility_raster as vr_mod
-        orig = vr_mod.HAS_DATASHADER
+        import cubevis.toolbox.visplot.visibility_plot as vp_mod
+        orig = vp_mod.HAS_DATASHADER
         try:
-            vr_mod.HAS_DATASHADER = False
+            vp_mod.HAS_DATASHADER = False
             with pytest.raises(ImportError, match="datashader"):
                 _make_vr(self.backend, self.sel)
         finally:
-            vr_mod.HAS_DATASHADER = orig
+            vp_mod.HAS_DATASHADER = orig
 
 
 # ---------------------------------------------------------------------------
@@ -822,7 +826,7 @@ class TestStateSource:
         vr = _make_vr(self.backend, self.sel)
         d = vr._state_source.data
         required = {"agg_n_x", "agg_n_y", "full_x0", "full_x1",
-                    "full_y0", "full_y1", "t0", "y_is_time",
+                    "full_y0", "full_y1", "y_is_time",
                     "x_is_time", "x_label", "y_label"}
         assert required <= set(d.keys()), (
             f"Missing keys: {required - set(d.keys())}"
@@ -946,13 +950,100 @@ class TestUpdateAxes:
 
     def test_update_axes_image_source_updated(self):
         """update_axes must push a new RGBA image into _image_source."""
-        vr = _make_vr(self.backend, self.sel, quantity=Axis.AMPLITUDE)
+        # Use color_mode="local" so Datashader normalises to each quantity's
+        # own range — amplitude (0-100 Jy) vs phase (-π to π) produce clearly
+        # different images.  In "global" mode the phase agg averaged over all
+        # channels can be nearly uniform, yielding a near-identical image.
+        vr = _make_vr(self.backend, self.sel, quantity=Axis.AMPLITUDE,
+                      color_mode="local")
         img_before = vr._image_source.data["image"][0].copy()
         vr.update_axes(quantity=Axis.PHASE)
         img_after = vr._image_source.data["image"][0]
         assert not np.array_equal(img_before, img_after), (
             "RGBA image must change when quantity changes"
         )
+
+
+# ---------------------------------------------------------------------------
+# 9b. ColorMode — global/local colour mapping
+# ---------------------------------------------------------------------------
+
+class TestColorMode:
+    """Tests for color_mode parameter and set_color_mode() on VisibilityRaster."""
+
+    def setup_method(self):
+        _require_datashader()
+        _suppress_warnings()
+        self.backend = _open_backend()
+        meta = self.backend.metadata()
+        t0, t1 = meta["time_range"]
+        self.sel = SelectionSpec(
+            time_range=(t0, t0 + (t1 - t0) * 0.15),
+            channel_range=(0, 48),
+        )
+
+    def teardown_method(self):
+        self.backend.close()
+
+    def test_default_color_mode_is_global(self):
+        vr = _make_vr(self.backend, self.sel)
+        assert vr._color_mode == "global"
+
+    def test_color_mode_local_accepted(self):
+        vr = _make_vr(self.backend, self.sel, color_mode="local")
+        assert vr._color_mode == "local"
+
+    def test_invalid_color_mode_raises(self):
+        vr = _make_vr(self.backend, self.sel)
+        with pytest.raises(ValueError, match="color_mode"):
+            vr.set_color_mode("invalid")
+
+    def test_set_color_mode_updates_attribute(self):
+        vr = _make_vr(self.backend, self.sel)
+        vr.set_color_mode("local")
+        assert vr._color_mode == "local"
+        vr.set_color_mode("global")
+        assert vr._color_mode == "global"
+
+    def test_set_color_mode_updates_state_source(self):
+        vr = _make_vr(self.backend, self.sel)
+        vr.set_color_mode("local")
+        assert vr._state_source.data["color_mode"][0] == "local"
+
+    def test_set_color_mode_rerenders_image(self):
+        """set_color_mode must update _image_source with a new image."""
+        vr = _make_vr(self.backend, self.sel, color_mode="global")
+        img_before = vr._image_source.data["image"][0].copy()
+        vr.set_color_mode("local")
+        img_after  = vr._image_source.data["image"][0]
+        assert img_after.dtype == np.uint32
+        assert img_after.shape == img_before.shape
+
+    def test_shade_viewport_global_local_differ_in_subrange(self):
+        """_shade_viewport must produce different images in global vs local
+        mode when viewing a sub-range of the data."""
+        vr = _make_vr(self.backend, self.sel)
+        x0, x1 = vr._x_range
+        y0, y1 = vr._y_range
+        xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
+
+        vr._color_mode = "global"
+        img_global = vr._shade_viewport((x0, xm), (y0, ym))
+
+        vr._color_mode = "local"
+        img_local  = vr._shade_viewport((x0, xm), (y0, ym))
+
+        assert img_global.dtype == np.uint32
+        assert img_local.dtype  == np.uint32
+        assert not np.array_equal(img_global, img_local), (
+            "global and local colour modes must produce different images "
+            "for a sub-range viewport"
+        )
+
+    def test_state_source_has_color_mode_key(self):
+        vr = _make_vr(self.backend, self.sel)
+        assert "color_mode" in vr._state_source.data
+        assert vr._state_source.data["color_mode"][0] == "global"
 
 
 # ---------------------------------------------------------------------------
@@ -1167,6 +1258,7 @@ if __name__ == "__main__":
         TestDatashadedOutput,
         TestStateSource,
         TestUpdateAxes,
+        TestColorMode,
         TestDecimation,
         TestTiming,
     ]

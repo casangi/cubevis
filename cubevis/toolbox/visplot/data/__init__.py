@@ -30,8 +30,9 @@ Quick start::
         # ds is a lazy, Dask-backed xarray Dataset ready for Datashader
 """
 
-from .reader import XArrayReader, MSv4Backend, _compute_axis_values
+from .reader import XArrayReader, _compute_axis_values
 from .msv2_backend import MSv2Backend
+from .msv4_backend import MSv4Backend
 
 __all__ = [
     "XArrayReader",

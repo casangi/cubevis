@@ -84,7 +84,7 @@ _XARRAY_MS_ENGINE = "xarray-ms:msv2"
 _THRESH_FUSED = 500_000     # samples
 _THRESH_PAR   = 5_000_000   # samples
 
-# Speed of light for uvwave computation
+# Speed of light for uvdist_lambda computation
 _C_MS = 299_792_458.0
 
 
@@ -272,7 +272,7 @@ class MSv2Backend(XArrayReader):
         v = uvw.sel(uvw_label="v")
         return np.sqrt(u**2 + v**2)
 
-    def _uvwave(self, ds: xr.Dataset) -> xr.DataArray:
+    def _uvdist_lambda(self, ds: xr.Dataset) -> xr.DataArray:
         """UV-distance in wavelengths, shape (time, baseline_id, frequency).
 
         Broadcast of uvdist_m (time, baseline_id) × freq (frequency) / c.
@@ -631,10 +631,10 @@ class MSv2Backend(XArrayReader):
         elif xaxis == Axis.UVDIST:
             uvdist = self._uvdist_m(ds)   # (time, baseline_id)
             return uvdist.broadcast_like(template)
-        elif xaxis == Axis.UVWAVE:
-            uvwave = self._uvwave(ds)      # (time, baseline_id, frequency)
+        elif xaxis == Axis.UVDIST_LAMBDA:
+            uvdist_lambda = self._uvdist_lambda(ds)      # (time, baseline_id, frequency)
             # template has (time, baseline_id, frequency) after pol-sel
-            return uvwave.broadcast_like(template)
+            return uvdist_lambda.broadcast_like(template)
         elif xaxis == Axis.FREQUENCY:
             return ds.coords["frequency"].broadcast_like(template)
         elif xaxis == Axis.CHANNEL:

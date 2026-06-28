@@ -1,0 +1,752 @@
+# VisibilityPlotter — Implementation Plan
+
+**Project:** cubevis / casangi  
+**Status:** Pre-implementation — architecture settled, no code written  
+**Last updated:** 2025-06
+
+---
+
+## Table of Contents
+
+1. [Background and motivation](#1-background-and-motivation)
+2. [Astronomer flagging workflow](#2-astronomer-flagging-workflow)
+3. [Architecture overview](#3-architecture-overview)
+4. [VisibilityPlotter capability set](#4-visibilityplotter-capability-set)
+5. [GUI layout](#5-gui-layout)
+6. [Implementation phases and punch list](#6-implementation-phases-and-punch-list)
+7. [Appendix A — API stubs](#appendix-a--api-stubs)
+8. [Appendix B — File inventory and change summary](#appendix-b--file-inventory-and-change-summary)
+
+---
+
+## 1. Background and Motivation
+
+`VisibilityPlotter` is a replacement for `plotms` and `msview` in CASA6, targeting both
+MSv2 and MSv4 / Processing Set data as used by NRAO (ALMA, VLA), RADPS/AstroVIPER, and
+future ngVLA pipelines. It combines two already-implemented display classes:
+
+- **`VisibilityRaster`** — Datashader-rendered 2D heatmap of a visibility quantity
+  (amplitude, phase, flag fraction, etc.) over two native axes (time × channel, baseline × time, etc.)
+- **`VisibilityScatter`** — Multi-layer Datashader scatter plot of one or more y-axis
+  quantities vs a free x-axis
+
+Both classes share the same `CommMgr`/`Comm` j2p/p2j transport, `_state_source` pattern,
+and two-level pan/zoom architecture. `VisibilityPlotter` wraps them in a single application
+with a shared selection panel, flagging toolbar, and the `ReductionContext` abstraction for
+calibration and flag commit.
+
+### Key advantages over plotms / msview
+
+| Capability | plotms | msview | VisibilityPlotter |
+|---|---|---|---|
+| Raster display | ✗ | ✓ | ✓ |
+| Scatter display | ✓ | ✗ | ✓ |
+| Simultaneous raster + scatter | ✗ | ✗ | ✓ |
+| MSv4 / Processing Set | ✗ | ✗ | ✓ |
+| Jupyter / notebook embedding | Limited | ✗ | ✓ |
+| Remote cluster execution | ✗ | ✗ | ✓ (via `RemoteReductionContext`) |
+| Closure phase display | ✗ | ✗ | Planned (Phase 4) |
+| Model overlay | Limited | ✗ | ✓ (scatter layer) |
+| Difmap-style vplot mode | ✗ | ✗ | ✓ (named preset) |
+
+---
+
+## 2. Astronomer Flagging Workflow
+
+Understanding the flagging workflow is the primary driver of the feature set.
+Flagging is not a single step — it recurs throughout the reduction cycle:
+
+```
+Import (ASDM → MS / Processing Set)
+    ↓
+Pre-calibration inspection & flagging       ← primary VisibilityPlotter use case
+    ↓
+Calibration (bandpass → gaincal → fluxscale → applycal)
+    ↓
+Post-calibration inspection & flagging      ← secondary use case (CORRECTED column)
+    ↓
+Imaging / self-calibration loop
+    ↓
+Final image analysis
+```
+
+### 2.1 What the astronomer is looking for
+
+| Problem type | Signature | Best plot configuration |
+|---|---|---|
+| RFI (narrowband) | Amplitude spike at specific channel(s) | Raster: time × channel |
+| RFI (broadband/transient) | Spike at specific time, all channels | Scatter: amp vs time |
+| Bad antenna | All baselines to one antenna deviant | Scatter: amp vs time, colour-by-baseline, iterate by antenna |
+| Bad baseline | One pair consistently deviant | Scatter: amp vs UVdist |
+| Phase decorrelation | Rapidly varying phase for a scan | Scatter: phase vs time |
+| Shadowing | Zero amplitude at short baselines | Scatter: amp vs time (automated) |
+| Edge channels | Rolloff at band edges | Raster or scatter: amp vs channel |
+| Quack (settle time) | Bad data in first N seconds of each scan | Scatter: amp vs time per scan |
+
+### 2.2 Lessons from difmap
+
+Difmap remains popular outside NRAO specifically because of features absent from
+CASA tools. The following difmap capabilities inform this design:
+
+- **`vplot` mode** — amplitude/phase vs time per baseline and IF, colour-coded by flag
+  state (green = unflagged, yellow = flagged, blue = selfcal-flagged, red = antenna flagged).
+  Planned as a named view preset in `VisibilityPlotter`.
+- **`radplot` mode** — amplitude/phase vs UV-radius; single-click nearest-point flagging
+  (no box required). Planned as an additional flagging tool mode.
+- **`corplot`** — accumulated self-cal corrections vs time per antenna; identifies
+  periods of poor phase stability. Maps to the future `CalibrationView` panel.
+- **`cpplot`** — interactive closure phase display. Planned as a new `Axis.CLOSURE_PHASE`
+  value (Phase 4); requires a new backend query path.
+- **`projplot`** — amplitude/phase along a projected UV cut; reveals source structure
+  anisotropy. Achievable as a named scatter configuration.
+- **Model overlay** — observed vs model visibilities on the same plot; immediate visual
+  residual. Supported via `VisibilityScatter` multi-layer with the MODEL data column.
+
+### 2.3 The interactive flag loop
+
+The core pattern, repeated many times per session:
+
+1. **Select** — field, SPW, scan, baseline/antenna subset, polarization
+2. **Plot** — amplitude and/or phase vs time or frequency
+3. **Identify** — hover/locate to determine coordinates of suspect data
+4. **Flag** — draw a box or click nearest point; entry added to `FlagDB`
+5. **Extend** — propagate flags to all correlations / all channels / all SPWs
+6. **Verify** — re-plot with flagged data overlaid in red
+7. **Checkpoint** — save flag version before next iteration
+
+---
+
+## 3. Architecture Overview
+
+### 3.1 Layer diagram
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   VisibilityPlotter                     │
+│  (owns layout, sidebar, toolbar, iteration engine)      │
+│                                                         │
+│  ┌─────────────────┐   ┌─────────────────────────────┐  │
+│  │ VisibilityRaster│   │    VisibilityScatter         │  │
+│  │ (Datashader     │   │    (multi-layer Datashader   │  │
+│  │  raster panel)  │   │     scatter panel)           │  │
+│  └────────┬────────┘   └──────────────┬──────────────┘  │
+│           │  VisibilityReader (Protocol)  │              │
+└───────────┼──────────────────────────────┼──────────────┘
+            │                              │
+  ┌─────────▼──────────────────────────────▼──────────┐
+  │              VisibilityReader (Protocol)           │
+  │  .query_raster()  .query_columns()                │
+  │  .probe_raster_pixel()  .probe_scatter_pixel()    │
+  └───────────────────┬───────────────────────────────┘
+                      │ implements
+          ┌───────────┴───────────────────────┐
+          │                                   │
+  LocalVisibilityReader          RemoteReductionContext
+  (wraps XArrayReader,           (future; implements BOTH
+   used when data is local)       VisibilityReader AND
+          │                       ReductionContext via RPC)
+          │ wraps
+  ┌───────┴───────────────────┐
+  │       XArrayReader (ABC)  │
+  │  .open()  .close()        │
+  │  .metadata()              │
+  └───────────────────────────┘
+          │ concrete subclasses
+    ┌─────┴──────┐
+    │            │
+MSv2Backend  MSv4Backend
+(xarray-ms)  (Zarr/xradio)
+
+  ┌────────────────────────────────────────────┐
+  │          ReductionContext (ABC)            │
+  │  commit_flags()  save/restore_flag_version │
+  │  bandpass()  gaincal()  applycal() ...     │
+  │  submit() → Future                         │
+  └────────────┬───────────────────────────────┘
+               │ concrete subclasses
+    ┌──────────┬──────────────┐
+    │          │              │
+NullContext  Casa6Context  RadpsContext  RemoteContext(future)
+
+  ┌──────────────────────────────────────────────────────┐
+  │                   FlagDB                             │
+  │  (append-only JSONL, coordinate-range FlagDeltas)    │
+  │  .commit() → ReductionContext.commit_flags()         │
+  └──────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────┐
+  │                ObservationMetadata                   │
+  │  (frozen dataclass; produced at open time;           │
+  │   drives VisibilityPlotter sidebar dropdowns)        │
+  └──────────────────────────────────────────────────────┘
+```
+
+### 3.2 The VisibilityReader boundary
+
+`VisibilityRaster` and `VisibilityScatter` depend **only** on `VisibilityReader`.
+They do not import `XArrayReader`, `MSv2Backend`, `MSv4Backend`, or
+`ReductionContext`. This boundary is what makes remote execution transparent:
+both `LocalVisibilityReader` and `RemoteReductionContext` satisfy the four-method
+`VisibilityReader` protocol, and the widgets never know the difference.
+
+For local sessions:
+
+```python
+reader  = LocalVisibilityReader(MSv2Backend("/data/obs.ms"))
+context = Casa6ReductionContext("/data/obs.ms")
+plotter = VisibilityPlotter(metadata, reader, context, flag_db)
+```
+
+For remote cluster sessions (TB-scale MS on a compute node):
+
+```python
+remote  = RemoteReductionContext(endpoint="slurm://cluster.nrao.edu/data/obs.ms")
+plotter = VisibilityPlotter(metadata, remote, remote, flag_db)
+```
+
+The same `VisibilityPlotter` code runs in both cases.
+
+### 3.3 Why the backends stay below LocalVisibilityReader
+
+`MSv2Backend` and `MSv4Backend` are **not** modified to implement
+`VisibilityReader`. They continue to implement `XArrayReader` directly, which
+gives them:
+
+- Lifecycle methods (`open`, `close`, context manager)
+- `metadata()` for `ObservationMetadata` construction
+- `available_axes()` for axis selector population
+
+These methods are not part of the widget-facing protocol. `LocalVisibilityReader`
+wraps the backend and presents only the four protocol methods to the widgets.
+`VisibilityPlotter` calls `metadata()` directly on the `LocalVisibilityReader`
+wrapper (which forwards to the backend) during construction.
+
+### 3.4 ObservationMetadata
+
+`ObservationMetadata` is a frozen dataclass produced once at open time by the
+`open_ms()` / `open_ps()` factory functions. It holds the field/SPW/antenna/scan
+inventory needed to populate the sidebar dropdowns and is passed directly to
+`VisibilityPlotter`. Neither `XArrayReader` nor `ReductionContext` holds it.
+
+---
+
+## 4. VisibilityPlotter Capability Set
+
+### 4.1 Display modes
+
+| Mode | Description |
+|---|---|
+| **Scatter only** | One or more `VisibilityScatter` layers |
+| **Raster only** | One `VisibilityRaster` |
+| **Linked** | Raster (top) + Scatter (bottom), shared selection and FlagDB |
+
+Linked mode is the primary differentiator. A box drawn in either panel marks
+the same rows in `FlagDB`.
+
+### 4.2 Data selection
+
+- MS / Processing Set path (file picker or text entry)
+- Field — dropdown from `ObservationMetadata.fields`
+- SPW — multi-select; label shows centre frequency and bandwidth
+- Scan — range or list (`1~5,8,10~12`)
+- Antenna / Baseline — MSSelection string or picker
+- Correlation — checkboxes: XX, YY, XY, YX (or RR, LL, RL, LR)
+- Time range — ISO or scan-relative
+- UV range — metres (baseline selection in image plane)
+- Data column — DATA, CORRECTED, MODEL (where available)
+
+### 4.3 Axis controls
+
+**Raster:**
+- Y: TIME, CHANNEL, BASELINE, ANTENNA1, UVDIST_LAMBDA
+- X: CHANNEL, TIME, UVDIST_LAMBDA
+- Quantity (colour): AMPLITUDE, PHASE, REAL, IMAGINARY, WEIGHT, FLAG_FRACTION
+
+**Scatter:**
+- X: TIME, CHANNEL, UVDIST, UVDIST_LAMBDA, FREQUENCY, U, V, W, BASELINE, ANTENNA1
+- Y (per layer): AMPLITUDE, PHASE, REAL, IMAGINARY, WEIGHT
+
+### 4.4 Averaging
+
+- Channel averaging — N channels binned to one
+- Time averaging — N seconds binned to one
+- Baseline averaging — average across all baselines
+- Scalar vs vector averaging
+
+Flags on averaged data propagate to unaveraged rows via `FlagDelta` — this is
+a `ReductionContext.commit_flags()` responsibility, not a display responsibility.
+
+### 4.5 Flagging tools
+
+- **Box select** (default) — draw rectangle in data space; `FlagDelta` added to `FlagDB`
+- **Nearest-point flag** — click to flag the point closest to cursor (difmap-style)
+- **Flag** — commit pending `FlagDB` entries via `ReductionContext.commit_flags()`
+- **Unflag** — same flow, `FlagDelta.flag = False`
+- **Flag extend** — per-delta controls: all correlations, all channels, all SPWs, all times in scan
+- **Undo** — pop last `FlagDelta` before commit
+- **Flag version** — save / restore named states via `ReductionContext`
+- **Show flagged** — overlay flagged data in red tint
+- **Flag summary** — fraction flagged per SPW and per antenna after each commit
+
+### 4.6 Locate / Hover
+
+- Hover: show probe result (value, coordinates, metadata) in a tooltip
+- **Locate** button: for a drawn region, list all matching rows in a sidebar table
+
+### 4.7 Iteration (difmap-style)
+
+- Iterate over: antenna, baseline, field, SPW, scan, time
+- Prev / Next buttons step through values
+- Both panels update synchronously
+- Title appends current iteration value
+
+### 4.8 Named view presets (difmap-inspired)
+
+- **vplot mode** — amplitude vs time, colour-by-baseline, flag-state overlay,
+  one-per-antenna iteration
+- **radplot mode** — amplitude vs UVdist, nearest-point flag tool active
+- **projplot mode** — amplitude vs projected UV cut (selectable position angle)
+
+### 4.9 Calibration integration (loose coupling)
+
+`VisibilityPlotter` accepts an optional `ReductionContext`. When
+`context.supports_calibration()` returns `True`, the sidebar gains a
+**Calibration** accordion section:
+
+- Run bandpass / gaincal / applycal buttons
+- Calibration solution view panel (future `CalibrationView`, Phase 4)
+- After `applycal`, the data column selector automatically switches to CORRECTED
+
+When `ReductionContext` is `NullReductionContext` (no backend available, e.g.
+RADPS without a CASA6 session), calibration buttons are hidden.
+
+### 4.10 Export / scripting
+
+- **Save plot** — PNG export of current view
+- **Copy flagdata command** — generate equivalent `flagdata()` call for pending flags
+- **Python API** — `VisibilityPlotter(metadata, reader, context)` usable in Jupyter
+
+---
+
+## 5. GUI Layout
+
+### 5.1 Overall structure
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  Toolbar (top)                                                        │
+├────────────────────┬─────────────────────────────────────────────────┤
+│  Control sidebar   │  Plot area                                       │
+│  (~320px, left)    │                                                  │
+│                    │  ┌───────────────────────────────────────────┐   │
+│  [Data]            │  │  Raster panel (optional, resizable)       │   │
+│  [Axes]            │  │                                           │   │
+│  [Averaging]       │  └───────────────────────────────────────────┘   │
+│  [Display]         │  ┌───────────────────────────────────────────┐   │
+│  [Flagging]        │  │  Scatter panel (optional, resizable)      │   │
+│  [Calibration]     │  │                                           │   │
+│                    │  └───────────────────────────────────────────┘   │
+├────────────────────┴─────────────────────────────────────────────────┤
+│  Status / Locate results (collapsible)                                │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.2 Toolbar
+
+```
+[Plot ▶]  [Reload ↺]  |  [◀ Prev]  Iter: antenna  [ea05 ▼]  [Next ▶]
+  |  [□ Box Select]  [· Point Flag]  [⚑ Flag]  [⚐ Unflag]  [⟲ Undo]  [✦ Locate]
+  |  [💾 Save plot]  [📋 Copy flagdata]
+```
+
+### 5.3 Sidebar accordion sections
+
+**Data**
+```
+MS path:   [/path/to/data.ms          ] [Browse]
+Column:    [DATA ▼]
+Field:     [0637-752 (0) ▼]
+SPW:       [☑ 0  ☑ 1  ☑ 2  ☐ 3]
+Scan:      [________________]
+Antenna:   [________________]
+UV range:  [______] – [______] m
+Time:      [________________]
+```
+
+**Axes**
+```
+Display mode:  [○ Scatter  ○ Raster  ● Both]
+
+── Raster ────────────────────────────────
+  Y axis:   [Time      ▼]
+  X axis:   [Channel   ▼]
+  Quantity: [Amplitude ▼]
+
+── Scatter ───────────────────────────────
+  X axis:   [UVdist    ▼]
+  Layers:
+    [Amplitude  XX  ████  α [━━●━] 1.0]  [−]
+    [Phase      XX  ████  α [━━━●] 1.0]  [−]
+  [+ Add layer]
+
+── Presets ───────────────────────────────
+  [vplot]  [radplot]  [projplot]
+```
+
+**Averaging**
+```
+Channel avg:   [1      ] channels
+Time avg:      [0      ] seconds  [☐ scalar]
+☐ Avg baselines   ☐ Avg SPWs
+```
+
+**Display**
+```
+Color mode: [● Global  ○ Local]
+☑ Show flagged data (red overlay)
+☐ Show flag fraction heatmap
+Polarization: [☑ XX  ☑ YY  ☐ XY  ☐ YX]
+```
+
+**Flagging**
+```
+Flag extend:
+  ☐ All correlations
+  ☐ All channels in SPW
+  ☐ All SPWs
+  ☐ All times in scan
+
+Flag versions:
+  [Save current…]  [Restore…]
+  Current: "before_plotms"
+```
+
+**Calibration** *(hidden when NullReductionContext)*
+```
+[Run bandpass…]  [Run gaincal…]  [Apply cal…]
+Caltables: [cal.B0 ▼]
+```
+
+### 5.4 Status / Locate bar
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Locate results  [×]                                                  │
+│ Scan  Field    Baseline    Time              Chan  SPW  Amp    Phase │
+│ 3     0637-752 ea01–ea04   2024-03-01 12:00  32    1    12.4J  47°  │
+│ …                                                                    │
+│ Flag fraction: SPW0: 12%  SPW1: 0%  SPW2: 3%  SPW3: 18%            │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 6. Implementation Phases and Punch List
+
+### Phase 0 — Architecture foundations
+*Complete before any other phase. No UI work.*
+
+| ID | Task | Files affected |
+|---|---|---|
+| A-1 | Define `VisibilityReader` protocol | `visibility_reader.py` *(new)* |
+| A-2 | Implement `LocalVisibilityReader` wrapping `XArrayReader` | `local_visibility_reader.py` *(new)* |
+| A-3 | Update `VisibilityRaster` and `VisibilityScatter` type annotation: `backend: XArrayReader` → `backend: VisibilityReader` | `visibility_raster.py`, `visibility_scatter.py` |
+| A-4 | Define `ObservationMetadata` frozen dataclass and `from_backend_metadata()` factory | `reduction_context.py` *(new)* |
+| A-5 | Define all DTOs: `FieldInfo`, `SpwInfo`, `AntennaInfo`, `ScanInfo`, `CaltableInfo`, `FlagDelta`, `FlagSummary`, `FlagVersionInfo`, `BandpassParams`, `GaincalParams`, `FluxscaleParams`, `ApplycalParams`, `SplitParams`, `ReductionOperation`, `ReductionResult` | `reduction_context.py` *(new)* |
+| A-6 | Define `ReductionContext` ABC | `reduction_context.py` *(new)* |
+| A-7 | Implement `NullReductionContext` | `reduction_context.py` *(new)* |
+| A-8 | Implement `open_ms()` and `open_ps()` factory functions returning `(ObservationMetadata, LocalVisibilityReader, NullReductionContext)` | `factory.py` *(new)* |
+| A-9 | Verify existing test suite passes with `LocalVisibilityReader` wrapper in place of direct backend references | test suite |
+
+> **Note:** `reduction_context.py`, `visibility_reader.py`, and `local_visibility_reader.py`
+> have been written as part of this planning session and are in the repository.
+> A-3 is the only change required to existing source files in this phase.
+
+---
+
+### Phase 1 — Flagging foundations
+*End-to-end flag accumulation and commit with the two existing widget classes.*
+
+| ID | Task | Files affected |
+|---|---|---|
+| F-1 | `FlagDelta` raster coordinate resolver: map `(time_range, channel_range)` or `(baseline_id, channel_range)` from a raster box to MS row indices | `flag_db.py` |
+| F-2 | `FlagDelta` scatter coordinate resolver: map `(x_range, y_range)` in the scatter axis space to MS row indices | `flag_db.py` |
+| F-3 | `FlagDB.undo()` — pop last pending `FlagDelta` before commit | `flag_db.py` |
+| F-4 | `FlagDelta` extend logic: apply `extend_corr`, `extend_chan`, `extend_spw`, `extend_scan` before building row set | `flag_db.py` |
+| F-5 | `Casa6ReductionContext` — flag operations only: `commit_flags()` calling `flagdata()`, `save_flag_version()`, `restore_flag_version()`, `list_flag_versions()` | `casa6_reduction_context.py` *(new)* |
+| F-6 | Wire `FlagDB.commit()` to call `ReductionContext.commit_flags()` | `flag_db.py` |
+| F-7 | Box-select j2p handler in `VisibilityRaster`: JS box-select tool callback sends data-space `(x0,x1,y0,y1)` → Python adds `FlagDelta` to `FlagDB` | `visibility_raster.py` |
+| F-8 | Box-select j2p handler in `VisibilityScatter` | `visibility_scatter.py` |
+| F-9 | "Show flagged" overlay in `VisibilityRaster`: red RGBA layer composited on top of existing image after commit | `visibility_raster.py` |
+| F-10 | "Show flagged" overlay in `VisibilityScatter`: semi-transparent red layer from flagged data points | `visibility_scatter.py` |
+| F-11 | Nearest-point flag tool in `VisibilityScatter` (difmap-style): given screen coordinate, find closest data point, add `FlagDelta` | `visibility_scatter.py` |
+
+---
+
+### Phase 2 — VisibilityPlotter shell
+*Combined layout with working selection, axis controls, and flag commit. No averaging or iteration yet.*
+
+| ID | Task | Files affected |
+|---|---|---|
+| P-1 | `VisibilityPlotter` class skeleton: owns `VisibilityRaster` and/or `VisibilityScatter`, `FlagDB`, shared `SelectionSpec`, `ObservationMetadata`, `VisibilityReader`, `ReductionContext` | `visibility_plotter.py` *(new)* |
+| P-2 | Sidebar widget set — accordion layout with Data, Axes, Display, Flagging sections; Bokeh `Select`, `MultiSelect`, `TextInput`, `CheckboxGroup`, `Slider` | `visibility_plotter.py` |
+| P-3 | Toolbar — Plot, Reload, Box Select, Point Flag, Flag, Unflag, Undo, Locate, Save Plot, Copy flagdata | `visibility_plotter.py` |
+| P-4 | Display mode toggle — Scatter / Raster / Both; dynamically show/hide panels | `visibility_plotter.py` |
+| P-5 | Named view presets — vplot, radplot, projplot buttons configure axes and tool | `visibility_plotter.py` |
+| P-6 | `SelectionSpec` UV range — add `uv_range` field (metres) for baseline selection | `selection.py` |
+| P-7 | `Casa6ReductionContext` metadata methods: `list_fields()`, `list_spws()`, `list_antennas()`, `list_scans()`, `list_data_columns()` | `casa6_reduction_context.py` |
+| P-8 | `open_ms()` / `open_ps()` factory: when CASA6 is importable, return `Casa6ReductionContext`; otherwise `NullReductionContext` | `factory.py` |
+
+---
+
+### Phase 3 — Averaging and iteration
+*Backend changes required before either feature can be correctly implemented.*
+
+| ID | Task | Files affected |
+|---|---|---|
+| V-1 | `AveragingSpec` dataclass: `n_chan`, `time_bin_s`, `avg_baselines`, `scalar` | `averaging.py` *(new)* |
+| V-2 | Channel and time averaging in `MSv2Backend.query_raster()` | `msv2_backend.py` |
+| V-3 | Channel and time averaging in `MSv2Backend.query_columns()` | `msv2_backend.py` |
+| V-4 | Channel and time averaging in `MSv4Backend.query_raster()` | `msv4_backend.py` |
+| V-5 | Channel and time averaging in `MSv4Backend.query_columns()` | `msv4_backend.py` |
+| V-6 | Averaging in `LocalVisibilityReader` pass-through (update signatures) | `local_visibility_reader.py` |
+| V-7 | Averaging in `VisibilityReader` protocol (update signatures) | `visibility_reader.py` |
+| V-8 | Iteration engine in `VisibilityPlotter`: state machine over (antenna, baseline, field, SPW, scan, time); Prev / Next buttons | `visibility_plotter.py` |
+| V-9 | Iteration updates both panels synchronously; title appends current iteration value | `visibility_plotter.py` |
+
+---
+
+### Phase 4 — Polish and completeness
+
+| ID | Task | Files affected |
+|---|---|---|
+| R-1 | `FLAG_FRACTION` quantity in `VisibilityRaster`: new aggregation mode in `query_raster` | `msv2_backend.py`, `msv4_backend.py`, `visibility_raster.py` |
+| R-2 | 1:1 zoom button in `VisibilityRaster`: JS button fires viewport reset using `agg_n_x`/`agg_n_y` from `_state_source` | `visibility_raster.py` |
+| R-3 | Colorbar in `VisibilityRaster`: Bokeh `ColorBar` linked to shade span | `visibility_raster.py` |
+| R-4 | Axis label units: CHANNEL shows frequency (GHz) secondary label; TIME shows ISO or elapsed | `visibility_raster.py`, `visibility_scatter.py` |
+| S-1 | Colour-by-metadata axis in `VisibilityScatter`: categorical palette per SPW / antenna / scan / baseline | `visibility_scatter.py`, `msv2_backend.py`, `msv4_backend.py` |
+| S-2 | Per-layer legend widget in `VisibilityScatter`: toggle (alpha=0) per layer from legend | `visibility_scatter.py` |
+| S-3 | Auto-alpha review: expose sensitivity slider or improve perceptual model | `visibility_scatter.py` |
+| S-4 | Multi-layer probe: `_handle_probe` returns a row per layer for hovered pixel | `visibility_scatter.py` |
+| C-1 | `CalibrationView` panel: gain/phase vs time per antenna from a calibration table | `calibration_view.py` *(new)* |
+| C-2 | Calibration sidebar section in `VisibilityPlotter`: bandpass / gaincal / applycal buttons; enabled when `context.supports_calibration()` | `visibility_plotter.py` |
+| C-3 | `Casa6ReductionContext` calibration methods: `bandpass()`, `gaincal()`, `fluxscale()`, `applycal()` | `casa6_reduction_context.py` |
+| C-4 | `RadpsReductionContext` — flag operations + data queries | `radps_reduction_context.py` *(new)* |
+| G-1 | Shared x-axis range linking between panels when x-axis dimension matches | `visibility_plotter.py` |
+| G-2 | Locate sidebar: `DataTable` below plot area populated by locate handler | `visibility_plotter.py` |
+| G-3 | Flag summary bar: fraction flagged per SPW and antenna after each commit | `visibility_plotter.py` |
+| G-4 | Copy `flagdata` command: format pending flags as `flagdata()` call string | `visibility_plotter.py` |
+| G-5 | PNG export via Bokeh `export_png` | `visibility_plotter.py` |
+| G-6 | `Axis.CLOSURE_PHASE` enum value and backend query path (triangle sum of phase over antenna triples) | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
+| T-1 | `data_group` test cases for `MSv4Backend` | `tests/` |
+| T-2 | Synthetic xradio-native DataTree structure tests | `tests/` |
+| T-3 | Single-dish test coverage | `tests/` |
+| T-4 | `RemoteReductionContext` skeleton and transport protocol | `remote_reduction_context.py` *(new)* |
+
+---
+
+## Appendix A — API Stubs
+
+The following files were written as part of this planning session and are
+checked into the repository. They define the interfaces but contain no
+operational implementation beyond `NullReductionContext`.
+
+### A.1 `visibility_reader.py` — `VisibilityReader` Protocol
+
+```python
+@runtime_checkable
+class VisibilityReader(Protocol):
+    def query_raster(
+        self,
+        y_dim: Axis,
+        x_dim: Axis,
+        quantity: Axis,
+        selection: SelectionSpec,
+        polarization: Optional[str] = None,
+        max_cells: int = 2_000_000,
+    ) -> tuple[xr.DataArray, tuple[float, float], tuple[float, float], bool]: ...
+
+    def query_columns(
+        self,
+        xaxis: Axis,
+        yaxes: list[tuple[Axis, str]],
+        selection: SelectionSpec,
+        *,
+        canvas_width: int = 800,
+        canvas_height: int = 600,
+    ) -> dict[tuple[Axis, str], pd.DataFrame]: ...
+
+    def probe_raster_pixel(
+        self,
+        raw_grid: xr.DataArray,
+        gx: int,
+        gy: int,
+        selection: SelectionSpec,
+    ) -> dict: ...
+
+    def probe_scatter_pixel(
+        self,
+        canvas_agg: xr.DataArray,
+        px: int,
+        py: int,
+        selection: SelectionSpec,
+        scatter_df: pd.DataFrame,
+    ) -> dict: ...
+```
+
+### A.2 `local_visibility_reader.py` — `LocalVisibilityReader`
+
+Pure delegation adapter. Wraps any `XArrayReader` subclass and exposes the
+four `VisibilityReader` methods. Also forwards `metadata()` and
+`available_axes()` for use by `open_ms()` / `open_ps()` factories.
+
+```python
+class LocalVisibilityReader:
+    def __init__(self, backend: XArrayReader) -> None: ...
+    def open(self) -> None: ...
+    def close(self) -> None: ...
+    # VisibilityReader protocol:
+    def query_raster(self, ...) -> ...: ...
+    def query_columns(self, ...) -> ...: ...
+    def probe_raster_pixel(self, ...) -> dict: ...
+    def probe_scatter_pixel(self, ...) -> dict: ...
+    # Pass-through for ObservationMetadata construction:
+    def metadata(self) -> dict: ...
+    def available_axes(self) -> list[Axis]: ...
+```
+
+### A.3 `reduction_context.py` — DTOs and `ReductionContext` ABC
+
+#### Key DTOs
+
+| DTO | Purpose |
+|---|---|
+| `ObservationMetadata` | Frozen dataclass; populates `VisibilityPlotter` sidebar |
+| `FieldInfo` | Single field metadata |
+| `SpwInfo` | Single SPW metadata |
+| `AntennaInfo` | Single antenna metadata |
+| `ScanInfo` | Single scan metadata |
+| `CaltableInfo` | Calibration table on disk |
+| `FlagDelta` | Pending flag operation from `FlagDB` |
+| `FlagSummary` | Result of `commit_flags()` |
+| `FlagVersionInfo` | Named saved flag version |
+| `BandpassParams` | Parameters for `bandpass()` |
+| `GaincalParams` | Parameters for `gaincal()` |
+| `FluxscaleParams` | Parameters for `fluxscale()` |
+| `ApplycalParams` | Parameters for `applycal()` |
+| `SplitParams` | Parameters for `split()` |
+| `ReductionOperation` | Serialisable task for remote dispatch |
+| `ReductionResult` | Result of a completed remote operation |
+
+#### `ReductionContext` ABC — method groups
+
+| Group | Methods |
+|---|---|
+| Metadata | `list_fields()`, `list_spws()`, `list_antennas()`, `list_scans()`, `list_data_columns()`, `list_caltables()` |
+| Flagging | `commit_flags()`, `save_flag_version()`, `restore_flag_version()`, `list_flag_versions()` |
+| Calibration | `bandpass()`, `gaincal()`, `fluxscale()`, `applycal()` |
+| Data manipulation | `split()` |
+| Remote execution | `submit() → Future[ReductionResult]` |
+| Introspection | `supports_calibration()`, `supports_remote_execution()` |
+
+#### `NullReductionContext`
+
+All metadata methods return empty lists. All mutation methods raise
+`NotImplementedError`. `supports_calibration()` returns `False`.
+
+### A.4 Future stubs (not yet written)
+
+**`factory.py`** — `open_ms()` and `open_ps()`:
+
+```python
+def open_ms(
+    path: str,
+    context: Optional[ReductionContext] = None,
+) -> tuple[ObservationMetadata, LocalVisibilityReader, ReductionContext]:
+    """Open an MSv2 or MSv4 Processing Set.
+
+    Returns (metadata, reader, context).  If context is None:
+    - Casa6ReductionContext if casatasks is importable
+    - NullReductionContext otherwise
+    """
+```
+
+**`casa6_reduction_context.py`** — `Casa6ReductionContext`:
+
+```python
+class Casa6ReductionContext(ReductionContext):
+    """Wraps casatasks for local CASA6 sessions.
+
+    commit_flags() calls flagdata().
+    bandpass() calls casatasks.bandpass().
+    list_fields() etc. delegate to the held XArrayReader.metadata() result.
+    """
+```
+
+**`radps_reduction_context.py`** — `RadpsReductionContext`:
+
+```python
+class RadpsReductionContext(ReductionContext):
+    """RADPS / AstroVIPER backend.
+
+    commit_flags() writes to MSv4 Zarr flag arrays.
+    Calibration methods call RADPS task equivalents.
+    """
+```
+
+**`remote_reduction_context.py`** — `RemoteReductionContext`:
+
+```python
+class RemoteReductionContext(ReductionContext):
+    """Remote cluster backend. Implements BOTH ReductionContext AND
+    VisibilityReader so that a single object can be passed for both
+    reader and context in VisibilityPlotter when data is remote.
+
+    query_raster() / query_columns() serialise the query, dispatch to
+    the remote worker, and return the small agg result over the wire.
+
+    submit() returns a real Future that resolves when the remote job
+    completes.
+    """
+```
+
+---
+
+## Appendix B — File Inventory and Change Summary
+
+### New files
+
+| File | Contents |
+|---|---|
+| `visibility_reader.py` | `VisibilityReader` protocol *(written)* |
+| `local_visibility_reader.py` | `LocalVisibilityReader` adapter *(written)* |
+| `reduction_context.py` | All DTOs, `ReductionContext` ABC, `NullReductionContext` *(written)* |
+| `factory.py` | `open_ms()`, `open_ps()` factory functions |
+| `visibility_plotter.py` | `VisibilityPlotter` combined application class |
+| `averaging.py` | `AveragingSpec` dataclass |
+| `casa6_reduction_context.py` | `Casa6ReductionContext` |
+| `radps_reduction_context.py` | `RadpsReductionContext` |
+| `remote_reduction_context.py` | `RemoteReductionContext` |
+| `calibration_view.py` | `CalibrationView` panel (Phase 4) |
+
+### Modified files
+
+| File | Change |
+|---|---|
+| `visibility_raster.py` | A-3: `backend: XArrayReader` → `backend: VisibilityReader`; F-7: box-select j2p handler; F-9: flagged overlay; R-1 – R-4 |
+| `visibility_scatter.py` | A-3: same type annotation change; F-8: box-select handler; F-10: flagged overlay; F-11: nearest-point flag; S-1 – S-4 |
+| `msv2_backend.py` | V-2, V-3: averaging; R-1: FLAG_FRACTION; S-1: colour-by-metadata; G-6: closure phase |
+| `msv4_backend.py` | V-4, V-5: averaging; R-1: FLAG_FRACTION; S-1: colour-by-metadata; G-6: closure phase |
+| `reader.py` | No changes required. `XArrayReader` ABC is unchanged. |
+| `flag_db.py` | F-1 – F-6: coordinate resolvers, undo, extend, wire to `ReductionContext` |
+| `selection.py` | P-6: add `uv_range` field |
+| `axes.py` | G-6: `Axis.CLOSURE_PHASE` |
+
+### Unchanged files
+
+| File | Reason |
+|---|---|
+| `reader.py` | `XArrayReader` ABC and `_compute_axis_values` are correct as-is |
+| `visibility_plot.py` | Base class is stable; no changes needed for Phase 0 |
+| `axes.py` | Stable until Phase 4 (closure phase) |
+| `selection.py` | Stable until Phase 2 (UV range) |

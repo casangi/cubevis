@@ -35,6 +35,19 @@ and two-level pan/zoom architecture. `VisibilityPlotter` wraps them in a single 
 with a shared selection panel, flagging toolbar, and the `ReductionContext` abstraction for
 calibration and flag commit.
 
+Requirements from JIRA ticket **CASR-385** (Plotting tool improvements, 12-month horizon)
+inform the Phase 4 punch list items prefixed **X-**:
+
+- Faster and more reliable than `plotms` — addressed by architecture (Datashader, two-level
+  pan/zoom, clean read/write separation)
+- Waterfall plot and flagging similar to AIPS TVFLG, SPFLG, FTFLG — TVFLG covered by
+  `VisibilityRaster` TIME × CHANNEL with immediate `FlagDB` accumulation and red overlay
+  on box close; SPFLG requires multi-panel tiled raster (X-1); FTFLG covered by
+  baseline-averaged TIME × CHANNEL configuration
+- Phase RMS vs time and frequency — new derived axis `Axis.PHASE_RMS` (X-2)
+- ngVLA TB-scale datasets — remote execution requirement confirmed; `RemoteReductionContext`
+  elevated in priority (X-4, X-5)
+
 ### Key advantages over plotms / msview
 
 | Capability | plotms | msview | VisibilityPlotter |
@@ -278,15 +291,17 @@ a `ReductionContext.commit_flags()` responsibility, not a display responsibility
 
 ### 4.5 Flagging tools
 
-- **Box select** (default) — draw rectangle in data space; `FlagDelta` added to `FlagDB`
-- **Nearest-point flag** — click to flag the point closest to cursor (difmap-style)
-- **Flag** — commit pending `FlagDB` entries via `ReductionContext.commit_flags()`
-- **Unflag** — same flow, `FlagDelta.flag = False`
+- **Box select** (default) — draw rectangle in data space; on box close immediately adds
+  `FlagDelta` to `FlagDB` and re-renders flagged overlay in red; no button press required
+- **Nearest-point flag** — click to flag the point closest to cursor (difmap-style);
+  same immediate `FlagDB` accumulation and overlay behaviour as box select
+- **Unflag** — same box-select flow with `FlagDelta.flag = False`
 - **Flag extend** — per-delta controls: all correlations, all channels, all SPWs, all times in scan
-- **Undo** — pop last `FlagDelta` before commit
-- **Flag version** — save / restore named states via `ReductionContext`
-- **Show flagged** — overlay flagged data in red tint
-- **Flag summary** — fraction flagged per SPW and per antenna after each commit
+- **Undo** — pop last `FlagDelta` from `FlagDB` and re-render; works freely until disk write
+- **Flag ⚑** — write accumulated `FlagDB` entries to disk via `ReductionContext.commit_flags()`;
+  the only operation that touches the MS or Processing Set
+- **Flag version** — save / restore named disk states via `ReductionContext`
+- **Flag summary** — fraction flagged per SPW and per antenna, updated after each disk write
 
 ### 4.6 Locate / Hover
 
@@ -531,16 +546,16 @@ Caltables: [cal.B0 ▼]
 | F-4 | `FlagDelta` extend logic: apply `extend_corr`, `extend_chan`, `extend_spw`, `extend_scan` before building row set | `flag_db.py` |
 | F-5 | `Casa6ReductionContext` — flag operations only: `commit_flags()` calling `flagdata()`, `save_flag_version()`, `restore_flag_version()`, `list_flag_versions()` | `casa6_reduction_context.py` *(new)* |
 | F-6 | Wire `FlagDB.commit()` to call `ReductionContext.commit_flags()` | `flag_db.py` |
-| F-7 | Box-select j2p handler in `VisibilityRaster`: JS box-select tool callback sends data-space `(x0,x1,y0,y1)` → Python adds `FlagDelta` to `FlagDB` | `visibility_raster.py` |
+| F-7 | Box-select j2p handler in `VisibilityRaster`: JS box-select tool callback sends data-space `(x0,x1,y0,y1)` → Python adds `FlagDelta` to `FlagDB` and immediately triggers flagged overlay re-render | `visibility_raster.py` |
 | F-8 | Box-select j2p handler in `VisibilityScatter` | `visibility_scatter.py` |
-| F-9 | "Show flagged" overlay in `VisibilityRaster`: red RGBA layer composited on top of existing image after commit | `visibility_raster.py` |
+| F-9 | "Show flagged" overlay in `VisibilityRaster`: red RGBA layer composited on top of existing image; re-rendered on every `FlagDB` accumulation (box close or undo), not only on disk write | `visibility_raster.py` |
 | F-10 | "Show flagged" overlay in `VisibilityScatter`: semi-transparent red layer from flagged data points | `visibility_scatter.py` |
 | F-11 | Nearest-point flag tool in `VisibilityScatter` (difmap-style): given screen coordinate, find closest data point, add `FlagDelta` | `visibility_scatter.py` |
 
 ---
 
 ### Phase 2 — VisibilityPlotter shell
-*Combined layout with working selection, axis controls, and flag commit. No averaging or iteration yet.*
+*Combined layout with working selection, axis controls, flag accumulation and overlay, and disk write. No averaging or iteration yet.*
 
 | ID | Task | Files affected |
 |---|---|---|
@@ -552,6 +567,7 @@ Caltables: [cal.B0 ▼]
 | P-6 | `SelectionSpec` UV range — add `uv_range` field (metres) for baseline selection | `selection.py` |
 | P-7 | `Casa6ReductionContext` metadata methods: `list_fields()`, `list_spws()`, `list_antennas()`, `list_scans()`, `list_data_columns()` | `casa6_reduction_context.py` |
 | P-8 | `open_ms()` / `open_ps()` factory: when CASA6 is importable, return `Casa6ReductionContext`; otherwise `NullReductionContext` | `factory.py` |
+| P-10 | Async plot with loading indicator: spinner `Div` overlay on figures while backend query is in flight; Cancel button sets a threading `Event` checked by the backend; Plot button disabled during query | `visibility_plotter.py` |
 
 ---
 
@@ -598,6 +614,11 @@ Caltables: [cal.B0 ▼]
 | T-2 | Synthetic xradio-native DataTree structure tests | `tests/` |
 | T-3 | Single-dish test coverage | `tests/` |
 | T-4 | `RemoteReductionContext` skeleton and transport protocol | `remote_reduction_context.py` *(new)* |
+| X-1 | **CASR-385** SPFLG-style multi-panel raster: tiled `VisibilityRaster` panels, one per baseline, rendered simultaneously in a scrollable grid; required for AIPS SPFLG workflow parity | `visibility_plotter.py`, `visibility_raster.py` |
+| X-2 | **CASR-385** `Axis.PHASE_RMS`: phase RMS vs time or frequency as a scatter y-axis quantity; backend computes `std(angle(visibility))` across the baseline axis per time/channel cell; same Phase 4 bucket as `CLOSURE_PHASE` | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
+| X-3 | **CASR-385** User-specified colours in colour-by-metadata mode: colour picker widget per category value (SPW, antenna, baseline); supplements the automatic categorical palette in S-1 | `visibility_plotter.py`, `visibility_scatter.py` |
+| X-4 | **CASR-385** Performance benchmarks: explicit test cases at ngVLA scale (200+ antennas, 8000 channels, 1-second integrations, 10 SPWs) and ALMA/VLA scale (50+ antennas, 1000 channels); used to validate Datashader pipeline and `is_decimated` gate | `tests/` |
+| X-5 | **CASR-385** Elevate `RemoteReductionContext` from stub to working implementation: serialise `ReductionOperation`, dispatch to remote worker (Dask or HTTP), return real `Future`; required for ngVLA TB-scale datasets where data cannot be local | `remote_reduction_context.py` |
 
 ---
 

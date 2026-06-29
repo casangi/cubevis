@@ -231,8 +231,8 @@ query.  A note beneath each reads *"Full selection — full release"*.
 | **[ Both \| Raster \| Scatter ]** | JS: sets visibility, resizes, updates sidebar |
 | **[ Side by Side \| Over / Under ]** | JS: flips layout, resizes figures |
 | **[vplot] [radplot] [Waterfall]** | JS: switches to Both, sets axes and layout |
-| **Box Select** | Activates Bokeh box-select tool; region drawn; commit not wired |
-| **Flag ⚑** | Disabled; tooltip: *"Flag commit — full release"* |
+| **Box Select** | Activates Bokeh box-select tool; on box close immediately adds `FlagDelta` to `FlagDB` and re-renders flagged overlay in red — no button press required |
+| **Flag ⚑** | Disabled; tooltip: *"Write flags to disk — full release"* |
 | **Undo ⟲** | Disabled; tooltip: *"Undo — full release"* |
 
 Iteration (Prev/Next), Locate, Save plot, and Copy flagdata are absent
@@ -263,7 +263,8 @@ hidden panel.
 
 Absent with no stubs:
 
-- Flag commit, undo, flag versions, flag extend
+- Writing flags to disk (FlagDB accumulation and red overlay work; disk write — full release)
+- Flag versions, flag extend
 - Locate / hover probe (Bokeh hover tool active but no custom handler)
 - Averaging controls
 - Iteration (Prev/Next antenna/baseline)
@@ -303,9 +304,9 @@ plotter = VisibilityPlotter(
     datacolumn  = "data",       # "data", "corrected", "model"
 
     # Initial display configuration
-    mode    = "both",           # "both", "raster", "scatter"
-    layout  = "side",           # "side", "over"
-    preset  = None,             # "vplot", "radplot", "waterfall"
+    mode        = "both",           # "both", "raster", "scatter"
+    layout      = "side",           # "side", "over"
+    preset      = None,             # "vplot", "radplot", "waterfall"
 
     # Initial zoom / axis ranges — optional
     time_range   = None,        # (start, end) as ISO strings or MJD floats
@@ -333,6 +334,14 @@ preference `ColumnDataSource` with an empty dict, and attaches `CustomJS`
 callbacks for the display mode toggle, layout toggle, and presets.  The
 CommMgr transport used by the two display classes is reused without
 modification.
+
+The box-select j2p handler always adds a `FlagDelta` to `FlagDB` and
+immediately re-renders the flagged overlay in red — no button press
+required.  This matches the AIPS TVFLG immediate-feedback workflow.
+The Flag ⚑ button writes the accumulated `FlagDB` entries to disk via
+`ReductionContext.commit_flags()` and is the only step that touches the
+MS or Processing Set.  Undo ⟲ pops the last `FlagDelta` from `FlagDB`
+and re-renders; it works freely until Flag is pressed.
 
 ### Programmer-facing composable layer
 
@@ -392,7 +401,9 @@ A reviewer in a Jupyter notebook should be able to:
 8. Press the vplot preset; axes and layout update; layout returns to Side by Side.
 9. Manually override the layout after a preset; press Plot; the manual choice is remembered.
 10. Pan the time axis in the raster when both show TIME on x; the scatter time axis follows.
-11. Read the status bar and know which dataset, mode, layout, and selection is active.
+11. Draw a box-select region; flagged data immediately appears in red in both panels without pressing Flag.
+12. Press Undo; the red overlay clears for that region.
+13. Read the status bar and know which dataset, mode, layout, and selection is active.
 
 That is sufficient to validate the no-server layout approach, communicate
 the design intent for both independent and preset operating modes, and

@@ -8,16 +8,17 @@ Tests against:
     cubevis/cubevis/toolbox/visplot/visibility_scatter.py
     cubevis/cubevis/toolbox/visplot/visibility_plot.py
     cubevis/cubevis/toolbox/visplot/data/msv2_backend.py
+    cubevis/cubevis/toolbox/visplot/data/msv4_backend.py
 
-Run from the cubevis repository root:
+Backend selection (mutually exclusive)
+--------------------------------------
+Set exactly one of MS or PS:
 
-    MS=sis14_twhya_calibrated_flagged.ms \\
-        pytest cubevis/tests/manual/visplot/test_visibility_scatter.py -v
+    MS=<path>.ms   pytest test_visibility_scatter.py -v   # MSv2
+    PS=<path>.ps.zarr pytest test_visibility_scatter.py -v  # MSv4
 
-Or standalone:
-
-    MS=sis14_twhya_calibrated_flagged.ms \\
-        python test_visibility_scatter.py
+If both are set the suite fails immediately (ambiguous).
+If neither is set all tests are skipped.
 
 Test classes
 ------------
@@ -53,12 +54,14 @@ def _try_package_import():
     from cubevis.toolbox.visplot.axes import Axis, AxisType
     from cubevis.toolbox.visplot.selection import SelectionSpec
     from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
+    from cubevis.toolbox.visplot.data.msv4_backend import MSv4Backend
     from cubevis.toolbox.visplot.visibility_scatter import (
         VisibilityScatter, ScatterLayer,
     )
     from cubevis.toolbox.visplot.visibility_plot import _img_to_uint32
-    return Axis, AxisType, SelectionSpec, MSv2Backend, VisibilityScatter, \
-           ScatterLayer, _img_to_uint32
+    return (Axis, AxisType, SelectionSpec,
+            MSv2Backend, MSv4Backend,
+            VisibilityScatter, ScatterLayer, _img_to_uint32)
 
 
 def _local_import():
@@ -79,17 +82,21 @@ def _local_import():
     _load("cubevis.toolbox.visplot.reader",          here / "reader.py")
     _load("cubevis.toolbox.visplot.data.msv2_backend",
           here / "msv2_backend.py")
+    _load("cubevis.toolbox.visplot.data.msv4_backend",
+          here / "msv4_backend.py")
     vp_mod = _load("cubevis.toolbox.visplot.visibility_plot",
                    here / "visibility_plot.py")
     vs_mod = _load("cubevis.toolbox.visplot.visibility_scatter",
                    here / "visibility_scatter.py")
 
     from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
+    from cubevis.toolbox.visplot.data.msv4_backend import MSv4Backend
     return (
         axes_mod.Axis,
         axes_mod.AxisType,
         sel_mod.SelectionSpec,
         MSv2Backend,
+        MSv4Backend,
         vs_mod.VisibilityScatter,
         vs_mod.ScatterLayer,
         vp_mod._img_to_uint32,
@@ -97,15 +104,15 @@ def _local_import():
 
 
 try:
-    (Axis, AxisType, SelectionSpec, MSv2Backend,
+    (Axis, AxisType, SelectionSpec,
+     MSv2Backend, MSv4Backend,
      VisibilityScatter, ScatterLayer, _img_to_uint32) = _try_package_import()
     _SOURCE = "package"
 except ImportError:
-    (Axis, AxisType, SelectionSpec, MSv2Backend,
+    (Axis, AxisType, SelectionSpec,
+     MSv2Backend, MSv4Backend,
      VisibilityScatter, ScatterLayer, _img_to_uint32) = _local_import()
     _SOURCE = "local"
-
-print(f"[test_visibility_scatter] imports from: {_SOURCE}")
 
 try:
     import datashader as ds
@@ -118,25 +125,62 @@ PLOT_H = 300
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers
+# Backend detection and shared helpers
 # ---------------------------------------------------------------------------
 
-def _get_ms() -> str:
-    path = os.environ.get("MS", "sis14_twhya_calibrated_flagged.ms")
-    if not os.path.isdir(path):
-        pytest.skip(
-            f"Test MS not found at {path!r}. "
-            "Set MS= env var or download from "
-            "https://casa.nrao.edu/download/devel/casavis/data/"
-            "sis14_twhya_calibrated_flagged.ms.tar.gz"
+def _detect_backend_path() -> tuple[str, str]:
+    """Return (path, kind) where kind is 'msv2' or 'msv4'.
+
+    * Neither set  -> pytest.skip (no data available)
+    * Both set     -> pytest.fail (ambiguous; hard error)
+    * One set, dir missing -> pytest.skip
+    * One set, dir present -> return (path, kind)
+    """
+    ms_path = os.environ.get("MS", "").strip()
+    ps_path = os.environ.get("PS", "").strip()
+    if ms_path and ps_path:
+        pytest.fail(
+            "Both MS and PS are set — ambiguous. Set exactly one.\n"
+            f"  MS={ms_path!r}\n  PS={ps_path!r}"
         )
-    return path
+    if not ms_path and not ps_path:
+        pytest.skip(
+            "No backend selected. Set MS=<path>.ms or PS=<path>.ps.zarr.",
+            allow_module_level=True,
+        )
+    if ms_path:
+        if not os.path.isdir(ms_path):
+            pytest.skip(f"MSv2 path not found: {ms_path!r}")
+        return ms_path, "msv2"
+    if not os.path.isdir(ps_path):
+        pytest.skip(f"MSv4 path not found: {ps_path!r}")
+    return ps_path, "msv4"
 
 
-def _open_backend() -> MSv2Backend:
-    b = MSv2Backend(_get_ms())
+def _open_backend():
+    """Open and return the backend indicated by the environment."""
+    path, kind = _detect_backend_path()
+    b = MSv2Backend(path) if kind == "msv2" else MSv4Backend(path)
     b.open()
     return b
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _show_backend(request):  # noqa: ARG001
+    """Write the active backend to /dev/tty, bypassing pytest capture."""
+    ms_path = os.environ.get("MS", "").strip()
+    ps_path = os.environ.get("PS", "").strip()
+    if ms_path and not ps_path:
+        msg = f"[test_visibility_scatter] backend: MSv2  path={ms_path!r}"
+    elif ps_path and not ms_path:
+        msg = f"[test_visibility_scatter] backend: MSv4  path={ps_path!r}"
+    else:
+        return
+    try:
+        with open("/dev/tty", "w") as tty:
+            tty.write(msg + "\n")
+    except OSError:
+        pass  # /dev/tty unavailable (CI without terminal)
 
 
 def _suppress_warnings():

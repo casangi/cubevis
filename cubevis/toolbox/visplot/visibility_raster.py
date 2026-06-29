@@ -40,7 +40,7 @@ from .visibility_plot import VisibilityPlot, _img_to_uint32, _axis_label
 
 if TYPE_CHECKING:
     import xarray as xr
-    from .reader import XArrayReader
+    from .visibility_reader import VisibilityReader
     from .selection import SelectionSpec
     from .axes import Axis
 
@@ -73,8 +73,10 @@ class VisibilityRaster(VisibilityPlot):
 
     Parameters
     ----------
-    backend : XArrayReader
-        Opened backend.
+    backend : VisibilityReader
+        Opened reader (``LocalVisibilityReader`` wrapping an
+        ``MSv2Backend`` or ``MSv4Backend``, or a
+        ``RemoteReductionContext`` for remote sessions).
     selection : SelectionSpec
         Data selection.
     y_dim : Axis
@@ -99,7 +101,7 @@ class VisibilityRaster(VisibilityPlot):
 
     def __init__(
         self,
-        backend: "XArrayReader",
+        backend: "VisibilityReader",
         selection: "SelectionSpec",
         y_dim: "Axis",
         x_dim: "Axis",

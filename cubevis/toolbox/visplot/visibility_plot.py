@@ -64,7 +64,7 @@ from bokeh.plotting import figure, show as bk_show
 from bokeh.layouts import column
 
 if TYPE_CHECKING:
-    from .reader import XArrayReader
+    from .visibility_reader import VisibilityReader
     from .selection import SelectionSpec
     from .axes import Axis
 
@@ -125,8 +125,11 @@ class VisibilityPlot(Model):
 
     Parameters
     ----------
-    backend : XArrayReader
-        Opened backend (``MSv2Backend`` or ``MSv4Backend``).
+    backend : VisibilityReader
+        Opened reader.  In local sessions this is a
+        ``LocalVisibilityReader`` wrapping an ``MSv2Backend`` or
+        ``MSv4Backend``; in remote sessions it is a
+        ``RemoteReductionContext`` that satisfies the same protocol.
     selection : SelectionSpec
         Data selection.
     y_dim : Axis
@@ -151,7 +154,7 @@ class VisibilityPlot(Model):
 
     def __init__(
         self,
-        backend: "XArrayReader",
+        backend: "VisibilityReader",
         selection: "SelectionSpec",
         y_dim: "Axis",
         x_dim: "Axis",
@@ -166,6 +169,18 @@ class VisibilityPlot(Model):
         kwargs.setdefault("canvas_height", height)
         super().__init__(**kwargs)
 
+        # Auto-wrap a bare XArrayReader so that self._backend always
+        # satisfies the VisibilityReader protocol.  This lets callers pass
+        # an MSv2Backend or MSv4Backend directly (the common case in tests
+        # and notebooks) without requiring an explicit LocalVisibilityReader
+        # construction step.  The wrapper is lightweight — pure delegation
+        # with no caching — so there is no runtime cost beyond one extra
+        # call frame per query.  Inline imports avoid circular-import risk
+        # since LocalVisibilityReader → reader, but reader ↛ visibility_plot.
+        from .data.reader import XArrayReader
+        from .local_visibility_reader import LocalVisibilityReader
+        if isinstance(backend, XArrayReader):
+            backend = LocalVisibilityReader(backend)
         self._backend   = backend
         self._selection = selection
         self._y_dim     = y_dim

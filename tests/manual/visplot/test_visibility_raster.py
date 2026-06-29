@@ -7,18 +7,19 @@ Location in repository:
 Tests against:
     cubevis/cubevis/toolbox/visplot/visibility_raster.py
     cubevis/cubevis/toolbox/visplot/data/msv2_backend.py
+    cubevis/cubevis/toolbox/visplot/data/msv4_backend.py
     cubevis/cubevis/toolbox/visplot/axes.py
     cubevis/cubevis/toolbox/visplot/selection.py
 
-Run from the cubevis repository root:
+Backend selection (mutually exclusive)
+--------------------------------------
+Set exactly one of MS or PS:
 
-    MS=sis14_twhya_calibrated_flagged.ms \\
-        pytest cubevis/tests/manual/visplot/test_visibility_raster.py -v
+    MS=<path>.ms   pytest test_visibility_raster.py -v   # MSv2
+    PS=<path>.ps.zarr pytest test_visibility_raster.py -v  # MSv4
 
-Or standalone (without pytest):
-
-    MS=sis14_twhya_calibrated_flagged.ms \\
-        python test_visibility_raster.py
+If both are set the suite fails immediately (ambiguous).
+If neither is set all tests are skipped.
 
 Tests
 -----
@@ -51,9 +52,12 @@ def _try_package_import():
     from cubevis.toolbox.visplot.axes import Axis, AxisType
     from cubevis.toolbox.visplot.selection import SelectionSpec
     from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend, _axis_to_dim
+    from cubevis.toolbox.visplot.data.msv4_backend import MSv4Backend
     from cubevis.toolbox.visplot.visibility_raster import VisibilityRaster
     from cubevis.toolbox.visplot.visibility_plot import _img_to_uint32
-    return Axis, AxisType, SelectionSpec, MSv2Backend, _axis_to_dim, VisibilityRaster, _img_to_uint32
+    return (Axis, AxisType, SelectionSpec,
+            MSv2Backend, MSv4Backend, _axis_to_dim,
+            VisibilityRaster, _img_to_uint32)
 
 
 def _local_import():
@@ -75,6 +79,8 @@ def _local_import():
     _load("cubevis.toolbox.visplot.reader",          here / "reader.py")
     backend_mod = _load("cubevis.toolbox.visplot.data.msv2_backend",
                         here / "msv2_backend.py")
+    msv4_mod    = _load("cubevis.toolbox.visplot.data.msv4_backend",
+                        here / "msv4_backend.py")
     _load("cubevis.toolbox.visplot.visibility_plot",
                        here / "visibility_plot.py")
     vr_mod      = _load("cubevis.toolbox.visplot.visibility_raster",
@@ -86,6 +92,7 @@ def _local_import():
         axes_mod.AxisType,
         sel_mod.SelectionSpec,
         backend_mod.MSv2Backend,
+        msv4_mod.MSv4Backend,
         backend_mod._axis_to_dim,
         vr_mod.VisibilityRaster,
         vp_mod._img_to_uint32,
@@ -93,15 +100,15 @@ def _local_import():
 
 
 try:
-    (Axis, AxisType, SelectionSpec, MSv2Backend,
-     _axis_to_dim, VisibilityRaster, _img_to_uint32) = _try_package_import()
+    (Axis, AxisType, SelectionSpec,
+     MSv2Backend, MSv4Backend, _axis_to_dim,
+     VisibilityRaster, _img_to_uint32) = _try_package_import()
     _SOURCE = "package"
 except ImportError:
-    (Axis, AxisType, SelectionSpec, MSv2Backend,
-     _axis_to_dim, VisibilityRaster, _img_to_uint32) = _local_import()
+    (Axis, AxisType, SelectionSpec,
+     MSv2Backend, MSv4Backend, _axis_to_dim,
+     VisibilityRaster, _img_to_uint32) = _local_import()
     _SOURCE = "local"
-
-print(f"[test_visibility_raster] imports from: {_SOURCE}")
 
 try:
     import datashader as ds
@@ -115,25 +122,73 @@ PLOT_H = 300
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers
+# Backend detection and shared helpers
 # ---------------------------------------------------------------------------
 
-def _get_ms() -> str:
-    path = os.environ.get("MS", "sis14_twhya_calibrated_flagged.ms")
-    if not os.path.isdir(path):
-        pytest.skip(
-            f"Test MS not found at {path!r}. "
-            "Set MS= env var or download from "
-            "https://casa.nrao.edu/download/devel/casavis/data/"
-            "sis14_twhya_calibrated_flagged.ms.tar.gz"
+def _detect_backend_path() -> tuple[str, str]:
+    """Return (path, kind) where kind is 'msv2' or 'msv4'.
+
+    * Neither set  -> pytest.skip (no data available)
+    * Both set     -> pytest.fail (ambiguous; hard error)
+    * One set, dir missing -> pytest.skip
+    * One set, dir present -> return (path, kind)
+    """
+    ms_path = os.environ.get("MS", "").strip()
+    ps_path = os.environ.get("PS", "").strip()
+    if ms_path and ps_path:
+        pytest.fail(
+            "Both MS and PS are set — ambiguous. Set exactly one.\n"
+            f"  MS={ms_path!r}\n  PS={ps_path!r}"
         )
-    return path
+    if not ms_path and not ps_path:
+        pytest.skip(
+            "No backend selected. Set MS=<path>.ms or PS=<path>.ps.zarr.",
+            allow_module_level=True,
+        )
+    if ms_path:
+        if not os.path.isdir(ms_path):
+            pytest.skip(f"MSv2 path not found: {ms_path!r}")
+        return ms_path, "msv2"
+    if not os.path.isdir(ps_path):
+        pytest.skip(f"MSv4 path not found: {ps_path!r}")
+    return ps_path, "msv4"
 
 
-def _open_backend(**kwargs) -> MSv2Backend:
-    b = MSv2Backend(_get_ms(), **kwargs)
+def _open_backend(**kwargs):
+    """Open and return the backend indicated by the environment."""
+    path, kind = _detect_backend_path()
+    b = MSv2Backend(path, **kwargs) if kind == "msv2" else MSv4Backend(path, **kwargs)
     b.open()
     return b
+
+
+def _backend_kind() -> str:
+    """Return 'msv2' or 'msv4' without opening the backend."""
+    _, kind = _detect_backend_path()
+    return kind
+
+
+def _axis_to_dim_safe(axis) -> str:
+    """Return the xarray dimension name for axis, backend-agnostically."""
+    return _axis_to_dim(axis)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _show_backend(request):  # noqa: ARG001
+    """Write the active backend to /dev/tty, bypassing pytest capture."""
+    ms_path = os.environ.get("MS", "").strip()
+    ps_path = os.environ.get("PS", "").strip()
+    if ms_path and not ps_path:
+        msg = f"[test_visibility_raster] backend: MSv2  path={ms_path!r}"
+    elif ps_path and not ms_path:
+        msg = f"[test_visibility_raster] backend: MSv4  path={ps_path!r}"
+    else:
+        return
+    try:
+        with open("/dev/tty", "w") as tty:
+            tty.write(msg + "\n")
+    except OSError:
+        pass  # /dev/tty unavailable (CI without terminal)
 
 
 def _suppress_warnings():
@@ -293,8 +348,8 @@ class TestRender:
     def test_agg_dims_match_axes(self):
         """agg dimensions must be (time, baseline_id) for TIME×BASELINE."""
         vr = _make_vr(self.backend, self.sel)
-        y_name = _axis_to_dim(Axis.TIME)
-        x_name = _axis_to_dim(Axis.BASELINE)
+        y_name = _axis_to_dim_safe(Axis.TIME)
+        x_name = _axis_to_dim_safe(Axis.BASELINE)
         assert vr.agg.dims == (y_name, x_name), (
             f"agg.dims={vr.agg.dims}, expected ({y_name}, {x_name})"
         )
@@ -454,7 +509,10 @@ class TestViewportSelection:
         assert sel2.time_range == (t_lo, t_hi)
 
     def test_frequency_y_axis_sets_freq_range(self):
-        # Need a single-baseline selection to get a time×freq raster
+        # Need a single-baseline selection to get a time×freq raster.
+        # _iter_visibility_partitions is MSv2-only; skip on MSv4.
+        if _backend_kind() != "msv2":
+            pytest.skip("_iter_visibility_partitions is MSv2-only")
         ds_part = next(self.backend._iter_visibility_partitions())
         eit  = ds_part["EFFECTIVE_INTEGRATION_TIME"].isel(time=0).compute()
         vidx = int(np.where(np.isfinite(eit.values))[0][0])
@@ -780,6 +838,8 @@ class TestDatashadedOutput:
             "viewport sizing or interpolation switch may be broken"
         )
         """Time×frequency waterfall for a single baseline."""
+        if _backend_kind() != "msv2":
+            pytest.skip("_iter_visibility_partitions is MSv2-only")
         ds_part = next(self.backend._iter_visibility_partitions())
         eit  = ds_part["EFFECTIVE_INTEGRATION_TIME"].isel(time=0).compute()
         vidx = int(np.where(np.isfinite(eit.values))[0][0])
@@ -915,14 +975,20 @@ class TestUpdateAxes:
         old_n_x = vr._state_source.data["agg_n_x"][0]
         old_n_y = vr._state_source.data["agg_n_y"][0]
 
-        # Get a single-baseline selection for TIME×FREQUENCY
-        ds_part = next(self.backend._iter_visibility_partitions())
-        from cubevis.toolbox.visplot.data.msv2_backend import _axis_to_dim
-        import xarray as xr
-        eit  = ds_part["EFFECTIVE_INTEGRATION_TIME"].isel(time=0).compute()
-        vidx = int(np.where(np.isfinite(eit.values))[0][0])
-        a1   = str(ds_part.coords["baseline_antenna1_name"].values[vidx])
-        a2   = str(ds_part.coords["baseline_antenna2_name"].values[vidx])
+        # Pick a single baseline for TIME×FREQUENCY.
+        # Use _iter_visibility_partitions on MSv2; fall back to
+        # metadata antenna_names on MSv4.
+        if _backend_kind() == "msv2":
+            ds_part = next(self.backend._iter_visibility_partitions())
+            eit  = ds_part["EFFECTIVE_INTEGRATION_TIME"].isel(time=0).compute()
+            vidx = int(np.where(np.isfinite(eit.values))[0][0])
+            a1   = str(ds_part.coords["baseline_antenna1_name"].values[vidx])
+            a2   = str(ds_part.coords["baseline_antenna2_name"].values[vidx])
+        else:
+            ants = self.backend.metadata().get("antenna_names", [])
+            if len(ants) < 2:
+                pytest.skip("Need at least two antennas for baseline selection")
+            a1, a2 = ants[0], ants[1]
         vr._selection = SelectionSpec(
             channel_range=(0, 48), baselines=[(a1, a2)]
         )
@@ -1102,7 +1168,6 @@ class TestDecimation:
 
     def test_decimated_agg_has_correct_dims(self):
         """Decimated agg must still have the right dimension names."""
-        from cubevis.toolbox.visplot.data.msv2_backend import _axis_to_dim
         agg, _, _, _ = self.backend.query_raster(
             y_dim        = Axis.TIME,
             x_dim        = Axis.BASELINE,
@@ -1111,8 +1176,8 @@ class TestDecimation:
             polarization = self.pols[0],
             max_cells    = 100,
         )
-        assert agg.dims[0] == _axis_to_dim(Axis.TIME)
-        assert agg.dims[1] == _axis_to_dim(Axis.BASELINE)
+        assert agg.dims[0] == _axis_to_dim_safe(Axis.TIME)
+        assert agg.dims[1] == _axis_to_dim_safe(Axis.BASELINE)
 
     def test_decimated_agg_coordinate_span_unchanged(self):
         """Decimation strides coordinates — the span must cover the full range."""
@@ -1247,6 +1312,8 @@ class TestTiming:
 
 if __name__ == "__main__":
     _suppress_warnings()
+    _, _kind = _detect_backend_path()
+    import sys; print(f"[test_visibility_raster] backend: {_kind}", file=sys.stderr)
 
     test_classes = [
         TestLifecycle,

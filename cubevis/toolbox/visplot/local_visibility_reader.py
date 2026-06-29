@@ -66,7 +66,7 @@ from typing import Optional, TYPE_CHECKING
 import pandas as pd
 import xarray as xr
 
-from .reader import XArrayReader
+from .data import XArrayReader
 from .visibility_reader import VisibilityReader
 
 if TYPE_CHECKING:

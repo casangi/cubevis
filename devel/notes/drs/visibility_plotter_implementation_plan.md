@@ -126,15 +126,15 @@ The core pattern, repeated many times per session:
 │  (owns layout, sidebar, toolbar, iteration engine)      │
 │                                                         │
 │  ┌─────────────────┐   ┌─────────────────────────────┐  │
-│  │ VisibilityRaster│   │    VisibilityScatter         │  │
-│  │ (Datashader     │   │    (multi-layer Datashader   │  │
-│  │  raster panel)  │   │     scatter panel)           │  │
+│  │ VisibilityRaster│   │    VisibilityScatter        │  │
+│  │ (Datashader     │   │    (multi-layer Datashader  │  │
+│  │  raster panel)  │   │     scatter panel)          │  │
 │  └────────┬────────┘   └──────────────┬──────────────┘  │
-│           │  VisibilityReader (Protocol)  │              │
+│           │  VisibilityReader (Protocol)  │             │
 └───────────┼──────────────────────────────┼──────────────┘
             │                              │
   ┌─────────▼──────────────────────────────▼──────────┐
-  │              VisibilityReader (Protocol)           │
+  │              VisibilityReader (Protocol)          │
   │  .query_raster()  .query_columns()                │
   │  .probe_raster_pixel()  .probe_scatter_pixel()    │
   └───────────────────┬───────────────────────────────┘

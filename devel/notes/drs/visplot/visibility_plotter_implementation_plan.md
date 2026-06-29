@@ -324,7 +324,63 @@ RADPS without a CASA6 session), calibration buttons are hidden.
 
 - **Save plot** — PNG export of current view
 - **Copy flagdata command** — generate equivalent `flagdata()` call for pending flags
-- **Python API** — `VisibilityPlotter(metadata, reader, context)` usable in Jupyter
+- **Python API** — `VisibilityPlotter(ms=..., field=..., preset=...)` usable in Jupyter
+
+### 4.11 Astronomer-facing constructor
+
+`VisibilityPlotter` is an end-user application, not a composable
+programmer component.  Its public constructor accepts only strings,
+numbers, and lists — no internal objects (`VisibilityReader`,
+`ReductionContext`, `ObservationMetadata`, `SelectionSpec`).
+
+```python
+from cubevis.toolbox.visplot import VisibilityPlotter
+
+plotter = VisibilityPlotter(
+    # Data source — exactly one of ms or ps (ValueError if both or neither)
+    ms   = "sis14_twhya_calibrated_flagged.ms",
+    # ps = "sis14_twhya_calibrated_flagged.ps.zarr",
+
+    # Initial selection — all optional strings or numbers
+    field       = "0637-752",   # name or int index; default: first field
+    spw         = "0,1,2,3",    # MSSelection string; default: all
+    antenna     = "",           # MSSelection string; default: all
+    scan        = "",           # MSSelection string; default: all
+    timerange   = "",           # MSSelection string; default: all
+    uvrange     = "",           # e.g. "0~50klambda"; default: all
+    correlation = "XX,YY",      # default: all available
+    datacolumn  = "data",       # "data", "corrected", "model"
+
+    # Initial display configuration
+    mode    = "both",           # "both", "raster", "scatter"
+    layout  = "side",           # "side", "over"
+    preset  = None,             # "vplot", "radplot", "waterfall"
+
+    # Initial zoom / axis ranges — optional
+    time_range   = None,        # (start, end) as ISO strings or MJD floats
+    freq_range   = None,        # (start, end) in Hz
+    uvdist_range = None,        # (min, max) in metres
+)
+
+plotter.show()  # returns a Bokeh layout for notebook embedding
+```
+
+Internally `__init__` calls `open_ms()` or `open_ps()` to produce
+`ObservationMetadata`, `LocalVisibilityReader`, and `ReductionContext`,
+then constructs `VisibilityRaster` and `VisibilityScatter` from those
+objects.  None of these internal objects are exposed as public attributes.
+Defaults for omitted selection parameters are resolved by inspecting
+`ObservationMetadata` (e.g. first field, all SPWs, all available
+polarizations).
+
+**Composable layer for developers.**  `VisibilityRaster`,
+`VisibilityScatter`, `LocalVisibilityReader`, and `ReductionContext`
+remain fully accessible as independent programmer-facing components for
+embedding in pipelines or custom tools.  `VisibilityPlotter` does not
+replace them — it wraps them behind an astronomer-friendly interface.
+Developers who want to build their own application shell can do so using
+these lower-level classes directly, optionally naming their own class
+`VisibilityWidget` or similar to signal its composable nature.
 
 ---
 
@@ -488,7 +544,7 @@ Caltables: [cal.B0 ▼]
 
 | ID | Task | Files affected |
 |---|---|---|
-| P-1 | `VisibilityPlotter` class skeleton: owns `VisibilityRaster` and/or `VisibilityScatter`, `FlagDB`, shared `SelectionSpec`, `ObservationMetadata`, `VisibilityReader`, `ReductionContext` | `visibility_plotter.py` *(new)* |
+| P-1 | `VisibilityPlotter` class skeleton: astronomer-facing constructor (see §4.11); internally calls `open_ms()`/`open_ps()`, constructs `VisibilityRaster`, `VisibilityScatter`, `FlagDB`, sidebar, toolbar, and preference `ColumnDataSource`; no internal objects exposed as public attributes | `visibility_plotter.py` *(new)* |
 | P-2 | Sidebar widget set — accordion layout with Data, Axes, Display, Flagging sections; Bokeh `Select`, `MultiSelect`, `TextInput`, `CheckboxGroup`, `Slider` | `visibility_plotter.py` |
 | P-3 | Toolbar — Plot, Reload, Box Select, Point Flag, Flag, Unflag, Undo, Locate, Save Plot, Copy flagdata | `visibility_plotter.py` |
 | P-4 | Display mode toggle — Scatter / Raster / Both; dynamically show/hide panels | `visibility_plotter.py` |

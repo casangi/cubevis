@@ -277,26 +277,91 @@ Absent with no stubs:
 
 ## Construction approach
 
-`VisibilityPlotter` takes the same constructor arguments it will take in
-the full release — no API changes needed later:
+### Astronomer-facing API
+
+`VisibilityPlotter` is an end-user application, not a composable
+programmer component.  Its constructor accepts strings, numbers, and
+lists — no internal objects.  The same call works in the preview and in
+the full release; no API changes will be needed later.
 
 ```python
+from cubevis.toolbox.visplot import VisibilityPlotter
+
 plotter = VisibilityPlotter(
-    metadata  = metadata,        # ObservationMetadata
-    reader    = reader,          # VisibilityReader
-    context   = context,         # ReductionContext (NullReductionContext for preview)
-    selection = SelectionSpec(),
+    # Data source — exactly one of ms or ps
+    ms   = "sis14_twhya_calibrated_flagged.ms",   # MSv2
+    # ps = "sis14_twhya_calibrated_flagged.ps.zarr", # MSv4
+
+    # Initial selection — all optional strings or numbers
+    field       = "0637-752",   # name or index; default: first field
+    spw         = "0,1,2,3",    # MSSelection string; default: all
+    antenna     = "",           # MSSelection string; default: all
+    scan        = "",           # MSSelection string; default: all
+    timerange   = "",           # MSSelection string; default: all
+    uvrange     = "",           # e.g. "0~50klambda"; default: all
+    correlation = "XX,YY",      # default: all available
+    datacolumn  = "data",       # "data", "corrected", "model"
+
+    # Initial display configuration
+    mode    = "both",           # "both", "raster", "scatter"
+    layout  = "side",           # "side", "over"
+    preset  = None,             # "vplot", "radplot", "waterfall"
+
+    # Initial zoom / axis ranges — optional
+    time_range   = None,        # (start, end) as ISO strings or MJD floats
+    freq_range   = None,        # (start, end) in Hz
+    uvdist_range = None,        # (min, max) in metres
 )
+
 plotter.show()  # returns a Bokeh layout for notebook embedding
 ```
 
-Internally, `__init__` constructs one `VisibilityRaster` and one
-`VisibilityScatter`, wraps their figures in a CSS flex container `Div`,
+Passing both `ms` and `ps` raises a `ValueError` immediately with a
+clear message.  Omitting both also raises `ValueError`.  All other
+parameters are optional; defaults are chosen by inspecting the data
+after opening (e.g. first field, all SPWs, all available polarizations).
+
+### What VisibilityPlotter does internally
+
+`__init__` calls `open_ms()` or `open_ps()` to produce an
+`ObservationMetadata`, a `LocalVisibilityReader`, and a
+`ReductionContext` (initially `NullReductionContext` in the preview).
+It then constructs one `VisibilityRaster` and one `VisibilityScatter`
+from those objects, wraps their figures in a CSS flex container `Div`,
 builds the sidebar and toolbar as Bokeh widget columns, initialises the
 preference `ColumnDataSource` with an empty dict, and attaches `CustomJS`
 callbacks for the display mode toggle, layout toggle, and presets.  The
 CommMgr transport used by the two display classes is reused without
 modification.
+
+### Programmer-facing composable layer
+
+Developers building their own tools or embedding individual display
+classes use the lower-level API directly:
+
+```python
+from cubevis.toolbox.visplot import (
+    MSv2Backend, LocalVisibilityReader,
+    VisibilityRaster, VisibilityScatter,
+    SelectionSpec, Axis,
+)
+
+backend = MSv2Backend("data.ms")
+backend.open()
+reader  = LocalVisibilityReader(backend)
+sel     = SelectionSpec(field_name="0637-752", spw_ids=[0, 1])
+
+raster  = VisibilityRaster(reader, sel, y_dim=Axis.TIME,
+                           x_dim=Axis.CHANNEL, quantity=Axis.AMPLITUDE,
+                           width=800, height=500)
+```
+
+`VisibilityPlotter` does not expose its internal `VisibilityRaster`,
+`VisibilityScatter`, `LocalVisibilityReader`, or `ReductionContext`
+instances as public attributes — these are implementation details.
+The composable layer exists independently and is the right choice for
+programmatic or pipeline use; `VisibilityPlotter` is the right choice
+for interactive data inspection.
 
 ---
 

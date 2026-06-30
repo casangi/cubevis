@@ -101,7 +101,7 @@ setting.
 │  Toolbar                                                            │
 │  [Plot ▶] [Reload ↺]  |  [● Both ○ Raster ○ Scatter]                │
 │  [○ Side by Side ● Over/Under]  |  [vplot] [radplot] [Waterfall]    │
-│  [□ Box Select] [⚑ Flag†] [⟲ Undo†]                                │
+│  [□ Box Select] [⚑ Flag†] [⟲ Undo†]                                 │
 ├──────────────────┬──────────────────────────────────────────────────┤
 │  Sidebar         │  ┌──────────────────┐  ┌──────────────────────┐  │
 │  (~280px)        │  │  Raster panel    │  │  Scatter panel       │  │

@@ -222,7 +222,26 @@ query.  A note beneath each reads *"Full selection — full release"*.
 - Y axis (single layer): AMPLITUDE (working)
 - Multi-layer and colour-by-axis: absent
 
-### 6. Toolbar summary
+### 6. Colormap controls (sidebar — working)
+
+Both panels default to Datashader's `eq_hist` (histogram equalization)
+reduction rather than linear scaling, which resolves the low-amplitude
+saturation seen in early scatter testing (dense low-value data collapsing
+to a uniform dark color under linear mapping).
+
+Each panel embeds its own `colormap_controls()` widget (a small column
+from `VisibilityRaster` / `VisibilityScatter` — see Phase 0 CM-series
+in the implementation plan):
+
+- Scaling dropdown: linear, log, sqrt, square, gamma, eq_hist (default)
+- Alpha / gamma numeric input (shown conditionally per scaling choice)
+- Min / max numeric range inputs
+
+Changing scaling re-shades from the cached aggregation — no backend
+re-query — so this is fast even on the preview's modest sis14 dataset and
+will remain fast at full scale.
+
+### 7. Toolbar summary
 
 | Control | Behaviour |
 |---|---|
@@ -238,14 +257,14 @@ query.  A note beneath each reads *"Full selection — full release"*.
 Iteration (Prev/Next), Locate, Save plot, and Copy flagdata are absent
 from the toolbar — no stubs, to keep the toolbar uncluttered.
 
-### 7. Linked axis behaviour (working)
+### 8. Linked axis behaviour (working)
 
 When both panels share the same x-axis dimension (e.g. both show TIME),
 a shared Bokeh `Range1d` links their x-axes.  Panning or zooming one
 panel moves the other in sync.  Hidden figures remain linked — switching
 back to Both mode restores the synchronised view correctly.
 
-### 8. Status bar
+### 9. Status bar
 
 A `Div` updated on every Plot press and every mode/layout change:
 
@@ -266,6 +285,8 @@ Absent with no stubs:
 - Writing flags to disk (FlagDB accumulation and red overlay work; disk write — full release)
 - Flag versions, flag extend
 - Locate / hover probe (Bokeh hover tool active but no custom handler)
+- Synchronized cross-panel cursor (Tier 1 same-axis Span and Tier 2 cross-axis
+  row-level highlight — both full release; see main plan §4.7)
 - Averaging controls
 - Iteration (Prev/Next antenna/baseline)
 - Calibration sidebar section
@@ -394,6 +415,9 @@ A reviewer in a Jupyter notebook should be able to:
 1. Open an MSv2 or MSv4 dataset and see both panels render side by side.
 2. Change field or SPW and press Plot; both panels update.
 3. Change the raster quantity from Amplitude to Phase and press Plot.
+3a. Switch the scatter colormap scaling from eq_hist to linear and back;
+    confirm the low-amplitude region goes from visually flat (linear) to
+    showing structure (eq_hist).
 4. Switch to Raster only; scatter hides, raster expands; layout toggle disables.
 5. Switch back to Both; scatter reappears at correct size; layout toggle re-enables.
 6. Toggle to Over / Under; both panels reflow and resize correctly.

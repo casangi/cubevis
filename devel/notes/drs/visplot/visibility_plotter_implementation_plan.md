@@ -308,21 +308,61 @@ a `ReductionContext.commit_flags()` responsibility, not a display responsibility
 - Hover: show probe result (value, coordinates, metadata) in a tooltip
 - **Locate** button: for a drawn region, list all matching rows in a sidebar table
 
-### 4.7 Iteration (difmap-style)
+### 4.7 Synchronized cursor (cross-panel)
+
+When both Raster and Scatter panels are visible, hovering in one panel
+highlights the corresponding visibility sample(s) in the other. Two tiers
+of fidelity, increasing in cost:
+
+**Tier 1 — same-axis cursor sync (pure JS, no Python round-trip).**
+When both panels share an x-axis dimension (the same case where the
+`Range1d` axis link in §3.2 applies), a `CustomJS` callback on each
+figure's `MouseMove` event reads the x-coordinate and positions a
+vertical `Span` annotation at that x position on both figures. Zero
+backend cost, zero latency. Only applies when axes correspond.
+
+**Tier 2 — cross-axis row-level sync (CommMgr round-trip).** When the
+panels show unrelated axis pairs (e.g. raster TIME × CHANNEL, scatter
+AMP vs UVDIST), translating a hovered raster pixel into a scatter
+highlight requires resolving the underlying MS row(s) that pixel
+represents — exactly what `probe_raster_pixel` already computes (§3.4,
+`VisibilityReader`). Mechanism:
+
+1. JS `MouseMove` listener, throttled to ~10–15 Hz, sends hovered pixel
+   coordinates to Python via a new CommMgr j2p message
+2. Python calls `probe_raster_pixel` (or `probe_scatter_pixel` for the
+   reverse direction) to resolve matching row(s)
+3. Python pushes the corresponding coordinates in the *other* panel's
+   axis space back via p2j
+4. JS updates a small `ColumnDataSource` driving one or more highlight
+   marker glyphs already present (but empty) in the target figure
+
+No new backend capability is required — both probe methods already exist
+on `VisibilityReader`.  The new pieces are the j2p/p2j message pair, the
+JS throttle, and the highlight-marker glyph and its `ColumnDataSource`.
+
+This is a genuinely useful diagnostic: hovering an anomalous raster pixel
+and seeing where that sample falls in amplitude-vs-baseline-length space
+immediately shows whether an anomaly is isolated to one baseline or
+affects the whole array at that time/channel — a different and
+complementary view from axis-range linking, which only works when both
+panels happen to share an axis.
+
+### 4.8 Iteration (difmap-style)
 
 - Iterate over: antenna, baseline, field, SPW, scan, time
 - Prev / Next buttons step through values
 - Both panels update synchronously
 - Title appends current iteration value
 
-### 4.8 Named view presets (difmap-inspired)
+### 4.9 Named view presets (difmap-inspired)
 
 - **vplot mode** — amplitude vs time, colour-by-baseline, flag-state overlay,
   one-per-antenna iteration
 - **radplot mode** — amplitude vs UVdist, nearest-point flag tool active
 - **projplot mode** — amplitude vs projected UV cut (selectable position angle)
 
-### 4.9 Calibration integration (loose coupling)
+### 4.10 Calibration integration (loose coupling)
 
 `VisibilityPlotter` accepts an optional `ReductionContext`. When
 `context.supports_calibration()` returns `True`, the sidebar gains a
@@ -335,13 +375,13 @@ a `ReductionContext.commit_flags()` responsibility, not a display responsibility
 When `ReductionContext` is `NullReductionContext` (no backend available, e.g.
 RADPS without a CASA6 session), calibration buttons are hidden.
 
-### 4.10 Export / scripting
+### 4.11 Export / scripting
 
 - **Save plot** — PNG export of current view
 - **Copy flagdata command** — generate equivalent `flagdata()` call for pending flags
 - **Python API** — `VisibilityPlotter(ms=..., field=..., preset=...)` usable in Jupyter
 
-### 4.11 Astronomer-facing constructor
+### 4.12 Astronomer-facing constructor
 
 `VisibilityPlotter` is an end-user application, not a composable
 programmer component.  Its public constructor accepts only strings,
@@ -517,6 +557,43 @@ Caltables: [cal.B0 ▼]
 ### Phase 0 — Architecture foundations
 *Complete before any other phase. No UI work.*
 
+**Colormap/pseudocolor fidelity (CM-series).** Linear value-to-color
+mapping in both display classes was found to saturate badly on
+real visibility data — a small high-amplitude population dominates the
+colormap while the populous low-amplitude region collapses to a
+featureless dark gradient (observed directly during scatter testing:
+amplitude vs UVdist rendered as a near-solid purple field below
+amplitude ~40, with structure visible only near the top of the range).
+This is a Datashader reduction-function problem, not a bit-depth problem —
+`uint16` would saturate identically under a linear map. Fixed here because
+`colormap_controls()` must exist on both display classes before
+`VisibilityPlotter` Phase 2 task P-2 (sidebar widget set) embeds it
+directly; doing this after `VisibilityPlotter` exists would mean
+retrofitting both display classes and the sidebar layout at the same time.
+
+| ID | Task | Files affected |
+|---|---|---|
+| CM-1 | Switch default Datashader reduction from linear to `eq_hist` (histogram equalization); add `scaling: str = "eq_hist"` constructor parameter to both classes, threaded through to `ds.tf.shade()` calls. Expose the four Datashader built-ins (`linear`, `log`, `eq_hist`, `cbrt`) plus `quantize()`-style scaling | `visibility_raster.py`, `visibility_scatter.py` |
+| CM-2 | `update_scaling(scaling, **kwargs)` fast re-shade path: re-shades the cached aggregation array without a backend re-query, mirroring the existing `set_alpha()` pattern | `visibility_raster.py`, `visibility_scatter.py` |
+| CM-3 | Port `quantize()`-style scaling functions (log, sqrt, square, gamma, power) from interactive_clean, adapted to operate on a generic Datashader aggregation array rather than a 2D image plane | `colormap_scaling.py` *(new, shared)* |
+| CM-4 | `colormap_controls()` method on both classes returning a Bokeh widget column: scaling dropdown, conditional alpha/gamma numeric input, min/max numeric range inputs. This is the hook `VisibilityPlotter`'s sidebar embeds directly (`raster.colormap_controls()`, `scatter.colormap_controls()`) | `visibility_raster.py`, `visibility_scatter.py` |
+| CM-5 | `histogram()` method on both classes returning binned aggregation values, for an eventual histogram display alongside the controls | `visibility_raster.py`, `visibility_scatter.py` |
+| CM-6 | Ensure `_render()` always reads `self._scaling` (instance state, not a hardcoded default) on every re-shade triggered by pan, zoom, or axis change — same discipline already applied to `self._x_dim` | `visibility_raster.py`, `visibility_scatter.py` |
+| CM-7 | Manual verification against the original saturation scenario (amplitude vs UVdist, full sis14 dataset): confirm `eq_hist` shows structure throughout the low-amplitude region rather than a featureless gradient | manual verification |
+| CM-8 | New test classes for `update_scaling()` and `colormap_controls()` | `test_visibility_raster.py`, `test_visibility_scatter.py` |
+
+**Deferred, not part of this phase** — tracked as Phase 4 items instead,
+since neither changes the `colormap_controls()` API shape or sidebar
+layout that Phase 2 depends on:
+
+- `uint16`/`uint32` image bit depth — internal encoding refinement only
+- User-selectable render resolution/quality (Colab network-cost tradeoff) —
+  a `VisibilityPlotter`-level deployment concern, not a display-class API concern
+- Draggable histogram `Span` overlay (interactive_clean's red-line drag
+  interaction) — visual polish on top of the CM-4 widget, same API
+
+**Architecture foundations (A-series).**
+
 | ID | Task | Files affected |
 |---|---|---|
 | A-1 | Define `VisibilityReader` protocol | `visibility_reader.py` *(new)* |
@@ -531,7 +608,8 @@ Caltables: [cal.B0 ▼]
 
 > **Note:** `reduction_context.py`, `visibility_reader.py`, and `local_visibility_reader.py`
 > have been written as part of this planning session and are in the repository.
-> A-3 is the only change required to existing source files in this phase.
+> A-3 is the only change required to existing source files in the A-series.
+> CM-1 through CM-8 are new work, not yet started.
 
 ---
 
@@ -559,7 +637,7 @@ Caltables: [cal.B0 ▼]
 
 | ID | Task | Files affected |
 |---|---|---|
-| P-1 | `VisibilityPlotter` class skeleton: astronomer-facing constructor (see §4.11); internally calls `open_ms()`/`open_ps()`, constructs `VisibilityRaster`, `VisibilityScatter`, `FlagDB`, sidebar, toolbar, and preference `ColumnDataSource`; no internal objects exposed as public attributes | `visibility_plotter.py` *(new)* |
+| P-1 | `VisibilityPlotter` class skeleton: astronomer-facing constructor (see §4.12); internally calls `open_ms()`/`open_ps()`, constructs `VisibilityRaster`, `VisibilityScatter`, `FlagDB`, sidebar, toolbar, and preference `ColumnDataSource`; no internal objects exposed as public attributes | `visibility_plotter.py` *(new)* |
 | P-2 | Sidebar widget set — accordion layout with Data, Axes, Display, Flagging sections; Bokeh `Select`, `MultiSelect`, `TextInput`, `CheckboxGroup`, `Slider` | `visibility_plotter.py` |
 | P-3 | Toolbar — Plot, Reload, Box Select, Point Flag, Flag, Unflag, Undo, Locate, Save Plot, Copy flagdata | `visibility_plotter.py` |
 | P-4 | Display mode toggle — Scatter / Raster / Both; dynamically show/hide panels | `visibility_plotter.py` |
@@ -610,6 +688,11 @@ Caltables: [cal.B0 ▼]
 | G-4 | Copy `flagdata` command: format pending flags as `flagdata()` call string | `visibility_plotter.py` |
 | G-5 | PNG export via Bokeh `export_png` | `visibility_plotter.py` |
 | G-6 | `Axis.CLOSURE_PHASE` enum value and backend query path (triangle sum of phase over antenna triples) | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
+| G-7 | Synchronized cursor, Tier 1 (same-axis): `CustomJS` `MouseMove` callback drawing a linked `Span` annotation on both figures when x-axis dimensions match | `visibility_plotter.py` |
+| G-8 | Synchronized cursor, Tier 2 (cross-axis): throttled JS `MouseMove` → CommMgr j2p message → `probe_raster_pixel`/`probe_scatter_pixel` row resolution → p2j coordinate push → highlight-marker `ColumnDataSource` update in the other panel | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
+| G-9 | `uint16`/`uint32` image bit depth option, deferred from Phase 0 CM-series — internal encoding refinement on top of `eq_hist` scaling | `visibility_raster.py`, `visibility_scatter.py` |
+| G-10 | User-selectable render resolution/quality tradeoff (relevant for high-latency deployments e.g. Colab) | `visibility_plotter.py` |
+| G-11 | Draggable histogram `Span` overlay for `colormap_controls()` (interactive_clean-style red-line drag), on top of the CM-4 numeric-input widget | `visibility_raster.py`, `visibility_scatter.py` |
 | T-1 | `data_group` test cases for `MSv4Backend` | `tests/` |
 | T-2 | Synthetic xradio-native DataTree structure tests | `tests/` |
 | T-3 | Single-dish test coverage | `tests/` |

@@ -31,7 +31,7 @@ Usage
 -----
 ::
 
-    from cubevis.toolbox.visplot.msv2_backend import MSv2Backend
+    from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
     from cubevis.toolbox.visplot.local_visibility_reader import (
         LocalVisibilityReader,
     )
@@ -66,7 +66,7 @@ from typing import Optional, TYPE_CHECKING
 import pandas as pd
 import xarray as xr
 
-from .data import XArrayReader
+from .data.reader import XArrayReader
 from .visibility_reader import VisibilityReader
 
 if TYPE_CHECKING:

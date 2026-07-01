@@ -1087,8 +1087,26 @@ class TestColorMode:
 
     def test_shade_viewport_global_local_differ_in_subrange(self):
         """_shade_viewport must produce different images in global vs local
-        mode when viewing a sub-range of the data."""
-        vr = _make_vr(self.backend, self.sel)
+        mode when viewing a sub-range of the data, for linear scaling.
+
+        Pinned to scaling="linear" explicitly to keep this test's
+        guarantee unconditional: "linear" and "log" always differ
+        visually between global/local since color_mode directly sets
+        Datashader's span= for both (see
+        TestColormapScaling.test_color_mode_affects_log_via_span,
+        despite the name being about log specifically — log behaves like
+        linear here, not like eq_hist). "eq_hist" also now differs
+        correctly between global/local — see
+        TestColormapScaling.test_color_mode_changes_eq_hist_output — but
+        is exercised separately rather than folded into this test. The
+        explicit scalings (sqrt/square/gamma/power) do have a genuine
+        global/local distinction at the value-domain level, but whether
+        that distinction survives 8-bit colour quantization into a
+        *visibly different* image is data- and seed-dependent — see
+        TestColormapScaling.test_explicit_scaling_color_mode_changes_value_domain
+        for a test of the underlying logic rather than pixel output.
+        """
+        vr = _make_vr(self.backend, self.sel, scaling="linear")
         x0, x1 = vr._x_range
         y0, y1 = vr._y_range
         xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
@@ -1103,13 +1121,313 @@ class TestColorMode:
         assert img_local.dtype  == np.uint32
         assert not np.array_equal(img_global, img_local), (
             "global and local colour modes must produce different images "
-            "for a sub-range viewport"
+            "for a sub-range viewport under linear scaling"
         )
 
     def test_state_source_has_color_mode_key(self):
         vr = _make_vr(self.backend, self.sel)
         assert "color_mode" in vr._state_source.data
         assert vr._state_source.data["color_mode"][0] == "global"
+
+
+# ---------------------------------------------------------------------------
+# 8a. Colormap scaling — Phase 0 CM-series (eq_hist default, update_scaling,
+#     colormap_controls, histogram)
+# ---------------------------------------------------------------------------
+
+class TestColormapScaling:
+    """Tests for the Phase 0 colormap/pseudocolor fidelity refactor.
+
+    Background: linear value-to-colour mapping was found to saturate
+    badly on real visibility data (a small high-amplitude population
+    dominates the colormap while the populous low-amplitude region
+    collapses to a featureless gradient — observed directly during
+    scatter testing). ``eq_hist`` (histogram equalization) is now the
+    default reduction; explicit scalings (log, sqrt, square, gamma,
+    power) are available as manual overrides via ``update_scaling()``.
+    """
+
+    def setup_method(self):
+        _require_datashader()
+        _suppress_warnings()
+        self.backend = _open_backend()
+        meta = self.backend.metadata()
+        t0, t1 = meta["time_range"]
+        self.sel = SelectionSpec(
+            time_range=(t0, t0 + (t1 - t0) * 0.15),
+            channel_range=(0, 48),
+        )
+
+    def teardown_method(self):
+        self.backend.close()
+
+    def test_default_scaling_is_eq_hist(self):
+        vr = _make_vr(self.backend, self.sel)
+        assert vr._scaling == "eq_hist"
+
+    def test_scaling_constructor_param_accepted(self):
+        vr = _make_vr(self.backend, self.sel, scaling="linear")
+        assert vr._scaling == "linear"
+
+    def test_invalid_scaling_constructor_param_falls_back_to_default(self):
+        vr = _make_vr(self.backend, self.sel, scaling="not_a_scaling")
+        assert vr._scaling == "eq_hist"
+
+    def test_update_scaling_changes_attribute(self):
+        vr = _make_vr(self.backend, self.sel)
+        vr.update_scaling(scaling="log")
+        assert vr._scaling == "log"
+
+    def test_update_scaling_invalid_raises(self):
+        vr = _make_vr(self.backend, self.sel)
+        with pytest.raises(ValueError, match="scaling"):
+            vr.update_scaling(scaling="bogus")
+
+    def test_update_scaling_rerenders_image(self):
+        """update_scaling must update _image_source with a new image,
+        without re-querying the backend (cheap re-shade path)."""
+        vr = _make_vr(self.backend, self.sel, scaling="linear")
+        img_before = vr._image_source.data["image"][0].copy()
+        vr.update_scaling(scaling="eq_hist")
+        img_after = vr._image_source.data["image"][0]
+        assert img_after.dtype == np.uint32
+        assert img_after.shape == img_before.shape
+        assert not np.array_equal(img_before, img_after), (
+            "image must change after switching from linear to eq_hist"
+        )
+
+    def test_eq_hist_resolves_more_structure_than_linear(self):
+        """The core fix under test: on real (right-skewed) visibility
+        amplitude data, eq_hist must show more colour variation than
+        linear, since linear saturates the populous low-amplitude region
+        into a near-uniform colour."""
+        vr = _make_vr(self.backend, self.sel, quantity=Axis.AMPLITUDE)
+
+        def _distinct_colors(img32):
+            alpha = (img32 >> 24) & 0xFF
+            rgb = img32 & 0x00FFFFFF
+            return len(np.unique(rgb[alpha > 0]))
+
+        vr.update_scaling(scaling="linear")
+        n_linear = _distinct_colors(vr._image_source.data["image"][0])
+
+        vr.update_scaling(scaling="eq_hist")
+        n_eq_hist = _distinct_colors(vr._image_source.data["image"][0])
+
+        assert n_eq_hist >= n_linear, (
+            f"eq_hist ({n_eq_hist} colours) should resolve at least as "
+            f"much structure as linear ({n_linear} colours) on real "
+            f"visibility amplitude data"
+        )
+
+    def test_explicit_scalings_render_without_error(self):
+        """All seven scalings must render a valid uint32 image with no
+        exception, on real data — the actual screenshot-reproduction
+        regression test."""
+        vr = _make_vr(self.backend, self.sel)
+        for scaling in ("linear", "log", "eq_hist", "sqrt", "square",
+                        "gamma", "power"):
+            vr.update_scaling(scaling=scaling, alpha=10.0, gamma=0.5)
+            img = vr._image_source.data["image"][0]
+            assert img.dtype == np.uint32
+            assert img.shape == (PLOT_H, PLOT_W)
+
+    def test_gamma_and_alpha_params_stored(self):
+        vr = _make_vr(self.backend, self.sel)
+        vr.update_scaling(scaling="gamma", gamma=0.3)
+        assert vr._scaling_gamma == 0.3
+        vr.update_scaling(scaling="power", alpha=5.0)
+        assert vr._scaling_alpha == 5.0
+        # gamma value from the prior call must persist independently
+        assert vr._scaling_gamma == 0.3
+
+    def test_update_scaling_before_render_is_a_noop_not_a_crash(self):
+        """Calling update_scaling before any _render() has populated
+        _agg must not raise — it should just update state for the next
+        render to pick up."""
+        vr = _make_vr(self.backend, self.sel)
+        vr._agg = None  # simulate pre-render state
+        vr.update_scaling(scaling="log")  # must not raise
+        assert vr._scaling == "log"
+
+    def test_state_source_has_scaling_keys(self):
+        vr = _make_vr(self.backend, self.sel)
+        assert "scaling" in vr._state_source.data
+        assert vr._state_source.data["scaling"][0] == "eq_hist"
+        assert "scaling_alpha" in vr._state_source.data
+        assert "scaling_gamma" in vr._state_source.data
+
+    def test_colormap_controls_returns_bokeh_layout(self):
+        from bokeh.models import LayoutDOM
+        vr = _make_vr(self.backend, self.sel)
+        controls = vr.colormap_controls()
+        assert isinstance(controls, LayoutDOM)
+
+    def test_histogram_returns_counts_and_edges(self):
+        vr = _make_vr(self.backend, self.sel)
+        counts, edges = vr.histogram(bins=50)
+        assert counts.shape[0] == 50
+        assert edges.shape[0] == 51
+        assert counts.sum() > 0
+
+    def test_histogram_before_render_returns_empty(self):
+        vr = _make_vr(self.backend, self.sel)
+        vr._agg = None
+        counts, edges = vr.histogram()
+        assert counts.size == 0
+        assert edges.size == 0
+
+    def test_explicit_scaling_value_domain_is_agg_values_not_axis_range(self):
+        """Regression test for a Phase 0 bug: the explicit-scaling
+        pre-transform (sqrt/square/gamma/power) must derive its vmin/vmax
+        from the rendered agg's own value range, not from the y-axis
+        coordinate range passed as `span`. The two are unrelated whenever
+        the y-axis (e.g. TIME, in MJD seconds ~5e9) differs from the
+        rendered quantity (e.g. AMPLITUDE, ~0-100) — passing the axis
+        range as the value-clip range silently collapsed every pixel to
+        a single colour bin."""
+        vr = _make_vr(
+            self.backend, self.sel,
+            y_dim=Axis.TIME, x_dim=Axis.BASELINE, quantity=Axis.AMPLITUDE,
+        )
+        vr.update_scaling(scaling="gamma", gamma=0.4)
+        img = vr._image_source.data["image"][0]
+        alpha = (img >> 24) & 0xFF
+        rgb = img & 0x00FFFFFF
+        n_colors = len(np.unique(rgb[alpha > 0]))
+        assert n_colors > 1, (
+            "gamma scaling collapsed to a single colour — vmin/vmax are "
+            "likely being derived from the y-axis range instead of the "
+            "agg's own value range"
+        )
+
+    def test_color_mode_affects_log_via_span(self):
+        """Datashader's log `how=` reduction computes its mapping purely
+        from the values present in the viewport crop when span=None, and
+        from a fixed external span= when provided — color_mode="global"
+        correctly sets that span (see the "linear", "log" branch in
+        VisibilityRaster._shade_agg's docstring), so log DOES respond to
+        color_mode in the same way linear does. This test exists to
+        confirm log behaves like linear, not like eq_hist (see
+        test_color_mode_changes_eq_hist_output below, and
+        test_shade_viewport_global_local_differ_in_subrange which is
+        pinned to "linear" for the same underlying reason).
+        """
+        vr = _make_vr(self.backend, self.sel, scaling="log")
+        x0, x1 = vr._x_range
+        y0, y1 = vr._y_range
+        xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
+
+        vr._color_mode = "global"
+        img_global = vr._shade_viewport((x0, xm), (y0, ym))
+        vr._color_mode = "local"
+        img_local = vr._shade_viewport((x0, xm), (y0, ym))
+
+        assert not np.array_equal(img_global, img_local), (
+            "log: global and local should differ, since log accepts "
+            "span= the same way linear does"
+        )
+
+    def test_color_mode_changes_eq_hist_output(self):
+        """color_mode must affect eq_hist rendering too, even though
+        Datashader's native how="eq_hist" rejects span= outright (raises
+        ValueError: "span is not (yet) valid to use with eq_hist").
+
+        eq_hist is implemented as an explicit pre-transform via
+        colormap_scaling.equalize_histogram(), which accepts a separate
+        *reference* array to build the equalization curve from:
+        "global" mode passes the full cached agg as the reference (so
+        colours stay anchored to the full data's distribution regardless
+        of zoom — useful when zoomed in and wanting flagging-stable
+        colours), "local" mode passes None (equalize against the crop
+        itself, matching Datashader's native behaviour). This restores
+        the global/local feature for eq_hist, which is the default
+        scaling, rather than leaving it as a silent no-op.
+        """
+        vr = _make_vr(self.backend, self.sel, scaling="eq_hist")
+        x0, x1 = vr._x_range
+        y0, y1 = vr._y_range
+        xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
+
+        vr._color_mode = "global"
+        img_global = vr._shade_viewport((x0, xm), (y0, ym))
+        vr._color_mode = "local"
+        img_local = vr._shade_viewport((x0, xm), (y0, ym))
+
+        assert not np.array_equal(img_global, img_local), (
+            "eq_hist: global and local should differ — global must "
+            "equalize against the full cached agg, local against the "
+            "current viewport crop"
+        )
+
+    def test_explicit_scaling_color_mode_changes_value_domain(self):
+        """For explicit scalings (sqrt/square/gamma/power), color_mode
+        must cause _shade_agg to pass a different vmin/vmax anchor to
+        the pre-transform: "global" anchors to the full cached agg's
+        value range, "local" anchors to the current viewport crop.
+
+        This is verified by monkeypatching apply_explicit_scaling to
+        capture the vmin/vmax arguments it actually receives, rather than
+        comparing the output arrays — the double-normalization inside
+        apply_explicit_scaling (clip to [vmin,vmax], apply curve,
+        normalize output back to [0,1]) can produce near-identical float
+        arrays even when vmin/vmax genuinely differ, if the vmin values
+        happen to be identical and the vmax difference is moderate and
+        the curve is strongly compressive at the high end (e.g. sqrt on
+        this particular real dataset with a half-range viewport crop).
+        Testing the vmin/vmax inputs directly is unambiguous.
+        """
+        from cubevis.toolbox.visplot import colormap_scaling as cms
+        import unittest.mock as mock
+
+        for scaling, gamma in (("sqrt", 1.0), ("square", 1.0),
+                                ("gamma", 0.4), ("power", 1.0)):
+            vr = _make_vr(self.backend, self.sel, scaling=scaling)
+            vr._scaling_gamma = gamma
+            x0, x1 = vr._x_range
+            y0, y1 = vr._y_range
+            xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
+
+            full_finite = vr._agg.values[np.isfinite(vr._agg.values)]
+            assert full_finite.size > 0, "need finite data in cached agg"
+
+            captured = {}
+            original = cms.apply_explicit_scaling
+
+            def capturing_apply(values, scaling_, **kwargs):
+                captured[scaling_] = (kwargs.get("vmin"), kwargs.get("vmax"))
+                return original(values, scaling_, **kwargs)
+
+            with mock.patch.object(cms, "apply_explicit_scaling",
+                                   side_effect=capturing_apply):
+                vr._color_mode = "global"
+                vr._shade_viewport((x0, xm), (y0, ym))
+                global_vmin, global_vmax = captured.get(scaling, (None, None))
+
+                captured.clear()
+                vr._color_mode = "local"
+                vr._shade_viewport((x0, xm), (y0, ym))
+                local_vmin, local_vmax = captured.get(scaling, (None, None))
+
+            assert global_vmin is not None, (
+                f"{scaling}: apply_explicit_scaling not called in global mode"
+            )
+            assert local_vmin is None and local_vmax is None, (
+                f"{scaling}: local mode should pass vmin=None, vmax=None "
+                f"(let apply_explicit_scaling derive from the crop); "
+                f"got vmin={local_vmin}, vmax={local_vmax}"
+            )
+            assert global_vmax is not None, (
+                f"{scaling}: global mode should pass a non-None vmax"
+            )
+            assert abs(global_vmax - float(full_finite.max())) < 1e-6, (
+                f"{scaling}: global vmax {global_vmax:.6g} should equal "
+                f"full agg max {full_finite.max():.6g}"
+            )
+            assert abs(global_vmin - float(full_finite.min())) < 1e-6, (
+                f"{scaling}: global vmin {global_vmin:.6g} should equal "
+                f"full agg min {full_finite.min():.6g}"
+            )
 
 
 # ---------------------------------------------------------------------------

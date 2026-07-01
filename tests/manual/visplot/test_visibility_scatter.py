@@ -614,6 +614,158 @@ class TestAlpha:
 
 
 # ---------------------------------------------------------------------------
+# 5a. Colormap scaling — Phase 0 CM-series (per-layer eq_hist default,
+#     update_scaling, colormap_controls, histogram)
+# ---------------------------------------------------------------------------
+
+class TestColormapScaling:
+    """Tests for the Phase 0 colormap/pseudocolor fidelity refactor.
+
+    Scaling is per-layer in VisibilityScatter, since each layer has its
+    own colormap and rendered quantity. See TestColormapScaling in
+    test_visibility_raster.py for the shared background and the
+    eq_hist-vs-linear screenshot-reproduction rationale.
+    """
+
+    def setup_method(self):
+        _require_datashader()
+        _suppress_warnings()
+        self.backend = _open_backend()
+        meta = self.backend.metadata()
+        t0, t1 = meta["time_range"]
+        self.sel = SelectionSpec(
+            time_range=(t0, t0 + (t1 - t0) * 0.15),
+            channel_range=(0, 48),
+        )
+
+    def teardown_method(self):
+        self.backend.close()
+
+    def test_default_layer_scaling_is_eq_hist(self):
+        vs = _make_single_layer(self.backend, self.sel)
+        assert vs._layers[0].scaling == "eq_hist"
+
+    def test_scatter_layer_scaling_param_accepted(self):
+        meta = self.backend.metadata()
+        pol = meta["correlation_labels"][0]
+        vs = VisibilityScatter(
+            backend=self.backend, selection=self.sel, x_axis=Axis.UVDIST,
+            layers=[ScatterLayer(y_axis=Axis.AMPLITUDE, polarization=pol,
+                                  scaling="linear")],
+            width=PLOT_W, height=PLOT_H,
+        )
+        assert vs._layers[0].scaling == "linear"
+
+    def test_update_scaling_changes_layer_attribute(self):
+        vs = _make_single_layer(self.backend, self.sel)
+        vs.update_scaling(0, scaling="log")
+        assert vs._layers[0].scaling == "log"
+
+    def test_update_scaling_invalid_raises(self):
+        vs = _make_single_layer(self.backend, self.sel)
+        with pytest.raises(ValueError, match="scaling"):
+            vs.update_scaling(0, scaling="bogus")
+
+    def test_update_scaling_out_of_range_index_raises(self):
+        vs = _make_single_layer(self.backend, self.sel)
+        with pytest.raises(IndexError):
+            vs.update_scaling(99, scaling="log")
+
+    def test_update_scaling_rerenders_image(self):
+        vs = _make_single_layer(self.backend, self.sel)
+        vs.update_scaling(0, scaling="linear")
+        img_before = vs._image_source.data["image"][0].copy()
+        vs.update_scaling(0, scaling="eq_hist")
+        img_after = vs._image_source.data["image"][0]
+        assert img_after.dtype == np.uint32
+        assert not np.array_equal(img_before, img_after), (
+            "image must change after switching from linear to eq_hist"
+        )
+
+    def test_set_alpha_preserves_scaling(self):
+        """Regression test: set_alpha() reconstructs the ScatterLayer
+        dataclass internally (it's frozen-by-convention, not truly
+        immutable) — a prior version of this reconstruction dropped
+        the scaling/scaling_alpha/scaling_gamma fields back to their
+        class defaults. This must not happen."""
+        vs = _make_single_layer(self.backend, self.sel)
+        vs.update_scaling(0, scaling="gamma", gamma=0.3)
+        assert vs._layers[0].scaling == "gamma"
+        assert vs._layers[0].scaling_gamma == 0.3
+        vs.set_alpha(0, 0.6)
+        assert vs._layers[0].scaling == "gamma", (
+            "set_alpha() must not reset scaling to the default"
+        )
+        assert vs._layers[0].scaling_gamma == 0.3
+        assert abs(vs._layers[0].alpha - 0.6) < 1e-9
+
+    def test_multi_layer_scaling_independent(self):
+        """Updating one layer's scaling must not affect another layer's."""
+        vs = _make_two_layer(self.backend, self.sel)
+        vs.update_scaling(0, scaling="eq_hist")
+        vs.update_scaling(1, scaling="linear")
+        assert vs._layers[0].scaling == "eq_hist"
+        assert vs._layers[1].scaling == "linear"
+        vs.update_scaling(1, scaling="sqrt")
+        assert vs._layers[0].scaling == "eq_hist", (
+            "layer 0 scaling must be unaffected by updating layer 1"
+        )
+        assert vs._layers[1].scaling == "sqrt"
+
+    def test_explicit_scalings_render_without_error(self):
+        vs = _make_single_layer(self.backend, self.sel)
+        for scaling in ("linear", "log", "eq_hist", "sqrt", "square",
+                        "gamma", "power"):
+            vs.update_scaling(0, scaling=scaling, alpha=10.0, gamma=0.5)
+            img = vs._image_source.data["image"][0]
+            assert img.dtype == np.uint32
+            assert img.shape == (PLOT_H, PLOT_W)
+
+    def test_state_source_has_per_layer_scaling_keys(self):
+        vs = _make_single_layer(self.backend, self.sel)
+        assert "layer_scaling_0" in vs._state_source.data
+        assert vs._state_source.data["layer_scaling_0"][0] == "eq_hist"
+        assert "layer_scaling_alpha_0" in vs._state_source.data
+        assert "layer_scaling_gamma_0" in vs._state_source.data
+
+    def test_colormap_controls_returns_bokeh_layout(self):
+        from bokeh.models import LayoutDOM
+        vs = _make_single_layer(self.backend, self.sel)
+        controls = vs.colormap_controls(layer_index=0)
+        assert isinstance(controls, LayoutDOM)
+
+    def test_colormap_controls_out_of_range_raises(self):
+        vs = _make_single_layer(self.backend, self.sel)
+        with pytest.raises(IndexError):
+            vs.colormap_controls(layer_index=99)
+
+    def test_histogram_returns_counts_and_edges(self):
+        vs = _make_single_layer(self.backend, self.sel)
+        counts, edges = vs.histogram(0, bins=30)
+        assert counts.shape[0] == 30
+        assert edges.shape[0] == 31
+
+    def test_histogram_out_of_range_raises(self):
+        vs = _make_single_layer(self.backend, self.sel)
+        with pytest.raises(IndexError):
+            vs.histogram(99)
+
+    def test_handle_update_scaling_j2p(self):
+        vs = _make_single_layer(self.backend, self.sel)
+        resp = vs._handle_update_scaling(
+            {"layer_index": 0, "scaling": "log", "alpha": 5.0}
+        )
+        assert resp["status"] == "ok"
+        assert vs._layers[0].scaling == "log"
+        assert vs._layers[0].scaling_alpha == 5.0
+
+    def test_handle_update_scaling_bad_index(self):
+        vs = _make_single_layer(self.backend, self.sel)
+        resp = vs._handle_update_scaling({"layer_index": 99, "scaling": "log"})
+        assert resp["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
 # 6. Viewport rerender
 # ---------------------------------------------------------------------------
 

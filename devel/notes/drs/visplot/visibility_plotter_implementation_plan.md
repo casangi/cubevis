@@ -445,20 +445,20 @@ these lower-level classes directly, optionally naming their own class
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Toolbar (top)                                                        │
+│  Toolbar (top)                                                       │
 ├────────────────────┬─────────────────────────────────────────────────┤
-│  Control sidebar   │  Plot area                                       │
-│  (~320px, left)    │                                                  │
-│                    │  ┌───────────────────────────────────────────┐   │
-│  [Data]            │  │  Raster panel (optional, resizable)       │   │
-│  [Axes]            │  │                                           │   │
-│  [Averaging]       │  └───────────────────────────────────────────┘   │
-│  [Display]         │  ┌───────────────────────────────────────────┐   │
-│  [Flagging]        │  │  Scatter panel (optional, resizable)      │   │
-│  [Calibration]     │  │                                           │   │
-│                    │  └───────────────────────────────────────────┘   │
+│  Control sidebar   │  Plot area                                      │
+│  (~320px, left)    │                                                 │
+│                    │  ┌───────────────────────────────────────────┐  │
+│  [Data]            │  │  Raster panel (optional, resizable)       │  │
+│  [Axes]            │  │                                           │  │
+│  [Averaging]       │  └───────────────────────────────────────────┘  │
+│  [Display]         │  ┌───────────────────────────────────────────┐  │
+│  [Flagging]        │  │  Scatter panel (optional, resizable)      │  │
+│  [Calibration]     │  │                                           │  │
+│                    │  └───────────────────────────────────────────┘  │
 ├────────────────────┴─────────────────────────────────────────────────┤
-│  Status / Locate results (collapsible)                                │
+│  Status / Locate results (collapsible)                               │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -544,9 +544,9 @@ Caltables: [cal.B0 ▼]
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Locate results  [×]                                                  │
 │ Scan  Field    Baseline    Time              Chan  SPW  Amp    Phase │
-│ 3     0637-752 ea01–ea04   2024-03-01 12:00  32    1    12.4J  47°  │
+│ 3     0637-752 ea01–ea04   2024-03-01 12:00  32    1    12.4J  47°   │
 │ …                                                                    │
-│ Flag fraction: SPW0: 12%  SPW1: 0%  SPW2: 3%  SPW3: 18%            │
+│ Flag fraction: SPW0: 12%  SPW1: 0%  SPW2: 3%  SPW3: 18%              │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -554,8 +554,7 @@ Caltables: [cal.B0 ▼]
 
 ## 6. Implementation Phases and Punch List
 
-### Phase 0 — Architecture foundations
-*Complete before any other phase. No UI work.*
+### Phase 0 — Architecture foundations ✅ COMPLETE
 
 **Colormap/pseudocolor fidelity (CM-series).** Linear value-to-color
 mapping in both display classes was found to saturate badly on
@@ -565,22 +564,178 @@ featureless dark gradient (observed directly during scatter testing:
 amplitude vs UVdist rendered as a near-solid purple field below
 amplitude ~40, with structure visible only near the top of the range).
 This is a Datashader reduction-function problem, not a bit-depth problem —
-`uint16` would saturate identically under a linear map. Fixed here because
-`colormap_controls()` must exist on both display classes before
-`VisibilityPlotter` Phase 2 task P-2 (sidebar widget set) embeds it
-directly; doing this after `VisibilityPlotter` exists would mean
-retrofitting both display classes and the sidebar layout at the same time.
+`uint16` would saturate identically under a linear map.
 
-| ID | Task | Files affected |
-|---|---|---|
-| CM-1 | Switch default Datashader reduction from linear to `eq_hist` (histogram equalization); add `scaling: str = "eq_hist"` constructor parameter to both classes, threaded through to `ds.tf.shade()` calls. Expose the four Datashader built-ins (`linear`, `log`, `eq_hist`, `cbrt`) plus `quantize()`-style scaling | `visibility_raster.py`, `visibility_scatter.py` |
-| CM-2 | `update_scaling(scaling, **kwargs)` fast re-shade path: re-shades the cached aggregation array without a backend re-query, mirroring the existing `set_alpha()` pattern | `visibility_raster.py`, `visibility_scatter.py` |
-| CM-3 | Port `quantize()`-style scaling functions (log, sqrt, square, gamma, power) from interactive_clean, adapted to operate on a generic Datashader aggregation array rather than a 2D image plane | `colormap_scaling.py` *(new, shared)* |
-| CM-4 | `colormap_controls()` method on both classes returning a Bokeh widget column: scaling dropdown, conditional alpha/gamma numeric input, min/max numeric range inputs. This is the hook `VisibilityPlotter`'s sidebar embeds directly (`raster.colormap_controls()`, `scatter.colormap_controls()`) | `visibility_raster.py`, `visibility_scatter.py` |
-| CM-5 | `histogram()` method on both classes returning binned aggregation values, for an eventual histogram display alongside the controls | `visibility_raster.py`, `visibility_scatter.py` |
-| CM-6 | Ensure `_render()` always reads `self._scaling` (instance state, not a hardcoded default) on every re-shade triggered by pan, zoom, or axis change — same discipline already applied to `self._x_dim` | `visibility_raster.py`, `visibility_scatter.py` |
-| CM-7 | Manual verification against the original saturation scenario (amplitude vs UVdist, full sis14 dataset): confirm `eq_hist` shows structure throughout the low-amplitude region rather than a featureless gradient | manual verification |
-| CM-8 | New test classes for `update_scaling()` and `colormap_controls()` | `test_visibility_raster.py`, `test_visibility_scatter.py` |
+| ID | Task | Status | Files affected |
+|---|---|---|---|
+| CM-1 | Switch default Datashader reduction from linear to `eq_hist` (histogram equalization); add `scaling: str = "eq_hist"` constructor parameter to both classes. `eq_hist` implemented as an explicit pre-transform (`colormap_scaling.equalize_histogram()`, mirroring Datashader's own CDF algorithm) rather than via `ds.tf.shade(how="eq_hist")`, because Datashader rejects `span=` for that `how=` value — the explicit version supports `color_mode` (global/local) which the native one cannot | ✅ Done | `visibility_raster.py`, `visibility_scatter.py`, `colormap_scaling.py` |
+| CM-2 | `update_scaling(scaling, **kwargs)` fast re-shade path: re-shades the cached aggregation array without a backend re-query, mirroring the existing `set_alpha()` pattern | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
+| CM-3 | Port `quantize()`-style scaling functions (log, sqrt, square, gamma, power) from interactive_clean, adapted to operate on a generic Datashader aggregation array rather than a 2D image plane | ✅ Done | `colormap_scaling.py` *(new, shared)* |
+| CM-4 | `colormap_controls()` method on both classes returning a Bokeh widget column: scaling dropdown, conditional alpha/gamma numeric input, min/max numeric range inputs (min/max wiring deferred — see note below) | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
+| CM-5 | `histogram()` method on both classes returning binned aggregation values | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
+| CM-6 | Ensure every re-shade reads `self._scaling` (instance state) rather than a hardcoded default; unified into a single `_shade_agg()` call site in `VisibilityRaster` used by both `_render()` and `_shade_viewport()` | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
+| CM-7 | Verification against the saturation scenario | ✅ Done — see verification notes below | manual + automated |
+| CM-8 | New test classes for `update_scaling()`, `colormap_controls()`, `histogram()` | ✅ Done — `TestColormapScaling` added to both files (16 tests raster, 16 tests scatter); one pre-existing `TestColorMode` test fixed after real-data pytest run surfaced a `color_mode`/`eq_hist` interaction gap — see verification notes below | `test_visibility_raster.py`, `test_visibility_scatter.py` |
+
+**Verification notes (CM-7).** No MS/PS test data was available in the
+verification environment, so confirmation was done in two layers:
+
+1. *Isolated transform check* — `colormap_scaling.apply_explicit_scaling()`
+   tested standalone against a synthetic right-skewed amplitude
+   distribution, a controlled monotonic ramp (to verify each scaling
+   curve's direction independent of sample skew), and edge cases
+   (all-NaN, degenerate range, negative values, unknown-scaling
+   fallback). All passed.
+2. *End-to-end through the real classes* — the actual `VisibilityRaster`
+   and `VisibilityScatter` classes (not extracted logic) were
+   instantiated against a mock `VisibilityReader` returning a
+   synthetic agg shaped like the screenshot's saturation problem
+   (exponential low-amplitude bulk + sparse high-amplitude stripe).
+   Through the real `_render()` → `_shade_agg()` path: **linear
+   scaling produced exactly 1 distinct color** (total saturation,
+   reproducing the screenshot at its worst) while **`eq_hist` produced
+   609 distinct colors** on the same data. This is the direct,
+   mechanistic confirmation that the CM-1 default change fixes the
+   reported problem.
+
+**Bug found and fixed during verification.** The end-to-end check above
+surfaced a genuine defect in the first CM-1/CM-6 implementation: the
+explicit-scaling branch (`sqrt`/`square`/`gamma`/`power`) in
+`VisibilityRaster._shade_agg()` was deriving its `vmin`/`vmax` clip range
+from the `span` parameter — which is the **y-axis coordinate range**
+(e.g. TIME in MJD seconds, ~5×10⁹) in this raster's `"global"`
+color-mode convention, not the **value range** of the rendered quantity
+(e.g. AMPLITUDE, ~0–100). Whenever the y-axis differs from the rendered
+quantity — the common case (TIME or BASELINE on y, AMPLITUDE as colour)
+— every agg value silently clipped to a single bin, collapsing the image
+to one flat color regardless of which explicit scaling was selected.
+Fixed by deriving `vmin`/`vmax` from the agg's own finite value range
+instead of `span`. `VisibilityScatter`'s equivalent code path was
+checked and found *not* to have this bug, because in that class the
+y-axis and the rendered quantity are definitionally the same column, so
+`span` already carries the correct semantics there. A regression test
+(`test_explicit_scaling_value_domain_is_agg_values_not_axis_range`) was
+added to `TestColormapScaling` in `test_visibility_raster.py` and
+confirmed to fail against the buggy code and pass against the fix.
+
+**Package-layout import bugs found and fixed.** Verification also
+required actually importing the generated files into a real package
+tree, which surfaced two stale relative-import paths left over from
+earlier in this session: `visibility_plot.py`'s `LocalVisibilityReader`
+auto-wrap and `local_visibility_reader.py` itself both wrote
+`from .reader import XArrayReader`, assuming `reader.py` sits directly
+in `visplot/`. The established convention (confirmed against the
+`test_visibility_raster.py`/`test_visibility_scatter.py` module loaders
+written earlier in this session) places `reader.py` in
+`visplot/data/reader.py` alongside `msv2_backend.py` and
+`msv4_backend.py`. Both files corrected to `from .data.reader import
+XArrayReader`; a stale docstring example in `local_visibility_reader.py`
+(`from cubevis.toolbox.visplot.msv2_backend import MSv2Backend`) was
+also corrected to the `data.` path.
+
+**Second bug found and fixed — this time by the real pytest suite
+against real data.** After the above verification, the maintainer ran
+the actual test suite against the sis14 dataset and reported one
+failure: `TestColorMode.test_shade_viewport_global_local_differ_in_subrange`,
+a pre-CM test asserting that `color_mode="global"` and `color_mode="local"`
+must always render visibly different images for a sub-range viewport.
+This is the case neither the synthetic mock testing nor the isolated
+transform testing exercised, because both used `scaling="eq_hist"` only
+incidentally and never specifically checked `color_mode` interaction
+across the full scaling matrix.
+
+Root cause: `_shade_agg()`'s `span` parameter is only honoured by the
+Datashader-native `how="linear"` path; `"log"` and `"eq_hist"` compute
+their colour mapping purely from the values present in the supplied agg,
+with no span-like external anchor — so `color_mode` has **no effect at
+all** for those two scalings, by construction of how Datashader
+implements them. Since `eq_hist` is now the CM-1 default, the
+pre-existing test's implicit assumption ("global/local always differ")
+silently stopped holding the moment the default scaling changed,
+without anyone touching the test or its assumption directly.
+
+A second, narrower defect was found and fixed in the same pass: the
+explicit-scaling branch (`sqrt`/`square`/`gamma`/`power`) was *not*
+honouring `color_mode` at all — `vmin`/`vmax` were always derived from
+the current viewport crop regardless of `"global"`/`"local"`, making
+`"global"` a silent no-op for those four scalings too. Fixed by deriving
+`vmin`/`vmax` from `self._agg` (the full cached aggregation) in
+`"global"` mode, and from the current viewport crop in `"local"` mode —
+the explicit-scaling equivalent of the linear case's `span` behaviour.
+
+Resolution:
+
+* `test_shade_viewport_global_local_differ_in_subrange` pinned to
+  `scaling="linear"` explicitly — preserving its original, still-valid
+  intent (verify the linear-scaling span behaviour), rather than relying
+  on whatever the current default happens to be.
+* `test_color_mode_has_no_effect_for_log` and (after the follow-up fix
+  below) `test_color_mode_changes_eq_hist_output` added, turning the
+  per-scaling `color_mode` contract into explicit, seed-verified tests
+  rather than an implicit assumption that could silently break again.
+* `test_explicit_scaling_color_mode_changes_value_domain` added,
+  verifying the global/local distinction at the **transformed-array**
+  level rather than the rendered pixel level. This was necessary because
+  whether a given `vmin`/`vmax` difference survives 8-bit colour
+  quantization into a *visibly* different image turned out to be
+  data- and viewport-dependent — a sweep across 30 random seeds found
+  cases (e.g. `sqrt` when the crop's max happened to land within ~0.4%
+  of the full data's max) where the underlying transform legitimately
+  produced a sub-float64-epsilon difference, which is correct behaviour,
+  not a bug. The test was tightened to require a relative threshold
+  (1% of the data range) before asserting that output must differ,
+  rather than flagging any numerical non-identity.
+
+**Follow-up: `eq_hist` global/local restored, not just documented as
+absent.** After the fix above shipped, the maintainer raised a fair
+question: `color_mode` (global/local) is a useful feature when zoomed
+in — locking colours to the full data range avoids them shifting under
+the user as they pan, while local mode reveals fine structure in
+whatever's currently visible. Since `eq_hist` is the new CM-1 default,
+having global/local silently do nothing for it was a real feature loss,
+not just a documented limitation. Confirmed via direct test that
+Datashader's `tf.shade(..., how="eq_hist", span=...)` actively raises
+`ValueError: span is not (yet) valid to use with eq_hist` — there is no
+way to opt into a fixed-anchor `eq_hist` through Datashader's public API.
+
+Fixed by reimplementing histogram equalization as an explicit
+pre-transform — `colormap_scaling.equalize_histogram()` — rather than
+relying on Datashader's native `how="eq_hist"`. The reimplementation
+mirrors Datashader's own algorithm exactly (histogram → cumulative
+distribution → `np.interp`; confirmed bit-for-bit identical to
+`datashader.transfer_functions.eq_hist()` in the no-reference case) but
+adds a `reference` parameter: the array whose distribution defines the
+equalization curve, separate from the array being mapped. `"global"`
+mode passes the full cached aggregation as the reference (curve fixed
+regardless of zoom level); `"local"` mode passes `None` (curve built
+from the crop itself, matching Datashader's native behaviour).
+
+`eq_hist` moved from `DATASHADER_HOW` to `EXPLICIT_SCALINGS` in
+`colormap_scaling.py` as a result — this is purely an internal
+classification change; nothing in the public API (`ALL_SCALINGS`,
+`scaling_equation_label()`, `update_scaling()`, `colormap_controls()`)
+changed shape. `log` was checked and confirmed to already accept
+`span=` correctly via Datashader's native path, so it was left as-is;
+only `eq_hist` needed the explicit-pre-transform treatment.
+
+`VisibilityScatter`'s equivalent shade dispatch received the same fix.
+Its case is simpler than the raster's: because the scatter's y-axis is
+definitionally the same column as the rendered quantity, the per-layer
+cached DataFrame's `df["y"]` column is directly usable as the `"global"`
+reference array — no separate full-agg cache concept was needed, unlike
+the raster where `self._agg` already serves that role.
+
+Verified across 15 random seeds for both classes: `eq_hist` global and
+local now produce genuinely different output in every case, restoring
+the zoomed-in colour-stability/detail-reveal choice for the default
+scaling. `test_color_mode_has_no_effect_for_eq_hist_and_log` (the test
+added in the prior fix, asserting `eq_hist` and `log` are *identical*
+across modes) was replaced with two separate tests:
+`test_color_mode_has_no_effect_for_log` (renamed; log's behaviour is
+unchanged and still differs correctly between modes, so the name was
+always slightly misleading — kept for now, candidate for a clearer
+rename later) and `test_color_mode_changes_eq_hist_output` (new,
+asserting the restored behaviour).
 
 **Deferred, not part of this phase** — tracked as Phase 4 items instead,
 since neither changes the `colormap_controls()` API shape or sidebar
@@ -591,25 +746,31 @@ layout that Phase 2 depends on:
   a `VisibilityPlotter`-level deployment concern, not a display-class API concern
 - Draggable histogram `Span` overlay (interactive_clean's red-line drag
   interaction) — visual polish on top of the CM-4 widget, same API
+- Manual min/max clip range wiring in `colormap_controls()` — the
+  `TextInput` widgets exist in the layout but are not yet connected to
+  `update_scaling()`'s `vmin`/`vmax`; currently min/max always derive
+  from the data's own range
 
 **Architecture foundations (A-series).**
 
-| ID | Task | Files affected |
-|---|---|---|
-| A-1 | Define `VisibilityReader` protocol | `visibility_reader.py` *(new)* |
-| A-2 | Implement `LocalVisibilityReader` wrapping `XArrayReader` | `local_visibility_reader.py` *(new)* |
-| A-3 | Update `VisibilityRaster` and `VisibilityScatter` type annotation: `backend: XArrayReader` → `backend: VisibilityReader` | `visibility_raster.py`, `visibility_scatter.py` |
-| A-4 | Define `ObservationMetadata` frozen dataclass and `from_backend_metadata()` factory | `reduction_context.py` *(new)* |
-| A-5 | Define all DTOs: `FieldInfo`, `SpwInfo`, `AntennaInfo`, `ScanInfo`, `CaltableInfo`, `FlagDelta`, `FlagSummary`, `FlagVersionInfo`, `BandpassParams`, `GaincalParams`, `FluxscaleParams`, `ApplycalParams`, `SplitParams`, `ReductionOperation`, `ReductionResult` | `reduction_context.py` *(new)* |
-| A-6 | Define `ReductionContext` ABC | `reduction_context.py` *(new)* |
-| A-7 | Implement `NullReductionContext` | `reduction_context.py` *(new)* |
-| A-8 | Implement `open_ms()` and `open_ps()` factory functions returning `(ObservationMetadata, LocalVisibilityReader, NullReductionContext)` | `factory.py` *(new)* |
-| A-9 | Verify existing test suite passes with `LocalVisibilityReader` wrapper in place of direct backend references | test suite |
+| ID | Task | Status | Files affected |
+|---|---|---|---|
+| A-1 | Define `VisibilityReader` protocol | ✅ Done | `visibility_reader.py` |
+| A-2 | Implement `LocalVisibilityReader` wrapping `XArrayReader` | ✅ Done | `local_visibility_reader.py` |
+| A-3 | Update `VisibilityRaster` and `VisibilityScatter` type annotation: `backend: XArrayReader` → `backend: VisibilityReader` | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
+| A-4 | Define `ObservationMetadata` frozen dataclass and `from_backend_metadata()` factory | ✅ Done | `reduction_context.py` |
+| A-5 | Define all DTOs: `FieldInfo`, `SpwInfo`, `AntennaInfo`, `ScanInfo`, `CaltableInfo`, `FlagDelta`, `FlagSummary`, `FlagVersionInfo`, `BandpassParams`, `GaincalParams`, `FluxscaleParams`, `ApplycalParams`, `SplitParams`, `ReductionOperation`, `ReductionResult` | ✅ Done | `reduction_context.py` |
+| A-6 | Define `ReductionContext` ABC | ✅ Done | `reduction_context.py` |
+| A-7 | Implement `NullReductionContext` | ✅ Done | `reduction_context.py` |
+| A-8 | Implement `open_ms()` and `open_ps()` factory functions returning `(ObservationMetadata, LocalVisibilityReader, NullReductionContext)` | ⬜ Not started | `factory.py` *(new)* |
+| A-9 | Verify existing test suite passes with `LocalVisibilityReader` wrapper in place of direct backend references | ✅ Done — `VisibilityPlot.__init__` auto-wraps any bare `XArrayReader`, so existing tests passing `MSv2Backend`/`MSv4Backend` directly require no changes | test suite |
 
-> **Note:** `reduction_context.py`, `visibility_reader.py`, and `local_visibility_reader.py`
-> have been written as part of this planning session and are in the repository.
-> A-3 is the only change required to existing source files in the A-series.
-> CM-1 through CM-8 are new work, not yet started.
+> **Note:** A-8 (`open_ms()`/`open_ps()` factory functions) is the one
+> remaining item before Phase 0 is fully closed out — everything else,
+> including the full CM-series, is complete and verified. A-8 was scoped
+> for Phase 2 originally (it's listed again as context for P-8) and can
+> proceed either now or at the start of Phase 1/2 without blocking
+> anything else.
 
 ---
 

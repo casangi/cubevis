@@ -59,6 +59,7 @@ import numpy as np
 from bokeh.models import ColumnDataSource
 
 from .visibility_plot import VisibilityPlot, _img_to_uint32, _axis_label
+from . import colormap_scaling as _cms
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -76,6 +77,8 @@ try:
     HAS_DATASHADER = True
 except ImportError:
     HAS_DATASHADER = False
+
+_DEFAULT_SCALING = "eq_hist"
 
 # Default colour maps for successive layers
 _LAYER_CMAPS = [
@@ -116,12 +119,26 @@ class ScatterLayer:
     label : str
         Human-readable label for legend / toggle widgets.  Auto-generated
         from ``y_axis.label`` and ``polarization`` if empty.
+    scaling : str
+        Value-to-colour transfer function for this layer.  One of
+        ``colormap_scaling.ALL_SCALINGS``.  Defaults to ``"eq_hist"``
+        (histogram equalization), which resolves the low-amplitude
+        saturation seen under linear scaling on real visibility data —
+        see ``colormap_scaling`` module docstring for the full
+        rationale.
+    scaling_alpha : float
+        Parameter for ``"log"`` and ``"power"`` scalings.
+    scaling_gamma : float
+        Parameter for ``"gamma"`` scaling.
     """
     y_axis:      "Axis"
     polarization: str        = "XX"
     cmap:         Optional[list] = None
     alpha:        float      = 1.0
     label:        str        = ""
+    scaling:        str   = _DEFAULT_SCALING
+    scaling_alpha:  float = 10.0
+    scaling_gamma:  float = 1.0
 
     def __post_init__(self):
         if not self.label:
@@ -177,11 +194,14 @@ class VisibilityScatter(VisibilityPlot):
         for i, lyr in enumerate(layers):
             if lyr.cmap is None:
                 lyr = ScatterLayer(
-                    y_axis       = lyr.y_axis,
-                    polarization = lyr.polarization,
-                    cmap         = _LAYER_CMAPS[i % len(_LAYER_CMAPS)],
-                    alpha        = lyr.alpha,
-                    label        = lyr.label,
+                    y_axis        = lyr.y_axis,
+                    polarization  = lyr.polarization,
+                    cmap          = _LAYER_CMAPS[i % len(_LAYER_CMAPS)],
+                    alpha         = lyr.alpha,
+                    label         = lyr.label,
+                    scaling       = lyr.scaling,
+                    scaling_alpha = lyr.scaling_alpha,
+                    scaling_gamma = lyr.scaling_gamma,
                 )
             self._layers.append(lyr)
 
@@ -200,6 +220,7 @@ class VisibilityScatter(VisibilityPlot):
         self._msg_update_axes  = str(uuid4())
         self._msg_set_alpha    = str(uuid4())
         self._msg_color_mode   = str(uuid4())
+        self._msg_update_scaling = str(uuid4())
 
         super().__init__(
             backend   = backend,
@@ -238,14 +259,148 @@ class VisibilityScatter(VisibilityPlot):
             raise IndexError(f"layer_index {layer_index} out of range")
         lyr = self._layers[layer_index]
         self._layers[layer_index] = ScatterLayer(
-            y_axis       = lyr.y_axis,
-            polarization = lyr.polarization,
-            cmap         = lyr.cmap,
-            alpha        = max(0.0, min(1.0, alpha)),
-            label        = lyr.label,
+            y_axis        = lyr.y_axis,
+            polarization  = lyr.polarization,
+            cmap          = lyr.cmap,
+            alpha         = max(0.0, min(1.0, alpha)),
+            label         = lyr.label,
+            scaling       = lyr.scaling,
+            scaling_alpha = lyr.scaling_alpha,
+            scaling_gamma = lyr.scaling_gamma,
         )
         self._composite_and_push()
         self._update_state_source()
+
+    def update_scaling(
+        self,
+        layer_index: int,
+        scaling: Optional[str] = None,
+        alpha: Optional[float] = None,
+        gamma: Optional[float] = None,
+    ) -> None:
+        """Change one layer's value-to-colour transfer function and re-composite.
+
+        Does NOT re-query the backend — only re-runs shade + stack, mirroring
+        ``set_alpha()``.
+
+        Parameters
+        ----------
+        layer_index : int
+            Zero-based index into ``self.layers``.
+        scaling : str | None
+            One of ``colormap_scaling.ALL_SCALINGS``.  ``None`` keeps the
+            current value.
+        alpha : float | None
+            Parameter for ``"log"`` / ``"power"`` scalings.  ``None``
+            keeps the current value.
+        gamma : float | None
+            Parameter for ``"gamma"`` scaling.  ``None`` keeps the
+            current value.
+        """
+        if not (0 <= layer_index < len(self._layers)):
+            raise IndexError(f"layer_index {layer_index} out of range")
+        if scaling is not None and scaling not in _cms.ALL_SCALINGS:
+            raise ValueError(
+                f"scaling must be one of {_cms.ALL_SCALINGS}, got {scaling!r}"
+            )
+        lyr = self._layers[layer_index]
+        self._layers[layer_index] = ScatterLayer(
+            y_axis        = lyr.y_axis,
+            polarization  = lyr.polarization,
+            cmap          = lyr.cmap,
+            alpha         = lyr.alpha,
+            label         = lyr.label,
+            scaling       = scaling if scaling is not None else lyr.scaling,
+            scaling_alpha = alpha if alpha is not None else lyr.scaling_alpha,
+            scaling_gamma = gamma if gamma is not None else lyr.scaling_gamma,
+        )
+        self._composite_and_push()
+        self._update_state_source()
+
+    def histogram(
+        self, layer_index: int, bins: int = 254,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return ``(counts, bin_edges)`` for one layer's cached agg values.
+
+        Used by ``colormap_controls()`` for an eventual histogram display
+        alongside the scaling controls.  Returns empty arrays if the
+        layer hasn't been rendered yet.
+        """
+        if not (0 <= layer_index < len(self._layer_aggs)):
+            raise IndexError(f"layer_index {layer_index} out of range")
+        agg = self._layer_aggs[layer_index]
+        if agg is None:
+            return np.array([]), np.array([])
+        finite = agg.values[np.isfinite(agg.values)]
+        if finite.size == 0:
+            return np.array([]), np.array([])
+        counts, edges = np.histogram(finite, bins=bins)
+        return counts, edges
+
+    def colormap_controls(self, layer_index: int = 0):
+        """Return a Bokeh widget column for one layer's scaling controls.
+
+        ``VisibilityPlotter``'s sidebar embeds one of these per layer —
+        see Phase 0 CM-4 in the implementation plan. Mirrors
+        ``VisibilityRaster.colormap_controls()``; see that docstring for
+        the full rationale. Scaling is per-layer here since each layer
+        has its own colormap and quantity.
+
+        Parameters
+        ----------
+        layer_index : int
+            Which layer's controls to build.  Defaults to the first
+            layer.
+        """
+        from bokeh.layouts import column, row
+        from bokeh.models import Select, TextInput, Div
+
+        if not (0 <= layer_index < len(self._layers)):
+            raise IndexError(f"layer_index {layer_index} out of range")
+        lyr = self._layers[layer_index]
+
+        equation = Div(text=_cms.scaling_equation_label(lyr.scaling))
+        scaling_select = Select(
+            title=f"Colour scaling — {lyr.label}",
+            value=lyr.scaling,
+            options=list(_cms.ALL_SCALINGS),
+        )
+        alpha_input = TextInput(
+            title="alpha", value=str(lyr.scaling_alpha),
+            visible=lyr.scaling in ("log", "power"),
+        )
+        gamma_input = TextInput(
+            title="gamma", value=str(lyr.scaling_gamma),
+            visible=lyr.scaling == "gamma",
+        )
+
+        def _on_scaling_change(attr, old, new):
+            alpha_input.visible = new in ("log", "power")
+            gamma_input.visible = new == "gamma"
+            equation.text = _cms.scaling_equation_label(new)
+            self.update_scaling(layer_index, scaling=new)
+
+        def _on_alpha_change(attr, old, new):
+            try:
+                self.update_scaling(layer_index, alpha=float(new))
+            except ValueError:
+                pass
+
+        def _on_gamma_change(attr, old, new):
+            try:
+                self.update_scaling(layer_index, gamma=float(new))
+            except ValueError:
+                pass
+
+        scaling_select.on_change("value", _on_scaling_change)
+        alpha_input.on_change("value", _on_alpha_change)
+        gamma_input.on_change("value", _on_gamma_change)
+
+        return column(
+            scaling_select,
+            equation,
+            row(alpha_input, gamma_input),
+        )
 
     def update_axes(
         self,
@@ -295,11 +450,14 @@ class VisibilityScatter(VisibilityPlot):
         return f"{labels}  vs  {self._x_dim.label}"
 
     def _state_data_extra(self) -> dict:
-        """Add per-layer alpha values to _state_source."""
+        """Add per-layer alpha and scaling values to _state_source."""
         extra: dict = {}
         for i, lyr in enumerate(self._layers):
             extra[f"layer_alpha_{i}"] = [lyr.alpha]
             extra[f"layer_label_{i}"] = [lyr.label]
+            extra[f"layer_scaling_{i}"]       = [lyr.scaling]
+            extra[f"layer_scaling_alpha_{i}"] = [lyr.scaling_alpha]
+            extra[f"layer_scaling_gamma_{i}"] = [lyr.scaling_gamma]
         extra["n_layers"]   = [len(self._layers)]
         extra["color_mode"] = [self._color_mode]
         return extra
@@ -382,6 +540,7 @@ class VisibilityScatter(VisibilityPlot):
         self._comm.register(self._msg_set_alpha,   self._handle_set_alpha)
         self._comm.register(self._msg_color_mode,  self._handle_set_color_mode)
         self._comm.register(self._msg_update_axes, self._handle_update_axes_scatter)
+        self._comm.register(self._msg_update_scaling, self._handle_update_scaling)
 
     # ------------------------------------------------------------------
     # Scatter-specific internals
@@ -494,13 +653,25 @@ class VisibilityScatter(VisibilityPlot):
                 layer_alpha  = max(0, min(255, int(auto_alpha * lyr.alpha)))
 
                 # Colour mapping controlled by color_mode:
-                #   "global" → linear + span=[full_y0, full_y1]
+                #   "global" → span=[full_y0, full_y1]
                 #       Stable colours across all zoom levels — a 50 Jy point
                 #       always maps to the same colour.  Best for flagging.
-                #   "local" → linear + span=[viewport_y_min, viewport_y_max]
-                #       Full Plasma palette spans whatever amplitudes are
-                #       visible in the current viewport.  Colours change on
-                #       zoom (expected).  Best for exploring structure.
+                #   "local" → span=[viewport_y_min, viewport_y_max]
+                #       Full palette spans whatever amplitudes are visible
+                #       in the current viewport.  Colours change on zoom
+                #       (expected).  Best for exploring structure.
+                #
+                # Within either color_mode, lyr.scaling selects the actual
+                # value-to-colour transform (Phase 0 CM-1).  "eq_hist" is
+                # the default — see colormap_scaling module docstring for
+                # why linear scaling saturates on real visibility data.
+                #
+                # Unlike VisibilityRaster (where the y-axis is often a
+                # different quantity than the rendered colour, e.g. TIME
+                # vs AMPLITUDE), here the y-axis IS the rendered quantity,
+                # so df["y"] directly gives the reference value array
+                # needed for "global" eq_hist equalization — no separate
+                # full-data cache is needed.
                 if self._color_mode == "local":
                     visible_y = df.loc[
                         (df["x"] >= x0) & (df["x"] <= x1) &
@@ -508,18 +679,44 @@ class VisibilityScatter(VisibilityPlot):
                         "y"
                     ]
                     if len(visible_y) > 0:
-                        local_span = [float(visible_y.min()),
-                                      float(visible_y.max())]
+                        span = [float(visible_y.min()), float(visible_y.max())]
+                        eq_hist_reference = visible_y.to_numpy()
                     else:
-                        local_span = [float(self._y_range[0]),
-                                      float(self._y_range[1])]
-                    shade_kwargs = dict(cmap=lyr.cmap, how="linear",
-                                       span=local_span)
+                        span = [float(self._y_range[0]), float(self._y_range[1])]
+                        eq_hist_reference = None
                 else:  # "global"
-                    shade_kwargs = dict(cmap=lyr.cmap, how="linear")
-                    if span_arg is not None:
-                        shade_kwargs["span"] = span_arg
-                img     = tf.shade(agg, **shade_kwargs)
+                    span = span_arg
+                    eq_hist_reference = df["y"].to_numpy()
+
+                if lyr.scaling in _cms.DATASHADER_HOW:
+                    shade_kwargs = dict(
+                        cmap=lyr.cmap,
+                        how=_cms.DATASHADER_HOW[lyr.scaling],
+                    )
+                    if span is not None:
+                        shade_kwargs["span"] = span
+                    img = tf.shade(agg, **shade_kwargs)
+                elif lyr.scaling == "eq_hist":
+                    transformed = _cms.equalize_histogram(
+                        agg.values, reference=eq_hist_reference,
+                    )
+                    scaled_agg = agg.copy(data=transformed)
+                    img = tf.shade(
+                        scaled_agg, cmap=lyr.cmap, how="linear", span=[0.0, 1.0]
+                    )
+                else:
+                    transformed = _cms.apply_explicit_scaling(
+                        agg.values,
+                        lyr.scaling,
+                        alpha=lyr.scaling_alpha,
+                        gamma=lyr.scaling_gamma,
+                        vmin=span[0] if span is not None else None,
+                        vmax=span[1] if span is not None else None,
+                    )
+                    scaled_agg = agg.copy(data=transformed)
+                    img = tf.shade(
+                        scaled_agg, cmap=lyr.cmap, how="linear", span=[0.0, 1.0]
+                    )
                 img_arr = np.array(img, dtype=np.uint32)
                 if layer_alpha > 0:
                     nonempty = (img_arr >> 24) > 0
@@ -670,6 +867,32 @@ class VisibilityScatter(VisibilityPlot):
             return {"status": "error", "message": str(exc)}
         return self._image_response("ok")
 
+    def _handle_update_scaling(self, message: dict) -> dict:
+        """Handle j2p 'vs_update_scaling': {layer_index, scaling, alpha, gamma}.
+
+        All fields except layer_index are optional; omitted fields keep
+        their current per-layer value. Uses _image_response so JS can
+        update image_source directly, mirroring _handle_set_alpha.
+        """
+        idx = int(message.get("layer_index", 0))
+        try:
+            self.update_scaling(
+                idx,
+                scaling = message.get("scaling"),
+                alpha   = message.get("alpha"),
+                gamma   = message.get("gamma"),
+            )
+        except (IndexError, ValueError) as exc:
+            return {"status": "error", "message": str(exc)}
+        lyr = self._layers[idx]
+        return self._image_response(
+            "ok",
+            layer_index   = idx,
+            scaling       = lyr.scaling,
+            scaling_alpha = lyr.scaling_alpha,
+            scaling_gamma = lyr.scaling_gamma,
+        )
+
     def _handle_update_axes_scatter(self, message: dict) -> dict:
         """Handle j2p 'vs_update_axes' with scatter-specific fields."""
         from .axes import Axis
@@ -678,10 +901,13 @@ class VisibilityScatter(VisibilityPlot):
             try:
                 new_layers = [
                     ScatterLayer(
-                        y_axis       = Axis[entry["y_axis"]],
-                        polarization = entry.get("polarization", "XX"),
-                        alpha        = float(entry.get("alpha", 1.0)),
-                        label        = entry.get("label", ""),
+                        y_axis        = Axis[entry["y_axis"]],
+                        polarization  = entry.get("polarization", "XX"),
+                        alpha         = float(entry.get("alpha", 1.0)),
+                        label         = entry.get("label", ""),
+                        scaling       = entry.get("scaling", _DEFAULT_SCALING),
+                        scaling_alpha = float(entry.get("scaling_alpha", 10.0)),
+                        scaling_gamma = float(entry.get("scaling_gamma", 1.0)),
                     )
                     for entry in message["layers"]
                 ]

@@ -37,6 +37,7 @@ import numpy as np
 from bokeh.models import ColumnDataSource
 
 from .visibility_plot import VisibilityPlot, _img_to_uint32, _axis_label
+from . import colormap_scaling as _cms
 
 if TYPE_CHECKING:
     import xarray as xr
@@ -57,6 +58,8 @@ _DEFAULT_CMAP = [
     "#0d0887", "#46039f", "#7201a8", "#9c179e", "#bd3786",
     "#d8576b", "#ed7953", "#fb9f3a", "#fdcb26", "#f0f921",
 ]
+
+_DEFAULT_SCALING = "eq_hist"
 
 
 def _auto_title(quantity: "Axis", y_dim: "Axis", x_dim: "Axis",
@@ -97,6 +100,19 @@ class VisibilityRaster(VisibilityPlot):
         Colour map hex strings.  Defaults to Plasma.
     max_cells : int
         Agg cell budget for ``query_raster`` decimation.
+    scaling : str
+        Value-to-colour transfer function.  One of
+        ``colormap_scaling.ALL_SCALINGS``:
+        ``"linear"``, ``"log"``, ``"eq_hist"`` (default), ``"sqrt"``,
+        ``"square"``, ``"gamma"``, ``"power"``.  ``"eq_hist"``
+        (histogram equalization) is the default because linear scaling
+        saturates badly on real visibility data — a small high-amplitude
+        population dominates the colormap while the populous
+        low-amplitude region collapses to a featureless gradient.
+    scaling_alpha : float
+        Parameter for ``"log"`` and ``"power"`` scalings.
+    scaling_gamma : float
+        Parameter for ``"gamma"`` scaling.
     """
 
     def __init__(
@@ -114,6 +130,9 @@ class VisibilityRaster(VisibilityPlot):
         cmap: Optional[list] = None,
         max_cells: int = 2_000_000,
         color_mode: str = "global",
+        scaling: str = _DEFAULT_SCALING,
+        scaling_alpha: float = 10.0,
+        scaling_gamma: float = 1.0,
         **kwargs,
     ) -> None:
         self._quantity     = quantity
@@ -121,6 +140,9 @@ class VisibilityRaster(VisibilityPlot):
         self._cmap         = cmap or _DEFAULT_CMAP
         self._max_cells    = max_cells
         self._color_mode   = color_mode
+        self._scaling       = scaling if scaling in _cms.ALL_SCALINGS else _DEFAULT_SCALING
+        self._scaling_alpha = scaling_alpha
+        self._scaling_gamma = scaling_gamma
 
         # Raster-specific state (set by _render)
         self._agg:          Optional["xr.DataArray"] = None
@@ -129,6 +151,7 @@ class VisibilityRaster(VisibilityPlot):
         # Per-instance uuid for the update_axes message
         self._msg_update_axes = str(uuid4())
         self._msg_color_mode  = str(uuid4())
+        self._msg_update_scaling = str(uuid4())
 
         super().__init__(
             backend   = backend,
@@ -209,12 +232,160 @@ class VisibilityRaster(VisibilityPlot):
         self._color_mode = mode
         self._render(self._selection)
 
+    def update_scaling(
+        self,
+        scaling: Optional[str] = None,
+        alpha: Optional[float] = None,
+        gamma: Optional[float] = None,
+    ) -> None:
+        """Change the value-to-colour transfer function and re-shade.
+
+        Does NOT re-query the backend — operates on the cached ``agg``
+        array, mirroring the fast re-composite pattern used by
+        ``VisibilityScatter.set_alpha()``.
+
+        Parameters
+        ----------
+        scaling : str | None
+            One of ``colormap_scaling.ALL_SCALINGS``.  ``None`` keeps the
+            current value.
+        alpha : float | None
+            Parameter for ``"log"`` / ``"power"`` scalings.  ``None``
+            keeps the current value.
+        gamma : float | None
+            Parameter for ``"gamma"`` scaling.  ``None`` keeps the
+            current value.
+        """
+        if scaling is not None:
+            if scaling not in _cms.ALL_SCALINGS:
+                raise ValueError(
+                    f"scaling must be one of {_cms.ALL_SCALINGS}, got {scaling!r}"
+                )
+            self._scaling = scaling
+        if alpha is not None:
+            self._scaling_alpha = alpha
+        if gamma is not None:
+            self._scaling_gamma = gamma
+
+        if self._agg is None:
+            return  # nothing rendered yet — new scaling takes effect on next _render
+
+        img32 = self._shade_viewport(self._x_range, self._y_range)
+        new_data = {
+            "image": [img32],
+            "x":     [self._x_range[0]],
+            "y":     [self._y_range[0]],
+            "dw":    [self._x_range[1] - self._x_range[0]],
+            "dh":    [self._y_range[1] - self._y_range[0]],
+        }
+        if self._image_source is None:
+            self._image_source = ColumnDataSource(data=new_data)
+        else:
+            self._image_source.data = new_data
+        self._update_state_source()
+
+    def histogram(self, bins: int = 254) -> tuple[np.ndarray, np.ndarray]:
+        """Return ``(counts, bin_edges)`` for the current ``agg`` values.
+
+        Used by ``colormap_controls()`` for an eventual histogram display
+        alongside the scaling controls.  Returns empty arrays if nothing
+        has been rendered yet.
+        """
+        if self._agg is None:
+            return np.array([]), np.array([])
+        finite = self._agg.values[np.isfinite(self._agg.values)]
+        if finite.size == 0:
+            return np.array([]), np.array([])
+        counts, edges = np.histogram(finite, bins=bins)
+        return counts, edges
+
+    def colormap_controls(self):
+        """Return a Bokeh widget column for scaling / range controls.
+
+        ``VisibilityPlotter``'s sidebar embeds this directly — see Phase 0
+        CM-4 in the implementation plan.  Scaling changes call
+        ``update_scaling()`` via the existing CommMgr j2p path
+        (``self._msg_update_scaling``); the dropdown and alpha/gamma
+        inputs themselves are plain Bokeh widgets with no bespoke
+        per-instance JS beyond what ``VisibilityPlot`` already wires for
+        other controls.
+
+        Layout, in order:
+            - Scaling dropdown (linear, log, eq_hist, sqrt, square,
+              gamma, power)
+            - Equation label (``Div``, updates with scaling choice)
+            - Alpha numeric input (visible for log / power)
+            - Gamma numeric input (visible for gamma)
+            - Min / max numeric range inputs
+
+        The widget construction itself (Bokeh `Select`, `TextInput`,
+        `Div`, and the `column`/`row` layout) is implemented inline here
+        rather than factored further, since both display classes need an
+        essentially identical control set and any divergence is better
+        caught early than abstracted prematurely.
+        """
+        from bokeh.layouts import column, row
+        from bokeh.models import Select, TextInput, Div
+
+        equation = Div(text=_cms.scaling_equation_label(self._scaling))
+        scaling_select = Select(
+            title="Colour scaling",
+            value=self._scaling,
+            options=list(_cms.ALL_SCALINGS),
+        )
+        alpha_input = TextInput(
+            title="alpha", value=str(self._scaling_alpha),
+            visible=self._scaling in ("log", "power"),
+        )
+        gamma_input = TextInput(
+            title="gamma", value=str(self._scaling_gamma),
+            visible=self._scaling == "gamma",
+        )
+        min_input = TextInput(title="min", value="")
+        max_input = TextInput(title="max", value="")
+
+        def _on_scaling_change(attr, old, new):
+            alpha_input.visible = new in ("log", "power")
+            gamma_input.visible = new == "gamma"
+            equation.text = _cms.scaling_equation_label(new)
+            self.update_scaling(scaling=new)
+
+        def _on_alpha_change(attr, old, new):
+            try:
+                self.update_scaling(alpha=float(new))
+            except ValueError:
+                pass
+
+        def _on_gamma_change(attr, old, new):
+            try:
+                self.update_scaling(gamma=float(new))
+            except ValueError:
+                pass
+
+        scaling_select.on_change("value", _on_scaling_change)
+        alpha_input.on_change("value", _on_alpha_change)
+        gamma_input.on_change("value", _on_gamma_change)
+
+        return column(
+            scaling_select,
+            equation,
+            row(alpha_input, gamma_input),
+            row(min_input, max_input),
+        )
+
     def _state_data_extra(self) -> dict:
-        """Add agg shape and color_mode to _state_source."""
+        """Add agg shape, color_mode, and colormap scaling to _state_source."""
         agg = self._agg
         n_x = agg.shape[1] if agg is not None and agg.ndim == 2 else 1
         n_y = agg.shape[0] if agg is not None and agg.ndim == 2 else 1
-        return {"agg_n_x": [n_x], "agg_n_y": [n_y], "color_mode": [self._color_mode]}
+        return {
+            "agg_n_x":    [n_x],
+            "agg_n_y":    [n_y],
+            "color_mode": [self._color_mode],
+            "scaling":        [self._scaling],
+            "scaling_alpha":  [self._scaling_alpha],
+            "scaling_gamma":  [self._scaling_gamma],
+        }
 
     def _build_glyphs(self) -> None:
         """Add the single image_rgba glyph for the raster."""
@@ -274,10 +445,8 @@ class VisibilityRaster(VisibilityPlot):
                 y_range     = (y0, y1),
             )
             ds_agg = cvs.raster(agg)
-            shade_kw = dict(cmap=self._cmap, how="linear")
-            if self._color_mode == "global":
-                shade_kw["span"] = [float(y0), float(y1)]
-            shaded = tf.shade(ds_agg, **shade_kw)
+            span = [float(y0), float(y1)] if self._color_mode == "global" else None
+            shaded = self._shade_agg(ds_agg, span=span)
             img32  = _img_to_uint32(shaded)
 
         new_data = {
@@ -356,6 +525,104 @@ class VisibilityRaster(VisibilityPlot):
     # Raster-specific internals
     # ------------------------------------------------------------------
 
+    def _shade_agg(
+        self,
+        ds_agg: "xr.DataArray",
+        span: Optional[list] = None,
+    ) -> "object":
+        """Shade a Datashader canvas agg using the current scaling state.
+
+        Single call site for the value-to-colour transform so that every
+        re-shade — whether triggered by ``_render``, ``_shade_viewport``,
+        or ``update_scaling`` — reads ``self._scaling`` rather than a
+        hardcoded default (Phase 0 CM-6).
+
+        ``color_mode`` behaviour by scaling family:
+
+        * ``"linear"``, ``"log"`` — Datashader-native ``how=`` reductions
+          that accept ``span=``. ``span`` (the y-axis range passed in by
+          the caller; this raster's long-standing ``"global"``
+          convention) directly anchors the colour domain. ``"global"``
+          keeps colours stable across pan/zoom; ``"local"``
+          (``span=None``) lets Datashader auto-range to whatever is in
+          ``ds_agg``.
+        * ``"eq_hist"`` — Datashader's native ``how="eq_hist"`` rejects
+          ``span=`` outright (raises ``ValueError``), so there is no way
+          to anchor it to an external range through the public API.
+          Implemented here as an explicit pre-transform via
+          ``colormap_scaling.equalize_histogram()`` instead, which
+          reimplements Datashader's own CDF-based algorithm but accepts
+          a separate *reference* array to build the equalization curve
+          from. ``"global"`` passes ``self._agg`` (the full cached
+          aggregation) as the reference, so colours stay anchored to the
+          full data's distribution regardless of zoom level — useful
+          when zoomed in and wanting flagging-stable colours. ``"local"``
+          passes ``None`` (equalize against the crop itself), matching
+          Datashader's native behaviour and auto-revealing whatever
+          structure is currently visible.
+        * ``"sqrt"``, ``"square"``, ``"gamma"``, ``"power"`` (explicit
+          pre-transform) — ``vmin``/``vmax`` for the transform are
+          derived from ``self._agg``'s own finite value range in
+          ``"global"`` mode, or from ``ds_agg`` (the current viewport
+          crop)'s own finite value range in ``"local"`` mode. Same
+          global/local intent as the eq_hist case above, via a clip
+          range rather than a full CDF.
+
+          IMPORTANT: none of the explicit-pre-transform branches derive
+          their value-domain anchor from the ``span`` parameter, which
+          carries the y-axis coordinate range (e.g. TIME in MJD seconds)
+          in this raster's ``"global"`` calling convention — unrelated
+          to the *value* domain of the rendered quantity (e.g.
+          amplitude) whenever the y-axis differs from the rendered
+          quantity, which is the common case. Using ``span`` for this
+          was an earlier bug: it silently clipped every agg value to a
+          single bin whenever the y-axis range didn't numerically
+          overlap the data-value range, producing a flat image
+          regardless of which scaling was selected.
+
+        Returns the raw Datashader ``Image`` (not yet converted to
+        ``uint32``) — callers apply ``_img_to_uint32`` themselves.
+        """
+        if self._scaling in _cms.DATASHADER_HOW:
+            shade_kw = dict(
+                cmap=self._cmap,
+                how=_cms.DATASHADER_HOW[self._scaling],
+            )
+            if span is not None:
+                shade_kw["span"] = span
+            return tf.shade(ds_agg, **shade_kw)
+
+        if self._scaling == "eq_hist":
+            reference = (
+                self._agg.values
+                if self._color_mode == "global" and self._agg is not None
+                else None
+            )
+            transformed = _cms.equalize_histogram(
+                ds_agg.values, reference=reference,
+            )
+            scaled_agg = ds_agg.copy(data=transformed)
+            return tf.shade(scaled_agg, cmap=self._cmap, how="linear", span=[0.0, 1.0])
+
+        if self._color_mode == "global" and self._agg is not None:
+            finite = self._agg.values[np.isfinite(self._agg.values)]
+            vmin = float(finite.min()) if finite.size else None
+            vmax = float(finite.max()) if finite.size else None
+        else:
+            vmin = None  # local mode: apply_explicit_scaling derives
+            vmax = None  # from ds_agg's own (cropped) finite range
+
+        transformed = _cms.apply_explicit_scaling(
+            ds_agg.values,
+            self._scaling,
+            alpha=self._scaling_alpha,
+            gamma=self._scaling_gamma,
+            vmin=vmin,
+            vmax=vmax,
+        )
+        scaled_agg = ds_agg.copy(data=transformed)
+        return tf.shade(scaled_agg, cmap=self._cmap, how="linear", span=[0.0, 1.0])
+
     def _shade_viewport(
         self,
         x_range: tuple[float, float],
@@ -390,10 +657,11 @@ class VisibilityRaster(VisibilityPlot):
             y_range     = (y0, y1),
         )
         ds_agg = cvs.raster(agg, interpolate=interpolate)
-        shade_kw = dict(cmap=self._cmap, how="linear")
-        if self._color_mode == "global":
-            shade_kw["span"] = [float(self._y_range[0]), float(self._y_range[1])]
-        shaded = tf.shade(ds_agg, **shade_kw)
+        span = (
+            [float(self._y_range[0]), float(self._y_range[1])]
+            if self._color_mode == "global" else None
+        )
+        shaded = self._shade_agg(ds_agg, span=span)
         return _img_to_uint32(shaded)
 
     def _data_to_pixel(
@@ -419,6 +687,7 @@ class VisibilityRaster(VisibilityPlot):
     def _register_extra_comm_handlers(self) -> None:
         self._comm.register(self._msg_update_axes, self._handle_update_axes_raster)
         self._comm.register(self._msg_color_mode,  self._handle_set_color_mode_raster)
+        self._comm.register(self._msg_update_scaling, self._handle_update_scaling_raster)
 
     def _handle_set_color_mode_raster(self, message: dict) -> dict:
         """Handle j2p message to toggle colour mode: {mode: "global"|"local"}."""
@@ -437,6 +706,36 @@ class VisibilityRaster(VisibilityPlot):
             "x1":         src["x"][0] + src["dw"][0],
             "y0":         src["y"][0],
             "y1":         src["y"][0] + src["dh"][0],
+        }
+
+    def _handle_update_scaling_raster(self, message: dict) -> dict:
+        """Handle j2p 'vr_update_scaling': {scaling, alpha, gamma}.
+
+        All fields optional; omitted fields keep their current value.
+        Returns the re-shaded image so JS can update image_source
+        directly, mirroring _handle_set_color_mode_raster.
+        """
+        try:
+            self.update_scaling(
+                scaling = message.get("scaling"),
+                alpha   = message.get("alpha"),
+                gamma   = message.get("gamma"),
+            )
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
+        if self._image_source is None:
+            return {"status": "ok", "scaling": self._scaling}
+        src = self._image_source.data
+        return {
+            "status":        "ok",
+            "scaling":       self._scaling,
+            "scaling_alpha": self._scaling_alpha,
+            "scaling_gamma": self._scaling_gamma,
+            "image":         src["image"][0],
+            "x0":            src["x"][0],
+            "x1":            src["x"][0] + src["dw"][0],
+            "y0":            src["y"][0],
+            "y1":            src["y"][0] + src["dh"][0],
         }
 
     def _handle_update_axes_raster(self, message: dict) -> dict:

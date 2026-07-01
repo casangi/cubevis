@@ -88,34 +88,39 @@ class VisibilityPlotter:
 > self._comm_mgr = BokehInit.get_app_context().comm_mgr
 > ```
 
-### 1.2 `_init_pipes(self)`
+### 1.2 Opening communication channels
 
-Open the websocket communication channels.  This must happen *after* any backend
-bootstrapping call but *before* `_task_server` runs, so it is called from `__call__`.
-The `if self._pipe['control'] is None` guard makes the method idempotent — `__call__`
-can be invoked more than once (e.g. when a user re-runs a notebook cell) and pipes
-must not be opened twice.
+Before `_task_server` runs, any `Comm` channels needed by the application must be
+opened and their Python callbacks registered.  The only architectural requirement is
+that this happens inside `__call__` before the `exe.Task` is handed to the adapter.
+How it is organized internally — whether inlined, delegated to a helper method, or
+split across several methods — is up to the developer.  In `iclean` this is done in a
+method called `_init_pipes`; the name carries no special meaning to the framework.
+
+The guard against double-initialization (`if self._pipe['control'] is None`) is worth
+including if `__call__` may be invoked more than once — for example when a user
+re-runs a notebook cell — since pipes must not be opened twice.
 
 ```python
-    def _init_pipes(self):
+    # Example: opening channels inline in __call__, or in a helper method
+    def _open_channels(self):
         if self._pipe['control'] is None:
             self._pipe['control'] = self._comm_mgr.open(
                 squash_queue=True,
                 description='my app control'
             )
-            # Register Python-side callbacks for each named message type
             self._pipe['control'].register(self._ids['some-action'], self._handle_some_action)
             self._pipe['control'].register(self._ids['done'],        self._handle_done)
 ```
 
 ### 1.3 `__call__(self, exec_context, task_id=None) → (BokehAppContext, exe.Task)`
 
-Called by the adapter (§4).  Calls `_init_pipes()` and returns the `BokehAppContext`
+Called by the adapter (§4).  Opens communication channels and returns the `BokehAppContext`
 together with an `exe.Task` wrapping the async server coroutine.
 
 ```python
     def __call__(self, exec_context, task_id=None):
-        self._init_pipes()
+        self._open_channels()         # or inline — whatever the developer chooses
         return self._app_context, exe.Task(self._task_server)
 ```
 
@@ -135,15 +140,19 @@ obtained if needed:
         self._stop_condition, _ = exec_context.create_stop_condition(task_id)
 ```
 
-### 1.4 `_task_server(self)` — the async server loop
+### 1.4 The async server coroutine
 
-Wrapped by `exe.Task`.  `exe.Task` accepts either a sync or async callable and handles
-the difference internally, but `_task_server` must be `async def` because it uses
-`asyncio.Future` and `websockets.serve`.  It creates the future that will carry the
-result, runs the websocket server, and blocks until `_stop()` resolves the future.
+The second element of the tuple returned from `__call__` is `exe.Task(coroutine)`,
+where `coroutine` is an `async def` method on the class.  `exe.Task` accepts either a
+sync or async callable and handles the difference internally, but the coroutine must be
+`async def` here because it uses `asyncio.Future` and `websockets.serve`.  The name
+`_task_server` is used in `iclean` but carries no special meaning to the framework.
+
+The coroutine creates the future that will carry the result, runs the websocket server,
+and blocks until the result future is resolved:
 
 ```python
-    async def _task_server(self):
+    async def _task_server(self):    # name is the developer's choice
         self._result_future = asyncio.Future()
 
         if self._comm_mgr.address:
@@ -157,32 +166,36 @@ result, runs the websocket server, and blocks until `_stop()` resolves the futur
         return self.result()
 ```
 
-### 1.5 `_stop(self)` — completing the result future
+### 1.5 Resolving the result future
 
-There are two paths by which shutdown can be triggered, and `_stop` must handle both:
+There are two paths by which shutdown can be triggered, and the method that resolves
+the result future must handle both.  The name `_stop` is used in `iclean` but is not
+required by the framework — it is simply called from the developer's own message
+handler and `shutdown_handler`:
 
 - **Normal shutdown** — the user clicks Stop; JavaScript sends a "done" message
-  through a `Comm`; the registered Python async callback calls `_stop()` and returns
-  a confirmation to JavaScript (see §3.2).
+  through a `Comm`; the registered Python async callback resolves the future and
+  returns a confirmation to JavaScript (see §3.2).
 - **Session disconnect** — the browser tab is closed without pressing Stop; the
-  `on_shutdown` callback passed to `CommMgr` at construction fires and calls `_stop()`
-  directly.
+  `on_shutdown` callback passed to `CommMgr` at construction fires and resolves the
+  future directly.
 
-In both cases `_result_future` must be resolved exactly once, hence the `.done()`
-guard:
+In both cases the future must be resolved exactly once, hence the `.done()` guard:
 
 ```python
-    def _stop(self, _=None):
+    def _stop(self, _=None):    # name is the developer's choice
         if not self._result_future.done():
             self._result_future.set_result(self._compute_result())
 ```
 
-### 1.6 `result(self)` — returning the computed result
+### 1.6 Returning the computed result
 
-A public method called at the end of `_task_server` and by `Showable.get_result()`:
+The server coroutine calls `self.result()` before returning, and `Showable.get_result()`
+calls it from outside.  Again the name is the developer's choice; what matters is that
+the same callable is used in both places:
 
 ```python
-    def result(self):
+    def result(self):    # name is the developer's choice
         if self._result_future is None or not self._result_future.done():
             raise RuntimeError('no result available yet')
         return self._result_future.result()
@@ -193,11 +206,11 @@ A public method called at the end of `_task_server` and by `Showable.get_result(
 | Element | Type | Purpose |
 |---|---|---|
 | `__init__(self, *args)` | constructor | build backend + Bokeh layout + `BokehAppContext` |
-| `_init_pipes(self)` | method | open `CommMgr` channels and register Python callbacks |
-| `__call__(self, exec_context, task_id)` | callable | return `(self._app_context, exe.Task(self._task_server))` |
-| `_task_server(self)` | `async def` | websocket server loop; creates and awaits `_result_future` |
-| `_stop(self)` | method | sets `_result_future`; called by message handler or `shutdown_handler` |
-| `result(self)` | method | returns the application's computed result after `_stop` |
+| open channels + register callbacks | inside `__call__` | open `CommMgr` channels before `exe.Task` is returned |
+| `__call__(self, exec_context, task_id)` | callable | return `(self._app_context, exe.Task(async_coroutine))` |
+| async server coroutine | `async def` | websocket server loop; creates and awaits the result future |
+| resolve result future | method or callback | called by message handler and `shutdown_handler`; sets future exactly once |
+| return result | method | returns computed result; called by server coroutine and `Showable.get_result()` |
 
 ---
 
@@ -220,7 +233,7 @@ includes `numpy` arrays.
 
 ### 2.2 Python side
 
-**Open a channel** in `_init_pipes()`:
+**Open a channel** before returning from `__call__`:
 
 ```python
 self._pipe['control'] = self._comm_mgr.open(
@@ -305,7 +318,7 @@ ctrl.send(
 
 This example is taken directly from `CubeMask.palette()` in `_cube.py`.
 
-**Python setup** (in `_init_pipes` / widget construction):
+**Python setup** (channel opening and callback registration):
 
 ```python
 self._ids = {'palette': str(uuid4()), ...}
@@ -383,8 +396,8 @@ The shutdown sequence is left to the developer, but the pattern used in `iclean`
    chosen for shutdown signalling.  The JavaScript side passes a callback that will run
    once Python replies.
 
-3. **Python's handler calls `_stop()`** — resolving `_result_future` and allowing
-   `_task_server` to return.
+3. **Python's handler resolves the result future** — allowing the server coroutine to
+   return.
 
 4. **Python replies, JavaScript closes** — inside the JavaScript reply callback,
    the code checks `showable`:
@@ -560,7 +573,7 @@ Its constructor accepts:
 
 | Parameter | Type | Purpose |
 |---|---|---|
-| `ui_element` | Bokeh `UIElement` | the `BokehAppContext` returned by `VisibilityPlotter.__call__` |
+| `ui_element` | Bokeh `UIElement` | the `BokehAppContext` returned by `VisibilityPlotter.__call__`; `BokehAppContext` is a `LayoutDOM` subclass and therefore satisfies the `UIElement` type |
 | `backend_func` | `Callable[[], None]` | called on `.show()`; invokes `context.execute(task)` |
 | `result_retrieval` | `Callable[[], Future]` | called by `.get_result()`; returns the `concurrent.futures.Future` holding the result |
 | `name` | `str` | used in display summaries |
@@ -603,7 +616,7 @@ of the Bokeh document tree for `cubevis` apps.  It:
   to registered handlers; it is passed directly to `websockets.serve()`.
 - The `on_shutdown` callback passed to `CommMgr` is invoked when the Bokeh session
   closes (e.g. browser tab closed without pressing Stop), giving the application a
-  chance to call `_stop()` and clean up.
+  chance to resolve the result future and clean up.
 
 ---
 

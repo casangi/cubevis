@@ -396,6 +396,10 @@ plotter = VisibilityPlotter(
     ms   = "sis14_twhya_calibrated_flagged.ms",
     # ps = "sis14_twhya_calibrated_flagged.ps.zarr",
 
+    # Reduction backend — controls which ReductionContext is constructed
+    backend         = "auto",   # "auto" | "casa6" | "radps" | "remote" | "null"
+    remote_endpoint = None,     # required when backend="remote"
+
     # Initial selection — all optional strings or numbers
     field       = "0637-752",   # name or int index; default: first field
     spw         = "0,1,2,3",    # MSSelection string; default: all
@@ -420,13 +424,35 @@ plotter = VisibilityPlotter(
 plotter.show()  # returns a Bokeh layout for notebook embedding
 ```
 
-Internally `__init__` calls `open_ms()` or `open_ps()` to produce
-`ObservationMetadata`, `LocalVisibilityReader`, and `ReductionContext`,
-then constructs `VisibilityRaster` and `VisibilityScatter` from those
-objects.  None of these internal objects are exposed as public attributes.
-Defaults for omitted selection parameters are resolved by inspecting
-`ObservationMetadata` (e.g. first field, all SPWs, all available
-polarizations).
+### The `backend=` parameter and `ReductionBackend`
+
+`backend` accepts a plain string or a `ReductionBackend` enum value
+(defined in `reduction_context.py`; the `str` mixin makes them
+identical at every call site):
+
+| Value | Behaviour |
+|---|---|
+| `"auto"` (default) | Probe in priority order: `casatasks` → RADPS → `NullReductionContext`. For MSv4/PS, `casatasks` is never probed (CASA6 has no MSv4 write path). During the preview, `AUTO` falls through to `NullReductionContext` with a warning log since `Casa6ReductionContext` and `RadpsReductionContext` are not yet implemented — display-only use works cleanly in any environment. |
+| `"casa6"` | Require `casatasks`; raise `RuntimeError` if not importable. **Only valid for `ms=`** — raises `ValueError` immediately if `ps=` is supplied. |
+| `"radps"` | Require RADPS / AstroVIPER; raise `RuntimeError` if not available. Valid for both `ms=` and `ps=`. |
+| `"remote"` | Use `RemoteReductionContext`; requires `remote_endpoint`. Valid for both. Not yet implemented in the preview — raises `NotImplementedError`. |
+| `"null"` | Explicitly construct `NullReductionContext` without probing. Useful for display-only sessions or to suppress the `AUTO` warning log. |
+
+### Role of `factory.py`
+
+`open_ms()` and `open_ps()` in `factory.py` are **internal
+implementation details** of `VisibilityPlotter.__init__`, not public
+API. This resolves the apparent tension in §4.12: the constructor
+accepts only primitive types, yet somehow produces a `ReductionContext`.
+The factory is where all `ReductionBackend` selection logic lives — it
+receives `path` and `backend` (a `ReductionBackend` value), resolves the
+correct `ReductionContext` via the context-selection matrix above, and
+returns the `(ObservationMetadata, LocalVisibilityReader, ReductionContext)`
+triple that `__init__` stores in private attributes.
+
+The factory is not imported directly by astronomer-facing code; it is an
+implementation layer that could be replaced (e.g. for testing with a mock
+context) without changing the `VisibilityPlotter` constructor signature.
 
 **Composable layer for developers.**  `VisibilityRaster`,
 `VisibilityScatter`, `LocalVisibilityReader`, and `ReductionContext`
@@ -759,18 +785,16 @@ layout that Phase 2 depends on:
 | A-2 | Implement `LocalVisibilityReader` wrapping `XArrayReader` | ✅ Done | `local_visibility_reader.py` |
 | A-3 | Update `VisibilityRaster` and `VisibilityScatter` type annotation: `backend: XArrayReader` → `backend: VisibilityReader` | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
 | A-4 | Define `ObservationMetadata` frozen dataclass and `from_backend_metadata()` factory | ✅ Done | `reduction_context.py` |
-| A-5 | Define all DTOs: `FieldInfo`, `SpwInfo`, `AntennaInfo`, `ScanInfo`, `CaltableInfo`, `FlagDelta`, `FlagSummary`, `FlagVersionInfo`, `BandpassParams`, `GaincalParams`, `FluxscaleParams`, `ApplycalParams`, `SplitParams`, `ReductionOperation`, `ReductionResult` | ✅ Done | `reduction_context.py` |
+| A-5 | Define all DTOs and `ReductionBackend` enum: `FieldInfo`, `SpwInfo`, `AntennaInfo`, `ScanInfo`, `CaltableInfo`, `FlagDelta`, `FlagSummary`, `FlagVersionInfo`, `BandpassParams`, `GaincalParams`, `FluxscaleParams`, `ApplycalParams`, `SplitParams`, `ReductionOperation`, `ReductionResult`; plus `ReductionBackend(str, Enum)` with members `AUTO`, `CASA6`, `RADPS`, `REMOTE`, `NULL` — the `str` mixin allows plain strings to be passed to `VisibilityPlotter`'s `backend=` parameter | ✅ Done | `reduction_context.py` |
 | A-6 | Define `ReductionContext` ABC | ✅ Done | `reduction_context.py` |
 | A-7 | Implement `NullReductionContext` | ✅ Done | `reduction_context.py` |
-| A-8 | Implement `open_ms()` and `open_ps()` factory functions returning `(ObservationMetadata, LocalVisibilityReader, NullReductionContext)` | ⬜ Not started | `factory.py` *(new)* |
+| A-8 | Implement `open_ms()` and `open_ps()` factory functions: accept `path`, `backend: ReductionBackend\|str = "auto"`, and `remote_endpoint`; resolve the correct `ReductionContext` via the context-selection matrix (see §4.12); return `(ObservationMetadata, LocalVisibilityReader, ReductionContext)`. These are **internal implementation details** of `VisibilityPlotter.__init__` — not public API. The factory is where `ReductionBackend` selection logic lives; `VisibilityPlotter.__init__` calls them and discards the triple into private attributes. | ✅ Done (subsequent session) | `factory.py` *(new)* |
 | A-9 | Verify existing test suite passes with `LocalVisibilityReader` wrapper in place of direct backend references | ✅ Done — `VisibilityPlot.__init__` auto-wraps any bare `XArrayReader`, so existing tests passing `MSv2Backend`/`MSv4Backend` directly require no changes | test suite |
 
-> **Note:** A-8 (`open_ms()`/`open_ps()` factory functions) is the one
-> remaining item before Phase 0 is fully closed out — everything else,
-> including the full CM-series, is complete and verified. A-8 was scoped
-> for Phase 2 originally (it's listed again as context for P-8) and can
-> proceed either now or at the start of Phase 1/2 without blocking
-> anything else.
+> **Phase 0 is fully closed out.** All A-series and CM-series items are
+> complete and verified against real sis14 data (MSv2 and MSv4). The next
+> session begins at Phase 1 (Flagging foundations).
+
 
 ---
 
@@ -805,7 +829,7 @@ layout that Phase 2 depends on:
 | P-5 | Named view presets — vplot, radplot, projplot buttons configure axes and tool | `visibility_plotter.py` |
 | P-6 | `SelectionSpec` UV range — add `uv_range` field (metres) for baseline selection | `selection.py` |
 | P-7 | `Casa6ReductionContext` metadata methods: `list_fields()`, `list_spws()`, `list_antennas()`, `list_scans()`, `list_data_columns()` | `casa6_reduction_context.py` |
-| P-8 | `open_ms()` / `open_ps()` factory: when CASA6 is importable, return `Casa6ReductionContext`; otherwise `NullReductionContext` | `factory.py` |
+| P-8 | `open_ms()` / `open_ps()` factory with full `ReductionBackend` context-selection matrix (see §4.12) | ✅ Done (subsequent session) | `factory.py` |
 | P-10 | Async plot with loading indicator: spinner `Div` overlay on figures while backend query is in flight; Cancel button sets a threading `Event` checked by the backend; Plot button disabled during query | `visibility_plotter.py` |
 
 ---

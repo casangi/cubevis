@@ -314,6 +314,10 @@ plotter = VisibilityPlotter(
     ms   = "sis14_twhya_calibrated_flagged.ms",   # MSv2
     # ps = "sis14_twhya_calibrated_flagged.ps.zarr", # MSv4
 
+    # Reduction backend — selects which ReductionContext is constructed
+    backend         = "auto",   # "auto" | "casa6" | "radps" | "remote" | "null"
+    remote_endpoint = None,     # required only when backend="remote"
+
     # Initial selection — all optional strings or numbers
     field       = "0637-752",   # name or index; default: first field
     spw         = "0,1,2,3",    # MSSelection string; default: all
@@ -343,18 +347,28 @@ clear message.  Omitting both also raises `ValueError`.  All other
 parameters are optional; defaults are chosen by inspecting the data
 after opening (e.g. first field, all SPWs, all available polarizations).
 
+The `backend=` parameter accepts a plain string or a `ReductionBackend`
+enum value.  In the preview `"auto"` falls through to
+`NullReductionContext` with a warning log (since `Casa6ReductionContext`
+and `RadpsReductionContext` are not yet implemented), so display-only use
+works cleanly in any environment.  Pass `"null"` explicitly to suppress
+the warning.  See §4.12 of the implementation plan for the full
+context-selection matrix.
+
 ### What VisibilityPlotter does internally
 
-`__init__` calls `open_ms()` or `open_ps()` to produce an
-`ObservationMetadata`, a `LocalVisibilityReader`, and a
-`ReductionContext` (initially `NullReductionContext` in the preview).
-It then constructs one `VisibilityRaster` and one `VisibilityScatter`
-from those objects, wraps their figures in a CSS flex container `Div`,
-builds the sidebar and toolbar as Bokeh widget columns, initialises the
-preference `ColumnDataSource` with an empty dict, and attaches `CustomJS`
-callbacks for the display mode toggle, layout toggle, and presets.  The
-CommMgr transport used by the two display classes is reused without
-modification.
+`__init__` calls `open_ms()` or `open_ps()` from `factory.py` (an
+internal implementation detail, not public API), passing `path`,
+`backend`, and `remote_endpoint`.  The factory resolves the appropriate
+`ReductionContext` and returns an `(ObservationMetadata,
+LocalVisibilityReader, ReductionContext)` triple that `__init__` stores
+in private attributes.  It then constructs one `VisibilityRaster` and
+one `VisibilityScatter` from those objects, wraps their figures in a CSS
+flex container `Div`, builds the sidebar and toolbar as Bokeh widget
+columns, initialises the preference `ColumnDataSource` with an empty
+dict, and attaches `CustomJS` callbacks for the display mode toggle,
+layout toggle, and presets.  The CommMgr transport used by the two
+display classes is reused without modification.
 
 The box-select j2p handler always adds a `FlagDelta` to `FlagDB` and
 immediately re-renders the flagged overlay in red — no button press

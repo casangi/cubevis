@@ -58,7 +58,8 @@ import numpy as np
 from bokeh.model import Model
 from bokeh.core.properties import String, Int, Bool
 from bokeh.models import (
-    ColumnDataSource, CustomJS, CustomJSTickFormatter, Div, HoverTool,
+    BoxSelectTool, ColumnDataSource, CustomJS, CustomJSTickFormatter,
+    Div, HoverTool,
 )
 from bokeh.plotting import figure, show as bk_show
 from bokeh.layouts import column
@@ -222,6 +223,10 @@ class VisibilityPlot(Model):
         self._msg_probe    = str(uuid4())
         self._msg_rerender = str(uuid4())
         self._msg_axes     = str(uuid4())
+        self._msg_select   = str(uuid4())
+
+        # Set by register_select_callback(); None until VisibilityPlotter wires it.
+        self._select_callback = None
 
         # Bokeh sources — created in _build()
         self._image_source: Optional[ColumnDataSource] = None
@@ -305,6 +310,48 @@ class VisibilityPlot(Model):
     def layout(self):
         """Bokeh column layout (figure + info Div) for embedding."""
         return self._layout
+
+    def register_select_callback(self, callback) -> None:
+        """Register a Python callable to receive box-select events.
+
+        Called by ``VisibilityPlotter`` after constructing both widget
+        instances so that box-close events from either figure are routed
+        to the plotter's ``FlagDB`` accumulation and overlay re-render
+        path rather than being handled inside the widget itself.
+
+        The callback receives a single dict::
+
+            {
+                "panel":  "raster" | "scatter",   # which figure fired
+                "x0": float, "x1": float,          # data-space extents
+                "y0": float, "y1": float,
+                "tool":  "box_select",             # always for now
+            }
+
+        The ``panel`` key is set by ``VisibilityPlotter`` when it calls
+        this method, not by the widget itself — the widget only knows its
+        own geometry.
+
+        Parameters
+        ----------
+        callback : async callable
+            An ``async def`` function accepting one dict argument and
+            returning a dict (or ``None``), conforming to the
+            ``CommMgr`` handler signature.
+
+        Notes
+        -----
+        * Calling this method a second time replaces the previous
+          callback — only one handler per widget is supported.
+        * The box-select ``CustomJS`` is wired during ``_build()`` and
+          always fires the j2p message when a box closes; whether a
+          Python handler is registered only controls what happens on the
+          Python side.  Calling this method before ``_build()`` is not
+          necessary — the message ID is fixed at construction time.
+        """
+        self._select_callback = callback
+        if self._comm is not None:
+            self._comm.register(self._msg_select, callback)
 
     def show(self) -> None:
         """Open the figure in a browser tab / render inline in a notebook."""
@@ -488,6 +535,7 @@ return sign + m + 'm ' + s.toString().padStart(2, '0') + 's';
         if self._comm is not None:
             self._add_rerender_trigger()
             self._add_axes_changed_handler()
+            self._add_box_select_tool()
 
     # ------------------------------------------------------------------
     # Internal: hover tool
@@ -600,6 +648,53 @@ comm.register('{msg_axes}', function(msg) {{
         init_source.js_on_change("data", init_js)
         self._axes_init_source = init_source
 
+    def _add_box_select_tool(self) -> None:
+        """Add a BoxSelectTool wired to fire a j2p select message on box-close.
+
+        The tool sends ``{x0, x1, y0, y1, tool: "box_select"}`` to
+        Python via the widget's own ``Comm`` channel using
+        ``self._msg_select`` as the routing UUID.  The Python handler
+        registered by ``register_select_callback()`` receives this dict.
+
+        The BoxSelectTool is added to the figure's tool list but is **not**
+        set as the active tool — ``VisibilityPlotter`` activates it by
+        setting ``fig.toolbar.active_drag`` when the Box Select toolbar
+        button is pressed.
+
+        The tool uses ``select_every_mousemove=False`` so the j2p message
+        fires exactly once when the mouse button is released, not on every
+        mouse-move event during the drag.  This matches the AIPS TVFLG
+        interaction model: drag to define the region, release to flag.
+        """
+        comm       = self._comm
+        msg_select = self._msg_select
+
+        select_js = CustomJS(
+            args={"comm": comm},
+            code=f"""
+const geom = cb_data['geometry'];
+if (!geom) return;
+const x0 = geom.x0, x1 = geom.x1;
+const y0 = geom.y0, y1 = geom.y1;
+// Ignore degenerate (click, not drag) selections
+if (Math.abs(x1 - x0) < 1e-12 && Math.abs(y1 - y0) < 1e-12) return;
+comm.send('{msg_select}',
+    {{x0: x0, x1: x1, y0: y0, y1: y1, tool: 'box_select'}},
+    function(resp) {{
+        // Python handler returns null in the preview (FlagDB accumulation
+        // only); a non-null response will carry a re-rendered overlay image
+        // once the full flag overlay pipeline is wired (Phase 1 F-9/F-10).
+        if (!resp || resp.image == null) return;
+        // Future: update image_source with the flagged overlay composite.
+    }}
+);
+""",
+        )
+
+        box_tool = BoxSelectTool(select_every_mousemove=False)
+        self._fig.add_tools(box_tool)
+        box_tool.js_on_event("selectiongeometry", select_js)
+
     def _notify_axes_changed(self) -> None:
         """Send 'vr_axes_changed' p2j after an axis update."""
         if self._comm is None:
@@ -626,6 +721,12 @@ comm.register('{msg_axes}', function(msg) {{
         # _register_extra_comm_handlers() so raster/scatter can handle
         # their own extended fields.
         self._register_extra_comm_handlers()
+        # Select callback: only if pre-registered before _build() ran.
+        # The normal path is VisibilityPlotter calling
+        # register_select_callback() after construction, which registers
+        # directly on self._comm at that point.
+        if self._select_callback is not None:
+            self._comm.register(self._msg_select, self._select_callback)
 
     # ------------------------------------------------------------------
     # j2p handlers (base)

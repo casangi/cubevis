@@ -194,6 +194,33 @@ def _suppress_warnings():
                             category=UserWarning)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_synthetic_stores():
+    """Remove synthetic /tmp ps.zarr stores after the test session ends.
+
+    The ``_get_or_create_*`` functions reuse existing stores within a
+    session for speed, but stale stores written by an older xarray/zarr
+    version cause ``open_consolidated`` failures in subsequent sessions.
+    This fixture ensures a clean slate for the next run while still
+    allowing all test classes within one session to share the stores.
+
+    The paths are derived from the same env-var / default pairs used by
+    the fixture creation functions, so overriding ``PS_DG`` etc. on the
+    command line is respected here too.
+    """
+    yield   # all tests run first
+
+    import shutil
+    for env_var, default in (
+        ("PS_DG",     "/tmp/msv4_test_dg.ps.zarr"),
+        ("PS_NATIVE", "/tmp/msv4_test_native.ps.zarr"),
+        ("PS_SD",     "/tmp/msv4_test_sd.ps.zarr"),
+    ):
+        path = os.environ.get(env_var, default)
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+
+
 def _require_datashader():
     if not HAS_DATASHADER:
         pytest.skip("datashader not installed — pip install datashader")

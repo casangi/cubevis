@@ -87,9 +87,10 @@ from .reduction_context import (
     FlagDelta,
     NullReductionContext,
     ObservationMetadata,
+    ReductionBackend,
     ReductionContext,
 )
-from .factory import open_ms, open_ps
+from .local_visibility_reader import LocalVisibilityReader
 
 log = logging.getLogger(__name__)
 
@@ -174,6 +175,177 @@ def _parse_field_string(field_str: str,
         if 0 <= idx < len(meta.fields):
             return meta.fields[idx].name
     return field_str.strip() or None
+
+
+
+# ---------------------------------------------------------------------------
+# Backend probes and open_ms / open_ps factory functions
+#
+# These live here rather than in a separate factory.py because they are only
+# ever called from VisibilityPlotter.__init__.  A separate module would add
+# indirection with no architectural benefit.
+# ---------------------------------------------------------------------------
+
+def _probe_casatasks() -> bool:
+    """Return ``True`` if ``casatasks`` is importable in this session."""
+    try:
+        import casatasks  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _probe_radps() -> bool:
+    """Return ``True`` if RADPS / AstroVIPER is available in this session."""
+    try:
+        import radps  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    try:
+        import astroviper  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _make_casa6_context(path: str) -> ReductionContext:
+    raise NotImplementedError(
+        "Casa6ReductionContext is not yet implemented. "
+        "Pass backend='null' to suppress this error and use display-only mode."
+    )
+
+
+def _make_radps_context(path: str) -> ReductionContext:
+    raise NotImplementedError(
+        "RadpsReductionContext is not yet implemented. "
+        "Pass backend='null' to suppress this error and use display-only mode."
+    )
+
+
+def _make_remote_context(path: str, endpoint: str) -> ReductionContext:
+    raise NotImplementedError(
+        f"RemoteReductionContext is not yet implemented (preview release). "
+        f"endpoint={endpoint!r} path={path!r}"
+    )
+
+
+def _resolve_context_msv2(
+    path: str,
+    backend: ReductionBackend,
+    remote_endpoint: Optional[str],
+) -> ReductionContext:
+    if backend == ReductionBackend.NULL:
+        return NullReductionContext()
+    if backend == ReductionBackend.REMOTE:
+        if not remote_endpoint:
+            raise ValueError("backend='remote' requires remote_endpoint to be supplied.")
+        return _make_remote_context(path, remote_endpoint)
+    if backend == ReductionBackend.CASA6:
+        if not _probe_casatasks():
+            raise RuntimeError(
+                "backend='casa6' was requested but casatasks is not importable."
+            )
+        return _make_casa6_context(path)
+    if backend == ReductionBackend.RADPS:
+        if not _probe_radps():
+            raise RuntimeError(
+                "backend='radps' was requested but RADPS / AstroVIPER is not available."
+            )
+        return _make_radps_context(path)
+    # AUTO — casatasks → RADPS → Null
+    if _probe_casatasks():
+        try:
+            return _make_casa6_context(path)
+        except NotImplementedError:
+            log.debug("open_ms (auto): Casa6ReductionContext not yet implemented; trying RADPS")
+    if _probe_radps():
+        try:
+            return _make_radps_context(path)
+        except NotImplementedError:
+            log.debug("open_ms (auto): RadpsReductionContext not yet implemented; using Null")
+    return NullReductionContext()
+
+
+def _resolve_context_msv4(
+    path: str,
+    backend: ReductionBackend,
+    remote_endpoint: Optional[str],
+) -> ReductionContext:
+    if backend == ReductionBackend.CASA6:
+        raise ValueError(
+            "backend='casa6' is not valid for MSv4 / Processing Set data. "
+            "CASA6 has no MSv4 write path."
+        )
+    if backend == ReductionBackend.NULL:
+        return NullReductionContext()
+    if backend == ReductionBackend.REMOTE:
+        if not remote_endpoint:
+            raise ValueError("backend='remote' requires remote_endpoint to be supplied.")
+        return _make_remote_context(path, remote_endpoint)
+    if backend == ReductionBackend.RADPS:
+        if not _probe_radps():
+            raise RuntimeError(
+                "backend='radps' was requested but RADPS / AstroVIPER is not available."
+            )
+        return _make_radps_context(path)
+    # AUTO — RADPS → Null
+    if _probe_radps():
+        try:
+            return _make_radps_context(path)
+        except NotImplementedError:
+            log.debug("open_ps (auto): RadpsReductionContext not yet implemented; using Null")
+    return NullReductionContext()
+
+
+def open_ms(
+    path: str,
+    *,
+    backend: ReductionBackend | str = ReductionBackend.AUTO,
+    remote_endpoint: Optional[str] = None,
+) -> tuple[ObservationMetadata, LocalVisibilityReader, ReductionContext]:
+    """Open an MSv2 measurement set; return (metadata, reader, context).
+
+    Called internally by ``VisibilityPlotter.__init__``.  Also importable
+    directly for developer / testing use.
+    """
+    from .data.msv2_backend import MSv2Backend
+    backend = ReductionBackend(backend)
+    b = MSv2Backend(path)
+    b.open()
+    reader = LocalVisibilityReader(b)
+    meta = ObservationMetadata.from_backend_metadata(
+        reader.metadata(), source_path=path
+    )
+    context = _resolve_context_msv2(path, backend, remote_endpoint)
+    log.debug("open_ms: fields=%d spws=%d context=%s",
+              len(meta.fields), len(meta.spws), type(context).__name__)
+    return meta, reader, context
+
+
+def open_ps(
+    path: str,
+    *,
+    backend: ReductionBackend | str = ReductionBackend.AUTO,
+    remote_endpoint: Optional[str] = None,
+) -> tuple[ObservationMetadata, LocalVisibilityReader, ReductionContext]:
+    """Open an MSv4 / Processing Set; return (metadata, reader, context).
+
+    Called internally by ``VisibilityPlotter.__init__``.  Also importable
+    directly for developer / testing use.
+    """
+    from .data.msv4_backend import MSv4Backend
+    backend = ReductionBackend(backend)
+    b = MSv4Backend(path)
+    b.open()
+    reader = LocalVisibilityReader(b)
+    meta = ObservationMetadata.from_backend_metadata(
+        reader.metadata(), source_path=path
+    )
+    context = _resolve_context_msv4(path, backend, remote_endpoint)
+    log.debug("open_ps: fields=%d spws=%d context=%s",
+              len(meta.fields), len(meta.spws), type(context).__name__)
+    return meta, reader, context
 
 
 # ---------------------------------------------------------------------------

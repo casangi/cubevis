@@ -5,15 +5,21 @@ data manipulation operations.
 
 This module defines:
 
-1. **Data Transfer Objects (DTOs)** — typed dataclasses that cross the
+1. **``ReductionBackend``** — ``str`` enum that selects which
+   ``ReductionContext`` implementation ``open_ms`` / ``open_ps`` should
+   construct (``"auto"``, ``"casa6"``, ``"radps"``, ``"remote"``,
+   ``"null"``).  Accepting plain strings makes the astronomer-facing
+   constructor ergonomic without requiring an explicit import.
+
+2. **Data Transfer Objects (DTOs)** — typed dataclasses that cross the
    ``ReductionContext`` boundary.  These are deliberately free of CASA-,
    RADPS-, or cluster-specific types so that every implementation speaks
    the same language.
 
-2. **``ReductionContext``** — abstract base class (ABC).  Concrete
+3. **``ReductionContext``** — abstract base class (ABC).  Concrete
    subclasses implement the methods for a specific execution environment.
 
-3. **``NullReductionContext``** — a no-op implementation used when no
+4. **``NullReductionContext``** — a no-op implementation used when no
    reduction backend is available.  Display and flagging accumulation work
    normally; calibration buttons in ``VisibilityPlotter`` are simply
    disabled when the active context is a ``NullReductionContext``.
@@ -73,10 +79,58 @@ from __future__ import annotations
 import abc
 import logging
 from concurrent.futures import Future
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field as dc_field
+from enum import Enum
 from typing import Any, Optional
 
 log = logging.getLogger(__name__)
+
+
+# ======================================================================
+# ReductionBackend — context selection enum
+# ======================================================================
+
+class ReductionBackend(str, Enum):
+    """Selects which ``ReductionContext`` implementation ``open_ms`` /
+    ``open_ps`` should construct.
+
+    Inherits from ``str`` so that plain strings are accepted wherever a
+    ``ReductionBackend`` is expected — ``"casa6"`` and
+    ``ReductionBackend.CASA6`` are identical at every call site.
+
+    Members
+    -------
+    AUTO
+        Probe in priority order and use the best available backend.
+
+        * ``open_ms``: try ``casatasks`` first, then RADPS, then
+          ``NullReductionContext``.
+        * ``open_ps``: try RADPS, then ``NullReductionContext``.
+          (``casatasks`` is never probed for MSv4/PS — CASA6 has no
+          MSv4 write path and cannot commit flags to a Processing Set.)
+    CASA6
+        Require ``casatasks``; raise ``RuntimeError`` if not importable.
+        Only valid for ``open_ms`` — passing ``CASA6`` to ``open_ps``
+        raises ``ValueError`` immediately.
+    RADPS
+        Require RADPS / AstroVIPER; raise ``RuntimeError`` if not
+        available.  Valid for both ``open_ms`` and ``open_ps``.
+    REMOTE
+        Use ``RemoteReductionContext``; requires ``remote_endpoint`` to
+        be supplied to the factory function.  Valid for both functions.
+        (``RemoteReductionContext`` is not yet implemented; this path
+        raises ``NotImplementedError`` for the preview release.)
+    NULL
+        Explicitly construct ``NullReductionContext`` without probing.
+        Useful for display-only sessions where probe latency is
+        undesirable, or to suppress the auto-detection warning log when
+        no backend is expected.
+    """
+    AUTO   = "auto"
+    CASA6  = "casa6"
+    RADPS  = "radps"
+    REMOTE = "remote"
+    NULL   = "null"
 
 
 # ======================================================================
@@ -280,8 +334,8 @@ class FlagSummary:
     """
     n_flagged:          int
     fraction_flagged:   float
-    by_spw:             dict[int, float]   = field(default_factory=dict)
-    by_antenna:         dict[str, float]   = field(default_factory=dict)
+    by_spw:             dict[int, float]   = dc_field(default_factory=dict)
+    by_antenna:         dict[str, float]   = dc_field(default_factory=dict)
     message:            str = ""
 
 
@@ -306,8 +360,8 @@ class BandpassParams:
     combine:       str = ""
     minblperant:   int = 4
     minsnr:        float = 3.0
-    gaintable:     list[str] = field(default_factory=list)
-    interp:        list[str] = field(default_factory=list)
+    gaintable:     list[str] = dc_field(default_factory=list)
+    interp:        list[str] = dc_field(default_factory=list)
 
 
 @dataclass
@@ -323,8 +377,8 @@ class GaincalParams:
     combine:       str = ""
     minblperant:   int = 4
     minsnr:        float = 3.0
-    gaintable:     list[str] = field(default_factory=list)
-    interp:        list[str] = field(default_factory=list)
+    gaintable:     list[str] = dc_field(default_factory=list)
+    interp:        list[str] = dc_field(default_factory=list)
 
 
 @dataclass
@@ -333,8 +387,8 @@ class FluxscaleParams:
     vis:        str
     caltable:   str
     fluxtable:  str
-    reference:  list[str] = field(default_factory=list)
-    transfer:   list[str] = field(default_factory=list)
+    reference:  list[str] = dc_field(default_factory=list)
+    transfer:   list[str] = dc_field(default_factory=list)
 
 
 @dataclass
@@ -343,8 +397,8 @@ class ApplycalParams:
     vis:        str
     field:      str = ""
     spw:        str = ""
-    gaintable:  list[str] = field(default_factory=list)
-    interp:     list[str] = field(default_factory=list)
+    gaintable:  list[str] = dc_field(default_factory=list)
+    interp:     list[str] = dc_field(default_factory=list)
     calwt:      bool = True
     flagbackup: bool = True
 
@@ -381,7 +435,7 @@ class ReductionOperation:
     back into the appropriate DTO using the ``operation`` key.
     """
     operation: str
-    params:    dict[str, Any] = field(default_factory=dict)
+    params:    dict[str, Any] = dc_field(default_factory=dict)
 
 
 @dataclass

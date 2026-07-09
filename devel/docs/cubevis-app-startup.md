@@ -14,6 +14,14 @@ A `cubevis` application is a class with two required elements: an `__init__` tha
 constructs the backend and builds all Bokeh widgets, and a `__call__` that wires them
 together and returns a `(app_context, task)` tuple to the adapter layer.
 
+> **Adapter vs. self-contained class.**  The general pattern described here separates
+> the developer-implemented class from a thin adapter (`MyApp`) that provides the
+> user-facing `__call__` and `notebook()` entry points.  An application may instead
+> collapse these into a single class, with the adapter logic living directly on methods
+> like `show()`.  Either approach is valid; the separation is most useful when a CASA
+> task wrapper or mustache-generated layer needs to sit between the user and the
+> implementation.
+
 ### 1.1 `__init__(self, *app_args)`
 
 Initialize everything needed to display and run the application:
@@ -90,19 +98,18 @@ class VisibilityPlotter:
 
 ### 1.2 Opening communication channels
 
-Before `_task_server` runs, any `Comm` channels needed by the application must be
-opened and their Python callbacks registered.  The only architectural requirement is
-that this happens inside `__call__` before the `exe.Task` is handed to the adapter.
-How it is organized internally — whether inlined, delegated to a helper method, or
-split across several methods — is up to the developer.  In `iclean` this is done in a
-method called `_init_pipes`; the name carries no special meaning to the framework.
+Before the server coroutine runs, any `Comm` channels needed by the application must
+be opened and their Python callbacks registered.  The only architectural requirement
+is that this happens before `exe.Task` starts executing — the natural place is inside
+`__call__`, either inlined or delegated to a helper method.  The name of any helper
+carries no special meaning to the framework.
 
 The guard against double-initialization (`if self._pipe['control'] is None`) is worth
 including if `__call__` may be invoked more than once — for example when a user
 re-runs a notebook cell — since pipes must not be opened twice.
 
 ```python
-    # Example: opening channels inline in __call__, or in a helper method
+    # Example: opening channels in __call__ via a helper
     def _open_channels(self):
         if self._pipe['control'] is None:
             self._pipe['control'] = self._comm_mgr.open(
@@ -634,3 +641,129 @@ that are *not* required by the general pattern:
 - **`_setup()` / `__reset()`**: bookkeeping for re-entrant calls and Bokeh output
   reset between uses.  Worth considering for any app that might be invoked multiple
   times in the same notebook session.
+
+---
+
+## Appendix A — Notebook display and `MutualExclusionManager`
+
+This section is relevant only when an application is displayed inside a Jupyter
+notebook via `Showable`.
+
+### A.1 The three display paths
+
+When a `Showable` is returned to a notebook cell, Bokeh supports three ways for the
+user to trigger display:
+
+| Path | How invoked | `Showable` entry point |
+|---|---|---|
+| Custom show | `app.show()` | `Showable.show()` |
+| Bokeh show | `bokeh.plotting.show(app)` | `Showable.document` setter |
+| Cell evaluation | `app` as the last expression in a cell | `Showable._repr_html_` / serialization |
+
+All three start the backend, but they do so via different code paths inside `Showable`.
+Mixing two of them for the *same* `Showable` instance corrupts the Bokeh notebook
+display, because Bokeh only expects a model to be serialized to the document once.
+
+### A.2 `MutualExclusionManager` and `DisplayContext`
+
+`MutualExclusionManager` (from `cubevis.utils`) is a small guard object that raises an
+informative error if a second display path is attempted after the first has already
+been used.  It is constructed with a `name` (used in error messages) and a
+`valid_modes` dict mapping mode names to the error message shown when that mode is
+violated:
+
+```python
+from cubevis.utils import MutualExclusionManager
+
+exclusion_mgr = MutualExclusionManager(
+    name="my app",
+    valid_modes={
+        "cell-custom-show": "❌ Cannot use bokeh.plotting.show() after app.show() ...",
+        "cell-bokeh-show":  "❌ Cannot use app.show() after bokeh.plotting.show() ...",
+    }
+)
+```
+
+`DisplayContext` is a thin helper that routes `Showable`'s two display-path hooks to
+`MutualExclusionManager.set_mode()`:
+
+```python
+class DisplayContext:
+    def __init__(self, exclusion_manager):
+        self.exclusion_manager = exclusion_manager
+        self._custom_show_called = False
+
+    def on_show(self):
+        """Called when app.show() is used."""
+        self._custom_show_called = True
+        self.exclusion_manager.set_mode('cell-custom-show')
+
+    def on_to_serializable(self):
+        """Called when bokeh.plotting.show() / cell evaluation serializes the model."""
+        if not self._custom_show_called:
+            self.exclusion_manager.set_mode('cell-bokeh-show')
+```
+
+A `DisplayContext` instance is passed to `Showable` as `display_context=display_ctx`
+at construction.  `Showable` calls `display_ctx.on_show()` when `.show()` is invoked
+and `display_ctx.on_to_serializable()` when the model is serialized via the other
+paths.
+
+### A.3 When to include this
+
+`MutualExclusionManager` / `DisplayContext` are only needed in the notebook adapter
+path.  In `iclean` they live in `InteractiveCleanNotebook.__call__`.  For a
+self-contained class like `VisibilityPlotter` that provides its own `show()` method,
+the same guards belong in `show()`.  CLI-only applications do not need them at all.
+
+---
+
+## Appendix B — Layer synchronisation with `sync_layers`
+
+`cubevis` applications that need to expose the same interface through multiple parallel
+layers (a CASA task wrapper, a shell interface, a script-layer entry point) can use the
+`sync_layers` build-time code-generation tool found at `scripts/sync_layers/`.
+
+### B.1 What it does
+
+`sync_layers` treats one Python class as the *canonical source of truth* — typically
+the developer-implemented class (e.g. `VisibilityPlotter`).  It scrapes the class's
+`__init__` (and any other nominated methods) using the AST to extract parameter names,
+type annotations, defaults, and per-parameter docstring prose, then expands Jinja2
+templates to generate the parallel layers.  Every generated file is marked read-only
+and carries a `generated by sync_layers` header.
+
+Running the tool:
+
+```bash
+python3 -m scripts.sync_layers            # regenerate all layers
+python3 -m scripts.sync_layers --check    # CI mode: exit 1 if any file would change
+```
+
+The `--check` flag is suitable for a CI step that catches layers not regenerated after
+a signature change.
+
+### B.2 Key configuration concepts
+
+Configuration lives in `scripts/sync_layers/project_layers.yaml`.  The two most
+important modifier concepts are:
+
+**`hidden_args`** — parameters that remain in the user-facing signature (and are
+logged, saved/restored via `tget`/`tput`, etc.) but are suppressed from the `inp()`
+display in the CASA shell layer.  Use this for expert or internal parameters.
+
+**`layer_args`** — parameters that are *owned by the layer*, not the user.  They are
+excluded from user-facing signatures entirely and injected by the layer itself via a
+Python expression.  Use this for things like execution contexts or session tokens that
+the layer supplies internally.
+
+### B.3 Relationship to `VisibilityPlotter`
+
+`VisibilityPlotter.__init__` is the canonical source.  The `backend` parameter is
+nominated as a `hidden_args` entry (present but not shown in `inp()`), while
+`remote_endpoint` is a `layer_args` entry in the CASA task layer (the layer injects
+`None` for it; the user never sees it in the task interface).  The Jinja2 template
+`casatask_layer.py.j2` generates the CASA task wrapper from this source.
+
+For full documentation of all template variables, filters, and override mechanisms,
+see `scripts/sync_layers/README.md` in the project root.

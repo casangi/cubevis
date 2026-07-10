@@ -16,6 +16,7 @@
 6. [Implementation phases and punch list](#6-implementation-phases-and-punch-list)
 7. [Appendix A — API stubs](#appendix-a--api-stubs)
 8. [Appendix B — File inventory and change summary](#appendix-b--file-inventory-and-change-summary)
+9. [Appendix C — Items for further research](#appendix-c--items-for-further-research)
 
 ---
 
@@ -877,7 +878,7 @@ layout that Phase 2 depends on:
 | G-8 | Synchronized cursor, Tier 2 (cross-axis): throttled JS `MouseMove` → CommMgr j2p message → `probe_raster_pixel`/`probe_scatter_pixel` row resolution → p2j coordinate push → highlight-marker `ColumnDataSource` update in the other panel | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
 | G-9 | `uint16`/`uint32` image bit depth option, deferred from Phase 0 CM-series — internal encoding refinement on top of `eq_hist` scaling | `visibility_raster.py`, `visibility_scatter.py` |
 | G-10 | User-selectable render resolution/quality tradeoff (relevant for high-latency deployments e.g. Colab) | `visibility_plotter.py` |
-| G-11 | Draggable histogram `Span` overlay for `colormap_controls()` (interactive_clean-style red-line drag), on top of the CM-4 numeric-input widget | `visibility_raster.py`, `visibility_scatter.py` |
+| G-11 | **Shared colormap widget** — extract the complete `colormap_adjust()` widget from interactive_clean (histogram figure with draggable `EditSpan` min/max handles, scaling dropdown, equation `Div`, reset tool) into `cubevis/toolbox/colormap_widget.py` as a standalone, reusable Bokeh layout fragment. Wire into `VisibilityPlotter` sidebar as the colormap section, replacing the CM-4 `colormap_controls()` stubs. Wire back into interactive_clean so it imports from the shared module rather than owning its own copy. The `colormap_scaling.py` transfer functions (Phase 0) remain as the shared math layer used by both the widget and any programmatic callers. | `colormap_widget.py` *(new, shared)*; `visibility_raster.py`, `visibility_scatter.py`, `visibility_plotter.py`, `iclean` |
 | T-1 | `data_group` test cases for `MSv4Backend` | `tests/` |
 | T-2 | Synthetic xradio-native DataTree structure tests | `tests/` |
 | T-3 | Single-dish test coverage | `tests/` |
@@ -887,6 +888,10 @@ layout that Phase 2 depends on:
 | X-3 | **CASR-385** User-specified colours in colour-by-metadata mode: colour picker widget per category value (SPW, antenna, baseline); supplements the automatic categorical palette in S-1 | `visibility_plotter.py`, `visibility_scatter.py` |
 | X-4 | **CASR-385** Performance benchmarks: explicit test cases at ngVLA scale (200+ antennas, 8000 channels, 1-second integrations, 10 SPWs) and ALMA/VLA scale (50+ antennas, 1000 channels); used to validate Datashader pipeline and `is_decimated` gate | `tests/` |
 | X-5 | **CASR-385** Elevate `RemoteReductionContext` from stub to working implementation: serialise `ReductionOperation`, dispatch to remote worker (Dask or HTTP), return real `Future`; required for ngVLA TB-scale datasets where data cannot be local | `remote_reduction_context.py` |
+| Y-1 | **CASR-385** Autoflag "calculate+display" mode: run an autoflag algorithm (e.g. `flagdata(mode='tfcrop', action='calculate')`), receive proposed flags, display them as a distinct overlay colour (e.g. orange, distinct from the committed-flag red), allow the astronomer to accept or reject before any disk write. Requires a new `ReductionContext.calculate_flags()` method returning proposed `FlagDelta` entries that flow into a separate "proposed" layer in `FlagDB` without entering the pending-commit queue. | `reduction_context.py`, `flag_db.py`, `visibility_raster.py`, `visibility_scatter.py`, `visibility_plotter.py` |
+| Y-2 | **CASR-385** `Axis.RESIDUAL`: DATA − MODEL and CORRECTED − MODEL as displayable quantities in both raster and scatter, computed by the backend from the existing data column infrastructure | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
+| Y-3 | **CASR-385** Frequency frame conversion (topo → LSRK/BARY/etc.) and velocity axis: display-time approximation analogous to plotms `transform` / `freqframe` / `restfreq` / `veldef` parameters; uses casacore `VelocityMachine` for MSv2 and equivalent MSv4 machinery. New `TransformSpec` dataclass to carry `freqframe`, `restfreq`, `veldef` alongside `SelectionSpec`. Note: on-the-fly frame conversion at display time is not as accurate as `cvel`/`mstransform` regridding; this limitation should be documented in the UI. | `axes.py` (`Axis.VELOCITY`), `msv2_backend.py`, `msv4_backend.py`, new `transform_spec.py` |
+| Y-4 | **CASR-385** Histogram view panel: standalone amplitude or flag-fraction distribution display as an optional third panel in `VisibilityPlotter`, sharing the `histogram()` data already computed by `VisibilityRaster`/`VisibilityScatter`; candidate view type raised in requirements but no confirmed use case yet — see Appendix C | `visibility_plotter.py` |
 
 ---
 
@@ -1095,3 +1100,161 @@ class RemoteReductionContext(ReductionContext):
 | `visibility_plot.py` | Base class is stable; no changes needed for Phase 0 |
 | `axes.py` | Stable until Phase 4 (closure phase) |
 | `selection.py` | Stable until Phase 2 (UV range) |
+
+---
+
+## Appendix C — Items for Further Research
+
+This appendix captures requirements and ideas that are **out of scope for the
+current implementation** but are worth tracking so they are not lost. Each
+item notes the source and what would be needed to make it actionable.
+
+### C.1 Histogram view panel
+
+**Source:** CASR-385 requirements document ("Histograms? Any use-case?")
+
+**Description:** A standalone amplitude or flag-fraction distribution panel,
+displayed alongside or instead of the raster/scatter panels. Amplitude
+histograms could help identify RFI thresholds before flagging; flag-fraction
+histograms could show how flagging is distributed across SPWs or antennas.
+
+**Current status:** The `histogram()` method on `VisibilityRaster` and
+`VisibilityScatter` (Phase 0, CM-5) already computes the binned aggregation
+data. The colormap widget (G-11) will display this as a small histogram
+alongside the scaling controls. A *standalone* histogram panel is a separate,
+larger UI element. No confirmed use case from astronomers yet.
+
+**What would make it actionable:** A concrete astronomer workflow that the
+raster/scatter view does not serve well, where a standalone distribution view
+is the natural tool. The `histogram()` data is already available; the question
+is whether the panel is worth the layout real estate.
+
+---
+
+### C.2 3D visibility views
+
+**Source:** CASR-385 requirements document ("3D views? Any use-case?")
+
+**Description:** Three-dimensional visualisation of visibility data — e.g. UV
+coverage plotted in 3D, or amplitude as a function of two spatial/frequency
+axes simultaneously.
+
+**Current status:** Not planned and no confirmed use case has been identified.
+The current architecture (Datashader → 2D RGBA image → Bokeh `image_rgba`)
+is inherently 2D. A 3D view would require a different rendering stack (e.g.
+three.js, plotly, or vispy).
+
+**What would make it actionable:** A specific science question that cannot be
+answered by any combination of the existing 2D raster and scatter views; a
+volunteer to design and implement the rendering layer; and a decision about
+whether the 3D view lives in `VisibilityPlotter` or as a separate application.
+
+---
+
+### C.3 Standalone application (Electron or equivalent)
+
+**Source:** CASR-385 requirements document (front-end options)
+
+**Description:** A packaged desktop application for rendering and user
+interaction, independent of a Jupyter notebook session.
+
+**Current status:** Not planned. `VisibilityPlotter` runs in a Jupyter
+notebook or browser tab via the existing iclean/casagui infrastructure.
+The architecture does not preclude this — the Bokeh layout is already
+self-contained — but packaging it as an Electron app (or similar) is a
+separate engineering effort.
+
+**What would make it actionable:** A decision that notebook/browser delivery
+is insufficient for a significant user segment; a resource allocation for the
+packaging and distribution work; and a resolution of the CommMgr/Python kernel
+communication model for a non-notebook environment (the j2p/p2j transport
+currently assumes a live IPython kernel).
+
+---
+
+### C.4 matplotlib / scriptable rendering back-end
+
+**Source:** CASR-385 requirements document ("Scriptability to include a
+matplotlib rendering option")
+
+**Description:** Non-interactive PNG/PDF output generated by a matplotlib
+back-end rather than Bokeh, for pipeline or scripting use where no browser is
+available. Matplotlib output is more easily customizable by astronomers than
+Bokeh's `export_png`.
+
+**Current status:** G-5 covers PNG export via Bokeh's own `export_png`, which
+requires a headless browser (via selenium or playwright). A true matplotlib
+back-end would require a parallel rendering path through the same backends
+(`query_raster`, `query_columns`) but a different output layer.
+
+**What would make it actionable:** A concrete pipeline use case where Bokeh's
+`export_png` is insufficient (e.g. publication-quality figure customization,
+environments without a headless browser); and a design decision about whether
+the matplotlib path shares the `VisibilityRaster`/`VisibilityScatter` classes
+or is a separate thin layer on top of the backend query API.
+
+---
+
+### C.5 Vector averaging vs scalar averaging — documentation gap
+
+**Source:** CASR-385 requirements document ("vector averaging")
+
+**Description:** The distinction between scalar averaging (average |V|) and
+vector averaging (average Re, Im, then take |V|) is captured in the `scalar`
+field of `AveragingSpec` (V-1) but is not explicitly documented anywhere in
+the user-facing interface design. The default in plotms is vector averaging;
+scalar averaging is important for detecting faint sources.
+
+**Current status:** The field exists in the data model but the UI design
+(sidebar averaging controls) does not yet specify how this is presented to
+the astronomer, and the docstrings in `AveragingSpec` should note the
+scientific implication of each choice.
+
+**What would make it actionable:** Add a "scalar averaging" checkbox to the
+averaging sidebar section with a tooltip explaining the distinction; update
+the `AveragingSpec` docstring. Small effort — candidate for Phase 3 polish
+rather than a new punch list item.
+
+---
+
+### C.6 Phase shift / phase center shift
+
+**Source:** CASR-385 requirements document (derived quantities: "phaseshift")
+
+**Description:** plotms supports an approximate phase center shift (`shift`
+parameter, in arcsec). This is useful for re-centering a source before
+inspecting visibilities. An approximate shift is a multiplication of the
+visibilities by a phase ramp; an accurate shift requires `mstransform`.
+
+**Current status:** Not in the plan. The `ReductionContext` interface has a
+`split()` method that could wrap `mstransform` for accurate shifting, but an
+approximate display-time shift (like plotms provides) has no current analog.
+
+**What would make it actionable:** A confirmed astronomer use case for
+display-time phase shifting during flagging inspection (as opposed to
+permanent shifting via `mstransform`); and a decision about approximate vs
+accurate implementation, noting the same plotms caveat about approximation
+accuracy.
+
+---
+
+### C.7 Weighted visibilities and statistical quantities
+
+**Source:** CASR-385 requirements document (derived quantities: "weighted
+visibilities, hour-angle and elevation")
+
+**Description:** Weighted visibilities (data × weight), hour-angle, and
+elevation as displayable axes. Hour-angle and elevation are particularly useful
+for diagnosing elevation-dependent gain issues and shadowing.
+
+**Current status:** `Axis.WEIGHT` and `Axis.WEIGHT_SPECTRUM` exist in the
+axes enum. `Axis.HOUR_ANGLE`, `Axis.AZIMUTH`, `Axis.ELEVATION`, and
+`Axis.PARALLACTIC_ANGLE` also exist. The backend query path (`query_columns`)
+would need to compute these from the MS antenna positions and observation
+times, which requires casacore coordinate machinery for MSv2 or equivalent
+for MSv4.
+
+**What would make it actionable:** Backend implementation of the coordinate
+computation (a moderate effort, casacore-dependent for MSv2); and confirmation
+that these axes are needed for the flagging workflow rather than just for
+diagnostic inspection (which could be served by listobs output).

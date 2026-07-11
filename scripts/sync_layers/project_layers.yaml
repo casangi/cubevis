@@ -1,0 +1,31 @@
+sources:
+  - file:  cubevis/toolbox/visplot/visibility_plotter.py
+    class: VisibilityPlotter
+    hidden_args:
+      - backend
+    layer_args:
+      remote_endpoint: None
+    short_desc_overrides:
+      mode:   'Display mode: both, raster, or scatter.'
+      preset: 'Named startup preset (vplot, radplot, waterfall).'
+    methods:
+      - __init__
+      - __call__
+      - show
+
+templates:
+  - input:  templates/casatask_layer.py.j2
+    output: cubevis/private/casatasks/visplot.py
+    vars:
+      task_name:  visplot
+      app_module: cubevis.toolbox.visplot.visibility_plotter
+      info_group: visualization, information,editing, manipulation
+      info_desc:  A plotter/interactive flagger for visibility data
+
+  - input:  templates/casashell_layer.py.j2
+    output: cubevis/private/casashell/visplot.py
+    vars:
+      task_name:  visplot
+      app_module: cubevis.toolbox.visplot.visibility_plotter
+      info_group: visualization, information,editing, manipulation
+      info_desc:  A plotter/interactive flagger for visibility data

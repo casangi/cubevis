@@ -391,11 +391,11 @@ class VisibilityPlotter:
     preset : str | None
         Named preset to apply at startup: ``"vplot"``, ``"radplot"``,
         ``"waterfall"``, or ``None``.
-    time_range : tuple | None
+    time_range : tuple[float, float] | list[float] | None
         ``(start, end)`` as ISO strings or MJD floats.
-    freq_range : tuple | None
+    freq_range : tuple[float, float] | list[float] | None
         ``(start, end)`` in Hz.
-    uvdist_range : tuple | None
+    uvdist_range : tuple[float, float] | list[float] | None
         ``(min, max)`` in metres.
     """
 
@@ -420,9 +420,9 @@ class VisibilityPlotter:
         layout:           str           = "side",
         preset:           Optional[str] = None,
         # Axis ranges
-        time_range:       Optional[tuple]  = None,
-        freq_range:       Optional[tuple]  = None,
-        uvdist_range:     Optional[tuple]  = None,
+        time_range:       tuple[float, float] | list[float] | None = None,
+        freq_range:       tuple[float, float] | list[float] | None = None,
+        uvdist_range:     tuple[float, float] | list[float] | None = None,
     ) -> None:
 
         # ------------------------------------------------------------------ #
@@ -549,14 +549,15 @@ class VisibilityPlotter:
             squash_queue=True,
             description="visibility plotter control",
         )
-        self._pipe["control"].register(self._ids["plot"], self._handle_plot)
-        self._pipe["control"].register(self._ids["done"], self._handle_done)
 
-        # Message IDs
+        # Message IDs — must be created before registering handlers
         self._ids = {
             "plot":   str(uuid4()),
             "done":   str(uuid4()),
         }
+
+        self._pipe["control"].register(self._ids["plot"], self._handle_plot)
+        self._pipe["control"].register(self._ids["done"], self._handle_done)
 
         # ------------------------------------------------------------------ #
         # Construct display widgets                                            #
@@ -947,10 +948,19 @@ class VisibilityPlotter:
     def _build_layout(self):
         """Build the full Bokeh layout: toolbar + sidebar + plot area + status.
 
-        Build order matters: status bar and sidebar must exist before the
-        toolbar because toolbar ``CustomJS`` args reference their widget
-        objects directly (``self._status_div``, ``self._field_select``, etc.).
+        Build order matters — creation sequence must satisfy all cross-references:
+
+        1. ``_pref_source`` — referenced by both ``_build_toolbar`` (layout_js)
+           and ``_build_plot_area``, so must exist before either.
+        2. ``_build_status_bar`` — creates ``_status_div`` referenced by toolbar.
+        3. ``_build_sidebar`` — creates ``_field_select``, ``_ry_select`` etc.
+           referenced by toolbar CustomJS args.
+        4. ``_build_toolbar`` — all referenced objects now exist.
+        5. ``_build_plot_area`` — attaches figures; ``_pref_source`` already set.
         """
+        # Step 1 — shared preference store (must precede toolbar and plot area)
+        self._pref_source = ColumnDataSource(data={"prefs": ["{}"]})
+
         status_bar = self._build_status_bar()
         sidebar    = self._build_sidebar()
         toolbar    = self._build_toolbar()
@@ -1406,15 +1416,15 @@ setBoxSelect(scatter_fig, cb_obj.active);
     # ---------------------------------------------------------------------- #
 
     def _build_plot_area(self):
-        """Build the flex-container div holding both figures.
+        """Build the flex-container holding both figures.
 
         Both figures are always present in the Bokeh document; visibility
         and sizing are controlled by ``CustomJS`` callbacks so no
         Python round-trip is needed for layout changes.
+
+        ``_pref_source`` is created in ``_build_layout`` before this method
+        is called, so it is already available here.
         """
-        # Preference ColumnDataSource — keyed JSON string mapping axis
-        # combinations to user-chosen layout modes.
-        self._pref_source = ColumnDataSource(data={"prefs": ["{}"]})
 
         # Linked x-axis: if both panels start with the same x dimension,
         # share a Range1d so panning one panel moves the other in sync.

@@ -37,6 +37,7 @@ from bokeh.plotting import show
 from bokeh.io import output_notebook
 from casatasks.private.imagerhelpers.input_parameters import ImagerParameters
 
+from cubevis.utils import MutualExclusionManager
 from cubevis.bokeh.models import Showable
 from cubevis.utils import find_pkg, load_pkg
 from cubevis.toolbox import InteractiveCleanUI
@@ -1885,7 +1886,34 @@ class InteractiveCleanNotebook:
         def startup( ):
             self._future = context.execute( exec_task, self._id )
 
-        display_ctx = DisplayContext(self._ui.exclusion_mgr)
+        display_ctx = DisplayContext(
+            ###
+            ### The expectation is that the "tab" option will not be used in practice because that interface is
+            ### separate from the `iclean.notebook(...)` interface which is implemented here. In other words,
+            ### the user cannot create a interactive clean instance in a notebook tab using the same object
+            ### that is returned for display within a Jupyter notebook. InteractiveClean.__call__ would be
+            ### the place that sets "tab" while InteractiveCleanNotebook (via DisplayContext above) is the
+            ### place that sets "cell-bokeh-show" and "cell-custom-show".
+            ###
+            MutualExclusionManager(
+                name="interactive clean",
+                valid_modes={
+                    "tab":              "❌ Cannot use iclean task display:\n\n" \
+                                        "Reason: bokeh.plotting.show() or iclean show method has already been\n" \
+                                        "        used for display of this class. Mixing display methods within\n" \
+                                        "        a single notebook corrupts Bokeh display within the notebook\n",
+                    "cell-bokeh-show":  "❌ Cannot use bokeh.plotting.show() display method:\n\n" \
+                                        "Reason: iclean show or task method has already been used for display\n" \
+                                        "        of this class. Mixing display methods within a single notebook\n" \
+                                        "        corrupts Bokeh display within the notebook\n",
+                    "cell-custom-show": "❌ Cannot use iclean show method:\n\n" \
+                                        "Reason: bokeh.plotting.show() or task has already been used for display\n" \
+                                        "        of this class. Mixing display methods within a single notebook\n" \
+                                        "        corrupts Bokeh display within the notebook\n",
+                }
+            )
+        )
+
         ### name is used in summary output of the Showable
         showed = Showable(
             bokeh_ui,

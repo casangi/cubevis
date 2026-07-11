@@ -691,7 +691,7 @@ comm.send('{msg_select}',
 """,
         )
 
-        box_tool = BoxSelectTool(select_every_mousemove=False)
+        box_tool = BoxSelectTool(continuous=False)
         self._fig.add_tools(box_tool)
         box_tool.js_on_event("selectiongeometry", select_js)
 

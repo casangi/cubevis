@@ -849,12 +849,13 @@ class CommMgr( Model, BokehInit ):
         except ImportError:
             pass
 
-        try:
-            from IPython import get_ipython
-            if get_ipython() is not None:
-                return 'jupyter'
-        except ImportError:
-            pass
+        # NOTE: `get_ipython() is not None` alone is NOT sufficient here —
+        # it is also true in a plain terminal `ipython` REPL, which has no
+        # kernel. is_jupyter_kernel() checks for the `.kernel` attribute
+        # that only a real notebook/kernel session has. See _environment.py.
+        from ._environment import is_jupyter_kernel
+        if is_jupyter_kernel():
+            return 'jupyter'
 
         return 'websocket'
 

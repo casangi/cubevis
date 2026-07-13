@@ -477,10 +477,10 @@ class CommsTransport(TransportBase):
                 self._last_parent_header = msg.get("parent_header", {})
                 if not self._last_parent_header:
                     try:
-                        from IPython import get_ipython as _gip2
-                        _ip3 = _gip2()
-                        if _ip3 is not None and hasattr(_ip3, 'kernel'):
-                            k = _ip3.kernel
+                        from ._environment import get_ipython_kernel_shell
+                        _shell = get_ipython_kernel_shell()
+                        if _shell is not None:
+                            k = _shell.kernel
                             if hasattr(k, '_parent_header'):
                                 self._last_parent_header = k._parent_header
                                 if hasattr(k, '_parent_ident'):
@@ -525,9 +525,9 @@ class CommsTransport(TransportBase):
                             # but without a valid context Colab may drop eval_js calls.
                             _ph_d = getattr(_self, '_colab_bridge_parents', {})
                             try:
-                                from IPython import get_ipython as _gip_d
-                                _ip_d = _gip_d()
-                                _k_d = _ip_d.kernel if (_ip_d and hasattr(_ip_d, 'kernel')) else None
+                                from ._environment import get_ipython_kernel_shell
+                                _shell_d = get_ipython_kernel_shell()
+                                _k_d = _shell_d.kernel if _shell_d is not None else None
                                 if _k_d is not None and _ph_d and hasattr(_k_d, '_parents'):
                                     _k_d._parents.clear()
                                     _k_d._parents.update(_ph_d)
@@ -627,10 +627,10 @@ class CommsTransport(TransportBase):
         # one from the previous run.
         if self._is_colab():
             try:
-                from IPython import get_ipython as _gip_open
-                _ip_open = _gip_open()
-                if _ip_open is not None and hasattr(_ip_open, 'kernel'):
-                    _k_open = _ip_open.kernel
+                from ._environment import get_ipython_kernel_shell
+                _shell_open = get_ipython_kernel_shell()
+                if _shell_open is not None:
+                    _k_open = _shell_open.kernel
                     if hasattr(_k_open, '_parents') and isinstance(_k_open._parents, dict):
                         self._colab_bridge_parents = dict(_k_open._parents)
 
@@ -711,10 +711,10 @@ class CommsTransport(TransportBase):
 
         if self._is_colab():
             try:
-                from IPython import get_ipython as _gip_br
-                _ip_br = _gip_br()
-                if _ip_br and hasattr(_ip_br, 'kernel'):
-                    _k_br = _ip_br.kernel
+                from ._environment import get_ipython_kernel_shell
+                _shell_br = get_ipython_kernel_shell()
+                if _shell_br is not None:
+                    _k_br = _shell_br.kernel
                     if hasattr(_k_br, '_parents') and isinstance(_k_br._parents, dict):
                         # Using dict() creates a shallow copy, which is good practice here
                         self._colab_bridge_parents = dict(_k_br._parents)
@@ -1036,15 +1036,31 @@ class CommsTransport(TransportBase):
             except Exception as e:
                 logger.warning(f"CommsTransport: comm target registration failed: {e}")
         else:
-            try:
-                from IPython import get_ipython
-                shell = get_ipython()
-                if shell is not None:
+            from ._environment import get_ipython_kernel_shell
+            shell = get_ipython_kernel_shell()
+            if shell is not None:
+                try:
                     shell.kernel.comm_manager.register_target(
                         self._comm_mgr_id, self._on_comm_open
                     )
-            except Exception as e:
-                logger.warning(f"CommsTransport: comm target registration failed: {e}")
+                except Exception as e:
+                    logger.warning(f"CommsTransport: comm target registration failed: {e}")
+            else:
+                # This previously fell through to `shell.kernel.comm_manager...`
+                # unguarded, so in a plain `ipython` terminal REPL (a shell
+                # with no `.kernel`) it raised AttributeError, was swallowed
+                # by the broad `except Exception`, and logged as an
+                # indistinguishable one-line warning. Made explicit here so
+                # this failure mode is loud rather than looking like a
+                # generic, unexplained registration failure.
+                logger.warning(
+                    "CommsTransport: no Jupyter/Colab kernel available — "
+                    "cannot register comm target %s. This transport requires "
+                    "a notebook/kernel session (JupyterLab, Classic Notebook, "
+                    "or Colab); a plain `ipython` REPL or `python` "
+                    "interpreter has no kernel to register against.",
+                    self._comm_mgr_id,
+                )
 
         # Wrap the bridge in an ipywidgets.Output so it renders in its own
         # sandboxed iframe even when display_bridge() is called from the same
@@ -1270,9 +1286,9 @@ class CommsTransport(TransportBase):
             def _do_teardown():
                 try:
                     from google.colab import output as _co
-                    from IPython import get_ipython as _gip_c
-                    _ip_c = _gip_c()
-                    _k_c  = _ip_c.kernel if (_ip_c and hasattr(_ip_c, 'kernel')) else None
+                    from ._environment import get_ipython_kernel_shell
+                    _shell_c = get_ipython_kernel_shell()
+                    _k_c  = _shell_c.kernel if _shell_c is not None else None
                     if _k_c is not None and _ph_c and hasattr(_k_c, '_parents'):
                         _k_c._parents.clear()
                         _k_c._parents.update(_ph_c)

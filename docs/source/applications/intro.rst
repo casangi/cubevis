@@ -17,4 +17,5 @@ that is included in CASA.
    :maxdepth: 2
 
    interactive_clean
+   visplot
    ms_raster

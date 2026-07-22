@@ -255,7 +255,7 @@ class CreateMask:
             self._image_bitmask_controls = imdetails['gui']['cube'].bitmask_ctrl( reuse=self._image_bitmask_controls, button_type='light' )
 
 
-            ,
+            ### init_script set later to allow access to self._fig['status']
             imdetails['gui']['cube'].init_script = None if initialization_registered else \
                 CustomJS( args={ 'status': self._fig['status'] },
                           ### app state is found based on one of the GUI's models

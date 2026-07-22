@@ -1,4 +1,4 @@
-.. casagui documentation master file, created by
+.. cubevis documentation master file, created by
    sphinx-quickstart on Tue Jun 29 11:40:03 2021.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
@@ -20,7 +20,7 @@ traditional, GUI toolkit based development.
    :maxdepth: 2
    :caption: Contents:
 
-   casagui
+   cubevis
 
 
 Indices and tables

@@ -1,10 +1,10 @@
-casagui.bokeh.utils package
+cubevis.bokeh.utils package
 ===========================
 
 Module contents
 ---------------
 
-.. automodule:: casagui.bokeh.utils
+.. automodule:: cubevis.bokeh.utils
    :members:
    :undoc-members:
    :show-inheritance:

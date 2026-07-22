@@ -11,7 +11,7 @@ it is important to layout the system level view of this boundary to prevent choi
 made in the system design of other parts of the CASA and NRAO ecosystem.
 
 For this discussion, only two execution modes will be considered. The "Usage Settings" in the introduction describe
-the user context where casagui operates. The "Execution Modes" are less abstract than the "Usage Settings".
+the user context where cubevis operates. The "Execution Modes" are less abstract than the "Usage Settings".
 This lower level is discussed here both to explain the concepts as well as identify constraints that are
 implied by the implementaton of these modes.
 
@@ -55,11 +55,11 @@ messages sent to the remote kernel. These messages will then run the process usi
 interfaces provided by CASA and other packages as was used for local execution.
 
 These two execution models are sufficient as the basis for the usage settings described
-in the casagui system document. A variant of these execution models may also be sufficent
+in the cubevis system document. A variant of these execution models may also be sufficent
 for a website implementation. The GUI elements created with :xref:`bokeh` are compatible
 with display within a website. The remote :xref:`jupyterkernel` execution is compatible
 with processing initiated from a website. The details of the execution model between a
-public website portal and the backend execution model lies outside of the CASA/casagui
+public website portal and the backend execution model lies outside of the CASA/cubevis
 context.
 
 Implications

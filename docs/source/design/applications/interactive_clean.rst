@@ -161,7 +161,7 @@ The *interactive clean app* is the first test of this new approach. It
 provides a simple GUI interface to
 `tclean <https://casadocs.readthedocs.io/en/latest/api/tt/casatasks.imaging.tclean.html>`_.
 To implement this, it uses
-`CubeMask <https://casagui.readthedocs.io/en/latest/design/components/cube_mask.html>`_
+`CubeMask <https://cubevis.readthedocs.io/en/latest/design/components/cube_mask.html>`_
 component to provide most of the interaction, and adds extra widgets to
 control :code:`tclean` and display convergence and statistics information.
 
@@ -197,7 +197,7 @@ the corresponding :code:`tclean` parameters:
 * :code:`threshold` - stopping threshold (number in units of Jy or string)
 
 The *channel slider* is provided by the
-`CubeMask <https://casagui.readthedocs.io/en/latest/design/components/cube_mask.html>`_
+`CubeMask <https://cubevis.readthedocs.io/en/latest/design/components/cube_mask.html>`_
 component. It allows for changing the the channel being displayed. Changing to a different
 channel results in all of the GUI elements being updated. The :code:`goto channel` text
 dialog provides a way to go to a specific channel by entering the channel number and
@@ -240,7 +240,7 @@ changes the displayed channel.
 Spectrum Display
 ````````````````
 Like the *channel slider*, the *spectrum display* is provided by the
-`CubeMask <https://casagui.readthedocs.io/en/latest/design/components/cube_mask.html>`_
+`CubeMask <https://cubevis.readthedocs.io/en/latest/design/components/cube_mask.html>`_
 component:
 
 .. image:: iclean-spectrum-display.png
@@ -262,19 +262,19 @@ Like the new :code:`MakeMask` app, the :code:`InteractiveClean` app uses the
 centered around image cubes. These widgets can be mixed into different
 applications.
 
-The :code:`InteractiveClean` application is available as part of the :code:`casagui`
+The :code:`InteractiveClean` application is available as part of the :code:`cubevis`
 Python package. This package is
-`available from PyPI <https://pypi.org/project/casagui/>`_.
+`available from PyPI <https://pypi.org/project/cubevis/>`_.
 It can be installed like::
 
-  bash$ pip install casagui
+  bash$ pip install cubevis
 
 To run :code:`InteractiveClean` the :code:`casatasks` package must also be installed.
 
 Once installed, the :code:`InteractiveClean` application can be imported and run from
 the user's Python session like::
 
-  >>> from casagui.apps import InteractiveClean
+  >>> from cubevis.apps import InteractiveClean
   >>> InteractiveClean( vis=ms_path, imagename=img, imsize=512, cell='12.0arcsec',
                         specmode='cube', interpolation='nearest', nchan=5, start='1.0GHz',
                         width='0.2GHz', pblimit=-1e-05, deconvolver='hogbom', threshold='0.001Jy',

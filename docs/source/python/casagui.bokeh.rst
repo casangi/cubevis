@@ -1,4 +1,4 @@
-casagui.bokeh package
+cubevis.bokeh package
 =====================
 
 Subpackages
@@ -7,16 +7,16 @@ Subpackages
 .. toctree::
    :maxdepth: 4
 
-   casagui.bokeh.sources
-   casagui.bokeh.utils
+   cubevis.bokeh.sources
+   cubevis.bokeh.utils
 
 Submodules
 ----------
 
-casagui.bokeh.state module
+cubevis.bokeh.state module
 --------------------------
 
-.. automodule:: casagui.bokeh.state
+.. automodule:: cubevis.bokeh.state
    :members:
    :undoc-members:
    :show-inheritance:
@@ -24,7 +24,7 @@ casagui.bokeh.state module
 Module contents
 ---------------
 
-.. automodule:: casagui.bokeh
+.. automodule:: cubevis.bokeh
    :members:
    :undoc-members:
    :show-inheritance:

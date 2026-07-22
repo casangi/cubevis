@@ -20,7 +20,7 @@ sys.path.insert(0, abspath(join(dirname(__file__),'..','..')))         # For aut
 
 # -- Project information -----------------------------------------------------
 
-project = 'casagui'
+project = 'cubevis'
 copyright = '2021,2022,2023,2024 Associated Universities, Inc. Washington DC, USA.'
 author = 'CASA visualization team'
 
@@ -56,7 +56,7 @@ extensions = [ 'sphinx.ext.autodoc',
              ]
 
 # configure autoapi
-autoapi_dirs = ['../../casagui' ]
+autoapi_dirs = ['../../cubevis' ]
 autoapi_add_toctree_entry = False
 autoapi_generate_api_docs = True
 autoapi_root = '_api/autoapi'

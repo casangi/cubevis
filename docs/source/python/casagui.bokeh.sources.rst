@@ -1,10 +1,10 @@
-casagui.bokeh.sources package
+cubevis.bokeh.sources package
 =============================
 
 Module contents
 ---------------
 
-.. automodule:: casagui.bokeh.sources
+.. automodule:: cubevis.bokeh.sources
    :members:
    :undoc-members:
    :show-inheritance:

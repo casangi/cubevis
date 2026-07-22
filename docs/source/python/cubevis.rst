@@ -1,4 +1,4 @@
-casagui package
+cubevis package
 ===============
 
 Subpackages
@@ -7,15 +7,15 @@ Subpackages
 .. toctree::
    :maxdepth: 6
 
-   casagui.bokeh
+   cubevis.bokeh
 
 Submodules
 ----------
 
-casagui.utils module
+cubevis.utils module
 --------------------
 
-.. automodule:: casagui.utils
+.. automodule:: cubevis.utils
    :members:
    :undoc-members:
    :show-inheritance:
@@ -23,7 +23,7 @@ casagui.utils module
 Module contents
 ---------------
 
-.. automodule:: casagui
+.. automodule:: cubevis
    :members:
    :undoc-members:
    :show-inheritance:

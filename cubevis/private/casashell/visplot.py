@@ -94,6 +94,7 @@ def _visplot_t(
         uvdist_range = uvdist_range,
         # layer-supplied arguments
         remote_endpoint = None,
+        enable_flagging = True,
     )
     return _app()
 
@@ -110,8 +111,8 @@ class _visplot:
     ps : str | None
         Path to an MSv4 / Processing Set Zarr store.
     backend : str
-        Reduction backend selection.  One of ``"auto"``, ``"casa6"``,
-        ``"radps"``, ``"remote"``, ``"null"``.  Default ``"auto"``.
+        Reduction backend: ``"auto"``, ``"casa6"``, ``"radps"``,
+        ``"remote"``, or ``"null"``.  Default ``"auto"``.
     remote_endpoint : str | None
         Required only when ``backend="remote"``.
     field : str
@@ -119,14 +120,13 @@ class _visplot:
     spw : str
         Comma-separated SPW indices (``"0,1,2,3"``).  Default: all.
     antenna : str
-        MSSelection antenna string.  Default: all.  (Stored; not yet
-        wired to the backend in the preview.)
+        MSSelection antenna string.  (Stored; not yet wired in preview.)
     scan : str
-        MSSelection scan string.  Default: all.  (Stored; not yet wired.)
+        MSSelection scan string.  (Stored; not yet wired.)
     timerange : str
-        MSSelection time-range string.  Default: all.  (Stored; not wired.)
+        MSSelection time-range string.  (Stored; not wired.)
     uvrange : str
-        UV range string (``"0~50klambda"``).  Default: all.  (Stored; not wired.)
+        UV range string.  (Stored; not wired.)
     correlation : str
         Comma-separated correlation labels (``"XX,YY"``).  Default: all.
     datacolumn : str
@@ -136,10 +136,9 @@ class _visplot:
     layout : str
         Initial layout: ``"side"`` (side by side) or ``"over"`` (over/under).
     preset : str | None
-        Named preset to apply at startup: ``"vplot"``, ``"radplot"``,
-        ``"waterfall"``, or ``None``.
+        Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
     time_range : tuple[float, float] | list[float] | None
-        ``(start, end)`` as ISO strings or MJD floats.
+        ``(start, end)`` as MJD floats.
     freq_range : tuple[float, float] | list[float] | None
         ``(start, end)`` in Hz.
     uvdist_range : tuple[float, float] | list[float] | None
@@ -153,19 +152,19 @@ class _visplot:
     _arg_description = {
         'ms': 'Path to an MSv2 measurement set.',
         'ps': 'Path to an MSv4 / Processing Set Zarr store.',
-        'backend': 'Reduction backend selection.',
+        'backend': 'Reduction backend: ``"auto"``, ``"casa6"``, ``"radps"``, ``"remote"``, or ``"null"``.',
         'field': 'Field name or integer index string.',
         'spw': 'Comma-separated SPW indices (``"0,1,2,3"``).',
         'antenna': 'MSSelection antenna string.',
         'scan': 'MSSelection scan string.',
         'timerange': 'MSSelection time-range string.',
-        'uvrange': 'UV range string (``"0~50klambda"``).',
+        'uvrange': 'UV range string.',
         'correlation': 'Comma-separated correlation labels (``"XX,YY"``).',
         'datacolumn': 'Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.',
         'mode': 'Display mode: both, raster, or scatter.',
         'layout': 'Initial layout: ``"side"`` (side by side) or ``"over"`` (over/under).',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
-        'time_range': '``(start, end)`` as ISO strings or MJD floats.',
+        'time_range': '``(start, end)`` as MJD floats.',
         'freq_range': '``(start, end)`` in Hz.',
         'uvdist_range': '``(min, max)`` in metres.',
     }

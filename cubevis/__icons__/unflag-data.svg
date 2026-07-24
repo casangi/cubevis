@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="1000" height="1000">
+  <!-- Shorter, Sturdier Brown Flagpole Shadow/Detail -->
+  <line x1="22" y1="20" x2="22" y2="85" stroke="#5C2E0B" stroke-width="6" stroke-linecap="round" />
+  
+  <!-- Flagpole Main -->
+  <line x1="22" y1="20" x2="22" y2="85" stroke="#8B4513" stroke-width="4" stroke-linecap="round" />
+  <circle cx="22" cy="20" r="4.5" fill="#8B4513" />
+
+  <!-- Enlarged Waving White Flag Body with High-Contrast Black Outline -->
+  <path d="M 23,26 
+           C 44,19  57,34  87,28 
+           L 87,66 
+           C 57,72  44,57  23,64 
+           Z" 
+        fill="#FFFFFF" 
+        stroke="#1A1A1A" 
+        stroke-width="3.5" 
+        stroke-linejoin="round" />
+</svg>

@@ -450,7 +450,7 @@ class VisibilityScatter(VisibilityPlot):
         return f"{labels}  vs  {self._x_dim.label}"
 
     def _state_data_extra(self) -> dict:
-        """Add per-layer alpha and scaling values to _state_source."""
+        """Add per-layer alpha/scaling values plus agg_n_x/agg_n_y."""
         extra: dict = {}
         for i, lyr in enumerate(self._layers):
             extra[f"layer_alpha_{i}"] = [lyr.alpha]
@@ -460,6 +460,24 @@ class VisibilityScatter(VisibilityPlot):
             extra[f"layer_scaling_gamma_{i}"] = [lyr.scaling_gamma]
         extra["n_layers"]   = [len(self._layers)]
         extra["color_mode"] = [self._color_mode]
+
+        # agg_n_x/agg_n_y: canvas resolution at the *full* data extent —
+        # same field names as VisibilityRaster so FlagTool's existing
+        # zoom-to-1:1 math (flag_tool.ts) works unchanged here too. Unlike
+        # raster, scatter points are exact (not binned/decimated), so this
+        # isn't about resolving averaged data — it's the same
+        # sparse-data canvas-shrink logic _shade_all_layers uses
+        # (_compute_canvas_size), which means "1:1" for scatter
+        # effectively means "zoomed in enough that the full-extent view's
+        # overplot-driven canvas shrink no longer applies" — a reasonable
+        # proxy for "not looking at an overplotted, ambiguous cluster."
+        full_x0, full_x1 = self._x_range
+        full_y0, full_y1 = self._y_range
+        agg_n_x, agg_n_y = self._compute_canvas_size(
+            full_x0, full_x1, full_y0, full_y1)
+        extra["agg_n_x"] = [agg_n_x]
+        extra["agg_n_y"] = [agg_n_y]
+
         return extra
 
     def _build_glyphs(self) -> None:
@@ -572,6 +590,36 @@ class VisibilityScatter(VisibilityPlot):
             self._x_range = (0.0, 1.0)
             self._y_range = (0.0, 1.0)
 
+    def _compute_canvas_size(
+        self, x0: float, x1: float, y0: float, y1: float,
+    ) -> tuple[int, int]:
+        """Canvas pixel dimensions used to render the given range.
+
+        Normally just ``(self._width, self._height)``, but for sparse
+        data (few points relative to canvas area) a smaller canvas is
+        used to visually boost apparent point density — see the
+        ``pts_per_px`` scaling below. Factored out of ``_shade_all_layers``
+        so ``_state_data_extra`` can also compute this for the *full*
+        data extent (see ``agg_n_x``/``agg_n_y`` there), independent of
+        whatever sub-range is currently in view.
+        """
+        total_in_view = sum(
+            int(((df["x"] >= x0) & (df["x"] <= x1) &
+                 (df["y"] >= y0) & (df["y"] <= y1)).sum())
+            for lyr, df in zip(self._layers, self._layer_dfs)
+            if df is not None and len(df) > 0 and lyr.alpha > 0.0
+        )
+        pts_per_px = total_in_view / (self._width * self._height)
+        if pts_per_px < 0.01 and total_in_view > 0:
+            scale = max(0.05, math.sqrt(
+                total_in_view / (self._width * self._height * 0.01)
+            ))
+            shared_w = max(10, int(self._width  * scale))
+            shared_h = max(10, int(self._height * scale))
+        else:
+            shared_w, shared_h = self._width, self._height
+        return shared_w, shared_h
+
     def _shade_all_layers(
         self,
         x_range: Optional[tuple[float, float]] = None,
@@ -606,21 +654,7 @@ class VisibilityScatter(VisibilityPlot):
         # Compute total points in viewport across all layers to determine
         # a single canvas size shared by all layers — this ensures the
         # Porter-Duff compositing loop always gets arrays of the same shape.
-        total_in_view = sum(
-            int(((df["x"] >= x0) & (df["x"] <= x1) &
-                 (df["y"] >= y0) & (df["y"] <= y1)).sum())
-            for lyr, df in zip(self._layers, self._layer_dfs)
-            if df is not None and len(df) > 0 and lyr.alpha > 0.0
-        )
-        pts_per_px = total_in_view / (self._width * self._height)
-        if pts_per_px < 0.01 and total_in_view > 0:
-            scale = max(0.05, math.sqrt(
-                total_in_view / (self._width * self._height * 0.01)
-            ))
-            shared_w = max(10, int(self._width  * scale))
-            shared_h = max(10, int(self._height * scale))
-        else:
-            shared_w, shared_h = self._width, self._height
+        shared_w, shared_h = self._compute_canvas_size(x0, x1, y0, y1)
 
         shaded_images = []
         for i, (lyr, df) in enumerate(zip(self._layers, self._layer_dfs)):

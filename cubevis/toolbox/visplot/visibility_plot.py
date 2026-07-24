@@ -13,6 +13,12 @@ Owns all infrastructure that is common to both plot types:
   that axis changes after page-load work without re-creating any JS
 * Figure construction: tick formatters, info Div, hover tool, rerender
   trigger, axes-changed p2j handler
+* ``enable_flagging`` — when True (default), adds the ``FlagTool`` /
+  ``FlagTool(flag=False)`` ("Unflag") drag tools to the figure toolbar in
+  place of a plain box-select. When False, no flag/unflag tooling is
+  added at all — the figure only gets pan/wheel-zoom/box-zoom/reset/save,
+  useful for astronomers who just want to inspect data with no
+  flagging workflow in the way.
 * ``update_axes()`` / ``_handle_update_axes()`` j2p handler
 * ``rerender()`` public API skeleton
 * ``_viewport_selection()`` — maps viewport extents to ``SelectionSpec``
@@ -58,11 +64,13 @@ import numpy as np
 from bokeh.model import Model
 from bokeh.core.properties import String, Int, Bool
 from bokeh.models import (
-    BoxSelectTool, ColumnDataSource, CustomJS, CustomJSTickFormatter,
+    ColumnDataSource, CustomJS, CustomJSTickFormatter,
     Div, HoverTool,
 )
 from bokeh.plotting import figure, show as bk_show
 from bokeh.layouts import column
+
+from cubevis.bokeh.tools._flag_tool import FlagTool
 
 if TYPE_CHECKING:
     from .visibility_reader import VisibilityReader
@@ -144,6 +152,14 @@ class VisibilityPlot(Model):
     comm_mgr :
         ``CommMgr`` from the active ``BokehAppContext``.  Auto-retrieved
         when ``None``.
+    enable_flagging : bool
+        Whether to add the ``FlagTool`` / ``FlagTool(flag=False)``
+        ("Unflag") drag tools to this figure's toolbar.  Defaults to
+        ``True``.  Set ``False`` to build a plot with no flagging
+        workflow at all — e.g. a quick-look tool for astronomers who
+        only want to inspect data.  When ``False``, ``register_select_callback``
+        can still be called but nothing in the browser will ever trigger
+        it, since no select/flag gesture tool is present.
     """
 
     # Bokeh Model properties (synced to JavaScript via Bokeh serialisation)
@@ -163,6 +179,8 @@ class VisibilityPlot(Model):
         height: int = 600,
         title: Optional[str] = None,
         comm_mgr=None,
+        cursor_source=None,
+        enable_flagging: bool = True,
         **kwargs,
     ) -> None:
         kwargs.setdefault("vr_id",         str(uuid4())[:8])
@@ -189,6 +207,7 @@ class VisibilityPlot(Model):
         self._width     = width
         self._height    = height
         self._title     = title   # None → subclass auto-generates
+        self._enable_flagging = enable_flagging
 
         # Coordinate extents — set by _render()
         self._x_range: tuple[float, float] = (0.0, 1.0)
@@ -214,6 +233,25 @@ class VisibilityPlot(Model):
                 log.warning("%s: could not open Comm: %s",
                             type(self).__name__, exc)
 
+        # Separate, dedicated Comm for flag/unflag traffic. The main
+        # self._comm above uses squash_queue=True (appropriate for
+        # high-frequency hover/probe traffic, where only the latest
+        # matters) — sharing it for flagging would risk a rapid second
+        # flag-box message silently squashing/replacing an earlier one
+        # still waiting in the queue before Python ever sees it. Each
+        # comm is queued independently, so this also means flag/unflag
+        # round-trips never wait behind probe/rerender traffic either.
+        self._flag_comm = None
+        if enable_flagging and self._comm_mgr is not None:
+            try:
+                self._flag_comm = self._comm_mgr.open(
+                    description=f"{self._comm_description()} flagging",
+                    squash_queue=False,
+                )
+            except Exception as exc:
+                log.warning("%s: could not open flagging Comm: %s",
+                            type(self).__name__, exc)
+
         # Per-instance message IDs — uuid strings registered on the Comm
         # and passed into CustomJS args so JS calls comm.send(msg_id, ...).
         # Using uuids (rather than fixed strings like "vr_probe") means
@@ -225,8 +263,8 @@ class VisibilityPlot(Model):
         self._msg_axes     = str(uuid4())
         self._msg_select   = str(uuid4())
 
-        # Set by register_select_callback(); None until VisibilityPlotter wires it.
-        self._select_callback = None
+        self._select_callback    = None
+        self._cursor_source_ref  = cursor_source  # shared CDS for linked cursor
 
         # Bokeh sources — created in _build()
         self._image_source: Optional[ColumnDataSource] = None
@@ -234,6 +272,11 @@ class VisibilityPlot(Model):
         self._fig      = None
         self._info_div: Optional[Div] = None
         self._layout   = None
+
+        # FlagTool / Unflag instances — created in _build() only when
+        # enable_flagging=True.  None otherwise.
+        self._flag_tool   = None
+        self._unflag_tool = None
 
         self._build()
         if self._comm is not None:
@@ -307,55 +350,86 @@ class VisibilityPlot(Model):
         return self._fig
 
     @property
+    def flagging_enabled(self) -> bool:
+        """Whether this instance was built with the Flag/Unflag drag tools."""
+        return self._enable_flagging
+
+    @property
     def layout(self):
         """Bokeh column layout (figure + info Div) for embedding."""
         return self._layout
+
+    def show(self) -> None:
+        """Open the figure in a browser tab / render inline in a notebook."""
+        bk_show(self._layout)
 
     def register_select_callback(self, callback) -> None:
         """Register a Python callable to receive box-select events.
 
         Called by ``VisibilityPlotter`` after constructing both widget
-        instances so that box-close events from either figure are routed
-        to the plotter's ``FlagDB`` accumulation and overlay re-render
-        path rather than being handled inside the widget itself.
+        instances.  The callback receives::
 
-        The callback receives a single dict::
+            {"x0": float, "x1": float, "y0": float, "y1": float,
+             "flag": bool, "panel": "raster"|"scatter",
+             "at_pixel_res": bool,
+             "tool": "flag_box"|"unflag_box"}
 
-            {
-                "panel":  "raster" | "scatter",   # which figure fired
-                "x0": float, "x1": float,          # data-space extents
-                "y0": float, "y1": float,
-                "tool":  "box_select",             # always for now
-            }
-
-        The ``panel`` key is set by ``VisibilityPlotter`` when it calls
-        this method, not by the widget itself — the widget only knows its
-        own geometry.
+        The box is now sent regardless of zoom level (``at_pixel_res``
+        tells the callback whether the box is actually at/past 1:1 pixel
+        resolution) — the callback is responsible for deciding whether to
+        record a flag and for reporting back to the user either way (see
+        ``VisibilityPlotter._handle_box_select`` / ``_notify``), rather
+        than the browser silently dropping below-resolution boxes.
 
         Parameters
         ----------
         callback : async callable
-            An ``async def`` function accepting one dict argument and
-            returning a dict (or ``None``), conforming to the
-            ``CommMgr`` handler signature.
+            ``async def`` function accepting one dict argument.
 
-        Notes
-        -----
-        * Calling this method a second time replaces the previous
-          callback — only one handler per widget is supported.
-        * The box-select ``CustomJS`` is wired during ``_build()`` and
-          always fires the j2p message when a box closes; whether a
-          Python handler is registered only controls what happens on the
-          Python side.  Calling this method before ``_build()`` is not
-          necessary — the message ID is fixed at construction time.
+        Note
+        ----
+        If this instance was built with ``enable_flagging=False`` the
+        callback is still registered on the Comm channel, but nothing in
+        the browser will ever send ``_msg_select`` — no flag/unflag tool
+        is present on the figure — so the callback simply never fires.
         """
         self._select_callback = callback
-        if self._comm is not None:
-            self._comm.register(self._msg_select, callback)
+        if self._flag_comm is not None:
+            self._flag_comm.register(self._msg_select, callback)
 
-    def show(self) -> None:
-        """Open the figure in a browser tab / render inline in a notebook."""
-        bk_show(self._layout)
+    def _add_flag_tools(self) -> None:
+        """Add the Flag / Unflag drag tools that fire a j2p on box-close.
+
+        Replaces the previous plain ``BoxSelectTool``-based flagging stub.
+        Only called from ``_build()`` when ``enable_flagging=True``.
+
+        Both instances share this panel's dedicated flagging ``Comm``
+        (``self._flag_comm`` — separate from the panel's main ``_comm``,
+        see ``__init__``) and ``_msg_select`` —
+        a single Python handler (registered via
+        ``register_select_callback``) distinguishes flag vs. unflag using
+        the ``flag`` field in the j2p payload, exactly as
+        ``VisibilityPlotter._handle_box_select`` already expects.
+        Box-zoom (``tools="pan,wheel_zoom,box_zoom,reset,save"`` in
+        ``_build()``) is unaffected — it's a separate tool and stays on
+        every figure regardless of ``enable_flagging``.
+        """
+        # Cosmetic only (informational field in the j2p payload) — derives
+        # "raster"/"scatter" from the subclass's "visibility raster" /
+        # "visibility scatter" comm description rather than requiring a
+        # dedicated abstract method.
+        panel_name = self._comm_description().rsplit(" ", 1)[-1]
+
+        common = dict(
+            comm         = self._flag_comm,
+            msg_id       = self._msg_select,
+            panel        = panel_name,
+            image_source = self._image_source,
+            state_source = self._state_source,
+        )
+        self._flag_tool   = FlagTool(flag=True,  **common)
+        self._unflag_tool = FlagTool(flag=False, **common)
+        self._fig.add_tools(self._flag_tool, self._unflag_tool)
 
     def update_axes(
         self,
@@ -428,11 +502,7 @@ class VisibilityPlot(Model):
     # ------------------------------------------------------------------
 
     def _state_data(self) -> dict:
-        """Build the full ``_state_source.data`` dict.
-
-        Base fields (shared by raster and scatter) are merged with
-        subclass-specific fields from ``_state_data_extra()``.
-        """
+        """Build the full ``_state_source.data`` dict."""
         from .axes import Axis
         x0, x1 = self._x_range
         y0, y1 = self._y_range
@@ -516,9 +586,10 @@ return sign + m + 'm ' + s.toString().padStart(2, '0') + 's';
 
         # Info / hover status div
         self._info_div = Div(
-            text   = "<i>Hover over the plot to inspect a pixel</i>",
-            width  = self._width,
-            styles = {
+            text        = "<i>Hover over the plot to inspect a pixel</i>",
+            width       = self._width,
+            sizing_mode = "stretch_width",
+            styles      = {
                 "font-size":   "12px",
                 "font-family": "monospace",
                 "padding":     "4px 8px",
@@ -528,14 +599,18 @@ return sign + m + 'm ' + s.toString().padStart(2, '0') + 's';
             },
         )
 
-        self._layout = column(self._fig, self._info_div)
+        self._layout = column(
+            self._fig, self._info_div,
+            sizing_mode="stretch_width",
+        )
 
         # Wiring
         self._add_hover_tool()
         if self._comm is not None:
             self._add_rerender_trigger()
             self._add_axes_changed_handler()
-            self._add_box_select_tool()
+            if self._enable_flagging:
+                self._add_flag_tools()
 
     # ------------------------------------------------------------------
     # Internal: hover tool
@@ -554,11 +629,14 @@ return sign + m + 'm ' + s.toString().padStart(2, '0') + 's';
 
     def _add_comm_hover(self) -> None:
         """HoverTool sending the probe message via the Comm channel."""
-        info_div  = self._info_div
-        comm      = self._comm
-        msg_probe = self._msg_probe
+        info_div    = self._info_div
+        comm        = self._comm
+        msg_probe   = self._msg_probe
+        vr_id       = self.vr_id   # unique per-figure ID
         hover_js = CustomJS(
-            args={"info_div": info_div, "comm": comm},
+            args={"info_div": info_div, "comm": comm,
+                  "cursor_src": self._cursor_source_ref,
+                  "fig_id": vr_id},
             code=f"""
 const now = Date.now();
 if (window._cvLastProbe && (now - window._cvLastProbe) < 120) return;
@@ -566,6 +644,7 @@ window._cvLastProbe = now;
 const x = cb_data.geometry.x;
 const y = cb_data.geometry.y;
 if (x == null || y == null) return;
+if (cursor_src) cursor_src.data = {{x: [x], y: [y], fig: [fig_id]}};
 comm.send('{msg_probe}', {{x: x, y: y}}, function(resp) {{
     if (resp && resp.label) info_div.text = resp.label;
 }});
@@ -624,89 +703,30 @@ window._cvRerenderTimer = setTimeout(function() {{
     # ------------------------------------------------------------------
 
     def _add_axes_changed_handler(self) -> None:
-        """Pre-wire a p2j 'vr_axes_changed' listener in the browser.
+        """No-op placeholder — previously used js_on_change on _state_source.
 
-        Sets ``x_axis_label``, ``y_axis_label``, and ``title`` on the
-        Bokeh Figure — properties that can't be driven from a CDS.
+        In cubevis's file-serve + websocket architecture Bokeh model mutations
+        from Python handlers are not propagated to the browser.  Axis label,
+        title, and viewport updates after a Plot press are instead returned in
+        the handler response payload and applied by the JS ``doPlot`` callback
+        in ``VisibilityPlotter``.  See ``_notify_axes_changed``.
         """
-        vr_id = self.vr_id
-        comm  = self._comm
-        fig   = self._fig
-
-        init_source = ColumnDataSource(data={"_init": [1]})
-        msg_axes = self._msg_axes
-        init_js = CustomJS(
-            args={"fig": fig, "comm": comm},
-            code=f"""
-comm.register('{msg_axes}', function(msg) {{
-    if (msg.x_label != null) fig.xaxis[0].axis_label = msg.x_label;
-    if (msg.y_label != null) fig.yaxis[0].axis_label = msg.y_label;
-    if (msg.title   != null) fig.title.text           = msg.title;
-}});
-""",
-        )
-        init_source.js_on_change("data", init_js)
-        self._axes_init_source = init_source
-
-    def _add_box_select_tool(self) -> None:
-        """Add a BoxSelectTool wired to fire a j2p select message on box-close.
-
-        The tool sends ``{x0, x1, y0, y1, tool: "box_select"}`` to
-        Python via the widget's own ``Comm`` channel using
-        ``self._msg_select`` as the routing UUID.  The Python handler
-        registered by ``register_select_callback()`` receives this dict.
-
-        The BoxSelectTool is added to the figure's tool list but is **not**
-        set as the active tool — ``VisibilityPlotter`` activates it by
-        setting ``fig.toolbar.active_drag`` when the Box Select toolbar
-        button is pressed.
-
-        The tool uses ``select_every_mousemove=False`` so the j2p message
-        fires exactly once when the mouse button is released, not on every
-        mouse-move event during the drag.  This matches the AIPS TVFLG
-        interaction model: drag to define the region, release to flag.
-        """
-        comm       = self._comm
-        msg_select = self._msg_select
-
-        select_js = CustomJS(
-            args={"comm": comm},
-            code=f"""
-const geom = cb_data['geometry'];
-if (!geom) return;
-const x0 = geom.x0, x1 = geom.x1;
-const y0 = geom.y0, y1 = geom.y1;
-// Ignore degenerate (click, not drag) selections
-if (Math.abs(x1 - x0) < 1e-12 && Math.abs(y1 - y0) < 1e-12) return;
-comm.send('{msg_select}',
-    {{x0: x0, x1: x1, y0: y0, y1: y1, tool: 'box_select'}},
-    function(resp) {{
-        // Python handler returns null in the preview (FlagDB accumulation
-        // only); a non-null response will carry a re-rendered overlay image
-        // once the full flag overlay pipeline is wired (Phase 1 F-9/F-10).
-        if (!resp || resp.image == null) return;
-        // Future: update image_source with the flagged overlay composite.
-    }}
-);
-""",
-        )
-
-        box_tool = BoxSelectTool(continuous=False)
-        self._fig.add_tools(box_tool)
-        box_tool.js_on_event("selectiongeometry", select_js)
+        pass
 
     def _notify_axes_changed(self) -> None:
-        """Send 'vr_axes_changed' p2j after an axis update."""
-        if self._comm is None:
-            return
-        try:
-            self._comm.send_p2j(self._msg_axes, {
-                "x_label": _axis_label(self._x_dim),
-                "y_label": _axis_label(self._y_dim),
-                "title":   self._effective_title(),
-            })
-        except Exception as exc:
-            log.warning("_notify_axes_changed: %s", exc)
+        """Called by ``update_axes`` after a successful re-render.
+
+        In cubevis's file-serve + websocket architecture, Bokeh model
+        mutations from Python handlers are not propagated to the browser.
+        Axis label, title, and viewport updates are therefore returned in
+        the ``_handle_plot`` response payload and applied by the JS
+        ``doPlot`` callback in ``VisibilityPlotter``.
+
+        This method calls ``_update_state_source`` to keep ``_state_source``
+        consistent (tick formatters and other JS that read from it will
+        reflect the new axis state on the next pan/zoom rerender).
+        """
+        self._update_state_source()
 
     # ------------------------------------------------------------------
     # Internal: CommMgr handler registration
@@ -715,18 +735,9 @@ comm.send('{msg_select}',
     def _register_comm_handlers(self) -> None:
         self._comm.register(self._msg_probe,    self._handle_probe)
         self._comm.register(self._msg_rerender, self._handle_rerender)
-        # The axes-changed message ID is registered as a p2j listener in JS
-        # (_add_axes_changed_handler) — no Python-side registration needed.
-        # update_axes message IDs are registered by each subclass via
-        # _register_extra_comm_handlers() so raster/scatter can handle
-        # their own extended fields.
         self._register_extra_comm_handlers()
-        # Select callback: only if pre-registered before _build() ran.
-        # The normal path is VisibilityPlotter calling
-        # register_select_callback() after construction, which registers
-        # directly on self._comm at that point.
-        if self._select_callback is not None:
-            self._comm.register(self._msg_select, self._select_callback)
+        if self._select_callback is not None and self._flag_comm is not None:
+            self._flag_comm.register(self._msg_select, self._select_callback)
 
     # ------------------------------------------------------------------
     # j2p handlers (base)

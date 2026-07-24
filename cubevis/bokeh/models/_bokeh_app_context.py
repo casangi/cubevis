@@ -185,7 +185,7 @@ class BokehAppContext(LayoutDOM):
         current_scripts = list(self.init_scripts) if self.init_scripts else []
 
         # 2. Append the new script
-        new_entry = (new_script, self.comm_id, description)
+        new_entry = (new_script, self.app_id, description)
         current_scripts.append(new_entry)
 
         # 3. REASSIGN to trigger synchronization

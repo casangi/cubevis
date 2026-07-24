@@ -195,6 +195,44 @@ NullContext  Casa6Context  RadpsContext  RemoteContext(future)
   └──────────────────────────────────────────────────────┘
 ```
 
+### 3.1b Panel ownership model
+
+`VisibilityPlotter` holds panels as a list rather than named attributes, and
+layout as a separate descriptor:
+
+```python
+self._panels: list[VisibilityPlot]   # N panels (VisibilityRaster or VisibilityScatter)
+self._layout: PanelLayout            # how to arrange them
+```
+
+```python
+@dataclass
+class PanelLayout:
+    mode:    str   = "split"  # "split" | "grid" | "deck"
+    rows:    int   = 1        # for split / grid
+    cols:    int   = 2        # for split / grid
+    window:  int   = 1        # for deck: panels visible at once
+    animate: bool  = False    # deck auto-advance
+    shared_selection: bool = True  # False → each panel has its own SelectionSpec
+```
+
+The **preview uses `PanelLayout(mode="split", cols=2)`** — one raster and one
+scatter side by side, shared selection — which is identical in behaviour to
+the current hardcoded design. The refactor (A-10) switches the internal
+representation without changing any visible behaviour or public API. The
+payoff comes in the subsequent work:
+
+| Layout | `mode` | Use case |
+|---|---|---|
+| Split (current) | `"split"` | One raster + one scatter, correlated views |
+| Grid | `"grid"` | Caltable antenna panels (plotms screenshot); SPFLG tiled raster |
+| Deck | `"deck"` | Sequential iteration with K simultaneous panels (`window` > 1 shows K at once) |
+
+**Shared vs independent selection.** The default `shared_selection=True` covers
+the current two-panel flagging case — both panels always show the same field/SPW.
+`shared_selection=False` is required for the caltable antenna grid (each panel
+shows a different antenna's solutions) and for any future multi-SPW tiled view.
+
 ### 3.2 The VisibilityReader boundary
 
 `VisibilityRaster` and `VisibilityScatter` depend **only** on `VisibilityReader`.
@@ -292,17 +330,49 @@ a `ReductionContext.commit_flags()` responsibility, not a display responsibility
 
 ### 4.5 Flagging tools
 
-- **Box select** (default) — draw rectangle in data space; on box close immediately adds
-  `FlagDelta` to `FlagDB` and re-renders flagged overlay in red; no button press required
+- **`FlagTool`** — custom Bokeh drag tool (not plain `BoxSelectTool`). A drag
+  draws a rubber-band box in data space and, on release, adds a `FlagDelta` to
+  `FlagDB` immediately; no separate button press required. A click (no drag) zooms
+  the panel to 1:1 pixel resolution (one screen pixel per underlying data cell),
+  which is the minimum resolution at which flagging is permitted. The tool is "not
+  unselectable" — re-clicking while already active re-triggers the 1:1 zoom rather
+  than deactivating, so flagging mode is never accidentally left behind. Implemented
+  in `cubevis.bokeh.tools._flag_tool`; shared via `VisibilityPlot._add_flag_tools()`
+  rather than per-subclass.
+- **`UnflagTool`** — same `FlagTool` class parameterized by `flag=False`. Draws a
+  box over data in the current `FlagDB` and removes matching deltas. This is a
+  **spatial region operation**, not a temporal undo stack: it removes flags in the
+  drawn region regardless of what order they were added. `Undo` (temporal reversal
+  of the last action) is dropped from the design entirely.
+- **1:1 resolution gate** — flagging/unflagging only records a `FlagDelta` when
+  the view is zoomed to at least one screen pixel per underlying data cell. Below
+  that resolution the box still draws (visual feedback, so the interaction doesn't
+  feel broken) but is rejected with an explanatory message in the status bar. For
+  raster this is exact; for scatter it uses a proxy based on the sparse-data
+  canvas-shrink logic (acknowledged approximation — see §2.4 for the scatter
+  flagging open question).
 - **Nearest-point flag** — click to flag the point closest to cursor (difmap-style);
-  same immediate `FlagDB` accumulation and overlay behaviour as box select
-- **Unflag** — same box-select flow with `FlagDelta.flag = False`
+  same `FlagTool` mechanism, `flag=True`, applied at point granularity
 - **Flag extend** — per-delta controls: all correlations, all channels, all SPWs, all times in scan
-- **Undo** — pop last `FlagDelta` from `FlagDB` and re-render; works freely until disk write
 - **Flag ⚑** — write accumulated `FlagDB` entries to disk via `ReductionContext.commit_flags()`;
   the only operation that touches the MS or Processing Set
 - **Flag version** — save / restore named disk states via `ReductionContext`
+- **Flag count** — running count of `FlagDB` entries shown in status bar after each
+  flag/unflag; "Flag count" preferred over "pending flags" since `FlagDB` rationalises
+  entries (unflagging removes deltas rather than adding inverse entries, so "pending"
+  is inaccurate)
 - **Flag summary** — fraction flagged per SPW and per antenna, updated after each disk write
+
+**Transport note.** Flag/unflag traffic runs on a dedicated `Comm` channel
+(opened with `squash_queue=False`) rather than sharing each panel's general-purpose
+hover/probe comm (`squash_queue=True`). A queue that silently replaces pending
+messages is correct for hover tracking but is a correctness risk for flagging — a
+rapid second flag-box could squash an earlier one before Python sees it.
+
+**`enable_flagging` constructor parameter.** Passing `enable_flagging=False` omits
+both `FlagTool` and `UnflagTool` from every panel toolbar, for sessions where the
+user only wants to inspect data. Threads through to `VisibilityRaster` /
+`VisibilityScatter` directly.
 
 ### 4.6 Locate / Hover
 
@@ -379,8 +449,9 @@ RADPS without a CASA6 session), calibration buttons are hidden.
 ### 4.11 Export / scripting
 
 - **Save plot** — PNG export of current view
-- **Copy flagdata command** — generate equivalent `flagdata()` call for pending flags
+- **Copy flagdata command** — generate equivalent `flagdata()` call for current `FlagDB` state
 - **Python API** — `VisibilityPlotter(ms=..., field=..., preset=...)` usable in Jupyter
+- **Reload ↺ vs Plot ▶** — `Plot ▶` re-queries and re-renders, preserving `FlagDB` state; `Reload ↺` re-queries, re-renders, and **clears `FlagDB`** (safe reset, since nothing has been written to disk) — matches the expectation that "start over" discards in-progress uncommitted flag state
 
 ### 4.12 Astronomer-facing constructor
 
@@ -791,11 +862,11 @@ layout that Phase 2 depends on:
 | A-7 | Implement `NullReductionContext` | ✅ Done | `reduction_context.py` |
 | A-8 | Implement `open_ms()` and `open_ps()` factory functions: accept `path`, `backend: ReductionBackend\|str = "auto"`, and `remote_endpoint`; resolve the correct `ReductionContext` via the context-selection matrix (see §4.12); return `(ObservationMetadata, LocalVisibilityReader, ReductionContext)`. These are **internal implementation details** of `VisibilityPlotter.__init__` — not public API. The factory is where `ReductionBackend` selection logic lives; `VisibilityPlotter.__init__` calls them and discards the triple into private attributes. | ✅ Done (subsequent session) | `factory.py` *(new)* |
 | A-9 | Verify existing test suite passes with `LocalVisibilityReader` wrapper in place of direct backend references | ✅ Done — `VisibilityPlot.__init__` auto-wraps any bare `XArrayReader`, so existing tests passing `MSv2Backend`/`MSv4Backend` directly require no changes | test suite |
+| A-10 | Define `PanelLayout` dataclass and adopt panel-list model in `VisibilityPlotter`. **Do immediately after the preview, before any Phase 1 work.** `VisibilityPlotter` must hold `_panels: list[VisibilityPlot]` and `_layout: PanelLayout` rather than named `_raster`/`_scatter` attributes. The preview hardcodes `PanelLayout(mode="split", rows=1, cols=2)` exactly as today; the refactor makes this parameterised without changing the preview's visual output. Precludes a painful retrofit when multi-panel grid (X-1, C-1 caltable grid) is implemented. Design decision to make now: **shared vs independent `SelectionSpec` per panel** — shared by default (the current two-panel case), overridable per-panel (required for the caltable antenna-grid case). | `visibility_plotter.py`, new `panel_layout.py` |
 
 > **Phase 0 is fully closed out.** All A-series and CM-series items are
 > complete and verified against real sis14 data (MSv2 and MSv4). The next
 > session begins at Phase 1 (Flagging foundations).
-
 
 ---
 
@@ -810,10 +881,9 @@ layout that Phase 2 depends on:
 | F-4 | `FlagDelta` extend logic: apply `extend_corr`, `extend_chan`, `extend_spw`, `extend_scan` before building row set | `flag_db.py` |
 | F-5 | `Casa6ReductionContext` — flag operations only: `commit_flags()` calling `flagdata()`, `save_flag_version()`, `restore_flag_version()`, `list_flag_versions()` | `casa6_reduction_context.py` *(new)* |
 | F-6 | Wire `FlagDB.commit()` to call `ReductionContext.commit_flags()` | `flag_db.py` |
-| F-7 | Box-select j2p handler in `VisibilityRaster`: JS box-select tool callback sends data-space `(x0,x1,y0,y1)` → Python adds `FlagDelta` to `FlagDB` and immediately triggers flagged overlay re-render | `visibility_raster.py` |
-| F-8 | Box-select j2p handler in `VisibilityScatter` | `visibility_scatter.py` |
-| F-9 | "Show flagged" overlay in `VisibilityRaster`: red RGBA layer composited on top of existing image; re-rendered on every `FlagDB` accumulation (box close or undo), not only on disk write | `visibility_raster.py` |
-| F-10 | "Show flagged" overlay in `VisibilityScatter`: semi-transparent red layer from flagged data points | `visibility_scatter.py` |
+| F-7/F-8 | Flag/unflag j2p handler — shared implementation in `VisibilityPlot` base class (`_add_flag_tools()`), used identically by both `VisibilityRaster` and `VisibilityScatter`. Custom `FlagTool` sends data-space `(x0,x1,y0,y1)` to Python via a dedicated `Comm` channel (`squash_queue=False`); `UnflagTool` (`flag=False`) is the spatial unflag. Flagging gated on 1:1 pixel resolution. *(Preview sketched the gesture UI; this item delivers the `FlagDB` accumulation and overlay wiring.)* | `visibility_plot.py`, `cubevis/bokeh/tools/_flag_tool.py` |
+| F-9 | **OPEN DESIGN QUESTION — resolve before scheduling.** "Show flagged" overlay in `VisibilityRaster`. Two candidate mechanisms: (A) re-query the backend with `FlagDB` state applied, shade flagged cells a distinct colour, and composite as a second `image_rgba` layer toggled by `figure.visible` — clean separation, independent show/hide, user-selectable colour, but requires a backend round-trip on every flag/unflag; (B) post-process the existing rendered `uint32` image in Python/NumPy, recolouring pixels that correspond to flagged data-space cells — cheaper but tightly couples flagging display to the rendering pipeline and loses independent show/hide. Complication: raster pixels are Datashader-aggregated bins, not 1:1 with MS rows, so identifying which pixels to recolour from a `FlagDelta` coordinate range is non-trivial. A second overlay image (option A) is architecturally cleaner and maps better to the "show/hide flagged data" UX goal. | `visibility_raster.py` |
+| F-10 | **OPEN DESIGN QUESTION — resolve before scheduling.** "Show flagged" overlay in `VisibilityScatter`. Same two-option framing as F-9. Scatter's existing Porter-Duff compositing pipeline already layers multiple `ScatterLayer` images; a third "flagged data" layer using a distinct colour and rendered from `FlagDB` coordinate ranges is a natural fit (option A equivalent). Complication: scatter's `FlagTool` 1:1 resolution criterion is an acknowledged approximation — the overlay must be visually consistent with what was actually flagged. | `visibility_scatter.py` |
 | F-11 | Nearest-point flag tool in `VisibilityScatter` (difmap-style): given screen coordinate, find closest data point, add `FlagDelta` | `visibility_scatter.py` |
 
 ---
@@ -825,8 +895,9 @@ layout that Phase 2 depends on:
 |---|---|---|
 | P-1 | `VisibilityPlotter` class skeleton: astronomer-facing constructor (see §4.12); internally calls `open_ms()`/`open_ps()`, constructs `VisibilityRaster`, `VisibilityScatter`, `FlagDB`, sidebar, toolbar, and preference `ColumnDataSource`; no internal objects exposed as public attributes | `visibility_plotter.py` *(new)* |
 | P-2 | Sidebar widget set — accordion layout with Data, Axes, Display, Flagging sections; Bokeh `Select`, `MultiSelect`, `TextInput`, `CheckboxGroup`, `Slider` | `visibility_plotter.py` |
-| P-3 | Toolbar — Plot, Reload, Box Select, Point Flag, Flag, Unflag, Undo, Locate, Save Plot, Copy flagdata | `visibility_plotter.py` |
+| P-3 | Toolbar — Plot, Reload, `FlagTool`, `UnflagTool`, Flag ⚑ (write to disk), Locate, Save Plot, Copy flagdata. `enable_flagging=False` omits flag tools entirely. | `visibility_plotter.py` |
 | P-4 | Display mode toggle — Scatter / Raster / Both; dynamically show/hide panels | `visibility_plotter.py` |
+| P-4a | **Auto-hide per-plot toolbars** — `VisibilityRaster` and `VisibilityScatter` gain an `autohide_toolbar: bool = False` constructor parameter. When `True`, the Bokeh figure toolbar is hidden by default and shown only when the mouse enters the figure boundary (via `figure.toolbar.autohide = True` or equivalent JS `MouseEnter`/`MouseLeave` on the figure div). Required for the multi-panel grid layout (A-10/X-1/C-1) where displaying per-panel toolbars on all N panels simultaneously wastes space and creates visual noise. In the preview and single-panel modes `autohide_toolbar=False` is the default; `VisibilityPlotter` sets `autohide_toolbar=True` automatically when `PanelLayout.mode == "grid"` and N > 2. | `visibility_raster.py`, `visibility_scatter.py`, `visibility_plotter.py` |
 | P-5 | Named view presets — vplot, radplot, projplot buttons configure axes and tool | `visibility_plotter.py` |
 | P-6 | `SelectionSpec` UV range — add `uv_range` field (metres) for baseline selection | `selection.py` |
 | P-7 | `Casa6ReductionContext` metadata methods: `list_fields()`, `list_spws()`, `list_antennas()`, `list_scans()`, `list_data_columns()` | `casa6_reduction_context.py` |
@@ -864,7 +935,7 @@ layout that Phase 2 depends on:
 | S-2 | Per-layer legend widget in `VisibilityScatter`: toggle (alpha=0) per layer from legend | `visibility_scatter.py` |
 | S-3 | Auto-alpha review: expose sensitivity slider or improve perceptual model | `visibility_scatter.py` |
 | S-4 | Multi-layer probe: `_handle_probe` returns a row per layer for hovered pixel | `visibility_scatter.py` |
-| C-1 | `CalibrationView` panel: gain/phase vs time per antenna from a calibration table | `calibration_view.py` *(new)* |
+| C-1 | `CalibrationView` panel: gain/phase vs time per antenna from a calibration table. In the tiled multi-antenna grid (as shown in the plotms caltable screenshot, e.g. 3×3 antenna panels), each cell is a `VisibilityScatter` with `autohide_toolbar=True` (P-4a) and `PanelLayout(mode="grid")` (A-10). Flagging bad solution intervals directly in the calibration view shares the same `FlagDB` as the visibility view. | `calibration_view.py` *(new)* |
 | C-2 | Calibration sidebar section in `VisibilityPlotter`: bandpass / gaincal / applycal buttons; enabled when `context.supports_calibration()` | `visibility_plotter.py` |
 | C-3 | `Casa6ReductionContext` calibration methods: `bandpass()`, `gaincal()`, `fluxscale()`, `applycal()` | `casa6_reduction_context.py` |
 | C-4 | `RadpsReductionContext` — flag operations + data queries | `radps_reduction_context.py` *(new)* |
@@ -883,7 +954,7 @@ layout that Phase 2 depends on:
 | T-2 | Synthetic xradio-native DataTree structure tests | `tests/` |
 | T-3 | Single-dish test coverage | `tests/` |
 | T-4 | `RemoteReductionContext` skeleton and transport protocol | `remote_reduction_context.py` *(new)* |
-| X-1 | **CASR-385** SPFLG-style multi-panel raster: tiled `VisibilityRaster` panels, one per baseline, rendered simultaneously in a scrollable grid; required for AIPS SPFLG workflow parity | `visibility_plotter.py`, `visibility_raster.py` |
+| X-1 | **CASR-385** SPFLG-style multi-panel raster: tiled `VisibilityRaster` panels, one per baseline, rendered simultaneously in a scrollable grid; required for AIPS SPFLG workflow parity. Depends on A-10 (panel-list model) and P-4a (auto-hide toolbars per panel). | `visibility_plotter.py`, `visibility_raster.py` |
 | X-2 | **CASR-385** `Axis.PHASE_RMS`: phase RMS vs time or frequency as a scatter y-axis quantity; backend computes `std(angle(visibility))` across the baseline axis per time/channel cell; same Phase 4 bucket as `CLOSURE_PHASE` | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
 | X-3 | **CASR-385** User-specified colours in colour-by-metadata mode: colour picker widget per category value (SPW, antenna, baseline); supplements the automatic categorical palette in S-1 | `visibility_plotter.py`, `visibility_scatter.py` |
 | X-4 | **CASR-385** Performance benchmarks: explicit test cases at ngVLA scale (200+ antennas, 8000 channels, 1-second integrations, 10 SPWs) and ALMA/VLA scale (50+ antennas, 1000 channels); used to validate Datashader pipeline and `is_decimated` gate | `tests/` |
@@ -1083,8 +1154,10 @@ class RemoteReductionContext(ReductionContext):
 
 | File | Change |
 |---|---|
-| `visibility_raster.py` | A-3: `backend: XArrayReader` → `backend: VisibilityReader`; F-7: box-select j2p handler; F-9: flagged overlay; R-1 – R-4 |
-| `visibility_scatter.py` | A-3: same type annotation change; F-8: box-select handler; F-10: flagged overlay; F-11: nearest-point flag; S-1 – S-4 |
+| `visibility_raster.py` | A-3: `backend: XArrayReader` → `backend: VisibilityReader`; F-9: flagged overlay (open design question); R-1 – R-4 |
+| `visibility_scatter.py` | A-3: same type annotation change; F-10: flagged overlay (open design question); F-11: nearest-point flag; S-1 – S-4 |
+| `visibility_plot.py` | F-7/F-8: `_add_flag_tools()` shared `FlagTool`/`UnflagTool` mechanism (delivered in preview) |
+| `cubevis/bokeh/tools/_flag_tool.py` *(new)* | Custom `FlagTool` Bokeh tool class |
 | `msv2_backend.py` | V-2, V-3: averaging; R-1: FLAG_FRACTION; S-1: colour-by-metadata; G-6: closure phase |
 | `msv4_backend.py` | V-4, V-5: averaging; R-1: FLAG_FRACTION; S-1: colour-by-metadata; G-6: closure phase |
 | `reader.py` | No changes required. `XArrayReader` ABC is unchanged. |

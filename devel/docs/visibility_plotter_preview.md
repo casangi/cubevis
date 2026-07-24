@@ -101,7 +101,7 @@ setting.
 │  Toolbar                                                            │
 │  [Plot ▶] [Reload ↺]  |  [● Both ○ Raster ○ Scatter]                │
 │  [○ Side by Side ● Over/Under]  |  [vplot] [radplot] [Waterfall]    │
-│  [□ Box Select] [⚑ Flag†] [⟲ Undo†]                                 │
+│  [🚩 FlagTool] [🏳 UnflagTool] [⚑ Flag†]                             │
 ├──────────────────┬──────────────────────────────────────────────────┤
 │  Sidebar         │  ┌──────────────────┐  ┌──────────────────────┐  │
 │  (~280px)        │  │  Raster panel    │  │  Scatter panel       │  │
@@ -113,7 +113,7 @@ setting.
 ├──────────────────┴──────────────────────────────────────────────────┤
 │  Status bar                                                         │
 └─────────────────────────────────────────────────────────────────────┘
-† Disabled in preview
+† Write-to-disk & flag accumulation — full release; preview demonstrates the selection gesture only
 ```
 
 ---
@@ -246,13 +246,14 @@ will remain fast at full scale.
 | Control | Behaviour |
 |---|---|
 | **Plot ▶** | Re-queries both active backends; re-renders; updates preference store |
-| **Reload ↺** | Same as Plot in the preview |
+| **Reload ↺** | Same as Plot ▶ in the preview (no `FlagDB` state to preserve or clear) |
 | **[ Both \| Raster \| Scatter ]** | JS: sets visibility, resizes, updates sidebar |
 | **[ Side by Side \| Over / Under ]** | JS: flips layout, resizes figures |
 | **[vplot] [radplot] [Waterfall]** | JS: switches to Both, sets axes and layout |
-| **Box Select** | Activates Bokeh box-select tool; on box close immediately adds `FlagDelta` to `FlagDB` and re-renders flagged overlay in red — no button press required |
-| **Flag ⚑** | Disabled; tooltip: *"Write flags to disk — full release"* |
-| **Undo ⟲** | Disabled; tooltip: *"Undo — full release"* |
+| **FlagTool 🚩** | Custom drag tool demonstrating the flagging gesture. Drag → draws rubber-band selection box; status bar confirms the drawn region (gated on 1:1 pixel resolution; rejected with message otherwise). Click → zooms to 1:1. "Not unselectable" — re-click re-triggers zoom. No `FlagDB` or `FlagDelta` in the preview. |
+| **UnflagTool 🏳** | Same `FlagTool`, `flag=False`. Demonstrates the unflag selection gesture; no `FlagDB` in the preview. |
+| **Flag ⚑** | `TipButton`; tooltip: *"Write flags to disk — full release"* |
+
 
 Iteration (Prev/Next), Locate, Save plot, and Copy flagdata are absent
 from the toolbar — no stubs, to keep the toolbar uncluttered.
@@ -266,15 +267,19 @@ back to Both mode restores the synchronised view correctly.
 
 ### 9. Status bar
 
-A `Div` updated on every Plot press and every mode/layout change:
+A single `row()` layout with two halves, updated on every Plot press and
+every mode/layout change:
 
 ```
-Ready — sis14_twhya_calibrated_flagged.ms  |  Mode: Both  |  Layout: Side by Side
-       Field: 0637-752  |  SPW: 0,1,2,3  |  Col: DATA
+[green: Ready — sis14_twhya.ms | Mode: Both | Layout: Side by Side]
+[red:   Flagged 12 cells (or rejection: "Zoom to 1:1 to flag")              ]
 ```
 
-In single-panel modes the status bar omits the axis summary for the
-hidden panel.
+The **green left half** shows the dataset/config summary. The **red right half**
+shows flagging tool feedback: a rejection message when a draw is below 1:1
+resolution, or confirmation that a selection region was drawn. On sidebar
+widget hover, both halves are replaced by the context-sensitive hint.
+In single-panel modes the green half omits the axis summary for the hidden panel.
 
 ---
 
@@ -282,9 +287,9 @@ hidden panel.
 
 Absent with no stubs:
 
-- Writing flags to disk (FlagDB accumulation and red overlay work; disk write — full release)
+- Flag accumulation (`FlagDB`, `FlagDelta`) and write-to-disk — full release; preview demonstrates the selection gesture only
 - Flag versions, flag extend
-- Locate / hover probe (Bokeh hover tool active but no custom handler)
+- Full Locate sidebar (cursor tracking info divs work; locate results table — full release)
 - Synchronized cross-panel cursor (Tier 1 same-axis Span and Tier 2 cross-axis
   row-level highlight — both full release; see main plan §4.7)
 - Averaging controls
@@ -333,6 +338,9 @@ plotter = VisibilityPlotter(
     layout      = "side",           # "side", "over"
     preset      = None,             # "vplot", "radplot", "waterfall"
 
+    # Flagging
+    enable_flagging = True,     # False → no FlagTool/UnflagTool at all (inspect-only)
+
     # Initial zoom / axis ranges — optional
     time_range   = None,        # (start, end) as ISO strings or MJD floats
     freq_range   = None,        # (start, end) in Hz
@@ -370,13 +378,11 @@ dict, and attaches `CustomJS` callbacks for the display mode toggle,
 layout toggle, and presets.  The CommMgr transport used by the two
 display classes is reused without modification.
 
-The box-select j2p handler always adds a `FlagDelta` to `FlagDB` and
-immediately re-renders the flagged overlay in red — no button press
-required.  This matches the AIPS TVFLG immediate-feedback workflow.
-The Flag ⚑ button writes the accumulated `FlagDB` entries to disk via
-`ReductionContext.commit_flags()` and is the only step that touches the
-MS or Processing Set.  Undo ⟲ pops the last `FlagDelta` from `FlagDB`
-and re-renders; it works freely until Flag is pressed.
+The `FlagTool` j2p handler records the drawn region and updates the
+status bar with confirmation or a rejection message. No `FlagDB` or
+`FlagDelta` exists in the preview — flag accumulation, write-to-disk,
+and undo/unflag persistence are Phase 1 deliverables (F-1 through F-10
+in the implementation plan).
 
 ### Programmer-facing composable layer
 
@@ -439,115 +445,11 @@ A reviewer in a Jupyter notebook should be able to:
 8. Press the vplot preset; axes and layout update; layout returns to Side by Side.
 9. Manually override the layout after a preset; press Plot; the manual choice is remembered.
 10. Pan the time axis in the raster when both show TIME on x; the scatter time axis follows.
-11. Draw a box-select region; flagged data immediately appears in red in both panels without pressing Flag.
-12. Press Undo; the red overlay clears for that region.
+11. Activate `FlagTool`; zoom to 1:1; draw a box; status bar confirms the selection region.
+11a. Draw without zooming to 1:1; status bar shows rejection message.
+12. Activate `UnflagTool`; draw a box; status bar confirms the unflag gesture.
 13. Read the status bar and know which dataset, mode, layout, and selection is active.
 
 That is sufficient to validate the no-server layout approach, communicate
 the design intent for both independent and preset operating modes, and
 gather feedback before flagging and iteration work begins.
-
----
-
-## Appendix: Preview implementation status (July 2026)
-
-This appendix records which items from the preview specification were
-delivered, which were modified in scope, and what was added beyond the
-original spec. It is intended to serve as a reference for the first
-round of stakeholder feedback.
-
----
-
-### Spec items — delivered as specified
-
-| § | Item | Notes |
-|---|---|---|
-| 1 | Display mode toggle (Both / Raster only / Scatter only) | `CustomJS`; sidebar axis sections hide/show correctly |
-| 2 | Layout toggle (Side by Side / Over Under) | Dual-container approach (row + column, one hidden); avoids flex-direction mutation |
-| 3 | Session-scoped layout preference memory | `ColumnDataSource` JSON store; written by layout JS, read on Plot |
-| 4 | Sidebar — data selection | Field (with "All fields" sentinel), SPW, Correlation, Data column |
-| 4 | Sidebar — axis controls | Raster Y/X/Qty, Scatter X/Y, with colormap controls |
-| 5 | Presets (vplot, radplot, Waterfall) | Replot fires automatically on preset press |
-| 6 | Toolbar skeleton | Plot ▶, Reload ↺, mode, layout, presets, Flag ⚑†, Undo ⟲† |
-| 7 | Flag ⚑ / Undo ⟲ disabled with explanation | Replaced with `TipButton`; tooltip explains preview limitation |
-| 8 | Linked x-axis behaviour | Shared `Range1d` when raster x == scatter x; restored on return to Both |
-| 9 | Status bar | Updated on every Plot press and mode/layout change |
-
----
-
-### Spec items — modified in scope or implementation
-
-| § | Item | Difference from spec |
-|---|---|---|
-| Layout | Dual-container rather than flex-direction | Spec described CSS flex-direction mutation; implemented as two Bokeh containers (row + column) toggled via `.visible`. More reliable in Bokeh's no-server architecture. |
-| 11 | Box-select → red overlay | Box-select j2p fires and `FlagDelta` accumulates in `FlagDB`. Red overlay re-render is a **stub** (Phase 1 F-9/F-10) — no visual feedback yet. Spec said "immediately appears in red". |
-| 12 | Undo | `FlagDB.pop()` / `FlagDB.undo()` implemented in Python; UI button disabled. |
-| radplot preset | Raster x axis | Spec has `BASELINE × UVDIST`; implemented as `BASELINE × TIME` since UVDIST is not a native raster MS dimension (`MSv2Backend` does not support it as a raster y/x). Scatter x = UVDIST as specified. |
-| Preference key sentinel | `_:_` for hidden panel | Implemented; layout preference restored on axes change. |
-| "Custom" label after diverging from preset | Not implemented | JS does not track whether current axes match a preset and relabel the toolbar. Low priority; deferred. |
-
----
-
-### Items added beyond the original spec
-
-| Item | Description |
-|---|---|
-| **Collapsible sidebar** | `⟨` / `⟩` toggle button collapses the left panel; figures expand via `sizing_mode="stretch_width"` |
-| **Dark / Light mode** | Full theme toggle covering figures, sidebar, info divs, status bar, and page background |
-| **Linked cursor spans** | Dashed `Span` lines in each figure track cursor position in the other figure when axes are compatible; axis-aware (vertical or horizontal) and orientation-correct |
-| **Cursor tracking info divs** | `_info_div` below each figure shows Amplitude, Channel/Time/Frequency, Field, Scan, BL on hover |
-| **Synchronised Bokeh toolbars** | Both figures keep their native Bokeh toolbars (pan, box zoom, wheel zoom, reset, save); tool activation synced via `js_on_change("active_drag")` |
-| **Context-sensitive sidebar hints** | On mouse-enter, the status bar is replaced by an MS-specific hint for each sidebar widget (actual scan IDs, antenna names, observation time range, format examples) via `EvTextInput` + `MouseEnter`/`MouseLeave` |
-| **Tooltips on all toolbar buttons** | `Tip` wraps all active buttons; `TipButton` replaces Flag and Undo with informative hover tooltips |
-| **Multi-layer scatter** | One `ScatterLayer` per selected polarisation (XX and YY by default), composited by Datashader |
-| **`ReductionBackend` enum** | `str` enum (`"auto"`, `"casa6"`, `"radps"`, `"remote"`, `"null"`) selects reduction context; accepted as plain string by constructor |
-| **Widget/render consistency** | "All fields" sentinel in Field dropdown ensures sidebar initial state matches the initial render (`field_names=None`); `_last_raster_selection` prevents spurious raster re-renders when only scatter axes change |
-| **Notification div** | Transient red notification area above the status bar for Python-side warnings and errors (e.g. unsupported axis combination) |
-
----
-
-### Success criteria — assessment
-
-| # | Criterion | Status |
-|---|---|---|
-| 1 | Open MSv2 / MSv4; both panels render | ✅ MSv2 confirmed; MSv4 path present |
-| 2 | Change field or SPW; press Plot; both panels update | ✅ |
-| 3 | Change raster quantity Amplitude → Phase | ✅ |
-| 3a | Colormap scaling eq_hist ↔ linear | ✅ |
-| 4 | Raster only: scatter hides, raster expands, layout disables | ✅ |
-| 5 | Back to Both: scatter reappears, layout re-enables | ✅ |
-| 6 | Over / Under: both panels reflow | ✅ |
-| 7 | Waterfall preset: Both mode, axes set, Over/Under | ✅ |
-| 8 | vplot preset: axes and layout update | ✅ |
-| 9 | Manual layout override after preset; Plot remembers choice | ✅ |
-| 10 | Pan shared TIME x-axis; scatter follows | ✅ |
-| 11 | Box-select → red overlay immediately | ⚠️ Box-select fires j2p and accumulates in `FlagDB`; red overlay not yet rendered (Phase 1) |
-| 12 | Undo → red overlay clears | ⚠️ `FlagDB.undo()` implemented; UI disabled in preview |
-| 13 | Status bar shows dataset / mode / layout / selection | ✅ |
-
----
-
-### Known limitations for stakeholder feedback
-
-1. **Box-select flag overlay** — selection accumulates in `FlagDB` but no
-   red visual feedback is rendered yet. Astronomers should be aware that
-   box-select does work (j2p fires) but the AIPS TVFLG-style immediate
-   red overlay is a Phase 1 deliverable.
-
-2. **Scan / Antenna / Time range / UV range** — sidebar fields accept
-   text input and sidebar hints show valid values, but these parameters
-   are not yet wired to the backend query. Only Field, SPW, Correlation,
-   and Data column filter the displayed data.
-
-3. **radplot raster x-axis** — shows TIME rather than UVDIST on the raster
-   panel. UVDIST is only available as a scatter x-axis; it cannot be used
-   as a native raster dimension against MSv2.
-
-4. **No iteration** — Prev/Next antenna/baseline/scan controls are absent.
-
-5. **No PNG export** — Bokeh's built-in save tool is present in the
-   toolbar but produces the default Bokeh PNG, not a publication-quality
-   export.
-
-6. **Preset "Custom" label** — the toolbar does not detect when axes have
-   diverged from a preset and relabel accordingly.

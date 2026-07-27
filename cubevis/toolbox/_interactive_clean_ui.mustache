@@ -269,6 +269,22 @@ class InteractiveCleanUI:
             self.__stop( )
             BokehInit.clear_app_context(self._app_context)
 
+        def connection_closed_handler( reason, description ):
+            ###
+            ### A connection ended but the session is still alive -- the laptop
+            ### slept, the network blipped, or the tab was reloaded. Do NOT call
+            ### self.__stop( ) here: it resolves __result_future, which exits
+            ### the `async with websockets.serve( ... )` block in _task_server( )
+            ### and closes the listening socket the frontend is about to
+            ### reconnect to.
+            ###
+            logger.debug( f"InteractiveCleanUI...connection_closed_handler: "
+                          f"connection lost ({description}); awaiting reconnection" )
+
+        def reconnect_handler( generation ):
+            logger.debug( f"InteractiveCleanUI...reconnect_handler: "
+                          f"frontend reconnected (generation={generation})" )
+
         self._app_context = BokehAppContext( comm_mgr=CommMgr( on_shutdown=shutdown_handler,
                                                                on_error=error_handler ),
                                              app_state={                              ### while the state dictionary itself
@@ -278,6 +294,23 @@ class InteractiveCleanUI:
 
         ## comm manager for opening communication channels
         self._comm_mgr = self._app_context.comm_mgr
+
+        ## Connection lifecycle: these fire for transient disconnects and are
+        ## distinct from on_shutdown, which ends the session for good.
+        self._comm_mgr.set_connection_closed_callback( connection_closed_handler )
+        self._comm_mgr.set_reconnect_callback( reconnect_handler )
+
+        ## Requests that were in flight when a connection dropped are replayed
+        ## once the frontend returns. All interactive clean p2j traffic is
+        ## idempotent GUI state, so redelivery is safe. Set to False if that
+        ## ever stops being true.
+        self._comm_mgr.resend_inflight_on_reconnect = True
+
+        ## Wait indefinitely for the frontend to come back. Set to a number of
+        ## seconds to have the session shut itself down after an outage of that
+        ## length -- useful if a closed browser tab should not leave the Python
+        ## side running forever.
+        self._comm_mgr.reconnect_timeout = None
 
         self._clean['gclean'] = gclean
 
@@ -1140,9 +1173,23 @@ class InteractiveCleanUI:
         self.__result_future = asyncio.Future( )
 
         if self._comm_mgr.address:
+            ###
+            ### The serve( ) context manager must outlive any individual
+            ### connection: process_messages( ) is the per-connection handler,
+            ### and it returns every time a socket drops. Keeping the listener
+            ### open across those returns is what makes reconnection possible.
+            ###
+            ### The keepalive parameters make the server notice a dead peer in
+            ### ~30s instead of waiting out TCP timeouts. The frontend runs its
+            ### own application-level heartbeat, because browsers cannot send
+            ### WebSocket ping frames from JavaScript.
+            ###
             async with websockets.serve( self._comm_mgr.process_messages,
                                          self._comm_mgr.address[0],
-                                         self._comm_mgr.address[1] ):
+                                         self._comm_mgr.address[1],
+                                         ping_interval=20,
+                                         ping_timeout=10,
+                                         close_timeout=5 ):
                 await self.__result_future
         else:
             await self._comm_mgr.process_messages( )

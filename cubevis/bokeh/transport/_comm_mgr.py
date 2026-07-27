@@ -197,7 +197,11 @@ class CommMgr( Model, BokehInit ):
         self._handlers: Dict[str, Dict[str, Callable]] = {}                                     # comm_id => {message_id => handler}
         self._pending: Dict[str, str] = {}                                                      # comm_id => request_id (currently pending)
         self._pending_tasks: Dict[str, asyncio.Task] = {}                                       # comm_id => Task (for cancellation)
-        self._pending_requests: Dict[str, Tuple[str, str, Callable]] = {}                       # request_id => (comm_id, message_id, callback)
+        # request_id => (comm_id, message_id, message, callback)
+        # The message body is retained so that a request which was in flight
+        # when a connection dropped can be replayed after the frontend
+        # reconnects. See _reset_for_reconnect( ).
+        self._pending_requests: Dict[str, Tuple[str, str, Dict[str, Any], Callable]] = {}
         self._send_queue: Dict[str, List[Tuple[str, Dict[str, Any], Optional[Callable]]]] = {}  # comm_id => [(message_id, message, callback)]
         self._lock = asyncio.Lock()
 
@@ -218,6 +222,29 @@ class CommMgr( Model, BokehInit ):
         self._on_error = on_error                         # REMOVED
         self._shutdown_event = asyncio.Event()
         self._on_connection_closed = None
+        self._on_reconnect = None
+
+        # Incremented each time a connection is torn down without shutting the
+        # application down. Lets callers distinguish a reconnect from a fresh
+        # start, and lets stale callbacks from a dead connection be recognised.
+        self._connection_generation = 0
+
+        # When True, a request that was in flight when the connection dropped
+        # is pushed back onto the front of its comm's send queue and re-sent
+        # once the frontend returns. See the resend_inflight_on_reconnect
+        # property below for the trade-off involved.
+        self._resend_inflight_on_reconnect = True
+
+        # Seconds to wait for a reconnect before giving up and shutting down,
+        # or None to wait indefinitely (the default). See the
+        # reconnect_timeout property below.
+        self._reconnect_timeout: Optional[float] = None
+        self._reconnect_watchdog: Optional[asyncio.Task] = None
+
+        # Seconds to wait when the frontend closed deliberately (tab closed or
+        # reloaded). Much shorter than _reconnect_timeout -- see the
+        # reconnect_grace_period property below.
+        self._reconnect_grace_period: Optional[float] = 3.0
 
         # Handler context (shared across all handlers)
         self._context = HandlerContext(self)
@@ -257,6 +284,100 @@ class CommMgr( Model, BokehInit ):
         old_state = self._state
         self._state = new_state
         logger.debug(f"Application state: {old_state.value} -> {new_state.value}")
+
+    @property
+    def connection_generation(self) -> int:
+        """
+        Number of connections that have been retired without shutting the
+        application down. Zero until the first disconnect, so
+        ``connection_generation > 0`` means "this is a reconnect".
+        """
+        return self._connection_generation
+
+    @property
+    def resend_inflight_on_reconnect(self) -> bool:
+        """
+        Whether p2j requests that were in flight when a connection dropped are
+        replayed after the frontend reconnects (default ``True``).
+
+        With ``True`` the message body is pushed back onto the front of its
+        comm's send queue and re-sent, so its callback still fires once the
+        frontend returns. This is the right default for the GUI-update traffic
+        cubevis sends, which is idempotent: the reply never arrived, so the
+        frontend either never saw the request or never finished acting on it.
+
+        Set to ``False`` if any p2j message is unsafe to deliver twice. In that
+        case the pending callback is instead invoked once with
+        ``{'error': ...}`` so the caller is not left waiting forever.
+        """
+        return self._resend_inflight_on_reconnect
+
+    @resend_inflight_on_reconnect.setter
+    def resend_inflight_on_reconnect(self, value: bool) -> None:
+        self._resend_inflight_on_reconnect = bool(value)
+        logger.debug(f"resend_inflight_on_reconnect set to {self._resend_inflight_on_reconnect}")
+
+    @property
+    def reconnect_timeout(self) -> Optional[float]:
+        """
+        Seconds to wait for the frontend to come back after a connection is
+        lost, or ``None`` (the default) to wait indefinitely.
+
+        ``None`` restores the original behaviour: the backend survives any
+        outage and the session ends only when the GUI explicitly requests
+        shutdown. The cost is that closing the browser tab outright leaves the
+        Python session waiting forever.
+
+        Setting a value (e.g. ``1800`` for thirty minutes) arms a watchdog on
+        each disconnect. If no new connection has arrived when it expires, the
+        CommMgr shuts down as though the transport had closed for good. Make it
+        comfortably longer than the longest outage you want to survive -- an
+        overnight suspend needs many hours.
+        """
+        return self._reconnect_timeout
+
+    @reconnect_timeout.setter
+    def reconnect_timeout(self, value: Optional[float]) -> None:
+        self._reconnect_timeout = None if value is None else float(value)
+        logger.debug(f"reconnect_timeout set to {self._reconnect_timeout}")
+
+    @property
+    def reconnect_grace_period(self) -> Optional[float]:
+        """
+        Seconds to wait after the frontend closed the connection *deliberately*
+        -- i.e. sent a WebSocket close frame -- before shutting down. Defaults
+        to 3 seconds. ``None`` waits indefinitely, as ``reconnect_timeout``
+        does; ``0`` shuts down at once and gives up on surviving reloads.
+
+        A closed browser tab and a reloaded browser tab are indistinguishable
+        at the moment they happen: both send close code 1001 ("going away"),
+        and there is no way to tell which one it was from the close frame
+        alone. Nor can the frontend tell us -- the browser only reveals that a
+        load was a reload on the *next* page load, which is after we needed to
+        decide. They separate themselves a moment later: a reload comes
+        straight back, a closed tab never does. So the policy is to wait
+        briefly and let the frontend prove which it was, and the floor on that
+        wait is however long a reload takes to reconnect.
+
+        Three seconds suits a local app, where the page is served from
+        ``file://`` and the socket is on localhost, so a reload reconnects
+        almost immediately. Raise it if the assets are ever served over a real
+        network, where a cold-cache reload has to re-fetch the Bokeh and
+        cubevis bundles before the handshake can even start -- a reload that
+        overruns this becomes a spurious shutdown.
+
+        This is deliberately much shorter than ``reconnect_timeout``, which
+        governs the case where the peer vanished without a close frame (a
+        suspended laptop, a dropped network). There, waiting indefinitely is
+        the whole point; here, waiting indefinitely would leave a session
+        pinned open after the user has visibly finished with it.
+        """
+        return self._reconnect_grace_period
+
+    @reconnect_grace_period.setter
+    def reconnect_grace_period(self, value: Optional[float]) -> None:
+        self._reconnect_grace_period = None if value is None else float(value)
+        logger.debug(f"reconnect_grace_period set to {self._reconnect_grace_period}")
 
     def open(self, comm_id: Optional[str] = None, squash_queue: bool = False, description: Optional[str] = '' ) -> Comm:
         """
@@ -440,16 +561,33 @@ class CommMgr( Model, BokehInit ):
             'request_id': request_id
         }
 
+        if not (self._transport and self._transport.is_connected()):
+            ### No live connection. Hold the message at the head of this comm's
+            ### queue and leave the comm un-pending, so it is not wedged waiting
+            ### for a reply that can never arrive. _flush_all_queues( ) picks it
+            ### up when the frontend reconnects.
+            self._send_queue.setdefault(comm_id, []).insert(0, (message_id, message, callback))
+            logger.debug(
+                f"Transport not ready; holding {comm_id}.{message_id} for reconnect "
+                f"(queue size: {len(self._send_queue[comm_id])})"
+            )
+            return
+
         # Mark this comm as having a pending request
         self._pending[comm_id] = request_id
-        self._pending_requests[request_id] = (comm_id, message_id, callback)
+        self._pending_requests[request_id] = (comm_id, message_id, message, callback)
 
         # Send through transport
-        if self._transport and self._transport.is_connected():
+        try:
             await self._transport.send_message(msg)
             logger.debug(f"Sent message: {comm_id}.{message_id} (request_id={request_id})")
-        else:
-            logger.warning(f"Transport not ready, cannot send {comm_id}.{message_id}")
+        except (ConnectionClosedError, ConnectionClosedOK) as e:
+            ### The socket died between is_connected( ) and the write. Undo the
+            ### pending marker and re-queue so the reconnect path replays it.
+            logger.debug(f"Connection closed while sending {comm_id}.{message_id}: {e}")
+            self._pending.pop(comm_id, None)
+            self._pending_requests.pop(request_id, None)
+            self._send_queue.setdefault(comm_id, []).insert(0, (message_id, message, callback))
 
     async def _process_next_queued(self, comm_id: str):
         """
@@ -526,6 +664,29 @@ class CommMgr( Model, BokehInit ):
 
                 from ._low_level_transport import WebSocketTransport
 
+                ### A new connection can arrive while the previous handler is
+                ### still unwinding. This is common on wake-from-sleep: the
+                ### browser notices the socket is dead and reconnects before the
+                ### server has finished tearing the old one down. Retire the old
+                ### transport first so it is not orphaned and so its in-flight
+                ### requests are re-queued rather than lost.
+                if self._transport is not None:
+                    logger.debug(
+                        "New connection while a transport is still active; retiring the old one"
+                    )
+                    try:
+                        await self._transport.close()
+                    except Exception:
+                        logger.exception("Error closing superseded transport")
+                    self._reset_for_reconnect()
+
+                ### The frontend is here, so the "never came back" timer no
+                ### longer applies. This must come *after* the retire block
+                ### above, because _reset_for_reconnect( ) arms a fresh one.
+                self._cancel_reconnect_watchdog()
+
+                is_reconnect = self._connection_generation > 0
+
                 def transport_abort(error):
                     # Only report truly fatal errors
                     logger.error(f"Transport abort: {error}")
@@ -546,6 +707,12 @@ class CommMgr( Model, BokehInit ):
 
                 self._initialized = True
                 self.state = AppState.RUNNING
+
+                if is_reconnect and self._on_reconnect:
+                    try:
+                        self._on_reconnect(self._connection_generation)
+                    except Exception:
+                        logger.exception("Error in on_reconnect callback")
 
             elif self.transport_type in ('colab', 'jupyter'):
                 # Already initialized
@@ -620,17 +787,23 @@ class CommMgr( Model, BokehInit ):
             should_shutdown = True
 
         finally:
+            ### Ask the transport how the connection ended *before* discarding
+            ### it. A close frame means the browser deliberately went away (tab
+            ### closed or reloaded); its absence means the peer vanished (sleep,
+            ### network loss). The two want very different reconnect policies.
+            clean_close = None
+            if self._transport is not None:
+                probe = getattr(self._transport, 'close_was_clean', None)
+                if callable(probe):
+                    try:
+                        clean_close = probe()
+                    except Exception:
+                        logger.exception("Error querying transport close status")
+
             # Clean up transport (make sure it's async)
             if self._transport:
                 try:
                     await self._transport.close()
-                    if self._on_shutdown and not self._shutdown_callback_called:
-                        try:
-                            # Pass the enum value for better type safety
-                            self._on_shutdown(reason={ShutdownReason.TRANSPORT_CLOSED}, description="comm manager transport closed")
-                            self._shutdown_callback_called = True
-                        except Exception as e:
-                            logger.error(f"Error calling shutdown function: {e}")
                 except Exception as e:
                     logger.error(f"Error closing transport: {e}")
 
@@ -642,19 +815,199 @@ class CommMgr( Model, BokehInit ):
                 # Just clean up this connection - ready for next one
                 logger.debug(f"Connection ended (reason: {shutdown_reason}), ready for reconnection")
 
-                # Reset connection-specific state
-                self._transport = None
-
-                # Clear pending requests for this connection
-                self._pending.clear()
-                self._pending_requests.clear()
-
-                # Call connection closed callback if set
+                ###
+                ### NOTE: self._on_shutdown is deliberately NOT called here.
+                ###
+                ### It tears down the application -- for interactive clean it
+                ### resolves __result_future, which exits the
+                ### `async with websockets.serve( ... )` block and closes the
+                ### listening socket. Calling it for a transient disconnect
+                ### (laptop sleep, brief network drop, tab reload) destroys the
+                ### very server the frontend is about to reconnect to, which is
+                ### how reconnection was lost. Only shutdown( ) -- reached via
+                ### the should_shutdown branch above -- may call it.
+                ###
+                self._reset_for_reconnect(clean_close=clean_close)
                 if self._on_connection_closed:
                     try:
                         self._on_connection_closed(shutdown_reason, shutdown_description)
                     except Exception as e:
                         logger.error(f"Error in on_connection_closed callback: {e}")
+
+    ########################################################################
+    # Reconnection support
+    ########################################################################
+    def _reset_for_reconnect(self, clean_close: Optional[bool] = None) -> None:
+        """
+        Discard per-connection state while keeping this CommMgr alive.
+
+        Called when a connection ends for a reason that does NOT warrant
+        shutting the application down: laptop sleep, a brief network drop, a
+        browser tab reload, or a new connection superseding an old one.
+
+        ``clean_close`` says how the connection ended, and selects how long we
+        are willing to wait for the frontend to return:
+
+          True  -- the peer sent a close frame, so the browser deliberately
+                   went away (tab closed, reloaded, navigated). Wait only
+                   ``reconnect_grace_period``.
+          False -- the peer vanished with no close frame (suspended laptop,
+                   dropped network). Wait ``reconnect_timeout``, which defaults
+                   to forever.
+          None  -- unknown; treated like False, so we wait rather than risk
+                   killing a recoverable session.
+
+        Everything that outlives a single connection -- registered handlers,
+        Comm objects, shared state, the per-comm send queues -- is preserved.
+        Only the transport and the in-flight request bookkeeping are reset.
+
+        Requests that were in flight are pushed back onto the *front* of their
+        comm's send queue when ``resend_inflight_on_reconnect`` is True, so
+        their callbacks still fire once the frontend returns. When it is False
+        the pending callback is invoked once with an error instead, so no
+        caller is left waiting on a reply that can never arrive.
+        """
+        self._transport = None
+        self._initialized = False
+        self._connection_generation += 1
+
+        if self.state not in ( AppState.STOPPED, AppState.ERROR, AppState.SHUTTING_DOWN ):
+            self.state = AppState.INITIALIZING
+
+        requeued = 0
+        notified = 0
+
+        for request_id, entry in list(self._pending_requests.items()):
+            comm_id, message_id, message, callback = entry
+
+            if self._resend_inflight_on_reconnect:
+                self._send_queue.setdefault(comm_id, []).insert(
+                    0, (message_id, message, callback)
+                )
+                requeued += 1
+            elif callback is not None:
+                ### Don't leave the caller waiting on a reply that will never come.
+                try:
+                    result = callback({ 'error': 'connection lost before a reply arrived' })
+                    if inspect.isawaitable(result):
+                        asyncio.ensure_future(result)
+                    notified += 1
+                except Exception:
+                    logger.exception(
+                        f"Error notifying {comm_id}.{message_id} of lost connection"
+                    )
+
+        self._pending.clear()
+        self._pending_requests.clear()
+
+        logger.debug(
+            f"CommMgr reset for reconnect (generation={self._connection_generation}, "
+            f"requeued={requeued}, notified={notified}, "
+            f"close={'clean' if clean_close else 'abrupt'})"
+        )
+
+        if clean_close:
+            self._arm_reconnect_watchdog(self._reconnect_grace_period, clean=True)
+        else:
+            self._arm_reconnect_watchdog(self._reconnect_timeout, clean=False)
+
+    def _arm_reconnect_watchdog(self, timeout: Optional[float],
+                                clean: bool = False) -> None:
+        """
+        Start the "frontend never came back" timer, if one is configured.
+
+        Without a watchdog a closed browser tab is indistinguishable from a
+        sleeping laptop, so the backend waits forever. With one, the session
+        shuts down cleanly after ``timeout`` seconds of silence.
+        """
+        self._cancel_reconnect_watchdog()
+
+        if timeout is None:
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.debug("No running loop; reconnect watchdog not armed")
+            return
+
+        logger.debug(
+            f"Reconnect watchdog armed for {timeout}s "
+            f"({'deliberate close' if clean else 'connection lost'})"
+        )
+        self._reconnect_watchdog = loop.create_task(
+            self._reconnect_watchdog_coro(self._connection_generation, timeout, clean)
+        )
+
+    def _cancel_reconnect_watchdog(self) -> None:
+        """Stand down the reconnect watchdog (called when a connection arrives)."""
+        watchdog = self._reconnect_watchdog
+        self._reconnect_watchdog = None
+        if watchdog is not None and not watchdog.done():
+            watchdog.cancel()
+
+    async def _reconnect_watchdog_coro(self, generation: int, timeout: float,
+                                       clean: bool = False) -> None:
+        try:
+            await asyncio.sleep(timeout)
+        except asyncio.CancelledError:
+            return
+
+        ### A later disconnect superseded this watchdog, so it is stale.
+        if self._connection_generation != generation:
+            return
+
+        ### The frontend came back.
+        if self._transport is not None:
+            return
+
+        if clean:
+            description = (
+                f"frontend closed the connection and did not return "
+                f"within {timeout}s"
+            )
+            logger.debug(
+                f"Frontend closed deliberately and did not reconnect within "
+                f"{timeout}s; shutting down"
+            )
+        else:
+            description = f"frontend did not reconnect within {timeout}s"
+            logger.warning(
+                f"No reconnection within {timeout}s; shutting down communications"
+            )
+
+        ### Detach before calling shutdown( ). shutdown( ) cancels the watchdog,
+        ### and this coroutine *is* the watchdog -- cancelling ourselves would
+        ### raise CancelledError at the first await inside shutdown( ) and leave
+        ### the teardown half finished.
+        self._reconnect_watchdog = None
+
+        await self.shutdown(
+            reason=ShutdownReason.TRANSPORT_CLOSED,
+            description=description
+        )
+
+    def set_connection_closed_callback(self, callback: Optional[Callable]) -> None:
+        """
+        Register a callback invoked when a connection ends but the application
+        keeps running.
+
+        Signature: ``callback(reason: ShutdownReason, description: str)``
+
+        Use this to grey out the GUI or show a "reconnecting..." indicator.
+        This is NOT a shutdown notification -- see the ``on_shutdown``
+        constructor argument for that.
+        """
+        self._on_connection_closed = callback
+
+    def set_reconnect_callback(self, callback: Optional[Callable]) -> None:
+        """
+        Register a callback invoked when a connection is established after the
+        first one, i.e. when the frontend has successfully reconnected.
+
+        Signature: ``callback(generation: int)``
+        """
+        self._on_reconnect = callback
 
     async def shutdown(self, reason: Optional[ShutdownReason] = None, description: str = ""):
         """Shut down the communications manager."""
@@ -662,6 +1015,9 @@ class CommMgr( Model, BokehInit ):
             return
 
         logger.debug(f"CommMgr.shutdown: {reason.value if reason else 'unknown'})")
+
+        # No point waiting for a reconnection we are no longer interested in
+        self._cancel_reconnect_watchdog()
 
         # Call shutdown callback
         if self._on_shutdown and not self._shutdown_callback_called:
@@ -716,8 +1072,9 @@ class CommMgr( Model, BokehInit ):
             logger.warning(f"Received response for unknown request: {request_id}")
             return
 
-        # Get request info
-        comm_id, message_id, callback = self._pending_requests.pop(request_id)
+        # Get request info. The message body is retained only so the request can
+        # be replayed after a reconnect; it is not needed once a reply arrives.
+        comm_id, message_id, _message, callback = self._pending_requests.pop(request_id)
 
         # Clear pending state for this comm
         if comm_id in self._pending and self._pending[comm_id] == request_id:

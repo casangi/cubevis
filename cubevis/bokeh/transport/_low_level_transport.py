@@ -152,6 +152,60 @@ class WebSocketTransport(TransportBase):
         self._should_run = False
         self._closed = False
 
+        ### How the connection ended, set by run( ):
+        ###   True  -- a close frame was exchanged. The browser said goodbye:
+        ###            the tab was closed, reloaded, or navigated away.
+        ###   False -- no close frame (RFC 6455 code 1006). The peer vanished:
+        ###            the laptop suspended, or the network dropped.
+        ###   None  -- still running, or the connection never got that far.
+        ### The distinction matters because the two cases want very different
+        ### reconnection policies. See CommMgr._reset_for_reconnect( ).
+        self._close_was_clean: Optional[bool] = None
+        self._close_code: Optional[int] = None
+
+        ### Set when the frontend sends '__goodbye__' from its pagehide /
+        ### beforeunload handler. This is a deliberate-departure signal that
+        ### does not depend on the close frame arriving intact.
+        self._goodbye_received = False
+
+    def close_was_clean(self) -> Optional[bool]:
+        """
+        Whether the peer closed with a proper WebSocket close frame.
+
+        None until the connection has actually ended. See ``_close_was_clean``
+        for what the values mean.
+        """
+        return self._close_was_clean
+
+    def close_code(self) -> Optional[int]:
+        """RFC 6455 close code, or None if the connection has not ended."""
+        return self._close_code
+
+    def _record_close(self) -> None:
+        """Capture the close code and classify the shutdown as clean or not."""
+        code = getattr(self.websocket, 'close_code', None)
+        self._close_code = code
+
+        ### 1006 (abnormal closure) is what the websockets library reports when
+        ### no close frame was received -- exactly the suspended-laptop case.
+        ### Anything else means the peer sent a close frame, most commonly 1001
+        ### "going away" for a tab close or reload, or 1000 for an explicit
+        ### close( ). A None code means we never learned; treat that as unclean
+        ### so the connection gets the benefit of the doubt and is waited for.
+        ### An explicit goodbye is authoritative: the frontend told us it was
+        ### leaving on purpose, so a lost or mangled close frame cannot cause
+        ### a deliberate departure to be misread as a dropped connection.
+        self._close_was_clean = (
+            self._goodbye_received or (code is not None and code != 1006)
+        )
+
+        logger.debug(
+            f"WebSocket close classified as "
+            f"{'clean' if self._close_was_clean else 'abrupt'} "
+            f"(code={code}, goodbye={self._goodbye_received}) "
+            f"for {self._comm_mgr_id}"
+        )
+
     def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]):
         """Set callback for incoming messages."""
         self._message_callback = callback
@@ -266,7 +320,7 @@ class WebSocketTransport(TransportBase):
         if not self._message_callback:
             raise RuntimeError("Must call set_message_callback() before run()")
 
-        from ...utils import deserialize
+        from ...utils import deserialize, serialize
         self._should_run = True
         logger.debug(f"WebSocket event loop starting for {self._comm_mgr_id}")
 
@@ -277,16 +331,44 @@ class WebSocketTransport(TransportBase):
                     break
                 try:
                     msg = deserialize(message)
+
+                    ### Transport-level keepalive.
+                    ###
+                    ### Browsers cannot send WebSocket control frames from
+                    ### JavaScript, so the frontend cannot use protocol-level
+                    ### ping/pong to notice that a socket went half-open while
+                    ### the laptop was asleep. It sends an application-level
+                    ### '__ping__' instead. Answer it here and never surface it
+                    ### to the application callback.
+                    ### The frontend is being torn down (tab closed, reloaded,
+                    ### or navigated away). Record it and keep going -- the
+                    ### close frame follows immediately after.
+                    if isinstance(msg, dict) and msg.get('type') == '__goodbye__':
+                        logger.debug(
+                            f"Frontend sent goodbye for {self._comm_mgr_id}"
+                        )
+                        self._goodbye_received = True
+                        continue
+
+                    if isinstance(msg, dict) and msg.get('type') == '__ping__':
+                        await self.websocket.send(serialize({
+                            'type': '__pong__',
+                            'seq': msg.get('seq'),
+                        }))
+                        continue
+
                     await self._message_callback(msg)
                 except Exception as e:
                     logger.error(f"Error processing message: {e}")
                     # Continue processing other messages
 
             logger.debug(f"WebSocket closed normally for {self._comm_mgr_id}")
+            self._record_close()
 
         except (ConnectionClosedError, ConnectionClosedOK) as e:
             # Normal close - don't treat as error
             logger.debug(f"WebSocket connection closed: {e}")
+            self._record_close()
             # Don't re-raise - this is expected when laptop sleeps
 
         except Exception as e:
@@ -641,6 +723,7 @@ class CommsTransport(TransportBase):
         if not self._connected:
             self._connected = True
             self._conn_event.set()
+            logger.debug(f"CommsTransport: comm (re)opened for {self._comm_mgr_id}")
 
     # ------------------------------------------------------------------
     # Phase 1: synchronous – must run inside the cell output context
@@ -1244,15 +1327,43 @@ class CommsTransport(TransportBase):
             comm_objs = getattr(self, '_comm_objs', None)
             if not comm_objs:
                 raise RuntimeError("CommsTransport: not connected (no comm available)")
-            try:
-                comm_objs[0].send(envelope)
-                #logger.debug("<<send_message>> sent via comm")
-            except Exception as e:
-                logger.warning("CommsTransport.send_message: comm send failed: %s", e)
+
+            ### Send on the most recently opened comm.
+            ###
+            ### _on_comm_open( ) *appends*, so after a browser reload or a
+            ### wake-from-sleep the frontend opens a fresh comm and
+            ### _comm_objs[0] is the dead one from the previous page. Walk
+            ### backwards from newest to oldest and prune anything that raises.
+            for comm in reversed(list(comm_objs)):
+                try:
+                    comm.send(envelope)
+                    #logger.debug("<<send_message>> sent via comm")
+                    return
+                except Exception as e:
+                    logger.debug(
+                        "CommsTransport.send_message: comm send failed (%s); trying an older comm", e
+                    )
+                    try:
+                        comm_objs.remove(comm)
+                    except ValueError:
+                        pass
+
+            logger.warning(
+                "CommsTransport.send_message: no live comm could accept the message"
+            )
 
     async def run(self) -> None:
-        """Keep the transport alive until disconnected."""
-        while self._connected:
+        """
+        Keep the transport alive until it is explicitly closed.
+
+        Deliberately keyed on ``_closed`` rather than ``_connected``. On a
+        JupyterLab browser reload or wake-from-sleep the frontend comm is torn
+        down and a new one is opened, which briefly clears ``_connected``.
+        Returning from run( ) at that point is read by
+        CommMgr.process_messages( ) as "the transport closed", which ends the
+        session instead of waiting for the frontend to come back.
+        """
+        while not self._closed:
             await asyncio.sleep(0.1)
 
 

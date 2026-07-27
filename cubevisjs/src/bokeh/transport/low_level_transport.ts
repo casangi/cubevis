@@ -97,10 +97,28 @@ export interface TransportBase {
 export class WebSocketTransport implements TransportBase {
     private websocket?: WebSocket
     private onMessageCallback?: (msg: any) => void
-    // @ts-expect-error: not yet used
     private connected: boolean = false
     private initialized: boolean = false
-  
+
+    // ----------------------------------------------------------------------
+    // Liveness detection
+    //
+    // A suspended laptop leaves a half-open socket behind: readyState stays
+    // OPEN and onclose never fires, sometimes for minutes, until a write
+    // finally provokes an RST. Browsers cannot send WebSocket ping frames from
+    // JavaScript, so we use an application-level ping which Python answers with
+    // __pong__ (see WebSocketTransport.run in _low_level_transport.py).
+    // ----------------------------------------------------------------------
+    private heartbeatIntervalMs: number = 15000   // how often to ping an idle socket
+    private heartbeatTimeoutMs:  number = 10000   // deadline for a routine pong
+    private wakeProbeTimeoutMs:  number = 3000    // deadline for a post-wake pong
+    private connectTimeoutMs:    number = 10000   // deadline for the initial open
+    private heartbeatTimer?: number
+    private pongTimer?: number
+    private heartbeatSeq: number = 0
+    private runResolve?: () => void
+    private wakeListenersAttached: boolean = false
+
     constructor(
         private comm_mgr: CommMgr,
         private address: [string, number]
@@ -118,31 +136,229 @@ export class WebSocketTransport implements TransportBase {
             if (this.websocket !== undefined) {
                 this.websocket.close()
             }
-            
+
+            // Guard every exit path: without this the "error" listener below
+            // can reject a promise that onopen already resolved, and a late
+            // error on a superseded socket can fail a healthy reconnect.
+            let settled = false
+            const settleResolve = () => { if (!settled) { settled = true; resolve() } }
+            const settleReject  = (e: any) => { if (!settled) { settled = true; reject(e) } }
+
             this.websocket = new WebSocket(ws_address)
             this.websocket.binaryType = "arraybuffer"
-            
-            this.websocket.addEventListener("error", (e: Event) => {
+
+            const onConnectError = (e: Event) => {
                 console.error('WebSocket error encountered:', e)
-                reject(new Error('WebSocket connection failed'))
-            })
-            
+                settleReject(new Error('WebSocket connection failed'))
+            }
+            this.websocket.addEventListener("error", onConnectError)
+
             // Don't set onmessage here - that's for run()
-            
+
             this.websocket.onopen = async () => {
                 console.debug("WebSocket connected, performing handshake...")
                 this.connected = true
-                
+
                 try {
                     await this.performHandshake()
                     console.log("WebSocket handshake complete")
-                    resolve()
+                    this.websocket?.removeEventListener("error", onConnectError)
+                    settleResolve()
                 } catch (e) {
                     console.error("WebSocket handshake failed:", e)
-                    reject(e)
+                    this.websocket?.removeEventListener("error", onConnectError)
+                    settleReject(e)
                 }
             }
+
+            // Don't hang forever if onopen never fires. This happens when the
+            // backend is gone but the OS has not yet returned a connection
+            // refusal -- common immediately after a wake-from-sleep.
+            window.setTimeout(
+                () => settleReject(new Error('WebSocket connect timeout')),
+                this.connectTimeoutMs
+            )
         })
+    }
+
+    // --------------------------------------------------------------------------
+    // Liveness: heartbeat + wake detection
+    // --------------------------------------------------------------------------
+
+    private startHeartbeat(): void {
+        this.stopHeartbeat()
+        this.heartbeatTimer = window.setInterval(
+            () => this.sendPing(this.heartbeatTimeoutMs),
+            this.heartbeatIntervalMs
+        )
+    }
+
+    private stopHeartbeat(): void {
+        if (this.heartbeatTimer !== undefined) {
+            clearInterval(this.heartbeatTimer)
+            this.heartbeatTimer = undefined
+        }
+        this.clearPongTimer()
+    }
+
+    private clearPongTimer(): void {
+        if (this.pongTimer !== undefined) {
+            clearTimeout(this.pongTimer)
+            this.pongTimer = undefined
+        }
+    }
+
+    /**
+     * Send an application-level ping and arm a deadline for the matching pong.
+     */
+    private sendPing(timeoutMs: number): void {
+        if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+            this.declareDead("socket is not OPEN")
+            return
+        }
+
+        try {
+            this.websocket.send(serialize({type: "__ping__", seq: ++this.heartbeatSeq}))
+        } catch (e) {
+            this.declareDead(`ping failed to send: ${e}`)
+            return
+        }
+
+        this.clearPongTimer()
+        this.pongTimer = window.setTimeout(
+            () => this.declareDead(`no __pong__ within ${timeoutMs}ms`),
+            timeoutMs
+        )
+    }
+
+    /** Any inbound traffic proves the socket is alive. */
+    private notePong(): void {
+        this.clearPongTimer()
+    }
+
+    /**
+     * Treat the connection as gone.
+     *
+     * Closes the socket on a best-effort basis -- a half-open socket may never
+     * produce an onclose event -- and resolves run() directly so that the
+     * CommMgr reconnection path advances immediately rather than waiting on a
+     * close that is not coming.
+     */
+    private declareDead(reason: string): void {
+        if (!this.connected && !this.initialized) {
+            return   // already handled
+        }
+        console.warn(`WebSocket declared dead (${reason}); triggering reconnection`)
+
+        this.stopHeartbeat()
+        this.connected = false
+        this.initialized = false
+
+        const ws = this.websocket
+        this.websocket = undefined
+        if (ws) {
+            try {
+                ws.onmessage = null
+                ws.onclose = null
+                ws.onerror = null
+                ws.close(4000, "stale connection")
+            } catch (e) {
+                console.debug("Error closing stale WebSocket:", e)
+            }
+        }
+
+        this.finishRun()
+    }
+
+    private finishRun(): void {
+        const resolve = this.runResolve
+        this.runResolve = undefined
+        if (resolve) {
+            resolve()
+        }
+    }
+
+    /**
+     * Probe the connection right now.
+     *
+     * Called on wake-from-sleep, tab re-focus and network-up, where the socket
+     * is very likely stale but still claims to be OPEN. Uses a short deadline
+     * so recovery is fast rather than waiting out a full heartbeat cycle.
+     */
+    private probeConnection = (): void => {
+        if (!this.websocket) {
+            return
+        }
+        if (this.websocket.readyState !== WebSocket.OPEN) {
+            this.declareDead("socket not OPEN after wake")
+            return
+        }
+        this.sendPing(this.wakeProbeTimeoutMs)
+    }
+
+    private onVisibilityChange = (): void => {
+        if (document.visibilityState === "visible") {
+            this.probeConnection()
+        }
+    }
+
+    private attachWakeListeners(): void {
+        if (this.wakeListenersAttached) {
+            return
+        }
+        this.wakeListenersAttached = true
+        window.addEventListener("online", this.probeConnection)
+        window.addEventListener("focus", this.probeConnection)
+        window.addEventListener("pageshow", this.probeConnection)
+        document.addEventListener("visibilitychange", this.onVisibilityChange)
+
+        // Announce a deliberate departure before the socket goes away.
+        //
+        // This does NOT distinguish a reload from a tab close -- the browser
+        // does not know which is happening when these fire, and won't until
+        // the next page load. The backend still has to wait out its grace
+        // period to find out.
+        //
+        // What it does buy is a reliable signal that the departure was
+        // deliberate. The backend otherwise infers that from close code 1001,
+        // which is not guaranteed to arrive: a tab closed over a flaky link
+        // can land as 1006 and be misread as a suspend, which means waiting
+        // indefinitely instead of shutting down. An explicit goodbye sent
+        // ahead of the close frame removes that failure mode.
+        window.addEventListener("pagehide", this.sendGoodbye)
+        window.addEventListener("beforeunload", this.sendGoodbye)
+    }
+
+    private goodbyeSent: boolean = false
+
+    private sendGoodbye = (): void => {
+        if (this.goodbyeSent) {
+            return   // pagehide and beforeunload both fire; only send once
+        }
+        if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+            return
+        }
+        this.goodbyeSent = true
+        try {
+            // Must be synchronous -- the page is being torn down and there is
+            // no opportunity to await anything.
+            this.websocket.send(serialize({type: "__goodbye__"}))
+        } catch (e) {
+            console.debug("Could not send goodbye:", e)
+        }
+    }
+
+    private detachWakeListeners(): void {
+        if (!this.wakeListenersAttached) {
+            return
+        }
+        this.wakeListenersAttached = false
+        window.removeEventListener("online", this.probeConnection)
+        window.removeEventListener("focus", this.probeConnection)
+        window.removeEventListener("pageshow", this.probeConnection)
+        document.removeEventListener("visibilitychange", this.onVisibilityChange)
+        window.removeEventListener("pagehide", this.sendGoodbye)
+        window.removeEventListener("beforeunload", this.sendGoodbye)
     }
     
     /**
@@ -237,13 +453,28 @@ export class WebSocketTransport implements TransportBase {
                 reject(new Error("WebSocket not initialized"))
                 return
             }
-            
+
+            // Held so that declareDead() and close() can end run() even when
+            // the socket is half-open and never fires onclose.
+            this.runResolve = resolve
+
             // Set up message handler
             this.websocket.onmessage = (event: MessageEvent) => {
                 if (typeof event.data === 'string' || event.data instanceof String) {
                     try {
                         const data = deserialize(event.data as string)
-                        
+
+                        // Transport-level keepalive reply. Handled here and
+                        // never surfaced to the application callback.
+                        if (data && data.type === "__pong__") {
+                            this.notePong()
+                            return
+                        }
+
+                        // Any inbound traffic at all proves the socket is alive,
+                        // so an outstanding pong deadline can be stood down.
+                        this.notePong()
+
                         if (this.onMessageCallback) {
                             this.onMessageCallback(data)
                         }
@@ -252,7 +483,7 @@ export class WebSocketTransport implements TransportBase {
                     }
                 }
             }
-            
+
             // Set up close handler
             this.websocket.onclose = (event: CloseEvent) => {
                 console.debug(
@@ -260,16 +491,20 @@ export class WebSocketTransport implements TransportBase {
                     `reason=${event.reason || 'none'}, ` +
                     `clean=${event.wasClean}`
                 )
+                this.stopHeartbeat()
                 this.connected = false
                 this.initialized = false
-                resolve()
+                this.finishRun()
             }
-            
+
             // Set up error handler
             this.websocket.onerror = (event: Event) => {
                 console.error("WebSocket error:", event)
                 // Don't reject here — let onclose handle it
             }
+
+            this.startHeartbeat()
+            this.attachWakeListeners()
         })
     }
 
@@ -286,14 +521,20 @@ export class WebSocketTransport implements TransportBase {
     }
     
     close(): void {
+        this.stopHeartbeat()
+        this.detachWakeListeners()
+
         if (this.websocket) {
             this.websocket.close()
             this.websocket = undefined
             this.connected = false
             this.initialized = false
         }
+
+        // Ensure a pending run() promise does not outlive the transport.
+        this.finishRun()
     }
-    
+
     isConnected(): boolean {
         return this.websocket !== undefined &&
                this.websocket.readyState === WebSocket.OPEN &&

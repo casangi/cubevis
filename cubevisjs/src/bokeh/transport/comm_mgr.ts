@@ -68,6 +68,11 @@ interface QueuedMessage {
 interface PendingRequest {
     commId: string
     messageId: string
+    /**
+     * Retained so a request that was in flight when the connection dropped can
+     * be pushed back onto its comm's send queue and replayed after reconnection.
+     */
+    message: any
     callback?: (response: any) => void
 }
 
@@ -107,6 +112,7 @@ export class CommMgr extends Model {
     private maxReconnectDelay: number = 30000  // Max 30 seconds
     private reconnectTimer?: number
     private shouldReconnect: boolean = true
+    private wakeRecoveryAttached: boolean = false
 
     private comms: Map<string, Comm> = new Map()
     private handlers: Map<string, Map<string, (msg: any, ctx: HandlerContext) => any>> = new Map()
@@ -190,6 +196,7 @@ export class CommMgr extends Model {
                 if (!this.address) {
                     throw new Error("WebSocket transport requires address")
                 }
+                this.attachWakeRecovery()
                 await this.connectWebSocket()
             } else if (transportType === 'colab' || transportType === 'jupyter') {
                 this.transport = new CommsTransport(this)
@@ -233,6 +240,51 @@ export class CommMgr extends Model {
                 //throw e
             }
         }
+    }
+
+    /**
+     * Recover promptly when the machine wakes, the tab is refocused, or the
+     * network comes back.
+     *
+     * The transport's own heartbeat will eventually notice a dead socket, but
+     * these events are a much better signal and arrive immediately. They also
+     * clear the backoff, which matters because a laptop closed overnight will
+     * otherwise be sitting at the 30s ceiling -- or past maxReconnectAttempts
+     * entirely, where scheduleReconnect() has paused the retry loop and only a
+     * backoff reset can restart it.
+     */
+    private attachWakeRecovery(): void {
+        if (this.wakeRecoveryAttached) {
+            return
+        }
+        this.wakeRecoveryAttached = true
+
+        const onWake = () => {
+            if (!this.shouldReconnect || this.state === AppState.STOPPED) {
+                return
+            }
+            if (this.transport && this.transport.isConnected()) {
+                return
+            }
+
+            console.debug("Wake/online detected — retrying connection immediately")
+            this.resetBackoff()
+
+            if (this.reconnectTimer !== undefined) {
+                clearTimeout(this.reconnectTimer)
+                this.reconnectTimer = undefined
+            }
+            this.scheduleReconnect()
+        }
+
+        window.addEventListener("online", onWake)
+        window.addEventListener("focus", onWake)
+        window.addEventListener("pageshow", onWake)
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "visible") {
+                onWake()
+            }
+        })
     }
 
     /**
@@ -297,10 +349,13 @@ export class CommMgr extends Model {
             // Run transport until it closes
             await this.transport.run()
 
+            this.resetConnectionState()
+
             // Transport closed - attempt reconnection if still active
             if (this.shouldReconnect && this.state !== AppState.STOPPED) {
                 console.debug("Transport closed, attempting reconnection...")
-                this.scheduleReconnect()  // ← This should be called!
+                this.state = AppState.INITIALIZING
+                this.scheduleReconnect()
             } else {
                 console.log("Not reconnecting (shouldReconnect=" + this.shouldReconnect + ", state=" + this.state + ")")
             }
@@ -308,12 +363,61 @@ export class CommMgr extends Model {
         } catch (e) {
             console.error("Transport error:", e)
 
+            this.resetConnectionState()
+
             // Attempt reconnection on error
             if (this.shouldReconnect && this.state !== AppState.STOPPED) {
                 console.debug("Transport error, attempting reconnection...")
+                this.state = AppState.INITIALIZING
                 this.scheduleReconnect()
             }
         }
+    }
+
+    /**
+     * Discard per-connection state after the transport goes away.
+     *
+     * Without this a comm that had a request in flight when the socket dropped
+     * stays in `pending` forever: flushAllQueues() skips it and send() queues
+     * behind it, so that comm never recovers even though the socket did.
+     *
+     * In-flight requests are pushed back onto the FRONT of their comm's queue
+     * so their callbacks still fire once the backend replies after
+     * reconnection. This mirrors CommMgr._reset_for_reconnect() in Python.
+     */
+    private resetConnectionState(): void {
+        let requeued = 0
+
+        for (const [requestId, req] of this.pendingRequests.entries()) {
+            const queue = this.sendQueue.get(req.commId) ?? []
+            queue.unshift({
+                messageId: req.messageId,
+                message:   req.message,
+                requestId,
+                callback:  req.callback,
+            })
+            this.sendQueue.set(req.commId, queue)
+            requeued++
+        }
+
+        this.pendingRequests.clear()
+        this.pending.clear()
+
+        if (requeued > 0) {
+            console.debug(`Re-queued ${requeued} in-flight request(s) for replay after reconnection`)
+        }
+    }
+
+    /**
+     * Reset the exponential backoff clock.
+     *
+     * Used when the machine wakes or the network returns: the backoff should
+     * not keep counting down while the machine was suspended, and a wake is the
+     * best possible moment to retry.
+     */
+    private resetBackoff(): void {
+        this.reconnectAttempts = 0
+        this.reconnectDelay = 1000
     }
 
     /**
@@ -327,9 +431,18 @@ export class CommMgr extends Model {
 
         // Check if we've exceeded max attempts
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            console.error(`Failed to reconnect after ${this.maxReconnectAttempts} attempts`)
+            // Stop the automatic retry loop but stay recoverable: a later wake,
+            // refocus or network-up event calls resetBackoff() and tries again.
+            //
+            // Do NOT report this as fatal. reportError(..., true) calls
+            // requestShutdown(), which sets shouldReconnect = false and makes
+            // recovery impossible -- a laptop closed overnight will always blow
+            // through the attempt cap.
+            console.warn(
+                `Pausing reconnection after ${this.maxReconnectAttempts} attempts; ` +
+                `will retry when the tab regains focus or the network returns`
+            )
             this.state = AppState.ERROR
-            this.reportError(new Error("Max reconnection attempts exceeded"), true)
             return
         }
 
@@ -338,16 +451,22 @@ export class CommMgr extends Model {
             clearTimeout(this.reconnectTimer)
         }
 
-        // Calculate delay with exponential backoff
-        const delay = Math.min(
+        // Calculate delay with exponential backoff, plus +/-20% jitter so that
+        // several tabs waking at once do not stampede the backend.
+        const base = Math.min(
             this.reconnectDelay * Math.pow(2, this.reconnectAttempts),
             this.maxReconnectDelay
         )
+        const delay = Math.round(base * (0.8 + Math.random() * 0.4))
 
         console.log(`Reconnecting in ${delay}ms...`)
 
         // Schedule reconnection
         this.reconnectTimer = window.setTimeout(async () => {
+            // Clear the handle first. send() gates its recovery path on
+            // `!this.reconnectTimer`, and leaving it set makes that path dead
+            // after the very first reconnect.
+            this.reconnectTimer = undefined
             this.reconnectAttempts++
 
             try {
@@ -549,6 +668,7 @@ private sendImmediate(
         this.pendingRequests.set(requestId, {
             commId,
             messageId,
+            message,
             callback
         })
         

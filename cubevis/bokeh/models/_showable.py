@@ -10,7 +10,6 @@ from .. import BokehInit
 from ...utils import is_colab
 
 logger = logging.getLogger(__name__)
-_executor = concurrent.futures.ThreadPoolExecutor( )
 
 class Showable(LayoutDOM,BokehInit):
     """Wrap a UIElement to make any Bokeh UI component showable with show()
@@ -123,9 +122,6 @@ class Showable(LayoutDOM,BokehInit):
         # Let Bokeh handle document management through the normal flow
         super().__init__(**kwargs)
 
-        # state for get_future/get_result
-        self._future = None
-
         # Set the UI element
         if ui_element is not None:
             self.ui = ui_element
@@ -212,31 +208,106 @@ class Showable(LayoutDOM,BokehInit):
         # The document setter handles it for the bokeh.plotting.show() path.
 
     def get_future(self, callback=None):
+        """Return the future that will hold this Showable's GUI result.
+
+        This is the *live* future owned by the application backend, not a
+        wrapper around it, so it is already done by the time the user stops
+        the application. Wrapping it in a second future submitted to a thread
+        pool meant the wrapper was never done on the first call, and it parked
+        a pool worker for the lifetime of the session.
+
+        Args:
+            callback: optional single-argument callable, invoked with the result
+                once it is available. It runs on whichever thread completes the
+                future, which in a notebook is a background thread with no
+                associated cell, so ``print()`` from it will not appear in the
+                notebook. Write to an ``ipywidgets.Output`` created in the
+                displaying cell, or push the value through the application's
+                own comm channel, instead.
+
+        Raises:
+            RuntimeError: if this Showable produces no result, or if the backend
+                has not been started yet so there is nothing to wait on.
+        """
         if self._result_retrieval is None:
             raise RuntimeError(
                 f"{self.name if self.name else 'this showable'} does not return a result"
             )
-        if getattr(self, '_future', None) is not None:
-            return self._future  # silently return the existing future
 
-        if callback is None:
-            callback = lambda result: print(f"Result: {result}")
+        future = self._result_retrieval( )
 
-        self._future = _executor.submit(self._result_retrieval().result)
-        self._future.add_done_callback(
-            lambda f: callback(f.result()) if not f.cancelled() else None
-        )
-        return self._future
+        if callback is not None:
+            if not callable(callback):
+                raise ValueError("result callback must be callable")
 
-    def get_result(self, default=None):
+            def _invoke(f):
+                if f.cancelled( ):
+                    return
+                try:
+                    result = f.result( )
+                except Exception:
+                    ### concurrent.futures swallows exceptions raised inside a done
+                    ### callback into its own logger, which is invisible in a
+                    ### notebook. Log it somewhere it will actually be seen.
+                    logger.exception(
+                        "\tShowable::get_future(): backend task failed; result callback skipped"
+                    )
+                    return
+                try:
+                    callback(result)
+                except Exception:
+                    logger.exception("\tShowable::get_future(): result callback raised")
+
+            future.add_done_callback(_invoke)
+
+        return future
+
+    def get_result(self, default=None, timeout=None):
+        """Return the GUI result if it is available, otherwise ``default``.
+
+        Args:
+            default: value returned when no result is available yet.
+            timeout: ``None`` or ``0`` (the default) polls and returns
+                immediately. A positive number of seconds blocks for up to that
+                long before giving up and returning ``default``.
+
+        Note:
+            Do not block indefinitely on the kernel's main thread while the
+            application is using the Jupyter comm transport: comm messages are
+            dispatched by that thread, so the stop message that resolves this
+            future could never arrive and the call would deadlock. A bounded
+            ``timeout`` is safe.
+        """
         if self._result_retrieval is None:
             raise RuntimeError(
                 f"{self.name if self.name else 'this showable'} does not return a result"
             )
-        future = self.get_future( )
-        if future is None or not future.done():
+
+        try:
+            future = self._result_retrieval( )
+        except RuntimeError:
+            ### backend has not been started, so there is no future to wait on
+            logger.debug(f"\tShowable::get_result(): no result future yet: {id(self)}")
             return default
-        return future.result()
+
+        if future is None:
+            return default
+
+        if not timeout:
+            return future.result( ) if future.done( ) else default
+
+        if not isinstance(future, concurrent.futures.Future):
+            raise TypeError(
+                f"a timeout requires a concurrent.futures.Future, but the backend "
+                f"supplied a {type(future).__name__}. Context.execute( ) returns an "
+                f"asyncio.Task in ASYNC_TASK mode and a bare value in SYNC mode; "
+                f"only THREAD mode yields a Future."
+            )
+
+        try:
+            return future.result(timeout)
+        except concurrent.futures.TimeoutError:
+            return default
 
     def _deregister(self):
         if self._app_context is not None:

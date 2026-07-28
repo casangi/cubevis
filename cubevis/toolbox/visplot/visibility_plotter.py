@@ -1573,7 +1573,6 @@ function doPlot(reload) {
         try {
             if (resp.raster_image != null) {
                 r_img_src.data['image'] = [resp.raster_image];
-                r_img_src.change.emit();  // always emit to keep hover renderer active
             }
             if (resp.raster_x0 != null) {
                 r_img_src.data['x']  = [resp.raster_x0];
@@ -1584,6 +1583,20 @@ function doPlot(reload) {
                 r_fig.y_range.start = resp.raster_y0; r_fig.y_range.end = resp.raster_y1;
                 r_fig.x_range.reset_start = resp.raster_x0; r_fig.x_range.reset_end = resp.raster_x1;
                 r_fig.y_range.reset_start = resp.raster_y0; r_fig.y_range.reset_end = resp.raster_y1;
+            }
+            // Single emit *after* image and x/y/dw/dh are both settled — a
+            // ColumnDataSource.data mutation is a plain dict write and does
+            // not itself notify the renderer (no Bokeh server here to sync
+            // that automatically), so emitting between the two blocks above
+            // redrew the glyph with the new image but the still-stale
+            // x/y/dw/dh box from the previous axes, positioning the correct
+            // pixels outside the new viewport (all black) even though
+            // r_fig's ranges/labels/title (driven by their own property
+            // setters, not this CDS) updated correctly. Always emit here —
+            // raster_image is always sent, even when axes are unchanged, to
+            // keep the hover renderer active.
+            if (resp.raster_image != null) {
+                r_img_src.change.emit();
             }
             if (resp.raster_x_label != null) r_fig.below[0].axis_label = resp.raster_x_label;
             if (resp.raster_y_label != null) r_fig.left[0].axis_label  = resp.raster_y_label;

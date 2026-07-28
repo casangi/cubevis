@@ -141,10 +141,15 @@ _PRESETS = {
     ),
 }
 
-_RASTER_Y_OPTIONS   = [("TIME",      "Time"),
-                       ("BASELINE",  "Baseline")]
-_RASTER_X_OPTIONS   = [("CHANNEL",  "Channel"),
-                       ("TIME",     "Time")]
+# Both raster axes share the same dimension vocabulary. Selecting the
+# same dimension for both Y and X is rejected — see the conflict guard
+# wired up in _build_sidebar() (client-side) and _handle_plot()
+# (server-side).
+_RASTER_AXIS_OPTIONS = [("TIME",     "Time"),
+                        ("BASELINE", "Baseline"),
+                        ("CHANNEL",  "Channel")]
+_RASTER_Y_OPTIONS   = _RASTER_AXIS_OPTIONS
+_RASTER_X_OPTIONS   = _RASTER_AXIS_OPTIONS
 _RASTER_QTY_OPTIONS = [("AMPLITUDE", "Amplitude"),
                        ("PHASE",     "Phase")]
 _SCATTER_X_OPTIONS  = [("UVDIST",    "UV Distance"),
@@ -836,6 +841,22 @@ for (const dt of other.tools) {
                     log.warning("_handle_plot: unknown Axis %r for %s",
                                 msg[key], key)
 
+        # Raster Y and X share the same {time, baseline, channel}
+        # vocabulary — reject a request that lands both on the same
+        # dimension. The browser already refuses to send this (doPlot's
+        # own guard, plus the live warning on the Selects themselves),
+        # but this handler is the single entry point for Plot ▶,
+        # Reload ↺, every preset button, and any future programmatic
+        # caller, so it's checked again here rather than trusted from
+        # the client — no Bokeh server means nothing enforces this
+        # automatically on the Python side otherwise.
+        if self._raster_y == self._raster_x:
+            text = (f"⚠ Raster Y and X axes must be different "
+                     f"(both set to {self._raster_y.label}).")
+            self._notify(text)
+            return {"status": "error", "status_text": text,
+                    "notify_text": text, "notify_color": "#f38ba8"}
+
         self._selection = self._build_selection()
         pols      = self._selection.correlation or ["XX"]
         first_pol = pols[0]
@@ -1421,6 +1442,37 @@ document.documentElement.style.background = '#181825';
             options=[(k, v) for k, v in _RASTER_QTY_OPTIONS],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+
+        # Raster Y/X conflict — both selects share the same {time,
+        # baseline, channel} vocabulary, so nothing stops them landing on
+        # the same value independently. This gives immediate feedback the
+        # moment that happens; doPlot() (below) refuses to send a request
+        # while it's in that state, and _handle_plot rejects it
+        # server-side too as a backstop for the preset buttons and any
+        # future programmatic caller. No Bokeh server here, so all three
+        # checks are independent — none of them can rely on the others
+        # having already run.
+        self._raster_axis_conflict_msg = "⚠ Raster Y and X axes must be different."
+        raster_axis_conflict_js = CustomJS(
+            args={
+                "ry_sel":     self._ry_select,
+                "rx_sel":     self._rx_select,
+                "notify_div": self._notify_div,
+                "msg":        self._raster_axis_conflict_msg,
+            },
+            code="""
+const conflict = (ry_sel.value === rx_sel.value);
+if (conflict) {
+    notify_div.text = msg;
+    notify_div.styles = {...notify_div.styles, color: '#f38ba8'};
+} else if (notify_div.text === msg) {
+    notify_div.text = '';
+}
+""",
+        )
+        self._ry_select.js_on_change("value", raster_axis_conflict_js)
+        self._rx_select.js_on_change("value", raster_axis_conflict_js)
+
         raster_cmap = self._raster.colormap_controls()
         self._raster_cmap_widgets = self._style_cmap_column(raster_cmap, dark)
 
@@ -1537,6 +1589,18 @@ btn.label        = collapsing ? '⟩' : '⟨';
         # Shared plot-send logic used by Plot ▶, Reload ↺, and all presets.
         _do_plot_js = """
 function doPlot(reload) {
+    // Raster Y/X conflict — refuse to send rather than let the server
+    // round-trip reject it. The live listener on ry_sel/rx_sel already
+    // shows this same warning as soon as the conflict appears; this is
+    // the enforcement point (Plot ▶, Reload ↺, and every preset all
+    // funnel through here).
+    if (ry_sel.value === rx_sel.value) {
+        if (notify_div) {
+            notify_div.text = raster_axis_conflict_msg;
+            notify_div.styles = {...notify_div.styles, color: '#f38ba8'};
+        }
+        return;
+    }
     const corr = corr_cbg.labels.filter((_, i) => corr_cbg.active.includes(i));
     ctrl.send(ids['plot'], {
         field:       field_sel.value,
@@ -1645,6 +1709,7 @@ function doPlot(reload) {
             "s_img_src":  self._scatter._image_source,
             "r_state":    self._raster._state_source,
             "s_state":    self._scatter._state_source,
+            "raster_axis_conflict_msg": self._raster_axis_conflict_msg,
         }
 
         plot_js = CustomJS(

@@ -15,12 +15,80 @@ dependencies = [
     "certifi",
     "matplotlib",
 ]
+# --- Python Versions
+# Should work with later versions and probably with slightly newer versions.
+# The latest (Wed Jul 29 14:06:15 EDT 2026) astroviper packages use:
+#
+#      requires-python = ">=3.11,<3.14"
+#
 requires-python = ">=3.11"
 readme = "README.rst"
 license = {text = "LGPL"}
 
 [project.optional-dependencies]
 notebook = ["anywidget"]
+
+# --- Backend/implementation extras -----------------------------------------
+# These name the library stack, not the app or data format. Most users
+# should reach for the app-named extras below instead; these exist as
+# building blocks for those, and for anyone composing a custom environment
+# (e.g. the combined casa6+xarray pixi environment) who genuinely cares
+# about the backend rather than the app.
+
+# CASA6 (legacy) backend. Pure-PyPI extra; safe to install standalone via pip.
+casa6 = ["casatasks"]
+# AstroVIPER / MSv4 backend. xarray-ms IS on PyPI (ratt-ru/xarray-ms, pure
+# Python wheel), NOT on conda-forge. Confirmed Requires-Dist (0.5.4):
+#   arcae<0.6.0,>=0.5.4, rarg-python-patterns>=0.0.3,
+#   typing-extensions>=4.12.2, xarray>=2025.0
+# Notably xarray-ms itself declares no pyarrow pin - dask/zarr support is
+# also explicitly "install separately" per its docs, so cubevis adds them
+# below. Track the 0.5.x stable line; the 0.4.0a* releases are an older
+# pre-release branch, not a newer one - don't let a naive ">=0.4" pin
+# accidentally resolve to those.
+#
+# `arcae` (Arrow C++ / casacore bindings) is where the real ABI risk lives,
+# not xarray-ms. Deliberately NOT adding our own pyarrow pin here: arcae
+# declares its own pyarrow-compatible range, and a second, independently
+# guessed pin in this file would just fight arcae's constraint instead of
+# deferring to it. If a pin does turn out to be necessary, check
+# `pip show arcae` after install to see what it actually requires and match
+# it - don't reintroduce a pin from a hunch.
+#
+# NOTE: this extra is only known-good in isolation. Installing
+# `cubevis[casa6,xarray]` together via plain pip is NOT supported and may
+# resolve to a version set that is ABI-incompatible at the C++ level
+# (casatools' linked libprotobuf vs. arcae's linked libprotobuf/arrow) even
+# though pip's resolver reports success. pip has no mechanism to express or
+# check that constraint - only conda/pixi package metadata carries the
+# relevant ABI/build info. For combined casa6+xarray environments, use the
+# pixi environment shipped in `pixi.toml` instead of pip extras.
+xarray = [
+    "xarray-ms>=0.5,<0.6",
+    "zarr",
+    "dask[array]",
+    "distributed",
+]
+
+# --- App-named extras -------------------------------------------------------
+# What a user actually installs cubevis for. Document/recommend these in
+# the README and quickstart rather than the backend extras above.
+#
+# iclean is casatasks-only.
+#
+# visplot is xarray-ms/arcae-only for BOTH its MSv2 and MSv4 backends - arcae
+# reads MSv2 tables directly, no casatasks involved - so "I have old-format
+# data" is NOT a reason to reach for [casa6]; [visplot] (or [xarray]) is
+# still correct even for MSv2 data.
+#
+# Self-referential extras (a package listing itself[other-extra]) are
+# standard PEP 621/pip behavior and resolve fine at install time. If
+# iclean/visplot's backend needs ever diverge from casa6/xarray 1:1, update
+# these two lines only - the public names iclean/visplot don't need to
+# change for users.
+iclean = ["cubevis[casa6]"]
+visplot = ["cubevis[xarray]"]
+
 
 [project.urls]
 "Homepage" = "https://github.com/casangi/cubevis?tab=readme-ov-file#cubevis---visualization-tools-for-casa-images"

@@ -31,6 +31,11 @@ Tests
 6. rerender            programmatic re-render updates source in place
 7. Datashader          rendered agg shape, finite pixels, colourmap
 8. Timing              full raster pipeline < 8s end-to-end
+
+Also covered further down (added after this list was last updated):
+update_axes(), color_mode, colormap scaling, decimation, and
+TestDeferredConstruction — construct with defer_initial_render=True
+(no backend query; see decision 11 in the grid/iteration design notes).
 """
 
 from __future__ import annotations
@@ -1031,6 +1036,133 @@ class TestUpdateAxes:
 
 
 # ---------------------------------------------------------------------------
+# 8b. Deferred construction — construct without querying the backend
+# ---------------------------------------------------------------------------
+
+class TestDeferredConstruction:
+    """Tests for defer_initial_render=True — construct a VisibilityRaster's
+    Bokeh scaffolding (figure, layout, state source) without querying the
+    backend, so the object can exist as an inactive shell (e.g. a duo-mode
+    slot's inactive kind) until it's actually needed. See decision 11 in
+    the grid/iteration design notes.
+    """
+
+    def setup_method(self):
+        _require_datashader()
+        _suppress_warnings()
+        self.backend = _open_backend()
+        meta = self.backend.metadata()
+        self.pols = meta["correlation_labels"]
+        t0, t1 = meta["time_range"]
+        self.sel = SelectionSpec(
+            time_range=(t0, t0 + (t1 - t0) * 0.15),
+            channel_range=(0, 48),
+        )
+
+    def teardown_method(self):
+        self.backend.close()
+
+    def test_defer_leaves_agg_none(self):
+        """defer_initial_render=True must not query the backend at all."""
+        vr = _make_vr(self.backend, self.sel, defer_initial_render=True)
+        assert vr.agg is None, (
+            "agg must stay None until the first real render — "
+            "defer_initial_render appears to have queried the backend"
+        )
+
+    def test_defer_still_constructs_figure_and_layout(self):
+        """Bokeh scaffolding must exist even though nothing was queried."""
+        vr = _make_vr(self.backend, self.sel, defer_initial_render=True)
+        assert vr.figure is not None
+        assert vr.layout is not None
+
+    def test_defer_produces_valid_blank_image(self):
+        """Deferred image must be a valid, fully-transparent placeholder —
+        same fallback path a real degenerate/empty-selection render uses,
+        not a new one."""
+        vr = _make_vr(self.backend, self.sel, defer_initial_render=True)
+        img = vr._image_source.data["image"][0]
+        assert img.dtype == np.uint32
+        assert img.shape == (PLOT_H, PLOT_W)
+        assert (img == 0).all(), "Deferred image should be all-zero (blank)"
+
+    def test_defer_produces_sane_placeholder_ranges(self):
+        """Ranges must be non-degenerate (x0 != x1, y0 != y1) so the figure
+        itself constructs with valid pan/zoom bounds, even though they're
+        placeholder values rather than real data extents."""
+        vr = _make_vr(self.backend, self.sel, defer_initial_render=True)
+        assert vr._x_range == (0.0, 1.0)
+        assert vr._y_range == (0.0, 1.0)
+
+    def test_defer_is_much_faster_than_real_render(self):
+        """Deferred construction must not pay the backend query cost —
+        the whole point of decision 11. Real construction of the same
+        selection is the baseline; deferred should be at least an order
+        of magnitude faster, not just "somewhat" faster, since it does
+        no I/O at all."""
+        t0 = time_mod.perf_counter()
+        _make_vr(self.backend, self.sel)
+        real_elapsed = time_mod.perf_counter() - t0
+
+        t0 = time_mod.perf_counter()
+        _make_vr(self.backend, self.sel, defer_initial_render=True)
+        deferred_elapsed = time_mod.perf_counter() - t0
+
+        print(f"  real={real_elapsed:.3f}s  deferred={deferred_elapsed:.3f}s")
+        assert deferred_elapsed < real_elapsed / 10 or deferred_elapsed < 0.05, (
+            f"Deferred construction ({deferred_elapsed:.3f}s) is not "
+            f"dramatically faster than real construction ({real_elapsed:.3f}s) "
+            "— defer_initial_render may still be querying the backend"
+        )
+
+    def test_first_update_axes_with_explicit_values_renders(self):
+        """Activating a deferred panel by passing its own current axes
+        back explicitly (the natural 'this slot just became active' call)
+        must perform a real render, even though nothing numerically
+        changed."""
+        vr = _make_vr(self.backend, self.sel, defer_initial_render=True)
+        assert vr.agg is None
+        vr.update_axes(
+            y_dim=vr._y_dim, x_dim=vr._x_dim,
+            quantity=vr._quantity, polarization=vr._polarization,
+        )
+        assert vr.agg is not None, (
+            "update_axes() with explicit (unchanged) current axes must "
+            "still materialize a deferred panel"
+        )
+        assert vr.agg.ndim == 2
+
+    def test_bare_update_axes_after_defer_renders(self):
+        """Regression test: update_axes() with *no* arguments at all must
+        still materialize a deferred panel. This is the case that was
+        actually broken before the self._agg is None guard was added —
+        the pre-existing 'no-op when unchanged' logic (correct for an
+        already-rendered panel; see test_update_axes_noop_when_unchanged)
+        would otherwise silently leave a deferred panel blank forever,
+        since nothing about its axes technically 'changes' on activation."""
+        vr = _make_vr(self.backend, self.sel, defer_initial_render=True)
+        assert vr.agg is None
+        vr.update_axes()
+        assert vr.agg is not None, (
+            "Bare update_axes() must still render a never-yet-rendered panel"
+        )
+
+    def test_update_axes_still_noop_when_already_rendered_and_unchanged(self):
+        """Sanity check that the defer fix didn't regress the existing
+        no-op guarantee for a normally-constructed (already-rendered)
+        panel — see test_update_axes_noop_when_unchanged."""
+        vr = _make_vr(self.backend, self.sel)   # defer_initial_render=False
+        old_agg = vr.agg
+        assert old_agg is not None
+        vr.update_axes()
+        assert vr.agg is old_agg, (
+            "No-op update_axes() on an already-rendered panel must not "
+            "replace agg — the defer fix should only affect never-yet-"
+            "rendered panels"
+        )
+
+
+# ---------------------------------------------------------------------------
 # 9b. ColorMode — global/local colour mapping
 # ---------------------------------------------------------------------------
 
@@ -1643,6 +1775,7 @@ if __name__ == "__main__":
         TestDatashadedOutput,
         TestStateSource,
         TestUpdateAxes,
+        TestDeferredConstruction,
         TestColorMode,
         TestDecimation,
         TestTiming,

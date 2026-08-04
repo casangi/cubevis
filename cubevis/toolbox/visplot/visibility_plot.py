@@ -160,6 +160,21 @@ class VisibilityPlot(Model):
         only want to inspect data.  When ``False``, ``register_select_callback``
         can still be called but nothing in the browser will ever trigger
         it, since no select/flag gesture tool is present.
+    compact_toolbar : bool
+        Whether the figure's toolbar auto-hides until the mouse is over
+        the plot (``bokeh.models.Toolbar.autohide``).  Defaults to
+        ``True``.  Purely a client-side Bokeh behavior — no server-side
+        state, no JS beyond what Bokeh already provides.
+    defer_initial_render : bool
+        If ``True``, construct the figure without querying the backend —
+        a blank placeholder image with sane (non-degenerate) axis ranges
+        is used instead, reusing each subclass's existing degenerate/empty
+        fallback path. The first real ``update_axes()`` or ``rerender()``
+        call (neither of which ever defers) performs the actual query.
+        Defaults to ``False``. Used to construct a panel object — e.g. a
+        slot's inactive kind — without paying its query/render cost until
+        it actually becomes active; see decision 11 in the grid/iteration
+        design notes.
     """
 
     # Bokeh Model properties (synced to JavaScript via Bokeh serialisation)
@@ -181,6 +196,8 @@ class VisibilityPlot(Model):
         comm_mgr=None,
         cursor_source=None,
         enable_flagging: bool = True,
+        compact_toolbar: bool = True,
+        defer_initial_render: bool = False,
         **kwargs,
     ) -> None:
         kwargs.setdefault("vr_id",         str(uuid4())[:8])
@@ -208,6 +225,8 @@ class VisibilityPlot(Model):
         self._height    = height
         self._title     = title   # None → subclass auto-generates
         self._enable_flagging = enable_flagging
+        self._compact_toolbar = compact_toolbar
+        self._defer_initial_render = defer_initial_render
 
         # Coordinate extents — set by _render()
         self._x_range: tuple[float, float] = (0.0, 1.0)
@@ -457,6 +476,16 @@ class VisibilityPlot(Model):
         if title is not None:
             self._title = title;  changed = True
 
+        # A never-yet-rendered (defer_initial_render=True) panel must
+        # render on its first update_axes() call even if the caller passes
+        # its own current axes back unchanged — e.g. "this slot's inactive
+        # kind just became active." See decision 11 in the grid/iteration
+        # design notes; self._agg is None only in that pre-first-render
+        # state, never after (including on legitimately empty selections —
+        # see each subclass's own degenerate-agg fallback).
+        if self._agg is None:
+            changed = True
+
         if not changed:
             return
 
@@ -535,8 +564,10 @@ class VisibilityPlot(Model):
                 "Install: pip install datashader"
             )
 
-        # Initial data query (sets _x_range, _y_range, _image_source)
-        self._render(self._selection)
+        # Initial data query (sets _x_range, _y_range, _image_source) —
+        # skipped when defer_initial_render=True; see that parameter's
+        # docstring and decision 11 in the grid/iteration design notes.
+        self._render(self._selection, defer=self._defer_initial_render)
 
         x0, x1 = self._x_range
         y0, y1 = self._y_range
@@ -556,6 +587,9 @@ class VisibilityPlot(Model):
             tools         = "pan,wheel_zoom,box_zoom,reset,save",
             active_scroll = "wheel_zoom",
         )
+        # Client-side only (bokeh.models.Toolbar.autohide) — no server
+        # round-trip, no JS beyond what Bokeh already generates for it.
+        self._fig.toolbar.autohide = self._compact_toolbar
 
         # Subclass adds its glyphs (image_rgba, scatter, etc.)
         self._build_glyphs()

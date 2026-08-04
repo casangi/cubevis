@@ -30,6 +30,9 @@ Test classes
 6.  ViewportRerender     pan/zoom re-composite from cached DataFrames
 7.  Probe                _handle_probe returns label, range-guard
 8.  UpdateAxes           update_axes() re-queries, preserves selection
+8b. DeferredConstruction defer_initial_render=True — no backend query
+                         until first activation (decision 11, grid/
+                         iteration design notes)
 9.  StateSource          _state_source fields for scatter
 10. EmptySelection       empty/degenerate selection returns blank image
 11. Timing               full pipeline under time budget
@@ -1038,6 +1041,139 @@ class TestUpdateAxes:
 
 
 # ---------------------------------------------------------------------------
+# 8b. Deferred construction — construct without querying the backend
+# ---------------------------------------------------------------------------
+
+class TestDeferredConstruction:
+    """Tests for defer_initial_render=True — construct a VisibilityScatter's
+    Bokeh scaffolding (figure, layout, state source) without querying the
+    backend, so the object can exist as an inactive shell (e.g. a duo-mode
+    slot's inactive kind) until it's actually needed. See decision 11 in
+    the grid/iteration design notes.
+    """
+
+    def setup_method(self):
+        _require_datashader()
+        _suppress_warnings()
+        self.backend = _open_backend()
+        meta = self.backend.metadata()
+        self.pols = meta["correlation_labels"]
+        t0, t1 = meta["time_range"]
+        self.sel = SelectionSpec(
+            time_range=(t0, t0 + (t1 - t0) * 0.15),
+            channel_range=(0, 48),
+        )
+
+    def teardown_method(self):
+        self.backend.close()
+
+    def test_defer_leaves_all_layer_dfs_none(self):
+        """defer_initial_render=True must not query the backend at all.
+
+        Stronger than the empty-selection case (test_empty_selection_
+        layer_df_none_or_empty), which allows None *or* an empty
+        DataFrame depending on what the backend returns for a genuinely
+        empty query — deferred construction never queries at all, so
+        every layer's df must be exactly None.
+        """
+        vs = _make_single_layer(self.backend, self.sel, defer_initial_render=True)
+        assert all(df is None for df in vs._layer_dfs), (
+            "All layer DataFrames must be None — defer_initial_render "
+            "appears to have queried the backend"
+        )
+
+    def test_defer_still_constructs_figure_and_layout(self):
+        """Bokeh scaffolding must exist even though nothing was queried."""
+        vs = _make_single_layer(self.backend, self.sel, defer_initial_render=True)
+        assert vs.figure is not None
+        assert vs.layout is not None
+
+    def test_defer_produces_valid_blank_image(self):
+        """Deferred image must be a valid, fully-transparent placeholder —
+        same fallback path a real empty-selection render uses, not a new
+        one."""
+        vs = _make_single_layer(self.backend, self.sel, defer_initial_render=True)
+        img = vs._image_source.data["image"][0]
+        assert img.dtype == np.uint32
+        assert img.shape == (PLOT_H, PLOT_W)
+        alpha = (img >> 24) & 0xff
+        assert (alpha == 0).all(), "Deferred image should be fully transparent"
+
+    def test_defer_produces_sane_placeholder_ranges(self):
+        """Ranges must be non-degenerate (x0 != x1, y0 != y1) so the figure
+        itself constructs with valid pan/zoom bounds — same placeholder
+        convention already used by _query_all_layers for genuinely empty
+        data, not a new one."""
+        vs = _make_single_layer(self.backend, self.sel, defer_initial_render=True)
+        assert vs._x_range == (0.0, 1.0)
+        assert vs._y_range == (0.0, 1.0)
+
+    def test_defer_is_much_faster_than_real_render(self):
+        """Deferred construction must not pay the backend query cost —
+        the whole point of decision 11."""
+        t0 = time_mod.perf_counter()
+        _make_single_layer(self.backend, self.sel)
+        real_elapsed = time_mod.perf_counter() - t0
+
+        t0 = time_mod.perf_counter()
+        _make_single_layer(self.backend, self.sel, defer_initial_render=True)
+        deferred_elapsed = time_mod.perf_counter() - t0
+
+        print(f"  real={real_elapsed:.3f}s  deferred={deferred_elapsed:.3f}s")
+        assert deferred_elapsed < real_elapsed / 10 or deferred_elapsed < 0.05, (
+            f"Deferred construction ({deferred_elapsed:.3f}s) is not "
+            f"dramatically faster than real construction ({real_elapsed:.3f}s) "
+            "— defer_initial_render may still be querying the backend"
+        )
+
+    def test_first_update_axes_with_explicit_x_dim_renders(self):
+        """Activating a deferred panel by passing its own current x_dim
+        back explicitly must perform a real render, even though nothing
+        numerically changed.
+
+        Note this is the scatter-specific version of a fix that mattered
+        more here than for raster: VisibilityScatter.update_axes()
+        requires x_dim to *actually differ* to register as changed (unlike
+        VisibilityRaster's override, which treats "was a value explicitly
+        passed" as sufficient on its own) — without the self._layer_dfs
+        all-None guard, this call would have silently no-op'd.
+        """
+        vs = _make_single_layer(self.backend, self.sel, defer_initial_render=True)
+        assert all(df is None for df in vs._layer_dfs)
+        vs.update_axes(x_dim=vs._x_dim)   # same value, explicitly passed
+        assert not all(df is None for df in vs._layer_dfs), (
+            "update_axes() with an explicit (unchanged) current x_dim "
+            "must still materialize a deferred panel"
+        )
+
+    def test_bare_update_axes_after_defer_renders(self):
+        """Regression test: update_axes() with *no* arguments at all must
+        still materialize a deferred panel — see
+        test_update_axes_noop_when_unchanged for the (correct, unchanged)
+        no-op behavior this must NOT break for an already-rendered panel."""
+        vs = _make_single_layer(self.backend, self.sel, defer_initial_render=True)
+        assert all(df is None for df in vs._layer_dfs)
+        vs.update_axes()
+        assert not all(df is None for df in vs._layer_dfs), (
+            "Bare update_axes() must still render a never-yet-rendered panel"
+        )
+
+    def test_update_axes_still_noop_when_already_rendered_and_unchanged(self):
+        """Sanity check that the defer fix didn't regress the existing
+        no-op guarantee for a normally-constructed (already-rendered)
+        panel — see test_update_axes_noop_when_unchanged."""
+        vs = _make_single_layer(self.backend, self.sel)   # defer_initial_render=False
+        df_ref = vs._layer_dfs[0]
+        assert df_ref is not None
+        vs.update_axes()
+        assert vs._layer_dfs[0] is df_ref, (
+            "No-op update_axes() on an already-rendered panel must not "
+            "replace layer dfs — the defer fix should only affect "
+            "never-yet-rendered panels"
+        )
+
+
+# ---------------------------------------------------------------------------
 # 9. StateSource
 # ---------------------------------------------------------------------------
 
@@ -1210,6 +1346,7 @@ if __name__ == "__main__":
         TestViewportRerender,
         TestProbe,
         TestUpdateAxes,
+        TestDeferredConstruction,
         TestStateSource,
         TestEmptySelection,
         TestTiming,

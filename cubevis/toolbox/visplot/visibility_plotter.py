@@ -24,7 +24,6 @@ no API changes are required later.
         spw         = "0,1,2,3",
         correlation = "XX,YY",
         datacolumn  = "data",
-        mode        = "both",
         layout      = "side",
         enable_flagging = True,   # False -> quick-look, no Flag/Unflag tools
     )
@@ -32,13 +31,14 @@ no API changes are required later.
 
 Preview scope
 -------------
-* Display mode toggle: Both / Raster only / Scatter only (CustomJS)
+* Layout control (unified, replaces the former separate mode + layout
+  toggles as of July 29 2026): One / Side by Side / Over-Under (CustomJS)
 * ``enable_flagging`` (default True): adds the FlagTool / Unflag drag
   tools to both panels' toolbars, replacing box-select. Set False for a
   quick-look instance with no flagging workflow at all — only
   pan/wheel-zoom/box-zoom/reset/save remain.
-* Layout toggle: Side by Side / Over Under — dual container approach,
-  both Bokeh row/column containers always in the document, one hidden
+* Dual container approach for Side by Side / Over-Under — both Bokeh
+  row/column containers always in the document, one hidden
 * Collapsible sidebar with ⟨/⟩ toggle button
 * Dark-mode sidebar widget styling via InlineStyleSheet
 * Shared toolbar: pan, zoom, reset applied to both figures simultaneously;
@@ -69,8 +69,10 @@ Package location
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
+from dataclasses import dataclass
 from typing import Optional
 from uuid import uuid4
 
@@ -79,9 +81,9 @@ import websockets
 from bokeh.events import MouseEnter, MouseLeave
 from bokeh.layouts import column, row
 from bokeh.models import (
-    Button, CheckboxGroup, ColumnDataSource, CustomJS, Div,
+    Button, CheckboxGroup, ColumnDataSource, CustomAction, CustomJS, Div,
     InlineStyleSheet, MultiSelect, RadioButtonGroup, Select,
-    TextInput, Toggle,
+    TabPanel, Tabs, TextInput, Toggle,
 )
 
 from cubevis.bokeh import BokehInit
@@ -184,6 +186,63 @@ label {
 }
 .bk-btn:hover {
     background: #45475a !important;
+}
+"""
+
+# ---------------------------------------------------------------------------
+# Stage 1c: gear tool icon + Tabs dark styling (added 2026-07-31)
+# ---------------------------------------------------------------------------
+#
+# Hand-authored generic gear/cog glyph (circle hub + eight rotated tooth
+# rectangles) rather than a path borrowed from any icon library, so there's
+# no third-party icon licensing question. Rendered at a small fixed size —
+# fine detail is unnecessary since it only needs to read as "settings" in a
+# toolbar button.
+_GEAR_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+<g fill="#cdd6f4">
+{teeth}
+<circle cx="12" cy="12" r="7" />
+</g>
+<circle cx="12" cy="12" r="3" fill="#1e1e2e" />
+</svg>""".format(teeth="\n".join(
+    f'<rect x="10.5" y="0.5" width="3" height="5" '
+    f'transform="rotate({angle} 12 12)" />'
+    for angle in range(0, 360, 45)
+))
+
+_GEAR_ICON_DATA_URI = (
+    "data:image/svg+xml;base64,"
+    + base64.b64encode(_GEAR_ICON_SVG.encode("utf-8")).decode("ascii")
+)
+
+# Color a panel's figure title switches to while its gear/Tabs config is
+# open (added 2026-07-31). Reuses the same red/pink accent this file
+# already uses for the raster Y/X axis-conflict warning
+# (raster_axis_conflict_msg's notify_div color) rather than introducing a
+# new ad hoc "attention" color into the palette.
+_EDIT_TITLE_COLOR = "#f38ba8"
+
+# Bokeh's Tabs widget uses its own shadow-DOM CSS classes (not the
+# .bk-input/.bk-btn ones _DARK_WIDGET_CSS targets), so it needs its own
+# dark-theme rule set. Not yet visually verified against a live render —
+# flagged for a look once this is tested against the real UI, same as
+# everything else here.
+_DARK_TABS_CSS = """
+:host { --bokeh-base-font: system-ui, sans-serif; }
+.bk-header {
+    background:   #181825 !important;
+    border-color: #45475a !important;
+}
+.bk-tab {
+    color:      #a6adc8 !important;
+    background: transparent !important;
+}
+.bk-tab.bk-active {
+    color:        #cdd6f4 !important;
+    border-color: #89b4fa !important;
+}
+.bk-tab:hover {
+    color: #cdd6f4 !important;
 }
 """
 
@@ -376,6 +435,51 @@ def _make_scatter_layers(
 
 
 # ---------------------------------------------------------------------------
+# _PanelSlot — Stage 1b.5 (added 2026-07-31)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _PanelSlot:
+    """One configurable panel slot: a fixed identity holding both a raster
+    and a scatter object, plus which of the two is currently active.
+
+    Replaces Stage 1b's six separate named attributes
+    (``self._slot_a_raster``/``_slot_a_scatter``/``_slot_b_raster``/
+    ``_slot_b_scatter`` plus ``self._slot_a_kind``/``_slot_b_kind``) with a
+    small record held in an ordered ``self._slots`` list, so code that needs
+    "however many slots currently exist" can iterate rather than reference
+    fixed attribute names. See decision 9's "Stage 1b.5" note in
+    ``visplot-grid-iteration-notes.md`` for the full rationale — this is a
+    pure data-structure refactor with no behavior change from Stage 1b.
+
+    Attributes
+    ----------
+    id : str
+        Slot identifier, e.g. ``"A"`` / ``"B"``. Mode-A-only for now — grid
+        mode's per-cell identifiers are a different (row/col) shape and are
+        not assumed to reuse this class; see the scope note in decision 9.
+    kind : str
+        ``"raster"`` or ``"scatter"`` — which of ``raster``/``scatter`` is
+        currently the slot's active/visible object.
+    raster : VisibilityRaster
+        Always constructed, per decisions 5/9/11 (structural cost paid
+        regardless of whether this slot is currently showing raster).
+    scatter : VisibilityScatter
+        Same as ``raster`` above, for the scatter kind.
+    """
+
+    id: str
+    kind: str
+    raster: "VisibilityRaster"
+    scatter: "VisibilityScatter"
+
+    @property
+    def active(self):
+        """Whichever of ``raster``/``scatter`` matches ``self.kind``."""
+        return self.raster if self.kind == "raster" else self.scatter
+
+
+# ---------------------------------------------------------------------------
 # VisibilityPlotter
 # ---------------------------------------------------------------------------
 
@@ -410,10 +514,11 @@ class VisibilityPlotter:
         Comma-separated correlation labels (``"XX,YY"``).  Default: all.
     datacolumn : str
         Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.
-    mode : str
-        Initial display mode: ``"both"``, ``"raster"``, or ``"scatter"``.
     layout : str
-        Initial layout: ``"side"`` (side by side) or ``"over"`` (over/under).
+        Panel layout: ``"one"`` (single panel, raster by default in this
+        preview — per-panel kind switching is a later addition),
+        ``"side"`` (both panels, side by side), or ``"over"`` (both
+        panels, one above the other). Default ``"side"``.
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
     time_range : tuple[float, float] | list[float] | None
@@ -422,6 +527,9 @@ class VisibilityPlotter:
         ``(start, end)`` in Hz.
     uvdist_range : tuple[float, float] | list[float] | None
         ``(min, max)`` in metres.
+    compact_toolbar : bool
+        Whether each figure's toolbar auto-hides until the mouse is over
+        that plot.  Defaults to ``True``.
     """
 
     def __init__(
@@ -439,13 +547,13 @@ class VisibilityPlotter:
         uvrange:          str           = "",
         correlation:      str           = "",
         datacolumn:       str           = "data",
-        mode:             str           = "both",
         layout:           str           = "side",
         preset:           Optional[str] = None,
         time_range:       tuple[float, float] | list[float] | None = None,
         freq_range:       tuple[float, float] | list[float] | None = None,
         uvdist_range:     tuple[float, float] | list[float] | None = None,
         enable_flagging:  bool           = True,
+        compact_toolbar:  bool           = True,
     ) -> None:
 
         # ------------------------------------------------------------------ #
@@ -470,18 +578,16 @@ class VisibilityPlotter:
         self._uvrange_str   = uvrange
         self._corr_str      = correlation
         self._datacolumn    = datacolumn.upper()
-        self._mode          = mode.lower()
         self._layout        = layout.lower()
         self._preset        = preset.lower() if preset else None
         self._time_range    = time_range
         self._freq_range    = freq_range
         self._uvdist_range  = uvdist_range
         self._enable_flagging = enable_flagging
+        self._compact_toolbar = compact_toolbar
 
-        if self._mode not in ("both", "raster", "scatter"):
-            raise ValueError(f"mode must be 'both', 'raster', or 'scatter'; got {mode!r}")
-        if self._layout not in ("side", "over"):
-            raise ValueError(f"layout must be 'side' or 'over'; got {layout!r}")
+        if self._layout not in ("one", "side", "over"):
+            raise ValueError(f"layout must be 'one', 'side', or 'over'; got {layout!r}")
 
         # ------------------------------------------------------------------ #
         # Open data source                                                     #
@@ -496,8 +602,38 @@ class VisibilityPlotter:
             )
 
         self._selection = self._build_selection()
-        # Record initial selection for raster_axes_changed comparison
-        self._last_raster_selection = self._selection
+        # Group 3 piece 3, Chunk 2 bug fix (added 2026-08-02): per-slot,
+        # not a single shared attribute. Was self._last_raster_selection
+        # (one value for the whole app) — correct only as long as at most
+        # one slot could ever be raster, which Chunk 2 finally allows to
+        # not be true. With two slots both raster, processing slot A
+        # first (in _handle_plot()'s per-slot loop) would set this shared
+        # tracker to match self._selection; by the time slot B's own
+        # axes-changed check ran in the *same call*, the "did selection
+        # change" comparison read as false — even though slot B's raster
+        # object had never had its range data sent to the client at
+        # all — so no x0/x1/y0/y1/title got sent for it, and the browser
+        # crashed trying to set a Bokeh Range1d.start to null. Keyed by
+        # slot.id so each slot's own render history is tracked
+        # independently. Starts empty — self._slots doesn't exist yet at
+        # this point in __init__ — and an absent key is exactly the
+        # right default anyway: .get(slot.id) returning None compares as
+        # "changed" against any real selection, correctly forcing a first
+        # render.
+        self._last_raster_selection_by_slot: dict = {}
+
+        # Recompute-cost fix (added 2026-08-02): scatter previously had no
+        # change-detection at all — it re-rendered unconditionally on
+        # every single _handle_plot() call, regardless of whether its
+        # axes/selection actually changed (a pre-existing asymmetry,
+        # documented but not fixed when Chunk 1 first touched this code).
+        # Two scatter panels can now exist simultaneously, doubling the
+        # wasted recompute on every Plot press — directly the kind of
+        # cost this whole rework started from concern about. Mirrors
+        # self._last_raster_selection_by_slot exactly: per-slot, starts
+        # empty for the same __init__-ordering reason (self._slots
+        # doesn't exist yet here), populated below once it does.
+        self._last_scatter_selection_by_slot: dict = {}
 
         # ------------------------------------------------------------------ #
         # Preset axes                                                          #
@@ -513,7 +649,6 @@ class VisibilityPlotter:
             raster_y, raster_x, raster_qty = ry, rx, rq
             scatter_x, scatter_y           = sx, sy
             self._layout                   = pl
-            self._mode                     = "both"
 
         self._raster_y   = raster_y
         self._raster_x   = raster_x
@@ -560,7 +695,6 @@ class VisibilityPlotter:
                 "name":        "VisibilityPlotter",
                 "initialized": True,
                 "source_path": self._source_path,
-                "mode":        self._mode,
                 "layout":      self._layout,
             },
             title = f"VisibilityPlotter — {os.path.basename(self._source_path)}",
@@ -617,9 +751,46 @@ class VisibilityPlotter:
             data={"x": [math.nan], "y": [math.nan], "fig": [""]}
         )
 
+        # Shared display-order tracker (added 2026-08-03, swap feature).
+        # order[0] is a list of self._slots indices, in current screen-
+        # position order — starts [0, 1], matching self._slot_display_order
+        # (which stays fixed; this is the *live*, client-side-mutable
+        # counterpart used by the actual swap trigger and by layout_js's
+        # "One" mode sizing, which needs to know which slot is currently
+        # primary). A ColumnDataSource, not a plain list, for the same
+        # reason orig_source is one: needs to be read and written by
+        # multiple independently-serialized CustomJS callbacks (both
+        # slots' swap buttons, layout_js) sharing one live reference.
+        # Deliberately a reorderable *list*, not a boolean — duo mode only
+        # ever needs a 2-element swap today, but this is the same
+        # structure a future N-panel "move to" scheme reuses directly,
+        # rather than something to redesign later.
+        self._display_order_source = ColumnDataSource(data={"order": [[0, 1]]})
+
         # Use stretch_width so figures fill available space responsively.
         # Fixed pixel widths are not set — Bokeh's CSS flexbox handles sizing.
-        self._raster = VisibilityRaster(
+        #
+        # ---- Stage 1b: each slot pre-builds BOTH kinds ---------------------
+        # Slot A defaults to raster, slot B defaults to scatter — preserves
+        # today's exact default appearance and behavior. Only each slot's
+        # default-active kind is actually rendered at construction (decision
+        # 11); the inactive kind is a real, comm-registered Bokeh object
+        # (structural cost paid regardless, per decision 9) that stays an
+        # empty shell until first activated via _activate_slot_kind() below.
+        # Nothing calls that method yet — gear/Tabs (a later stage) is what
+        # will eventually wire a UI trigger to it — so for now this is
+        # inert, testable infrastructure, not a behavior change.
+        #
+        # ---- Stage 1b.5: object construction order/kwargs are unchanged
+        # from Stage 1b (still slot A raster, slot A scatter, slot B
+        # scatter, slot B raster) — only the storage after construction
+        # changes, from four named attributes to two _PanelSlot records in
+        # self._slots. See decision 9's "Stage 1b.5" note in
+        # visplot-grid-iteration-notes.md.
+        _slot_a_kind = "raster"
+        _slot_b_kind = "scatter"
+
+        _slot_a_raster = VisibilityRaster(
             backend       = self._reader,
             selection     = self._selection,
             y_dim         = self._raster_y,
@@ -631,11 +802,15 @@ class VisibilityPlotter:
             comm_mgr      = self._comm_mgr,
             cursor_source = self._cursor_source,
             enable_flagging = self._enable_flagging,
+            compact_toolbar = self._compact_toolbar,
+            defer_initial_render = (_slot_a_kind != "raster"),
         )
-
         # One scatter layer per polarisation — multi-layer compositing
-        # naturally boosts density and visibility vs a single layer.
-        self._scatter = VisibilityScatter(
+        # naturally boosts density and visibility vs a single layer. Slot
+        # A's scatter has no user-configured axes yet (nothing can set them
+        # until gear/Tabs exists), so it mirrors slot B's scatter defaults
+        # as a sensible starting point rather than an arbitrary one.
+        _slot_a_scatter = VisibilityScatter(
             backend       = self._reader,
             selection     = self._selection,
             x_axis        = self._scatter_x,
@@ -645,24 +820,123 @@ class VisibilityPlotter:
             comm_mgr      = self._comm_mgr,
             cursor_source = self._cursor_source,
             enable_flagging = self._enable_flagging,
+            compact_toolbar = self._compact_toolbar,
+            defer_initial_render = (_slot_a_kind != "scatter"),
         )
 
-        # Use stretch_width so figures expand to fill available space when
-        # the sidebar is collapsed or layout changes.
-        self._raster.figure.sizing_mode  = "stretch_width"
-        self._scatter.figure.sizing_mode = "stretch_width"
+        _slot_b_scatter = VisibilityScatter(
+            backend       = self._reader,
+            selection     = self._selection,
+            x_axis        = self._scatter_x,
+            layers        = _make_scatter_layers(self._scatter_y, pols),
+            width         = _PANEL_WIDTH_SIDE,
+            height        = _PANEL_HEIGHT,
+            comm_mgr      = self._comm_mgr,
+            cursor_source = self._cursor_source,
+            enable_flagging = self._enable_flagging,
+            compact_toolbar = self._compact_toolbar,
+            defer_initial_render = (_slot_b_kind != "scatter"),
+        )
+        # Slot B's raster mirrors slot A's raster defaults — same reasoning
+        # as slot A's scatter above.
+        _slot_b_raster = VisibilityRaster(
+            backend       = self._reader,
+            selection     = self._selection,
+            y_dim         = self._raster_y,
+            x_dim         = self._raster_x,
+            quantity      = self._raster_qty,
+            polarization  = first_pol,
+            width         = _PANEL_WIDTH_SIDE,
+            height        = _PANEL_HEIGHT,
+            comm_mgr      = self._comm_mgr,
+            cursor_source = self._cursor_source,
+            enable_flagging = self._enable_flagging,
+            compact_toolbar = self._compact_toolbar,
+            defer_initial_render = (_slot_b_kind != "raster"),
+        )
 
-        # Keep the Bokeh toolbar visible on each figure — it provides all
-        # standard tools (pan, wheel zoom, box zoom, reset, save, etc.) with
-        # correct visual feedback.  Tool synchronisation is done via JS
-        # on_change callbacks so selecting a tool on one figure activates
-        # the matching tool on the other.
-        self._raster.figure.toolbar_location  = "right"
-        self._scatter.figure.toolbar_location = "right"
+        # Stage 1b.5: ordered slot records — self._slots[0] is "A",
+        # self._slots[1] is "B". Order matches today's A/B layout
+        # convention; nothing currently depends on list order beyond that.
+        self._slots: list[_PanelSlot] = [
+            _PanelSlot(id="A", kind=_slot_a_kind,
+                       raster=_slot_a_raster, scatter=_slot_a_scatter),
+            _PanelSlot(id="B", kind=_slot_b_kind,
+                       raster=_slot_b_raster, scatter=_slot_b_scatter),
+        ]
+
+        # Now that self._slots exists, populate the per-slot selection
+        # trackers declared earlier (had to start empty — self._slots
+        # didn't exist yet at that point in __init__). Populating them
+        # here with the initial selection, for every slot, avoids an
+        # unnecessary first re-render if the user presses Plot without
+        # having changed anything — for raster this matches what
+        # self._last_raster_selection = self._selection used to do at
+        # construction, just keyed per slot now instead of shared; for
+        # scatter this is new (it previously had no change-detection to
+        # preserve the behavior of), but the same reasoning applies.
+        for _slot in self._slots:
+            self._last_raster_selection_by_slot[_slot.id]  = self._selection
+            self._last_scatter_selection_by_slot[_slot.id] = self._selection
+
+        # Screen-position order, added 2026-07-31 alongside the Group 1/2
+        # slot-indexed rework: self._slot_display_order[0] is whichever
+        # self._slots index is currently drawn first/left/top,
+        # [1] is second/right/bottom. Kept separate from slot *identity*
+        # (self._slots' own order, self._panel_title_state/_tabpanels keyed
+        # by slot.id) on purpose — a future zero-recompute "swap Panel A
+        # and Panel B's screen positions" action (discussed, not yet
+        # built) only needs to reverse this list; it doesn't touch slot
+        # identity, kind, or any rendered content, since both panels'
+        # RGBA data is already cached on their respective slot regardless
+        # of where either is currently drawn. Currently always [0, 1];
+        # nothing reorders it yet.
+        self._slot_display_order: list[int] = [0, 1]
+
+        # All four panel objects (both kinds, both slots) — added 2026-07-31
+        # as part of the Group 1/2 rework. Previously several setup steps
+        # below only touched self._raster/self._scatter (whichever two
+        # objects happen to be kind-active right now, i.e. today always
+        # slot A's raster + slot B's scatter) and silently left the other
+        # two panel objects (slot A's scatter, slot B's raster — both
+        # already constructed per decision 9/11, just not yet displayed)
+        # without this setup applied at all. That was a latent bug, not
+        # just an inconsistency: once a future Kind selector activates one
+        # of those two, it would appear with Bokeh's raw default
+        # sizing/toolbar/theme and *no* select-callback wired for
+        # box-flagging, rather than picking up the same setup every other
+        # panel already has. Fixed by applying setup uniformly to all four
+        # here, at construction time, regardless of which is currently
+        # displayed.
+        self._all_panels = [obj for slot in self._slots
+                            for obj in (slot.raster, slot.scatter)]
+
+        # Use stretch_width so figures expand to fill available space when
+        # the sidebar is collapsed or layout changes. Both .figure and
+        # .layout (the wrapper column: figure + info div) need this — the
+        # latter is applied here too (2026-07-31) rather than only in
+        # _build_plot_area(), so it's already correct on all four panels,
+        # not just whichever two are positioned on screen at any moment.
+        for _panel in self._all_panels:
+            _panel.figure.sizing_mode = "stretch_width"
+            _panel.layout.sizing_mode = "stretch_width"
+
+        # Toolbar sits on the right of each figure, providing all standard
+        # tools (pan, wheel zoom, box zoom, reset, save, etc.) with correct
+        # visual feedback. With compact_toolbar=True (default) it auto-hides
+        # until the mouse is over that plot (bokeh.models.Toolbar.autohide) —
+        # position and hide-behavior are independent Bokeh settings, not in
+        # tension with each other. Tool synchronisation (below) is a
+        # separate, position-based concern — see _pos0/_pos1.
+        for _panel in self._all_panels:
+            _panel.figure.toolbar_location = "right"
 
         # Apply dark mode styling at construction time so figures match the
-        # dark sidebar/status bar without the user needing to press the button.
-        for fig in (self._raster.figure, self._scatter.figure):
+        # dark sidebar/status bar without the user needing to press the
+        # button — for all four, so an initially-inactive panel doesn't
+        # appear in Bokeh's raw default theme the moment it's later shown.
+        for _panel in self._all_panels:
+            fig = _panel.figure
             fig.background_fill_color = "black"
             fig.border_fill_color     = "#1e1e2e"
             if fig.title:
@@ -681,9 +955,19 @@ class VisibilityPlotter:
                     g.grid_line_color = _gc
 
         # ------------------------------------------------------------------ #
-        # Synchronise Bokeh toolbars between the two figures.              #
-        # js_on_change on the toolbar model property fires when the user   #
-        # activates a tool via the Bokeh UI.                               #
+        # Synchronise Bokeh toolbars between the two *currently displayed*  #
+        # figures. js_on_change on the toolbar model property fires when    #
+        # the user activates a tool via the Bokeh UI.                      #
+        #                                                                    #
+        # Position-based (self._pos0/self._pos1), not all-four: syncing pan #
+        # tool state only makes sense between the two figures a user can    #
+        # actually see/interact with side by side right now — the other    #
+        # two panel objects have no visible toolbar to sync in the first    #
+        # place. Uses self._slot_display_order indirectly via _pos0/_pos1,  #
+        # so this keeps tracking "whatever's currently adjacent on screen"  #
+        # if a future swap changes which slot is drawn where. (Kind         #
+        # switching, if/when built, would need this re-wired per switch —   #
+        # out of scope here, same as the rest of Group 3.)                  #
         # ------------------------------------------------------------------ #
         _sync_drag_code = """
 const t = cb_obj.active_drag;
@@ -699,23 +983,34 @@ for (const dt of other.tools) {
     if (dt.type === t.type) { other.active_scroll = dt; return; }
 }
 """
-        r_tb = self._raster.figure.toolbar
-        s_tb = self._scatter.figure.toolbar
+        pos0_tb = self._pos0.figure.toolbar
+        pos1_tb = self._pos1.figure.toolbar
 
-        r_tb.js_on_change("active_drag",
-            CustomJS(args={"other": s_tb}, code=_sync_drag_code))
-        s_tb.js_on_change("active_drag",
-            CustomJS(args={"other": r_tb}, code=_sync_drag_code))
-        r_tb.js_on_change("active_scroll",
-            CustomJS(args={"other": s_tb}, code=_sync_scroll_code))
-        s_tb.js_on_change("active_scroll",
-            CustomJS(args={"other": r_tb}, code=_sync_scroll_code))
+        pos0_tb.js_on_change("active_drag",
+            CustomJS(args={"other": pos1_tb}, code=_sync_drag_code))
+        pos1_tb.js_on_change("active_drag",
+            CustomJS(args={"other": pos0_tb}, code=_sync_drag_code))
+        pos0_tb.js_on_change("active_scroll",
+            CustomJS(args={"other": pos1_tb}, code=_sync_scroll_code))
+        pos1_tb.js_on_change("active_scroll",
+            CustomJS(args={"other": pos0_tb}, code=_sync_scroll_code))
 
         # ------------------------------------------------------------------ #
-        # Wire flag/unflag callbacks. Registering this is harmless even     #
-        # when enable_flagging=False — with no FlagTool present on either   #
-        # figure's toolbar, nothing in the browser ever sends _msg_select,  #
-        # so these closures simply never fire.                             #
+        # Wire flag/unflag callbacks on all four panel objects (not just    #
+        # the two currently kind-active ones — same all-four reasoning as   #
+        # above). Registering this is harmless even when                    #
+        # enable_flagging=False — with no FlagTool present on a figure's    #
+        # toolbar, nothing in the browser ever sends _msg_select for it, so #
+        # these closures simply never fire. Dispatch is by each object's    #
+        # own actual kind (two objects get the raster callback, two get     #
+        # the scatter callback) — kind-based, not slot- or position-based,  #
+        # since _handle_box_select's raster/scatter interpretation is       #
+        # inherently a kind concern. Note: _handle_box_select() itself      #
+        # still reads self._raster_x/self._scatter_x (today's single        #
+        # global axis state) to interpret coordinates — correct today only  #
+        # because only the two currently-displayed figures can actually    #
+        # fire a select event from the browser; becomes Group 3's problem   #
+        # once per-slot axis state exists.                                  #
         # ------------------------------------------------------------------ #
         async def _raster_select(msg, context=None, self=self):
             return await self._handle_box_select(msg, panel="raster")
@@ -723,14 +1018,164 @@ for (const dt of other.tools) {
         async def _scatter_select(msg, context=None, self=self):
             return await self._handle_box_select(msg, panel="scatter")
 
-        self._raster.register_select_callback(_raster_select)
-        self._scatter.register_select_callback(_scatter_select)
+        for slot in self._slots:
+            slot.raster.register_select_callback(_raster_select)
+            slot.scatter.register_select_callback(_scatter_select)
 
         # ------------------------------------------------------------------ #
         # Build layout                                                         #
         # ------------------------------------------------------------------ #
         inner_layout = self._build_layout()
         self._app_context.ui = inner_layout
+
+    # ====================================================================== #
+    # Stage 1b.5 — slot lookup + Stage 1b compatibility properties           #
+    # (properties are still TEMPORARY, see docstrings)                      #
+    # ====================================================================== #
+
+    def _slot_by_id(self, slot_id: str) -> "_PanelSlot":
+        """Look up a ``_PanelSlot`` by its id (``"A"`` / ``"B"``).
+
+        Small helper introduced with the Stage 1b.5 refactor — centralizes
+        the id→record lookup so callers don't index ``self._slots``
+        positionally. Raises ``ValueError`` on an unknown id, same
+        validation ``_activate_slot_kind()`` did directly before this
+        refactor.
+        """
+        for slot in self._slots:
+            if slot.id == slot_id:
+                return slot
+        raise ValueError(f"slot must be one of "
+                          f"{[s.id for s in self._slots]!r}; got {slot_id!r}")
+
+    @property
+    def _pos0(self):
+        """Whichever panel object is currently drawn first/left/top.
+
+        Added 2026-07-31 (Group 1 rework) as the *position*-indexed
+        counterpart to the *kind*-indexed ``self._raster``/``self._scatter``
+        below — deliberately separate properties, not aliases, because
+        kind and screen position are independent axes now that
+        ``self._slot_display_order`` exists. Layout/display code (which
+        figure is drawn where, toolbar sync between whatever's currently
+        adjacent on screen, cursor-span sync) should read this; code that
+        cares about "the raster config" specifically regardless of where
+        it's drawn (``doPlot``'s JS args, ``_handle_plot()``) should keep
+        using ``self._raster``/``self._scatter`` — that split hasn't been
+        touched by this rework and still depends on Group 3 (per-slot axis
+        controls, not yet designed).
+        """
+        return self._slots[self._slot_display_order[0]].active
+
+    @property
+    def _pos1(self):
+        """Whichever panel object is currently drawn second/right/bottom.
+
+        See ``self._pos0`` above for the position-vs-kind distinction.
+        """
+        return self._slots[self._slot_display_order[1]].active
+
+    @property
+    def _raster(self) -> "VisibilityRaster":
+        """Whichever slot currently holds the raster kind.
+
+        Temporary compatibility shim, unchanged in behavior from Stage 1b —
+        only its storage moved (Stage 1b.5: sourced from ``self._slots``
+        instead of named ``self._slot_a_raster``/``self._slot_b_raster``
+        attributes). Correct as long as at most one slot is raster at a
+        time — true for the entire session today, since nothing calls
+        ``_activate_slot_kind()`` yet (gear/Tabs, a later stage, is what
+        will eventually wire a UI trigger to it) — so slot A stays raster /
+        slot B stays scatter throughout. This property exists so the ~60
+        existing references elsewhere in this class (hover probes, flag
+        tools, crosshair sync, ``doPlot``'s JS args, etc.) keep working
+        completely unchanged during Stage 1b/1b.5.
+
+        It does **not** solve the deeper problem: once kind-switching is
+        actually wired up, both slots could independently hold the same
+        kind (two rasters, two scatters) or neither could — "the raster
+        panel" stops being well-defined. At that point every one of those
+        ~60 references needs to become properly slot-indexed instead of
+        kind-indexed; this shim only buys time until that stage, it isn't
+        the fix for it. Falls back to the first slot's (deferred,
+        unrendered) raster object if no slot is currently raster.
+        """
+        for slot in self._slots:
+            if slot.kind == "raster":
+                return slot.raster
+        return self._slots[0].raster
+
+    @property
+    def _scatter(self) -> "VisibilityScatter":
+        """Whichever slot currently holds the scatter kind.
+
+        Same temporary-shim caveats as ``self._raster`` above — see that
+        docstring. Falls back to the last slot's (deferred, unrendered)
+        scatter object if no slot is currently scatter — matches Stage 1b's
+        original fallback-to-slot-B behavior, since slot B is
+        ``self._slots[-1]`` in today's two-slot ordering.
+        """
+        for slot in self._slots:
+            if slot.kind == "scatter":
+                return slot.scatter
+        return self._slots[-1].scatter
+
+    def _activate_slot_kind(self, slot: str, kind: str) -> None:
+        """Switch which kind (raster/scatter) is active for a slot.
+
+        Real, testable Python-level infrastructure — not yet wired to any
+        UI trigger. Updates the slot's active-kind state and, if the
+        target object has never been rendered (``defer_initial_render``
+        left it as an empty shell — see decision 11), performs its first
+        real render now, reusing the same ``update_axes()`` mechanism
+        already used for axis changes rather than a new one.
+
+        Parameters
+        ----------
+        slot : ``"A"`` | ``"B"``
+        kind : ``"raster"`` | ``"scatter"``
+
+        Notes
+        -----
+        Deliberately does **not** attempt to keep ``self._raster``/
+        ``self._scatter`` well-defined in every resulting state (e.g. after
+        switching slot B to raster while slot A is already raster, both
+        slots are raster and ``self._scatter`` falls back to the last
+        slot's scatter object, which is what a caller would see even though
+        that's not really "the" scatter panel in any deep sense). That
+        ambiguity is real but out of scope for Stage 1b/1b.5 — nothing
+        calls this method from the browser yet, so it's only reachable from
+        direct Python/test code until gear/Tabs and the Stage 1c
+        slot-indexing rework land.
+
+        Stage 1b.5 change: mutates the looked-up ``_PanelSlot.kind`` field
+        (via ``self._slot_by_id()``) instead of ``setattr`` on a
+        ``f"_slot_{slot.lower()}_kind"`` attribute name — same effect,
+        sourced from the new record instead of a named attribute.
+        """
+        panel_slot = self._slot_by_id(slot)  # raises ValueError on bad id
+        if kind not in ("raster", "scatter"):
+            raise ValueError(f"kind must be 'raster' or 'scatter'; got {kind!r}")
+
+        panel_slot.kind = kind
+
+        panel = panel_slot.raster if kind == "raster" else panel_slot.scatter
+        if kind == "raster":
+            never_rendered = panel.agg is None
+        else:
+            never_rendered = all(df is None for df in panel._layer_dfs)
+
+        if never_rendered:
+            # Force-activate via the same mechanism update_axes() already
+            # uses for real axis changes (decision 11's self._agg-is-None /
+            # all-layer-dfs-None guard).
+            if kind == "raster":
+                panel.update_axes(
+                    y_dim=panel._y_dim, x_dim=panel._x_dim,
+                    quantity=panel._quantity, polarization=panel._polarization,
+                )
+            else:
+                panel.update_axes(x_dim=panel._x_dim)
 
     # ====================================================================== #
     # Public entry point                                                       #
@@ -816,6 +1261,38 @@ for (const dt of other.tools) {
     # ====================================================================== #
 
     async def _handle_plot(self, msg, context=None):
+        # Validation-error auto-switch-to-tab (added 2026-08-03) — the
+        # last piece of decision 9's originally-settled gear/Tabs design
+        # never built. Every error return below now includes
+        # "failed_slot": slot.id, tagging which slot actually caused the
+        # failure so doPlot()'s response handler can switch focus to that
+        # tab rather than just showing an error message somewhere the
+        # user isn't necessarily looking. Checked before building this:
+        # every current error path already runs inside a `for slot in
+        # self._slots:` loop (the kind-mismatch guard, the per-slot
+        # raster Y/X conflict check below, and both kind's `except
+        # Exception` catches around update_axes()) — so `slot.id` was
+        # already in scope at every site; no new plumbing needed, just
+        # adding the field to responses that already existed.
+        #
+        # Found immediately during live testing (2026-08-03): the raster
+        # Y/X conflict check below is normally never reached at all —
+        # doPlot()'s own client-side guard already refuses to send a
+        # conflicting request before ctrl.send() is even called (see that
+        # guard's comment for the reasoning), calling switchToTab()
+        # directly there instead. The check here remains a genuine
+        # "server-side backstop" (its own existing description, still
+        # accurate) for any caller that might reach _handle_plot() without
+        # going through that client guard — failed_slot still gets tagged
+        # correctly if that ever happens, it just isn't the path this
+        # specific error takes in normal use.
+        #
+        # One category this can't help with regardless: a malformed
+        # *global* selection value (field/spw/scan/antenna/time/UV range,
+        # parsed by self._build_selection() below) isn't tied to any
+        # single panel in the first place, so there's no tab to usefully
+        # switch to — orthogonal to this feature, not a gap in it.
+        #
         # Reload ↺ (as opposed to Plot ▶ or a preset) starts over — the
         # pending FlagDB is preview-scope, in-memory, never written
         # anywhere, so "reload" discarding it is the correct behaviour
@@ -829,143 +1306,270 @@ for (const dt of other.tools) {
         if "spw"         in msg: self._spw_str      = msg["spw"]
         if "correlation" in msg: self._corr_str     = msg["correlation"]
         if "datacolumn"  in msg: self._datacolumn   = msg["datacolumn"].upper()
-        for attr, key in (("_raster_y",   "raster_y"),
-                          ("_raster_x",   "raster_x"),
-                          ("_raster_qty", "raster_qty"),
-                          ("_scatter_x",  "scatter_x"),
-                          ("_scatter_y",  "scatter_y")):
-            if key in msg:
-                try:
-                    setattr(self, attr, Axis[msg[key]])
-                except KeyError:
-                    log.warning("_handle_plot: unknown Axis %r for %s",
-                                msg[key], key)
 
-        # Raster Y and X share the same {time, baseline, channel}
-        # vocabulary — reject a request that lands both on the same
-        # dimension. The browser already refuses to send this (doPlot's
-        # own guard, plus the live warning on the Selects themselves),
-        # but this handler is the single entry point for Plot ▶,
-        # Reload ↺, every preset button, and any future programmatic
-        # caller, so it's checked again here rather than trusted from
-        # the client — no Bokeh server means nothing enforces this
-        # automatically on the Python side otherwise.
-        if self._raster_y == self._raster_x:
-            text = (f"⚠ Raster Y and X axes must be different "
-                     f"(both set to {self._raster_y.label}).")
-            self._notify(text)
-            return {"status": "error", "status_text": text,
-                    "notify_text": text, "notify_color": "#f38ba8"}
+        # Group 3 piece 3 / Chunk 1 (added 2026-07-31): request is now
+        # per-slot (msg["panels"][slot.id] = {"kind": ..., ...}) instead
+        # of flat raster_y/raster_x/scatter_x/scatter_y globals — see
+        # decision 9's "Group 3 piece 3, Chunk 1" note in
+        # visplot-grid-iteration-notes.md for the full design record.
+        panels_msg = msg.get("panels", {})
+
+        # ---- Chunk 2: perform an actual kind-switch when requested ----
+        # Was Chunk 1's reject-on-mismatch guard; relaxed here to the
+        # real behavior — the actual point of this whole rework (two
+        # rasters or two scatters open at once). _activate_slot_kind()
+        # (built back in Stage 1b, never had a caller until now) handles
+        # the slot.kind flip and, if the target has genuinely never been
+        # rendered, a first render using its own stored axis defaults.
+        # This chunk's own axes-changed check further below then applies
+        # THIS request's actual y/x/qty on top — meaning a slot being
+        # activated for the first time *and* given different axes than
+        # its stored defaults in the same request renders twice (once
+        # here with stale defaults, once below with the real values).
+        # Known, narrow, first-activation-only inefficiency — accepted
+        # rather than complicating _activate_slot_kind()'s contract to
+        # avoid a render that only ever happens once per panel's
+        # lifetime; a repeated switch back to an already-rendered kind
+        # correctly reuses the cached render with no recompute at all,
+        # via the same axes-changed check.
+        switched_kind_this_round = set()
+        for slot in self._slots:
+            panel_msg = panels_msg.get(slot.id)
+            if panel_msg is None:
+                continue
+            requested_kind = panel_msg.get("kind")
+            if requested_kind is not None and requested_kind != slot.kind:
+                if requested_kind not in ("raster", "scatter"):
+                    text = f"⚠ Panel {slot.id}: unknown kind {requested_kind!r}."
+                    self._notify(text)
+                    return {"status": "error", "status_text": text,
+                            "notify_text": text, "notify_color": "#f38ba8",
+                            "failed_slot": slot.id}
+                self._activate_slot_kind(slot.id, requested_kind)
+                switched_kind_this_round.add(slot.id)
+
+        # ---- Per-slot raster Y/X conflict, server-side backstop -------
+        # Same reasoning as the old single global check (still true: the
+        # browser already refuses to send this — doPlot's own guard, plus
+        # each raster panel's own live conflict_div from Group 3 piece 1
+        # — but this handler is the single entry point for Plot ▶,
+        # Reload ↺, every preset, and any future programmatic caller, so
+        # it's checked again here rather than trusted from the client).
+        # Now per-slot rather than global, since each slot has its own
+        # independent raster Y/X pair.
+        for slot in self._slots:
+            panel_msg = panels_msg.get(slot.id)
+            if panel_msg is None or panel_msg.get("kind") != "raster":
+                continue
+            if panel_msg.get("y") == panel_msg.get("x"):
+                text = (f"⚠ Panel {slot.id}: Raster Y and X axes must be "
+                        f"different (both set to {panel_msg.get('y')}).")
+                self._notify(text)
+                return {"status": "error", "status_text": text,
+                        "notify_text": text, "notify_color": "#f38ba8",
+                        "failed_slot": slot.id}
 
         self._selection = self._build_selection()
         pols      = self._selection.correlation or ["XX"]
         first_pol = pols[0]
 
-        # Update both widgets' selection so field/SPW/correlation changes
-        # take effect on the next render.
-        self._raster._selection  = self._selection
-        self._scatter._selection = self._selection
+        # Selection now applied to all four panel objects (Group 2
+        # pattern), not just the two currently kind-active ones. A panel
+        # object that's activated later (Chunk 2, via
+        # _activate_slot_kind()) needs to already have current selection
+        # rather than whatever was current when it was last constructed
+        # or active — same "structural cost paid regardless of
+        # visibility" reasoning as everywhere else in this class.
+        for panel in self._all_panels:
+            panel._selection = self._selection
 
-        # Force re-render by resetting stored dims then calling update_axes.
-        # Forcing _y_dim/_x_dim to None makes update_axes always detect
-        # a change and run _render, even if the new value equals the old one.
-        # Force raster re-render only when raster axes or selection content
-        # actually changed — not just because a new SelectionSpec object
-        # was created (which always happens at top of _handle_plot).
-        raster_axes_changed = (
-            self._raster_y   != self._raster._y_dim   or
-            self._raster_x   != self._raster._x_dim   or
-            self._raster_qty != self._raster._quantity or
-            self._selection.field_names  != getattr(self._last_raster_selection, 'field_names', None)  or
-            self._selection.spw          != getattr(self._last_raster_selection, 'spw', None)           or
-            self._selection.correlation  != getattr(self._last_raster_selection, 'correlation', None)   or
-            self._selection.data_column  != getattr(self._last_raster_selection, 'data_column', None)
-        )
+        panels_response = {}
+        for slot in self._slots:
+            panel_msg = panels_msg.get(slot.id)
+            if panel_msg is None:
+                continue
+            kind  = panel_msg["kind"]
+            # The Chunk 2 loop above already activated this slot's kind
+            # if it wasn't already active, so slot.active is
+            # unambiguously the correct (and only) object to update here
+            # — no fallback ambiguity, unlike the self._raster/
+            # self._scatter compatibility properties elsewhere in this
+            # class.
+            panel = slot.active
 
-        try:
-            if raster_axes_changed:
-                self._raster._y_dim    = None
-                self._raster._x_dim    = None
-                self._raster._quantity = None
-                self._raster.update_axes(
-                    y_dim        = self._raster_y,
-                    x_dim        = self._raster_x,
-                    quantity     = self._raster_qty,
-                    polarization = first_pol,
+            if kind == "raster":
+                try:
+                    y   = Axis[panel_msg["y"]]
+                    x   = Axis[panel_msg["x"]]
+                    qty = Axis[panel_msg["qty"]]
+                except KeyError as exc:
+                    log.warning("_handle_plot: unknown Axis %r for panel %s",
+                                exc, slot.id)
+                    continue
+
+                # Force re-render when this slot's raster axes or
+                # selection content actually changed — not just because a
+                # new SelectionSpec object was created (which always
+                # happens above) — OR when this slot's kind was switched
+                # this round (checked explicitly, not just inferred from
+                # the comparisons below).
+                #
+                # Bug fixed 2026-08-02 (found during testing): this used
+                # to compare against self._last_raster_selection, a
+                # single attribute shared across the whole app — correct
+                # only as long as at most one slot could ever be raster.
+                # With two slots both raster in the same _handle_plot()
+                # call, processing slot A first would set that shared
+                # tracker to match self._selection; slot B's own check,
+                # running later in the same call, then read "selection
+                # unchanged" as true even though slot B's raster object
+                # had never had its range data sent to the client at
+                # all — so x0/x1/y0/y1/title/state all came back null,
+                # and the browser crashed trying to set a Bokeh
+                # Range1d.start to null. Now keyed per slot
+                # (self._last_raster_selection_by_slot), so slot B's
+                # check is independent of whatever slot A just did in the
+                # same call. The explicit switched_kind_this_round check
+                # is a second, direct guarantee for the same underlying
+                # case — belt and suspenders, not relying solely on the
+                # selection comparison correctly inferring "this is
+                # actually a first render" on its own.
+                axes_changed = (
+                    slot.id in switched_kind_this_round or
+                    y   != panel._y_dim    or
+                    x   != panel._x_dim    or
+                    qty != panel._quantity or
+                    self._selection.field_names  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'field_names', None)  or
+                    self._selection.spw          != getattr(self._last_raster_selection_by_slot.get(slot.id), 'spw', None)           or
+                    self._selection.correlation  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'correlation', None)   or
+                    self._selection.data_column  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'data_column', None)
                 )
-                self._last_raster_selection = self._selection
-        except Exception as exc:
-            log.error("_handle_plot: raster update_axes failed: %s", exc,
-                      exc_info=True)
-            text = f"⚠ Raster error: {exc}"
-            self._notify(text)
-            return {"status": "error", "status_text": text,
-                    "notify_text": text, "notify_color": "#f38ba8"}
+                try:
+                    if axes_changed:
+                        panel._y_dim    = None
+                        panel._x_dim    = None
+                        panel._quantity = None
+                        panel.update_axes(
+                            y_dim        = y,
+                            x_dim        = x,
+                            quantity     = qty,
+                            polarization = first_pol,
+                        )
+                        self._last_raster_selection_by_slot[slot.id] = self._selection
+                except Exception as exc:
+                    log.error("_handle_plot: panel %s raster update_axes "
+                              "failed: %s", slot.id, exc, exc_info=True)
+                    text = f"⚠ Panel {slot.id} raster error: {exc}"
+                    self._notify(text)
+                    return {"status": "error", "status_text": text,
+                            "notify_text": text, "notify_color": "#f38ba8",
+                            "failed_slot": slot.id}
 
-        try:
-            layers = _make_scatter_layers(self._scatter_y, pols)
-            log.debug("_handle_plot: scatter update_axes x=%s layers=%s",
-                      self._scatter_x, [(l.y_axis, l.polarization) for l in layers])
-            # Setting _x_dim to None forces update_axes to always re-render.
-            self._scatter._x_dim  = None
-            self._scatter.update_axes(
-                x_dim  = self._scatter_x,
-                layers = layers,
-            )
-            log.debug("_handle_plot: scatter _layer_aggs after render: %s",
-                      [a is not None for a in self._scatter._layer_aggs])
-        except Exception as exc:
-            log.error("_handle_plot: scatter update_axes failed: %s", exc,
-                      exc_info=True)
-            text = f"⚠ Scatter error: {exc}"
-            self._notify(text)
-            return {"status": "error", "status_text": text,
-                    "notify_text": text, "notify_color": "#f38ba8"}
+                img_data = panel._image_source.data
+                x0, x1 = panel._x_range
+                y0, y1 = panel._y_range
+                panels_response[slot.id] = {
+                    "kind":  "raster",
+                    # Always sent (even when axes unchanged) to keep the
+                    # hover tool renderer active — same reasoning as the
+                    # original raster_image field.
+                    "image": img_data["image"][0],
+                    "x0":      float(x0)              if axes_changed else None,
+                    "x1":      float(x1)              if axes_changed else None,
+                    "y0":      float(y0)              if axes_changed else None,
+                    "y1":      float(y1)              if axes_changed else None,
+                    "x_label": _axis_label(x)          if axes_changed else None,
+                    "y_label": _axis_label(y)          if axes_changed else None,
+                    "title":   panel._effective_title() if axes_changed else None,
+                    "state":   panel._state_data()      if axes_changed else None,
+                }
+
+            else:  # kind == "scatter"
+                try:
+                    x = Axis[panel_msg["x"]]
+                    y = Axis[panel_msg["y"]]
+                except KeyError as exc:
+                    log.warning("_handle_plot: unknown Axis %r for panel %s",
+                                exc, slot.id)
+                    continue
+
+                # Recompute-cost fix (added 2026-08-02): scatter used to
+                # re-render unconditionally every call — see the note by
+                # self._last_scatter_selection_by_slot's declaration in
+                # __init__ for why this mattered enough to fix now, not
+                # just flag. Mirrors raster's axes_changed check exactly:
+                # scatter doesn't have a single _y_dim attribute the way
+                # raster does (its Y axis lives inside each layer), so
+                # the comparison reads it off the first existing layer —
+                # _make_scatter_layers() always builds one layer per
+                # polarization sharing the same y_axis, so any layer's
+                # y_axis is representative. never_rendered mirrors
+                # _activate_slot_kind()'s own check (all layer_dfs None)
+                # for the same reason: a never-rendered panel's stored
+                # dims could otherwise coincidentally match the request
+                # and wrongly skip its first real render.
+                current_y_axis = panel._layers[0].y_axis if panel._layers else None
+                current_pols   = [lyr.polarization for lyr in panel._layers]
+                never_rendered = (not panel._layers or
+                                  all(df is None for df in panel._layer_dfs))
+                axes_changed = (
+                    slot.id in switched_kind_this_round or
+                    never_rendered or
+                    x    != panel._x_dim or
+                    y    != current_y_axis or
+                    pols != current_pols or
+                    self._selection.field_names  != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'field_names', None)  or
+                    self._selection.spw          != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'spw', None)           or
+                    self._selection.correlation  != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'correlation', None)   or
+                    self._selection.data_column  != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'data_column', None)
+                )
+                try:
+                    if axes_changed:
+                        layers = _make_scatter_layers(y, pols)
+                        log.debug("_handle_plot: panel %s scatter update_axes "
+                                  "x=%s layers=%s", slot.id, x,
+                                  [(l.y_axis, l.polarization) for l in layers])
+                        panel._x_dim = None
+                        panel.update_axes(x_dim=x, layers=layers)
+                        log.debug("_handle_plot: panel %s scatter _layer_aggs "
+                                  "after render: %s", slot.id,
+                                  [a is not None for a in panel._layer_aggs])
+                        self._last_scatter_selection_by_slot[slot.id] = self._selection
+                except Exception as exc:
+                    log.error("_handle_plot: panel %s scatter update_axes "
+                              "failed: %s", slot.id, exc, exc_info=True)
+                    text = f"⚠ Panel {slot.id} scatter error: {exc}"
+                    self._notify(text)
+                    return {"status": "error", "status_text": text,
+                            "notify_text": text, "notify_color": "#f38ba8",
+                            "failed_slot": slot.id}
+
+                img_data = panel._image_source.data
+                panels_response[slot.id] = {
+                    "kind":    "scatter",
+                    # Always sent (even when axes unchanged) to keep the
+                    # hover tool renderer active — same reasoning as
+                    # raster's image field above. Reading from
+                    # panel._image_source.data is correct even when
+                    # axes_changed is False: nothing changed means
+                    # whatever was rendered last time is still current.
+                    "image":   img_data["image"][0],
+                    "x0":      float(img_data["x"][0])                                if axes_changed else None,
+                    "x1":      float(img_data["x"][0]) + float(img_data["dw"][0])      if axes_changed else None,
+                    "y0":      float(img_data["y"][0])                                if axes_changed else None,
+                    "y1":      float(img_data["y"][0]) + float(img_data["dh"][0])      if axes_changed else None,
+                    "x_label": _axis_label(x)             if axes_changed else None,
+                    "y_label": _axis_label(y)              if axes_changed else None,
+                    "title":   panel._effective_title()    if axes_changed else None,
+                    "state":   panel._state_data()         if axes_changed else None,
+                }
 
         self._notify("")   # clear any previous warning
-        rx0, rx1 = self._raster._x_range
-        ry0, ry1 = self._raster._y_range
-        sx0, sx1 = self._scatter._x_range
-        sy0, sy1 = self._scatter._y_range
-
-        r_img_data = self._raster._image_source.data
-        s_img_data = self._scatter._image_source.data
-
         return {
-            "status":       "ok",
-            "status_text":  self._status_text(),
-            "notify_text":  "",
-            # Always send the raster image to keep the hover tool renderer
-            # active (required for cursor tracking). When raster_axes_changed=False
-            # the image is unchanged and we skip the range reset to avoid
-            # triggering a spurious viewport rerender via x_range.js_on_change.
-            "raster_image":   r_img_data["image"][0],
-            "raster_x0":      float(rx0) if raster_axes_changed else None,
-            "raster_x1":      float(rx1) if raster_axes_changed else None,
-            "raster_y0":      float(ry0) if raster_axes_changed else None,
-            "raster_y1":      float(ry1) if raster_axes_changed else None,
-            "raster_x_label": _axis_label(self._raster_x) if raster_axes_changed else None,
-            "raster_y_label": _axis_label(self._raster_y) if raster_axes_changed else None,
-            "raster_title":   self._raster._effective_title() if raster_axes_changed else None,
-            # Scatter image + axes
-            "scatter_image": s_img_data["image"][0],
-            "scatter_x0":    float(s_img_data["x"][0]),
-            "scatter_x1":    float(s_img_data["x"][0]) + float(s_img_data["dw"][0]),
-            "scatter_y0":    float(s_img_data["y"][0]),
-            "scatter_y1":    float(s_img_data["y"][0]) + float(s_img_data["dh"][0]),
-            "scatter_x_label": _axis_label(self._scatter_x),
-            "scatter_y_label": _axis_label(self._scatter_y),
-            "scatter_title":   self._scatter._effective_title(),
-            # _state_source (full_x0/x1/y0/y1, agg_n_x/agg_n_y, ...) has no
-            # other path to the browser without a Bokeh server — without
-            # this, FlagTool's zoom-to-1:1 math (flag_tool.ts) keeps using
-            # whatever full_x0/agg_n_x were current as of the last time
-            # this was sent (page load, or the last axes change that
-            # happened to trigger it), silently wrong after any axis
-            # change. Raster is gated the same way its image/range fields
-            # already are; scatter always re-renders so is unconditional.
-            "raster_state":  self._raster._state_data()  if raster_axes_changed else None,
-            "scatter_state": self._scatter._state_data(),
+            "status":      "ok",
+            "status_text": self._status_text(),
+            "notify_text": "",
+            "panels":      panels_response,
         }
 
     async def _handle_done(self, msg, context=None):
@@ -993,8 +1597,8 @@ for (const dt of other.tools) {
         # applies notify_text/notify_color/status_text directly to the
         # live notify_div/status_div models, the same p2j response
         # mechanism doPlot already uses for resp.status_text.
-        colour_warn = "#f38ba8"
-        colour_ok   = "#a6e3a1"
+        color_warn = "#f38ba8"
+        color_ok   = "#a6e3a1"
 
         # The box now draws at any zoom level (better UX feedback than a
         # silent no-op), but flagging is still only semantically valid at
@@ -1004,8 +1608,8 @@ for (const dt of other.tools) {
         if not bool(msg.get("at_pixel_res", False)):
             text = (f"⚠ Zoom to ≥1:1 pixel resolution before you can {verb} "
                     f"({panel}) — nothing {verb}ged.")
-            self._notify(text, colour=colour_warn)
-            return {"notify_text": text, "notify_color": colour_warn}
+            self._notify(text, color=color_warn)
+            return {"notify_text": text, "notify_color": color_warn}
 
         if panel == "raster":
             delta = FlagDelta(
@@ -1042,10 +1646,10 @@ for (const dt of other.tools) {
         text = (f"✓ {verb.capitalize()}ged box recorded ({panel}) — "
                 f"preview only, stored — not yet committed. "
                 f"Flag count: {count}.")
-        self._notify(text, colour=colour_ok)
+        self._notify(text, color=color_ok)
         return {
             "notify_text":  text,
-            "notify_color": colour_ok,
+            "notify_color": color_ok,
             "status_text":  self._status_text(),
         }
 
@@ -1075,21 +1679,21 @@ for (const dt of other.tools) {
             freq_range  = self._freq_range,
         )
 
-    def _notify(self, text: str, colour: str = "#f38ba8") -> None:
+    def _notify(self, text: str, color: str = "#f38ba8") -> None:
         """Show a transient notification in the status bar.
 
         Parameters
         ----------
         text : str
             HTML message to display.  Empty string clears the notification.
-        colour : str
-            CSS colour for the text.  Default is red (#f38ba8) for errors
+        color : str
+            CSS color for the text.  Default is red (#f38ba8) for errors
             and warnings.  Use ``#a6e3a1`` (green) for success messages.
         """
         if hasattr(self, "_notify_div") and self._notify_div is not None:
             self._notify_div.styles = dict(
                 self._notify_div.styles,
-                color=colour,
+                color=color,
             )
             self._notify_div.text = text
 
@@ -1099,9 +1703,7 @@ for (const dt of other.tools) {
 
     def _status_text(self) -> str:
         fname        = os.path.basename(self._source_path)
-        mode_label   = {"both": "Both", "raster": "Raster only",
-                        "scatter": "Scatter only"}.get(self._mode, self._mode)
-        layout_label = {"side": "Side by Side",
+        layout_label = {"one": "One panel", "side": "Side by Side",
                         "over": "Over / Under"}.get(self._layout, self._layout)
         field   = self._field_str or "all"
         spw     = self._spw_str or "all"
@@ -1110,8 +1712,7 @@ for (const dt of other.tools) {
         flag_note = (f"  |  <b>Flag count:</b> {count}"
                      if count > 0 else "")
         return (
-            f"<b>{fname}</b>  |  Mode: {mode_label}  |  "
-            f"Layout: {layout_label}<br>"
+            f"<b>{fname}</b>  |  Layout: {layout_label}<br>"
             f"Field: {field}  |  SPW: {spw}  |  Col: {col}{flag_note}"
         )
 
@@ -1170,7 +1771,11 @@ document.documentElement.style.background = '#181825';
         # each panel's own VisibilityPlot._build() -> _add_flag_tools()),
         # before _notify_div/_status_div exist — so wire them here, now
         # that both divs are available. None when enable_flagging=False.
-        for panel in (self._raster, self._scatter):
+        # All four panel objects (self._all_panels, Group 2 rework
+        # 2026-07-31) — previously only the two kind-active ones, leaving
+        # an initially-inactive panel's flag/unflag tools unwired until
+        # some other code path happened to fix them up.
+        for panel in self._all_panels:
             for tool in (getattr(panel, "_flag_tool", None),
                          getattr(panel, "_unflag_tool", None)):
                 if tool is not None:
@@ -1217,7 +1822,7 @@ document.documentElement.style.background = '#181825';
                 node.stylesheets = [dark_stylesheet]
                 styled.append(node)
             elif isinstance(node, Div):
-                # Style equation label Div text colour
+                # Style equation label Div text color
                 if node.text and not node.text.startswith("<span"):
                     node.text = (
                         f"<span style='color:#a6adc8;font-size:11px'>"
@@ -1239,6 +1844,148 @@ document.documentElement.style.background = '#181825';
     def _dark(self):
         """Return an InlineStyleSheet applying the dark widget theme."""
         return InlineStyleSheet(css=_DARK_WIDGET_CSS)
+
+    def _tt(self, html: str, position: str = "bottom") -> Tooltip:
+        """Build a Tooltip for wrapping a widget with Tip(widget, tooltip=...).
+
+        Promoted from a nested function local to ``_build_toolbar()``
+        (added 2026-08-03) so ``_build_sidebar()``'s per-tab widgets
+        (Raster/Scatter switch, Cancel, Swap) can use the exact same
+        tooltip convention already established for the top toolbar,
+        rather than a second, separately-defined helper doing the same
+        thing.
+        """
+        return Tooltip(content=BokehHTML(html), position=position)
+
+    # ---------------------------------------------------------------------- #
+    # Group 3 piece 1 (added 2026-07-31): per-slot config panels            #
+    # ---------------------------------------------------------------------- #
+    #
+    # One raster panel and one scatter panel per slot — mirrors decision
+    # 11's own "structural cost paid regardless of visibility" precedent
+    # for the plot objects themselves, one layer up. Deliberately two
+    # separate builder methods, not one parameterized by kind: raster and
+    # scatter genuinely have different fields (raster's min/max via
+    # colormap_controls() vs. scatter's lack of them is the concrete
+    # example that settled this), so a shared builder would need kind
+    # branching internally anyway — clearer to just have two.
+    #
+    # Both are called in a loop over self._slots (not written as two
+    # hardcoded per-slot calls) specifically so a third slot, whenever
+    # that's supported, is a non-event here — build for N, ship for 2.
+
+    def _build_raster_config_panel(self, slot: "_PanelSlot", dark) -> tuple:
+        """Build one slot's raster config panel: Y/X/quantity + colormap.
+
+        Wired to ``slot.raster`` — that slot's own, already-constructed
+        ``VisibilityRaster`` object — via ``colormap_controls()``, so
+        scaling/min/max controls are genuinely independent per slot, not
+        shared. The Y/X/quantity ``Select`` widgets are plain pickers with
+        no live wiring of their own; they're read at Plot-press time by
+        ``_handle_plot()``'s rewrite (piece 3, not yet built), same as the
+        old global controls were.
+
+        Returns
+        -------
+        panel : Bokeh column
+        widgets : dict
+            ``y_sel``, ``x_sel``, ``q_sel``, ``conflict_div``,
+            ``cmap_widgets`` — stored by the caller in
+            ``self._panel_axis_widgets[slot.id]["raster"]``.
+        """
+        ry_sel = Select(
+            title="Raster Y axis", value=self._raster_y.name,
+            options=[(k, v) for k, v in _RASTER_Y_OPTIONS],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        rx_sel = Select(
+            title="Raster X axis", value=self._raster_x.name,
+            options=[(k, v) for k, v in _RASTER_X_OPTIONS],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        rq_sel = Select(
+            title="Raster quantity", value=self._raster_qty.name,
+            options=[(k, v) for k, v in _RASTER_QTY_OPTIONS],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+
+        # Per-slot Y/X conflict indicator — an inline Div scoped to this
+        # panel, not the shared self._notify_div the old single global
+        # raster section used. A shared message can't say which tab it's
+        # about now that both tabs can be open with independent raster
+        # configs at once (flagged explicitly when this design was
+        # discussed, not an oversight).
+        conflict_div = Div(
+            text="", width=_SIDEBAR_WIDTH,
+            styles={"color": "#f38ba8", "font-size": "12px"},
+        )
+        conflict_msg = "⚠ Raster Y and X axes must be different."
+        conflict_js = CustomJS(
+            args={"ry_sel": ry_sel, "rx_sel": rx_sel,
+                  "conflict_div": conflict_div, "msg": conflict_msg},
+            code="""
+const conflict = (ry_sel.value === rx_sel.value);
+conflict_div.text = conflict ? msg : '';
+""",
+        )
+        ry_sel.js_on_change("value", conflict_js)
+        rx_sel.js_on_change("value", conflict_js)
+
+        raster_cmap  = slot.raster.colormap_controls()
+        cmap_widgets = self._style_cmap_column(raster_cmap, dark)
+
+        panel = column(
+            Div(text="<span style='color:#89b4fa;font-weight:bold'>"
+                     "── Raster ──</span>", width=_SIDEBAR_WIDTH),
+            ry_sel, rx_sel, rq_sel,
+            conflict_div,
+            raster_cmap,
+        )
+        widgets = {
+            "y_sel": ry_sel, "x_sel": rx_sel, "q_sel": rq_sel,
+            "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
+        }
+        return panel, widgets
+
+    def _build_scatter_config_panel(self, slot: "_PanelSlot", dark) -> tuple:
+        """Build one slot's scatter config panel: X/Y + colormap.
+
+        Same reasoning as ``_build_raster_config_panel`` above — see that
+        docstring. No Y/X conflict check here: scatter's X and Y axes
+        aren't drawn from the same shared vocabulary the way raster's are,
+        so the same-value conflict this class checks for raster doesn't
+        apply.
+
+        Returns
+        -------
+        panel : Bokeh column
+        widgets : dict
+            ``x_sel``, ``y_sel``, ``cmap_widgets`` — stored by the caller
+            in ``self._panel_axis_widgets[slot.id]["scatter"]``.
+        """
+        sx_sel = Select(
+            title="Scatter X axis", value=self._scatter_x.name,
+            options=[(k, v) for k, v in _SCATTER_X_OPTIONS],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        sy_sel = Select(
+            title="Scatter Y axis", value=self._scatter_y.name,
+            options=[(k, v) for k, v in _SCATTER_Y_OPTIONS],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        scatter_cmap = slot.scatter.colormap_controls(layer_index=0)
+        cmap_widgets = self._style_cmap_column(scatter_cmap, dark)
+
+        panel = column(
+            Div(text="<span style='color:#89b4fa;font-weight:bold'>"
+                     "── Scatter ──</span>", width=_SIDEBAR_WIDTH),
+            sx_sel, sy_sel,
+            scatter_cmap,
+        )
+        widgets = {
+            "x_sel": sx_sel, "y_sel": sy_sel, "cmap_widgets": cmap_widgets,
+        }
+        return panel, widgets
 
     def _build_sidebar(self):
         """Build sidebar column + collapse toggle button.
@@ -1264,6 +2011,7 @@ document.documentElement.style.background = '#181825';
             ),
             width=_SIDEBAR_WIDTH,
         )
+        self._path_div = path_div
 
         # ---- Data column -------------------------------------------------- #
         col_options = list(meta.data_columns) or ["DATA"]
@@ -1426,84 +2174,48 @@ document.documentElement.style.background = '#181825';
         _focus_blur(self._spw_select,   self._hint_spw)
         _focus_blur(self._corr_cbg,     self._hint_corr)
 
-        # ---- Raster axis controls ----------------------------------------- #
-        self._ry_select = Select(
-            title="Raster Y axis", value=self._raster_y.name,
-            options=[(k, v) for k, v in _RASTER_Y_OPTIONS],
-            width=_SIDEBAR_WIDTH, stylesheets=[dark],
-        )
-        self._rx_select = Select(
-            title="Raster X axis", value=self._raster_x.name,
-            options=[(k, v) for k, v in _RASTER_X_OPTIONS],
-            width=_SIDEBAR_WIDTH, stylesheets=[dark],
-        )
-        self._rq_select = Select(
-            title="Raster quantity", value=self._raster_qty.name,
-            options=[(k, v) for k, v in _RASTER_QTY_OPTIONS],
-            width=_SIDEBAR_WIDTH, stylesheets=[dark],
-        )
+        # ---- Global raster/scatter axis sections removed (Group 3 piece
+        # 2, added 2026-07-31). This sidebar section used to build
+        # self._ry_select/_rx_select/_rq_select/_sx_select/_sy_select,
+        # the old raster Y/X conflict check, and
+        # self._raster_axis_section/_scatter_axis_section — all now dead
+        # code since Chunk 1 (Group 3 piece 3) moved doPlot()/
+        # _handle_plot() onto the per-slot config panels built in Group 3
+        # piece 1 (_build_raster_config_panel()/_build_scatter_config_panel(),
+        # called per slot further below). Confirmed dead via live test
+        # before removal, not assumed: the global controls stopped having
+        # any effect once Chunk 1 landed, while the gear-driven per-slot
+        # panels correctly drove Plot ▶.
 
-        # Raster Y/X conflict — both selects share the same {time,
-        # baseline, channel} vocabulary, so nothing stops them landing on
-        # the same value independently. This gives immediate feedback the
-        # moment that happens; doPlot() (below) refuses to send a request
-        # while it's in that state, and _handle_plot rejects it
-        # server-side too as a backstop for the preset buttons and any
-        # future programmatic caller. No Bokeh server here, so all three
-        # checks are independent — none of them can rely on the others
-        # having already run.
-        self._raster_axis_conflict_msg = "⚠ Raster Y and X axes must be different."
-        raster_axis_conflict_js = CustomJS(
-            args={
-                "ry_sel":     self._ry_select,
-                "rx_sel":     self._rx_select,
-                "notify_div": self._notify_div,
-                "msg":        self._raster_axis_conflict_msg,
-            },
-            code="""
-const conflict = (ry_sel.value === rx_sel.value);
-if (conflict) {
-    notify_div.text = msg;
-    notify_div.styles = {...notify_div.styles, color: '#f38ba8'};
-} else if (notify_div.text === msg) {
-    notify_div.text = '';
-}
-""",
-        )
-        self._ry_select.js_on_change("value", raster_axis_conflict_js)
-        self._rx_select.js_on_change("value", raster_axis_conflict_js)
-
-        raster_cmap = self._raster.colormap_controls()
-        self._raster_cmap_widgets = self._style_cmap_column(raster_cmap, dark)
-
-        self._raster_axis_section = column(
-            Div(text="<span style='color:#89b4fa;font-weight:bold'>"
-                     "── Raster ──</span>", width=_SIDEBAR_WIDTH),
-            self._ry_select, self._rx_select, self._rq_select,
-            raster_cmap,
-            visible=(self._mode != "scatter"),
-        )
-
-        # ---- Scatter axis controls ---------------------------------------- #
-        self._sx_select = Select(
-            title="Scatter X axis", value=self._scatter_x.name,
-            options=[(k, v) for k, v in _SCATTER_X_OPTIONS],
-            width=_SIDEBAR_WIDTH, stylesheets=[dark],
-        )
-        self._sy_select = Select(
-            title="Scatter Y axis", value=self._scatter_y.name,
-            options=[(k, v) for k, v in _SCATTER_Y_OPTIONS],
-            width=_SIDEBAR_WIDTH, stylesheets=[dark],
-        )
-        scatter_cmap = self._scatter.colormap_controls(layer_index=0)
-        self._scatter_cmap_widgets = self._style_cmap_column(scatter_cmap, dark)
-
-        self._scatter_axis_section = column(
-            Div(text="<span style='color:#89b4fa;font-weight:bold'>"
-                     "── Scatter ──</span>", width=_SIDEBAR_WIDTH),
-            self._sx_select, self._sy_select,
-            scatter_cmap,
-            visible=(self._mode != "raster"),
+        # ---- Group 3 piece 1: gear/Tabs skeleton (built here, before
+        # self._sidebar_col, so it can be included directly in that
+        # column's children like every other sidebar section — no
+        # post-construction .children mutation, matching this method's
+        # existing pattern). One TabPanel per self._slots entry (placeholder
+        # content only — no Kind selector, no wiring to
+        # _activate_slot_kind() yet, that's a later Stage 1c increment).
+        # Hidden by default; a gear click (added further below, once
+        # toggle_btn exists) reveals it and activates that slot's tab. Per
+        # decision 9 (see visplot-grid-iteration-notes.md): one TabPanel
+        # pre-built per slot, not a shared retargeted drawer, so each
+        # slot's in-progress config is preserved when switching away and
+        # back, via Bokeh's native inactive-tab state retention.
+        _tabs_dark = InlineStyleSheet(css=_DARK_TABS_CSS)
+        # ---- Revised 2026-07-31: Tabs widget starts genuinely empty -------
+        # (tabs=[]), not pre-populated with both slots' TabPanels. Per
+        # feedback: pre-populating both meant the *header strip* always
+        # showed both "Panel A"/"Panel B" labels the moment either gear was
+        # clicked, even for the slot the user never asked to touch — the
+        # gear tool wasn't actually narrowing what's revealed, just
+        # toggling one shared widget's overall visibility. Each gear now
+        # injects only its own (still singly-instantiated, never rebuilt)
+        # TabPanel into tabs.tabs on click — see the gear CustomJS below.
+        self._gear_tabs = Tabs(
+            tabs=[],
+            active=0,
+            visible=False,
+            width=_SIDEBAR_WIDTH_COL,
+            stylesheets=[_tabs_dark],
         )
 
         # ---- Assemble sidebar column --------------------------------------- #
@@ -1516,10 +2228,14 @@ if (conflict) {
             self._col_select, self._field_select, self._spw_select,
             corr_label, self._corr_cbg,
             scan_inp, antenna_inp, time_inp, uv_inp,
-            Div(text="<span style='color:#cdd6f4;font-weight:bold'>"
-                     "Axes</span>", width=_SIDEBAR_WIDTH),
-            self._raster_axis_section,
-            self._scatter_axis_section,
+            # "Axes" header removed (Group 3 piece 2, 2026-07-31) along
+            # with self._raster_axis_section/_scatter_axis_section that
+            # used to sit under it — axis controls now live inside each
+            # tab's per-slot config panel instead. self._gear_tabs is
+            # hidden by default, so a lone "Axes" label with nothing
+            # visibly under it would have looked broken rather than just
+            # collapsed.
+            self._gear_tabs,
             width       = _SIDEBAR_WIDTH_COL,
             visible     = True,
             css_classes = ["cv-sidebar"],
@@ -1558,6 +2274,460 @@ btn.label        = collapsing ? '⟩' : '⟨';
         )
         toggle_btn.js_on_click(self._sidebar_toggle_js)
 
+        # ---- Stage 1c increment 1 (continued): gear/Tabs/Cancel ------------
+        #
+        # Revised 2026-07-31 (second pass), per feedback on the "[Panel X] "
+        # prefix version: that prefix collided visually with this app's own
+        # existing title convention, which already uses square brackets for
+        # axis info (e.g. "Amplitude [Time vs Channel] pol=XX") — stacking
+        # "[Panel A]" in front of that read as two unrelated uses of the
+        # same bracket notation. It was also not attention-grabbing enough
+        # given the title is otherwise unstyled black-on-dark text.
+        #
+        # Replaced with: on gear click, the figure's title is fully
+        # *replaced* (not prefixed) with a plain "Panel A"/"Panel B" label
+        # in a distinct red (_EDIT_TITLE_COLOR, reusing the same accent this
+        # file already uses for the raster axis-conflict warning, so it's
+        # not a new ad hoc color). Bokeh's Title annotation is plain
+        # text — it does not support per-substring rich/HTML styling — so a
+        # full-title color change is the most expressive signal actually
+        # available here; a real risk (colorblind users, grayscale
+        # screenshots) if this were the *only* signal, but it isn't: the
+        # panel identity is still spelled out as literal text, not
+        # color-only.
+        #
+        # A user who starts editing a panel is now explicitly in an
+        # unfinished state for that panel until either a successful Plot ▶
+        # (see doPlot() below) or the new Cancel button inside each tab,
+        # which restores that slot's original title text+color and removes
+        # its tab, "as if the gear had never been clicked."
+        #
+        # Cross-callback shared state: each slot gets its own small
+        # ColumnDataSource (self._panel_title_state[slot.id]) holding the
+        # pre-edit title text+color, written once by the gear click and
+        # read by both Cancel and doPlot()'s success handler — same
+        # cross-callback-state idiom already used elsewhere in this class
+        # (e.g. _state_source for FlagTool). A plain Python dict would not
+        # be shared live across separately-serialized CustomJS callbacks;
+        # a ColumnDataSource is an actual client-side model instance, so
+        # mutations by one callback are visible to the others.
+        self._panel_title_state = {}
+        self._panel_tabpanels   = {}
+        # Group 3 (added 2026-07-31): per-slot, per-kind config panels.
+        # self._panel_axis_widgets[slot.id][kind] -> dict of widget refs
+        # (y_sel/x_sel/q_sel/conflict_div/cmap_widgets for raster;
+        # x_sel/y_sel/cmap_widgets for scatter) — read at Plot-press time
+        # by _handle_plot()'s rewrite (piece 3, not yet built). Keyed by
+        # slot.id, not named _a/_b attributes, so this scales to more than
+        # two slots without restructuring — same convention as
+        # self._panel_title_state/self._panel_tabpanels above.
+        # self._panel_kind_switch[slot.id] -> that slot's Raster/Scatter
+        # RadioButtonGroup; its .active value at Plot-press time is the
+        # slot's "pending kind" — no separate tracking variable needed,
+        # since the switch only ever changes which config panel is
+        # visible (client-side, no comm) until Plot ▶ reads it.
+        self._panel_axis_widgets = {}
+        self._panel_kind_switch  = {}
+        # Swap buttons — one per tab (added 2026-08-03). A plain list, not
+        # a dict, since neither swap_js's logic nor the later
+        # side_container/over_container patching care which slot's tab a
+        # given button lives in — both buttons do the identical thing.
+        self._swap_btns = []
+        self._swap_js_objects = []
+
+        gear_click_js = """
+const idx = tabs.tabs.indexOf(my_panel);
+if (idx === -1) {
+    // First time opening this round: remember the real title text+color
+    // so Cancel can fully undo this. (A successful Plot needs only the
+    // color restored — Python already resends fresh title *text* on
+    // success, see doPlot() below.)
+    //
+    // Also remember WHICH KIND was actually clicked (added 2026-08-02,
+    // fixing a bug found during testing): if the user changes the
+    // Raster/Scatter switch within this same open tab before pressing
+    // Plot, the switch takes effect at Plot time, but the figure that
+    // was actually reddened here is whichever one *this* gear instance
+    // is bound to — which may no longer match whatever kind ends up
+    // active after the Plot press. The success handler needs to restore
+    // color on the figure that was actually edited, not guess from the
+    // post-Plot kind.
+    orig_source.data['text']  = [fig.title != null ? fig.title.text : null];
+    orig_source.data['color'] = [fig.title != null ? fig.title.text_color : null];
+    orig_source.data['kind']  = [kind];
+    orig_source.change.emit();
+
+    if (fig.title != null) {
+        fig.title.text       = panel_label;
+        fig.title.text_color = edit_color;
+        // Explicit emit — same idiom as r_img_src.change.emit() elsewhere
+        // in this file: property assignment alone doesn't reliably force
+        // a repaint in every case here (no Bokeh server driving this).
+        fig.title.change.emit();
+    }
+    // Figure-level emit too, added alongside the Cancel-path fix attempt
+    // for consistency — see cancel_click_js for the reasoning.
+    fig.change.emit();
+
+    tabs.tabs = tabs.tabs.concat([my_panel]);
+    tabs.active = tabs.tabs.length - 1;
+} else {
+    // Already open — just bring it to front, don't rebuild/reset it.
+    tabs.active = idx;
+}
+tabs.visible = true;
+
+if (!sidebar.visible) {
+    sidebar.visible  = true;
+    toggle_btn.label = '⟨';
+}
+
+// Scroll the sidebar so the revealed Tabs widget is actually visible,
+// rather than appearing off-screen at whatever scroll position the user
+// happened to be at (reported: gear click while scrolled to the bottom
+// of the global axis sections left only a sliver of the tab visible).
+// The Tabs widget is the last child of the sidebar column, so scrolling
+// to the container's full scrollHeight puts it in view. Deferred via
+// setTimeout — same reasoning as the Cancel-button title fix earlier:
+// the DOM hasn't reflowed to reflect tabs.visible=true yet in this same
+// synchronous tick, so scrollHeight read right now would be stale.
+//
+// Revised: a plain document.querySelector('.cv-sidebar') reportedly found
+// nothing (no visible effect at all, consistent with the `if (sidebarEl)`
+// guard silently skipping). Bokeh 3.x commonly renders each root's content
+// inside a Shadow DOM for style encapsulation, which a plain top-level
+// querySelector cannot see across — it returns null rather than erroring,
+// so the failure was silent. __cvFindEl recursively searches into every
+// shadow root it finds instead of assuming everything is in the light DOM.
+setTimeout(function() {
+    function __cvFindEl(root, selector) {
+        const found = root.querySelector(selector);
+        if (found) return found;
+        const all = root.querySelectorAll('*');
+        for (let i = 0; i < all.length; i++) {
+            if (all[i].shadowRoot) {
+                const inner = __cvFindEl(all[i].shadowRoot, selector);
+                if (inner) return inner;
+            }
+        }
+        return null;
+    }
+    const sidebarEl = __cvFindEl(document, '.cv-sidebar');
+    if (sidebarEl) {
+        sidebarEl.scrollTop = sidebarEl.scrollHeight;
+    }
+}, 0);
+"""
+        cancel_click_js = """
+if (fig.title != null) {
+    fig.title.text       = orig_source.data['text'][0];
+    fig.title.text_color = orig_source.data['color'][0];
+    fig.title.change.emit();
+}
+fig.change.emit();
+
+// Defer the tabs.tabs removal to the next tick (added after title-emit
+// alone made no difference). Gear's title-set is immediately followed by
+// tabs.tabs.concat(...) (adding a tab) and renders fine; Cancel's is
+// immediately followed by tabs.tabs.filter(...) (removing one) and does
+// not, until something else (mouse movement) forces a later repaint. The
+// difference in symptoms points at the *removal* specifically — likely a
+// heavier Tabs-view rebuild competing with the figure's own pending
+// title-layout invalidation in the same synchronous tick, with one of
+// the two invalidations getting dropped rather than both completing.
+// Pushing the removal to a fresh tick via setTimeout(..., 0) is the
+// standard workaround for two same-tick layout-invalidating updates
+// racing like this; if this doesn't resolve it either, the same-tick
+// collision theory is wrong and the next step is reconstructing a new
+// Title object outright rather than mutating the existing one in place.
+setTimeout(function() {
+    tabs.tabs = tabs.tabs.filter(p => p !== my_panel);
+    if (tabs.tabs.length === 0) {
+        tabs.visible = false;
+    } else {
+        tabs.active = 0;
+    }
+}, 0);
+"""
+        # Swap button — added 2026-08-03. Clicking either slot's button
+        # does the identical thing (swap is its own inverse, and with
+        # exactly two positions there's only ever one possible action —
+        # no "which target" question the way a future N-panel dropdown
+        # will need), so this is one shared code string reused by two
+        # separate Button/CustomJS instances (one per tab) below, not
+        # duplicated logic. Genuinely zero-recompute: reorders
+        # self._display_order_source (the live, client-side-mutable
+        # tracker — self._slot_display_order itself is Python-side and
+        # fixed, only ever read at construction) and rebuilds the
+        # container's children from the two already-fully-rendered pairs
+        # of layout objects — no comm round-trip, no re-render, matching
+        # the recompute-cost concern this whole feature exists for.
+        swap_js = """
+const order   = display_order_source.data['order'][0].slice();
+const swapped = [order[1], order[0]];
+display_order_source.data = {order: [swapped]};
+
+const slot0_pair = [slot0_raster_layout, slot0_scatter_layout];
+const slot1_pair = [slot1_raster_layout, slot1_scatter_layout];
+const first_pair  = (swapped[0] === 0) ? slot0_pair : slot1_pair;
+const second_pair = (swapped[0] === 0) ? slot1_pair : slot0_pair;
+const new_children = first_pair.concat(second_pair);
+
+// Whole-array reassignment, not in-place mutation — same pattern
+// already proven correct for tabs.tabs (Bokeh List-valued properties
+// need reassignment, not .push()/.splice(), to notify the renderer).
+side_container.children = new_children;
+over_container.children = new_children;
+"""
+        # Fixed 2026-07-31 as part of the Group 1/2 rework: previously
+        # paired via (self._slots[0], self._raster), (self._slots[1],
+        # self._scatter) — documented at the time as a "positional shim"
+        # that "stops being correct the moment kind-switching is wired
+        # up," since self._raster/self._scatter resolve by kind across
+        # *both* slots and could point at the wrong slot entirely once a
+        # future Kind selector lets either slot hold either kind. That
+        # shim is no longer needed: self._slots[i].active (Stage 1b.5)
+        # already gives "whichever object *this specific slot* currently
+        # shows," which is what gear/Cancel actually need — genuinely
+        # correct per-slot resolution now, not a shim scoped to today's
+        # fixed defaults.
+        for slot in self._slots:
+            orig_source = ColumnDataSource(data={"text": [""], "color": [None], "kind": [None]})
+            self._panel_title_state[slot.id] = orig_source
+
+            cancel_btn = Button(
+                label       = "Cancel",
+                button_type = "default",
+                width       = 80,
+                stylesheets = [dark],
+            )
+
+            # Group 3 piece 1: per-slot Raster/Scatter switch + both
+            # config panels. RadioButtonGroup to match the visual language
+            # already established by the Layout control (One/Side/Over) —
+            # same kind of switch, same place a user would expect it.
+            #
+            # Purely a navigation control, not a trigger: switching only
+            # toggles which of the two panels below is visible
+            # (client-side, no comm), exactly like the "batched, not
+            # immediate" reading confirmed when this was discussed —
+            # actually switching the slot's kind only happens later, when
+            # Plot ▶ is pressed and _handle_plot()'s rewrite (piece 3)
+            # reads whichever kind this switch is showing at that moment.
+            # No separate "pending kind" variable to keep in sync — the
+            # switch's own .active value at Plot-press time *is* the
+            # pending kind.
+            raster_panel, raster_widgets = \
+                self._build_raster_config_panel(slot, dark)
+            scatter_panel, scatter_widgets = \
+                self._build_scatter_config_panel(slot, dark)
+            self._panel_axis_widgets[slot.id] = {
+                "raster": raster_widgets, "scatter": scatter_widgets,
+            }
+
+            kind_switch = RadioButtonGroup(
+                labels=["Raster", "Scatter"],
+                active=(0 if slot.kind == "raster" else 1),
+                width=120,
+                stylesheets=[dark],
+            )
+            self._panel_kind_switch[slot.id] = kind_switch
+
+            raster_panel.visible  = (slot.kind == "raster")
+            scatter_panel.visible = (slot.kind == "scatter")
+            kind_switch.js_on_change("active", CustomJS(
+                args={"raster_panel": raster_panel,
+                      "scatter_panel": scatter_panel},
+                code="""
+// Capture scroll position before toggling — reported: switching
+// Raster<->Scatter shifted the visible sidebar content unexpectedly.
+// Root cause: nothing here calls scrollTo() directly; the raster panel
+// (min/max + extra fields) is taller than the scatter panel, so toggling
+// which is .visible changes the sidebar column's total content height.
+// When that happens while already scrolled near the bottom, the browser
+// clamps scrollTop to the new (smaller) max on its own — an incidental
+// side effect of the height change, not an intentional scroll, but it
+// looks and feels like one. Explicitly restoring the pre-toggle
+// scrollTop afterward cancels that clamp out, so the view only moves
+// when the content still extends that far after the change (the
+// unavoidable case: if the user was scrolled somewhere the shorter
+// content genuinely doesn't reach anymore, the browser will still clamp
+// — nothing can prevent that without leaving dead space in the layout).
+//
+// Revised: a plain document.querySelector('.cv-sidebar') reportedly found
+// nothing here either (the original unmitigated clamp behavior showed
+// through unchanged, consistent with the guard below silently skipping).
+// Same Shadow DOM issue as the gear-click fix — see that comment.
+function __cvFindEl(root, selector) {
+    const found = root.querySelector(selector);
+    if (found) return found;
+    const all = root.querySelectorAll('*');
+    for (let i = 0; i < all.length; i++) {
+        if (all[i].shadowRoot) {
+            const inner = __cvFindEl(all[i].shadowRoot, selector);
+            if (inner) return inner;
+        }
+    }
+    return null;
+}
+const sidebarEl = __cvFindEl(document, '.cv-sidebar');
+const prevScrollTop    = sidebarEl ? sidebarEl.scrollTop    : null;
+const prevScrollHeight = sidebarEl ? sidebarEl.scrollHeight : null;
+
+raster_panel.visible  = (cb_obj.active === 0);
+scatter_panel.visible = (cb_obj.active === 1);
+
+if (sidebarEl && prevScrollTop !== null) {
+    // Deferred by a tick — same reasoning as the gear-click scroll fix
+    // above and the earlier Cancel-button title fix: the DOM hasn't
+    // reflowed to reflect the new .visible state yet in this same
+    // synchronous tick, so measuring/restoring scroll right now would be
+    // fighting a reflow that hasn't happened.
+    //
+    // Asymmetric on purpose (added after further feedback): restoring the
+    // exact prior scrollTop is correct when content *shrinks* (switching
+    // to Scatter, fewer fields than Raster) — confirmed working. It's
+    // wrong when content *grows* (switching to Raster): restoring the old
+    // position leaves whatever newly appeared below it (e.g. min/max)
+    // still off-screen, unrevealed. So: scroll to the bottom instead when
+    // scrollHeight increased, same idea as the gear-click fix — reveal
+    // what just appeared, rather than pin to where the view was before it
+    // existed. Compares against the actual new scrollHeight after reflow,
+    // not which kind was selected, so this stays correct even if a
+    // future panel's relative heights change.
+    setTimeout(function() {
+        if (sidebarEl.scrollHeight > prevScrollHeight) {
+            sidebarEl.scrollTop = sidebarEl.scrollHeight;
+        } else {
+            sidebarEl.scrollTop = prevScrollTop;
+        }
+    }, 0);
+}
+""",
+            ))
+
+            swap_btn = Button(
+                label       = "Swap",
+                button_type = "default",
+                width       = 60,
+                stylesheets = [dark],
+            )
+            swap_js_obj = CustomJS(
+                args={
+                    "display_order_source": self._display_order_source,
+                    "slot0_raster_layout":  self._slots[0].raster.layout,
+                    "slot0_scatter_layout": self._slots[0].scatter.layout,
+                    "slot1_raster_layout":  self._slots[1].raster.layout,
+                    "slot1_scatter_layout": self._slots[1].scatter.layout,
+                    "side_container": None,   # patched in after _build_plot_area
+                    "over_container": None,   # patched in after _build_plot_area
+                },
+                code=swap_js,
+            )
+            swap_btn.js_on_click(swap_js_obj)
+            # Stored so side_container/over_container can be patched in
+            # after _build_plot_area() creates them (same "construct now,
+            # patch args in later" pattern already used for layout_js,
+            # presets, and the sidebar toggle) — the button itself
+            # (self._swap_btns) isn't otherwise needed after construction,
+            # but kept too in case something later needs to reference it
+            # (e.g. disabling it, should that ever become relevant).
+            self._swap_btns.append(swap_btn)
+            self._swap_js_objects.append(swap_js_obj)
+
+            tab_panel = TabPanel(
+                child=column(
+                    # Split into two rows (added 2026-08-03, reported
+                    # overflowing the sidebar as one row —
+                    # 120+80+60=260px, exactly _SIDEBAR_WIDTH with no
+                    # margin left for borders/padding). Grouped by
+                    # function: mode selection on its own row, the two
+                    # action buttons together below.
+                    row(Tip(kind_switch,
+                            tooltip=self._tt("Switch this panel between "
+                                              "raster and scatter"))),
+                    row(Tip(cancel_btn,
+                            tooltip=self._tt("Discard changes to this "
+                                              "panel and close its tab")),
+                        Tip(swap_btn,
+                            tooltip=self._tt("Swap this panel's screen "
+                                              "position with the other "
+                                              "panel — instant, no "
+                                              "replot"))),
+                    raster_panel,
+                    scatter_panel,
+                ),
+                title=f"Panel {slot.id}",
+            )
+            self._panel_tabpanels[slot.id] = tab_panel
+
+            # Fixed 2026-07-31: reported as a testing-blocking bug — after
+            # switching a slot's kind via Chunk 2, the gear tool vanished
+            # entirely rather than just mistargeting. Root cause: gear was
+            # only ever added to slot.active.figure, evaluated once at
+            # construction — so only whichever figure was active *then*
+            # ever got a gear in its toolbar. The other figure (which
+            # becomes the visible one after a switch) never had one added
+            # at all; there was nothing to retarget, it was just missing.
+            #
+            # Fixed by adding one gear per KIND per slot (two, not one) —
+            # each bound to its own figure, sharing the same tab_panel/
+            # orig_source/cancel_btn (only one tab per slot, regardless of
+            # which of its two gears opened it). Since only the currently
+            # *visible* figure's toolbar is ever actually clickable, this
+            # also incidentally resolves the earlier-flagged "gear title
+            # targets the wrong (hidden) figure" gap — there is no wrong
+            # figure to target anymore, each gear only ever fires from the
+            # one it's actually attached to, which is only reachable when
+            # visible.
+            #
+            # Cancel needed a matching fix: it used to bind to a single
+            # fixed slot.active.figure too, which would restore the wrong
+            # figure's title after a switch. Now determined dynamically at
+            # click time from which of the slot's two layout objects is
+            # currently .visible (Chunk 2 already keeps this correctly
+            # up to date) — reuses existing state rather than adding a new
+            # "which figure did the open gear session target" tracker.
+            cancel_btn.js_on_click(CustomJS(
+                args={
+                    "tabs":           self._gear_tabs,
+                    "my_panel":       tab_panel,
+                    "raster_fig":     slot.raster.figure,
+                    "scatter_fig":    slot.scatter.figure,
+                    "orig_source":    orig_source,
+                },
+                # Determines the target figure from orig_source's tracked
+                # 'kind' field (written by gear_click_js at capture time)
+                # rather than checking layout visibility — same fix and
+                # same reasoning as the doPlot() success handler below:
+                # precise and direct rather than relying on "the visible
+                # figure hasn't changed since gear was clicked" staying
+                # true, which is more fragile to depend on implicitly.
+                code="const fig = (orig_source.data['kind'][0] === 'scatter') "
+                     "? scatter_fig : raster_fig;\n" + cancel_click_js,
+            ))
+
+            for kind, kind_panel in (("raster", slot.raster), ("scatter", slot.scatter)):
+                gear = CustomAction(
+                    icon=_GEAR_ICON_DATA_URI,
+                    description=f"Configure Panel {slot.id}",
+                    callback=CustomJS(
+                        args={
+                            "sidebar":     self._sidebar_col,
+                            "toggle_btn":  toggle_btn,
+                            "tabs":        self._gear_tabs,
+                            "my_panel":    tab_panel,
+                            "panel_label": f"Panel {slot.id}",
+                            "fig":         kind_panel.figure,
+                            "kind":        kind,
+                            "orig_source": orig_source,
+                            "edit_color":  _EDIT_TITLE_COLOR,
+                        },
+                        code=gear_click_js,
+                    ),
+                )
+                kind_panel.figure.add_tools(gear)
+
         return self._sidebar_col, toggle_btn
 
     # ---------------------------------------------------------------------- #
@@ -1574,8 +2744,20 @@ btn.label        = collapsing ? '⟩' : '⟨';
         """
         ctrl        = self._pipe["control"]
         ids         = self._ids
-        raster_fig  = self._raster.figure
-        scatter_fig = self._scatter.figure
+        # raster_fig/scatter_fig locals removed (Group 3 piece 3, Chunk 2,
+        # 2026-07-31) — their only use was the fixed r_fig/s_fig args in
+        # _plot_js_args, replaced by per-slot, per-kind fig args since
+        # either slot can now show either kind.
+
+        # Group 3 piece 3, Chunk 2 follow-on fix (added 2026-08-02): the
+        # slot currently in each screen position, used below by layout_js
+        # and preset_js to reference both kinds' fig/layout objects
+        # rather than the single fixed self._pos0.figure/.layout — those
+        # are captured once at construction and go stale the instant a
+        # kind switch actually happens (same root cause as the four bugs
+        # fixed the same day in doPlot()'s response handler).
+        _pos0_slot = self._slots[self._slot_display_order[0]]
+        _pos1_slot = self._slots[self._slot_display_order[1]]
 
         side_w   = _PANEL_WIDTH_SIDE
         full_w   = _PANEL_WIDTH_FULL
@@ -1588,33 +2770,96 @@ btn.label        = collapsing ? '⟩' : '⟨';
 
         # Shared plot-send logic used by Plot ▶, Reload ↺, and all presets.
         _do_plot_js = """
+// Shared by both the early client-side conflict guard inside doPlot()
+// below and the server-error response handling further down (added
+// 2026-08-03, factored out once it became clear both needed the exact
+// same "open + focus this tab, expanding the sidebar if needed" logic —
+// see the two call sites for why each one exists). Deliberately does
+// NOT touch gear_tabs.tabs' other entries or hide/reset anything —
+// whatever else is open stays open, exactly as decision 9 called for.
+function switchToTab(target_tab, gear_tabs, sidebar, toggle_btn) {
+    if (target_tab == null) return;
+    const idx = gear_tabs.tabs.indexOf(target_tab);
+    if (idx === -1) {
+        gear_tabs.tabs = gear_tabs.tabs.concat([target_tab]);
+        gear_tabs.active = gear_tabs.tabs.length - 1;
+    } else {
+        gear_tabs.active = idx;
+    }
+    gear_tabs.visible = true;
+    if (!sidebar.visible) {
+        sidebar.visible  = true;
+        toggle_btn.label = '⟨';
+    }
+}
+
 function doPlot(reload) {
-    // Raster Y/X conflict — refuse to send rather than let the server
-    // round-trip reject it. The live listener on ry_sel/rx_sel already
-    // shows this same warning as soon as the conflict appears; this is
-    // the enforcement point (Plot ▶, Reload ↺, and every preset all
-    // funnel through here).
-    if (ry_sel.value === rx_sel.value) {
-        if (notify_div) {
-            notify_div.text = raster_axis_conflict_msg;
-            notify_div.styles = {...notify_div.styles, color: '#f38ba8'};
+    // Group 3 piece 3 / Chunk 1 (added 2026-07-31): request/response are
+    // now per-slot (panels: {id: {...}}) instead of flat raster_y/
+    // raster_x/scatter_x/scatter_y globals. See decision 9's "Group 3
+    // piece 3, Chunk 1" note in visplot-grid-iteration-notes.md for the
+    // full design record. panel0/panel1 below correspond to self._slots[0]
+    // (still always raster in this chunk) and self._slots[1] (still
+    // always scatter) — kind is still read from each slot's own switch
+    // and sent honestly, but _handle_plot() rejects an actual mismatch
+    // rather than this chunk attempting to render one (that's Chunk 2).
+    function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel) {
+        if (kind_switch.active === 0) {
+            return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value};
+        } else {
+            return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value};
         }
+    }
+    function rasterConflict(kind_switch, ry_sel, rx_sel) {
+        return kind_switch.active === 0 && ry_sel.value === rx_sel.value;
+    }
+
+    // Refuse to send rather than let the server round-trip reject it —
+    // same enforcement point as before (Plot ▶, Reload ↺, every preset
+    // all funnel through here). Each raster panel's own live conflict_div
+    // (Group 3 piece 1) already shows the warning as soon as the conflict
+    // appears — but only where it's visible, i.e. on that panel's own
+    // tab. Reported gap (found 2026-08-03): if the *other* tab is the
+    // one currently open, pressing Plot here used to silently do
+    // nothing — correctly refusing to send, but with no visible sign of
+    // why, and no way to discover it without guessing which tab to check.
+    // This never went through _handle_plot() at all (the request is
+    // refused right here, before ctrl.send()), so the server-side
+    // failed_slot/switchToTab mechanism below never got a chance to run
+    // for this specific error — same underlying UX problem as that
+    // feature was built for, just reached via a different, client-only
+    // path. Fixed by calling the same switchToTab() helper here too.
+    if (rasterConflict(panel0_kind_switch, panel0_ry_sel, panel0_rx_sel)) {
+        switchToTab(panel_a_tab, gear_tabs, sidebar, toggle_btn);
         return;
     }
+    if (rasterConflict(panel1_kind_switch, panel1_ry_sel, panel1_rx_sel)) {
+        switchToTab(panel_b_tab, gear_tabs, sidebar, toggle_btn);
+        return;
+    }
+
     const corr = corr_cbg.labels.filter((_, i) => corr_cbg.active.includes(i));
+    const panels = {};
+    panels[panel0_id] = buildPanelPayload(
+        panel0_kind_switch, panel0_ry_sel, panel0_rx_sel, panel0_rq_sel,
+        panel0_sx_sel, panel0_sy_sel);
+    panels[panel1_id] = buildPanelPayload(
+        panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
+        panel1_sx_sel, panel1_sy_sel);
+
+    console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
+
     ctrl.send(ids['plot'], {
         field:       field_sel.value,
         spw:         spw_sel.value.join(','),
         correlation: corr.join(','),
         datacolumn:  col_sel.value,
-        raster_y:    ry_sel.value,
-        raster_x:    rx_sel.value,
-        raster_qty:  rq_sel.value,
-        scatter_x:   sx_sel.value,
-        scatter_y:   sy_sel.value,
+        panels:      panels,
         reload:      !!reload,
     }, function(resp) {
         if (!resp) return;
+        console.log('[visplot doPlot] received status:', resp.status,
+                     'panels:', resp.panels ? JSON.parse(JSON.stringify(resp.panels)) : resp.panels);
         if (resp.status_text && status_div)
             status_div.text = resp.status_text;
         // No Bokeh server — resp.notify_text must be applied explicitly
@@ -1626,27 +2871,51 @@ function doPlot(reload) {
                 notify_div.styles = {...notify_div.styles, color: resp.notify_color};
             }
         }
+
+        const p0 = resp.panels ? resp.panels[panel0_id] : null;
+        const p1 = resp.panels ? resp.panels[panel1_id] : null;
+
+        // Group 3 piece 3, Chunk 2 (added 2026-07-31): pick the correct
+        // kind-specific fig/img_src/state/layout for each slot at
+        // runtime, from resp.panels[id].kind (what _handle_plot() says
+        // actually rendered this round) — not a construction-time-fixed
+        // binding, since either slot can now show either kind. Falls
+        // back to the raster set if p0/p1 is null (nothing to update
+        // regardless) purely so the destructuring below doesn't throw;
+        // no fields get applied in that case since every read below is
+        // already guarded on p0/p1 being present.
+        const p0_kind  = (p0 && p0.kind === 'scatter') ? 'scatter' : 'raster';
+        const p0_fig   = (p0_kind === 'raster') ? panel0_raster_fig   : panel0_scatter_fig;
+        const p0_img   = (p0_kind === 'raster') ? panel0_raster_img_src : panel0_scatter_img_src;
+        const p0_state = (p0_kind === 'raster') ? panel0_raster_state : panel0_scatter_state;
+
+        const p1_kind  = (p1 && p1.kind === 'scatter') ? 'scatter' : 'raster';
+        const p1_fig   = (p1_kind === 'raster') ? panel1_raster_fig   : panel1_scatter_fig;
+        const p1_img   = (p1_kind === 'raster') ? panel1_raster_img_src : panel1_scatter_img_src;
+        const p1_state = (p1_kind === 'raster') ? panel1_raster_state : panel1_scatter_state;
+
         // Same story for _state_source (full_x0/agg_n_x/...) — without
         // this, FlagTool keeps computing its 1:1 zoom target from
         // whatever full_x0/agg_n_x were current as of the last time this
         // ran, silently stale after any axis change.
-        if (resp.raster_state  != null) { r_state.data = resp.raster_state; }
-        if (resp.scatter_state != null) { s_state.data = resp.scatter_state; }
+        if (p0 && p0.state != null) { p0_state.data = p0.state; }
+        if (p1 && p1.state != null) { p1_state.data = p1.state; }
 
-        // Update raster image + axes.
+        // Update panel 0's figure + axes — whichever kind actually
+        // rendered this round (p0_fig/p0_img), not a fixed one.
         try {
-            if (resp.raster_image != null) {
-                r_img_src.data['image'] = [resp.raster_image];
+            if (p0 && p0.image != null) {
+                p0_img.data['image'] = [p0.image];
             }
-            if (resp.raster_x0 != null) {
-                r_img_src.data['x']  = [resp.raster_x0];
-                r_img_src.data['y']  = [resp.raster_y0];
-                r_img_src.data['dw'] = [resp.raster_x1 - resp.raster_x0];
-                r_img_src.data['dh'] = [resp.raster_y1 - resp.raster_y0];
-                r_fig.x_range.start = resp.raster_x0; r_fig.x_range.end = resp.raster_x1;
-                r_fig.y_range.start = resp.raster_y0; r_fig.y_range.end = resp.raster_y1;
-                r_fig.x_range.reset_start = resp.raster_x0; r_fig.x_range.reset_end = resp.raster_x1;
-                r_fig.y_range.reset_start = resp.raster_y0; r_fig.y_range.reset_end = resp.raster_y1;
+            if (p0 && p0.x0 != null) {
+                p0_img.data['x']  = [p0.x0];
+                p0_img.data['y']  = [p0.y0];
+                p0_img.data['dw'] = [p0.x1 - p0.x0];
+                p0_img.data['dh'] = [p0.y1 - p0.y0];
+                p0_fig.x_range.start = p0.x0; p0_fig.x_range.end = p0.x1;
+                p0_fig.y_range.start = p0.y0; p0_fig.y_range.end = p0.y1;
+                p0_fig.x_range.reset_start = p0.x0; p0_fig.x_range.reset_end = p0.x1;
+                p0_fig.y_range.reset_start = p0.y0; p0_fig.y_range.reset_end = p0.y1;
             }
             // Single emit *after* image and x/y/dw/dh are both settled — a
             // ColumnDataSource.data mutation is a plain dict write and does
@@ -1655,37 +2924,200 @@ function doPlot(reload) {
             // redrew the glyph with the new image but the still-stale
             // x/y/dw/dh box from the previous axes, positioning the correct
             // pixels outside the new viewport (all black) even though
-            // r_fig's ranges/labels/title (driven by their own property
+            // p0_fig's ranges/labels/title (driven by their own property
             // setters, not this CDS) updated correctly. Always emit here —
-            // raster_image is always sent, even when axes are unchanged, to
-            // keep the hover renderer active.
-            if (resp.raster_image != null) {
-                r_img_src.change.emit();
+            // panel 0's image is always sent, even when axes are
+            // unchanged, to keep the hover renderer active.
+            if (p0 && p0.image != null) {
+                p0_img.change.emit();
             }
-            if (resp.raster_x_label != null) r_fig.below[0].axis_label = resp.raster_x_label;
-            if (resp.raster_y_label != null) r_fig.left[0].axis_label  = resp.raster_y_label;
-            if (resp.raster_title   != null) r_fig.title.text           = resp.raster_title;
-        } catch(e) { console.warn('raster update failed:', e); }
+            if (p0 && p0.x_label != null) p0_fig.below[0].axis_label = p0.x_label;
+            if (p0 && p0.y_label != null) p0_fig.left[0].axis_label  = p0.y_label;
+            if (p0 && p0.title   != null) p0_fig.title.text           = p0.title;
 
-        // Update scatter image + axes.
-        try {
-            if (resp.scatter_image != null) {
-                s_img_src.data['image'] = [resp.scatter_image];
-                s_img_src.data['x']     = [resp.scatter_x0];
-                s_img_src.data['y']     = [resp.scatter_y0];
-                s_img_src.data['dw']    = [resp.scatter_x1 - resp.scatter_x0];
-                s_img_src.data['dh']    = [resp.scatter_y1 - resp.scatter_y0];
-                s_img_src.change.emit();
-                s_fig.x_range.start = resp.scatter_x0; s_fig.x_range.end = resp.scatter_x1;
-                s_fig.y_range.start = resp.scatter_y0; s_fig.y_range.end = resp.scatter_y1;
-                // Update reset bounds so the ResetTool returns to new data extents
-                s_fig.x_range.reset_start = resp.scatter_x0; s_fig.x_range.reset_end = resp.scatter_x1;
-                s_fig.y_range.reset_start = resp.scatter_y0; s_fig.y_range.reset_end = resp.scatter_y1;
+            // Reveal whichever of this slot's two layout objects matches
+            // what actually rendered, hide the other — the visibility-
+            // toggling mechanism _build_plot_area() sets up (both are
+            // already children of the container; a hidden LayoutDOM
+            // child takes no space, same as "One" mode's pos1 already
+            // relied on before this chunk). Only touched when a panel
+            // response actually arrived, so a request that only updated
+            // the other slot doesn't needlessly re-toggle this one.
+            if (p0) {
+                panel0_raster_layout.visible  = (p0_kind === 'raster');
+                panel0_scatter_layout.visible = (p0_kind === 'scatter');
             }
-            if (resp.scatter_x_label != null) s_fig.below[0].axis_label = resp.scatter_x_label;
-            if (resp.scatter_y_label != null) s_fig.left[0].axis_label  = resp.scatter_y_label;
-            if (resp.scatter_title   != null) s_fig.title.text           = resp.scatter_title;
-        } catch(e) { console.warn('scatter update failed:', e); }
+        } catch(e) { console.warn('panel 0 update failed:', e); }
+
+        // Update panel 1's figure + axes — same pattern as panel 0 above.
+        //
+        // Bug fixed 2026-08-03 (found during testing): this block used to
+        // combine the always-sent image update with the conditionally-
+        // sent range update into a single "if (p1.image != null)" check —
+        // unlike panel 0's block above, which correctly splits them into
+        // two separate conditionals. Since p1.image is *always* sent
+        // (even when axes didn't change, to keep the hover renderer
+        // active), that combined condition was always true — meaning it
+        // always tried to set p1_img.data['x'] = [p1.x0] etc even when
+        // p1.x0/x1/y0/y1 were null (axes unchanged this round), corrupting
+        // the image's position data to NaN and making it disappear. This
+        // was a latent bug since Chunk 2: scatter previously always
+        // re-rendered unconditionally, so x0 was always non-null and this
+        // combined condition was never exercised with a null value —
+        // only exposed once scatter's own change-detection (added the
+        // same day, see self._last_scatter_selection_by_slot) started
+        // correctly sending null range fields for an unchanged scatter
+        // panel. Fixed by splitting into the same two-conditional
+        // structure panel 0 already had correct.
+        try {
+            if (p1 && p1.image != null) {
+                p1_img.data['image'] = [p1.image];
+            }
+            if (p1 && p1.x0 != null) {
+                p1_img.data['x']  = [p1.x0];
+                p1_img.data['y']  = [p1.y0];
+                p1_img.data['dw'] = [p1.x1 - p1.x0];
+                p1_img.data['dh'] = [p1.y1 - p1.y0];
+                p1_fig.x_range.start = p1.x0; p1_fig.x_range.end = p1.x1;
+                p1_fig.y_range.start = p1.y0; p1_fig.y_range.end = p1.y1;
+                // Update reset bounds so the ResetTool returns to new data extents
+                p1_fig.x_range.reset_start = p1.x0; p1_fig.x_range.reset_end = p1.x1;
+                p1_fig.y_range.reset_start = p1.y0; p1_fig.y_range.reset_end = p1.y1;
+            }
+            // Same reasoning as panel 0's emit above: always emit when
+            // image is sent, even if axes/range didn't change, to keep
+            // the hover renderer active.
+            if (p1 && p1.image != null) {
+                p1_img.change.emit();
+            }
+            if (p1 && p1.x_label != null) p1_fig.below[0].axis_label = p1.x_label;
+            if (p1 && p1.y_label != null) p1_fig.left[0].axis_label  = p1.y_label;
+            if (p1 && p1.title   != null) p1_fig.title.text           = p1.title;
+
+            if (p1) {
+                panel1_raster_layout.visible  = (p1_kind === 'raster');
+                panel1_scatter_layout.visible = (p1_kind === 'scatter');
+            }
+        } catch(e) { console.warn('panel 1 update failed:', e); }
+
+        // Gear/Tabs: hide + fully reset on success (added 2026-07-31,
+        // revised same day for the full-title-replacement version).
+        // resp.status already came back from _handle_plot() as 'ok' or
+        // 'error' — previously unused here.
+        //
+        // Text used to need no manual handling here, on the assumption
+        // that p0.title/p1.title above always superseded whatever plain
+        // "Panel A"/"Panel B" label a gear click had put there. That
+        // assumption was wrong (bug found during testing, fixed
+        // 2026-08-02): p0.title/p1.title are only sent when
+        // _handle_plot() decides that panel's axes actually changed —
+        // if a gear tab was open but nothing about that panel's own axes
+        // changed before Plot was pressed, no fresh title arrives, and
+        // text stays stuck on the placeholder even though color gets
+        // unconditionally restored below. Now falls back to
+        // panel_a_state/panel_b_state's captured original text whenever
+        // a fresh title wasn't actually applied to the edited figure
+        // this round — see the fuller comment at the fallback check
+        // itself, below, for the exact condition (also covers the
+        // related kind-switch-mid-session case). text_color still needs
+        // the same explicit restore it always did: the gear click set it
+        // to _EDIT_TITLE_COLOR and nothing else ever touches it,
+        // so on success it must be explicitly restored from that slot's
+        // own captured pre-edit color (self._panel_title_state[slot.id],
+        // same source Cancel reads from) — but only for a slot that's
+        // actually currently open (tabs.tabs membership), so a slot the
+        // user never touched this round doesn't get its color needlessly
+        // reset.
+        //
+        // Fixed 2026-08-02 (bug found during testing, not previously
+        // reported): this used to target p0_fig/p1_fig — whichever kind
+        // the response says actually rendered this round. That's wrong
+        // if the user changed the Raster/Scatter switch *within* the
+        // same open tab before pressing Plot: the figure that was
+        // actually reddened is whichever the gear was originally clicked
+        // on, which can differ from what's active after the switch takes
+        // effect. Now reads panel_a_state/panel_b_state's tracked 'kind'
+        // field (written by gear_click_js at capture time) to pick the
+        // correct figure directly, independent of what this round's
+        // response says rendered.
+        //
+        // Resetting tabs.tabs to [] (not just tabs.visible = false)
+        // matters so the *next* gear click starts from "nothing open"
+        // again rather than instantly re-revealing whatever was open last
+        // round.
+        if (resp.status === 'ok') {
+            if (gear_tabs.tabs.indexOf(panel_a_tab) !== -1) {
+                const edited_kind = panel_a_state.data['kind'][0];
+                const edited_fig  = (edited_kind === 'scatter')
+                    ? panel0_scatter_fig : panel0_raster_fig;
+                if (edited_fig.title != null) {
+                    // Fixed 2026-08-02 (bug found during testing): text
+                    // was only ever restored as a side effect of the
+                    // unconditional "if (p0.title != null) p0_fig.title.text
+                    // = p0.title" line above — which only fires when
+                    // _handle_plot() actually sent a fresh title, i.e.
+                    // when this panel's own axes genuinely changed. If
+                    // the gear tab was open but nothing about that
+                    // panel's axes actually changed before Plot was
+                    // pressed, no fresh title arrives — color still gets
+                    // unconditionally restored below, but text was left
+                    // stuck on the gear's placeholder ("Panel A") with
+                    // nothing to replace it. Also covers the kind-switch
+                    // case: if p0_kind (what actually rendered this
+                    // round) differs from edited_kind (what was actually
+                    // gear-clicked), the response describes a different
+                    // figure entirely, so p0.title never applied to
+                    // edited_fig regardless of whether it's non-null.
+                    // Falls back to orig_source's captured original text
+                    // in either case — correct because if nothing
+                    // changed, the pre-edit title is still accurate.
+                    const p0_title_applied = (p0 && p0.title != null && p0_kind === edited_kind);
+                    if (!p0_title_applied) {
+                        edited_fig.title.text = panel_a_state.data['text'][0];
+                    }
+                    edited_fig.title.text_color = panel_a_state.data['color'][0];
+                    edited_fig.title.change.emit();
+                }
+            }
+            if (gear_tabs.tabs.indexOf(panel_b_tab) !== -1) {
+                const edited_kind = panel_b_state.data['kind'][0];
+                const edited_fig  = (edited_kind === 'scatter')
+                    ? panel1_scatter_fig : panel1_raster_fig;
+                if (edited_fig.title != null) {
+                    // Same fix as panel A above.
+                    const p1_title_applied = (p1 && p1.title != null && p1_kind === edited_kind);
+                    if (!p1_title_applied) {
+                        edited_fig.title.text = panel_b_state.data['text'][0];
+                    }
+                    edited_fig.title.text_color = panel_b_state.data['color'][0];
+                    edited_fig.title.change.emit();
+                }
+            }
+            gear_tabs.visible = false;
+            gear_tabs.tabs    = [];
+        } else if (resp.status === 'error' && resp.failed_slot != null) {
+            // Validation-error auto-switch-to-tab (added 2026-08-03) —
+            // decision 9's originally-settled design, last piece built.
+            // resp.failed_slot (tagged by every _handle_plot() error
+            // path — the kind-mismatch guard, the raster Y/X conflict
+            // check, and both kinds' exception handlers) tells us which
+            // slot actually caused the failure. Deliberately does NOT
+            // hide/reset gear_tabs the way the success branch does — the
+            // open tabs stay open, exactly as decision 9 called for;
+            // switchToTab() only makes sure the right one is in front.
+            //
+            // In practice this branch only fires for errors that
+            // actually reach _handle_plot() — the raster Y/X conflict is
+            // caught earlier, client-side, before any request is even
+            // sent (see doPlot()'s own guard above, which calls
+            // switchToTab() directly for that case) — but the
+            // kind-mismatch guard and both kinds' exception handlers
+            // still route through here.
+            const failed_tab = (resp.failed_slot === panel0_id) ? panel_a_tab
+                              : (resp.failed_slot === panel1_id) ? panel_b_tab
+                              : null;
+            switchToTab(failed_tab, gear_tabs, sidebar, toggle_btn);
+        }
     });
 }
 """
@@ -1696,20 +3128,71 @@ function doPlot(reload) {
             "spw_sel":    self._spw_select,
             "corr_cbg":   self._corr_cbg,
             "col_sel":    self._col_select,
-            "ry_sel":     self._ry_select,
-            "rx_sel":     self._rx_select,
-            "rq_sel":     self._rq_select,
-            "sx_sel":     self._sx_select,
-            "sy_sel":     self._sy_select,
             "status_div": self._status_div,
             "notify_div": self._notify_div,
-            "r_fig":      raster_fig,
-            "s_fig":      scatter_fig,
-            "r_img_src":  self._raster._image_source,
-            "s_img_src":  self._scatter._image_source,
-            "r_state":    self._raster._state_source,
-            "s_state":    self._scatter._state_source,
-            "raster_axis_conflict_msg": self._raster_axis_conflict_msg,
+            "gear_tabs":  self._gear_tabs,
+            # Needed for validation-error auto-switch-to-tab (added
+            # 2026-08-03): if the sidebar was collapsed when a failure
+            # happens, gear_tabs.visible=true alone wouldn't be enough to
+            # actually show it — the whole sidebar (gear_tabs' parent)
+            # needs expanding too, same as gear_click_js already does.
+            "sidebar":    self._sidebar_col,
+            "toggle_btn": sidebar_toggle_btn,
+            # Positional shim (same scope noted in _build_sidebar): slot A
+            # is currently "the raster position", slot B "the scatter
+            # position", per self._slots' construction order.
+            "panel_a_tab":   self._panel_tabpanels[self._slots[0].id],
+            "panel_b_tab":   self._panel_tabpanels[self._slots[1].id],
+            "panel_a_state": self._panel_title_state[self._slots[0].id],
+            "panel_b_state": self._panel_title_state[self._slots[1].id],
+            # Group 3 piece 3 / Chunk 1 (added 2026-07-31): per-slot
+            # request-building args, replacing the old flat ry_sel/
+            # rx_sel/rq_sel/sx_sel/sy_sel/raster_axis_conflict_msg args
+            # (removed above — no longer read by doPlot()). panel0/panel1
+            # map to self._slots[0]/self._slots[1] — same positional
+            # convention as panel_a_tab/panel_b_tab above, just named for
+            # request-building rather than display-state. Each includes
+            # both kinds' widgets (not just the currently-active one)
+            # since the switch could be on either — doPlot() reads
+            # whichever the switch currently shows.
+            "panel0_id":          self._slots[0].id,
+            "panel0_kind_switch": self._panel_kind_switch[self._slots[0].id],
+            "panel0_ry_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["y_sel"],
+            "panel0_rx_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["x_sel"],
+            "panel0_rq_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["q_sel"],
+            "panel0_sx_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["x_sel"],
+            "panel0_sy_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["y_sel"],
+            "panel1_id":          self._slots[1].id,
+            "panel1_kind_switch": self._panel_kind_switch[self._slots[1].id],
+            "panel1_ry_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["y_sel"],
+            "panel1_rx_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["x_sel"],
+            "panel1_rq_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["q_sel"],
+            "panel1_sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
+            "panel1_sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
+            # Group 3 piece 3, Chunk 2 (added 2026-07-31): both kinds'
+            # figure/image-source/state-source/layout per slot, replacing
+            # the fixed r_fig/s_fig/r_img_src/s_img_src/r_state/s_state
+            # args above — those assumed slot 0 is always raster and slot
+            # 1 always scatter, which Chunk 2 finally allows to not be
+            # true. doPlot()'s response handler picks the right one per
+            # slot at runtime from resp.panels[id].kind (what actually
+            # rendered), not from a construction-time-fixed binding.
+            "panel0_raster_fig":      self._slots[0].raster.figure,
+            "panel0_raster_img_src":  self._slots[0].raster._image_source,
+            "panel0_raster_state":    self._slots[0].raster._state_source,
+            "panel0_raster_layout":   self._slots[0].raster.layout,
+            "panel0_scatter_fig":     self._slots[0].scatter.figure,
+            "panel0_scatter_img_src": self._slots[0].scatter._image_source,
+            "panel0_scatter_state":   self._slots[0].scatter._state_source,
+            "panel0_scatter_layout":  self._slots[0].scatter.layout,
+            "panel1_raster_fig":      self._slots[1].raster.figure,
+            "panel1_raster_img_src":  self._slots[1].raster._image_source,
+            "panel1_raster_state":    self._slots[1].raster._state_source,
+            "panel1_raster_layout":   self._slots[1].raster.layout,
+            "panel1_scatter_fig":     self._slots[1].scatter.figure,
+            "panel1_scatter_img_src": self._slots[1].scatter._image_source,
+            "panel1_scatter_state":   self._slots[1].scatter._state_source,
+            "panel1_scatter_layout":  self._slots[1].scatter.layout,
         }
 
         plot_js = CustomJS(
@@ -1727,109 +3210,124 @@ function doPlot(reload) {
         self._do_plot_js   = _do_plot_js
         self._plot_js_args = _plot_js_args
 
-        # ---- Display mode ------------------------------------------------- #
-        mode_rbg = RadioButtonGroup(
-            labels = ["Both", "Raster only", "Scatter only"],
-            active = {"both": 0, "raster": 1, "scatter": 2}.get(self._mode, 0),
-            width  = 260,
-        )
-        self._mode_rbg = mode_rbg
-
-        mode_js = CustomJS(
-            args={
-                "raster_fig":     raster_fig,
-                "scatter_fig":    scatter_fig,
-                "raster_layout":  self._raster.layout,
-                "scatter_layout": self._scatter.layout,
-                "layout_rbg":     None,
-                "raster_sec":     self._raster_axis_section,
-                "scatter_sec":    self._scatter_axis_section,
-                "side_w":         side_w,
-                "full_w":         full_w,
-                "panel_h":        panel_h,
-            },
-            code="""
-const mode    = cb_obj.active;
-const both    = (mode === 0);
-const raster  = (mode !== 2);
-const scatter = (mode !== 1);
-
-// Toggle the whole layout column (fig + info_div) not just the figure,
-// so the info_div is also hidden when a panel is not active.
-raster_layout.visible  = raster;
-scatter_layout.visible = scatter;
-
-if (both) {
-    raster_fig.width   = side_w;
-    scatter_fig.width  = side_w;
-    raster_fig.height  = panel_h;
-    scatter_fig.height = panel_h;
-    if (layout_rbg) layout_rbg.disabled = false;
-} else {
-    const vfig = raster ? raster_fig : scatter_fig;
-    vfig.width  = full_w;
-    vfig.height = panel_h;
-    if (layout_rbg) layout_rbg.disabled = true;
-}
-
-raster_sec.visible  = raster;
-scatter_sec.visible = scatter;
-""",
-        )
-        mode_rbg.js_on_change("active", mode_js)
-
-        # ---- Layout toggle (dual-container approach) ---------------------- #
+        # ---- Layout (unified — replaces the former separate mode +
+        # layout toggles as of July 29 2026) -------------------------------- #
+        # "One" reuses side_container (pos0_layout visible, pos1_layout
+        # hidden within it) rather than a third container — a hidden
+        # LayoutDOM child in a Bokeh row/column is removed from the render
+        # flow, so no extra widget is needed for the single-panel case.
         layout_rbg = RadioButtonGroup(
-            labels   = ["Side by Side", "Over / Under"],
-            active   = 0 if self._layout == "side" else 1,
-            disabled = (self._mode != "both"),
-            width    = 220,
+            labels = ["One", "Side by Side", "Over / Under"],
+            active = {"one": 0, "side": 1, "over": 2}.get(self._layout, 1),
+            width  = 320,
         )
         self._layout_rbg = layout_rbg
-        mode_js.args["layout_rbg"] = layout_rbg   # patch back-reference
 
         layout_js = CustomJS(
             args={
-                "raster_fig":       raster_fig,
-                "scatter_fig":      scatter_fig,
-                "side_container":   None,    # patched in after _build_plot_area
-                "over_container":   None,    # patched in after _build_plot_area
-                "side_w":           side_w,
-                "full_w":           full_w,
-                "panel_h":          panel_h,
-                "over_h":           over_h,
-                "pref_src":         self._pref_source,
-                "ry_sel":           self._ry_select,
-                "rx_sel":           self._rx_select,
-                "sx_sel":           self._sx_select,
-                "sy_sel":           self._sy_select,
+                # Swap follow-on fix (added 2026-08-03): all four
+                # slot-kind fig/layout objects plus the live display-order
+                # tracker, replacing the construction-time-fixed
+                # _pos0_slot/_pos1_slot-derived args (correct only until
+                # the swap feature — added the same day — could actually
+                # move either slot into either position at runtime).
+                # Mirrors the kind-resolution fix from 2026-08-02 exactly
+                # (determine at click time, don't assume from
+                # construction) — this closes the equivalent gap for
+                # *position* instead of *kind*, the "One" mode sizing
+                # issue flagged when the swap was first discussed.
+                "slot0_raster_fig":     self._slots[0].raster.figure,
+                "slot0_raster_layout":  self._slots[0].raster.layout,
+                "slot0_scatter_fig":    self._slots[0].scatter.figure,
+                "slot0_scatter_layout": self._slots[0].scatter.layout,
+                "slot1_raster_fig":     self._slots[1].raster.figure,
+                "slot1_raster_layout":  self._slots[1].raster.layout,
+                "slot1_scatter_fig":    self._slots[1].scatter.figure,
+                "slot1_scatter_layout": self._slots[1].scatter.layout,
+                "display_order_source": self._display_order_source,
+                "side_container": None,    # patched in after _build_plot_area
+                "over_container": None,    # patched in after _build_plot_area
+                "side_w":         side_w,
+                "full_w":         full_w,
+                "panel_h":        panel_h,
+                "over_h":         over_h,
+                "pref_src":       self._pref_source,
+                # Group 3 piece 3 / Chunk 1 (added 2026-07-31): points at
+                # the per-slot widgets now (panel0 = slot A = raster,
+                # panel1 = slot B = scatter — same fixed assumption
+                # presets use) rather than the old global ry_sel/rx_sel/
+                # sx_sel/sy_sel, which piece 2 (2026-07-31) removed
+                # entirely — nothing wrote to them anymore as of Chunk 1,
+                # so reading them here would have silently built
+                # preference keys from stale, frozen values.
+                "ry_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["y_sel"],
+                "rx_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["x_sel"],
+                "sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
+                "sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
             },
             code="""
-const over = (cb_obj.active === 1);
+const val  = cb_obj.active;   // 0=one, 1=side, 2=over
+const one  = (val === 0);
+const over = (val === 2);
 
-// Switch container visibility
-side_container.visible = !over;
+// Which SLOT is currently in the primary/first screen position — read
+// from the live swap tracker, not assumed from construction-time slot
+// indices, since a swap (added 2026-08-03) can have moved either slot
+// into either position since the page loaded. This is the "One" mode
+// sizing gap flagged when the swap feature was first discussed, closed
+// here as part of the same change that introduces the swap itself.
+const order = display_order_source.data['order'][0];
+const pos0_is_slot0 = (order[0] === 0);
+
+const pos0_raster_fig     = pos0_is_slot0 ? slot0_raster_fig     : slot1_raster_fig;
+const pos0_raster_layout  = pos0_is_slot0 ? slot0_raster_layout  : slot1_raster_layout;
+const pos0_scatter_fig    = pos0_is_slot0 ? slot0_scatter_fig    : slot1_scatter_fig;
+const pos0_scatter_layout = pos0_is_slot0 ? slot0_scatter_layout : slot1_scatter_layout;
+const pos1_raster_fig     = pos0_is_slot0 ? slot1_raster_fig     : slot0_raster_fig;
+const pos1_raster_layout  = pos0_is_slot0 ? slot1_raster_layout  : slot0_raster_layout;
+const pos1_scatter_fig    = pos0_is_slot0 ? slot1_scatter_fig    : slot0_scatter_fig;
+const pos1_scatter_layout = pos0_is_slot0 ? slot1_scatter_layout : slot0_scatter_layout;
+
+// Which kind is CURRENTLY showing at each (now correctly resolved)
+// position — same "check .visible" pattern already used by Cancel and
+// doPlot()'s response handler, unchanged from the 2026-08-02 fix.
+const pos0_fig    = pos0_raster_layout.visible ? pos0_raster_fig    : pos0_scatter_fig;
+const pos0_layout = pos0_raster_layout.visible ? pos0_raster_layout : pos0_scatter_layout;
+const pos1_fig    = pos1_raster_layout.visible ? pos1_raster_fig    : pos1_scatter_fig;
+const pos1_layout = pos1_raster_layout.visible ? pos1_raster_layout : pos1_scatter_layout;
+
+// "one" always shows whatever's in the primary/first screen position,
+// not "the raster panel" specifically (positional, not kind-based).
+pos0_layout.visible  = true;
+pos1_layout.visible  = !one;
+
+side_container.visible = !over;   // covers both "one" and "side"
 over_container.visible =  over;
 
-// Resize figures to fit new container
-if (over) {
-    raster_fig.width   = full_w;
-    scatter_fig.width  = full_w;
-    raster_fig.height  = over_h;
-    scatter_fig.height = over_h;
+if (one) {
+    pos0_fig.width  = full_w;
+    pos0_fig.height = panel_h;
+} else if (over) {
+    pos0_fig.width   = full_w;
+    pos1_fig.width  = full_w;
+    pos0_fig.height  = over_h;
+    pos1_fig.height = over_h;
 } else {
-    raster_fig.width   = side_w;
-    scatter_fig.width  = side_w;
-    raster_fig.height  = panel_h;
-    scatter_fig.height = panel_h;
+    pos0_fig.width   = side_w;
+    pos1_fig.width  = side_w;
+    pos0_fig.height  = panel_h;
+    pos1_fig.height = panel_h;
 }
 
-// Persist preference
-const key   = [ry_sel.value, rx_sel.value, 'AMPLITUDE',
-               sx_sel.value, sy_sel.value].join(':');
-const prefs = JSON.parse(pref_src.data['prefs'][0]);
-prefs[key]  = over ? 'over' : 'side';
-pref_src.data = {prefs: [JSON.stringify(prefs)]};
+// Persist preference (side vs. over) — unchanged from before, "one"
+// doesn't participate since there's nothing to arrange with one panel.
+if (!one) {
+    const key   = [ry_sel.value, rx_sel.value, 'AMPLITUDE',
+                   sx_sel.value, sy_sel.value].join(':');
+    const prefs = JSON.parse(pref_src.data['prefs'][0]);
+    prefs[key]  = over ? 'over' : 'side';
+    pref_src.data = {prefs: [JSON.stringify(prefs)]};
+}
 """,
         )
         layout_rbg.js_on_change("active", layout_js)
@@ -1844,16 +3342,34 @@ pref_src.data = {prefs: [JSON.stringify(prefs)]};
 
         def _preset_js(preset_name: str) -> CustomJS:
             ry, rx, rq, sx, sy, pl = _PRESETS[preset_name]
-            active_layout = 0 if pl == "side" else 1
+            # Presets always show both panels (never "one") — index 1=side,
+            # 2=over on the unified layout_rbg (0 is reserved for "one").
+            active_layout = 1 if pl == "side" else 2
             args = {
                 **self._plot_js_args,
-                "mode_rbg":        mode_rbg,
                 "layout_rbg":      layout_rbg,
                 "active_layout":   active_layout,
-                "raster_fig":      raster_fig,
-                "scatter_fig":     scatter_fig,
-                "raster_layout":   self._raster.layout,
-                "scatter_layout":  self._scatter.layout,
+                # Group 3 piece 3, Chunk 2 follow-on fix (added
+                # 2026-08-02): presets always force pos0=raster/
+                # pos1=scatter (their own fixed assumption, unchanged —
+                # see the kind_switch.active lines below), so unlike
+                # layout_js above they can reference the target fig/
+                # layout directly rather than needing to check which is
+                # currently showing. But the *other* kind (whichever was
+                # actually showing before this preset ran) also needs
+                # explicit args now, to hide it — the old code only set
+                # the target layout's .visible = true without touching
+                # the other one, so if the user had switched a slot away
+                # from the preset's assumed kind, both could briefly
+                # appear stacked until doPlot()'s async response settled
+                # things a moment later. Fixed to set the complete
+                # correct end-state synchronously instead.
+                "pos0_raster_fig":     _pos0_slot.raster.figure,
+                "pos0_raster_layout":  _pos0_slot.raster.layout,
+                "pos0_scatter_layout": _pos0_slot.scatter.layout,
+                "pos1_scatter_fig":    _pos1_slot.scatter.figure,
+                "pos1_scatter_layout": _pos1_slot.scatter.layout,
+                "pos1_raster_layout":  _pos1_slot.raster.layout,
                 "side_container":  None,
                 "over_container":  None,
                 "side_w":          side_w,
@@ -1864,27 +3380,45 @@ pref_src.data = {prefs: [JSON.stringify(prefs)]};
             return CustomJS(
                 args=args,
                 code=self._do_plot_js + f"""
-mode_rbg.active     = 0;
-layout_rbg.active   = active_layout;
-layout_rbg.disabled = false;
-raster_layout.visible  = true;
-scatter_layout.visible = true;
+layout_rbg.active      = active_layout;
 
-ry_sel.value = '{ry.name}';
-rx_sel.value = '{rx.name}';
-rq_sel.value = '{rq.name}';
-sx_sel.value = '{sx.name}';
-sy_sel.value = '{sy.name}';
+// Presets' fixed target: pos0 = raster, pos1 = scatter. Set the complete
+// end-state for both positions synchronously (both the target kind
+// visible AND the other kind hidden), rather than only setting the
+// target visible and leaving whatever was previously showing untouched
+// until doPlot()'s async response settles it a moment later.
+pos0_raster_layout.visible  = true;
+pos0_scatter_layout.visible = false;
+pos1_scatter_layout.visible = true;
+pos1_raster_layout.visible  = false;
 
-const over = (active_layout === 1);
+// Group 3 piece 3 / Chunk 1 (added 2026-07-31): presets set the
+// per-slot widgets directly now (panel0 = slot A = raster, panel1 =
+// slot B = scatter — presets' existing fixed assumption, unchanged).
+// Also force each slot's kind switch to match, in case the user had
+// switched either away before clicking a preset — otherwise doPlot()
+// would read a stale switch position and send the wrong kind (or the
+// wrong, untouched widgets) for what the preset actually intends.
+// Setting .active here fires the same js_on_change listener a real
+// click would, so each tab's visible config panel updates too.
+panel0_kind_switch.active = 0;
+panel1_kind_switch.active = 1;
+
+panel0_ry_sel.value = '{ry.name}';
+panel0_rx_sel.value = '{rx.name}';
+panel0_rq_sel.value = '{rq.name}';
+panel1_sx_sel.value = '{sx.name}';
+panel1_sy_sel.value = '{sy.name}';
+
+const over = (active_layout === 2);
 side_container.visible = !over;
 over_container.visible =  over;
 if (over) {{
-    raster_fig.width   = full_w;  scatter_fig.width  = full_w;
-    raster_fig.height  = over_h;  scatter_fig.height = over_h;
+    pos0_raster_fig.width   = full_w;  pos1_scatter_fig.width  = full_w;
+    pos0_raster_fig.height  = over_h;  pos1_scatter_fig.height = over_h;
 }} else {{
-    raster_fig.width   = side_w;  scatter_fig.width  = side_w;
-    raster_fig.height  = panel_h; scatter_fig.height = panel_h;
+    pos0_raster_fig.width   = side_w;  pos1_scatter_fig.width  = side_w;
+    pos0_raster_fig.height  = panel_h; pos1_scatter_fig.height = panel_h;
 }}
 
 doPlot();
@@ -1907,22 +3441,56 @@ doPlot();
             button_type = "default",
             width       = 78,
         )
+        # Group 3 piece 2 (added 2026-07-31): flattened list of every
+        # per-slot, per-kind axis widget + colormap widget, replacing the
+        # old self._ry_select/_rx_select/_rq_select/_sx_select/_sy_select
+        # + self._raster_cmap_widgets/_scatter_cmap_widgets references
+        # (removed along with the global sections they belonged to).
+        # Built explicitly rather than assumed covered by the shared
+        # `dark` InlineStyleSheet instance these widgets were constructed
+        # with — the toggle's JS mutates each listed widget's own
+        # stylesheets[0].css directly, so anything not listed here
+        # wouldn't get re-themed regardless of what object it shares.
+        _all_axis_widgets = []
+        for slot in self._slots:
+            for kind in ("raster", "scatter"):
+                w = self._panel_axis_widgets[slot.id][kind]
+                if kind == "raster":
+                    _all_axis_widgets += [w["y_sel"], w["x_sel"], w["q_sel"]]
+                else:
+                    _all_axis_widgets += [w["x_sel"], w["y_sel"]]
+                _all_axis_widgets += w["cmap_widgets"]
+
         dark_btn.js_on_change("active", CustomJS(
             args={
-                "rf":           raster_fig,
-                "sf":           scatter_fig,
-                "r_info":       self._raster._info_div,
-                "s_info":       self._scatter._info_div,
+                # All four panel figures/info-divs, not just the two
+                # kind-active ones (Group 2 rework, 2026-07-31) — a
+                # currently-inactive panel should already be in the
+                # correct theme by the time it's shown, not caught in
+                # Bokeh's raw default because the toggle never reached it.
+                "figs":         [p.figure    for p in self._all_panels],
+                "info_divs":    [p._info_div for p in self._all_panels],
                 "sidebar":      self._sidebar_col,
                 "status_div":   self._status_div,
                 "notify_div":   self._notify_div,
+                # Two light-mode gaps fixed 2026-08-03, found during
+                # testing — neither was ever covered by any part of the
+                # existing dark/light mechanism (the config-field hint
+                # divs use plain .styles with a hardcoded dark-only
+                # color, not stylesheets, so the generic `widgets` loop
+                # below never reaches them; path_div's color is baked
+                # into an inline HTML <span style=...> inside .text
+                # itself, which no property-based recolor mechanism can
+                # reach at all — it has to be regenerated, not restyled).
+                "hint_divs":    [self._hint_field, self._hint_spw,
+                                 self._hint_corr, self._hint_scan,
+                                 self._hint_antenna, self._hint_time,
+                                 self._hint_uvrange],
+                "path_div":         self._path_div,
+                "source_basename":  os.path.basename(self._source_path),
                 "widgets":      [self._col_select, self._field_select,
-                                 self._spw_select, self._corr_cbg,
-                                 self._ry_select, self._rx_select,
-                                 self._rq_select, self._sx_select,
-                                 self._sy_select]
-                                + self._raster_cmap_widgets
-                                + self._scatter_cmap_widgets,
+                                 self._spw_select, self._corr_cbg]
+                                + _all_axis_widgets,
             },
             code="""
 const light     = cb_obj.active;
@@ -1935,6 +3503,16 @@ const info_bg   = light ? '#ffffff' : '#1e1e2e';
 const info_c    = light ? '#222222' : '#cdd6f4';
 const status_c  = light ? '#155724' : '#a6e3a1';
 const title_c   = light ? '#222222' : '#cdd6f4';
+// Two new colors for the light-mode fixes above: hint_c stays visually
+// distinct from status_c in light mode too (dark teal vs. dark green),
+// matching the existing dark-mode intent ("cyan — distinct from status
+// green") rather than just reusing status_c and losing that distinction.
+// source_c is exactly label_c's value, reused under its own name since
+// it's conceptually "make the source path readable, matching the rest
+// of the sidebar's text" rather than tied to the same one label_c
+// happens to serve elsewhere.
+const hint_c    = light ? '#0c5460' : '#89dceb';
+const source_c  = light ? '#222222' : '#a6e3a1';
 const dark_css = `:host { --bokeh-base-font: system-ui, sans-serif; }
 .bk-input { background: #313244 !important; color: #cdd6f4 !important; border-color: #45475a !important; }
 select.bk-input option { background: #313244; color: #cdd6f4; }
@@ -1960,8 +3538,8 @@ for (const sel of ['.bk-root', '[data-root-id]', '.bk']) {
     } catch(e) {}
 }
 
-// Figures
-for (const fig of [rf, sf]) {
+// Figures (all four panel objects — see args comment above)
+for (const fig of figs) {
     fig.background_fill_color = bg_fig;
     fig.border_fill_color     = bg_border;
     if (fig.title) fig.title.text_color = title_c;
@@ -1986,10 +3564,29 @@ function recolor_div(div, bg, fg) {
         div.styles = s;
     } catch(e) {}
 }
-recolor_div(r_info,     info_bg, info_c);
-recolor_div(s_info,     info_bg, info_c);
+for (const info_div of info_divs) {
+    recolor_div(info_div, info_bg, info_c);
+}
 recolor_div(status_div, page_bg, status_c);
 recolor_div(notify_div, page_bg, light ? '#b02a37' : '#f38ba8');
+
+// Config-field hint divs (added 2026-08-03, fixing a reported gap) —
+// same page_bg as status_div, distinct text color from status_c to
+// preserve the dark-mode "cyan — distinct from status green" intent.
+for (const hint_div of hint_divs) {
+    recolor_div(hint_div, page_bg, hint_c);
+}
+
+// Source path (added 2026-08-03, fixing a reported gap) — the color was
+// baked into an inline HTML <span style=...> inside .text itself, which
+// no property-based recolor mechanism can reach; rebuilt here instead of
+// restyled. label_c already correctly tracks light/dark for the
+// "Source:" label; source_c (== label_c's value, see definition above)
+// does the same for the path itself, replacing the old permanently-green
+// value per the specific request that light mode read black, not green.
+path_div.text = "<b style='color:" + label_c + "'>Source:</b> " +
+    "<span style='font-family:monospace;font-size:11px;color:" +
+    source_c + "'>" + source_basename + "</span>";
 
 // Sidebar container background
 try {
@@ -2022,9 +3619,6 @@ cb_obj.label = light ? '🌙 Dark' : '☀ Light';
         # When enable_flagging=False no such tools exist on either figure
         # and there is nothing here to disable/hide — this row simply has
         # no flagging-related controls in that case.
-        def _tt(html: str, position: str = "bottom") -> Tooltip:
-            return Tooltip(content=BokehHTML(html), position=position)
-
         # ---- Separators --------------------------------------------------- #
         def _sep():
             return Div(text="&nbsp;|&nbsp;", width=14,
@@ -2032,20 +3626,18 @@ cb_obj.label = light ? '🌙 Dark' : '☀ Light';
 
         return row(
             Tip(sidebar_toggle_btn,
-                tooltip=_tt("Show / hide the plot configuration panel", "right")),
+                tooltip=self._tt("Show / hide the plot configuration panel", "right")),
             _sep(),
-            Tip(plot_btn,   tooltip=_tt("Replot both panels using the current configuration")),
-            Tip(reload_btn, tooltip=_tt("Reload data and replot (clears any pending flags)")),
+            Tip(plot_btn,   tooltip=self._tt("Replot both panels using the current configuration")),
+            Tip(reload_btn, tooltip=self._tt("Reload data and replot (clears any pending flags)")),
             _sep(),
-            Tip(mode_rbg,   tooltip=_tt("Show both panels, raster only, or scatter only")),
+            Tip(layout_rbg, tooltip=self._tt("Show one panel, or both side by side / one above the other")),
             _sep(),
-            Tip(layout_rbg, tooltip=_tt("Arrange panels side by side or one above the other")),
+            Tip(vplot_btn,     tooltip=self._tt("Preset: Baseline vs Time (raster) + Amplitude vs Time (scatter)")),
+            Tip(radplot_btn,   tooltip=self._tt("Preset: Baseline vs Time (raster) + Amplitude vs UV Distance (scatter)")),
+            Tip(waterfall_btn, tooltip=self._tt("Preset: Amplitude vs Channel waterfall (over/under layout)")),
             _sep(),
-            Tip(vplot_btn,     tooltip=_tt("Preset: Baseline vs Time (raster) + Amplitude vs Time (scatter)")),
-            Tip(radplot_btn,   tooltip=_tt("Preset: Baseline vs Time (raster) + Amplitude vs UV Distance (scatter)")),
-            Tip(waterfall_btn, tooltip=_tt("Preset: Amplitude vs Channel waterfall (over/under layout)")),
-            _sep(),
-            Tip(dark_btn, tooltip=_tt("Toggle between dark and light background")),
+            Tip(dark_btn, tooltip=self._tt("Toggle between dark and light background")),
         )
 
     # ---------------------------------------------------------------------- #
@@ -2057,13 +3649,75 @@ cb_obj.label = light ? '🌙 Dark' : '☀ Light';
         if self._raster_x == self._scatter_x:
             self._scatter.figure.x_range = self._raster.figure.x_range
 
-        raster_layout  = self._raster.layout
-        scatter_layout = self._scatter.layout
+        # Group 3 piece 3, Chunk 2 (added 2026-07-31): both layout
+        # objects (raster and scatter) for BOTH slots are now children of
+        # side_container/over_container from construction, not just
+        # whichever is currently active — visibility toggling (below)
+        # selects which one is shown per slot, the same mechanism this
+        # method already used for "One" mode's pos1_layout (a hidden
+        # LayoutDOM child in a Bokeh row/column takes no space — proven
+        # working before this chunk, not new machinery). This replaces
+        # needing to reassign which object occupies a container position
+        # when a slot's kind actually changes (doPlot()'s response
+        # handler, not this method, does that toggling at runtime) —
+        # simpler than swapping container.children entries, since the
+        # "different object each time" case tabs.tabs needed doesn't
+        # apply here: exactly two pre-built alternatives per slot, not an
+        # open-ended list.
+        #
+        # Positional (Group 1 rework, 2026-07-31, still applies): WHICH
+        # SLOT'S pair is in the primary/first position vs the
+        # secondary/second is a screen-position concept
+        # (self._slot_display_order), independent of which kind either
+        # slot currently shows. self._pos0/self._pos1 still resolve
+        # correctly through a kind change (they read slot.active, which
+        # follows slot.kind) — used below only to decide "One" mode's
+        # sizing target, not container membership anymore.
+        pos0_slot = self._slots[self._slot_display_order[0]]
+        pos1_slot = self._slots[self._slot_display_order[1]]
 
-        raster_layout.sizing_mode  = "stretch_width"
-        scatter_layout.sizing_mode = "stretch_width"
+        # Stage 1a fixed roles, now positional rather than kind-based:
+        # position 0 is always shown; position 1 only when layout != "one".
+        # Previously this initial state was never set in Python at all —
+        # mode="raster"/"scatter" only took visual effect after a user
+        # interaction fired the (now-removed) mode_js listener, never on
+        # first page load. Closed here as part of the same edit rather
+        # than left for a separate pass, since it's the same code this
+        # rewrite already has to touch.
+        pos0_slot.raster.layout.visible  = (pos0_slot.kind == "raster")
+        pos0_slot.scatter.layout.visible = (pos0_slot.kind == "scatter")
+        pos1_slot.raster.layout.visible  = (
+            self._layout != "one" and pos1_slot.kind == "raster")
+        pos1_slot.scatter.layout.visible = (
+            self._layout != "one" and pos1_slot.kind == "scatter")
+        if self._layout == "one":
+            _full_w  = self._layout_js.args["full_w"]
+            _panel_h = self._layout_js.args["panel_h"]
+            self._pos0.figure.width  = _full_w
+            self._pos0.figure.height = _panel_h
 
         # ---- Linked cursor Spans ----------------------------------------- #
+        # Generalized to N panels (added 2026-07-31, closing the KNOWN GAP
+        # flagged in Chunk 2 above). Previously kind-indexed
+        # (self._raster/self._scatter, exactly 2 fixed roles) — degraded
+        # once Chunk 2 allowed two rasters or two scatters at once, since
+        # "the raster's span" stopped identifying a single panel.
+        #
+        # Revised design, confirmed in conversation: tracking is no
+        # longer "raster syncs with scatter" but "any panel whose cursor
+        # moved syncs with every *other* panel that shares at least one
+        # matching axis dimension" — X-vs-X, X-vs-Y, Y-vs-X, and Y-vs-Y
+        # are all independently checked, so a panel with two matching
+        # dimensions correctly gets both its vertical and horizontal span
+        # set, not just the first match found.
+        #
+        # Same "structural cost paid regardless of visibility" pattern as
+        # decision 11/Group 2 (flag tools, register_select_callback, dark
+        # styling — already applied to all four panel objects, not just
+        # the two currently active): every panel gets its own span pair
+        # unconditionally at construction, so a kind switch never needs
+        # to create anything new at runtime, only decide whether to move
+        # something that already exists.
         from bokeh.models import Span
 
         def _make_span(dim, color="#f38ba8"):
@@ -2071,102 +3725,105 @@ cb_obj.label = light ? '🌙 Dark' : '☀ Light';
                         line_color=color, line_width=1,
                         line_alpha=0.85, line_dash="dashed")
 
-        # Both figures always get both a vertical and horizontal span.
-        # The JS callback decides which to show based on current axis labels,
-        # so span visibility correctly updates after preset/axis changes.
-        r_vspan = _make_span("height")   # raster vertical (x-axis link)
-        r_hspan = _make_span("width")    # raster horizontal (y-axis link)
-        s_vspan = _make_span("height")   # scatter vertical (x-axis link)
-        s_hspan = _make_span("width")    # scatter horizontal (y-axis link)
-
-        self._raster.figure.add_layout(r_vspan)
-        self._raster.figure.add_layout(r_hspan)
-        self._scatter.figure.add_layout(s_vspan)
-        self._scatter.figure.add_layout(s_hspan)
+        # One descriptor per panel object (self._all_panels — all four,
+        # not just the two currently active), built once here rather than
+        # in __init__, since spans need a figure to attach to via
+        # add_layout() and that's already guaranteed to exist by this
+        # point regardless of construction order.
+        _cursor_panels = []
+        for panel in self._all_panels:
+            vspan = _make_span("height")   # vertical span (tracks X)
+            hspan = _make_span("width")    # horizontal span (tracks Y)
+            panel.figure.add_layout(vspan)
+            panel.figure.add_layout(hspan)
+            _cursor_panels.append({
+                "id": panel.vr_id, "fig": panel.figure,
+                "vspan": vspan, "hspan": hspan,
+            })
 
         cursor_src = self._cursor_source
-        raster_fig  = self._raster.figure
-        scatter_fig = self._scatter.figure
 
         self._cursor_source.js_on_change("data", CustomJS(
             args={
-                "r_vspan":    r_vspan,
-                "r_hspan":    r_hspan,
-                "s_vspan":    s_vspan,
-                "s_hspan":    s_hspan,
                 "cursor_src": cursor_src,
-                "r_fig":      raster_fig,
-                "s_fig":      scatter_fig,
-                "r_id":       self._raster.vr_id,
-                "s_id":       self._scatter.vr_id,
+                "panels":     _cursor_panels,
             },
             code="""
 const x      = cursor_src.data['x'][0];
 const y      = cursor_src.data['y'][0];
 const fig_id = cursor_src.data['fig'] ? cursor_src.data['fig'][0] : '';
 
-const from_raster  = (fig_id === r_id);
-const from_scatter = (fig_id === s_id);
+// Reset every panel's spans first — same as before, just looped instead
+// of four hardcoded lines.
+for (const p of panels) {
+    p.vspan.location = NaN;
+    p.hspan.location = NaN;
+}
 
-const r_x_label = r_fig.below.length ? r_fig.below[0].axis_label : '';
-const r_y_label = r_fig.left.length  ? r_fig.left[0].axis_label  : '';
-const s_x_label = s_fig.below.length ? s_fig.below[0].axis_label : '';
-const s_y_label = s_fig.left.length  ? s_fig.left[0].axis_label  : '';
+if (x != null && !isNaN(x)) {
+    let source = null;
+    for (const p of panels) {
+        if (p.id === fig_id) { source = p; break; }
+    }
 
-// Reset all spans
-r_vspan.location = NaN;
-r_hspan.location = NaN;
-s_vspan.location = NaN;
-s_hspan.location = NaN;
+    if (source) {
+        const sx_label = source.fig.below.length ? source.fig.below[0].axis_label : '';
+        const sy_label = source.fig.left.length  ? source.fig.left[0].axis_label  : '';
 
-if (from_raster && x != null && !isNaN(x)) {
-    // Cursor is in the raster: x=raster_x_coord, y=raster_y_coord
-    r_vspan.location = x;   // always show vertical span on raster at x
+        for (const p of panels) {
+            if (p === source) {
+                // Always show on the panel the cursor is actually in —
+                // same as the old "always show vertical span on raster
+                // at x" rule, generalized to whichever panel fired.
+                p.vspan.location = x;
+                if (y != null && !isNaN(y)) p.hspan.location = y;
+                continue;
+            }
 
-    // Show horizontal span on raster at y (shows which row cursor is on)
-    if (y != null && !isNaN(y)) r_hspan.location = y;
+            const p_x_label = p.fig.below.length ? p.fig.below[0].axis_label : '';
+            const p_y_label = p.fig.left.length  ? p.fig.left[0].axis_label  : '';
 
-    // Scatter vertical span: if raster_x matches scatter_x
-    if (r_x_label && r_x_label === s_x_label) s_vspan.location = x;
-    // Scatter vertical span: if raster_y matches scatter_x (x coord = y of raster)
-    else if (r_y_label && r_y_label === s_x_label && y != null && !isNaN(y))
-        s_vspan.location = y;
+            // This panel's vertical span (its X axis): match against the
+            // source's X first, else the source's Y — independent of the
+            // horizontal-span check below, so both can fire on the same
+            // panel if it happens to match on both axes.
+            if (sx_label && sx_label === p_x_label) {
+                p.vspan.location = x;
+            } else if (sy_label && sy_label === p_x_label && y != null && !isNaN(y)) {
+                p.vspan.location = y;
+            }
 
-    // Scatter horizontal span: if raster_x matches scatter_y
-    if (r_x_label && r_x_label === s_y_label) s_hspan.location = x;
-    // Scatter horizontal span: if raster_y matches scatter_y
-    else if (r_y_label && r_y_label === s_y_label && y != null && !isNaN(y))
-        s_hspan.location = y;
+            // This panel's horizontal span (its Y axis): same two-way
+            // check against the source's X and Y.
+            if (sx_label && sx_label === p_y_label) {
+                p.hspan.location = x;
+            } else if (sy_label && sy_label === p_y_label && y != null && !isNaN(y)) {
+                p.hspan.location = y;
+            }
 
-} else if (from_scatter && x != null && !isNaN(x)) {
-    // Cursor is in the scatter: x=scatter_x_coord, y=scatter_y_coord
-    s_vspan.location = x;   // always show vertical span on scatter at x
-
-    // Show horizontal span on scatter at y
-    if (y != null && !isNaN(y)) s_hspan.location = y;
-
-    // Raster vertical span: if scatter_x matches raster_x
-    if (s_x_label && s_x_label === r_x_label) r_vspan.location = x;
-    // Raster horizontal span: if scatter_x matches raster_y
-    else if (s_x_label && s_x_label === r_y_label) r_hspan.location = x;
-
-    // Raster vertical span: if scatter_y matches raster_x
-    if (s_y_label && s_y_label === r_x_label && y != null && !isNaN(y))
-        r_vspan.location = y;
-    // Raster horizontal span: if scatter_y matches raster_y
-    else if (s_y_label && s_y_label === r_y_label && y != null && !isNaN(y))
-        r_hspan.location = y;
+            console.log('[visplot cursor-span]', p.id,
+                        'p_x_label:', p_x_label, 'p_y_label:', p_y_label,
+                        'sx_label:', sx_label, 'sy_label:', sy_label,
+                        'vspan.location:', p.vspan.location,
+                        'hspan.location:', p.hspan.location);
+        }
+    }
 }
 """,
         ))
 
+        # All four layout objects as children — see the Chunk 2 comment at
+        # the top of this method for why (visibility toggling, not
+        # container.children reassignment, selects which is shown).
         side_container = row(
-            raster_layout, scatter_layout,
+            pos0_slot.raster.layout, pos0_slot.scatter.layout,
+            pos1_slot.raster.layout, pos1_slot.scatter.layout,
             sizing_mode = "stretch_width",
-            visible     = (self._layout == "side"),
+            visible     = (self._layout in ("one", "side")),
         )
         over_container = column(
-            raster_layout, scatter_layout,
+            pos0_slot.raster.layout, pos0_slot.scatter.layout,
+            pos1_slot.raster.layout, pos1_slot.scatter.layout,
             sizing_mode = "stretch_width",
             visible     = (self._layout == "over"),
         )
@@ -2178,6 +3835,9 @@ if (from_raster && x != null && !isNaN(x)) {
             pjs.args["over_container"] = over_container
         self._sidebar_toggle_js.args["side_container"] = side_container
         self._sidebar_toggle_js.args["over_container"] = over_container
+        for sjs in self._swap_js_objects:
+            sjs.args["side_container"] = side_container
+            sjs.args["over_container"] = over_container
 
         return side_container, over_container
 

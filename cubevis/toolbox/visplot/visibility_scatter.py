@@ -4,7 +4,7 @@ visibility_scatter.py
 Datashader scatter plot for visibility data with multiple overlaid layers.
 
 Each layer is a ``ScatterLayer`` specifying a y-axis quantity, polarization,
-colour map, and alpha value.  All layers share the same x-axis and
+color map, and alpha value.  All layers share the same x-axis and
 ``SelectionSpec``.
 
 Rendering pipeline
@@ -80,7 +80,7 @@ except ImportError:
 
 _DEFAULT_SCALING = "eq_hist"
 
-# Default colour maps for successive layers
+# Default color maps for successive layers
 _LAYER_CMAPS = [
     # Plasma
     ["#0d0887","#46039f","#7201a8","#9c179e","#bd3786",
@@ -112,7 +112,7 @@ class ScatterLayer:
     polarization : str
         Correlation product label (e.g. ``"XX"``).
     cmap : list[str] | None
-        Colour map hex strings.  ``None`` → assigned from ``_LAYER_CMAPS``
+        Color map hex strings.  ``None`` → assigned from ``_LAYER_CMAPS``
         cycle based on layer index.
     alpha : float
         Opacity in [0.0, 1.0].  0.0 = transparent (hidden), 1.0 = opaque.
@@ -120,7 +120,7 @@ class ScatterLayer:
         Human-readable label for legend / toggle widgets.  Auto-generated
         from ``y_axis.label`` and ``polarization`` if empty.
     scaling : str
-        Value-to-colour transfer function for this layer.  One of
+        Value-to-color transfer function for this layer.  One of
         ``colormap_scaling.ALL_SCALINGS``.  Defaults to ``"eq_hist"``
         (histogram equalization), which resolves the low-amplitude
         saturation seen under linear scaling on real visibility data —
@@ -164,7 +164,7 @@ class VisibilityScatter(VisibilityPlot):
         The x-axis (e.g. ``Axis.UVDIST``, ``Axis.TIME``).
     layers : list[ScatterLayer]
         One or more scatter layers.  Each specifies a y-axis quantity,
-        polarization, colour map, and alpha.
+        polarization, color map, and alpha.
     width, height : int
         Canvas dimensions in pixels.
     title : str | None
@@ -189,7 +189,7 @@ class VisibilityScatter(VisibilityPlot):
         if not layers:
             raise ValueError("VisibilityScatter: layers must be non-empty")
 
-        # Assign default colour maps by layer index
+        # Assign default color maps by layer index
         self._layers: list[ScatterLayer] = []
         for i, lyr in enumerate(layers):
             if lyr.cmap is None:
@@ -278,7 +278,7 @@ class VisibilityScatter(VisibilityPlot):
         alpha: Optional[float] = None,
         gamma: Optional[float] = None,
     ) -> None:
-        """Change one layer's value-to-colour transfer function and re-composite.
+        """Change one layer's value-to-color transfer function and re-composite.
 
         Does NOT re-query the backend — only re-runs shade + stack, mirroring
         ``set_alpha()``.
@@ -361,7 +361,7 @@ class VisibilityScatter(VisibilityPlot):
 
         equation = Div(text=_cms.scaling_equation_label(lyr.scaling))
         scaling_select = Select(
-            title=f"Colour scaling — {lyr.label}",
+            title=f"Color scaling — {lyr.label}",
             value=lyr.scaling,
             options=list(_cms.ALL_SCALINGS),
         )
@@ -430,6 +430,16 @@ class VisibilityScatter(VisibilityPlot):
         if title is not None:
             self._title = title;  changed = True
 
+        # A never-yet-rendered (defer_initial_render=True) panel must
+        # render on its first update_axes() call regardless of what else
+        # changed — same rationale as VisibilityRaster's identical guard.
+        # Scatter has no single self._agg; "never rendered" here means
+        # every layer's DataFrame is still None (set that way by
+        # _render(defer=True), and by the layers-replacement branch above,
+        # which is why this check must come after it).
+        if all(df is None for df in self._layer_dfs):
+            changed = True
+
         if not changed:
             return
 
@@ -488,10 +498,25 @@ class VisibilityScatter(VisibilityPlot):
             x = "x", y = "y", dw = "dw", dh = "dh",
         )
 
-    def _render(self, selection: "SelectionSpec", **kwargs) -> None:
-        """Query all layers and push the composite image."""
+    def _render(self, selection: "SelectionSpec", defer: bool = False, **kwargs) -> None:
+        """Query all layers and push the composite image.
+
+        Parameters
+        ----------
+        defer : bool
+            If ``True``, skip the backend query entirely and leave all
+            layers empty with the same placeholder ``(0.0, 1.0)`` ranges
+            ``_query_all_layers`` already uses for genuinely empty data —
+            same purpose and pattern as ``VisibilityRaster._render``'s
+            ``defer``; see decision 11 in the grid/iteration design notes.
+        """
         t0 = time.perf_counter()
-        self._query_all_layers(selection)
+        if defer:
+            self._layer_dfs = [None] * len(self._layers)
+            self._x_range    = (0.0, 1.0)
+            self._y_range    = (0.0, 1.0)
+        else:
+            self._query_all_layers(selection)
         self._current_viewport = None   # reset — new data covers full range
         self._composite_and_push()
         log.debug("VisibilityScatter._render: %.3fs", time.perf_counter() - t0)
@@ -643,9 +668,9 @@ class VisibilityScatter(VisibilityPlot):
             return np.zeros((self._height, self._width), dtype=np.uint32)
 
         # Global amplitude scale — anchor span to the full data y_range so
-        # the same amplitude value always maps to the same colour regardless
+        # the same amplitude value always maps to the same color regardless
         # of zoom level.  This makes it possible to visually track features
-        # across pan/zoom without the colour shifting under the user's feet.
+        # across pan/zoom without the color shifting under the user's feet.
         span_arg = None
         if self._color_mode == "global":
             global_y0, global_y1 = self._y_range
@@ -686,22 +711,22 @@ class VisibilityScatter(VisibilityPlot):
                 auto_alpha   = max(80, min(255, auto_alpha))
                 layer_alpha  = max(0, min(255, int(auto_alpha * lyr.alpha)))
 
-                # Colour mapping controlled by color_mode:
+                # Color mapping controlled by color_mode:
                 #   "global" → span=[full_y0, full_y1]
-                #       Stable colours across all zoom levels — a 50 Jy point
-                #       always maps to the same colour.  Best for flagging.
+                #       Stable colors across all zoom levels — a 50 Jy point
+                #       always maps to the same color.  Best for flagging.
                 #   "local" → span=[viewport_y_min, viewport_y_max]
                 #       Full palette spans whatever amplitudes are visible
-                #       in the current viewport.  Colours change on zoom
+                #       in the current viewport.  Colors change on zoom
                 #       (expected).  Best for exploring structure.
                 #
                 # Within either color_mode, lyr.scaling selects the actual
-                # value-to-colour transform (Phase 0 CM-1).  "eq_hist" is
+                # value-to-color transform (Phase 0 CM-1).  "eq_hist" is
                 # the default — see colormap_scaling module docstring for
                 # why linear scaling saturates on real visibility data.
                 #
                 # Unlike VisibilityRaster (where the y-axis is often a
-                # different quantity than the rendered colour, e.g. TIME
+                # different quantity than the rendered color, e.g. TIME
                 # vs AMPLITUDE), here the y-axis IS the rendered quantity,
                 # so df["y"] directly gives the reference value array
                 # needed for "global" eq_hist equalization — no separate
@@ -836,19 +861,19 @@ class VisibilityScatter(VisibilityPlot):
     # ------------------------------------------------------------------
 
     def set_color_mode(self, mode: str) -> None:
-        """Toggle colour mode and re-composite without re-querying the backend.
+        """Toggle color mode and re-composite without re-querying the backend.
 
         Parameters
         ----------
         mode : ``"global"`` | ``"local"``
             ``"global"`` (default) — ``linear`` shading with ``span`` anchored
             to the full data y_range.  A 50 Jy point always maps to the same
-            colour regardless of zoom level.  Recommended for flagging.
+            color regardless of zoom level.  Recommended for flagging.
             ``"local"`` — ``linear`` shading with ``span`` derived from the
             amplitude range of the data visible in the current viewport.  The
             full Plasma palette spans whatever is on screen, so zooming into
-            a narrow amplitude range uses the full colour range for that
-            region.  Colours change on zoom (expected).  Best for exploring
+            a narrow amplitude range uses the full color range for that
+            region.  Colors change on zoom (expected).  Best for exploring
             structure and low-contrast features within a region.
         """
         if mode not in ("global", "local"):
@@ -878,7 +903,7 @@ class VisibilityScatter(VisibilityPlot):
         }
 
     def _handle_set_color_mode(self, message: dict) -> dict:
-        """Handle j2p message to toggle colour mode: {mode: "global"|"local"}.
+        """Handle j2p message to toggle color mode: {mode: "global"|"local"}.
 
         Returns the new composite image so the JS callback can update
         image_source.data directly — Python-side model property changes

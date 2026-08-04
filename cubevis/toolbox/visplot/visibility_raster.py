@@ -87,7 +87,7 @@ class VisibilityRaster(VisibilityPlot):
     x_dim : Axis
         Native axis for the raster x dimension (columns).
     quantity : Axis
-        Derived quantity rendered as colour (AMPLITUDE, PHASE, etc.).
+        Derived quantity rendered as color (AMPLITUDE, PHASE, etc.).
     polarization : str
         Correlation product label, e.g. ``"XX"``.
     width, height : int
@@ -97,11 +97,11 @@ class VisibilityRaster(VisibilityPlot):
     comm_mgr :
         ``CommMgr`` from the active ``BokehAppContext``.
     cmap : list[str] | None
-        Colour map hex strings.  Defaults to Plasma.
+        Color map hex strings.  Defaults to Plasma.
     max_cells : int
         Agg cell budget for ``query_raster`` decimation.
     scaling : str
-        Value-to-colour transfer function.  One of
+        Value-to-color transfer function.  One of
         ``colormap_scaling.ALL_SCALINGS``:
         ``"linear"``, ``"log"``, ``"eq_hist"`` (default), ``"sqrt"``,
         ``"square"``, ``"gamma"``, ``"power"``.  ``"eq_hist"``
@@ -193,9 +193,18 @@ class VisibilityRaster(VisibilityPlot):
         if polarization is not None and polarization != self._polarization:
             self._polarization = polarization;  changed = True
 
+        # A never-yet-rendered (defer_initial_render=True) panel must
+        # render on its first update_axes() call regardless of what else
+        # changed — see the same guard and rationale in the base class's
+        # update_axes(). Without it, activating a deferred panel by
+        # calling update_axes() with no args, or with only unrelated
+        # kwargs, would silently stay blank.
+        if self._agg is None:
+            changed = True
+
         # Delegate y_dim / x_dim / title changes to base; it calls _render
         # and _notify_axes_changed.  If only quantity/polarization changed
-        # we must trigger those ourselves.
+        # (or the panel has never rendered) we must trigger those ourselves.
         if y_dim is not None or x_dim is not None or title is not None or changed:
             if y_dim is not None and y_dim != self._y_dim:
                 self._y_dim = y_dim
@@ -219,12 +228,12 @@ class VisibilityRaster(VisibilityPlot):
         )
 
     def set_color_mode(self, mode: str) -> None:
-        """Toggle colour mode and re-render.
+        """Toggle color mode and re-render.
 
         Parameters
         ----------
         mode : ``"global"`` | ``"local"``
-            ``"global"`` — span = full data y_range; colours stable on zoom.
+            ``"global"`` — span = full data y_range; colors stable on zoom.
             ``"local"`` — Datashader normalises to viewport; reveals detail.
         """
         if mode not in ("global", "local"):
@@ -238,7 +247,7 @@ class VisibilityRaster(VisibilityPlot):
         alpha: Optional[float] = None,
         gamma: Optional[float] = None,
     ) -> None:
-        """Change the value-to-colour transfer function and re-shade.
+        """Change the value-to-color transfer function and re-shade.
 
         Does NOT re-query the backend — operates on the cached ``agg``
         array, mirroring the fast re-composite pattern used by
@@ -329,7 +338,7 @@ class VisibilityRaster(VisibilityPlot):
 
         equation = Div(text=_cms.scaling_equation_label(self._scaling))
         scaling_select = Select(
-            title="Colour scaling",
+            title="Color scaling",
             value=self._scaling,
             options=list(_cms.ALL_SCALINGS),
         )
@@ -399,24 +408,44 @@ class VisibilityRaster(VisibilityPlot):
         self,
         selection: "SelectionSpec",
         max_cells: Optional[int] = None,
+        defer: bool = False,
     ) -> None:
-        """Run query_raster → shade → update _image_source."""
+        """Run query_raster → shade → update _image_source.
+
+        Parameters
+        ----------
+        defer : bool
+            If ``True``, skip the backend query entirely and populate a
+            blank placeholder image with sane (non-degenerate) axis
+            ranges, reusing the existing degenerate-agg fallback path
+            below rather than a new code path. Used to construct a panel
+            object — e.g. a slot's inactive kind — without paying its
+            query/render cost until it actually becomes active; see
+            decision 11 in the grid/iteration design notes.
+            ``self._agg`` is left ``None`` (an already-handled state
+            elsewhere — see ``_shade_viewport``'s own ``agg is None``
+            check), so a later real ``_render()`` call is not mistaken
+            for a redundant one.
+        """
         t0     = time.perf_counter()
         budget = max_cells if max_cells is not None else self._max_cells
 
-        agg, x_range, y_range, is_decimated = self._backend.query_raster(
-            y_dim        = self._y_dim,
-            x_dim        = self._x_dim,
-            quantity     = self._quantity,
-            selection    = selection,
-            polarization = self._polarization,
-            max_cells    = budget,
-        )
-        log.debug(
-            "query_raster: agg=%s  x=%s  y=%s  decimated=%s  (%.3fs)",
-            agg.shape, x_range, y_range, is_decimated,
-            time.perf_counter() - t0,
-        )
+        if defer:
+            agg, x_range, y_range, is_decimated = None, (0.0, 1.0), (0.0, 1.0), False
+        else:
+            agg, x_range, y_range, is_decimated = self._backend.query_raster(
+                y_dim        = self._y_dim,
+                x_dim        = self._x_dim,
+                quantity     = self._quantity,
+                selection    = selection,
+                polarization = self._polarization,
+                max_cells    = budget,
+            )
+            log.debug(
+                "query_raster: agg=%s  x=%s  y=%s  decimated=%s  (%.3fs)",
+                agg.shape, x_range, y_range, is_decimated,
+                time.perf_counter() - t0,
+            )
 
         self._agg          = agg
         self._x_range      = x_range
@@ -426,8 +455,11 @@ class VisibilityRaster(VisibilityPlot):
         x0, x1 = x_range
         y0, y1 = y_range
 
+        # `defer` first so the rest short-circuits — agg is None in that
+        # case and must never be touched (no agg.shape access below).
         _degenerate = (
-            agg.shape[0] < 2
+            defer
+            or agg.shape[0] < 2
             or agg.shape[1] < 2
             or not np.isfinite(agg.values).any()
             or x0 == x1
@@ -532,7 +564,7 @@ class VisibilityRaster(VisibilityPlot):
     ) -> "object":
         """Shade a Datashader canvas agg using the current scaling state.
 
-        Single call site for the value-to-colour transform so that every
+        Single call site for the value-to-color transform so that every
         re-shade — whether triggered by ``_render``, ``_shade_viewport``,
         or ``update_scaling`` — reads ``self._scaling`` rather than a
         hardcoded default (Phase 0 CM-6).
@@ -542,8 +574,8 @@ class VisibilityRaster(VisibilityPlot):
         * ``"linear"``, ``"log"`` — Datashader-native ``how=`` reductions
           that accept ``span=``. ``span`` (the y-axis range passed in by
           the caller; this raster's long-standing ``"global"``
-          convention) directly anchors the colour domain. ``"global"``
-          keeps colours stable across pan/zoom; ``"local"``
+          convention) directly anchors the color domain. ``"global"``
+          keeps colors stable across pan/zoom; ``"local"``
           (``span=None``) lets Datashader auto-range to whatever is in
           ``ds_agg``.
         * ``"eq_hist"`` — Datashader's native ``how="eq_hist"`` rejects
@@ -554,9 +586,9 @@ class VisibilityRaster(VisibilityPlot):
           reimplements Datashader's own CDF-based algorithm but accepts
           a separate *reference* array to build the equalization curve
           from. ``"global"`` passes ``self._agg`` (the full cached
-          aggregation) as the reference, so colours stay anchored to the
+          aggregation) as the reference, so colors stay anchored to the
           full data's distribution regardless of zoom level — useful
-          when zoomed in and wanting flagging-stable colours. ``"local"``
+          when zoomed in and wanting flagging-stable colors. ``"local"``
           passes ``None`` (equalize against the crop itself), matching
           Datashader's native behaviour and auto-revealing whatever
           structure is currently visible.
@@ -690,7 +722,7 @@ class VisibilityRaster(VisibilityPlot):
         self._comm.register(self._msg_update_scaling, self._handle_update_scaling_raster)
 
     def _handle_set_color_mode_raster(self, message: dict) -> dict:
-        """Handle j2p message to toggle colour mode: {mode: "global"|"local"}."""
+        """Handle j2p message to toggle color mode: {mode: "global"|"local"}."""
         mode = message.get("mode", "global")
         try:
             self.set_color_mode(mode)

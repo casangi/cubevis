@@ -66,12 +66,12 @@ def _visplot_t(
         uvrange: str = '',
         correlation: str = '',
         datacolumn: str = 'data',
-        mode: str = 'both',
         layout: str = 'side',
         preset: Optional[str] = None,
         time_range: tuple[float, float] | list[float] | None = None,
         freq_range: tuple[float, float] | list[float] | None = None,
         uvdist_range: tuple[float, float] | list[float] | None = None,
+        compact_toolbar: bool = True,
 ):
     _app = VisibilityPlotter(
         # user-supplied arguments
@@ -86,12 +86,12 @@ def _visplot_t(
         uvrange = uvrange,
         correlation = correlation,
         datacolumn = datacolumn,
-        mode = mode,
         layout = layout,
         preset = preset,
         time_range = time_range,
         freq_range = freq_range,
         uvdist_range = uvdist_range,
+        compact_toolbar = compact_toolbar,
         # layer-supplied arguments
         remote_endpoint = None,
         enable_flagging = True,
@@ -131,10 +131,11 @@ class _visplot:
         Comma-separated correlation labels (``"XX,YY"``).  Default: all.
     datacolumn : str
         Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.
-    mode : str
-        Initial display mode: ``"both"``, ``"raster"``, or ``"scatter"``.
     layout : str
-        Initial layout: ``"side"`` (side by side) or ``"over"`` (over/under).
+        Panel layout: ``"one"`` (single panel, raster by default in this
+        preview — per-panel kind switching is a later addition),
+        ``"side"`` (both panels, side by side), or ``"over"`` (both
+        panels, one above the other). Default ``"side"``.
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
     time_range : tuple[float, float] | list[float] | None
@@ -143,6 +144,9 @@ class _visplot:
         ``(start, end)`` in Hz.
     uvdist_range : tuple[float, float] | list[float] | None
         ``(min, max)`` in metres.
+    compact_toolbar : bool
+        Whether each figure's toolbar auto-hides until the mouse is over
+        that plot.  Defaults to ``True``.
     """
 
     _info_group_ = """visualization, information,editing, manipulation"""
@@ -161,12 +165,12 @@ class _visplot:
         'uvrange': 'UV range string.',
         'correlation': 'Comma-separated correlation labels (``"XX,YY"``).',
         'datacolumn': 'Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.',
-        'mode': 'Display mode: both, raster, or scatter.',
-        'layout': 'Initial layout: ``"side"`` (side by side) or ``"over"`` (over/under).',
+        'layout': 'Panel layout: ``"one"`` (single panel, raster by default in this preview — per-panel kind switching is a later addition), ``"side"`` (both panels, side by side), or ``"over"`` (both panels, one above the other).',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
         'time_range': '``(start, end)`` as MJD floats.',
         'freq_range': '``(start, end)`` in Hz.',
         'uvdist_range': '``(min, max)`` in metres.',
+        'compact_toolbar': 'Whether each figure's toolbar auto-hides until the mouse is over that plot.',
     }
 
     # Default values, derived from the canonical interface signature.
@@ -182,12 +186,12 @@ class _visplot:
         'uvrange': '',
         'correlation': '',
         'datacolumn': 'data',
-        'mode': 'both',
         'layout': 'side',
         'preset': None,
         'time_range': None,
         'freq_range': None,
         'uvdist_range': None,
+        'compact_toolbar': True,
     }
 
     def __init__(self):
@@ -238,12 +242,12 @@ class _visplot:
             'uvrange': 'str',
             'correlation': 'str',
             'datacolumn': 'str',
-            'mode': 'str',
             'layout': 'str',
             'preset': 'Optional[str]',
             'time_range': 'tuple[float, float] | list[float] | None',
             'freq_range': 'tuple[float, float] | list[float] | None',
             'uvdist_range': 'tuple[float, float] | list[float] | None',
+            'compact_toolbar': 'bool',
         }
         ann = _type_map.get(name, '')
         if not ann:
@@ -500,21 +504,6 @@ class _visplot:
             desc, fmt,
         )
 
-    def __mode_inp(self):
-        glb     = self.__globals_()
-        value   = glb.get('mode', self._arg_default['mode'])
-        default = self._arg_default['mode']
-        desc    = self._arg_description.get('mode', '')
-        if self.__validate_('mode', value):
-            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
-                if value != default else ('', '', 0)
-        else:
-            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
-        self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('mode', pre, self.__to_string_(value), post),
-            desc, fmt,
-        )
-
     def __layout_inp(self):
         glb     = self.__globals_()
         value   = glb.get('layout', self._arg_default['layout'])
@@ -590,6 +579,21 @@ class _visplot:
             desc, fmt,
         )
 
+    def __compact_toolbar_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('compact_toolbar', self._arg_default['compact_toolbar'])
+        default = self._arg_default['compact_toolbar']
+        desc    = self._arg_description.get('compact_toolbar', '')
+        if self.__validate_('compact_toolbar', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('compact_toolbar', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     #--------- global default implementation --------------------------------------
     @static_var('state', __sf__('casa_inp_go_state'))
     def set_global_defaults(self):
@@ -606,12 +610,12 @@ class _visplot:
         if 'uvrange' in glb: del glb['uvrange']
         if 'correlation' in glb: del glb['correlation']
         if 'datacolumn' in glb: del glb['datacolumn']
-        if 'mode' in glb: del glb['mode']
         if 'layout' in glb: del glb['layout']
         if 'preset' in glb: del glb['preset']
         if 'time_range' in glb: del glb['time_range']
         if 'freq_range' in glb: del glb['freq_range']
         if 'uvdist_range' in glb: del glb['uvdist_range']
+        if 'compact_toolbar' in glb: del glb['compact_toolbar']
 
     #--------- inp function -------------------------------------------------------
     def inp(self):
@@ -627,12 +631,12 @@ class _visplot:
         self.__uvrange_inp()
         self.__correlation_inp()
         self.__datacolumn_inp()
-        self.__mode_inp()
         self.__layout_inp()
         self.__preset_inp()
         self.__time_range_inp()
         self.__freq_range_inp()
         self.__uvdist_range_inp()
+        self.__compact_toolbar_inp()
 
     #--------- tget function ------------------------------------------------------
     @static_var('state', __sf__('casa_inp_go_state'))
@@ -673,12 +677,12 @@ class _visplot:
         _invocation_parameters['uvrange'] = glb.get('uvrange', self._arg_default['uvrange'])
         _invocation_parameters['correlation'] = glb.get('correlation', self._arg_default['correlation'])
         _invocation_parameters['datacolumn'] = glb.get('datacolumn', self._arg_default['datacolumn'])
-        _invocation_parameters['mode'] = glb.get('mode', self._arg_default['mode'])
         _invocation_parameters['layout'] = glb.get('layout', self._arg_default['layout'])
         _invocation_parameters['preset'] = glb.get('preset', self._arg_default['preset'])
         _invocation_parameters['time_range'] = glb.get('time_range', self._arg_default['time_range'])
         _invocation_parameters['freq_range'] = glb.get('freq_range', self._arg_default['freq_range'])
         _invocation_parameters['uvdist_range'] = glb.get('uvdist_range', self._arg_default['uvdist_range'])
+        _invocation_parameters['compact_toolbar'] = glb.get('compact_toolbar', self._arg_default['compact_toolbar'])
 
         try:
             with open(_postfile, 'w') as _f:
@@ -710,12 +714,12 @@ class _visplot:
             uvrange = _UNSET,
             correlation = _UNSET,
             datacolumn = _UNSET,
-            mode = _UNSET,
             layout = _UNSET,
             preset = _UNSET,
             time_range = _UNSET,
             freq_range = _UNSET,
             uvdist_range = _UNSET,
+            compact_toolbar = _UNSET,
     ):
         def noobj(s):
             if s.startswith('<') and s.endswith('>'):
@@ -740,12 +744,12 @@ class _visplot:
             uvrange,
             correlation,
             datacolumn,
-            mode,
             layout,
             preset,
             time_range,
             freq_range,
             uvdist_range,
+            compact_toolbar,
         ]
 
         if any(x is not _UNSET for x in _arguments):
@@ -785,9 +789,6 @@ class _visplot:
             _invocation_parameters['datacolumn'] = \
                 datacolumn if datacolumn is not _UNSET \
                 else glb.get('datacolumn', self._arg_default['datacolumn'])
-            _invocation_parameters['mode'] = \
-                mode if mode is not _UNSET \
-                else glb.get('mode', self._arg_default['mode'])
             _invocation_parameters['layout'] = \
                 layout if layout is not _UNSET \
                 else glb.get('layout', self._arg_default['layout'])
@@ -803,6 +804,9 @@ class _visplot:
             _invocation_parameters['uvdist_range'] = \
                 uvdist_range if uvdist_range is not _UNSET \
                 else glb.get('uvdist_range', self._arg_default['uvdist_range'])
+            _invocation_parameters['compact_toolbar'] = \
+                compact_toolbar if compact_toolbar is not _UNSET \
+                else glb.get('compact_toolbar', self._arg_default['compact_toolbar'])
         else:
             # inp/go-style invocation: read everything from the global frame
             _invocation_parameters['ms'] = \
@@ -827,8 +831,6 @@ class _visplot:
                 glb.get('correlation', self._arg_default['correlation'])
             _invocation_parameters['datacolumn'] = \
                 glb.get('datacolumn', self._arg_default['datacolumn'])
-            _invocation_parameters['mode'] = \
-                glb.get('mode', self._arg_default['mode'])
             _invocation_parameters['layout'] = \
                 glb.get('layout', self._arg_default['layout'])
             _invocation_parameters['preset'] = \
@@ -839,6 +841,8 @@ class _visplot:
                 glb.get('freq_range', self._arg_default['freq_range'])
             _invocation_parameters['uvdist_range'] = \
                 glb.get('uvdist_range', self._arg_default['uvdist_range'])
+            _invocation_parameters['compact_toolbar'] = \
+                glb.get('compact_toolbar', self._arg_default['compact_toolbar'])
 
         try:
             with open(_prefile, 'w') as _f:
@@ -870,12 +874,12 @@ class _visplot:
                     'uvrange=' + repr(_invocation_parameters['uvrange']),
                     'correlation=' + repr(_invocation_parameters['correlation']),
                     'datacolumn=' + repr(_invocation_parameters['datacolumn']),
-                    'mode=' + repr(_invocation_parameters['mode']),
                     'layout=' + repr(_invocation_parameters['layout']),
                     'preset=' + repr(_invocation_parameters['preset']),
                     'time_range=' + repr(_invocation_parameters['time_range']),
                     'freq_range=' + repr(_invocation_parameters['freq_range']),
                     'uvdist_range=' + repr(_invocation_parameters['uvdist_range']),
+                    'compact_toolbar=' + repr(_invocation_parameters['compact_toolbar']),
                 ],
             )
             task_result = _visplot_t(
@@ -890,12 +894,12 @@ class _visplot:
                 uvrange = _invocation_parameters['uvrange'],
                 correlation = _invocation_parameters['correlation'],
                 datacolumn = _invocation_parameters['datacolumn'],
-                mode = _invocation_parameters['mode'],
                 layout = _invocation_parameters['layout'],
                 preset = _invocation_parameters['preset'],
                 time_range = _invocation_parameters['time_range'],
                 freq_range = _invocation_parameters['freq_range'],
                 uvdist_range = _invocation_parameters['uvdist_range'],
+                compact_toolbar = _invocation_parameters['compact_toolbar'],
             )
         except Exception as exc:
             _except_log('visplot', exc)

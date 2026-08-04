@@ -58,12 +58,12 @@ def _validate_params(
         uvrange,
         correlation,
         datacolumn,
-        mode,
         layout,
         preset,
         time_range,
         freq_range,
         uvdist_range,
+        compact_toolbar,
 ):
     import re as _re
 
@@ -79,12 +79,12 @@ def _validate_params(
         'uvrange': 'str',
         'correlation': 'str',
         'datacolumn': 'str',
-        'mode': 'str',
         'layout': 'str',
         'preset': 'Optional[str]',
         'time_range': 'tuple[float, float] | list[float] | None',
         'freq_range': 'tuple[float, float] | list[float] | None',
         'uvdist_range': 'tuple[float, float] | list[float] | None',
+        'compact_toolbar': 'bool',
     }
 
     _simple = {
@@ -158,12 +158,12 @@ def _validate_params(
     _check('uvrange', uvrange, _type_map['uvrange'])
     _check('correlation', correlation, _type_map['correlation'])
     _check('datacolumn', datacolumn, _type_map['datacolumn'])
-    _check('mode', mode, _type_map['mode'])
     _check('layout', layout, _type_map['layout'])
     _check('preset', preset, _type_map['preset'])
     _check('time_range', time_range, _type_map['time_range'])
     _check('freq_range', freq_range, _type_map['freq_range'])
     _check('uvdist_range', uvdist_range, _type_map['uvdist_range'])
+    _check('compact_toolbar', compact_toolbar, _type_map['compact_toolbar'])
 
 
 def _visplot_t(
@@ -179,12 +179,12 @@ def _visplot_t(
         uvrange: str = '',
         correlation: str = '',
         datacolumn: str = 'data',
-        mode: str = 'both',
         layout: str = 'side',
         preset: Optional[str] = None,
         time_range: tuple[float, float] | list[float] | None = None,
         freq_range: tuple[float, float] | list[float] | None = None,
         uvdist_range: tuple[float, float] | list[float] | None = None,
+        compact_toolbar: bool = True,
 ):
     _app = VisibilityPlotter(
         # user-supplied arguments
@@ -199,12 +199,12 @@ def _visplot_t(
         uvrange = uvrange,
         correlation = correlation,
         datacolumn = datacolumn,
-        mode = mode,
         layout = layout,
         preset = preset,
         time_range = time_range,
         freq_range = freq_range,
         uvdist_range = uvdist_range,
+        compact_toolbar = compact_toolbar,
         # layer-supplied arguments
         remote_endpoint = None,
         enable_flagging = True,
@@ -248,10 +248,11 @@ class _visplot:
         Comma-separated correlation labels (``"XX,YY"``).  Default: all.
     datacolumn : str
         Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.
-    mode : str
-        Initial display mode: ``"both"``, ``"raster"``, or ``"scatter"``.
     layout : str
-        Initial layout: ``"side"`` (side by side) or ``"over"`` (over/under).
+        Panel layout: ``"one"`` (single panel, raster by default in this
+        preview — per-panel kind switching is a later addition),
+        ``"side"`` (both panels, side by side), or ``"over"`` (both
+        panels, one above the other). Default ``"side"``.
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
     time_range : tuple[float, float] | list[float] | None
@@ -260,6 +261,9 @@ class _visplot:
         ``(start, end)`` in Hz.
     uvdist_range : tuple[float, float] | list[float] | None
         ``(min, max)`` in metres.
+    compact_toolbar : bool
+        Whether each figure's toolbar auto-hides until the mouse is over
+        that plot.  Defaults to ``True``.
     """
 
     _info_group_ = """visualization, information,editing, manipulation"""
@@ -279,12 +283,12 @@ class _visplot:
             uvrange: str = '',
             correlation: str = '',
             datacolumn: str = 'data',
-            mode: str = 'both',
             layout: str = 'side',
             preset: Optional[str] = None,
             time_range: tuple[float, float] | list[float] | None = None,
             freq_range: tuple[float, float] | list[float] | None = None,
             uvdist_range: tuple[float, float] | list[float] | None = None,
+            compact_toolbar: bool = True,
     )  -> None:
 
         _validate_params(
@@ -299,12 +303,12 @@ class _visplot:
             uvrange = uvrange,
             correlation = correlation,
             datacolumn = datacolumn,
-            mode = mode,
             layout = layout,
             preset = preset,
             time_range = time_range,
             freq_range = freq_range,
             uvdist_range = uvdist_range,
+            compact_toolbar = compact_toolbar,
         )
         _logging_state_ = _start_log(
             'visplot',
@@ -320,12 +324,12 @@ class _visplot:
                 'uvrange=' + repr(uvrange),
                 'correlation=' + repr(correlation),
                 'datacolumn=' + repr(datacolumn),
-                'mode=' + repr(mode),
                 'layout=' + repr(layout),
                 'preset=' + repr(preset),
                 'time_range=' + repr(time_range),
                 'freq_range=' + repr(freq_range),
                 'uvdist_range=' + repr(uvdist_range),
+                'compact_toolbar=' + repr(compact_toolbar),
             ],
         )
         task_result = None
@@ -342,12 +346,12 @@ class _visplot:
                 uvrange = uvrange,
                 correlation = correlation,
                 datacolumn = datacolumn,
-                mode = mode,
                 layout = layout,
                 preset = preset,
                 time_range = time_range,
                 freq_range = freq_range,
                 uvdist_range = uvdist_range,
+                compact_toolbar = compact_toolbar,
             )
         except Exception as exc:
             _except_log('visplot', exc)

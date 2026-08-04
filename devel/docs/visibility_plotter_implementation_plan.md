@@ -669,7 +669,7 @@ This is a Datashader reduction-function problem, not a bit-depth problem —
 | CM-1 | Switch default Datashader reduction from linear to `eq_hist` (histogram equalization); add `scaling: str = "eq_hist"` constructor parameter to both classes. `eq_hist` implemented as an explicit pre-transform (`colormap_scaling.equalize_histogram()`, mirroring Datashader's own CDF algorithm) rather than via `ds.tf.shade(how="eq_hist")`, because Datashader rejects `span=` for that `how=` value — the explicit version supports `color_mode` (global/local) which the native one cannot | ✅ Done | `visibility_raster.py`, `visibility_scatter.py`, `colormap_scaling.py` |
 | CM-2 | `update_scaling(scaling, **kwargs)` fast re-shade path: re-shades the cached aggregation array without a backend re-query, mirroring the existing `set_alpha()` pattern | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
 | CM-3 | Port `quantize()`-style scaling functions (log, sqrt, square, gamma, power) from interactive_clean, adapted to operate on a generic Datashader aggregation array rather than a 2D image plane | ✅ Done | `colormap_scaling.py` *(new, shared)* |
-| CM-4 | `colormap_controls()` method on both classes returning a Bokeh widget column: scaling dropdown, conditional alpha/gamma numeric input, min/max numeric range inputs (min/max wiring deferred — see note below) | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
+| CM-4 | `colormap_controls()` method on both classes returning a Bokeh widget column: scaling dropdown, conditional alpha/gamma numeric input, min/max numeric range inputs. ✅ **Done structurally; non-functional in deployed app (found August 3 2026, explicitly deferred to reference-testing phase).** Two problems: (1) `min`/`max` `TextInput`s have no callbacks — pure visual mockup; (2) the Color scaling dropdown and alpha/gamma inputs use Bokeh `.on_change()` — a server-side callback that cannot fire without a live Bokeh server; this app deliberately has none. A correct comm handler already exists (`_handle_update_scaling_raster`/`..._scatter`, registered via `self._comm.register()`) but nothing on the client side sends the triggering message. **Fix needed:** replace `.on_change()` with `js_on_change` + comm send; build `min`/`max` callbacks. See reference-testing phase below. | `visibility_raster.py`, `visibility_scatter.py` |
 | CM-5 | `histogram()` method on both classes returning binned aggregation values | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
 | CM-6 | Ensure every re-shade reads `self._scaling` (instance state) rather than a hardcoded default; unified into a single `_shade_agg()` call site in `VisibilityRaster` used by both `_render()` and `_shade_viewport()` | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
 | CM-7 | Verification against the saturation scenario | ✅ Done — see verification notes below | manual + automated |
@@ -862,11 +862,32 @@ layout that Phase 2 depends on:
 | A-7 | Implement `NullReductionContext` | ✅ Done | `reduction_context.py` |
 | A-8 | Implement `open_ms()` and `open_ps()` factory functions: accept `path`, `backend: ReductionBackend\|str = "auto"`, and `remote_endpoint`; resolve the correct `ReductionContext` via the context-selection matrix (see §4.12); return `(ObservationMetadata, LocalVisibilityReader, ReductionContext)`. These are **internal implementation details** of `VisibilityPlotter.__init__` — not public API. The factory is where `ReductionBackend` selection logic lives; `VisibilityPlotter.__init__` calls them and discards the triple into private attributes. | ✅ Done (subsequent session) | `factory.py` *(new)* |
 | A-9 | Verify existing test suite passes with `LocalVisibilityReader` wrapper in place of direct backend references | ✅ Done — `VisibilityPlot.__init__` auto-wraps any bare `XArrayReader`, so existing tests passing `MSv2Backend`/`MSv4Backend` directly require no changes | test suite |
-| A-10 | Define `PanelLayout` dataclass and adopt panel-list model in `VisibilityPlotter`. **Do immediately after the preview, before any Phase 1 work.** `VisibilityPlotter` must hold `_panels: list[VisibilityPlot]` and `_layout: PanelLayout` rather than named `_raster`/`_scatter` attributes. The preview hardcodes `PanelLayout(mode="split", rows=1, cols=2)` exactly as today; the refactor makes this parameterised without changing the preview's visual output. Precludes a painful retrofit when multi-panel grid (X-1, C-1 caltable grid) is implemented. Design decision to make now: **shared vs independent `SelectionSpec` per panel** — shared by default (the current two-panel case), overridable per-panel (required for the caltable antenna-grid case). | `visibility_plotter.py`, new `panel_layout.py` |
+| A-10 | Panel-list model and `_PanelSlot` data structure. ✅ **Done (July 31 2026).** `VisibilityPlotter` holds `self._slots: list[_PanelSlot]` (not fixed named attributes). Each `_PanelSlot` owns both a `VisibilityRaster` and a `VisibilityScatter` instance; `.kind` tracks which is currently active; the inactive kind's first `_render()` is deferred until it is switched to ("defer render, not construction"). Compatibility properties `self._raster`/`self._scatter` resolve through `self._slots[0]`/`self._slots[1]` for pre-slot code. Extending to N panels is "change how many entries are in this list." `panel_layout.py` as a separate file was superseded by this in-class design. `test_visibility_raster.py`/`test_visibility_scatter.py` pass unchanged — pure storage refactor with no observable behavior change. | `visibility_plotter.py` |
 
 > **Phase 0 is fully closed out.** All A-series and CM-series items are
 > complete and verified against real sis14 data (MSv2 and MSv4). The next
 > session begins at Phase 1 (Flagging foundations).
+
+---
+
+### Reference-testing phase (between duo-mode stabilization and Phase 1)
+
+*Not yet started. Deliberately deferred — verifying that the values the UI
+produces are correct (not just that the UI behaves sensibly) requires known-good
+comparison points.*
+
+The plan is to validate against PlotMS and msview tutorial results for:
+
+- Whether selection controls (scan range, antenna, time range, UV range) actually
+  constrain the plotted data, and correctly — not yet confirmed either way
+- `colormap_controls()` correctness, once the `.on_change()` → `js_on_change` +
+  comm-send fix is applied (CM-4 above)
+- General cross-validation of axis values, flagging behaviour, and aggregation
+  against a trusted reference implementation
+
+See `visplot-testing-handoff.md` for structural (does-the-UI-work) testing
+already completed; this phase is the separate, harder question of value
+correctness against ground truth.
 
 ---
 
@@ -888,6 +909,21 @@ layout that Phase 2 depends on:
 
 ---
 
+### Phase 1.5 — Functional export slice and benchmarking
+*(Moved earlier per stakeholder feedback, July 28 2026. A functional but not fully
+polished export/benchmarking slice sits immediately after duo-mode stabilization,
+before any iteration/grid-mode work, so benchmark numbers inform grid-mode sizing
+decisions rather than guessing.)*
+
+| ID | Task | Files affected |
+|---|---|---|
+| E-1 | Generator/iteration API over duo mode: lightweight re-selection over an open backend, enabling scripted export without a new `VisibilityPlotter` per value. Does not depend on grid infrastructure. | `visibility_plotter.py` |
+| E-2 | Headless PNG export via matplotlib — rendering path resolved to matplotlib (July 29 2026; webdriver export_png failed in pipeline-like environment; matplotlib worked immediately). Feed the already-composited RGBA array to `imshow`, guaranteeing byte-identical pixels between interactive and headless output. `headless: bool` constructor flag skips Bokeh Figure/toolbar/tick-formatter construction for this path. | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
+| E-3 | Colorbar for headless export: accurate colorbar requires the eq_hist scalar-to-color mapping function itself, not just pre-colored pixels — not a standard matplotlib norm. Acknowledged hard piece; known follow-up, not a preview/E-2 blocker. | `colormap_scaling.py`, export module |
+| E-4 | Real query→render→export timing benchmarks vs. PlotMS — provides data-backed decisions for iteration/grid-mode sizing (default/cap grid dimensions) rather than the currently-unconfirmed 3×3/6×6 guess. | benchmarking scripts |
+
+---
+
 ### Phase 2 — VisibilityPlotter shell
 *Combined layout with working selection, axis controls, flag accumulation and overlay, and disk write. No averaging or iteration yet.*
 
@@ -897,8 +933,12 @@ layout that Phase 2 depends on:
 | P-2 | Sidebar widget set — accordion layout with Data, Axes, Display, Flagging sections; Bokeh `Select`, `MultiSelect`, `TextInput`, `CheckboxGroup`, `Slider` | `visibility_plotter.py` |
 | P-3 | Toolbar — Plot, Reload, `FlagTool`, `UnflagTool`, Flag ⚑ (write to disk), Locate, Save Plot, Copy flagdata. `enable_flagging=False` omits flag tools entirely. | `visibility_plotter.py` |
 | P-4 | Display mode toggle — Scatter / Raster / Both; dynamically show/hide panels | `visibility_plotter.py` |
-| P-4a | **Auto-hide per-plot toolbars** — `VisibilityRaster` and `VisibilityScatter` gain an `autohide_toolbar: bool = False` constructor parameter. When `True`, the Bokeh figure toolbar is hidden by default and shown only when the mouse enters the figure boundary (via `figure.toolbar.autohide = True` or equivalent JS `MouseEnter`/`MouseLeave` on the figure div). Required for the multi-panel grid layout (A-10/X-1/C-1) where displaying per-panel toolbars on all N panels simultaneously wastes space and creates visual noise. In the preview and single-panel modes `autohide_toolbar=False` is the default; `VisibilityPlotter` sets `autohide_toolbar=True` automatically when `PanelLayout.mode == "grid"` and N > 2. | `visibility_raster.py`, `visibility_scatter.py`, `visibility_plotter.py` |
-| P-5 | Named view presets — vplot, radplot, projplot buttons configure axes and tool | `visibility_plotter.py` |
+| P-4a | **Auto-hide per-plot toolbars** — `compact_toolbar: bool = True` on `VisibilityPlot` base class; implemented via `figure.toolbar.autohide = True` (no custom JS). ✅ **Done (July 29 2026), default=True for all panels including duo mode.** Known accepted behavior: the toolbar's reserved layout space does not collapse when hidden (only drawn content toggles), consistent with upstream Bokeh design (bokeh/bokeh#8284) — collapsing the space would reflow the layout on every hover-boundary crossing. Accepted as-is; revisit only if this becomes an actual user complaint. | `visibility_plot.py`, `visibility_raster.py`, `visibility_scatter.py`, `visibility_plotter.py` |
+| P-5 | Named view presets (vplot, radplot, Waterfall) — configure axes and layout per slot. ✅ **Done (August 2026).** Presets integrated with per-slot gear/Tabs config; preset application triggers per-slot `_handle_plot()`. | `visibility_plotter.py` |
+| P-5a | **Per-slot gear tool + tabbed sidebar config.** ✅ **Done (July–August 2026).** A `CustomAction` tool in each panel's toolbar reveals a Bokeh `Tabs` widget, expanding the sidebar if collapsed. One gear per (slot, kind) pair — 2×2 = 4 gear instances for duo mode — because the kind that becomes active via a kind-switch would otherwise have no gear. Each slot pre-builds both a raster panel and a scatter panel; the tab's Kind selector picks which is shown. Independent per-slot editing state preserved (editing two panels' configs independently before committing either). | `visibility_plotter.py` |
+| P-5b | **Per-slot raster ↔ scatter kind switching, same-kind-on-both-slots.** ✅ **Done (August 2026).** Any slot can independently be raster or scatter; two rasters or two scatters simultaneously is fully supported. All four layout objects (both kinds, both slots) always children of the display container, `.visible` toggled to show only the active kind per slot. A kind switch is implemented as a visibility toggle (no rebuild); scatter is recompute-gated (does not run `_render()` while invisible) to avoid wasted backend queries. | `visibility_plotter.py` |
+| P-5c | **Zero-recompute panel-position swap.** ✅ **Done (August 3 2026).** One swap button per tab; `self._display_order_source` is the underlying reorderable-list tracker. Swap is a visibility toggle across all four layout objects simultaneously — no recompute. One/Side-by-Side/Over-Under all three layout modes confirmed working. | `visibility_plotter.py` |
+| P-5d | **Validation-error auto-focus.** ✅ **Done (August 3 2026).** On a validation error (e.g. raster Y/X axis conflict), the sidebar automatically focuses the offending slot's tab. Client-side raster-Y/X-conflict guard fires before the server is ever reached. | `visibility_plotter.py` |
 | P-6 | `SelectionSpec` UV range — add `uv_range` field (metres) for baseline selection | `selection.py` |
 | P-7 | `Casa6ReductionContext` metadata methods: `list_fields()`, `list_spws()`, `list_antennas()`, `list_scans()`, `list_data_columns()` | `casa6_reduction_context.py` |
 | P-8 | `open_ms()` / `open_ps()` factory with full `ReductionBackend` context-selection matrix (see §4.12) | ✅ Done (subsequent session) | `factory.py` |
@@ -954,7 +994,7 @@ layout that Phase 2 depends on:
 | T-2 | Synthetic xradio-native DataTree structure tests | `tests/` |
 | T-3 | Single-dish test coverage | `tests/` |
 | T-4 | `RemoteReductionContext` skeleton and transport protocol | `remote_reduction_context.py` *(new)* |
-| X-1 | **CASR-385** SPFLG-style multi-panel raster: tiled `VisibilityRaster` panels, one per baseline, rendered simultaneously in a scrollable grid; required for AIPS SPFLG workflow parity. Depends on A-10 (panel-list model) and P-4a (auto-hide toolbars per panel). | `visibility_plotter.py`, `visibility_raster.py` |
+| X-1 | **CASR-385** SPFLG-style **iteration mode** (formerly "grid mode"): paginated N×M grid of panels sharing the same axes, iterating through a selection value (antenna, SPW, field, scan) per cell. Each cell is a real interactive `VisibilityRaster`/`VisibilityScatter` instance (own `ColumnDataSource`s, comm registrations, flag tools) — not a static image. Object pool sized to the page, not the full iteration count; page turns re-select via existing `update_axes()` path, never rebuild. Depends on A-10 (`_PanelSlot` list, ✅ done) and P-4a (autohide, ✅ done). Grid/iteration layout is a sibling value on the same `layout_rbg` control as duo mode — switching between duo and iteration mid-session is supported by construction. Default/cap grid dimensions (proposed 3×3/6×6) should be set from E-4 benchmark numbers, not guessed. Key design decisions already settled: real interactive panels per cell; bounded grid size; paginate not scroll; uniform axes/mode per grid by default (data model supports heterogeneous, UI does not expose it in phase 1); object count sized to page; cross-cell pan/zoom sync gated by toggle; cross-cell crosshair position sync (reuses Bokeh native linked-crosshair, cheaper than the raster↔scatter crosshair link in duo mode). **Open questions:** exact default/max dimensions; compound "Iterate by" (single axis vs. antenna+SPW simultaneously); cross-cell flagging propagation; pan/zoom per-axis granularity; concurrent-backend-query burst mitigation; N-panel swap-trigger UI (coordinate dropdown vs. spatial button grid). Full detail in `visplot-development-handoff.md`. | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
 | X-2 | **CASR-385** `Axis.PHASE_RMS`: phase RMS vs time or frequency as a scatter y-axis quantity; backend computes `std(angle(visibility))` across the baseline axis per time/channel cell; same Phase 4 bucket as `CLOSURE_PHASE` | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
 | X-3 | **CASR-385** User-specified colours in colour-by-metadata mode: colour picker widget per category value (SPW, antenna, baseline); supplements the automatic categorical palette in S-1 | `visibility_plotter.py`, `visibility_scatter.py` |
 | X-4 | **CASR-385** Performance benchmarks: explicit test cases at ngVLA scale (200+ antennas, 8000 channels, 1-second integrations, 10 SPWs) and ALMA/VLA scale (50+ antennas, 1000 channels); used to validate Datashader pipeline and `is_decimated` gate | `tests/` |

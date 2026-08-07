@@ -189,6 +189,36 @@ label {
 }
 """
 
+# Light-mode counterpart -- previously existed ONLY as inline JS text
+# inside the dark_btn toggle's CustomJS code (never promoted to a
+# Python constant the way _DARK_WIDGET_CSS was), the exact kind of
+# duplication that let _LIGHT_TABS_CSS go missing entirely for a while
+# (see that constant's own history). Values match what was already
+# working in the inline JS version; only the formatting changed, to
+# match _DARK_WIDGET_CSS's style.
+_LIGHT_WIDGET_CSS = """
+:host { }
+.bk-input {
+    background:   #ffffff !important;
+    color:        #222222 !important;
+    border-color: #aaa !important;
+}
+select.bk-input option {
+    background: #fff;
+    color:      #222;
+}
+.bk-input-group label,
+.bk-label,
+label {
+    color: #222222 !important;
+}
+.bk-btn {
+    background: #f0f0f0 !important;
+    color:      #222 !important;
+    border-color: #aaa !important;
+}
+"""
+
 # ---------------------------------------------------------------------------
 # Stage 1c: gear tool icon + Tabs dark styling (added 2026-07-31)
 # ---------------------------------------------------------------------------
@@ -243,6 +273,31 @@ _DARK_TABS_CSS = """
 }
 .bk-tab:hover {
     color: #cdd6f4 !important;
+}
+"""
+
+# Light-mode counterpart -- previously didn't exist at all, so the
+# dark/light toggle had nothing to swap _gear_tabs' stylesheet to and
+# the gear tab strip (e.g. "Panel A") stayed dark regardless of mode.
+# Colors chosen to match the existing light widget CSS in the dark_btn
+# toggle JS (#222222 text, #aaa/#ccc borders, light backgrounds) for
+# consistency with the rest of the light theme.
+_LIGHT_TABS_CSS = """
+:host { }
+.bk-header {
+    background:   #f0f0f0 !important;
+    border-color: #cccccc !important;
+}
+.bk-tab {
+    color:      #555555 !important;
+    background: transparent !important;
+}
+.bk-tab.bk-active {
+    color:        #222222 !important;
+    border-color: #4a90d9 !important;
+}
+.bk-tab:hover {
+    color: #222222 !important;
 }
 """
 
@@ -1803,24 +1858,66 @@ document.documentElement.style.background = '#181825';
         return column(_css_div, toolbar, body, status_bar,
                       sizing_mode="stretch_width")
 
-    def _style_cmap_column(self, cmap_col, dark_stylesheet) -> list:
-        """Apply dark InlineStyleSheet to all input widgets in a colormap column.
+    def _style_cmap_column(self, cmap_col, dark_stylesheet) -> tuple:
+        """Apply dark styling to every themeable element in a colormap column.
 
         ``colormap_controls()`` returns a Bokeh ``column`` whose children
-        are ``Select``, ``TextInput``, ``Div``, ``row``, and ``column``
-        instances.  This method walks the tree, applies ``dark_stylesheet``
-        to every input widget, and returns a flat list of those widgets
-        so the dark/light JS callback can update their ``stylesheets[0].css``.
+        are ``Select``, ``TextInput``, ``Button`` (the histogram reset
+        button), ``Div``, a histogram ``figure``, and ``row``/``column``
+        containers. This method walks the tree and applies dark styling
+        to each, returning three flat lists so the dark/light JS
+        callback can keep them in sync when the user toggles later:
+
+        - ``styled`` — ``Select``/``TextInput``/``Button`` widgets,
+          updated the same way as the rest of the sidebar (swapping
+          ``stylesheets[0].css``, the shared mechanism the toggle JS's
+          `widgets` loop already handles).
+        - ``styled_figs`` — the colormap histogram ``figure``, updated
+          via its own dedicated toggle-JS block (NOT the same one the
+          main panel figures use — the histogram intentionally uses a
+          dimmer, not stark black/white, background so the plotted
+          distribution stays legible; see colormap_controls' own
+          comments).
+        - ``styled_icons`` — the reset button's ``BuiltinIcon``, whose
+          ``color`` doesn't live on the ``Button`` itself and so isn't
+          reachable via `stylesheets` at all.
+
+        Button was previously not handled here at all (a real gap,
+        found via live light-mode testing) — its dark colors were
+        instead hardcoded once at construction time in
+        ``colormap_controls()`` itself, with no way to ever change them
+        again. Fixed here by PREPENDING ``dark_stylesheet`` to whatever
+        stylesheets the widget already has (rather than replacing them,
+        as done for Select/TextInput) — the reset button also carries
+        its own small stylesheet for icon padding that must survive
+        this. Prepending specifically (not appending) matters: the
+        toggle JS's widget loop unconditionally does
+        ``w.stylesheets[0].css = widget_css``, so the shared,
+        toggle-managed stylesheet has to stay at index 0 or the toggle
+        would silently clobber the padding rule instead of actually
+        updating the theme.
         """
-        from bokeh.models import Select, TextInput, Div
-        from bokeh.layouts import column as bk_column, row as bk_row
+        from bokeh.models import Select, TextInput, Div, Button, Plot
 
         styled = []
+        styled_figs = []
+        styled_icons = []
 
         def _walk(node):
             if isinstance(node, (Select, TextInput)):
                 node.stylesheets = [dark_stylesheet]
                 styled.append(node)
+            elif isinstance(node, Button):
+                node.stylesheets = [dark_stylesheet] + list(node.stylesheets)
+                styled.append(node)
+                if getattr(node, "icon", None) is not None:
+                    styled_icons.append(node.icon)
+            elif isinstance(node, Plot):
+                # The histogram figure inside colormap_controls()'s
+                # returned column -- distinct from the four main panel
+                # figures (self._all_panels), which already have their
+                # own recoloring via the `figs` arg below.
+                styled_figs.append(node)
             elif isinstance(node, Div):
                 # Style equation label Div text color
                 if node.text and not node.text.startswith("<span"):
@@ -1835,7 +1932,7 @@ document.documentElement.style.background = '#181825';
                     _walk(child)
 
         _walk(cmap_col)
-        return styled
+        return styled, styled_figs, styled_icons
 
     # ---------------------------------------------------------------------- #
     # Sidebar                                                                  #
@@ -1890,8 +1987,8 @@ document.documentElement.style.background = '#181825';
         panel : Bokeh column
         widgets : dict
             ``y_sel``, ``x_sel``, ``q_sel``, ``conflict_div``,
-            ``cmap_widgets`` — stored by the caller in
-            ``self._panel_axis_widgets[slot.id]["raster"]``.
+            ``cmap_widgets``, ``cmap_figs``, ``cmap_icons`` — stored by
+            the caller in ``self._panel_axis_widgets[slot.id]["raster"]``.
         """
         ry_sel = Select(
             title="Raster Y axis", value=self._raster_y.name,
@@ -1932,7 +2029,7 @@ conflict_div.text = conflict ? msg : '';
         rx_sel.js_on_change("value", conflict_js)
 
         raster_cmap  = slot.raster.colormap_controls()
-        cmap_widgets = self._style_cmap_column(raster_cmap, dark)
+        cmap_widgets, cmap_figs, cmap_icons = self._style_cmap_column(raster_cmap, dark)
 
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
@@ -1944,6 +2041,7 @@ conflict_div.text = conflict ? msg : '';
         widgets = {
             "y_sel": ry_sel, "x_sel": rx_sel, "q_sel": rq_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
+            "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
         }
         return panel, widgets
 
@@ -1960,8 +2058,9 @@ conflict_div.text = conflict ? msg : '';
         -------
         panel : Bokeh column
         widgets : dict
-            ``x_sel``, ``y_sel``, ``cmap_widgets`` — stored by the caller
-            in ``self._panel_axis_widgets[slot.id]["scatter"]``.
+            ``x_sel``, ``y_sel``, ``cmap_widgets``, ``cmap_figs``,
+            ``cmap_icons`` — stored by the caller in
+            ``self._panel_axis_widgets[slot.id]["scatter"]``.
         """
         sx_sel = Select(
             title="Scatter X axis", value=self._scatter_x.name,
@@ -1974,7 +2073,7 @@ conflict_div.text = conflict ? msg : '';
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
         scatter_cmap = slot.scatter.colormap_controls(layer_index=0)
-        cmap_widgets = self._style_cmap_column(scatter_cmap, dark)
+        cmap_widgets, cmap_figs, cmap_icons = self._style_cmap_column(scatter_cmap, dark)
 
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
@@ -1984,6 +2083,7 @@ conflict_div.text = conflict ? msg : '';
         )
         widgets = {
             "x_sel": sx_sel, "y_sel": sy_sel, "cmap_widgets": cmap_widgets,
+            "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
         }
         return panel, widgets
 
@@ -3452,6 +3552,8 @@ doPlot();
         # stylesheets[0].css directly, so anything not listed here
         # wouldn't get re-themed regardless of what object it shares.
         _all_axis_widgets = []
+        _all_cmap_figs = []
+        _all_cmap_icons = []
         for slot in self._slots:
             for kind in ("raster", "scatter"):
                 w = self._panel_axis_widgets[slot.id][kind]
@@ -3460,6 +3562,8 @@ doPlot();
                 else:
                     _all_axis_widgets += [w["x_sel"], w["y_sel"]]
                 _all_axis_widgets += w["cmap_widgets"]
+                _all_cmap_figs     += w["cmap_figs"]
+                _all_cmap_icons    += w["cmap_icons"]
 
         dark_btn.js_on_change("active", CustomJS(
             args={
@@ -3491,6 +3595,38 @@ doPlot();
                 "widgets":      [self._col_select, self._field_select,
                                  self._spw_select, self._corr_cbg]
                                 + _all_axis_widgets,
+                # Colormap histogram figures + reset-button icons (added
+                # to fix a reported light-mode gap: these previously had
+                # dark colors hardcoded once at construction time in
+                # colormap_controls() with nothing to ever change them).
+                # Kept separate from `figs`/`widgets` above rather than
+                # merged in, since the histogram deliberately uses a
+                # dimmer background than the main panels' stark
+                # black/white (so the plotted distribution stays
+                # legible — see colormap_controls' own comments), and
+                # icon color isn't reachable via `stylesheets` at all.
+                "cmap_figs":    _all_cmap_figs,
+                "cmap_icons":   _all_cmap_icons,
+                # Gear tab strip ("Panel A"/"Panel B") -- previously not
+                # included in the toggle at all, so it stayed dark
+                # regardless of mode (reported directly: the header/tab
+                # area, unlike everything else, never responded to the
+                # toggle). Uses Bokeh's shadow-DOM tab classes
+                # (.bk-header/.bk-tab), not the .bk-input/.bk-btn ones
+                # widget_css targets, so it needs its own CSS strings
+                # below rather than reusing widget_css.
+                "tabs":         self._gear_tabs,
+                # CSS content passed in from the Python-side constants
+                # rather than duplicated as inline JS template literals
+                # (which is what this replaced) -- single source of
+                # truth, so a change to e.g. _DARK_WIDGET_CSS can't
+                # silently drift out of sync with what the toggle
+                # actually applies, and a new theme constant can't go
+                # missing the way _LIGHT_TABS_CSS did before it existed.
+                "dark_css":       _DARK_WIDGET_CSS,
+                "light_css":      _LIGHT_WIDGET_CSS,
+                "dark_tabs_css":  _DARK_TABS_CSS,
+                "light_tabs_css": _LIGHT_TABS_CSS,
             },
             code="""
 const light     = cb_obj.active;
@@ -3513,18 +3649,12 @@ const title_c   = light ? '#222222' : '#cdd6f4';
 // happens to serve elsewhere.
 const hint_c    = light ? '#0c5460' : '#89dceb';
 const source_c  = light ? '#222222' : '#a6e3a1';
-const dark_css = `:host { --bokeh-base-font: system-ui, sans-serif; }
-.bk-input { background: #313244 !important; color: #cdd6f4 !important; border-color: #45475a !important; }
-select.bk-input option { background: #313244; color: #cdd6f4; }
-.bk-input-group label, .bk-label, label { color: #cdd6f4 !important; }
-.bk-btn { background: #313244 !important; color: #cdd6f4 !important; border-color: #45475a !important; }
-.bk-btn:hover { background: #45475a !important; }`;
-const light_css = `:host { }
-.bk-input { background: #ffffff !important; color: #222222 !important; border-color: #aaa !important; }
-select.bk-input option { background: #fff; color: #222; }
-.bk-input-group label, .bk-label, label { color: #222222 !important; }
-.bk-btn { background: #f0f0f0 !important; color: #222 !important; border-color: #aaa !important; }`;
+// dark_css/light_css/dark_tabs_css/light_tabs_css are passed in via
+// args (see the CustomJS args dict above) rather than defined here --
+// single source of truth in _DARK_WIDGET_CSS/_LIGHT_WIDGET_CSS/
+// _DARK_TABS_CSS/_LIGHT_TABS_CSS.
 const widget_css = light ? light_css : dark_css;
+const tabs_css = light ? light_tabs_css : dark_tabs_css;
 
 // Page background
 for (const el of [document.body, document.documentElement]) {
@@ -3605,6 +3735,50 @@ try {
         }
     }
 } catch(e) { console.warn('widget stylesheet update failed:', e); }
+
+// Gear tab strip ("Panel A"/"Panel B") — previously had no light-mode
+// CSS defined anywhere and was never touched by this callback at all,
+// so it stayed dark regardless of mode (reported directly). Same
+// stylesheets[0].css swap pattern as the widgets loop above, just with
+// dedicated tab CSS since Bokeh's Tabs widget uses different shadow-DOM
+// classes (.bk-header/.bk-tab) than .bk-input/.bk-btn.
+try {
+    if (tabs.stylesheets && tabs.stylesheets.length > 0) {
+        tabs.stylesheets[0].css = tabs_css;
+    }
+} catch(e) { console.warn('tabs stylesheet update failed:', e); }
+
+// Colormap histogram figures (added to fix a reported light-mode gap —
+// see _style_cmap_column's docstring). Deliberately dimmer than the
+// main panels' stark black/white in BOTH modes — light mode reuses the
+// sidebar's own light background tone (#f8f8f0) rather than pure
+// white — so the plotted distribution stays legible either way, per
+// the original design intent for this figure.
+const cmap_bg = light ? '#f8f8f0' : '#1e1e2e';
+try {
+    for (const fig of cmap_figs) {
+        fig.background_fill_color = cmap_bg;
+        fig.border_fill_color     = cmap_bg;
+        if (fig.outline_line_color !== undefined) fig.outline_line_color = grid_c;
+        for (const ax of [...fig.below, ...fig.left, ...fig.right, ...fig.above]) {
+            if (ax.axis_line_color        !== undefined) ax.axis_line_color        = label_c;
+            if (ax.major_tick_line_color  !== undefined) ax.major_tick_line_color  = label_c;
+            if (ax.minor_tick_line_color  !== undefined) ax.minor_tick_line_color  = label_c;
+            if (ax.major_label_text_color !== undefined) ax.major_label_text_color = label_c;
+        }
+        for (const g of fig.center) {
+            if (g.grid_line_color !== undefined) g.grid_line_color = grid_c;
+        }
+    }
+} catch(e) { console.warn('colormap figure recolor failed:', e); }
+
+// Reset button icons — BuiltinIcon.color isn't reachable via
+// stylesheets at all, has to be set directly.
+try {
+    for (const icon of cmap_icons) {
+        if (icon.color !== undefined) icon.color = label_c;
+    }
+} catch(e) { console.warn('colormap icon recolor failed:', e); }
 
 cb_obj.label = light ? '🌙 Dark' : '☀ Light';
 """,

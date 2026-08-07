@@ -130,6 +130,11 @@ class ScatterLayer:
         Parameter for ``"log"`` and ``"power"`` scalings.
     scaling_gamma : float
         Parameter for ``"gamma"`` scaling.
+    scaling_vmin, scaling_vmax : float | None
+        Manual value-domain clip range, overriding the automatic
+        ``color_mode``-based range once both are set. ``None`` (default)
+        means automatic. Clips the input (rather than setting a
+        Datashader ``span=``) for ``"eq_hist"`` scaling.
     """
     y_axis:      "Axis"
     polarization: str        = "XX"
@@ -139,6 +144,8 @@ class ScatterLayer:
     scaling:        str   = _DEFAULT_SCALING
     scaling_alpha:  float = 10.0
     scaling_gamma:  float = 1.0
+    scaling_vmin:   Optional[float] = None  # manual override; None = auto
+    scaling_vmax:   Optional[float] = None  # (see update_scaling, _shade_all_layers)
 
     def __post_init__(self):
         if not self.label:
@@ -202,6 +209,8 @@ class VisibilityScatter(VisibilityPlot):
                     scaling       = lyr.scaling,
                     scaling_alpha = lyr.scaling_alpha,
                     scaling_gamma = lyr.scaling_gamma,
+                    scaling_vmin  = lyr.scaling_vmin,
+                    scaling_vmax  = lyr.scaling_vmax,
                 )
             self._layers.append(lyr)
 
@@ -267,6 +276,8 @@ class VisibilityScatter(VisibilityPlot):
             scaling       = lyr.scaling,
             scaling_alpha = lyr.scaling_alpha,
             scaling_gamma = lyr.scaling_gamma,
+            scaling_vmin  = lyr.scaling_vmin,
+            scaling_vmax  = lyr.scaling_vmax,
         )
         self._composite_and_push()
         self._update_state_source()
@@ -277,6 +288,9 @@ class VisibilityScatter(VisibilityPlot):
         scaling: Optional[str] = None,
         alpha: Optional[float] = None,
         gamma: Optional[float] = None,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+        reset_range: bool = False,
     ) -> None:
         """Change one layer's value-to-color transfer function and re-composite.
 
@@ -296,6 +310,18 @@ class VisibilityScatter(VisibilityPlot):
         gamma : float | None
             Parameter for ``"gamma"`` scaling.  ``None`` keeps the
             current value.
+        vmin, vmax : float | None
+            Manual value-domain clip range, overriding the automatic
+            ``color_mode``-based range (see ``_shade_all_layers``) once
+            set. ``None`` keeps the current value on its own — use
+            ``reset_range=True`` to clear a previously-set override
+            (``colormap_controls()``'s reset button). Clips the
+            reference population (rather than setting a Datashader
+            ``span=``) for ``"eq_hist"`` scaling.
+        reset_range : bool
+            If ``True``, clears both ``vmin`` and ``vmax`` back to
+            ``None`` for this layer, applied before any ``vmin``/``vmax``
+            passed in the same call.
         """
         if not (0 <= layer_index < len(self._layers)):
             raise IndexError(f"layer_index {layer_index} out of range")
@@ -304,6 +330,8 @@ class VisibilityScatter(VisibilityPlot):
                 f"scaling must be one of {_cms.ALL_SCALINGS}, got {scaling!r}"
             )
         lyr = self._layers[layer_index]
+        new_vmin = None if reset_range else lyr.scaling_vmin
+        new_vmax = None if reset_range else lyr.scaling_vmax
         self._layers[layer_index] = ScatterLayer(
             y_axis        = lyr.y_axis,
             polarization  = lyr.polarization,
@@ -313,6 +341,8 @@ class VisibilityScatter(VisibilityPlot):
             scaling       = scaling if scaling is not None else lyr.scaling,
             scaling_alpha = alpha if alpha is not None else lyr.scaling_alpha,
             scaling_gamma = gamma if gamma is not None else lyr.scaling_gamma,
+            scaling_vmin  = vmin if vmin is not None else new_vmin,
+            scaling_vmax  = vmax if vmax is not None else new_vmax,
         )
         self._composite_and_push()
         self._update_state_source()
@@ -343,8 +373,17 @@ class VisibilityScatter(VisibilityPlot):
         ``VisibilityPlotter``'s sidebar embeds one of these per layer —
         see Phase 0 CM-4 in the implementation plan. Mirrors
         ``VisibilityRaster.colormap_controls()``; see that docstring for
-        the full rationale. Scaling is per-layer here since each layer
-        has its own colormap and quantity.
+        the full rationale on the ``CustomJS``/``comm.send()`` wiring
+        pattern, the histogram+``EditSpan`` design (modeled on
+        ``iclean``'s ``colormap_adjust()``), and the "rebuild on Plot
+        press, not on every pan/zoom" scope decision. Scaling is
+        per-layer here since each layer has its own colormap and
+        quantity — ``layer_index`` is baked into every outgoing message
+        so the response updates the right layer.
+
+        This used to be missing min/max fields entirely (unlike
+        ``VisibilityRaster``'s, which existed but weren't wired) —
+        added here to bring the two into parity.
 
         Parameters
         ----------
@@ -353,7 +392,10 @@ class VisibilityScatter(VisibilityPlot):
             layer.
         """
         from bokeh.layouts import column, row
-        from bokeh.models import Select, TextInput, Div
+        from bokeh.models import Select, TextInput, Div, CustomJS, Button, BuiltinIcon, InlineStyleSheet, Spacer
+        from bokeh.plotting import figure
+        from bokeh.events import ValueSubmit
+        from cubevis.bokeh.models._edit_span import EditSpan
 
         if not (0 <= layer_index < len(self._layers)):
             raise IndexError(f"layer_index {layer_index} out of range")
@@ -374,33 +416,239 @@ class VisibilityScatter(VisibilityPlot):
             visible=lyr.scaling == "gamma",
         )
 
-        def _on_scaling_change(attr, old, new):
-            alpha_input.visible = new in ("log", "power")
-            gamma_input.visible = new == "gamma"
-            equation.text = _cms.scaling_equation_label(new)
-            self.update_scaling(layer_index, scaling=new)
+        # --- Histogram + draggable min/max span pair ------------------
+        counts, edges = self.histogram(layer_index)
+        if counts.size == 0:
+            edges = np.array([0.0, 1.0])
+            counts = np.array([0])
+        hist_lo, hist_hi = float(edges[0]), float(edges[-1])
+        min_loc = lyr.scaling_vmin if lyr.scaling_vmin is not None else hist_lo
+        max_loc = lyr.scaling_vmax if lyr.scaling_vmax is not None else hist_hi
 
-        def _on_alpha_change(attr, old, new):
-            try:
-                self.update_scaling(layer_index, alpha=float(new))
-            except ValueError:
-                pass
+        hist_source = ColumnDataSource(data={
+            "left":   edges[:-1],
+            "right":  edges[1:],
+            "top":    counts,
+            "bottom": np.zeros_like(counts),
+        })
+        hist_fig = figure(
+            height=100, width=260,
+            # REVERTED -- see VisibilityRaster.colormap_controls'
+            # identical block: the toolbar-restoration hypothesis made
+            # click-count worse (2->3), confirmed by testing. Real root
+            # cause was unrelated -- see the EditSpan `dragging`
+            # property fix and its wiring below.
+            toolbar_location=None, tools="",
+            y_axis_label=None,
+        )
+        hist_fig.quad(
+            left="left", right="right", top="top", bottom="bottom",
+            source=hist_source, fill_color="#89b4fa", line_color=None,
+            fill_alpha=0.8,
+        )
+        hist_fig.yaxis.visible = False
+        hist_fig.ygrid.visible = False
+        # See VisibilityRaster.colormap_controls' identical block for the
+        # full rationale (dim-but-legible dark default; now collected
+        # by VisibilityPlotter._style_cmap_column for toggle support).
+        hist_fig.background_fill_color = "#1e1e2e"
+        hist_fig.border_fill_color     = "#1e1e2e"
+        hist_fig.xaxis.axis_line_color        = "#45475a"
+        hist_fig.xaxis.major_tick_line_color  = "#45475a"
+        hist_fig.xaxis.minor_tick_line_color  = "#45475a"
+        hist_fig.xaxis.major_label_text_color = "#cdd6f4"
+        hist_fig.xgrid.grid_line_color        = "#45475a"
+        hist_fig.xgrid.grid_line_alpha        = 0.3
+        hist_fig.outline_line_color           = "#45475a"
 
-        def _on_gamma_change(attr, old, new):
-            try:
-                self.update_scaling(layer_index, gamma=float(new))
-            except ValueError:
-                pass
+        # See VisibilityRaster.colormap_controls' identical block for
+        # the rationale (line_width also sets Bokeh's pan hit-test
+        # tolerance; the previous 2 was floored to a fixed 2.5px zone).
+        min_span = EditSpan(
+            location=min_loc, dimension="height", editable=True,
+            line_color="#f38ba8", line_dash="dashed", line_width=2,
+        )
+        max_span = EditSpan(
+            location=max_loc, dimension="height", editable=True,
+            line_color="#f38ba8", line_dash="dashed", line_width=2,
+        )
+        hist_fig.add_layout(min_span)
+        hist_fig.add_layout(max_span)
+        # See VisibilityRaster.colormap_controls' identical block for
+        # the rationale.
+        min_span.sibling = max_span
+        max_span.sibling = min_span
 
-        scaling_select.on_change("value", _on_scaling_change)
-        alpha_input.on_change("value", _on_alpha_change)
-        gamma_input.on_change("value", _on_gamma_change)
+        min_input = TextInput(title="min", value=f"{min_loc:.6g}", width=110)
+        max_input = TextInput(title="max", value=f"{max_loc:.6g}", width=110)
+        # See VisibilityRaster.colormap_controls' identical block for
+        # the icon/styling rationale (colors come from a toggle-managed
+        # stylesheet prepended by VisibilityPlotter._style_cmap_column,
+        # not from here -- only non-color properties belong in this
+        # button's own stylesheet).
+        reset_button = Button(
+            icon=BuiltinIcon(icon_name="reset", size="1.1em", color="#cdd6f4"),
+            label="", width=36, height=36, button_type="default",
+            stylesheets=[InlineStyleSheet(css="""
+                :host(.bk-btn), .bk-btn {
+                    padding: 2px;
+                }
+            """)],
+        )
+        # See VisibilityRaster.colormap_controls' identical block for
+        # the rationale (align="end" alone isn't enough since the
+        # button has no label above it, unlike the TextInputs).
+        reset_button_col = column(Spacer(height=19), reset_button)
 
-        return column(
+        controls = column(
             scaling_select,
             equation,
             row(alpha_input, gamma_input),
+            hist_fig,
+            row(reset_button_col, min_input, max_input),
         )
+
+        if self._comm is None:
+            # No comm channel -- controls render but are inert, matching
+            # VisibilityRaster.colormap_controls' identical convention.
+            return controls
+
+        comm               = self._comm
+        image_source       = self._image_source
+        msg_update_scaling = self._msg_update_scaling
+        equations          = {s: _cms.scaling_equation_label(s) for s in _cms.ALL_SCALINGS}
+
+        _apply_image_js = """
+    console.log('[visplot colormap] update_scaling response:', resp);
+    if (!resp || resp.status !== 'ok') {
+        console.warn('[visplot colormap] update_scaling failed or no response:', resp);
+        return;
+    }
+    if (resp.image != null) {
+        image_source.data['image'] = [resp.image];
+        image_source.data['x']     = [resp.x0];
+        image_source.data['y']     = [resp.y0];
+        image_source.data['dw']    = [resp.x1 - resp.x0];
+        image_source.data['dh']    = [resp.y1 - resp.y0];
+        image_source.change.emit();
+    } else {
+        console.warn('[visplot colormap] response had no image:', resp);
+    }
+"""
+
+        scaling_js = CustomJS(
+            args={
+                "comm": comm, "image_source": image_source,
+                "equation": equation, "alpha_input": alpha_input,
+                "gamma_input": gamma_input, "equations": equations,
+                "layer_index": layer_index,
+            },
+            code=f"""
+const s = cb_obj.value;
+alpha_input.visible = (s === 'log' || s === 'power');
+gamma_input.visible = (s === 'gamma');
+equation.text = equations[s] || s;
+console.log('[visplot colormap] sending:', {{layer_index: layer_index, scaling: s}});
+comm.send('{msg_update_scaling}', {{layer_index: layer_index, scaling: s}}, function(resp) {{
+{_apply_image_js}
+}});
+""",
+        )
+        scaling_select.js_on_change("value", scaling_js)
+
+        def _numeric_submit_js(field_key: str) -> "CustomJS":
+            return CustomJS(
+                args={"comm": comm, "image_source": image_source,
+                      "layer_index": layer_index},
+                code=f"""
+const v = parseFloat(cb_obj.value);
+if (isNaN(v)) return;
+console.log('[visplot colormap] sending:', {{layer_index: layer_index, {field_key}: v}});
+comm.send('{msg_update_scaling}', {{layer_index: layer_index, {field_key}: v}}, function(resp) {{
+{_apply_image_js}
+}});
+""",
+            )
+
+        alpha_input.js_on_event(ValueSubmit, _numeric_submit_js("alpha"))
+        gamma_input.js_on_event(ValueSubmit, _numeric_submit_js("gamma"))
+
+        # --- min/max <-> span bidirectional wiring ---------------------
+        def _span_drag_visual_js(paired_input) -> "CustomJS":
+            """See VisibilityRaster.colormap_controls' identical function
+            for the null-guard rationale (undefined.toFixed() crash on a
+            dead first drag attempt)."""
+            return CustomJS(
+                args={"paired_input": paired_input},
+                code="""
+if (cb_obj.location == null || isNaN(cb_obj.location)) return;
+paired_input.value = cb_obj.location.toFixed(6);
+""",
+            )
+
+        def _span_release_js(field_key: str, paired_input) -> "CustomJS":
+            """See VisibilityRaster.colormap_controls' identical function
+            for the full rationale (dragging property replacing the
+            LODEnd PlotEvent approach, which never dispatched at all
+            from a non-Plot origin)."""
+            return CustomJS(
+                args={"comm": comm, "image_source": image_source,
+                      "layer_index": layer_index, "paired_input": paired_input},
+                code=f"""
+if (cb_obj.dragging) return;  // only act when the drag just ENDED
+const v = cb_obj.location;
+if (v == null || isNaN(v)) return;
+paired_input.value = v.toFixed(6);
+console.log('[visplot colormap] sending (span release):', {{layer_index: layer_index, {field_key}: v}});
+comm.send('{msg_update_scaling}', {{layer_index: layer_index, {field_key}: v}}, function(resp) {{
+{_apply_image_js}
+}});
+""",
+            )
+
+        min_span.js_on_change("location", _span_drag_visual_js(min_input))
+        max_span.js_on_change("location", _span_drag_visual_js(max_input))
+        min_span.js_on_change("dragging", _span_release_js("vmin", min_input))
+        max_span.js_on_change("dragging", _span_release_js("vmax", max_input))
+
+        def _range_submit_js(field_key: str, paired_span) -> "CustomJS":
+            return CustomJS(
+                args={"comm": comm, "image_source": image_source,
+                      "layer_index": layer_index, "paired_span": paired_span},
+                code=f"""
+const v = parseFloat(cb_obj.value);
+if (isNaN(v)) return;
+paired_span.location = v;
+console.log('[visplot colormap] sending (field submit):', {{layer_index: layer_index, {field_key}: v}});
+comm.send('{msg_update_scaling}', {{layer_index: layer_index, {field_key}: v}}, function(resp) {{
+{_apply_image_js}
+}});
+""",
+            )
+
+        min_input.js_on_event(ValueSubmit, _range_submit_js("vmin", min_span))
+        max_input.js_on_event(ValueSubmit, _range_submit_js("vmax", max_span))
+
+        reset_js = CustomJS(
+            args={"comm": comm, "image_source": image_source,
+                  "layer_index": layer_index,
+                  "min_span": min_span, "max_span": max_span,
+                  "min_input": min_input, "max_input": max_input,
+                  "hist_lo": hist_lo, "hist_hi": hist_hi},
+            code=f"""
+min_span.location = hist_lo;
+max_span.location = hist_hi;
+min_input.value = hist_lo.toFixed(6);
+max_input.value = hist_hi.toFixed(6);
+console.log('[visplot colormap] sending (reset):', {{layer_index: layer_index, reset_range: true}});
+comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}}, function(resp) {{
+{_apply_image_js}
+}});
+""",
+        )
+        reset_button.js_on_click(reset_js)
+
+        return controls
 
     def update_axes(
         self,
@@ -468,6 +716,8 @@ class VisibilityScatter(VisibilityPlot):
             extra[f"layer_scaling_{i}"]       = [lyr.scaling]
             extra[f"layer_scaling_alpha_{i}"] = [lyr.scaling_alpha]
             extra[f"layer_scaling_gamma_{i}"] = [lyr.scaling_gamma]
+            extra[f"layer_scaling_vmin_{i}"]  = [lyr.scaling_vmin]
+            extra[f"layer_scaling_vmax_{i}"]  = [lyr.scaling_vmax]
         extra["n_layers"]   = [len(self._layers)]
         extra["color_mode"] = [self._color_mode]
 
@@ -747,6 +997,17 @@ class VisibilityScatter(VisibilityPlot):
                     span = span_arg
                     eq_hist_reference = df["y"].to_numpy()
 
+                # Manual override (colormap_controls' min/max fields)
+                # takes precedence over the automatic global/local span
+                # above, in either color_mode. Applied to DATASHADER_HOW
+                # scalings via `span` here; eq_hist gets an equivalent
+                # clip applied directly to its inputs below instead,
+                # since it doesn't take a span= (see VisibilityRaster.
+                # _shade_agg's eq_hist branch for the identical
+                # reasoning).
+                if lyr.scaling_vmin is not None and lyr.scaling_vmax is not None:
+                    span = [lyr.scaling_vmin, lyr.scaling_vmax]
+
                 if lyr.scaling in _cms.DATASHADER_HOW:
                     shade_kwargs = dict(
                         cmap=lyr.cmap,
@@ -756,8 +1017,25 @@ class VisibilityScatter(VisibilityPlot):
                         shade_kwargs["span"] = span
                     img = tf.shade(agg, **shade_kwargs)
                 elif lyr.scaling == "eq_hist":
+                    eq_reference = eq_hist_reference
+                    # See VisibilityRaster._shade_agg's eq_hist branch
+                    # for the full rationale: restricting the reference
+                    # population (not clipping agg.values in place) is
+                    # what actually concentrates color resolution into
+                    # the selected range, verified empirically.
+                    if lyr.scaling_vmin is not None or lyr.scaling_vmax is not None:
+                        pool = eq_reference if eq_reference is not None else agg.values
+                        pool_finite = pool[np.isfinite(pool)]
+                        lo = lyr.scaling_vmin if lyr.scaling_vmin is not None else (
+                            float(pool_finite.min()) if pool_finite.size else None)
+                        hi = lyr.scaling_vmax if lyr.scaling_vmax is not None else (
+                            float(pool_finite.max()) if pool_finite.size else None)
+                        if lo is not None and hi is not None and hi > lo:
+                            in_band = pool_finite[(pool_finite >= lo) & (pool_finite <= hi)]
+                            if in_band.size > 0:
+                                eq_reference = in_band
                     transformed = _cms.equalize_histogram(
-                        agg.values, reference=eq_hist_reference,
+                        agg.values, reference=eq_reference,
                     )
                     scaled_agg = agg.copy(data=transformed)
                     img = tf.shade(
@@ -927,7 +1205,7 @@ class VisibilityScatter(VisibilityPlot):
         return self._image_response("ok")
 
     def _handle_update_scaling(self, message: dict) -> dict:
-        """Handle j2p 'vs_update_scaling': {layer_index, scaling, alpha, gamma}.
+        """Handle j2p 'vs_update_scaling': {layer_index, scaling, alpha, gamma, vmin, vmax, reset_range}.
 
         All fields except layer_index are optional; omitted fields keep
         their current per-layer value. Uses _image_response so JS can
@@ -937,9 +1215,12 @@ class VisibilityScatter(VisibilityPlot):
         try:
             self.update_scaling(
                 idx,
-                scaling = message.get("scaling"),
-                alpha   = message.get("alpha"),
-                gamma   = message.get("gamma"),
+                scaling     = message.get("scaling"),
+                alpha       = message.get("alpha"),
+                gamma       = message.get("gamma"),
+                vmin        = message.get("vmin"),
+                vmax        = message.get("vmax"),
+                reset_range = bool(message.get("reset_range", False)),
             )
         except (IndexError, ValueError) as exc:
             return {"status": "error", "message": str(exc)}
@@ -950,6 +1231,8 @@ class VisibilityScatter(VisibilityPlot):
             scaling       = lyr.scaling,
             scaling_alpha = lyr.scaling_alpha,
             scaling_gamma = lyr.scaling_gamma,
+            scaling_vmin  = lyr.scaling_vmin,
+            scaling_vmax  = lyr.scaling_vmax,
         )
 
     def _handle_update_axes_scatter(self, message: dict) -> dict:

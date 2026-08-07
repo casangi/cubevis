@@ -1223,8 +1223,10 @@ class TestColorMode:
 
         Pinned to scaling="linear" explicitly to keep this test's
         guarantee unconditional: "linear" and "log" always differ
-        visually between global/local since color_mode directly sets
-        Datashader's span= for both (see
+        visually between global/local since color_mode sets Datashader's
+        span= to the rendered quantity's own value range — the full
+        cached agg's range in "global" mode, the viewport crop's range
+        in "local" mode — for both (see
         TestColormapScaling.test_color_mode_affects_log_via_span,
         despite the name being about log specifically — log behaves like
         linear here, not like eq_hist). "eq_hist" also now differs
@@ -1437,9 +1439,11 @@ class TestColormapScaling:
         """Datashader's log `how=` reduction computes its mapping purely
         from the values present in the viewport crop when span=None, and
         from a fixed external span= when provided — color_mode="global"
-        correctly sets that span (see the "linear", "log" branch in
-        VisibilityRaster._shade_agg's docstring), so log DOES respond to
-        color_mode in the same way linear does. This test exists to
+        sets that span to the full cached agg's value range,
+        color_mode="local" to the viewport crop's own value range (see
+        the "linear", "log" branch in VisibilityRaster._shade_agg's
+        docstring), so log DOES respond to color_mode in the same way
+        linear does. This test exists to
         confirm log behaves like linear, not like eq_hist (see
         test_color_mode_changes_eq_hist_output below, and
         test_shade_viewport_global_local_differ_in_subrange which is

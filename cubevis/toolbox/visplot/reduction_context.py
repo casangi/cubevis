@@ -228,9 +228,27 @@ class ObservationMetadata:
         this factory can be replaced by direct construction from those
         calls.
         """
+        # field_id: prefer the backend's own authoritative FIELD_IDs
+        # (meta["field_ids"], aligned by position with field_names) when
+        # present. Falls back to a bare positional index otherwise --
+        # this is WRONG whenever the source FIELD_IDs are non-contiguous
+        # (confirmed on a real MS: field_names sorted alphabetically
+        # does not line up with FIELD_ID order at all), but is kept as
+        # a graceful degradation for backends that don't populate
+        # "field_ids" yet (MSv4Backend, as of this fix, is one -- ADD
+        # A COMPARABLE FIELD_ID SOURCE THERE before relying on numeric
+        # field= selection against Processing Sets).
+        field_names = meta.get("field_names", [])
+        raw_field_ids = meta.get("field_ids")
+        if (raw_field_ids is not None
+                and len(raw_field_ids) == len(field_names)
+                and all(fid is not None for fid in raw_field_ids)):
+            field_ids = raw_field_ids
+        else:
+            field_ids = list(range(len(field_names)))
         fields = tuple(
-            FieldInfo(field_id=i, name=n)
-            for i, n in enumerate(meta.get("field_names", []))
+            FieldInfo(field_id=fid, name=n)
+            for fid, n in zip(field_ids, field_names)
         )
         spws = tuple(
             SpwInfo(

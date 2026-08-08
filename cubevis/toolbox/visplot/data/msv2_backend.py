@@ -372,6 +372,47 @@ class MSv2Backend(XArrayReader):
     # Metadata                                                             #
     # ------------------------------------------------------------------ #
 
+    def _field_id_map(self) -> dict:
+        """Authoritative name -> real FIELD_ID mapping.
+
+        xarray-ms's DataTree has no separate field catalog node — its
+        children are only the visibility partitions themselves
+        (confirmed by direct inspection: ``self._datatree.children``
+        lists only ``..._partition_NNN`` entries). Its per-row
+        ``field_name`` coordinate carries names only, and collecting
+        unique names into a ``set()`` then ``sorted()``-ing them (as
+        ``metadata()`` does for display) discards the real FIELD_ID
+        entirely and does not preserve source order -- confirmed on a
+        real MS with non-contiguous FIELD_IDs (0, 2, 3, 5, 6): the
+        alphabetically-sorted name list does not line up with FIELD_ID
+        order at all.
+
+        Reads the FIELD subtable directly via ``arcae`` (already a hard
+        dependency of this class, not a new one) instead -- by CASA
+        convention, FIELD_ID *is* the row index into this subtable, the
+        same convention ``plotms`` itself relies on for ``field='N'``
+        selection.
+
+        Returns an empty dict (never raises) if the subtable can't be
+        read for any reason; callers should treat a missing name as
+        "authoritative ID unavailable" and fall back accordingly, not
+        as a fatal error.
+        """
+        from arcae import table as _arcae_table
+        field_table_path = f"{self._path}/FIELD"
+        try:
+            ft = _arcae_table(field_table_path)
+            try:
+                names = ft.getcol("NAME")
+            finally:
+                ft.close()
+        except Exception:
+            log.debug("MSv2Backend: could not read FIELD subtable at %s "
+                      "for authoritative field IDs", field_table_path,
+                      exc_info=True)
+            return {}
+        return {name: i for i, name in enumerate(names)}
+
     def metadata(self) -> dict:
         """Collect human-readable metadata from all visibility partitions.
 
@@ -427,9 +468,18 @@ class MSv2Backend(XArrayReader):
             if "VISIBILITY" in ds.data_vars:
                 data_columns.add(self._data_column)
 
+        sorted_field_names = sorted(field_names)
+        field_id_map = self._field_id_map()
+        # Parallel list, aligned by position with sorted_field_names.
+        # None for any name the subtable read didn't resolve (shouldn't
+        # normally happen, but _field_id_map() never raises, so this
+        # stays graceful rather than crashing metadata() entirely).
+        field_ids = [field_id_map.get(n) for n in sorted_field_names]
+
         return {
             "scan_names":        sorted(scan_names),
-            "field_names":       sorted(field_names),
+            "field_names":       sorted_field_names,
+            "field_ids":         field_ids,
             "antenna_names":     sorted(ant_names),
             "spw_ids":           sorted(spw_ids),
             "correlation_labels": sorted(pol_labels),

@@ -328,12 +328,35 @@ def _parse_correlation_string(corr_str: str,
 
 def _parse_field_string(field_str: str,
                          meta: ObservationMetadata) -> Optional[str]:
+    """Resolve a field= string to a field name.
+
+    A purely-numeric string is matched against each field's real
+    ``field_id`` (not a positional index into ``meta.fields`` -- that
+    was the bug this replaced: silently wrong whenever source FIELD_IDs
+    are non-contiguous, which they commonly are, e.g. after splitting
+    out a subset of an MS's original fields. Confirmed on a real MS
+    with FIELD_IDs 0, 2, 3, 5, 6 -- the old positional-index version
+    resolved field='2' to the field at position 2 in an alphabetically-
+    sorted name list, which was J0522-364, not the field whose real
+    FIELD_ID is 2 (Ceres). ``meta.fields[i].field_id`` is now populated
+    from an authoritative source where the backend provides one -- see
+    ``ObservationMetadata.from_backend_metadata`` and
+    ``MSv2Backend._field_id_map`` -- so a direct match against it gives
+    the same answer plotms's field='N' MSSelection syntax would).
+
+    Matches plotms's field= convention. Returns None (not a fallback
+    guess) if no field has that FIELD_ID, so callers can tell "no such
+    field" apart from a real match rather than silently degrading into
+    matching the numeric string as a literal field name.
+    """
     if not field_str or field_str.strip() == "":
         return None
     if field_str.strip().isdigit():
-        idx = int(field_str.strip())
-        if 0 <= idx < len(meta.fields):
-            return meta.fields[idx].name
+        fid = int(field_str.strip())
+        for f in meta.fields:
+            if f.field_id == fid:
+                return f.name
+        return None
     return field_str.strip() or None
 
 

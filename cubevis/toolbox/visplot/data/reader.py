@@ -307,6 +307,18 @@ class XArrayReader(abc.ABC):
             All scan name strings present in the dataset.
         ``field_names`` : list[str]
             All field name strings.
+        ``field_ids`` : list[Optional[int]], optional
+            Real MS/PS FIELD_ID for each entry in ``field_names``,
+            aligned by position. Concrete backends SHOULD populate this
+            from an authoritative source (e.g. the MS's ``FIELD``
+            subtable row order for ``MSv2Backend``) rather than
+            omitting it -- without it, ``ObservationMetadata`` falls
+            back to a bare positional index, which silently gives wrong
+            results whenever the real FIELD_IDs are non-contiguous
+            (confirmed on a real MS: alphabetically-sorted field names
+            do not line up with FIELD_ID order). Omit this key entirely
+            (rather than returning wrong values) if no authoritative
+            source is available yet.
         ``antenna_names`` : list[str]
             All antenna name strings (sorted).
         ``spw_ids`` : list[int]

@@ -581,7 +581,7 @@ class MSv2Backend(XArrayReader):
         # Build lazy derived arrays for every requested (axis, pol)
         lazy_y: dict[tuple[Axis, str], xr.DataArray] = {}
         for axis, pol in yaxes:
-            lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, axis, pol)
+            lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, axis, pol, ds)
 
         # x-axis lazy array — broadcast to match a representative y shape
         template = next(iter(lazy_y.values()))
@@ -626,10 +626,12 @@ class MSv2Backend(XArrayReader):
         flag: xr.DataArray,
         axis: Axis,
         pol: str,
+        ds: Optional[xr.Dataset] = None,
     ) -> xr.DataArray:
         """Return a lazy DataArray for the requested axis and polarization.
 
-        Masked with NaN at flagged/padded positions.
+        Masked with NaN at flagged/padded positions — except U/V, see
+        below.
 
         Uses dask.array.absolute() and dask.array.angle() directly for
         AMPLITUDE and PHASE rather than xr.apply_ufunc().  This avoids
@@ -637,9 +639,34 @@ class MSv2Backend(XArrayReader):
         when apply_ufunc evaluates np.abs on a zero-element complex128
         meta array.  The dask.array operations are complex-aware and
         produce the correct float64 output dtype without any warnings.
+
+        ``ds`` : the source Dataset, required only for ``Axis.U``/
+        ``Axis.V`` (needs the ``UVW`` array, which isn't derivable from
+        ``vis``/``flag`` alone the way the other quantities are) —
+        optional for every other axis, which don't need it.
         """
         vis_pol  = vis.sel(polarization=pol)
         flag_pol = flag.sel(polarization=pol)
+
+        if axis in (Axis.U, Axis.V):
+            # Geometry-derived, not visibility-derived: the same value
+            # regardless of polarization, and deliberately NOT flag-
+            # masked -- matches _lazy_x_axis's existing Axis.U/Axis.V
+            # handling exactly (same quantity, same semantics, whether
+            # it's playing the X or Y role). A UV-coverage plot should
+            # show every baseline sample that was actually observed,
+            # flagged or not -- the point is showing sampling coverage,
+            # not current data quality, and masking would misleadingly
+            # hide real coverage. Added to let Axis.V work as a scatter
+            # Y-axis (previously NotImplementedError'd here) -- see
+            # visplot-testing-handoff's u-vs-v UV-coverage test.
+            if ds is None:
+                raise ValueError(
+                    f"Axis.{axis.name} requires ds (the source Dataset) "
+                    f"for the UVW array; pass ds= from the caller."
+                )
+            label = "u" if axis == Axis.U else "v"
+            return ds["UVW"].sel(uvw_label=label).broadcast_like(vis_pol)
 
         if axis == Axis.AMPLITUDE:
             # da.absolute() is complex-aware: |a+bj| -> sqrt(a²+b²), float64
@@ -664,7 +691,7 @@ class MSv2Backend(XArrayReader):
         else:
             raise NotImplementedError(
                 f"Axis {axis} is not a supported scatter y-axis. "
-                f"Use AMPLITUDE, PHASE, REAL, or IMAGINARY."
+                f"Use AMPLITUDE, PHASE, REAL, IMAGINARY, U, or V."
             )
 
         return q.where(~flag_pol)

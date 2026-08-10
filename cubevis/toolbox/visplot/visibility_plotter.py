@@ -147,18 +147,30 @@ _PRESETS = {
 # same dimension for both Y and X is rejected — see the conflict guard
 # wired up in _build_sidebar() (client-side) and _handle_plot()
 # (server-side).
-_RASTER_AXIS_OPTIONS = [("TIME",     "Time"),
-                        ("BASELINE", "Baseline"),
-                        ("CHANNEL",  "Channel")]
+_RASTER_AXIS_OPTIONS = [("TIME",        "Time"),
+                        ("BASELINE",    "Baseline"),
+                        ("CHANNEL",     "Channel"),
+                        ("CORRELATION", "Correlation")]
 _RASTER_Y_OPTIONS   = _RASTER_AXIS_OPTIONS
 _RASTER_X_OPTIONS   = _RASTER_AXIS_OPTIONS
 _RASTER_QTY_OPTIONS = [("AMPLITUDE", "Amplitude"),
-                       ("PHASE",     "Phase")]
-_SCATTER_X_OPTIONS  = [("UVDIST",    "UV Distance"),
-                       ("TIME",      "Time"),
-                       ("FREQUENCY", "Frequency")]
+                       ("PHASE",     "Phase"),
+                       ("REAL",      "Real"),
+                       ("IMAGINARY", "Imaginary"),
+                       ("FLAG",      "Flag")]
+_SCATTER_X_OPTIONS  = [("UVDIST",        "UV Distance"),
+                       ("UVDIST_LAMBDA", "UV Distance (wavelengths)"),
+                       ("TIME",          "Time"),
+                       ("FREQUENCY",     "Frequency"),
+                       ("CHANNEL",       "Channel"),
+                       ("U",             "U"),
+                       ("V",             "V")]
 _SCATTER_Y_OPTIONS  = [("AMPLITUDE", "Amplitude"),
-                       ("PHASE",     "Phase")]
+                       ("PHASE",     "Phase"),
+                       ("REAL",      "Real"),
+                       ("IMAGINARY", "Imaginary"),
+                       ("U",         "U"),
+                       ("V",         "V")]
 
 # Dark-mode CSS applied to all sidebar input widgets via InlineStyleSheet.
 # Overrides Bokeh's default light component styles so widgets blend with

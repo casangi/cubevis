@@ -68,6 +68,11 @@ def _visplot_t(
         datacolumn: str = 'data',
         layout: str = 'side',
         preset: Optional[str] = None,
+        raster_y: Optional[str] = None,
+        raster_x: Optional[str] = None,
+        raster_qty: Optional[str] = None,
+        scatter_x: Optional[str] = None,
+        scatter_y: Optional[str] = None,
         time_range: tuple[float, float] | list[float] | None = None,
         freq_range: tuple[float, float] | list[float] | None = None,
         uvdist_range: tuple[float, float] | list[float] | None = None,
@@ -88,6 +93,11 @@ def _visplot_t(
         datacolumn = datacolumn,
         layout = layout,
         preset = preset,
+        raster_y = raster_y,
+        raster_x = raster_x,
+        raster_qty = raster_qty,
+        scatter_x = scatter_x,
+        scatter_y = scatter_y,
         time_range = time_range,
         freq_range = freq_range,
         uvdist_range = uvdist_range,
@@ -138,6 +148,25 @@ class _visplot:
         panels, one above the other). Default ``"side"``.
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
+    raster_y, raster_x : str | None
+        Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
+        ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
+        ``preset``, which takes precedence over the default
+        (Time vs. Channel). Validated against the same options the
+        raster axis dropdowns expose in the GUI — an invalid value
+        raises ``ValueError`` listing the valid options.
+    raster_qty : str | None
+        Explicit raster quantity (color axis), e.g. ``"AMPLITUDE"``,
+        ``"PHASE"``, ``"REAL"``, ``"IMAGINARY"``, ``"FLAG"``. Same
+        precedence and validation as ``raster_y``/``raster_x``.
+    scatter_x, scatter_y : str | None
+        Explicit scatter X/Y axis, e.g. ``"UVDIST"``, ``"TIME"``,
+        ``"FREQUENCY"``, ``"CHANNEL"``, ``"UVDIST_LAMBDA"``, ``"U"``,
+        ``"V"`` for X; ``"AMPLITUDE"``, ``"PHASE"``, ``"REAL"``,
+        ``"IMAGINARY"``, ``"U"``, ``"V"`` for Y. Same precedence and
+        validation. E.g. ``scatter_x="U", scatter_y="V"`` launches
+        directly into a U-vs-V UV-coverage scatter plot with no manual
+        axis-picker step needed.
     time_range : tuple[float, float] | list[float] | None
         ``(start, end)`` as MJD floats.
     freq_range : tuple[float, float] | list[float] | None
@@ -167,6 +196,11 @@ class _visplot:
         'datacolumn': 'Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.',
         'layout': 'Panel layout: ``"one"`` (single panel, raster by default in this preview — per-panel kind switching is a later addition), ``"side"`` (both panels, side by side), or ``"over"`` (both panels, one above the other).',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
+        'raster_y': '',
+        'raster_x': '',
+        'raster_qty': 'Explicit raster quantity (color axis), e.g.',
+        'scatter_x': '',
+        'scatter_y': '',
         'time_range': '``(start, end)`` as MJD floats.',
         'freq_range': '``(start, end)`` in Hz.',
         'uvdist_range': '``(min, max)`` in metres.',
@@ -188,6 +222,11 @@ class _visplot:
         'datacolumn': 'data',
         'layout': 'side',
         'preset': None,
+        'raster_y': None,
+        'raster_x': None,
+        'raster_qty': None,
+        'scatter_x': None,
+        'scatter_y': None,
         'time_range': None,
         'freq_range': None,
         'uvdist_range': None,
@@ -244,6 +283,11 @@ class _visplot:
             'datacolumn': 'str',
             'layout': 'str',
             'preset': 'Optional[str]',
+            'raster_y': 'Optional[str]',
+            'raster_x': 'Optional[str]',
+            'raster_qty': 'Optional[str]',
+            'scatter_x': 'Optional[str]',
+            'scatter_y': 'Optional[str]',
             'time_range': 'tuple[float, float] | list[float] | None',
             'freq_range': 'tuple[float, float] | list[float] | None',
             'uvdist_range': 'tuple[float, float] | list[float] | None',
@@ -534,6 +578,81 @@ class _visplot:
             desc, fmt,
         )
 
+    def __raster_y_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('raster_y', self._arg_default['raster_y'])
+        default = self._arg_default['raster_y']
+        desc    = self._arg_description.get('raster_y', '')
+        if self.__validate_('raster_y', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('raster_y', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __raster_x_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('raster_x', self._arg_default['raster_x'])
+        default = self._arg_default['raster_x']
+        desc    = self._arg_description.get('raster_x', '')
+        if self.__validate_('raster_x', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('raster_x', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __raster_qty_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('raster_qty', self._arg_default['raster_qty'])
+        default = self._arg_default['raster_qty']
+        desc    = self._arg_description.get('raster_qty', '')
+        if self.__validate_('raster_qty', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('raster_qty', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __scatter_x_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('scatter_x', self._arg_default['scatter_x'])
+        default = self._arg_default['scatter_x']
+        desc    = self._arg_description.get('scatter_x', '')
+        if self.__validate_('scatter_x', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('scatter_x', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __scatter_y_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('scatter_y', self._arg_default['scatter_y'])
+        default = self._arg_default['scatter_y']
+        desc    = self._arg_description.get('scatter_y', '')
+        if self.__validate_('scatter_y', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('scatter_y', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     def __time_range_inp(self):
         glb     = self.__globals_()
         value   = glb.get('time_range', self._arg_default['time_range'])
@@ -612,6 +731,11 @@ class _visplot:
         if 'datacolumn' in glb: del glb['datacolumn']
         if 'layout' in glb: del glb['layout']
         if 'preset' in glb: del glb['preset']
+        if 'raster_y' in glb: del glb['raster_y']
+        if 'raster_x' in glb: del glb['raster_x']
+        if 'raster_qty' in glb: del glb['raster_qty']
+        if 'scatter_x' in glb: del glb['scatter_x']
+        if 'scatter_y' in glb: del glb['scatter_y']
         if 'time_range' in glb: del glb['time_range']
         if 'freq_range' in glb: del glb['freq_range']
         if 'uvdist_range' in glb: del glb['uvdist_range']
@@ -633,6 +757,11 @@ class _visplot:
         self.__datacolumn_inp()
         self.__layout_inp()
         self.__preset_inp()
+        self.__raster_y_inp()
+        self.__raster_x_inp()
+        self.__raster_qty_inp()
+        self.__scatter_x_inp()
+        self.__scatter_y_inp()
         self.__time_range_inp()
         self.__freq_range_inp()
         self.__uvdist_range_inp()
@@ -679,6 +808,11 @@ class _visplot:
         _invocation_parameters['datacolumn'] = glb.get('datacolumn', self._arg_default['datacolumn'])
         _invocation_parameters['layout'] = glb.get('layout', self._arg_default['layout'])
         _invocation_parameters['preset'] = glb.get('preset', self._arg_default['preset'])
+        _invocation_parameters['raster_y'] = glb.get('raster_y', self._arg_default['raster_y'])
+        _invocation_parameters['raster_x'] = glb.get('raster_x', self._arg_default['raster_x'])
+        _invocation_parameters['raster_qty'] = glb.get('raster_qty', self._arg_default['raster_qty'])
+        _invocation_parameters['scatter_x'] = glb.get('scatter_x', self._arg_default['scatter_x'])
+        _invocation_parameters['scatter_y'] = glb.get('scatter_y', self._arg_default['scatter_y'])
         _invocation_parameters['time_range'] = glb.get('time_range', self._arg_default['time_range'])
         _invocation_parameters['freq_range'] = glb.get('freq_range', self._arg_default['freq_range'])
         _invocation_parameters['uvdist_range'] = glb.get('uvdist_range', self._arg_default['uvdist_range'])
@@ -716,6 +850,11 @@ class _visplot:
             datacolumn = _UNSET,
             layout = _UNSET,
             preset = _UNSET,
+            raster_y = _UNSET,
+            raster_x = _UNSET,
+            raster_qty = _UNSET,
+            scatter_x = _UNSET,
+            scatter_y = _UNSET,
             time_range = _UNSET,
             freq_range = _UNSET,
             uvdist_range = _UNSET,
@@ -746,6 +885,11 @@ class _visplot:
             datacolumn,
             layout,
             preset,
+            raster_y,
+            raster_x,
+            raster_qty,
+            scatter_x,
+            scatter_y,
             time_range,
             freq_range,
             uvdist_range,
@@ -795,6 +939,21 @@ class _visplot:
             _invocation_parameters['preset'] = \
                 preset if preset is not _UNSET \
                 else glb.get('preset', self._arg_default['preset'])
+            _invocation_parameters['raster_y'] = \
+                raster_y if raster_y is not _UNSET \
+                else glb.get('raster_y', self._arg_default['raster_y'])
+            _invocation_parameters['raster_x'] = \
+                raster_x if raster_x is not _UNSET \
+                else glb.get('raster_x', self._arg_default['raster_x'])
+            _invocation_parameters['raster_qty'] = \
+                raster_qty if raster_qty is not _UNSET \
+                else glb.get('raster_qty', self._arg_default['raster_qty'])
+            _invocation_parameters['scatter_x'] = \
+                scatter_x if scatter_x is not _UNSET \
+                else glb.get('scatter_x', self._arg_default['scatter_x'])
+            _invocation_parameters['scatter_y'] = \
+                scatter_y if scatter_y is not _UNSET \
+                else glb.get('scatter_y', self._arg_default['scatter_y'])
             _invocation_parameters['time_range'] = \
                 time_range if time_range is not _UNSET \
                 else glb.get('time_range', self._arg_default['time_range'])
@@ -835,6 +994,16 @@ class _visplot:
                 glb.get('layout', self._arg_default['layout'])
             _invocation_parameters['preset'] = \
                 glb.get('preset', self._arg_default['preset'])
+            _invocation_parameters['raster_y'] = \
+                glb.get('raster_y', self._arg_default['raster_y'])
+            _invocation_parameters['raster_x'] = \
+                glb.get('raster_x', self._arg_default['raster_x'])
+            _invocation_parameters['raster_qty'] = \
+                glb.get('raster_qty', self._arg_default['raster_qty'])
+            _invocation_parameters['scatter_x'] = \
+                glb.get('scatter_x', self._arg_default['scatter_x'])
+            _invocation_parameters['scatter_y'] = \
+                glb.get('scatter_y', self._arg_default['scatter_y'])
             _invocation_parameters['time_range'] = \
                 glb.get('time_range', self._arg_default['time_range'])
             _invocation_parameters['freq_range'] = \
@@ -876,6 +1045,11 @@ class _visplot:
                     'datacolumn=' + repr(_invocation_parameters['datacolumn']),
                     'layout=' + repr(_invocation_parameters['layout']),
                     'preset=' + repr(_invocation_parameters['preset']),
+                    'raster_y=' + repr(_invocation_parameters['raster_y']),
+                    'raster_x=' + repr(_invocation_parameters['raster_x']),
+                    'raster_qty=' + repr(_invocation_parameters['raster_qty']),
+                    'scatter_x=' + repr(_invocation_parameters['scatter_x']),
+                    'scatter_y=' + repr(_invocation_parameters['scatter_y']),
                     'time_range=' + repr(_invocation_parameters['time_range']),
                     'freq_range=' + repr(_invocation_parameters['freq_range']),
                     'uvdist_range=' + repr(_invocation_parameters['uvdist_range']),
@@ -896,6 +1070,11 @@ class _visplot:
                 datacolumn = _invocation_parameters['datacolumn'],
                 layout = _invocation_parameters['layout'],
                 preset = _invocation_parameters['preset'],
+                raster_y = _invocation_parameters['raster_y'],
+                raster_x = _invocation_parameters['raster_x'],
+                raster_qty = _invocation_parameters['raster_qty'],
+                scatter_x = _invocation_parameters['scatter_x'],
+                scatter_y = _invocation_parameters['scatter_y'],
                 time_range = _invocation_parameters['time_range'],
                 freq_range = _invocation_parameters['freq_range'],
                 uvdist_range = _invocation_parameters['uvdist_range'],

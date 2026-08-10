@@ -60,6 +60,11 @@ def _validate_params(
         datacolumn,
         layout,
         preset,
+        raster_y,
+        raster_x,
+        raster_qty,
+        scatter_x,
+        scatter_y,
         time_range,
         freq_range,
         uvdist_range,
@@ -81,6 +86,11 @@ def _validate_params(
         'datacolumn': 'str',
         'layout': 'str',
         'preset': 'Optional[str]',
+        'raster_y': 'Optional[str]',
+        'raster_x': 'Optional[str]',
+        'raster_qty': 'Optional[str]',
+        'scatter_x': 'Optional[str]',
+        'scatter_y': 'Optional[str]',
         'time_range': 'tuple[float, float] | list[float] | None',
         'freq_range': 'tuple[float, float] | list[float] | None',
         'uvdist_range': 'tuple[float, float] | list[float] | None',
@@ -160,6 +170,11 @@ def _validate_params(
     _check('datacolumn', datacolumn, _type_map['datacolumn'])
     _check('layout', layout, _type_map['layout'])
     _check('preset', preset, _type_map['preset'])
+    _check('raster_y', raster_y, _type_map['raster_y'])
+    _check('raster_x', raster_x, _type_map['raster_x'])
+    _check('raster_qty', raster_qty, _type_map['raster_qty'])
+    _check('scatter_x', scatter_x, _type_map['scatter_x'])
+    _check('scatter_y', scatter_y, _type_map['scatter_y'])
     _check('time_range', time_range, _type_map['time_range'])
     _check('freq_range', freq_range, _type_map['freq_range'])
     _check('uvdist_range', uvdist_range, _type_map['uvdist_range'])
@@ -181,6 +196,11 @@ def _visplot_t(
         datacolumn: str = 'data',
         layout: str = 'side',
         preset: Optional[str] = None,
+        raster_y: Optional[str] = None,
+        raster_x: Optional[str] = None,
+        raster_qty: Optional[str] = None,
+        scatter_x: Optional[str] = None,
+        scatter_y: Optional[str] = None,
         time_range: tuple[float, float] | list[float] | None = None,
         freq_range: tuple[float, float] | list[float] | None = None,
         uvdist_range: tuple[float, float] | list[float] | None = None,
@@ -201,6 +221,11 @@ def _visplot_t(
         datacolumn = datacolumn,
         layout = layout,
         preset = preset,
+        raster_y = raster_y,
+        raster_x = raster_x,
+        raster_qty = raster_qty,
+        scatter_x = scatter_x,
+        scatter_y = scatter_y,
         time_range = time_range,
         freq_range = freq_range,
         uvdist_range = uvdist_range,
@@ -255,6 +280,25 @@ class _visplot:
         panels, one above the other). Default ``"side"``.
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
+    raster_y, raster_x : str | None
+        Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
+        ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
+        ``preset``, which takes precedence over the default
+        (Time vs. Channel). Validated against the same options the
+        raster axis dropdowns expose in the GUI — an invalid value
+        raises ``ValueError`` listing the valid options.
+    raster_qty : str | None
+        Explicit raster quantity (color axis), e.g. ``"AMPLITUDE"``,
+        ``"PHASE"``, ``"REAL"``, ``"IMAGINARY"``, ``"FLAG"``. Same
+        precedence and validation as ``raster_y``/``raster_x``.
+    scatter_x, scatter_y : str | None
+        Explicit scatter X/Y axis, e.g. ``"UVDIST"``, ``"TIME"``,
+        ``"FREQUENCY"``, ``"CHANNEL"``, ``"UVDIST_LAMBDA"``, ``"U"``,
+        ``"V"`` for X; ``"AMPLITUDE"``, ``"PHASE"``, ``"REAL"``,
+        ``"IMAGINARY"``, ``"U"``, ``"V"`` for Y. Same precedence and
+        validation. E.g. ``scatter_x="U", scatter_y="V"`` launches
+        directly into a U-vs-V UV-coverage scatter plot with no manual
+        axis-picker step needed.
     time_range : tuple[float, float] | list[float] | None
         ``(start, end)`` as MJD floats.
     freq_range : tuple[float, float] | list[float] | None
@@ -285,6 +329,11 @@ class _visplot:
             datacolumn: str = 'data',
             layout: str = 'side',
             preset: Optional[str] = None,
+            raster_y: Optional[str] = None,
+            raster_x: Optional[str] = None,
+            raster_qty: Optional[str] = None,
+            scatter_x: Optional[str] = None,
+            scatter_y: Optional[str] = None,
             time_range: tuple[float, float] | list[float] | None = None,
             freq_range: tuple[float, float] | list[float] | None = None,
             uvdist_range: tuple[float, float] | list[float] | None = None,
@@ -305,6 +354,11 @@ class _visplot:
             datacolumn = datacolumn,
             layout = layout,
             preset = preset,
+            raster_y = raster_y,
+            raster_x = raster_x,
+            raster_qty = raster_qty,
+            scatter_x = scatter_x,
+            scatter_y = scatter_y,
             time_range = time_range,
             freq_range = freq_range,
             uvdist_range = uvdist_range,
@@ -326,6 +380,11 @@ class _visplot:
                 'datacolumn=' + repr(datacolumn),
                 'layout=' + repr(layout),
                 'preset=' + repr(preset),
+                'raster_y=' + repr(raster_y),
+                'raster_x=' + repr(raster_x),
+                'raster_qty=' + repr(raster_qty),
+                'scatter_x=' + repr(scatter_x),
+                'scatter_y=' + repr(scatter_y),
                 'time_range=' + repr(time_range),
                 'freq_range=' + repr(freq_range),
                 'uvdist_range=' + repr(uvdist_range),
@@ -348,6 +407,11 @@ class _visplot:
                 datacolumn = datacolumn,
                 layout = layout,
                 preset = preset,
+                raster_y = raster_y,
+                raster_x = raster_x,
+                raster_qty = raster_qty,
+                scatter_x = scatter_x,
+                scatter_y = scatter_y,
                 time_range = time_range,
                 freq_range = freq_range,
                 uvdist_range = uvdist_range,

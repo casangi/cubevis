@@ -143,6 +143,36 @@ _PRESETS = {
     ),
 }
 
+
+def _resolve_axis_arg(value, options, role_name, default):
+    """Resolve a user-supplied axis= constructor string to an Axis enum
+    member.
+
+    ``options`` is one of ``_RASTER_AXIS_OPTIONS``/``_RASTER_QTY_OPTIONS``/
+    ``_SCATTER_X_OPTIONS``/``_SCATTER_Y_OPTIONS`` -- the exact same list
+    that populates the corresponding GUI dropdown, so this validates
+    against a single source of truth rather than a separately-maintained
+    list: anything invalid here would also be unselectable in the GUI,
+    and anything added to a dropdown's options becomes constructor-
+    selectable for free, no separate update needed.
+
+    Returns ``default`` unchanged if ``value`` is None (no override
+    requested) -- callers pass the preset-or-hardcoded-default value
+    computed so far as ``default``, so precedence is: explicit
+    argument > preset > hardcoded default.
+    """
+    if value is None:
+        return default
+    name = value.strip().upper()
+    valid_names = [opt[0] for opt in options]
+    if name not in valid_names:
+        raise ValueError(
+            f"{role_name}={value!r} is not a valid axis for this role. "
+            f"Valid options: {', '.join(valid_names)}"
+        )
+    return Axis[name]
+
+
 # Both raster axes share the same dimension vocabulary. Selecting the
 # same dimension for both Y and X is rejected — see the conflict guard
 # wired up in _build_sidebar() (client-side) and _handle_plot()
@@ -611,6 +641,25 @@ class VisibilityPlotter:
         panels, one above the other). Default ``"side"``.
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
+    raster_y, raster_x : str | None
+        Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
+        ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
+        ``preset``, which takes precedence over the default
+        (Time vs. Channel). Validated against the same options the
+        raster axis dropdowns expose in the GUI — an invalid value
+        raises ``ValueError`` listing the valid options.
+    raster_qty : str | None
+        Explicit raster quantity (color axis), e.g. ``"AMPLITUDE"``,
+        ``"PHASE"``, ``"REAL"``, ``"IMAGINARY"``, ``"FLAG"``. Same
+        precedence and validation as ``raster_y``/``raster_x``.
+    scatter_x, scatter_y : str | None
+        Explicit scatter X/Y axis, e.g. ``"UVDIST"``, ``"TIME"``,
+        ``"FREQUENCY"``, ``"CHANNEL"``, ``"UVDIST_LAMBDA"``, ``"U"``,
+        ``"V"`` for X; ``"AMPLITUDE"``, ``"PHASE"``, ``"REAL"``,
+        ``"IMAGINARY"``, ``"U"``, ``"V"`` for Y. Same precedence and
+        validation. E.g. ``scatter_x="U", scatter_y="V"`` launches
+        directly into a U-vs-V UV-coverage scatter plot with no manual
+        axis-picker step needed.
     time_range : tuple[float, float] | list[float] | None
         ``(start, end)`` as MJD floats.
     freq_range : tuple[float, float] | list[float] | None
@@ -639,6 +688,11 @@ class VisibilityPlotter:
         datacolumn:       str           = "data",
         layout:           str           = "side",
         preset:           Optional[str] = None,
+        raster_y:         Optional[str] = None,
+        raster_x:         Optional[str] = None,
+        raster_qty:       Optional[str] = None,
+        scatter_x:        Optional[str] = None,
+        scatter_y:        Optional[str] = None,
         time_range:       tuple[float, float] | list[float] | None = None,
         freq_range:       tuple[float, float] | list[float] | None = None,
         uvdist_range:     tuple[float, float] | list[float] | None = None,
@@ -726,25 +780,49 @@ class VisibilityPlotter:
         self._last_scatter_selection_by_slot: dict = {}
 
         # ------------------------------------------------------------------ #
-        # Preset axes                                                          #
+        # Preset / explicit axes                                               #
         # ------------------------------------------------------------------ #
-        raster_y   = Axis.TIME
-        raster_x   = Axis.CHANNEL
-        raster_qty = Axis.AMPLITUDE
-        scatter_x  = Axis.UVDIST
-        scatter_y  = Axis.AMPLITUDE
+        # NOTE: uses _resolved_* local names throughout, not raster_y/
+        # raster_x/etc. directly -- those names now belong to the
+        # incoming raster_y=/raster_x=/etc. constructor parameters
+        # (added so a test or script can launch straight into a given
+        # axis configuration, e.g. scatter_x='U', scatter_y='V', without
+        # a manual GUI step -- see visplot-testing-handoff/reference
+        # test 01 for the motivating case). Reusing those names for the
+        # resolved Axis values would silently clobber the incoming
+        # arguments before they're ever read.
+        _resolved_raster_y   = Axis.TIME
+        _resolved_raster_x   = Axis.CHANNEL
+        _resolved_raster_qty = Axis.AMPLITUDE
+        _resolved_scatter_x  = Axis.UVDIST
+        _resolved_scatter_y  = Axis.AMPLITUDE
 
         if self._preset and self._preset in _PRESETS:
             ry, rx, rq, sx, sy, pl = _PRESETS[self._preset]
-            raster_y, raster_x, raster_qty = ry, rx, rq
-            scatter_x, scatter_y           = sx, sy
-            self._layout                   = pl
+            _resolved_raster_y, _resolved_raster_x, _resolved_raster_qty = ry, rx, rq
+            _resolved_scatter_x, _resolved_scatter_y                    = sx, sy
+            self._layout                                                = pl
 
-        self._raster_y   = raster_y
-        self._raster_x   = raster_x
-        self._raster_qty = raster_qty
-        self._scatter_x  = scatter_x
-        self._scatter_y  = scatter_y
+        # Explicit raster_y=/raster_x=/etc. arguments take precedence
+        # over preset (which takes precedence over the hardcoded
+        # default above). Validated against the same per-role OPTIONS
+        # lists that drive the GUI dropdowns -- _RASTER_AXIS_OPTIONS/
+        # _RASTER_QTY_OPTIONS/_SCATTER_X_OPTIONS/_SCATTER_Y_OPTIONS are
+        # the single source of truth for "what's valid here" either
+        # way, so this can never accept something the GUI itself
+        # wouldn't, and anything added to the GUI's options becomes
+        # usable here for free.
+        _resolved_raster_y   = _resolve_axis_arg(raster_y,   _RASTER_AXIS_OPTIONS, "raster_y",   _resolved_raster_y)
+        _resolved_raster_x   = _resolve_axis_arg(raster_x,   _RASTER_AXIS_OPTIONS, "raster_x",   _resolved_raster_x)
+        _resolved_raster_qty = _resolve_axis_arg(raster_qty, _RASTER_QTY_OPTIONS,  "raster_qty", _resolved_raster_qty)
+        _resolved_scatter_x  = _resolve_axis_arg(scatter_x,  _SCATTER_X_OPTIONS,   "scatter_x",  _resolved_scatter_x)
+        _resolved_scatter_y  = _resolve_axis_arg(scatter_y,  _SCATTER_Y_OPTIONS,   "scatter_y",  _resolved_scatter_y)
+
+        self._raster_y   = _resolved_raster_y
+        self._raster_x   = _resolved_raster_x
+        self._raster_qty = _resolved_raster_qty
+        self._scatter_x  = _resolved_scatter_x
+        self._scatter_y  = _resolved_scatter_y
 
         # ------------------------------------------------------------------ #
         # FlagDB + hotkey scope                                                #

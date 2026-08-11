@@ -49,6 +49,128 @@ log = logging.getLogger(__name__)
 
 
 # ======================================================================
+# Probe geometry helpers
+# ======================================================================
+#
+# Shared by MSv2Backend and MSv4Backend so the two probe implementations
+# cannot drift apart again.  Both previously carried copy-pasted cell
+# geometry with the same defects; see the 2026-08 probe-miss notes in
+# VisibilityScatter._handle_probe.
+
+def _cell_bounds(coords: np.ndarray, idx: int) -> tuple[float, float]:
+    """Data-space ``(lo, hi)`` bounds of cell *idx* in *coords*.
+
+    Uses **local** neighbour spacing rather than a global
+    ``(c[-1] - c[0]) / (N - 1)`` average.
+
+    The global-average form is exact for a Datashader canvas agg, whose
+    bins are uniform by construction, but it is wrong for a raw MS
+    coordinate axis, which routinely is not:
+
+    * ``time`` has large gaps between scans — an average half-width
+      derived across those gaps makes every cell's window many times
+      wider than the actual integration spacing, so the field/scan/
+      antenna metadata lookup in ``probe_raster_pixel`` sweeps in rows
+      belonging to *neighbouring scans* and reports them as though they
+      were under the cursor.
+    * ``frequency`` is non-uniform across concatenated spectral windows
+      for the same reason.
+
+    Local spacing degrades gracefully: on a uniform axis it reproduces
+    the global answer exactly, and on a gapped axis it keeps each cell's
+    window tied to its own neighbours.  Handles descending coordinate
+    arrays and the degenerate single-element case.
+    """
+    n = len(coords)
+    if n == 0:
+        raise IndexError("empty coordinate array")
+    if not (0 <= idx < n):
+        raise IndexError(f"index {idx} out of range for {n} coordinates")
+
+    centre = float(coords[idx])
+    if n == 1:
+        return centre, centre
+
+    if idx > 0:
+        half_lo = abs(centre - float(coords[idx - 1])) / 2.0
+    else:
+        half_lo = abs(float(coords[1]) - centre) / 2.0
+    if idx < n - 1:
+        half_hi = abs(float(coords[idx + 1]) - centre) / 2.0
+    else:
+        half_hi = abs(centre - float(coords[n - 2])) / 2.0
+
+    return centre - half_lo, centre + half_hi
+
+
+def _widen_if_degenerate(
+    bounds: tuple[float, float], coords: np.ndarray
+) -> tuple[float, float]:
+    """Give a zero-width bin window a usable width.
+
+    ``_cell_bounds`` returns ``(c, c)`` for a single-element coordinate
+    axis, which the adaptive scatter canvas can produce at extreme zoom
+    on sparse data.  A closed test against a zero-width window requires
+    exact float equality, so the sample count comes back 0 even when the
+    bin plainly contains points.
+
+    The pad is sized to absorb float32 round-trip error rather than to
+    guess a bin width: MS columns are frequently float32 while the agg
+    coordinates are float64, so a sample and its bin centre can differ
+    in the seventh significant figure while being the same number.  It
+    deliberately does *not* widen far enough to capture genuinely
+    different values — with a single-bin canvas there is no bin width to
+    recover, and ``_compute_canvas_size`` clamps the canvas to at least
+    10x10 anyway, so this is a guard against an unreachable state rather
+    than a routine code path.
+    """
+    lo, hi = bounds
+    if hi > lo:
+        return bounds
+    if coords.size > 1:
+        pad = abs(float(coords[-1]) - float(coords[0])) / 2.0
+    else:
+        pad = abs(lo) * 1e-6 or 1e-9
+    return lo - pad, hi + pad
+
+
+def _bin_membership(
+    series: "pd.Series",
+    bounds: tuple[float, float],
+    idx: int,
+    n_bins: int,
+):
+    """Half-open ``[lo, hi)`` membership, closed on the final bin.
+
+    Matches Datashader's own binning rule
+    (``floor((v - v0) / (v1 - v0) * N)``).  The previous
+    closed-on-both-ends test double-counted samples lying exactly on the
+    edge shared by two adjacent bins.
+    """
+    lo, hi = bounds
+    if idx >= n_bins - 1:
+        return (series >= lo) & (series <= hi)
+    return (series >= lo) & (series < hi)
+
+
+def _agg_value(values: np.ndarray, iy: int, ix: int) -> Optional[float]:
+    """Value at ``values[iy, ix]``, or ``None`` when that bin is empty.
+
+    Empty-bin sentinels differ by reduction: ``mean``/``max``/``min``
+    leave NaN, but ``count`` leaves integer ``0`` and ``any`` leaves
+    ``False``.  A bare ``np.isnan`` test therefore reports every bin of
+    an integer agg as populated, which would make a switch of reduction
+    silently break the "is there data here?" readout.
+    """
+    raw = values[iy, ix]
+    if np.issubdtype(values.dtype, np.floating):
+        return None if np.isnan(raw) else float(raw)
+    if np.issubdtype(values.dtype, np.bool_):
+        return 1.0 if bool(raw) else None
+    return None if raw == 0 else float(raw)
+
+
+# ======================================================================
 # Axis dispatch helpers
 # ======================================================================
 

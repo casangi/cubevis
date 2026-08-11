@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional, TYPE_CHECKING
@@ -178,6 +179,20 @@ class VisibilityScatter(VisibilityPlot):
         Figure title; ``None`` → auto-generated.
     comm_mgr :
         ``CommMgr`` from the active ``BokehAppContext``.
+    probe_slop_px : float
+        How far, in *screen* pixels, the hover probe looks beyond the
+        hovered bin for a populated one.  Converted to a bin radius per
+        render using the current adaptive canvas size, so the tolerance
+        feels the same at every zoom level.  Default ``6.0``; when a bin
+        is already wider than this the radius resolves to 0 and only the
+        exact bin is consulted.
+    probe_search_radius : int | None
+        Fixed radius in canvas bins, overriding ``probe_slop_px``.
+        ``0`` forces strict exact-bin lookup.  Default ``None`` (derive
+        from ``probe_slop_px``).
+    probe_debug : bool
+        Log one INFO line per hover describing what each layer's agg
+        returned.  Also enabled by setting ``VISPLOT_PROBE_DEBUG=1``.
     """
 
     def __init__(
@@ -191,6 +206,9 @@ class VisibilityScatter(VisibilityPlot):
         title: Optional[str] = None,
         comm_mgr=None,
         color_mode: str = "global",
+        probe_slop_px: float = 6.0,
+        probe_search_radius: Optional[int] = None,
+        probe_debug: bool = False,
         **kwargs,
     ) -> None:
         if not layers:
@@ -217,6 +235,41 @@ class VisibilityScatter(VisibilityPlot):
         # Cached DataFrames and canvas aggs — one per layer
         self._layer_dfs:  list[Optional["pd.DataFrame"]] = [None] * len(layers)
         self._layer_aggs: list[Optional["xr.DataArray"]] = [None] * len(layers)
+        self._layer_skip_reason: list[Optional[str]] = [None] * len(layers)
+        self._layer_extents: list[Optional[tuple]] = [None] * len(layers)
+
+        # Hover-probe tuning.  ``probe_slop_px`` is how far, in *screen*
+        # pixels, the probe will look beyond the hovered bin for a
+        # populated one.  Screen pixels rather than bins because the
+        # adaptive canvas changes bin size by more than an order of
+        # magnitude: a bins-based radius of 1 is 3x3 screen px on a full
+        # 900x600 canvas but 108x67 once the canvas shrinks to 25x27,
+        # which is generous in exactly the case where the drawn mark is
+        # already a whole bin wide and needs no help at all.
+        #
+        # At the default 6 px this means: single-pixel marks on a dense
+        # canvas get a few pixels of forgiveness, while a shrunken
+        # canvas whose bins are bigger than the budget resolves to
+        # radius 0 -- exact-bin lookup, which already covers the entire
+        # visible mark.
+        #
+        # ``probe_search_radius`` overrides the computation with a fixed
+        # radius in bins; None (default) means derive it.  Setting 0
+        # forces strict exact-bin behaviour, useful for isolating
+        # whether a reported miss is a slop problem or a layer problem.
+        #
+        # ``probe_debug`` logs one line per hover at INFO with each
+        # layer's agg shape, bin size, hovered and matched pixel, and
+        # hit distance; it also honours the VISPLOT_PROBE_DEBUG
+        # environment variable so it can be switched on without
+        # touching a notebook cell.
+        self._probe_slop_px: float = float(probe_slop_px)
+        self._probe_search_radius: Optional[int] = (
+            None if probe_search_radius is None else int(probe_search_radius)
+        )
+        self._probe_debug: bool = bool(probe_debug) or bool(
+            os.environ.get("VISPLOT_PROBE_DEBUG")
+        )
 
         # Current viewport — updated on every pan/zoom rerender so that
         # set_alpha / set_color_mode re-composite over the correct region.
@@ -674,6 +727,8 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._layers = list(layers)
             self._layer_dfs  = [None] * len(layers)
             self._layer_aggs = [None] * len(layers)
+            self._layer_skip_reason = [None] * len(layers)
+            self._layer_extents = [None] * len(layers)
             changed = True
         if title is not None:
             self._title = title;  changed = True
@@ -762,7 +817,12 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         """
         t0 = time.perf_counter()
         if defer:
-            self._layer_dfs = [None] * len(self._layers)
+            self._layer_dfs  = [None] * len(self._layers)
+            self._layer_aggs = [None] * len(self._layers)
+            self._layer_skip_reason = (
+                ["deferred (never rendered)"] * len(self._layers)
+            )
+            self._layer_extents = [None] * len(self._layers)
             self._x_range    = (0.0, 1.0)
             self._y_range    = (0.0, 1.0)
         else:
@@ -787,47 +847,328 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             "y0": y0, "y1": y1,
         }
 
+    # ------------------------------------------------------------------
+    # Hover probe
+    # ------------------------------------------------------------------
+    #
+    # DEFECT HISTORY (2026-08 probe-miss investigation)
+    # -------------------------------------------------
+    # The previous implementation had three independent defects that all
+    # produced the same user-visible symptom: hovering a point that is
+    # clearly painted in the composite image reports "<i>empty</i>",
+    # while a neighbouring point in the same zoomed region reports a
+    # value.
+    #
+    #   (1) SINGLE-LAYER PROBE.  It computed (px, py) from the *first*
+    #       non-None layer agg, then looped over layers and returned on
+    #       the first call that did not *raise* -- which is always layer
+    #       0.  Layers 1..N-1 were therefore never consulted.  But the
+    #       displayed image is a Porter-Duff composite of *every* layer
+    #       (see _shade_all_layers), so any pixel painted only by, say,
+    #       the YY layer reads back as NaN from the XX agg.  With two
+    #       polarizations overlaid this alternates hit/miss point by
+    #       point with no spatial pattern -- exactly the reported
+    #       symptom.  Note the old loop returned even when
+    #       info["value"] is None, so "found a layer" and "found data"
+    #       were conflated.
+    #
+    #   (2) STALE AGGS.  _shade_all_layers only ever *assigns*
+    #       self._layer_aggs[i]; it never clears it.  A layer skipped on
+    #       the current pass (alpha == 0, zero points in view, shade
+    #       exception, or the whole-canvas degenerate early return) kept
+    #       its agg from a *previous viewport*, with different bin
+    #       centres and possibly a different shape.  Indexing that with
+    #       (px, py) derived from the current viewport silently returns
+    #       a value from the wrong place, or raises IndexError.  Fixed
+    #       at the top of _shade_all_layers; also defended here by
+    #       deriving (px, py) per layer from that layer's own coords.
+    #
+    #   (3) NO SLOP.  cvs.points() marks exactly one bin per sample,
+    #       but at deep zoom _compute_canvas_size shrinks the canvas so
+    #       each bin is drawn as a large block, and the hover geometry
+    #       is continuous.  A hover landing one bin off the mark reads
+    #       NaN even though the user is visually on the point.  Now
+    #       handled by _nearest_populated_bin with a configurable
+    #       search radius.
+    #
+    # The probe now examines every visible layer, prefers an exact-bin
+    # hit over a near hit and a near hit over nothing, and reports which
+    # layer answered (via the layer's own label) plus how far off the
+    # matched bin was.
+
+    def _agg_pixel(
+        self, agg: "xr.DataArray", x: float, y: float
+    ) -> Optional[tuple[int, int]]:
+        """Map data-space (x, y) to (px, py) in *this* agg's own coords.
+
+        Derived per layer rather than once from a representative agg:
+        layers are normally shaded at a shared canvas size against a
+        shared viewport, but a layer whose agg is stale (see defect 2
+        above) will have different coords, and using another layer's
+        indices against it produces silent misattribution.
+        """
+        try:
+            x_coords = agg.coords[agg.dims[1]].values
+            y_coords = agg.coords[agg.dims[0]].values
+        except (KeyError, IndexError):
+            return None
+        if x_coords.size == 0 or y_coords.size == 0:
+            return None
+        h, w = agg.shape
+        px = max(0, min(int(np.argmin(np.abs(x_coords - x))), w - 1))
+        py = max(0, min(int(np.argmin(np.abs(y_coords - y))), h - 1))
+        return px, py
+
+    @staticmethod
+    def _populated_mask(values: np.ndarray) -> np.ndarray:
+        """Boolean mask of bins that actually contain samples.
+
+        ``ds_agg.mean()`` (what _shade_all_layers uses) leaves empty
+        bins NaN, but ``count()``/``any()`` aggs use 0/False instead.
+        Testing for emptiness with np.isnan alone silently treats every
+        bin of an integer agg as populated, so branch on dtype.
+        """
+        if np.issubdtype(values.dtype, np.floating):
+            return np.isfinite(values)
+        if np.issubdtype(values.dtype, np.bool_):
+            return values
+        return values != 0
+
+    def _bin_screen_size(self, agg: "xr.DataArray") -> tuple[float, float]:
+        """Size of one agg bin in *screen* pixels, (width, height).
+
+        The adaptive canvas (_compute_canvas_size) can shrink the agg to
+        a small fraction of the figure, in which case the image glyph
+        stretches each bin over many screen pixels -- on sparse zoomed
+        data a bin is routinely 30-40 px across, i.e. the drawn mark IS
+        one bin.  Everything the probe expresses in bins therefore has
+        to be converted before it means anything to the user.
+        """
+        h, w = agg.shape
+        if w <= 0 or h <= 0:
+            return 1.0, 1.0
+        return self._width / float(w), self._height / float(h)
+
+    def _search_radius_bins(self, agg: "xr.DataArray") -> int:
+        """Search radius in bins that yields ``_probe_slop_px`` of slop.
+
+        A radius fixed in *bins* is the wrong unit: the same value gives
+        3x3 screen pixels of tolerance on a full-resolution canvas and
+        over 100x67 on a canvas the adaptive shrink has taken down to
+        25x27.  It is most forgiving exactly where the marks are already
+        biggest and least forgiving where they are single pixels.
+
+        Converting from a screen-pixel budget inverts that.  When a bin
+        is already larger than the budget -- the shrunken-canvas case,
+        where the drawn mark and the bin coincide -- this returns 0, so
+        an exact-bin lookup covers the whole visible mark and nothing
+        beyond it.
+        """
+        if self._probe_search_radius is not None:
+            return int(self._probe_search_radius)
+        bin_w, bin_h = self._bin_screen_size(agg)
+        smallest = min(bin_w, bin_h)
+        if smallest >= self._probe_slop_px:
+            return 0
+        return int(math.ceil(self._probe_slop_px / smallest))
+
+    def _nearest_populated_bin(
+        self, agg: "xr.DataArray", px: int, py: int, radius: int,
+        bin_w: float = 1.0, bin_h: float = 1.0,
+    ) -> Optional[tuple[float, int, int]]:
+        """Nearest populated bin to (px, py) within *radius* bins.
+
+        Returns ``(distance_in_screen_px, px, py)`` -- distance 0.0 when
+        the hovered bin itself is populated -- or ``None`` when the whole
+        search window is empty.
+
+        Distances are weighted by ``bin_w``/``bin_h`` so "nearest" means
+        nearest *on screen*.  Agg bins are not square in screen space
+        (36x22 px in the case that prompted this), so an unweighted
+        hypot in bin units can prefer a bin the user's eye reads as
+        farther away.  It is also what makes the reported distance
+        honest: bins are the wrong unit to show in a status bar.
+
+        A single pass over the (2r+1)² window finds the true nearest
+        within it; ring-by-ring expansion would not (a hit at Chebyshev
+        radius r can be farther in Euclidean terms than one at r+1).
+        """
+        values = agg.values
+        h, w   = values.shape
+        if not (0 <= px < w and 0 <= py < h):
+            return None
+        mask = self._populated_mask(values)
+        if mask[py, px]:
+            return 0.0, px, py
+        if radius <= 0:
+            return None
+        y0, y1 = max(0, py - radius), min(h, py + radius + 1)
+        x0, x1 = max(0, px - radius), min(w, px + radius + 1)
+        window = mask[y0:y1, x0:x1]
+        if not window.any():
+            return None
+        ys, xs = np.nonzero(window)
+        dist   = np.hypot(((ys + y0) - py) * bin_h, ((xs + x0) - px) * bin_w)
+        k      = int(np.argmin(dist))
+        return float(dist[k]), int(xs[k] + x0), int(ys[k] + y0)
+
     def _handle_probe(self, message: dict) -> dict:
-        """Probe the composite canvas agg at hover coordinates."""
+        """Probe every visible layer at the hover coordinates."""
         x = float(message.get("x", 0.0))
         y = float(message.get("y", 0.0))
 
-        x0, x1 = self._x_range
-        y0, y1 = self._y_range
-        if not (x0 <= x <= x1 and y0 <= y <= y1):
+        # Range-check against what is actually on screen.  The old code
+        # checked the *full* data extent, so after a zoom a hover well
+        # outside the visible region still passed and then got clamped
+        # by argmin onto an edge bin, reporting that edge bin's data as
+        # though it were under the cursor.
+        if self._current_viewport is not None:
+            vx0, vx1, vy0, vy1 = self._current_viewport
+        else:
+            vx0, vx1 = self._x_range
+            vy0, vy1 = self._y_range
+        if not (min(vx0, vx1) <= x <= max(vx0, vx1) and
+                min(vy0, vy1) <= y <= max(vy0, vy1)):
             return {"label": "<i>out of range</i>"}
 
-        # Use the first non-None layer agg for the probe
-        canvas_agg = next(
-            (a for a in self._layer_aggs if a is not None), None
-        )
-        if canvas_agg is None:
-            return {"label": "<i>no data</i>"}
+        # Gather a candidate from every layer that is currently drawn.
+        # (distance_in_screen_px, layer_index, px, py)
+        candidates: list[tuple[float, int, int, int]] = []
+        fallback:   Optional[tuple[int, int, int]] = None   # (layer, px, py)
+        debug_rows: list[str] = []
+        radius = 0
 
-        # Convert data-space to canvas pixel indices
-        x_coords = canvas_agg.coords[canvas_agg.dims[1]].values
-        y_coords = canvas_agg.coords[canvas_agg.dims[0]].values
-        px = max(0, min(int(np.argmin(np.abs(x_coords - x))),
-                        canvas_agg.shape[1] - 1))
-        py = max(0, min(int(np.argmin(np.abs(y_coords - y))),
-                        canvas_agg.shape[0] - 1))
-
-        # Probe the first non-empty layer at this pixel
         for i, (agg, df, lyr) in enumerate(
             zip(self._layer_aggs, self._layer_dfs, self._layers)
         ):
-            if agg is None or df is None:
-                continue
-            try:
-                info  = self._backend.probe_scatter_pixel(
-                    agg, px, py, self._selection, df
+            if agg is None or df is None or len(df) == 0:
+                reason = (self._layer_skip_reason[i]
+                          if i < len(self._layer_skip_reason) else None)
+                ext = (self._layer_extents[i]
+                       if i < len(self._layer_extents) else None)
+                extent_s = ""
+                if ext is not None:
+                    _, xmin, xmax, ymin, ymax = ext
+                    extent_s = (f" x=[{xmin:.6g},{xmax:.6g}]"
+                                f" y=[{ymin:.6g},{ymax:.6g}]")
+                debug_rows.append(
+                    f"L{i}[{lyr.label}]:skip({reason or 'no agg/df'})"
+                    f"{extent_s}"
                 )
-                label = self._format_probe(info, lyr.y_axis.label)
-                return {"label": label}
-            except Exception as exc:
-                log.warning("probe_scatter_pixel layer %d failed: %s", i, exc)
+                continue
+            idx = self._agg_pixel(agg, x, y)
+            if idx is None:
+                debug_rows.append(f"L{i}:skip(no coords)")
+                continue
+            px, py = idx
+            if fallback is None:
+                fallback = (i, px, py)
+            bin_w, bin_h = self._bin_screen_size(agg)
+            radius = self._search_radius_bins(agg)
+            hit = self._nearest_populated_bin(
+                agg, px, py, radius, bin_w, bin_h
+            )
+            if hit is None:
+                debug_rows.append(
+                    f"L{i}:miss@({px},{py}) shape={agg.shape} "
+                    f"bin={bin_w:.1f}x{bin_h:.1f}px r={radius}"
+                )
+                continue
+            dist, hpx, hpy = hit
+            candidates.append((dist, i, hpx, hpy))
+            # Log the hovered bin as well as the matched one; when they
+            # differ, that difference is the whole story.
+            debug_rows.append(
+                f"L{i}[{lyr.label}]:hit@({hpx},{hpy}) from({px},{py}) "
+                f"d={dist:.1f}px "
+                f"shape={agg.shape} bin={bin_w:.1f}x{bin_h:.1f}px r={radius}"
+            )
 
-        return {"label": "<i>empty</i>"}
+        if self._probe_debug:
+            log.info(
+                "[probe] x=%.9g y=%.9g viewport=(%.6g,%.6g,%.6g,%.6g) | %s",
+                x, y, vx0, vx1, vy0, vy1, "  ".join(debug_rows),
+            )
+
+        if not candidates and fallback is None:
+            return {"label": "<i>no data</i>"}
+
+        # Prefer an exact-bin hit; among equals prefer the lowest layer
+        # index so the answer is stable as the cursor moves.
+        if candidates:
+            dist, layer_i, px, py = min(candidates, key=lambda c: (c[0], c[1]))
+            exact = dist == 0.0
+        else:
+            layer_i, px, py = fallback          # type: ignore[misc]
+            dist, exact     = 0.0, True
+
+        lyr = self._layers[layer_i]
+        df  = self._layer_dfs[layer_i]
+        agg = self._layer_aggs[layer_i]
+        try:
+            info = self._backend.probe_scatter_pixel(
+                agg, px, py, self._selection, df
+            )
+        except Exception as exc:
+            log.warning(
+                "probe_scatter_pixel layer %d at (%d,%d) failed: %s",
+                layer_i, px, py, exc,
+            )
+            return {
+                "label":
+                    f"<span style='color:#f38ba8'>probe error: {exc}</span>"
+            }
+
+        # Report *every* layer, not just the one that answered.
+        #
+        # A status bar showing only the winning layer cannot distinguish
+        # "XX has no data here" from "you weren't told about XX", and
+        # that distinction is the whole question when judging whether an
+        # outlier is single-polarization or common to both.  An explicit
+        # em dash for a layer with nothing at this location carries real
+        # information; silence carries none.
+        #
+        # Values for the non-winning layers are read straight from their
+        # aggs rather than by calling probe_scatter_pixel again: the
+        # backend recounts samples against the full DataFrame, which is
+        # a scan of >1e6 rows per call, and hover fires many times a
+        # second.  The sample count N therefore describes the winning
+        # layer only, which is why it stays adjacent to that layer's
+        # reading in the field order below.
+        hits = {i: (d, hx, hy) for d, i, hx, hy in candidates}
+        readings: list[str] = []
+        for i, other in enumerate(self._layers):
+            if other.alpha == 0.0:
+                # Hidden by the user — a reading would imply the layer
+                # was consulted and found wanting, which it wasn't.
+                continue
+            hit = hits.get(i)
+            if hit is None:
+                readings.append(f"<b>{other.label}:</b> <i>&mdash;</i>")
+                continue
+            d_i, hx, hy = hit
+            agg_i = self._layer_aggs[i]
+            try:
+                val = float(agg_i.values[hy, hx])
+            except (IndexError, TypeError, ValueError):
+                readings.append(f"<b>{other.label}:</b> <i>&mdash;</i>")
+                continue
+            cell = f"<b>{other.label}:</b> {val:.6g}"
+            if d_i > 0.0:
+                cell += f" <i>(~{d_i:.0f}px)</i>"
+            readings.append(cell)
+
+        # Everything after the winning layer's own value: the axis
+        # coordinates, the sample count, and any backend extras.
+        _, _, remainder = self._format_probe(
+            info, lyr.label
+        ).partition(self._PROBE_SEP)
+
+        parts = readings + ([remainder] if remainder else [])
+        label = self._PROBE_SEP.join(parts)
+        if not exact:
+            label += f"{self._PROBE_SEP}<i>nearest ({dist:.0f} px away)</i>"
+        return {"label": label}
 
     def _register_extra_comm_handlers(self) -> None:
         self._comm.register(self._msg_set_alpha,   self._handle_set_alpha)
@@ -847,16 +1188,59 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._x_dim, y_axes, selection
         )
 
+        # A layer whose key is absent from the result is a different
+        # failure from one whose frame is empty, and both are different
+        # from a frame that arrived holding the wrong quantity.  Record
+        # enough to tell them apart: the requested key, whether the
+        # backend returned it, and the frame's actual data extent.
+        missing = [
+            (lyr.y_axis, lyr.polarization)
+            for lyr in self._layers
+            if (lyr.y_axis, lyr.polarization) not in result
+        ]
+        if missing:
+            log.warning(
+                "query_columns returned no frame for %d of %d requested "
+                "keys: %s (requested %s, got %s)",
+                len(missing), len(self._layers), missing,
+                y_axes, list(result.keys()),
+            )
+        if len(set(y_axes)) != len(y_axes):
+            # y_axes is a list but the backend keys its result by these
+            # pairs, so duplicates silently collapse and two layers end
+            # up sharing one frame.
+            log.warning(
+                "duplicate (y_axis, polarization) across layers: %s — "
+                "layers sharing a key will share a DataFrame", y_axes,
+            )
+
         x0_all, x1_all, y0_all, y1_all = [], [], [], []
+        self._layer_extents = [None] * len(self._layers)
         for i, lyr in enumerate(self._layers):
             key = (lyr.y_axis, lyr.polarization)
             df  = result.get(key)
             self._layer_dfs[i] = df
             if df is not None and len(df) > 0:
-                x0_all.append(float(df["x"].min()))
-                x1_all.append(float(df["x"].max()))
-                y0_all.append(float(df["y"].min()))
-                y1_all.append(float(df["y"].max()))
+                xmin, xmax = float(df["x"].min()), float(df["x"].max())
+                ymin, ymax = float(df["y"].min()), float(df["y"].max())
+                self._layer_extents[i] = (len(df), xmin, xmax, ymin, ymax)
+                x0_all.append(xmin)
+                x1_all.append(xmax)
+                y0_all.append(ymin)
+                y1_all.append(ymax)
+
+        if self._probe_debug:
+            for i, (lyr, ext) in enumerate(
+                zip(self._layers, self._layer_extents)
+            ):
+                if ext is None:
+                    log.info("[query] L%d[%s]: no rows", i, lyr.label)
+                    continue
+                n, xmin, xmax, ymin, ymax = ext
+                log.info(
+                    "[query] L%d[%s]: n=%d x=[%.6g, %.6g] y=[%.6g, %.6g]",
+                    i, lyr.label, n, xmin, xmax, ymin, ymax,
+                )
 
         if x0_all:
             self._x_range = (min(x0_all), max(x1_all))
@@ -914,6 +1298,15 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         x0, x1 = (min(xr), max(xr))
         y0, y1 = (min(yr), max(yr))
 
+        # Invalidate every cached agg up front.  Only layers that are
+        # actually shaded below re-populate their slot, so a layer that
+        # is skipped this pass (alpha == 0, no points in view, or a
+        # shade exception) can no longer leave behind an agg built for a
+        # *previous* viewport — which _handle_probe would then index
+        # with current-viewport pixel coordinates.  See defect (2) in
+        # the probe notes above.
+        self._layer_aggs = [None] * len(self._layers)
+
         if x0 == x1 or y0 == y1:
             return np.zeros((self._height, self._width), dtype=np.uint32)
 
@@ -931,9 +1324,24 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         # Porter-Duff compositing loop always gets arrays of the same shape.
         shared_w, shared_h = self._compute_canvas_size(x0, x1, y0, y1)
 
+        # Why each layer did or did not contribute to this composite.
+        # Consumed by _handle_probe so a hover that finds no data can
+        # say which of the several quite different causes applies --
+        # "never queried", "query came back empty", "hidden by the user"
+        # and "no samples in this viewport" are not the same event, and
+        # only the last is routine.
+        self._layer_skip_reason = [None] * len(self._layers)
+
         shaded_images = []
         for i, (lyr, df) in enumerate(zip(self._layers, self._layer_dfs)):
-            if df is None or len(df) == 0 or lyr.alpha == 0.0:
+            if df is None:
+                self._layer_skip_reason[i] = "not queried"
+                continue
+            if len(df) == 0:
+                self._layer_skip_reason[i] = "query returned 0 rows"
+                continue
+            if lyr.alpha == 0.0:
+                self._layer_skip_reason[i] = "hidden (alpha=0)"
                 continue
             try:
                 # Count points in viewport for this layer's auto-alpha.
@@ -942,6 +1350,9 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                      (df["y"] >= y0) & (df["y"] <= y1)).sum()
                 )
                 if n_in_view == 0:
+                    self._layer_skip_reason[i] = (
+                        f"0 of {len(df)} samples in viewport"
+                    )
                     continue
 
                 cvs_layer = ds.Canvas(
@@ -1063,6 +1474,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                     )
                 shaded_images.append(img_arr)
             except Exception as exc:
+                self._layer_skip_reason[i] = f"shade failed: {exc}"
                 log.warning("shade layer %d failed: %s", i, exc)
 
         if not shaded_images:

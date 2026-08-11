@@ -101,7 +101,14 @@ try:
 except ImportError:
     HAS_DASK = False
 
-from .reader import XArrayReader, _compute_axis_values
+from .reader import (
+    XArrayReader,
+    _compute_axis_values,
+    _agg_value,
+    _bin_membership,
+    _cell_bounds,
+    _widen_if_degenerate,
+)
 from ..axes import Axis, AxisType
 from ..selection import SelectionSpec
 
@@ -1257,8 +1264,7 @@ class MSv4Backend(XArrayReader):
                 f"Pixel ({gx}, {gy}) out of range for grid ({w}×{h})"
             )
 
-        raw_val = float(raw_grid.values[gy, gx])
-        value   = None if np.isnan(raw_val) else raw_val
+        value = _agg_value(raw_grid.values, gy, gx)
 
         y_dim_name = raw_grid.dims[0]
         x_dim_name = raw_grid.dims[1]
@@ -1267,25 +1273,27 @@ class MSv4Backend(XArrayReader):
         y_coords = raw_grid.coords[y_dim_name].values
 
         # For numeric coordinates (time, baseline_id, frequency) the centre is
-        # the coordinate value itself.  For string/categorical coordinates
-        # (antenna_name in single-dish mode) the centre is the integer index,
-        # matching the index-range x_range/y_range returned by query_raster.
+        # the coordinate value itself, and cell bounds come from *local*
+        # neighbour spacing — MSv4 time and frequency axes are no more
+        # uniform than MSv2's, and a global-average half-width lets the
+        # metadata lookup below reach into neighbouring scans/SPWs.
+        # See MSv2Backend's _cell_bounds for the full rationale.
+        # For string/categorical coordinates (antenna_name in single-dish
+        # mode) the centre is the integer index, matching the index-range
+        # x_range/y_range returned by query_raster.
         if np.issubdtype(x_coords.dtype, np.number):
             x_centre = float(x_coords[gx])
-            dx = abs(float(x_coords[-1] - x_coords[0])) / (2 * len(x_coords)) if len(x_coords) > 1 else 0.0
+            x_range  = _cell_bounds(x_coords, gx)
         else:
             x_centre = float(gx)
-            dx = 0.5  # half-cell width for categorical axis
+            x_range  = (x_centre - 0.5, x_centre + 0.5)
 
         if np.issubdtype(y_coords.dtype, np.number):
             y_centre = float(y_coords[gy])
-            dy = abs(float(y_coords[-1] - y_coords[0])) / (2 * len(y_coords)) if len(y_coords) > 1 else 0.0
+            y_range  = _cell_bounds(y_coords, gy)
         else:
             y_centre = float(gy)
-            dy = 0.5
-
-        x_range = (x_centre - dx, x_centre + dx)
-        y_range = (y_centre - dy, y_centre + dy)
+            y_range  = (y_centre - 0.5, y_centre + 0.5)
 
         field_names:    set[str]              = set()
         scan_names:     set[str]              = set()
@@ -1368,6 +1376,8 @@ class MSv4Backend(XArrayReader):
 
         Mirrors ``MSv2Backend.probe_scatter_pixel`` exactly.
         """
+        self._require_open()
+
         if canvas_agg.ndim != 2:
             raise ValueError(f"canvas_agg must be 2D; got {canvas_agg.ndim}D")
 
@@ -1377,8 +1387,8 @@ class MSv4Backend(XArrayReader):
                 f"Pixel ({px}, {py}) out of range for canvas ({w}×{h})"
             )
 
-        raw_val = float(canvas_agg.values[py, px])
-        value   = None if np.isnan(raw_val) else raw_val
+        # Dtype-aware empty test: mean/max aggs leave NaN, count leaves 0.
+        value = _agg_value(canvas_agg.values, py, px)
 
         x_coords = canvas_agg.coords[canvas_agg.dims[1]].values
         y_coords = canvas_agg.coords[canvas_agg.dims[0]].values
@@ -1386,25 +1396,16 @@ class MSv4Backend(XArrayReader):
         x_centre = float(x_coords[px])
         y_centre = float(y_coords[py])
 
-        if len(x_coords) > 1:
-            dx = abs(float(x_coords[-1] - x_coords[0])) / (2 * len(x_coords))
-        else:
-            dx = 0.0
-        if len(y_coords) > 1:
-            dy = abs(float(y_coords[-1] - y_coords[0])) / (2 * len(y_coords))
-        else:
-            dy = 0.0
+        x_range = _widen_if_degenerate(_cell_bounds(x_coords, px), x_coords)
+        y_range = _widen_if_degenerate(_cell_bounds(y_coords, py), y_coords)
 
-        x_range = (x_centre - dx, x_centre + dx)
-        y_range = (y_centre - dy, y_centre + dy)
-
+        # Half-open bin membership, matching Datashader's own binning;
+        # see MSv2Backend.probe_scatter_pixel.
         n_scatter = 0
         if len(scatter_df) > 0:
             mask = (
-                (scatter_df["x"] >= x_range[0]) &
-                (scatter_df["x"] <= x_range[1]) &
-                (scatter_df["y"] >= y_range[0]) &
-                (scatter_df["y"] <= y_range[1])
+                _bin_membership(scatter_df["x"], x_range, px, len(x_coords)) &
+                _bin_membership(scatter_df["y"], y_range, py, len(y_coords))
             )
             n_scatter = int(mask.sum())
 

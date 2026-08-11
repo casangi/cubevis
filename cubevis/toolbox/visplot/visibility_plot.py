@@ -831,6 +831,13 @@ window._cvRerenderTimer = setTimeout(function() {{
     # Formatting (shared; subclasses may extend)
     # ------------------------------------------------------------------
 
+    # Separator between status-bar fields.  Exposed as a class attribute
+    # rather than inlined so subclasses that need to splice their own
+    # sections into a formatted probe string (VisibilityScatter builds a
+    # per-layer value section) can split on it without hard-coding the
+    # literal in two places.
+    _PROBE_SEP = " &nbsp;|&nbsp; "
+
     def _format_probe(self, info: dict, quantity_label: str = "") -> str:
         """Format a probe result dict as an HTML status-bar string."""
         parts: list[str] = []
@@ -872,4 +879,4 @@ window._cvRerenderTimer = setTimeout(function() {{
         if n is not None:
             parts.append(f"<b>N:</b> {n}")
 
-        return " &nbsp;|&nbsp; ".join(parts)
+        return self._PROBE_SEP.join(parts)

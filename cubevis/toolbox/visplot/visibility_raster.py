@@ -28,6 +28,7 @@ Package location
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Optional, TYPE_CHECKING
 from uuid import uuid4
@@ -133,6 +134,7 @@ class VisibilityRaster(VisibilityPlot):
         scaling: str = _DEFAULT_SCALING,
         scaling_alpha: float = 10.0,
         scaling_gamma: float = 1.0,
+        probe_debug: bool = False,
         **kwargs,
     ) -> None:
         self._quantity     = quantity
@@ -149,6 +151,14 @@ class VisibilityRaster(VisibilityPlot):
         # Raster-specific state (set by _render)
         self._agg:          Optional["xr.DataArray"] = None
         self._is_decimated: bool                     = False
+
+        # Log one INFO line per hover with the resolved grid indices,
+        # agg shape, and the cell window the backend derived.  Also
+        # honours VISPLOT_PROBE_DEBUG so it can be enabled without
+        # editing a notebook cell.  Mirrors VisibilityScatter.
+        self._probe_debug: bool = bool(probe_debug) or bool(
+            os.environ.get("VISPLOT_PROBE_DEBUG")
+        )
 
         # Per-instance uuid for the update_axes message
         self._msg_update_axes = str(uuid4())
@@ -907,6 +917,14 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 self._agg, px, py, self._selection
             )
             label = self._format_probe(info, self._quantity.label)
+            if self._probe_debug:
+                log.info(
+                    "[probe raster] x=%.9g y=%.9g -> (%d,%d) shape=%s "
+                    "value=%r x_range=%r y_range=%r",
+                    x, y, px, py, self._agg.shape,
+                    info.get("value"), info.get("x_range"),
+                    info.get("y_range"),
+                )
         except Exception as exc:
             log.warning("probe_raster_pixel failed: %s", exc)
             label = f"<span style='color:#f38ba8'>probe error: {exc}</span>"

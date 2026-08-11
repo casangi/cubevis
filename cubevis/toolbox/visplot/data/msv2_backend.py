@@ -68,7 +68,14 @@ try:
 except ImportError:
     HAS_DASK = False
 
-from .reader import XArrayReader, _compute_axis_values
+from .reader import (
+    XArrayReader,
+    _compute_axis_values,
+    _agg_value,
+    _bin_membership,
+    _cell_bounds,
+    _widen_if_degenerate,
+)
 from ..axes import Axis, AxisType
 from ..selection import SelectionSpec
 
@@ -820,6 +827,32 @@ class MSv2Backend(XArrayReader):
                 log.warning("query_raster: could not concat partitions: %s", exc)
                 agg = partitions_2d[0]
 
+        # Sort along both display axes -- unconditional, not just in the
+        # multi-partition branch. xr.concat() above only concatenates in
+        # _iter_visibility_partitions()'s iteration order, which reflects
+        # how the partitions were split (by intent/OBS_MODE on this
+        # backend), NOT necessarily ascending coordinate order. A given
+        # intent revisited at multiple non-contiguous times (e.g. a
+        # phase calibrator checked periodically through an observation,
+        # a normal ALMA cadence) lands in a single partition covering a
+        # non-contiguous time range; concatenating it as one contiguous
+        # block after/before its neighbors silently scrambles true
+        # chronological order in the result. This was found by directly
+        # comparing a visplot Time-vs-Baseline raster against msview's
+        # equivalent on the same MS -- a real, confirmed feature (a
+        # small flagged/dark region) appeared at a different relative
+        # Time position in each tool's rendering, only explainable by
+        # an actual ordering difference, not a display-convention one
+        # (both tools' Time axes were independently confirmed to
+        # increase upward from their tick label positions). Applied
+        # even in the single-partition branch as a defensive guarantee,
+        # not just where concat is involved -- cheap on already-sorted
+        # data, and doesn't rely on assuming a single partition is
+        # necessarily already in coordinate order.
+        sort_dims = [d for d in (y_name, x_name) if d in agg.dims]
+        if sort_dims:
+            agg = agg.sortby(sort_dims)
+
         # Use pre-decimation extents collected partition-by-partition above.
         # Do NOT derive extents from agg.coords here because: (a) the
         # per-partition _decimate_agg pass may have already strided away the
@@ -1058,8 +1091,7 @@ class MSv2Backend(XArrayReader):
                 f"Pixel ({gx}, {gy}) out of range for grid ({w}×{h})"
             )
 
-        raw_val = float(raw_grid.values[gy, gx])
-        value   = None if np.isnan(raw_val) else raw_val
+        value = _agg_value(raw_grid.values, gy, gx)
 
         # Named MS dimension coordinates
         y_dim_name = raw_grid.dims[0]   # e.g. "time"
@@ -1071,19 +1103,14 @@ class MSv2Backend(XArrayReader):
         x_centre = float(x_coords[gx])
         y_centre = float(y_coords[gy])
 
-        # Cell half-widths from the full coordinate span, not just the
-        # first two values — safe after decimation and multi-partition concat.
-        if len(x_coords) > 1:
-            dx = abs(float(x_coords[-1] - x_coords[0])) / (2 * len(x_coords))
-        else:
-            dx = 0.0
-        if len(y_coords) > 1:
-            dy = abs(float(y_coords[-1] - y_coords[0])) / (2 * len(y_coords))
-        else:
-            dy = 0.0
-
-        x_range = (x_centre - dx, x_centre + dx)
-        y_range = (y_centre - dy, y_centre + dy)
+        # Cell bounds from *local* neighbour spacing.  The previous
+        # global-average form assumed a uniformly spaced axis; raw MS
+        # time and frequency axes are not uniform (inter-scan gaps,
+        # concatenated SPWs), which inflated the cell window and made
+        # the field/scan/antenna lookup below attribute neighbouring
+        # scans to the hovered cell.  See _cell_bounds.
+        x_range = _cell_bounds(x_coords, gx)
+        y_range = _cell_bounds(y_coords, gy)
 
         # Partition coordinate lookup — no VISIBILITY read
         field_names:    set[str]              = set()
@@ -1184,6 +1211,8 @@ class MSv2Backend(XArrayReader):
         -------
         dict — see ``XArrayReader.probe_scatter_pixel`` for key definitions.
         """
+        self._require_open()
+
         if canvas_agg.ndim != 2:
             raise ValueError(f"canvas_agg must be 2D; got {canvas_agg.ndim}D")
 
@@ -1193,8 +1222,8 @@ class MSv2Backend(XArrayReader):
                 f"Pixel ({px}, {py}) out of range for canvas ({w}×{h})"
             )
 
-        raw_val = float(canvas_agg.values[py, px])
-        value   = None if np.isnan(raw_val) else raw_val
+        # Dtype-aware empty test: mean/max aggs leave NaN, count leaves 0.
+        value = _agg_value(canvas_agg.values, py, px)
 
         x_coords = canvas_agg.coords[canvas_agg.dims[1]].values
         y_coords = canvas_agg.coords[canvas_agg.dims[0]].values
@@ -1202,25 +1231,25 @@ class MSv2Backend(XArrayReader):
         x_centre = float(x_coords[px])
         y_centre = float(y_coords[py])
 
-        if len(x_coords) > 1:
-            dx = abs(float(x_coords[-1] - x_coords[0])) / (2 * len(x_coords))
-        else:
-            dx = 0.0
-        if len(y_coords) > 1:
-            dy = abs(float(y_coords[-1] - y_coords[0])) / (2 * len(y_coords))
-        else:
-            dy = 0.0
+        x_range = _cell_bounds(x_coords, px)
+        y_range = _cell_bounds(y_coords, py)
 
-        x_range = (x_centre - dx, x_centre + dx)
-        y_range = (y_centre - dy, y_centre + dy)
+        # A one-bin canvas gives a degenerate zero-width window, and the
+        # sample count below would then require exact float equality and
+        # always return 0.  Widen it to something numerically meaningful.
+        x_range = _widen_if_degenerate(x_range, x_coords)
+        y_range = _widen_if_degenerate(y_range, y_coords)
 
+        # Half-open bin membership, matching Datashader's own binning
+        # (floor((v - v0) / (v1 - v0) * N)); the previous closed-on-both-
+        # ends test double-counted samples sitting exactly on a shared
+        # edge between adjacent bins.  The final bin stays closed so the
+        # maximum sample is not dropped.
         n_scatter = 0
         if len(scatter_df) > 0:
             mask = (
-                (scatter_df["x"] >= x_range[0]) &
-                (scatter_df["x"] <= x_range[1]) &
-                (scatter_df["y"] >= y_range[0]) &
-                (scatter_df["y"] <= y_range[1])
+                _bin_membership(scatter_df["x"], x_range, px, len(x_coords)) &
+                _bin_membership(scatter_df["y"], y_range, py, len(y_coords))
             )
             n_scatter = int(mask.sum())
 

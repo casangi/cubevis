@@ -68,6 +68,7 @@ xarray = [
     "zarr",
     "dask[array]",
     "distributed",
+    "datashader"
 ]
 
 # --- App-named extras -------------------------------------------------------

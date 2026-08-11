@@ -44,6 +44,7 @@ sys.modules[__name__].__class__ = ImportProtectedModule( __name__, { 'plotants':
                                                                      'InteractiveClean': '._interactiveclean',
                                                                      'InteractiveCleanNotebook': '._interactivecleannotebook',
                                                                      'iclean': '..casatasks.iclean',
+                                                                     'visplot': '..casatasks.visplot',
                                                                      'iclean_notebook': '..casatasks.iclean_notebook',
                                                                      'createmask': '..casatasks.createmask',
                                                                      'createregion': '..casatasks.createregion',

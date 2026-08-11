@@ -57,6 +57,7 @@ else:
     logger.setLevel(_logging.INFO)
 
 from .private.apps import iclean
+from .private.apps import visplot
 
 def xml_interface_defs( ):
     '''This function may eventually return XML files for use in generating casashell bindings. An

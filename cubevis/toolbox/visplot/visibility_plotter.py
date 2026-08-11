@@ -106,7 +106,6 @@ from .reduction_context import (
     ReductionBackend,
     ReductionContext,
 )
-from .local_visibility_reader import LocalVisibilityReader
 
 log = logging.getLogger(__name__)
 
@@ -501,6 +500,7 @@ def _resolve_context_msv4(path, backend, remote_endpoint):
 
 def open_ms(path, *, backend=ReductionBackend.AUTO, remote_endpoint=None):
     """Open an MSv2 measurement set; return (metadata, reader, context)."""
+    from .local_visibility_reader import LocalVisibilityReader
     from .data.msv2_backend import MSv2Backend
     backend = ReductionBackend(backend)
     b = MSv2Backend(path)
@@ -517,6 +517,7 @@ def open_ms(path, *, backend=ReductionBackend.AUTO, remote_endpoint=None):
 
 def open_ps(path, *, backend=ReductionBackend.AUTO, remote_endpoint=None):
     """Open an MSv4 / Processing Set; return (metadata, reader, context)."""
+    from .local_visibility_reader import LocalVisibilityReader
     from .data.msv4_backend import MSv4Backend
     backend = ReductionBackend(backend)
     b = MSv4Backend(path)

@@ -19,9 +19,9 @@ dependencies = [
 # Should work with later versions and probably with slightly newer versions.
 # The latest (Wed Jul 29 14:06:15 EDT 2026) astroviper packages use:
 #
-#      requires-python = ">=3.11,<3.14"
+#      requires-python = ">=3.12,<3.14"
 #
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 readme = "README.rst"
 license = {text = "LGPL"}
 

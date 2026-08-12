@@ -134,6 +134,7 @@ class VisibilityRaster(VisibilityPlot):
         scaling: str = _DEFAULT_SCALING,
         scaling_alpha: float = 10.0,
         scaling_gamma: float = 1.0,
+        raster_interpolate: str = "auto",
         probe_debug: bool = False,
         **kwargs,
     ) -> None:
@@ -151,6 +152,21 @@ class VisibilityRaster(VisibilityPlot):
         # Raster-specific state (set by _render)
         self._agg:          Optional["xr.DataArray"] = None
         self._is_decimated: bool                     = False
+
+        # Upsample method for Canvas.raster().  "auto" (default) picks
+        # "nearest" whenever either axis is upsampling and "linear"
+        # otherwise -- see _resample_method for why linear is wrong on
+        # a categorical baseline axis and a gapped time axis.  Force
+        # "nearest" or "linear" to override; "nearest" unconditionally
+        # is defensible for this display class and is the setting to
+        # use when comparing against a reference tool that does no
+        # interpolation of its own.
+        if raster_interpolate not in ("auto", "nearest", "linear"):
+            raise ValueError(
+                f"raster_interpolate must be 'auto', 'nearest', or "
+                f"'linear'; got {raster_interpolate!r}"
+            )
+        self._raster_interpolate: str = raster_interpolate
 
         # Log one INFO line per hover with the resolved grid indices,
         # agg shape, and the cell window the backend derived.  Also
@@ -840,13 +856,18 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             log.debug("_render: degenerate agg — blank image")
             img32 = np.zeros((self._height, self._width), dtype=np.uint32)
         else:
+            # Same resample rule as _shade_viewport.  Previously this
+            # call was bare, taking Datashader's "linear" default, so
+            # the initial full-extent view was interpolated while every
+            # post-zoom view was not.  See _resample_method.
+            interpolate = self._resample_method(agg, (x0, x1), (y0, y1))
             cvs    = ds.Canvas(
                 plot_width  = self._width,
                 plot_height = self._height,
                 x_range     = (x0, x1),
                 y_range     = (y0, y1),
             )
-            ds_agg = cvs.raster(agg)
+            ds_agg = cvs.raster(agg, interpolate=interpolate)
             shaded = self._shade_agg(ds_agg)
             img32  = _img_to_uint32(shaded)
 
@@ -1083,6 +1104,75 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         scaled_agg = ds_agg.copy(data=transformed)
         return tf.shade(scaled_agg, cmap=self._cmap, how="linear", span=[0.0, 1.0])
 
+    def _resample_method(
+        self,
+        agg: "xr.DataArray",
+        x_range: tuple[float, float],
+        y_range: tuple[float, float],
+    ) -> str:
+        """Datashader upsample method for rendering *agg* into *x/y_range*.
+
+        Returns ``"nearest"`` when either display axis is being
+        **upsampled** — that is, when one agg cell spans more than one
+        screen pixel — and ``"linear"`` otherwise.
+
+        Why this matters, and why it is shared
+        --------------------------------------
+        ``Canvas.raster()`` defaults to ``upsample_method="linear"``.
+        Linear interpolation presumes both axes are continua, and on a
+        visibility raster neither is:
+
+        * ``baseline_id`` is a categorical index.  Adjacent IDs are not
+          physically adjacent baselines, so a value interpolated between
+          baseline 40 and 41 corresponds to no baseline at all.
+        * ``time`` has inter-scan gaps.  Interpolating across one invents
+          data spanning minutes during which nothing was observed.  (The
+          same non-uniformity that produced the ``_cell_bounds`` defect
+          in the probe path.)
+
+        It also dilutes exactly the features this tool exists to find.
+        A single bad integration at amplitude 90 against a background of
+        10 renders at 82.1 (8.8% low) at a 2.5x upsample ratio and 85.9
+        (4.6% low) at 5x -- and the loss is *worst* at low ratios, where
+        screen pixels straddle sample points rather than landing near
+        them.  Ratios of 2-5x are the common regime for a few hundred
+        timestamps on a 500 px panel.  A marginal outlier diluted below
+        visual threshold in the full-extent view is one the astronomer
+        never zooms in on.
+
+        Finally, ``_data_to_pixel`` maps hover coordinates to the **agg
+        grid**, so the probe reports true cell values while a linearly
+        interpolated image shows fabricated intermediate ones.  On a
+        smoothed gradient the displayed colour varies while every probe
+        returns the same number, and the probe is the one that is right.
+
+        This was previously computed only in ``_shade_viewport``;
+        ``_render`` called ``cvs.raster(agg)`` bare and so took the
+        ``"linear"`` default.  Since the initial full-extent view is
+        routinely upsampling in time (a few tens of timestamps stretched
+        over ~500 screen rows), the first image the user saw was
+        interpolated and every image after the first zoom was not.
+        Extracted here so the two paths cannot diverge again.
+
+        Note that the test is an ``or`` across axes: if *either* axis
+        upsamples, ``"nearest"`` is used for both.  Datashader takes a
+        single upsample method for the whole resample, and preserving
+        true sample values is the safer failure direction for a tool
+        whose purpose is spotting bad data.
+        """
+        if self._raster_interpolate != "auto":
+            return self._raster_interpolate
+
+        x0, x1 = x_range
+        y0, y1 = y_range
+        agg_cell_w = (self._x_range[1] - self._x_range[0]) / agg.shape[1]
+        agg_cell_h = (self._y_range[1] - self._y_range[0]) / agg.shape[0]
+        upsampling = (
+            (x1 - x0) / self._width  < agg_cell_w
+            or (y1 - y0) / self._height < agg_cell_h
+        )
+        return "nearest" if upsampling else "linear"
+
     def _shade_viewport(
         self,
         x_range: tuple[float, float],
@@ -1102,13 +1192,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         ):
             return np.zeros((self._height, self._width), dtype=np.uint32)
 
-        agg_cell_w = (self._x_range[1] - self._x_range[0]) / agg.shape[1]
-        agg_cell_h = (self._y_range[1] - self._y_range[0]) / agg.shape[0]
-        upsampling  = (
-            (x1 - x0) / self._width  < agg_cell_w
-            or (y1 - y0) / self._height < agg_cell_h
-        )
-        interpolate = "nearest" if upsampling else "linear"
+        interpolate = self._resample_method(agg, x_range, y_range)
 
         cvs    = ds.Canvas(
             plot_width  = self._width,

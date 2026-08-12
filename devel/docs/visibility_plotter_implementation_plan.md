@@ -310,13 +310,13 @@ the same rows in `FlagDB`.
 ### 4.3 Axis controls
 
 **Raster:**
-- Y: TIME, CHANNEL, BASELINE, ANTENNA1, UVDIST_LAMBDA
-- X: CHANNEL, TIME, UVDIST_LAMBDA
-- Quantity (colour): AMPLITUDE, PHASE, REAL, IMAGINARY, WEIGHT, FLAG_FRACTION
+- Y: TIME, BASELINE (working in UI); FREQUENCY, CHANNEL, CORRELATION (backend-implemented, not yet in GUI dropdown); ANTENNA1, UVDIST_LAMBDA (planned)
+- X: CHANNEL, TIME, FREQUENCY (working in UI); CORRELATION (same backend status); UVDIST_LAMBDA (planned)
+- Quantity (colour): AMPLITUDE, PHASE, REAL, IMAGINARY (working); FLAG_FRACTION (planned); WEIGHT (planned)
 
 **Scatter:**
-- X: TIME, CHANNEL, UVDIST, UVDIST_LAMBDA, FREQUENCY, U, V, W, BASELINE, ANTENNA1
-- Y (per layer): AMPLITUDE, PHASE, REAL, IMAGINARY, WEIGHT
+- X: TIME, UVDIST, UVDIST_LAMBDA, FREQUENCY, CHANNEL, U, V (working — CHANNEL and UVDIST_LAMBDA added to GUI this session); W, BASELINE, ANTENNA1 (planned)
+- Y (per layer): AMPLITUDE, PHASE, REAL, IMAGINARY, U, V (working — U/V added this session; unmasked by flags: UV-coverage shows sampling coverage); WEIGHT (planned)
 
 ### 4.4 Averaging
 
@@ -376,7 +376,7 @@ user only wants to inspect data. Threads through to `VisibilityRaster` /
 
 ### 4.6 Locate / Hover
 
-- Hover: show probe result (value, coordinates, metadata) in a tooltip
+- Hover: multi-layer probe reports every visible layer; em dash (—) for any layer with no data at that location (hidden layers omitted entirely). Stable field order so status bar does not shift as cursor moves. Prefers exact-bin hit; near-miss search uses screen-pixel budget (`probe_slop_px` = 6 px), bin-aspect-weighted distances, lowest-layer-index tiebreak.
 - **Locate** button: for a drawn region, list all matching rows in a sidebar table
 
 ### 4.7 Synchronized cursor (cross-panel)
@@ -481,6 +481,14 @@ plotter = VisibilityPlotter(
     uvrange     = "",           # e.g. "0~50klambda"; default: all
     correlation = "XX,YY",      # default: all available
     datacolumn  = "data",       # "data", "corrected", "model"
+
+    # Explicit axis override (precedence: explicit > preset > hardcoded default)
+    # Validated against GUI dropdown lists; ValueError with valid-options list if invalid
+    raster_y   = None,          # e.g. "Time", "Baseline"
+    raster_x   = None,          # e.g. "Channel", "Frequency"
+    raster_qty = None,          # e.g. "Amplitude", "Phase"
+    scatter_x  = None,          # e.g. "UVDist", "U"
+    scatter_y  = None,          # e.g. "Amplitude", "V"
 
     # Initial display configuration
     mode    = "both",           # "both", "raster", "scatter"
@@ -669,7 +677,7 @@ This is a Datashader reduction-function problem, not a bit-depth problem —
 | CM-1 | Switch default Datashader reduction from linear to `eq_hist` (histogram equalization); add `scaling: str = "eq_hist"` constructor parameter to both classes. `eq_hist` implemented as an explicit pre-transform (`colormap_scaling.equalize_histogram()`, mirroring Datashader's own CDF algorithm) rather than via `ds.tf.shade(how="eq_hist")`, because Datashader rejects `span=` for that `how=` value — the explicit version supports `color_mode` (global/local) which the native one cannot | ✅ Done | `visibility_raster.py`, `visibility_scatter.py`, `colormap_scaling.py` |
 | CM-2 | `update_scaling(scaling, **kwargs)` fast re-shade path: re-shades the cached aggregation array without a backend re-query, mirroring the existing `set_alpha()` pattern | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
 | CM-3 | Port `quantize()`-style scaling functions (log, sqrt, square, gamma, power) from interactive_clean, adapted to operate on a generic Datashader aggregation array rather than a 2D image plane | ✅ Done | `colormap_scaling.py` *(new, shared)* |
-| CM-4 | `colormap_controls()` method on both classes returning a Bokeh widget column: scaling dropdown, conditional alpha/gamma numeric input, min/max numeric range inputs. ✅ **Done structurally; non-functional in deployed app (found August 3 2026, explicitly deferred to reference-testing phase).** Two problems: (1) `min`/`max` `TextInput`s have no callbacks — pure visual mockup; (2) the Color scaling dropdown and alpha/gamma inputs use Bokeh `.on_change()` — a server-side callback that cannot fire without a live Bokeh server; this app deliberately has none. A correct comm handler already exists (`_handle_update_scaling_raster`/`..._scatter`, registered via `self._comm.register()`) but nothing on the client side sends the triggering message. **Fix needed:** replace `.on_change()` with `js_on_change` + comm send; build `min`/`max` callbacks. See reference-testing phase below. | `visibility_raster.py`, `visibility_scatter.py` |
+| CM-4 | `colormap_controls()` method: histogram figure with draggable `EditSpan` min/max handles (sibling-aware `interactive_hit` override fixing Bokeh\'s distance-unaware pan dispatch), `js_on_change` + comm-send replacing `.on_change()`, working alpha/gamma inputs, reset button, full dark/light support. ✅ **Done (August 2026).** | `visibility_raster.py`, `visibility_scatter.py` |
 | CM-5 | `histogram()` method on both classes returning binned aggregation values | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
 | CM-6 | Ensure every re-shade reads `self._scaling` (instance state) rather than a hardcoded default; unified into a single `_shade_agg()` call site in `VisibilityRaster` used by both `_render()` and `_shade_viewport()` | ✅ Done | `visibility_raster.py`, `visibility_scatter.py` |
 | CM-7 | Verification against the saturation scenario | ✅ Done — see verification notes below | manual + automated |
@@ -842,12 +850,8 @@ layout that Phase 2 depends on:
 - `uint16`/`uint32` image bit depth — internal encoding refinement only
 - User-selectable render resolution/quality (Colab network-cost tradeoff) —
   a `VisibilityPlotter`-level deployment concern, not a display-class API concern
-- Draggable histogram `Span` overlay (interactive_clean's red-line drag
-  interaction) — visual polish on top of the CM-4 widget, same API
-- Manual min/max clip range wiring in `colormap_controls()` — the
-  `TextInput` widgets exist in the layout but are not yet connected to
-  `update_scaling()`'s `vmin`/`vmax`; currently min/max always derive
-  from the data's own range
+- Draggable `EditSpan` overlay and min/max wiring — ✅ **Done as part of CM-4** (August 2026)
+
 
 **Architecture foundations (A-series).**
 
@@ -868,6 +872,27 @@ layout that Phase 2 depends on:
 > complete and verified against real sis14 data (MSv2 and MSv4). The next
 > session begins at Phase 1 (Flagging foundations).
 
+
+---
+
+**Hover-probe defect fixes (PB-series).** Fixed August 10 2026; verified against sis14.
+Three independent defects produced the same symptom (hover returning empty for plainly-drawn points).
+Primary cause was in `VisibilityScatter._handle_probe`. Measured impact: 47.7% of painted bins
+reported empty under the old algorithm; 0% under the fix.
+
+| ID | Task | Status | Files affected |
+|---|---|---|---|
+| PB-1 | Multi-layer hover probe: consult every visible layer; derive `(px,py)` per layer from that layer's own agg; prefer exact-bin hit, tiebreak by lowest layer index | ✅ Done | `visibility_scatter.py` |
+| PB-2 | Agg invalidation at top of each shade pass; matching resets in `update_axes` and deferred-render paths | ✅ Done | `visibility_scatter.py` |
+| PB-3 | Screen-pixel budget (`probe_slop_px` = 6.0 px) replacing fixed bin-radius; bin-aspect-weighted distances; resolves to 0 radius when bin is already larger than budget | ✅ Done | `visibility_scatter.py` |
+| PB-4 | Shared probe geometry helpers (`_cell_bounds`, `_widen_if_degenerate`, `_bin_membership`, `_agg_value`) extracted to `reader.py`; both backends converted | ✅ Done | `reader.py`, `msv2_backend.py`, `msv4_backend.py` |
+| PB-5 | Local cell bounds for non-uniform MS axes (previous global average 32× too wide on gapped time/frequency axes, sweeping in rows from neighbouring scans). Verified synthetically; **reference testing against real multi-scan/multi-SPW data pending** | ✅ Done (synthetic); ⬜ reference test pending | `reader.py`, `msv2_backend.py`, `msv4_backend.py` |
+| PB-6 | Multi-layer status-bar readout; em dash for layers with no data; `_PROBE_SEP` extracted to base class | ✅ Done | `visibility_scatter.py`, `visibility_plot.py` |
+| PB-7 | Probe diagnostics: `probe_debug` / `VISPLOT_PROBE_DEBUG`; per-layer skip reasons; extent logging; duplicate-layer-key warnings | ✅ Done | `visibility_scatter.py`, `visibility_raster.py` |
+| PB-8 | `test_probe_fix.py` — 11 tests, standalone, AST-extracted from shipped sources | ✅ Done | `test_probe_fix.py` *(new)* |
+
+**Forward links:** F-11 (nearest-point flag) needs the same `_nearest_populated_bin` primitive — differing only in returning a row identifier; do not reimplement. F-10 (scatter flag overlay) interacts with PB-1: a flagged layer would appear in the multi-layer status bar — whether it *should* is a design question to settle when F-10 is scheduled.
+
 ---
 
 ### Reference-testing phase (between duo-mode stabilization and Phase 1)
@@ -878,6 +903,8 @@ comparison points.*
 
 The plan is to validate against PlotMS and msview tutorial results for:
 
+- Selection controls (antenna=, scan=, timerange=, uvrange=) — not yet confirmed to constrain plotted data; concrete consequence: Time-vs-Channel raster comparison against msview cannot run fairly (msview requires single-baseline selection; antenna= not wired)
+- PB-5 raster hover probe metadata attribution against a real multi-scan/multi-SPW MS — local-cell-bounds fix verified synthetically, not yet validated against known-good plotms values
 - Whether selection controls (scan range, antenna, time range, UV range) actually
   constrain the plotted data, and correctly — not yet confirmed either way
 - `colormap_controls()` correctness, once the `.on_change()` → `js_on_change` +
@@ -985,16 +1012,17 @@ decisions rather than guessing.)*
 | G-4 | Copy `flagdata` command: format pending flags as `flagdata()` call string | `visibility_plotter.py` |
 | G-5 | PNG export via Bokeh `export_png` | `visibility_plotter.py` |
 | G-6 | `Axis.CLOSURE_PHASE` enum value and backend query path (triangle sum of phase over antenna triples) | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
-| G-7 | Synchronized cursor, Tier 1 (same-axis): `CustomJS` `MouseMove` callback drawing a linked `Span` annotation on both figures when x-axis dimensions match | `visibility_plotter.py` |
-| G-8 | Synchronized cursor, Tier 2 (cross-axis): throttled JS `MouseMove` → CommMgr j2p message → `probe_raster_pixel`/`probe_scatter_pixel` row resolution → p2j coordinate push → highlight-marker `ColumnDataSource` update in the other panel | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
+| G-7 | Synchronized cursor, Tier 1 (same-axis Span crosshair): cursor-span sync observed working live in all panel-kind combinations in duo mode (raster+scatter, raster+raster, scatter+scatter). ✅ **Substantially done** — implemented earlier, confirmed live August 2026; documents were stale. Generalized to N panels. | `visibility_plotter.py` |
+| G-8 | Synchronized cursor, Tier 2 (cross-axis row-level highlight): distinct from G-7's Span sync; requires j2p round-trip to resolve which MS row a hovered pixel corresponds to, then highlight the matching point in the other panel's axis space. **Not yet built.** PB-series probe machinery and F-11's `_nearest_populated_bin` are the prerequisites. | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
 | G-9 | `uint16`/`uint32` image bit depth option, deferred from Phase 0 CM-series — internal encoding refinement on top of `eq_hist` scaling | `visibility_raster.py`, `visibility_scatter.py` |
 | G-10 | User-selectable render resolution/quality tradeoff (relevant for high-latency deployments e.g. Colab) | `visibility_plotter.py` |
-| G-11 | **Shared colormap widget** — extract the complete `colormap_adjust()` widget from interactive_clean (histogram figure with draggable `EditSpan` min/max handles, scaling dropdown, equation `Div`, reset tool) into `cubevis/toolbox/colormap_widget.py` as a standalone, reusable Bokeh layout fragment. Wire into `VisibilityPlotter` sidebar as the colormap section, replacing the CM-4 `colormap_controls()` stubs. Wire back into interactive_clean so it imports from the shared module rather than owning its own copy. The `colormap_scaling.py` transfer functions (Phase 0) remain as the shared math layer used by both the widget and any programmatic callers. | `colormap_widget.py` *(new, shared)*; `visibility_raster.py`, `visibility_scatter.py`, `visibility_plotter.py`, `iclean` |
+| G-11a | Colormap widget built: histogram figure, draggable `EditSpan` min/max handles, scaling dropdown, reset button, dark/light support including histogram. ✅ **Done (CM-4, August 2026).** | `visibility_raster.py`, `visibility_scatter.py` |
+| G-11b | Extract colormap widget to shared `cubevis/toolbox/colormap_widget.py`; wire `interactive_clean` to import from there. **Still open.** | `colormap_widget.py` *(new)*; `iclean` |
 | T-1 | `data_group` test cases for `MSv4Backend` | `tests/` |
 | T-2 | Synthetic xradio-native DataTree structure tests | `tests/` |
 | T-3 | Single-dish test coverage | `tests/` |
 | T-4 | `RemoteReductionContext` skeleton and transport protocol | `remote_reduction_context.py` *(new)* |
-| X-1 | **CASR-385** SPFLG-style **iteration mode** (formerly "grid mode"): paginated N×M grid of panels sharing the same axes, iterating through a selection value (antenna, SPW, field, scan) per cell. Each cell is a real interactive `VisibilityRaster`/`VisibilityScatter` instance (own `ColumnDataSource`s, comm registrations, flag tools) — not a static image. Object pool sized to the page, not the full iteration count; page turns re-select via existing `update_axes()` path, never rebuild. Depends on A-10 (`_PanelSlot` list, ✅ done) and P-4a (autohide, ✅ done). Grid/iteration layout is a sibling value on the same `layout_rbg` control as duo mode — switching between duo and iteration mid-session is supported by construction. Default/cap grid dimensions (proposed 3×3/6×6) should be set from E-4 benchmark numbers, not guessed. Key design decisions already settled: real interactive panels per cell; bounded grid size; paginate not scroll; uniform axes/mode per grid by default (data model supports heterogeneous, UI does not expose it in phase 1); object count sized to page; cross-cell pan/zoom sync gated by toggle; cross-cell crosshair position sync (reuses Bokeh native linked-crosshair, cheaper than the raster↔scatter crosshair link in duo mode). **Open questions:** exact default/max dimensions; compound "Iterate by" (single axis vs. antenna+SPW simultaneously); cross-cell flagging propagation; pan/zoom per-axis granularity; concurrent-backend-query burst mitigation; N-panel swap-trigger UI (coordinate dropdown vs. spatial button grid). Full detail in `visplot-development-handoff.md`. | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
+| X-1 | **CASR-385** SPFLG-style **grid mode**: paginated N×M grid of panels sharing the same axes, iterating through a selection value (antenna, SPW, field, scan) per cell. Each cell is a real interactive `VisibilityRaster`/`VisibilityScatter` instance (own `ColumnDataSource`s, comm registrations, flag tools) — not a static image. Object pool sized to the page, not the full iteration count; page turns re-select via existing `update_axes()` path, never rebuild. Depends on A-10 (`_PanelSlot` list, ✅ done) and P-4a (autohide, ✅ done). Grid/iteration layout is a sibling value on the same `layout_rbg` control as duo mode — switching between duo and iteration mid-session is supported by construction. Default/cap grid dimensions (proposed 3×3/6×6) should be set from E-4 benchmark numbers, not guessed. Key design decisions already settled: real interactive panels per cell; bounded grid size; paginate not scroll; uniform axes/mode per grid by default (data model supports heterogeneous, UI does not expose it in phase 1); object count sized to page; cross-cell pan/zoom sync gated by toggle; cross-cell crosshair position sync (reuses Bokeh native linked-crosshair, cheaper than the raster↔scatter crosshair link in duo mode). **Open questions:** exact default/max dimensions; compound "Iterate by" (single axis vs. antenna+SPW simultaneously); cross-cell flagging propagation; pan/zoom per-axis granularity; concurrent-backend-query burst mitigation; N-panel swap-trigger UI (coordinate dropdown vs. spatial button grid). Full detail in `visplot-development-handoff.md`. | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
 | X-2 | **CASR-385** `Axis.PHASE_RMS`: phase RMS vs time or frequency as a scatter y-axis quantity; backend computes `std(angle(visibility))` across the baseline axis per time/channel cell; same Phase 4 bucket as `CLOSURE_PHASE` | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
 | X-3 | **CASR-385** User-specified colours in colour-by-metadata mode: colour picker widget per category value (SPW, antenna, baseline); supplements the automatic categorical palette in S-1 | `visibility_plotter.py`, `visibility_scatter.py` |
 | X-4 | **CASR-385** Performance benchmarks: explicit test cases at ngVLA scale (200+ antennas, 8000 channels, 1-second integrations, 10 SPWs) and ALMA/VLA scale (50+ antennas, 1000 channels); used to validate Datashader pipeline and `is_decimated` gate | `tests/` |
@@ -1371,3 +1399,55 @@ for MSv4.
 computation (a moderate effort, casacore-dependent for MSv2); and confirmation
 that these axes are needed for the flagging workflow rather than just for
 diagnostic inspection (which could be served by listobs output).
+
+---
+
+### C.8 `msview` animator vs `visplot` averager
+
+**Source:** reference-testing session (Time-vs-Channel raster test, August 2026)
+
+**Description:** `msview` picks 2 display axes; the remaining axis becomes an Animator
+stepped one frame at a time — never averaged. `visplot` averages over whatever isn't
+displayed. These are different reductions; comparison for axis pairs beyond Time-vs-Baseline
+is not apples-to-apples. Phase 3 averaging work (V-1 through V-9) may unblock fair comparison.
+
+**What would make it actionable:** wire `antenna=` for single-baseline selection (§4.2),
+or confirm whether msview has an averaging option.
+
+---
+
+### C.9 `MSv4Backend` field-ID resolution
+
+**Source:** reference-testing session
+
+**Description:** `_parse_field_string` positional-index fix was applied to MSv2Backend;
+MSv4Backend has the same bug. Processing Sets have no FIELD subtable — no authoritative
+name→FIELD_ID source found. `reduction_context.py` fallback keeps old behavior for any
+backend without a real `field_ids` source: no crash, but wrong results for non-contiguous field IDs.
+
+**What would make it actionable:** find where field IDs live in MSv4/Processing Set structure.
+
+---
+
+### C.10 Y-axis auto-ranging may not recompute per quantity
+
+**Source:** reference-testing session (Real/Imaginary test)
+
+**Description:** Imaginary scatter appeared empty ("no data") at Y range 49–53, squarely
+within Real's range (Imaginary's actual range is −45 to +45). Not confirmed — could be
+reused-browser-tab stale-state artifact.
+
+**What would make it actionable:** clean repro attempt on a fresh browser tab.
+
+---
+
+### C.11 No mechanism to relocate a specific data point across views
+
+**Source:** reference-testing session (Real² + Imaginary² = Amplitude² check)
+
+**Description:** UV distance hover resolves to 3 decimal places but there is no way to
+pin a point in one visplot launch and find it in another. Worked around by reading raw
+visibilities directly from the MS.
+
+**What would make it actionable:** a "copy hover coordinates" feature or session-persistent
+hover log; confirmed user demand beyond testing workflows.

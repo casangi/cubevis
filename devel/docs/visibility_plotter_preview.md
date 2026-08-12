@@ -219,8 +219,9 @@ query.  A note beneath each reads *"Full selection — full release"*.
 
 **Scatter** (hidden in Raster only mode):
 - X axis: UVDIST, TIME, FREQUENCY (working)
-- Y axis (single layer): AMPLITUDE (working)
-- Multi-layer and colour-by-axis: absent
+- Y axis: AMPLITUDE, PHASE, REAL, IMAGINARY, U, V (working — one ScatterLayer per selected polarisation, XX and YY by default, composited by Datashader; U/V added this session, deliberately unmasked by flags)
+- Multi-layer *controls* (user-facing add/remove layer UI): absent
+- Colour-by-metadata axis: absent
 
 ### 6. Colormap controls (sidebar — working)
 
@@ -281,6 +282,8 @@ resolution, or confirmation that a selection region was drawn. On sidebar
 widget hover, both halves are replaced by the context-sensitive hint.
 In single-panel modes the green half omits the axis summary for the hidden panel.
 
+The hover probe reports all visible layers in the status bar (one reading per layer, stable index order so fields do not shift as the cursor moves). An em dash (—) appears for any layer with no data at the hovered location — this is intentional ("no data here"), not a bug. Hidden layers (alpha = 0) are omitted entirely. At high zoom the probe uses a screen-pixel search budget so a hover slightly off a drawn mark still resolves correctly.
+
 ---
 
 ## What the preview explicitly omits
@@ -290,14 +293,13 @@ Absent with no stubs:
 - Flag accumulation (`FlagDB`, `FlagDelta`) and write-to-disk — full release; preview demonstrates the selection gesture only
 - Flag versions, flag extend
 - Full Locate sidebar (cursor tracking info divs work; locate results table — full release)
-- Synchronized cross-panel cursor (Tier 1 same-axis Span and Tier 2 cross-axis
-  row-level highlight — both full release; see main plan §4.7)
+- Synchronized cross-panel cursor, Tier 1 (same-axis Span crosshair) — ✅ working in duo mode for all panel-kind combinations; documents were stale. Tier 2 (cross-axis row-level highlight via CommMgr probe) — not yet built; see §4.7 of the implementation plan
 - Averaging controls
 - Iteration (Prev/Next antenna/baseline)
 - Calibration sidebar section
 - Colour-by-metadata axis in scatter
 - PNG export
-- Multi-layer scatter
+- Multi-layer scatter *controls* (the rendering machinery and probe both handle multiple layers; the absent piece is user-facing UI to add/remove layers)
 - Draggable panel divider
 
 ---
@@ -332,6 +334,14 @@ plotter = VisibilityPlotter(
     uvrange     = "",           # e.g. "0~50klambda"; default: all
     correlation = "XX,YY",      # default: all available
     datacolumn  = "data",       # "data", "corrected", "model"
+
+    # Explicit axis override (precedence: explicit > preset > hardcoded default)
+    # Validated against the same lists that drive the GUI dropdowns
+    raster_y   = None,          # e.g. "Time", "Baseline"
+    raster_x   = None,          # e.g. "Channel", "Frequency"
+    raster_qty = None,          # e.g. "Amplitude", "Phase"
+    scatter_x  = None,          # e.g. "UVDist", "U"
+    scatter_y  = None,          # e.g. "Amplitude", "V"
 
     # Initial display configuration
     mode        = "both",           # "both", "raster", "scatter"
@@ -447,6 +457,7 @@ A reviewer in a Jupyter notebook should be able to:
 10. Pan the time axis in the raster when both show TIME on x; the scatter time axis follows.
 11. Activate `FlagTool`; zoom to 1:1; draw a box; status bar confirms the selection region.
 11a. Draw without zooming to 1:1; status bar shows rejection message.
+11b. Hover a scatter point at high zoom; the status bar reports a value for each visible polarisation, with an em dash (—) for any layer with no data at that location.
 12. Activate `UnflagTool`; draw a box; status bar confirms the unflag gesture.
 13. Read the status bar and know which dataset, mode, layout, and selection is active.
 

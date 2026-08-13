@@ -59,7 +59,10 @@ import numpy as np
 
 from bokeh.models import ColumnDataSource
 
-from .visibility_plot import VisibilityPlot, _img_to_uint32, _axis_label
+from .visibility_plot import (
+    VisibilityPlot, _img_to_uint32, _axis_label, _json_num,
+)
+from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
 
 if TYPE_CHECKING:
@@ -762,38 +765,111 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         labels = ", ".join(lyr.label for lyr in self._layers)
         return f"{labels}  vs  {self._x_dim.label}"
 
-    def _state_data_extra(self) -> dict:
-        """Add per-layer alpha/scaling values plus agg_n_x/agg_n_y."""
-        extra: dict = {}
-        for i, lyr in enumerate(self._layers):
-            extra[f"layer_alpha_{i}"] = [lyr.alpha]
-            extra[f"layer_label_{i}"] = [lyr.label]
-            extra[f"layer_scaling_{i}"]       = [lyr.scaling]
-            extra[f"layer_scaling_alpha_{i}"] = [lyr.scaling_alpha]
-            extra[f"layer_scaling_gamma_{i}"] = [lyr.scaling_gamma]
-            extra[f"layer_scaling_vmin_{i}"]  = [lyr.scaling_vmin]
-            extra[f"layer_scaling_vmax_{i}"]  = [lyr.scaling_vmax]
-        extra["n_layers"]   = [len(self._layers)]
-        extra["color_mode"] = [self._color_mode]
+    def _panel_spec(self) -> PanelSpec:
+        """Describe this scatter: one colour band per ScatterLayer.
 
-        # agg_n_x/agg_n_y: canvas resolution at the *full* data extent —
+        One band per layer regardless of visibility, so band indices stay
+        stable — the same invariant the probe envelope's ``layers`` list
+        keeps, and for the same reason: a consumer indexing by position
+        must not have entries shift under it when the user hides a layer.
+
+        ``status`` is ``"empty"`` when no layer has data to draw.  The
+        per-layer ``_layer_skip_reason`` strings are joined into ``note``
+        because "never queried", "query returned 0 rows" and "0 samples
+        in this viewport" are genuinely different events and only the
+        last is routine — an exported cell that says which one applies is
+        far more useful than a blank square.
+        """
+        x_is_time, y_is_time = self._axis_flags()
+
+        bands = tuple(
+            ColorBand(
+                label         = lyr.label,
+                cmap          = tuple(lyr.cmap or ()),
+                scaling       = lyr.scaling,
+                scaling_alpha = lyr.scaling_alpha,
+                scaling_gamma = lyr.scaling_gamma,
+                vmin          = lyr.scaling_vmin,
+                vmax          = lyr.scaling_vmax,
+                alpha         = lyr.alpha,
+                visible       = lyr.alpha > 0.0,
+            )
+            for lyr in self._layers
+        )
+
+        # agg_n_x/agg_n_y: canvas resolution at the *full* data extent --
         # same field names as VisibilityRaster so FlagTool's existing
         # zoom-to-1:1 math (flag_tool.ts) works unchanged here too. Unlike
         # raster, scatter points are exact (not binned/decimated), so this
-        # isn't about resolving averaged data — it's the same
+        # isn't about resolving averaged data -- it's the same
         # sparse-data canvas-shrink logic _shade_all_layers uses
         # (_compute_canvas_size), which means "1:1" for scatter
         # effectively means "zoomed in enough that the full-extent view's
-        # overplot-driven canvas shrink no longer applies" — a reasonable
+        # overplot-driven canvas shrink no longer applies" -- a reasonable
         # proxy for "not looking at an overplotted, ambiguous cluster."
         full_x0, full_x1 = self._x_range
         full_y0, full_y1 = self._y_range
         agg_n_x, agg_n_y = self._compute_canvas_size(
             full_x0, full_x1, full_y0, full_y1)
-        extra["agg_n_x"] = [agg_n_x]
-        extra["agg_n_y"] = [agg_n_y]
 
-        return extra
+        drawable = any(
+            df is not None and len(df) > 0 and lyr.alpha > 0.0
+            for lyr, df in zip(self._layers, self._layer_dfs)
+        )
+        status, note = "ok", None
+        if not drawable:
+            status = "empty"
+            reasons = [
+                f"{lyr.label}: {r}"
+                for lyr, r in zip(self._layers, self._layer_skip_reason)
+                if r
+            ]
+            note = "; ".join(reasons) if reasons else "no layers with data"
+
+        return PanelSpec(
+            kind       = "scatter",
+            title      = self._effective_title(),
+            x_label    = _axis_label(self._x_dim),
+            y_label    = _axis_label(self._y_dim),
+            x_range    = (float(full_x0), float(full_x1)),
+            y_range    = (float(full_y0), float(full_y1)),
+            x_is_time  = x_is_time,
+            y_is_time  = y_is_time,
+            agg_n_x    = agg_n_x,
+            agg_n_y    = agg_n_y,
+            color_mode = self._color_mode,
+            bands      = bands,
+            status     = status,
+            note       = note,
+        )
+
+    def _shade_for_export(self, viewport=None) -> Optional[np.ndarray]:
+        """Re-composite from cached DataFrames at *viewport*; no re-query.
+
+        _shade_all_layers has side effects -- it rebuilds self._layer_aggs
+        and self._layer_skip_reason -- and _handle_probe indexes those
+        aggs with coordinates derived from whatever viewport the *browser*
+        is showing.  An export at any other viewport would therefore
+        silently corrupt the next hover, which is defect (2) in the probe
+        notes above arriving by a new route.  Snapshot and restore rather
+        than relying on the export viewport happening to match.
+        """
+        saved_aggs    = self._layer_aggs
+        saved_reasons = self._layer_skip_reason
+        try:
+            if viewport is None:
+                if self._current_viewport is not None:
+                    vx0, vx1, vy0, vy1 = self._current_viewport
+                    xr, yr = (vx0, vx1), (vy0, vy1)
+                else:
+                    xr, yr = self._x_range, self._y_range
+            else:
+                x0, x1, y0, y1 = viewport
+                xr, yr = (x0, x1), (y0, y1)
+            return self._shade_all_layers(xr, yr)
+        finally:
+            self._layer_aggs        = saved_aggs
+            self._layer_skip_reason = saved_reasons
 
     def _build_glyphs(self) -> None:
         """Add the single composite image_rgba glyph."""
@@ -1029,7 +1105,9 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             vy0, vy1 = self._y_range
         if not (min(vx0, vx1) <= x <= max(vx0, vx1) and
                 min(vy0, vy1) <= y <= max(vy0, vy1)):
-            return {"label": "<i>out of range</i>"}
+            return self._probe_envelope(
+                "out_of_range", "<i>out of range</i>", x=x, y=y, layers=[],
+            )
 
         # Gather a candidate from every layer that is currently drawn.
         # (distance_in_screen_px, layer_index, px, py)
@@ -1091,7 +1169,9 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             )
 
         if not candidates and fallback is None:
-            return {"label": "<i>no data</i>"}
+            return self._probe_envelope(
+                "no_data", "<i>no data</i>", x=x, y=y, layers=[],
+            )
 
         # Prefer an exact-bin hit; among equals prefer the lowest layer
         # index so the answer is stable as the cursor moves.
@@ -1114,10 +1194,11 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 "probe_scatter_pixel layer %d at (%d,%d) failed: %s",
                 layer_i, px, py, exc,
             )
-            return {
-                "label":
-                    f"<span style='color:#f38ba8'>probe error: {exc}</span>"
-            }
+            return self._probe_envelope(
+                "error",
+                f"<span style='color:#f38ba8'>probe error: {exc}</span>",
+                x=x, y=y, layers=[], error=str(exc),
+            )
 
         # Report *every* layer, not just the one that answered.
         #
@@ -1135,28 +1216,50 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         # second.  The sample count N therefore describes the winning
         # layer only, which is why it stays adjacent to that layer's
         # reading in the field order below.
+        # Built as records first, rendered to HTML second.  The two used
+        # to happen in one pass, which meant the only machine-readable
+        # form of "did this layer have data" was the presence of an em
+        # dash in a markup string — see _probe_envelope for why that is a
+        # bad thing for a test to depend on.  One entry per layer
+        # regardless of visibility, so field order is stable for callers;
+        # the HTML pass below is what filters hidden layers out.
         hits = {i: (d, hx, hy) for d, i, hx, hy in candidates}
-        readings: list[str] = []
+        layer_results: list[dict] = []
         for i, other in enumerate(self._layers):
-            if other.alpha == 0.0:
-                # Hidden by the user — a reading would imply the layer
-                # was consulted and found wanting, which it wasn't.
-                continue
+            entry = {
+                "index":       i,
+                "label":       other.label,
+                "visible":     other.alpha > 0.0,
+                "value":       None,
+                "distance_px": None,
+                "skip_reason": (self._layer_skip_reason[i]
+                                if i < len(self._layer_skip_reason) else None),
+            }
             hit = hits.get(i)
-            if hit is None:
-                readings.append(f"<b>{other.label}:</b> <i>&mdash;</i>")
-                continue
-            d_i, hx, hy = hit
-            agg_i = self._layer_aggs[i]
-            try:
-                val = float(agg_i.values[hy, hx])
-            except (IndexError, TypeError, ValueError):
-                readings.append(f"<b>{other.label}:</b> <i>&mdash;</i>")
-                continue
-            cell = f"<b>{other.label}:</b> {val:.6g}"
-            if d_i > 0.0:
-                cell += f" <i>(~{d_i:.0f}px)</i>"
-            readings.append(cell)
+            if entry["visible"] and hit is not None:
+                d_i, hx, hy = hit
+                # Routing a non-finite value through _json_num is the one
+                # deliberate label change in this refactor: the old loop
+                # rendered a NaN bin as the literal text "nan", which
+                # reads as a value in the status bar when it means the
+                # opposite.  Unreachable in normal flow — _populated_mask
+                # tests np.isfinite for float aggs, so
+                # _nearest_populated_bin never returns a NaN bin — so
+                # this only fires if mask and agg ever disagree, and an
+                # em dash is the honest answer when they do.  Every other
+                # input produces byte-identical HTML to the old loop.
+                try:
+                    val = _json_num(self._layer_aggs[i].values[hy, hx])
+                except (IndexError, TypeError, ValueError):
+                    val = None
+                if val is not None:
+                    entry["value"]       = val
+                    entry["distance_px"] = float(d_i)
+            layer_results.append(entry)
+
+        readings = [
+            self._layer_reading_html(e) for e in layer_results if e["visible"]
+        ]
 
         # Everything after the winning layer's own value: the axis
         # coordinates, the sample count, and any backend extras.
@@ -1168,7 +1271,40 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         label = self._PROBE_SEP.join(parts)
         if not exact:
             label += f"{self._PROBE_SEP}<i>nearest ({dist:.0f} px away)</i>"
-        return {"label": label}
+
+        # Only known-safe scalars are promoted out of `info`; the raw
+        # backend dict also holds tuples, numpy types, and the
+        # field_names/antenna_pairs lists, none of which have ever
+        # crossed the wire.  Widen this deliberately, not by splatting.
+        return self._probe_envelope(
+            "ok", label,
+            x = x, y = y,
+            winner      = int(layer_i),
+            exact       = bool(exact),
+            distance_px = float(dist),
+            layers      = layer_results,
+            n_samples   = _json_num(info.get("n_scatter_samples")),
+            x_centre    = _json_num(info.get("x_centre")),
+            y_centre    = _json_num(info.get("y_centre")),
+        )
+
+    @staticmethod
+    def _layer_reading_html(entry: dict) -> str:
+        """Render one layer record from ``layer_results`` as a status cell.
+
+        A pure function of the record, so the status-bar wording can
+        change without touching probe logic.  The em dash means
+        "consulted, nothing here" — see the reasoning above the readings
+        loop for why silence is not an acceptable substitute.  Hidden
+        layers are filtered out before this is called: a hidden layer was
+        never consulted, so any reading for it would be a lie.
+        """
+        if entry["value"] is None:
+            return f"<b>{entry['label']}:</b> <i>&mdash;</i>"
+        cell = f"<b>{entry['label']}:</b> {entry['value']:.6g}"
+        if entry["distance_px"]:   # falsy covers both None and an exact hit
+            cell += f" <i>(~{entry['distance_px']:.0f}px)</i>"
+        return cell
 
     def _register_extra_comm_handlers(self) -> None:
         self._comm.register(self._msg_set_alpha,   self._handle_set_alpha)
@@ -1258,7 +1394,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         data (few points relative to canvas area) a smaller canvas is
         used to visually boost apparent point density — see the
         ``pts_per_px`` scaling below. Factored out of ``_shade_all_layers``
-        so ``_state_data_extra`` can also compute this for the *full*
+        so ``_panel_spec`` can also compute this for the *full*
         data extent (see ``agg_n_x``/``agg_n_y`` there), independent of
         whatever sub-range is currently in view.
         """

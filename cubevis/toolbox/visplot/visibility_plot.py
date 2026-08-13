@@ -41,10 +41,16 @@ Subclass responsibilities
 ``_handle_probe(message)`` → dict
     Handle a hover probe request.  Returns ``{label: str}``.
 
-``_state_data_extra()`` → dict
-    Extra ``_state_source`` fields specific to the subclass (e.g.
-    ``agg_n_x/y`` for raster, per-layer alpha for scatter).  Merged into
-    the base ``_state_data()`` result.
+``_panel_spec()`` → PanelSpec
+    Describe the panel: ranges, labels, aggregation resolution, and one
+    ``ColorBand`` per value-to-color mapping.  ``_state_data()`` is
+    derived from this, so the Bokeh chrome and the matplotlib export
+    chrome read one description rather than two — see ``panel_spec``.
+    Must be cheap; it runs on every ``_state_source`` push.
+
+``_shade_for_export(viewport)`` → ndarray | None
+    Re-shade from cached state at a given viewport, without re-querying
+    the backend.  Feeds ``render_result()``.
 
 Package location
 ----------------
@@ -55,6 +61,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import math
 import time
 from typing import Optional, TYPE_CHECKING
 from uuid import uuid4
@@ -92,30 +99,74 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 def _img_to_uint32(img) -> np.ndarray:
-    """Convert a Datashader Image or PIL RGBA Image to Bokeh uint32 array.
+    """Convert a Datashader Image or PIL RGBA Image to a Bokeh uint32 array.
+
+    Returns ``(H, W) uint32`` whose bytes are **R, G, B, A in memory
+    order** — the layout ``figure.image_rgba`` hands to canvas
+    ``ImageData``, and the layout ``matplotlib.imshow`` reads back via a
+    ``uint8`` view.  The result is always C-contiguous, so
+    ``out.view(np.uint8).reshape(H, W, 4)`` is safe on it.
+
+    Reason about this in memory order, not numerically.  On a
+    little-endian machine the same bytes read as ``0xAABBGGRR`` and on
+    big-endian as ``0xRRGGBBAA``; neither is a useful thing to assert.
 
     ``datashader.tf.shade()`` returns a Datashader ``Image`` — an
-    ``xr.DataArray`` subclass with dtype ``uint32`` already packed as
-    0xAARRGGBB.  ``np.array(img)`` gives ``(H, W) uint32`` directly.
+    ``xr.DataArray`` subclass already in this layout — so
+    ``np.asarray(img)`` gives the ``(H, W) uint32`` directly.  A PIL
+    ``Image`` in mode ``"RGBA"`` (uint8, used by unit tests) is likewise
+    already RGBA, so packing it is a plain copy.
 
-    Also handles a PIL ``Image`` (mode ``"RGBA"``, uint8) for unit tests.
+    NOTE: the uint32 branch returns a *view* of its input when that input
+    is already contiguous, where this function previously always copied.
+    No current caller mutates the result in place — raster's ``_render``
+    and ``_shade_viewport`` only push it into a ``ColumnDataSource``, and
+    ``VisibilityScatter._shade_all_layers`` does its in-place alpha
+    rewrite on a separate ``np.array(img, dtype=np.uint32)`` that still
+    copies — but a future one must copy first.
+
+    HISTORY: the PIL branch used to write B, G, R, A, producing
+    BGRA-in-memory — R and B transposed relative to what ``image_rgba``
+    consumes.  Test-only, so nothing user-visible was wrong, but any test
+    asserting colour through this path was asserting a mirrored answer,
+    and the old docstring's "0xAARRGGBB" described that same wrong
+    layout.  Datashader's actual output was verified empirically
+    (2026-08): shading ``cmap=["#FF0000", "#0000FF"]`` yields bytes
+    ``[255, 0, 0, 255]`` and ``[0, 0, 255, 255]``.
     """
-    arr = np.array(img)
+    arr = np.asarray(img)
     if arr.dtype == np.uint32:
-        return arr
-    if arr.ndim == 3 and arr.shape[2] == 4:
+        # No-op when already contiguous; present so callers may rely on
+        # the uint8 view above unconditionally.
+        return np.ascontiguousarray(arr)
+    if arr.ndim == 3 and arr.shape[2] == 4 and arr.dtype == np.uint8:
         h, w = arr.shape[:2]
         out  = np.empty((h, w), dtype=np.uint32)
-        view = out.view(np.uint8).reshape(h, w, 4)
-        view[..., 0] = arr[..., 2]   # B
-        view[..., 1] = arr[..., 1]   # G
-        view[..., 2] = arr[..., 0]   # R
-        view[..., 3] = arr[..., 3]   # A
+        out.view(np.uint8).reshape(h, w, 4)[:] = arr   # PIL is already RGBA
         return out
     raise ValueError(
         f"_img_to_uint32: unrecognised input — shape={arr.shape}, "
         f"dtype={arr.dtype}"
     )
+
+
+def _json_num(v):
+    """Coerce a backend probe value to a JSON-safe number, or ``None``.
+
+    Backend ``probe_*_pixel`` results carry numpy scalars, and a
+    non-finite float is not representable in JSON: ``json.dumps`` emits a
+    bare ``NaN``/``Infinity`` token that the browser's ``JSON.parse``
+    rejects, taking down the whole p2j response rather than just the one
+    field.  Every numeric value placed under a probe envelope's
+    ``"probe"`` key goes through here first.
+    """
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
 
 
 def _axis_label(axis: "Axis") -> str:
@@ -345,13 +396,58 @@ class VisibilityPlot(Model):
     def _handle_probe(self, message: dict) -> dict:
         """Handle a ``'vr_probe'`` j2p message; return ``{label: str}``."""
 
-    def _state_data_extra(self) -> dict:
-        """Subclass-specific ``_state_source`` fields.
+    @abc.abstractmethod
+    def _panel_spec(self) -> "PanelSpec":
+        """Describe this panel: geometry, labels, and colour bands.
 
-        Override to add extra fields (e.g. ``agg_n_x/y`` for raster,
-        per-layer alpha for scatter).  Default returns empty dict.
+        Must be cheap — plain attribute reads and values already computed
+        during ``_render()``.  It is called on every ``_state_source``
+        push, so anything expensive here (a re-query, a re-shade) is a
+        per-interaction cost.  The pixels are deliberately not part of
+        this; see ``render_result()``.
+
+        Replaces the old ``_state_data_extra()`` hook, which returned
+        raw Bokeh column dicts.  Returning a structured spec instead is
+        what lets the matplotlib export path consume the same
+        description the JS chrome does.
         """
-        return {}
+
+    def _shade_for_export(
+        self, viewport: "Optional[tuple[float, float, float, float]]" = None
+    ) -> "Optional[np.ndarray]":
+        """Shade this panel at *viewport* and return ``(H, W) uint32``.
+
+        Must not re-query the backend — it operates on whatever the last
+        ``_render()`` cached, which is what makes an export from the GUI
+        instant and guarantees it shows the data the user is looking at
+        rather than a fresh query that might differ.
+
+        Default returns ``None`` (nothing renderable).  Subclasses
+        override.
+        """
+        return None
+
+    def render_result(
+        self, viewport: "Optional[tuple[float, float, float, float]] " = None
+    ):
+        """Return a ``RenderedPanel``: this panel's spec plus its pixels.
+
+        The unit the export compositor consumes, produced identically by
+        a headless render and by the GUI's Export button.  ``viewport``
+        is ``(x0, x1, y0, y1)``; ``None`` means full extent.  The GUI
+        path must supply it — with no Bokeh server, a pan or zoom done in
+        the browser never reaches Python, so the Python-side ranges are
+        stale the moment the user touches the plot.
+        """
+        from .panel_spec import RenderedPanel
+        spec = self._panel_spec()
+        if spec.status != "ok":
+            return RenderedPanel(spec=spec, image=None, viewport=viewport)
+        return RenderedPanel(
+            spec     = spec,
+            image    = self._shade_for_export(viewport),
+            viewport = viewport,
+        )
 
     def _register_extra_comm_handlers(self) -> None:
         """Register additional j2p handlers beyond the base set.
@@ -531,22 +627,24 @@ class VisibilityPlot(Model):
     # ------------------------------------------------------------------
 
     def _state_data(self) -> dict:
-        """Build the full ``_state_source.data`` dict."""
+        """Build the full ``_state_source.data`` dict.
+
+        Derived from ``_panel_spec()`` rather than assembled here, so the
+        JS chrome and the matplotlib export chrome read one description
+        instead of two.  See ``panel_spec`` for why that matters; the
+        short version is that a field added for the browser becomes
+        visible to the exporter for free, and neither can drift without
+        the other noticing.
+
+        ``PanelSpec.to_state_data()`` emits exactly the historical key
+        set, so this is a pure refactor from the browser's point of view.
+        """
+        return self._panel_spec().to_state_data()
+
+    def _axis_flags(self) -> tuple[bool, bool]:
+        """``(x_is_time, y_is_time)`` — shared by both subclasses' specs."""
         from .axes import Axis
-        x0, x1 = self._x_range
-        y0, y1 = self._y_range
-        base = {
-            "full_x0":   [float(x0)],
-            "full_x1":   [float(x1)],
-            "full_y0":   [float(y0)],
-            "full_y1":   [float(y1)],
-            "y_is_time": [int(self._y_dim == Axis.TIME)],
-            "x_is_time": [int(self._x_dim == Axis.TIME)],
-            "x_label":   [_axis_label(self._x_dim)],
-            "y_label":   [_axis_label(self._y_dim)],
-        }
-        base.update(self._state_data_extra())
-        return base
+        return (self._x_dim == Axis.TIME, self._y_dim == Axis.TIME)
 
     def _update_state_source(self) -> None:
         """Push current state into ``_state_source`` (no-op before build)."""
@@ -837,6 +935,36 @@ window._cvRerenderTimer = setTimeout(function() {{
     # per-layer value section) can split on it without hard-coding the
     # literal in two places.
     _PROBE_SEP = " &nbsp;|&nbsp; "
+
+    def _probe_envelope(self, status: str, label: str, **extra) -> dict:
+        """Wrap a probe answer as ``{"label": ..., "probe": {...}}``.
+
+        ``label`` is the HTML the status bar renders and remains the only
+        key the browser reads — the ``CustomJS`` hover callback in
+        ``_add_comm_hover`` does ``if (resp.label) info_div.text =
+        resp.label`` — so ``"probe"`` is inert client-side.  It exists so
+        Python callers and tests can assert on *structure* rather than on
+        presentation markup.  Tests that matched on ``"empty"`` or on an
+        em dash have twice broken purely because the label format
+        changed, which is a bad reason for a test to fail.
+
+        Parameters
+        ----------
+        status : str
+            One of ``"ok"``, ``"out_of_range"``, ``"no_data"``,
+            ``"error"``.  This is the fault-tolerance lever: a caller
+            asking "was there data here" reads ``status`` and the
+            per-value ``None``s, never the label.
+        label : str
+            The status-bar HTML, unchanged from what this method's
+            callers produced before the envelope existed.
+        **extra
+            Merged into the ``"probe"`` dict.  Every numeric value must
+            have gone through ``_json_num`` first — see its docstring for
+            why a stray NaN breaks the entire p2j response and not just
+            one field.
+        """
+        return {"label": label, "probe": {"status": status, **extra}}
 
     def _format_probe(self, info: dict, quantity_label: str = "") -> str:
         """Format a probe result dict as an HTML status-bar string."""

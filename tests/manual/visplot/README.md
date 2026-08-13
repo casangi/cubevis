@@ -14,3 +14,9 @@ PROTOBUF_VER=$(cd ~/develop/casa/casa6-dev && pixi list 2>/dev/null | awk '$1=="
     mamba create -n ms4-py312 python=3.12 ipython websockets anywidget bokeh=3.9 scipy regions certifi xarray zarr \
     'pyarrow=23' "libprotobuf=$PROTOBUF_VER" dask datashader pytest nodejs
 ```
+
+Running tests in this directory requires many file descriptors so you must do the equivalent of:
+
+```bash
+bash$ ulimit -n 4096 && MS=sis14_twhya_calibrated_flagged.ms python3 test_visibility_raster.py
+```

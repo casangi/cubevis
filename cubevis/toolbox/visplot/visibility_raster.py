@@ -37,7 +37,10 @@ import numpy as np
 
 from bokeh.models import ColumnDataSource
 
-from .visibility_plot import VisibilityPlot, _img_to_uint32, _axis_label
+from .visibility_plot import (
+    VisibilityPlot, _img_to_uint32, _axis_label, _json_num,
+)
+from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
 
 if TYPE_CHECKING:
@@ -766,21 +769,71 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
 
         return controls
 
-    def _state_data_extra(self) -> dict:
-        """Add agg shape, color_mode, and colormap scaling to _state_source."""
+    def _panel_spec(self) -> PanelSpec:
+        """Describe this raster: one colour band, the quantity.
+
+        ``status`` is ``"empty"`` whenever ``_render()`` took its
+        degenerate branch — a deferred panel, a sub-2-cell agg, an
+        all-NaN agg, or a zero-width range.  The browser ignores it (the
+        blank image already says as much next to a live sidebar), but an
+        exported PNG has no sidebar, so the compositor needs to know to
+        draw a framed cell with a note instead of a black rectangle.
+        """
         agg = self._agg
         n_x = agg.shape[1] if agg is not None and agg.ndim == 2 else 1
         n_y = agg.shape[0] if agg is not None and agg.ndim == 2 else 1
-        return {
-            "agg_n_x":    [n_x],
-            "agg_n_y":    [n_y],
-            "color_mode": [self._color_mode],
-            "scaling":        [self._scaling],
-            "scaling_alpha":  [self._scaling_alpha],
-            "scaling_gamma":  [self._scaling_gamma],
-            "scaling_vmin":   [self._scaling_vmin],
-            "scaling_vmax":   [self._scaling_vmax],
-        }
+        x_is_time, y_is_time = self._axis_flags()
+
+        band = ColorBand(
+            label         = self._quantity.label,
+            cmap          = tuple(self._cmap),
+            scaling       = self._scaling,
+            scaling_alpha = self._scaling_alpha,
+            scaling_gamma = self._scaling_gamma,
+            vmin          = self._scaling_vmin,
+            vmax          = self._scaling_vmax,
+            alpha         = 1.0,
+            visible       = True,
+        )
+
+        status, note = "ok", None
+        if agg is None:
+            status, note = "empty", "not rendered yet"
+        elif agg.ndim != 2 or agg.shape[0] < 2 or agg.shape[1] < 2:
+            status, note = "empty", f"aggregation too small ({agg.shape})"
+        elif not np.isfinite(agg.values).any():
+            status, note = "empty", "no finite values in selection"
+        elif self._x_range[0] == self._x_range[1] or \
+             self._y_range[0] == self._y_range[1]:
+            status, note = "empty", "zero-width axis range"
+
+        return PanelSpec(
+            kind       = "raster",
+            title      = self._effective_title(),
+            x_label    = _axis_label(self._x_dim),
+            y_label    = _axis_label(self._y_dim),
+            x_range    = (float(self._x_range[0]), float(self._x_range[1])),
+            y_range    = (float(self._y_range[0]), float(self._y_range[1])),
+            x_is_time  = x_is_time,
+            y_is_time  = y_is_time,
+            agg_n_x    = n_x,
+            agg_n_y    = n_y,
+            color_mode = self._color_mode,
+            bands      = (band,),
+            status     = status,
+            note       = note,
+        )
+
+    def _shade_for_export(self, viewport=None) -> Optional[np.ndarray]:
+        """Re-shade from the cached agg at *viewport*; no backend query."""
+        if self._agg is None:
+            return None
+        if viewport is None:
+            xr, yr = self._x_range, self._y_range
+        else:
+            x0, x1, y0, y1 = viewport
+            xr, yr = (x0, x1), (y0, y1)
+        return self._shade_viewport(xr, yr)
 
     def _build_glyphs(self) -> None:
         """Add the single image_rgba glyph for the raster."""
@@ -928,11 +981,15 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         x0, x1 = self._x_range
         y0, y1 = self._y_range
         if not (x0 <= x <= x1 and y0 <= y <= y1):
-            return {"label": "<i>out of range</i>"}
+            return self._probe_envelope(
+                "out_of_range", "<i>out of range</i>", x=x, y=y,
+            )
 
         px, py = self._data_to_pixel(x, y)
         if px is None:
-            return {"label": "<i>out of range</i>"}
+            return self._probe_envelope(
+                "out_of_range", "<i>out of range</i>", x=x, y=y,
+            )
         try:
             info  = self._backend.probe_raster_pixel(
                 self._agg, px, py, self._selection
@@ -948,8 +1005,24 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 )
         except Exception as exc:
             log.warning("probe_raster_pixel failed: %s", exc)
-            label = f"<span style='color:#f38ba8'>probe error: {exc}</span>"
-        return {"label": label}
+            return self._probe_envelope(
+                "error",
+                f"<span style='color:#f38ba8'>probe error: {exc}</span>",
+                x=x, y=y, error=str(exc),
+            )
+
+        # `empty` is carried explicitly rather than left to be inferred
+        # from `value is None`: "the backend found no sample here" and
+        # "the sample's value was non-finite and _json_num dropped it"
+        # collapse to the same None, and only the first is routine.
+        value = _json_num(info.get("value"))
+        return self._probe_envelope(
+            "ok", label,
+            x = x, y = y,
+            value = value,
+            empty = info.get("value") is None,
+            pixel = [int(px), int(py)],
+        )
 
     # ------------------------------------------------------------------
     # Raster-specific internals

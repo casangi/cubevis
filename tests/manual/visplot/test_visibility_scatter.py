@@ -14,8 +14,8 @@ Backend selection (mutually exclusive)
 --------------------------------------
 Set exactly one of MS or PS:
 
-    MS=<path>.ms   pytest test_visibility_scatter.py -v   # MSv2
-    PS=<path>.ps.zarr pytest test_visibility_scatter.py -v  # MSv4
+    ulimit -n 4096 && MS=<path>.ms   pytest test_visibility_scatter.py -v   # MSv2
+    ulimit -n 4096 && PS=<path>.ps.zarr pytest test_visibility_scatter.py -v  # MSv4
 
 If both are set the suite fails immediately (ambiguous).
 If neither is set all tests are skipped.
@@ -945,19 +945,133 @@ class TestProbe:
         # _format_probe adds "N: <int>" when n_scatter_samples is present
         assert "N:" in resp["label"] or resp["label"]
 
-    def test_probe_nan_pixel_returns_empty(self):
-        """A pixel with no data must return a label containing 'empty'."""
-        agg = self.vs._layer_aggs[0]
-        if agg is None:
-            pytest.skip("No layer agg")
-        ys, xs = np.where(np.isnan(agg.values))
-        if len(ys) == 0:
-            pytest.skip("No NaN pixels in scatter agg")
-        px, py = int(xs[0]), int(ys[0])
-        x_val = float(agg.coords[agg.dims[1]].values[px])
-        y_val = float(agg.coords[agg.dims[0]].values[py])
-        resp = self.vs._handle_probe({"x": x_val, "y": y_val})
-        assert "empty" in resp["label"].lower() or "N: 0" in resp["label"]
+    def test_probe_empty_region_reports_no_value_for_any_layer(self):
+        """A location with no data in any layer yields value=None per layer.
+
+        Rewritten 2026-08.  Was test_probe_nan_pixel_returns_empty, which
+        picked a bin NaN in layer 0 only and asserted "empty" in the
+        label.  Both halves became wrong with the PB-series probe fix:
+
+          * The probe consults every layer, so a bin empty in XX but
+            populated in YY legitimately returns a value -- that was
+            defect (1), and most of the 47.7% false-empty rate.
+          * _nearest_populated_bin searches a screen-pixel budget, so an
+            empty bin next to a populated one answers too -- defect (3).
+          * _format_probe's "<i>empty</i>" is the first field, and
+            _handle_probe partitions it off and discards it.  The string
+            is now unreachable; the em dash is the no-data marker.
+
+        Asserting on resp["probe"] instead means the next status-bar
+        wording change does not break this test.
+        """
+        aggs = [a for a in self.vs._layer_aggs if a is not None]
+        if not aggs:
+            pytest.skip("No layer aggs")
+
+        def _all_layers_miss(xv, yv):
+            """True when no layer has data within its own search radius.
+
+            Asks each layer through the same helpers _handle_probe uses,
+            rather than reimplementing the radius geometry here -- which
+            would drift from it exactly as the old assertion did.
+            """
+            for agg in aggs:
+                idx = self.vs._agg_pixel(agg, xv, yv)
+                if idx is None:
+                    continue
+                px, py = idx
+                bw, bh = self.vs._bin_screen_size(agg)
+                r = self.vs._search_radius_bins(agg)
+                if self.vs._nearest_populated_bin(agg, px, py, r, bw, bh):
+                    return False
+            return True
+
+        agg0 = aggs[0]
+        ys, xs = np.where(np.isnan(agg0.values))
+        for py, px in zip(ys.tolist(), xs.tolist()):
+            xv = float(agg0.coords[agg0.dims[1]].values[px])
+            yv = float(agg0.coords[agg0.dims[0]].values[py])
+            if _all_layers_miss(xv, yv):
+                break
+        else:
+            # On dense data with generous slop there may be no such bin.
+            # Skipping is the honest outcome; contriving one would test
+            # nothing real.
+            pytest.skip("No bin empty in every layer beyond the search radius")
+
+        probe = self.vs._handle_probe({"x": xv, "y": yv})["probe"]
+        assert probe["status"] in ("ok", "no_data")
+        assert all(e["value"] is None for e in probe["layers"] if e["visible"])
+
+    # ------------------------------------------------------------------
+    # Structured probe envelope (added 2026-08)
+    # ------------------------------------------------------------------
+
+    def test_probe_envelope_shape(self):
+        """Every probe answer carries a status and leaves label intact."""
+        x, y = self._finite_data_coords()
+        resp = self.vs._handle_probe({"x": x, "y": y})
+        assert set(resp.keys()) >= {"label", "probe"}
+        probe = resp["probe"]
+        assert probe["status"] == "ok"
+        assert isinstance(probe["exact"], bool)
+        assert probe["winner"] in range(len(self.vs.layers))
+
+    def test_probe_layers_entry_per_layer_including_hidden(self):
+        """One entry per layer, in index order, whatever the visibility.
+
+        The status bar's stable field order depends on this -- readings
+        must not shift position as the cursor moves or as a layer is
+        hidden.  Filtering happens at render time, not here.
+        """
+        x, y = self._finite_data_coords()
+        probe = self.vs._handle_probe({"x": x, "y": y})["probe"]
+        assert len(probe["layers"]) == len(self.vs.layers)
+        assert [e["index"] for e in probe["layers"]] == list(
+            range(len(self.vs.layers))
+        )
+        for entry, lyr in zip(probe["layers"], self.vs.layers):
+            assert entry["label"] == lyr.label
+            assert entry["visible"] == (lyr.alpha > 0.0)
+
+    def test_probe_hidden_layer_reports_no_value(self):
+        """A hidden layer is never consulted, so it can never carry a value."""
+        if len(self.vs.layers) < 2:
+            pytest.skip("Need at least two layers")
+        self.vs.set_alpha(1, 0.0)
+        try:
+            x, y = self._finite_data_coords()
+            probe = self.vs._handle_probe({"x": x, "y": y})["probe"]
+            hidden = probe["layers"][1]
+            assert hidden["visible"] is False
+            assert hidden["value"] is None
+            assert hidden["distance_px"] is None
+        finally:
+            self.vs.set_alpha(1, 1.0)
+
+    def test_probe_out_of_range_status(self):
+        """Out-of-range must be identifiable without reading the markup."""
+        x0, x1 = self.vs._x_range
+        y0, y1 = self.vs._y_range
+        resp = self.vs._handle_probe({"x": x1 + 1e6, "y": y0})
+        assert resp["probe"]["status"] == "out_of_range"
+        assert resp["probe"]["layers"] == []
+
+    def test_probe_envelope_is_json_safe(self):
+        """The envelope must survive the Comm transport's json.dumps.
+
+        A numpy scalar raises TypeError and a non-finite float serialises
+        to a bare NaN token that the browser's JSON.parse rejects -- both
+        take down the whole p2j response, not just the offending field.
+        This is what _json_num exists to prevent; catch it here rather
+        than in a browser console.
+        """
+        import json
+        x, y = self._finite_data_coords()
+        resp = self.vs._handle_probe({"x": x, "y": y})
+        text = json.dumps(resp)
+        assert "NaN" not in text and "Infinity" not in text
+        json.loads(text)
 
 
 # ---------------------------------------------------------------------------

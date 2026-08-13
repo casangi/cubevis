@@ -15,8 +15,8 @@ Backend selection (mutually exclusive)
 --------------------------------------
 Set exactly one of MS or PS:
 
-    MS=<path>.ms   pytest test_visibility_raster.py -v   # MSv2
-    PS=<path>.ps.zarr pytest test_visibility_raster.py -v  # MSv4
+    ulimit -n 4096 && MS=<path>.ms   pytest test_visibility_raster.py -v   # MSv2
+    ulimit -n 4096 && PS=<path>.ps.zarr pytest test_visibility_raster.py -v  # MSv4
 
 If both are set the suite fails immediately (ambiguous).
 If neither is set all tests are skipped.
@@ -619,7 +619,13 @@ class TestProbeStatic:
         assert "label" in resp
 
     def test_probe_nan_pixel_shows_empty(self):
-        """Probing an empty (NaN) pixel must yield a label containing 'empty'."""
+        """Probing an empty (NaN) pixel must report empty, structurally.
+
+        Asserts resp["probe"], not the label markup.  The equivalent
+        scatter test broke twice on label-format changes alone, which is
+        a bad reason for a test to fail; the label assertion is kept as a
+        second, weaker check rather than as the only one.
+        """
         agg = self.vr.agg
         ys, xs = np.where(np.isnan(agg.values))
         if len(ys) == 0:
@@ -628,7 +634,47 @@ class TestProbeStatic:
         x_val = float(agg.coords[agg.dims[1]].values[px])
         y_val = float(agg.coords[agg.dims[0]].values[py])
         resp = self.vr._handle_probe({"x": x_val, "y": y_val})
+        probe = resp["probe"]
+        assert probe["status"] == "ok"
+        assert probe["empty"] is True
+        assert probe["value"] is None
         assert "empty" in resp["label"].lower()
+
+    # ------------------------------------------------------------------
+    # Structured probe envelope (added 2026-08)
+    # ------------------------------------------------------------------
+
+    def test_probe_envelope_shape(self):
+        """Every probe answer carries a status and leaves label intact."""
+        x, y = self._finite_data_coords()
+        resp = self.vr._handle_probe({"x": x, "y": y})
+        assert set(resp.keys()) >= {"label", "probe"}
+        probe = resp["probe"]
+        assert probe["status"] == "ok"
+        assert probe["empty"] is False
+        assert isinstance(probe["value"], float)
+        assert len(probe["pixel"]) == 2
+
+    def test_probe_out_of_range_status(self):
+        """Out-of-range must be identifiable without reading the markup."""
+        resp = self.vr._handle_probe({"x": -1e30, "y": -1e30})
+        assert resp["probe"]["status"] == "out_of_range"
+
+    def test_probe_envelope_is_json_safe(self):
+        """The envelope must survive the Comm transport's json.dumps.
+
+        A numpy scalar raises TypeError and a non-finite float serialises
+        to a bare NaN token that the browser's JSON.parse rejects -- both
+        take down the whole p2j response, not just the offending field.
+        This is what _json_num exists to prevent; catch it here rather
+        than in a browser console.
+        """
+        import json
+        x, y = self._finite_data_coords()
+        resp = self.vr._handle_probe({"x": x, "y": y})
+        text = json.dumps(resp)
+        assert "NaN" not in text and "Infinity" not in text
+        json.loads(text)
 
     def test_probe_field_name_in_label(self):
         """When baseline is x-axis, probe should include field info (time is y)."""
@@ -771,7 +817,15 @@ class TestDatashadedOutput:
         self.backend.close()
 
     def test_img_to_uint32_pil_byte_order(self):
-        """PIL RGBA Image path: bytes packed as B G R A in memory (little-endian)."""
+        """PIL RGBA Image path: bytes stay R G B A in memory order.
+
+        Was asserting B G R A, matching a transposition in the PIL branch
+        of _img_to_uint32 (fixed 2026-08).  Test-only path, so nothing
+        user-visible was wrong, but this test was pinning the bug in
+        place.  Assert memory order rather than the packed uint32 value:
+        the same bytes read as 0xAABBGGRR little-endian and 0xRRGGBBAA
+        big-endian, so a hex assertion would be an endianness trap.
+        """
         from PIL import Image
         img = Image.fromarray(
             np.array([[[0x11, 0x22, 0x33, 0xff]]], dtype=np.uint8), mode="RGBA"
@@ -779,11 +833,53 @@ class TestDatashadedOutput:
         out  = _img_to_uint32(img)
         assert out.shape == (1, 1)
         assert out.dtype == np.uint32
+        assert out.flags["C_CONTIGUOUS"]
         view = out.view(np.uint8).reshape(1, 1, 4)
-        assert int(view[0, 0, 0]) == 0x33, "Blue channel wrong"
+        assert int(view[0, 0, 0]) == 0x11, "Red channel wrong"
         assert int(view[0, 0, 1]) == 0x22, "Green channel wrong"
-        assert int(view[0, 0, 2]) == 0x11, "Red channel wrong"
+        assert int(view[0, 0, 2]) == 0x33, "Blue channel wrong"
         assert int(view[0, 0, 3]) == 0xff, "Alpha channel wrong"
+
+    def test_img_to_uint32_datashader_emits_rgba_in_memory(self):
+        """Datashader shade() output is RGBA in memory: red byte 0, blue byte 2.
+
+        The fact the whole export path rests on -- matplotlib's imshow
+        takes ``img32.view(np.uint8).reshape(h, w, 4)`` with no channel
+        permutation, and that is correct only if this holds.  Uses a
+        two-colour cmap because a symmetric palette cannot distinguish R
+        from B, which is exactly how the transposition above survived.
+        """
+        import xarray as xr
+        import datashader.transfer_functions as tf
+
+        agg = xr.DataArray(
+            np.array([[0.0, 1.0]]), dims=("y", "x"),
+            coords={"y": [0], "x": [0, 1]},
+        )
+        img = tf.shade(agg, cmap=["#FF0000", "#0000FF"],
+                       how="linear", span=[0.0, 1.0])
+        out  = _img_to_uint32(img)
+        view = out.view(np.uint8).reshape(out.shape + (4,))
+        assert int(view[0, 0, 0]) == 0xFF, "low end should be red in byte 0"
+        assert int(view[0, 0, 2]) == 0x00
+        assert int(view[0, 1, 0]) == 0x00
+        assert int(view[0, 1, 2]) == 0xFF, "high end should be blue in byte 2"
+
+    def test_img_to_uint32_rejects_float_rgba(self):
+        """A float RGBA array must raise, not be silently truncated."""
+        with pytest.raises(ValueError):
+            _img_to_uint32(np.zeros((2, 2, 4), dtype=np.float32))
+
+    def test_img_to_uint32_uint32_passthrough_is_contiguous(self):
+        """A non-contiguous uint32 input still yields a viewable result.
+
+        Callers rely on ``.view(np.uint8)`` unconditionally; that is only
+        safe because the uint32 branch runs ascontiguousarray.
+        """
+        src = np.arange(6, dtype=np.uint32).reshape(2, 3)
+        out = _img_to_uint32(src[:, ::2])
+        assert out.flags["C_CONTIGUOUS"]
+        np.testing.assert_array_equal(out, src[:, ::2])
 
     def test_img_to_uint32_datashader_passthrough(self):
         """Datashader Image path: uint32 array passed through unchanged."""

@@ -824,6 +824,45 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             note       = note,
         )
 
+    def _bands_with_mappings(self, spec, viewport=None):
+        """One mapping, from the same reference _shade_agg would use.
+
+        ``color_mode`` decides the reference exactly as in ``_shade_agg``:
+        ``"global"`` anchors to ``self._agg`` (the full cached
+        aggregation) so colours stay put under zoom; ``"local"`` anchors
+        to the viewport crop.  A manual ``vmin``/``vmax`` override wins
+        over both, again matching the shade.
+        """
+        from dataclasses import replace
+        from .colormap_scaling import ScalarMapping
+
+        if self._agg is None or not spec.bands:
+            return spec.bands
+        crop = self._crop_agg(viewport) if viewport is not None else self._agg
+        values = np.asarray((crop if crop is not None else self._agg).values)
+        reference = (np.asarray(self._agg.values)
+                     if self._color_mode == "global" else None)
+        m = ScalarMapping.from_values(
+            values, self._scaling,
+            reference     = reference,
+            alpha         = self._scaling_alpha,
+            gamma         = self._scaling_gamma,
+            vmin          = self._scaling_vmin,
+            vmax          = self._scaling_vmax,
+        )
+        return (replace(spec.bands[0], kind="value", mapping=m),)
+
+    def _crop_agg(self, viewport):
+        """Cached agg cropped to *viewport*, or ``None`` if not possible."""
+        try:
+            x0, x1, y0, y1 = viewport
+            dy, dx = self._agg.dims
+            return self._agg.sel({dx: slice(min(x0, x1), max(x0, x1)),
+                                  dy: slice(min(y0, y1), max(y0, y1))})
+        except Exception as exc:
+            log.debug("_crop_agg failed, using full agg: %s", exc)
+            return None
+
     def _shade_for_export(self, viewport=None) -> Optional[np.ndarray]:
         """Re-shade from the cached agg at *viewport*; no backend query."""
         if self._agg is None:

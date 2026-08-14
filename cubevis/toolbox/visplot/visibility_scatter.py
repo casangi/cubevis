@@ -218,22 +218,7 @@ class VisibilityScatter(VisibilityPlot):
             raise ValueError("VisibilityScatter: layers must be non-empty")
 
         # Assign default color maps by layer index
-        self._layers: list[ScatterLayer] = []
-        for i, lyr in enumerate(layers):
-            if lyr.cmap is None:
-                lyr = ScatterLayer(
-                    y_axis        = lyr.y_axis,
-                    polarization  = lyr.polarization,
-                    cmap          = _LAYER_CMAPS[i % len(_LAYER_CMAPS)],
-                    alpha         = lyr.alpha,
-                    label         = lyr.label,
-                    scaling       = lyr.scaling,
-                    scaling_alpha = lyr.scaling_alpha,
-                    scaling_gamma = lyr.scaling_gamma,
-                    scaling_vmin  = lyr.scaling_vmin,
-                    scaling_vmax  = lyr.scaling_vmax,
-                )
-            self._layers.append(lyr)
+        self._layers: list[ScatterLayer] = self._with_default_cmaps(layers)
 
         # Cached DataFrames and canvas aggs — one per layer
         self._layer_dfs:  list[Optional["pd.DataFrame"]] = [None] * len(layers)
@@ -727,7 +712,10 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         if x_dim is not None and x_dim != self._x_dim:
             self._x_dim = x_dim;  changed = True
         if layers is not None:
-            self._layers = list(layers)
+            # _with_default_cmaps, not list(): a j2p layers payload
+            # carries no cmap field, and an unfilled None reaches
+            # tf.shade and blanks the panel.
+            self._layers = self._with_default_cmaps(layers)
             self._layer_dfs  = [None] * len(layers)
             self._layer_aggs = [None] * len(layers)
             self._layer_skip_reason = [None] * len(layers)
@@ -842,6 +830,44 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             status     = status,
             note       = note,
         )
+
+    def _bands_with_mappings(self, spec, viewport=None):
+        """One mapping per layer, plus each layer's peak per-pixel count.
+
+        A scatter agg is a *count*, so these bands are ``kind="density"``
+        -- which is what stops the compositor labelling the ramp with the
+        layer's amplitude label.  ``peak_density`` feeds the legend
+        annotation that scatter panels show instead of a colorbar.
+
+        Uses whatever ``_layer_aggs`` the last shade left, so the curve
+        matches the pixels on screen.  A layer that was skipped has no
+        agg and keeps ``mapping=None``, which the compositor reads as
+        "no bar for this band".
+        """
+        from dataclasses import replace
+        from .colormap_scaling import ScalarMapping
+
+        out = []
+        for i, band in enumerate(spec.bands):
+            agg = (self._layer_aggs[i]
+                   if i < len(self._layer_aggs) else None)
+            if agg is None or not band.visible:
+                out.append(replace(band, kind="density"))
+                continue
+            values = np.asarray(agg.values, dtype=np.float64)
+            finite = values[np.isfinite(values)]
+            peak = float(finite.max()) if finite.size else None
+            lyr = self._layers[i]
+            m = ScalarMapping.from_values(
+                values, lyr.scaling,
+                alpha = lyr.scaling_alpha,
+                gamma = lyr.scaling_gamma,
+                vmin  = lyr.scaling_vmin,
+                vmax  = lyr.scaling_vmax,
+            )
+            out.append(replace(band, kind="density", mapping=m,
+                               peak_density=peak))
+        return tuple(out)
 
     def _shade_for_export(self, viewport=None) -> Optional[np.ndarray]:
         """Re-composite from cached DataFrames at *viewport*; no re-query.
@@ -1782,6 +1808,38 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             scaling_vmin  = lyr.scaling_vmin,
             scaling_vmax  = lyr.scaling_vmax,
         )
+
+    @staticmethod
+    def _with_default_cmaps(layers) -> list:
+        """Return *layers* with any missing ``cmap`` filled in by index.
+
+        Must be applied wherever ``self._layers`` is set, not only in
+        ``__init__``.  ``_handle_update_axes_scatter`` constructs
+        ``ScatterLayer`` objects from a j2p payload without a ``cmap``
+        field -- the browser has no reason to send one -- so they arrive
+        with ``cmap=None``.  Before this helper existed, ``update_axes``
+        assigned that list straight to ``self._layers``, and every
+        subsequent ``tf.shade(cmap=None)`` failed with "Expected `cmap`
+        of ...; got: <class 'NoneType'>", blanking the panel after any
+        sidebar axis or layer change.
+        """
+        out = []
+        for i, lyr in enumerate(layers):
+            if lyr.cmap is None:
+                lyr = ScatterLayer(
+                    y_axis        = lyr.y_axis,
+                    polarization  = lyr.polarization,
+                    cmap          = _LAYER_CMAPS[i % len(_LAYER_CMAPS)],
+                    alpha         = lyr.alpha,
+                    label         = lyr.label,
+                    scaling       = lyr.scaling,
+                    scaling_alpha = lyr.scaling_alpha,
+                    scaling_gamma = lyr.scaling_gamma,
+                    scaling_vmin  = lyr.scaling_vmin,
+                    scaling_vmax  = lyr.scaling_vmax,
+                )
+            out.append(lyr)
+        return out
 
     def _handle_update_axes_scatter(self, message: dict) -> dict:
         """Handle j2p 'vs_update_axes' with scatter-specific fields."""

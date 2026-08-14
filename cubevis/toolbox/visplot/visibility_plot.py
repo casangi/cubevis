@@ -79,6 +79,8 @@ from bokeh.layouts import column
 
 from cubevis.bokeh.tools._flag_tool import FlagTool
 
+from .tick_format import TICK_FORMATTER_JS
+
 if TYPE_CHECKING:
     from .visibility_reader import VisibilityReader
     from .selection import SelectionSpec
@@ -443,11 +445,26 @@ class VisibilityPlot(Model):
         spec = self._panel_spec()
         if spec.status != "ok":
             return RenderedPanel(spec=spec, image=None, viewport=viewport)
+        # Mappings are attached here rather than in _panel_spec because
+        # building one costs a histogram plus a few hundred interpolation
+        # samples: negligible beside a shade, but far too much to pay on
+        # every _state_source push.
+        spec = spec.with_bands(self._bands_with_mappings(spec, viewport))
         return RenderedPanel(
             spec     = spec,
             image    = self._shade_for_export(viewport),
             viewport = viewport,
         )
+
+    def _bands_with_mappings(self, spec, viewport=None):
+        """Return *spec*'s bands with ``mapping``/``peak_density`` filled.
+
+        Default is a no-op; subclasses override.  The mapping must be
+        built from the same reference array the shade uses, or the
+        colorbar will label the image with a curve the image was not
+        drawn with — which is worse than no colorbar at all.
+        """
+        return spec.bands
 
     def _register_extra_comm_handlers(self) -> None:
         """Register additional j2p handlers beyond the base set.
@@ -693,27 +710,21 @@ class VisibilityPlot(Model):
         self._build_glyphs()
 
         # Shared tick formatters reading from _state_source
-        _time_fmt_code = """
-const is_time = state.data[axis_key][0];
-if (!is_time) return tick.toFixed(4);
-const t0      = state.data[t0_key][0];
-const elapsed = tick - t0;
-if (Math.abs(elapsed) < 60)
-    return elapsed.toFixed(1) + ' s';
-const m    = Math.floor(Math.abs(elapsed) / 60);
-const s    = Math.round(Math.abs(elapsed) % 60);
-const sign = elapsed < 0 ? '-' : '';
-return sign + m + 'm ' + s.toString().padStart(2, '0') + 's';
-"""
+        # Tick formatting lives in tick_format so the matplotlib export
+        # chrome can produce byte-identical labels from Python.  Do not
+        # inline a copy back here -- test_tick_format asserts this module
+        # does not define its own, because a local copy would let the
+        # browser and exported PNGs drift while the parity tests kept
+        # passing against the shared string.
         self._fig.yaxis.formatter = CustomJSTickFormatter(
             args={"state": self._state_source,
                   "axis_key": "y_is_time", "t0_key": "full_y0"},
-            code=_time_fmt_code,
+            code=TICK_FORMATTER_JS,
         )
         self._fig.xaxis.formatter = CustomJSTickFormatter(
             args={"state": self._state_source,
                   "axis_key": "x_is_time", "t0_key": "full_x0"},
-            code=_time_fmt_code,
+            code=TICK_FORMATTER_JS,
         )
 
         # Info / hover status div

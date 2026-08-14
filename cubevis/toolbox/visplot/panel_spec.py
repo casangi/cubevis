@@ -79,6 +79,20 @@ class ColorBand:
         scalar mapping, not from here.
     alpha : float
         Layer opacity in [0, 1].  Always 1.0 for a raster.
+    kind : {"value", "density"}
+        What the ramp encodes.  ``"value"`` for a raster, whose ramp is
+        the quantity; ``"density"`` for a scatter layer, whose ramp is
+        points per pixel.  Drives ``bar_label()`` — see there.
+    mapping : ScalarMapping | None
+        The value-to-colour-position curve, from
+        ``colormap_scaling.ScalarMapping``.  ``None`` on a spec built for
+        ``_state_data()``, which never needs it; populated by
+        ``render_result()``, where a colorbar might.  Building it costs a
+        histogram and 512 interpolation samples, which is nothing beside
+        a shade but too much to pay on every state push.
+    peak_density : float | None
+        Highest per-pixel count in a scatter layer's aggregation, for the
+        legend annotation.  ``None`` for a raster.
     visible : bool
         ``False`` when the user has hidden this band (``alpha == 0``).
         Kept in the list rather than filtered out so band indices stay
@@ -95,6 +109,66 @@ class ColorBand:
     vmax:          Optional[float] = None
     alpha:         float = 1.0
     visible:       bool  = True
+    kind:          str   = "value"
+    mapping:       Optional[object] = None
+    peak_density:  Optional[float]  = None
+
+    # ------------------------------------------------------------------
+    # Labelling
+    # ------------------------------------------------------------------
+
+    def bar_label(self) -> str:
+        """Axis label for this band's colorbar.
+
+        Two things this must get right, both of which are misreadings
+        waiting to happen in a published figure:
+
+        *Quantity.*  A raster's ramp encodes the quantity itself; a
+        scatter's encodes *points per pixel*.  Labelling a scatter bar
+        "Amplitude XX" — the layer label, which is what the legend
+        correctly uses — states that the ramp is an amplitude scale when
+        it is a density scale.  ``kind`` distinguishes them so the
+        compositor never has to guess.
+
+        *Scaling.*  Every reader's prior, from plotms and the CASA
+        viewer, is a linear ramp.  Under ``eq_hist`` the ticks bunch
+        where the data is dense, which is the information the scaling
+        exists to expose — but only to a reader who knows to expect it.
+        Naming the scaling is the difference between a figure that
+        documents its processing and one that quietly misrepresents it.
+        """
+        base = "Density" if self.kind == "density" else self.label
+        if self.scaling and self.scaling != "linear":
+            return f"{base} ({self.scaling})"
+        return base
+
+    def legend_label(self) -> str:
+        """Legend entry, with peak density folded in for scatter bands.
+
+        What an astronomer wants from a density ramp is usually one
+        number — "how overplotted is this?" — not a ramp.  Folding it
+        into the legend answers that in one line, survives grid mode
+        without scaling, and is why scatter colorbars default to off.
+        """
+        if self.kind == "density" and self.peak_density:
+            return f"{self.label}  (\u2264{self.peak_density:.0f} pts/px)"
+        return self.label
+
+    def bin_area(self, spec: "PanelSpec") -> tuple[float, float]:
+        """Data-units size of one aggregation bin, for comparability.
+
+        Two scatter panels only have comparable densities if their bins
+        cover the same area — ``_compute_canvas_size`` is adaptive and
+        shrinks the canvas for sparse layers by more than an order of
+        magnitude, so "count = 10" can mean quite different things in two
+        cells of the same grid.  Note this is orthogonal to
+        ``color_mode``: global vs local governs zoom *within* a panel,
+        not comparability *across* panels.
+        """
+        return (
+            (spec.x_range[1] - spec.x_range[0]) / max(spec.agg_n_x, 1),
+            (spec.y_range[1] - spec.y_range[0]) / max(spec.agg_n_y, 1),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +244,11 @@ class PanelSpec:
     # ------------------------------------------------------------------
     # Bokeh interop
     # ------------------------------------------------------------------
+
+    def with_bands(self, bands) -> "PanelSpec":
+        """Copy with *bands* replaced — used to attach mappings late."""
+        from dataclasses import replace
+        return replace(self, bands=tuple(bands))
 
     def to_state_data(self) -> dict:
         """Render as a ``ColumnDataSource.data`` dict.

@@ -281,6 +281,142 @@ def apply_explicit_scaling(
     return (scaled - s_lo) / (s_hi - s_lo)
 
 
+# ---------------------------------------------------------------------------
+# ScalarMapping — value <-> colour-position, as an object
+# ---------------------------------------------------------------------------
+
+class ScalarMapping:
+    """The value-to-colour-position curve of a shade, made inspectable.
+
+    ``apply_explicit_scaling`` and ``equalize_histogram`` transform an
+    array and discard the curve they used.  That is all a shade needs,
+    but a *colorbar* needs the curve itself: to place a tick at 0.5 Jy it
+    must know where 0.5 lands in [0, 1], and to label a position it must
+    invert.  This class captures the curve as a monotonic lookup table so
+    both directions are available.
+
+    One LUT covers every scaling, ``eq_hist`` included.  For eq_hist the
+    table is the histogram CDF (which is exactly what
+    ``equalize_histogram`` already interpolates against); for the
+    explicit transforms it is the composed clip-normalise-transform-
+    renormalise pipeline sampled on a fine grid.  Sampling rather than
+    inverting analytically keeps one code path and stays correct if a new
+    curve is added to ``_SCALING_FUNCS``.
+
+    ``forward`` and ``inverse`` accept scalars or arrays and are directly
+    usable as ``matplotlib.colors.FuncNorm((forward, inverse))``, which
+    is what gives an exported colorbar correctly-placed ticks in data
+    units under a non-linear scaling.
+
+    Attributes
+    ----------
+    vmin, vmax : float
+        The *effective* data range the curve spans — after any manual
+        clip, and after ``color_mode`` has decided whether the reference
+        was the full aggregation or just the viewport.  Not the same as
+        ``ColorBand.vmin``/``vmax``, which are the user's overrides and
+        are often ``None``.
+    scaling : str
+        Which curve this is, for labelling.
+    """
+
+    __slots__ = ("vmin", "vmax", "scaling", "_x", "_u")
+
+    def __init__(self, x: np.ndarray, u: np.ndarray, scaling: str) -> None:
+        # Enforce strict monotonicity: np.interp needs an increasing xp,
+        # and a CDF plateau (a value range with no samples) would
+        # otherwise make the inverse ambiguous.  Dropping duplicate u
+        # keeps the first x of each plateau, which is the conventional
+        # choice and keeps ticks inside the populated range.
+        keep = np.concatenate(([True], np.diff(u) > 0))
+        self._x = np.asarray(x, dtype=np.float64)[keep]
+        self._u = np.asarray(u, dtype=np.float64)[keep]
+        self.vmin = float(self._x[0])
+        self.vmax = float(self._x[-1])
+        self.scaling = scaling
+
+    # -- construction ----------------------------------------------------
+
+    @classmethod
+    def from_values(
+        cls,
+        values: np.ndarray,
+        scaling: str,
+        *,
+        reference: np.ndarray | None = None,
+        alpha: float = 10.0,
+        gamma: float = 1.0,
+        vmin: float | None = None,
+        vmax: float | None = None,
+        nsamples: int = 512,
+    ) -> "ScalarMapping | None":
+        """Build the mapping a shade of *values* under *scaling* would use.
+
+        *reference* mirrors ``equalize_histogram``: pass the full cached
+        aggregation for ``color_mode="global"`` so the curve is anchored
+        to the whole dataset rather than to the current viewport.
+
+        Returns ``None`` when there is nothing to map (no finite values,
+        or a degenerate range), which callers should treat as "draw no
+        colorbar" rather than as an error.
+        """
+        ref = reference if reference is not None else values
+        finite = np.asarray(ref)[np.isfinite(ref)]
+        if finite.size == 0:
+            return None
+
+        lo = float(finite.min()) if vmin is None else float(vmin)
+        hi = float(finite.max()) if vmax is None else float(vmax)
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return None
+
+        if scaling == "eq_hist":
+            # Reuse the shade's own curve rather than a parallel one:
+            # sample equalize_histogram on a grid spanning [lo, hi].
+            grid = np.linspace(lo, hi, nsamples)
+            u = equalize_histogram(grid, reference=finite)
+            if not np.any(np.isfinite(u)):
+                return None
+            return cls(grid, u, scaling)
+
+        grid = np.linspace(lo, hi, nsamples)
+        u = apply_explicit_scaling(
+            grid, scaling, alpha=alpha, gamma=gamma, vmin=lo, vmax=hi,
+        )
+        if not np.any(np.isfinite(u)):
+            return None
+        return cls(grid, u, scaling)
+
+    # -- the two directions ---------------------------------------------
+
+    def forward(self, v):
+        """Data value(s) -> colour position in [0, 1]."""
+        return np.interp(v, self._x, self._u,
+                         left=self._u[0], right=self._u[-1])
+
+    def inverse(self, u):
+        """Colour position in [0, 1] -> data value(s)."""
+        return np.interp(u, self._u, self._x,
+                         left=self._x[0], right=self._x[-1])
+
+    # -- convenience -----------------------------------------------------
+
+    def ticks(self, n: int = 6) -> np.ndarray:
+        """*n* data values evenly spaced along the *colour* axis.
+
+        Even spacing in colour, not in value, is what makes a non-linear
+        colorbar readable: under eq_hist the ticks bunch up where the
+        data is dense, which is exactly the information the scaling was
+        chosen to expose.
+        """
+        return self.inverse(np.linspace(0.0, 1.0, max(2, n)))
+
+    def __repr__(self) -> str:                      # pragma: no cover
+        return (f"ScalarMapping(scaling={self.scaling!r}, "
+                f"vmin={self.vmin:.6g}, vmax={self.vmax:.6g}, "
+                f"n={len(self._x)})")
+
+
 def scaling_equation_label(scaling: str) -> str:
     """Return a short human-readable equation string for UI display.
 

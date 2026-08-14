@@ -42,7 +42,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from ..axes import Axis, AxisType
+from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
 
 log = logging.getLogger(__name__)
@@ -755,6 +755,34 @@ class XArrayReader(abc.ABC):
     # ------------------------------------------------------------------ #
     # Convenience                                                          #
     # ------------------------------------------------------------------ #
+
+    def axis_info(
+        self, axis: Axis, selection: Optional[SelectionSpec] = None
+    ) -> AxisInfo:
+        """Resolve what will actually be plotted along *axis*.
+
+        The single authority for an axis's label, unit, and dimension —
+        callers must not derive any of those from the ``Axis`` enum
+        directly, because a backend may substitute a different axis for
+        the one requested and the label has to follow.  See ``AxisInfo``
+        for why that divergence was previously possible.
+
+        The *selection* argument matters: the answer can differ between
+        "one spectral window selected, the channel index is unique" and
+        "four selected, fall back to frequency".  A backend that cannot
+        honour *axis* under *selection* returns
+        ``AxisInfo.substituted(...)`` with a note explaining what would
+        restore it.
+
+        This default returns the axis unchanged, which is correct for
+        every axis a backend does not special-case.  ``Axis.CHANNEL`` is
+        marked as an index axis so it takes no unit suffix.
+        """
+        return AxisInfo.direct(
+            axis,
+            dim      = "",
+            is_index = axis in (Axis.CHANNEL, Axis.ROW),
+        )
 
     def available_axes(self) -> list[Axis]:
         """Return the subset of ``Axis`` members valid for this reader.

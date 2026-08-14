@@ -76,7 +76,7 @@ from .reader import (
     _cell_bounds,
     _widen_if_degenerate,
 )
-from ..axes import Axis, AxisType
+from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
 
 log = logging.getLogger(__name__)
@@ -221,6 +221,61 @@ class MSv2Backend(XArrayReader):
             )
         return dt
 
+
+
+    def axis_info(self, axis, selection=None):
+        """Resolve *axis* for *selection*, substituting where necessary.
+
+        ``Axis.CHANNEL`` is the case that matters.  ``_axis_to_dim`` maps
+        it to the ``"frequency"`` dimension, the same as
+        ``Axis.FREQUENCY``, and ``query_raster`` takes its extent from
+        that coordinate -- so before this method existed, selecting
+        CHANNEL produced an axis labelled "Channel" with ticks in Hz.
+        Correct picture, wrong label.
+
+        A channel index is unique *within* a partition but not across
+        them: with four SPWs there are four channels numbered 5, and
+        ``query_raster`` concatenates partitions.  Frequency has no such
+        problem -- globally unique, monotonic, and it orders the
+        partitions correctly -- so the backend plots frequency and must
+        say so rather than leaving the user to infer it from tick
+        magnitudes.
+
+        There is no global channel index available, and MSv4 deliberately
+        has no notion of a global spectral axis (SPWs may differ in
+        channel count and width, and may overlap).  Inventing one would
+        break whenever ``partition_schema`` or a selection changed, and it
+        is not needed for flagging: frequency inverts exactly to
+        ``(partition, local channel index)`` via a lookup in that
+        partition's ``frequency`` coordinate, and ``FlagDB`` already
+        stores coordinate ranges rather than indices.
+
+        The partition count must come from the iteration, not from
+        ``len(selection.spw)``: a non-default partition schema splitting
+        by scan or field yields several partitions within one SPW, and
+        their frequency coordinates would be identical.
+        """
+        info = super().axis_info(axis, selection)
+        try:
+            dim = _axis_to_dim(axis, self._baseline_dim)
+        except (ValueError, AttributeError):
+            dim = ""
+
+        if axis is not Axis.CHANNEL:
+            return AxisInfo(axis=info.axis, requested=info.requested,
+                            dim=dim, is_index=info.is_index)
+
+        n_parts = sum(1 for _ in self._iter_visibility_partitions(selection))
+        if n_parts <= 1:
+            # One partition means one SPW's channel numbering: unambiguous.
+            return AxisInfo.direct(Axis.CHANNEL, dim=dim, is_index=True)
+
+        return AxisInfo.substituted(
+            Axis.CHANNEL, Axis.FREQUENCY, dim=dim,
+            note=("channel index is not unique across the "
+                  + str(n_parts) + " selected spectral windows; showing "
+                  "frequency. Select a single spw to plot channel number."),
+        )
 
     @staticmethod
     def _partition_spw_id(ds) -> "Optional[int]":

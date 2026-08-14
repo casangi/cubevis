@@ -19,7 +19,9 @@ References
 msvis_design.md §2.1, §4.2, Appendix A
 """
 
+from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Optional
 
 
 class AxisType(Enum):
@@ -231,3 +233,118 @@ class Axis(Enum):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"Axis.{self.name}"
+
+
+# ---------------------------------------------------------------------------
+# AxisInfo
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class AxisInfo:
+    """What is *actually* plotted along an axis, for a given selection.
+
+    ``Axis`` describes an axis in the abstract; ``AxisInfo`` describes the
+    one concrete axis a backend resolved for a specific selection.  The
+    two differ whenever a backend cannot honour the requested axis and
+    substitutes another.
+
+    Why this exists
+    ---------------
+    Before ``AxisInfo``, three places independently decided what an axis
+    was, and nothing forced them to agree:
+
+    * ``_compute_axis_values`` built the values,
+    * ``_axis_label`` built the display string from the requested ``Axis``,
+    * ``_axis_to_dim`` quietly decided which values were actually plotted.
+
+    ``_axis_to_dim`` maps **both** ``Axis.CHANNEL`` and ``Axis.FREQUENCY``
+    to the ``"frequency"`` dimension, so ``query_raster`` took its extent
+    from the frequency coordinate — producing an axis labelled "Channel"
+    with ticks at 372.55–372.76 GHz.  Correct picture, wrong label, which
+    is the worst combination because the plot looks fine.
+
+    A backend that substitutes must now return the substituted axis in
+    ``axis``, so the label follows automatically and the divergence
+    becomes unrepresentable rather than merely discouraged.  ``requested``
+    preserves what was asked for, so the substitution can be reported
+    instead of silently inferred from tick magnitudes.
+
+    Attributes
+    ----------
+    axis:
+        The axis whose values are on the plot.  ``label`` and ``unit``
+        are read from here, never from ``requested``.
+    requested:
+        What the caller asked for.  Equal to ``axis`` in the normal case.
+    dim:
+        Dimension name the values live along, e.g. ``"frequency"``.
+    is_index:
+        ``True`` when the plotted values are a positional index rather
+        than a physical quantity (``Axis.CHANNEL`` resolved as a genuine
+        per-SPW channel number).  Index axes take no SI prefix and no
+        unit suffix.
+    note:
+        Human-readable explanation when a substitution occurred, for
+        ``PanelSpec.note`` and the status bar.  ``None`` otherwise.
+    """
+
+    axis:      Axis
+    requested: Axis
+    dim:       str = ""
+    is_index:  bool = False
+    note:      Optional[str] = None
+
+    # -- construction ---------------------------------------------------
+
+    @classmethod
+    def direct(cls, axis: Axis, dim: str = "", is_index: bool = False
+               ) -> "AxisInfo":
+        """The axis was honoured as requested — the normal case."""
+        return cls(axis=axis, requested=axis, dim=dim, is_index=is_index)
+
+    @classmethod
+    def substituted(cls, requested: Axis, actual: Axis, dim: str = "",
+                    note: Optional[str] = None) -> "AxisInfo":
+        """The backend plotted *actual* in place of *requested*.
+
+        *note* should say why in terms a user can act on, e.g. naming the
+        selection that would restore the requested axis.
+        """
+        return cls(axis=actual, requested=requested, dim=dim,
+                   is_index=False, note=note)
+
+    # -- display --------------------------------------------------------
+
+    @property
+    def label(self) -> str:
+        """Bare label of the axis actually plotted, e.g. ``"Frequency"``."""
+        return self.axis.label
+
+    @property
+    def unit(self) -> str:
+        """Unit of the axis actually plotted; ``""`` when dimensionless."""
+        return "" if self.is_index else self.axis.unit
+
+    @property
+    def substituted_axis(self) -> bool:
+        """``True`` when the plotted axis is not the requested one."""
+        return self.axis is not self.requested
+
+    def display_label(self, unit_override: Optional[str] = None) -> str:
+        """Axis label with unit suffix, e.g. ``"Frequency [Hz]"``.
+
+        *unit_override* lets a caller substitute an SI-prefixed unit
+        (``"GHz"``) once the visible range is known.  The prefix belongs
+        in the label rather than on each tick because Bokeh's
+        ``CustomJSTickFormatter`` runs per tick and has no slot for a
+        shared multiplier annotation — putting it here is the one
+        approach that works identically in both runtimes.
+        """
+        unit = self.unit if unit_override is None else unit_override
+        return f"{self.label}" + (f" [{unit}]" if unit else "")
+
+    def __repr__(self) -> str:      # pragma: no cover
+        if self.substituted_axis:
+            return (f"AxisInfo({self.requested.name}->{self.axis.name}, "
+                    f"dim={self.dim!r})")
+        return f"AxisInfo({self.axis.name}, dim={self.dim!r})"

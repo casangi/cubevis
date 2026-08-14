@@ -289,8 +289,53 @@ class MSv4Backend(XArrayReader):
             )
         return dt
 
-    def _iter_visibility_partitions(self) -> Iterator[xr.Dataset]:
+
+    @staticmethod
+    def _partition_spw_id(ds) -> "Optional[int]":
+        """SPW id of a partition, or ``None`` if it does not declare one.
+
+        Read from ``ds.attrs["spectral_window_id"]``, the same key
+        ``metadata()`` uses to collect ``spw_ids``.
+        """
+        spw_id = ds.attrs.get("spectral_window_id")
+        return None if spw_id is None else int(spw_id)
+
+    def _spw_selected(self, ds, selection) -> bool:
+        """Whether *ds* passes *selection*'s SPW filter.
+
+        A partition that declares no SPW id is **kept**: refusing to plot
+        data because a store omits an optional attribute would be a worse
+        failure than plotting slightly more than asked for, and
+        ``metadata()`` has the same tolerance when collecting ``spw_ids``.
+        """
+        if selection is None or getattr(selection, "spw", None) is None:
+            return True
+        spw_id = self._partition_spw_id(ds)
+        if spw_id is None:
+            return True
+        return spw_id in set(selection.spw)
+
+    def _iter_visibility_partitions(
+        self, selection=None
+    ) -> Iterator[xr.Dataset]:
         """Yield each cached visibility partition Dataset.
+
+        When *selection* carries an ``spw`` constraint, partitions whose
+        SPW is not listed are skipped entirely.  Filtering here rather
+        than in ``_apply_selection`` is deliberate: SPW is a *partition*
+        property in MSv4, not a dimension within one, so skipping avoids
+        reading the partition at all.
+
+        SPW selection was silently ignored before 2026-08: the field
+        existed on ``SelectionSpec``, ``VisibilityPlotter.__init__``
+        accepted ``spw=``, ``_parse_spw_string`` converted it to ids, and
+        ``_build_selection`` populated ``SelectionSpec.spw`` -- and then
+        no backend ever read it.  ``visplot(ms=..., spw='0')`` plotted
+        every SPW, with no error and no warning.
+
+        Callers that must see the whole store regardless of selection --
+        ``metadata()``, and MSv2's ``open()`` -- pass no *selection* and
+        are unaffected.
 
         After ``open()``, simply iterates ``self._partitions`` — a Python
         list of ``xr.Dataset`` objects — avoiding repeated DataTree subtree
@@ -301,11 +346,27 @@ class MSv4Backend(XArrayReader):
         ready), preserving the same behaviour as the original implementation.
         """
         if self._partitions:
-            yield from self._partitions
+            source = iter(self._partitions)
         else:
             # Fallback: live walk (only used transiently during open())
-            dt = self._require_open()
-            yield from _collect_visibility_partitions(dt)
+            source = _collect_visibility_partitions(self._require_open())
+
+        n_total = n_kept = 0
+        for ds in source:
+            n_total += 1
+            if not self._spw_selected(ds, selection):
+                continue
+            n_kept += 1
+            yield ds
+
+        if n_total and not n_kept:
+            # Every partition filtered out.  Callers handle "no data"
+            # gracefully, but silence here would look identical to an
+            # empty selection range, so say which constraint emptied it.
+            log.warning(
+                "SPW selection %r matched none of the %d partitions in %s",
+                getattr(selection, "spw", None), n_total, self._path,
+            )
 
     @property
     def is_single_dish(self) -> bool:
@@ -697,7 +758,7 @@ class MSv4Backend(XArrayReader):
         # Collect selected partitions and estimate total sample count
         selected: list[xr.Dataset] = []
         total_samples = 0
-        for raw_ds in self._iter_visibility_partitions():
+        for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
                 continue
@@ -976,7 +1037,7 @@ class MSv4Backend(XArrayReader):
         all_x_vals: list[float]        = []
         all_y_vals: list[float]        = []
 
-        for raw_ds in self._iter_visibility_partitions():
+        for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
                 continue
@@ -1169,7 +1230,7 @@ class MSv4Backend(XArrayReader):
             return pd.DataFrame({"x": [], "y": []})
 
         selected: list[xr.Dataset] = []
-        for raw_ds in self._iter_visibility_partitions():
+        for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) > 0:
                 selected.append(ds)
@@ -1228,7 +1289,7 @@ class MSv4Backend(XArrayReader):
         y_name = _axis_to_dim(y_dim, self._baseline_dim)
 
         total_x = total_y = 0
-        for raw_ds in self._iter_visibility_partitions():
+        for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             total_x = max(total_x, ds.sizes.get(x_name, 0))
             total_y = max(total_y, ds.sizes.get(y_name, 0))
@@ -1300,7 +1361,7 @@ class MSv4Backend(XArrayReader):
         antenna_pairs:  list[tuple[str, str]] = []
         freq_range_ghz: Optional[tuple[float, float]] = None
 
-        for raw_ds in self._iter_visibility_partitions():
+        for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
                 continue

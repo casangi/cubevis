@@ -221,7 +221,38 @@ class MSv2Backend(XArrayReader):
             )
         return dt
 
-    def _iter_visibility_partitions(self):
+
+    @staticmethod
+    def _partition_spw_id(ds) -> "Optional[int]":
+        """SPW id of a partition, or ``None`` if it does not declare one.
+
+        Tries ``spectral_window_id`` then ``DATA_DESC_ID`` -- the same
+        fallback pair ``metadata()`` uses, because xarray-ms-written
+        stores and xradio-written stores disagree on which key
+        carries it.
+        """
+        for attr_key in ("spectral_window_id", "DATA_DESC_ID"):
+            spw_id = ds.attrs.get(attr_key)
+            if spw_id is not None:
+                return int(spw_id)
+        return None
+
+    def _spw_selected(self, ds, selection) -> bool:
+        """Whether *ds* passes *selection*'s SPW filter.
+
+        A partition that declares no SPW id is **kept**: refusing to plot
+        data because a store omits an optional attribute would be a worse
+        failure than plotting slightly more than asked for, and
+        ``metadata()`` has the same tolerance when collecting ``spw_ids``.
+        """
+        if selection is None or getattr(selection, "spw", None) is None:
+            return True
+        spw_id = self._partition_spw_id(ds)
+        if spw_id is None:
+            return True
+        return spw_id in set(selection.spw)
+
+    def _iter_visibility_partitions(self, selection=None):
         """Yield each leaf Dataset that contains visibility data.
 
         Filters to nodes that have both a non-empty time dimension and
@@ -233,8 +264,21 @@ class MSv2Backend(XArrayReader):
         Checking for VISIBILITY/DATA is more reliable than checking for
         time>0 alone because some metadata subtables (e.g. ANTENNA) are
         broadcast onto the time dimension and would otherwise pass through.
+
+        When *selection* carries an ``spw`` constraint, partitions whose
+        SPW is not listed are skipped.  Filtering here rather than in
+        ``_apply_selection`` is deliberate: with the default partition
+        schema ``["DATA_DESC_ID", "OBSERVATION_ID"]`` SPW is a *partition*
+        property, not a dimension within one, so skipping avoids reading
+        the partition at all.
+
+        SPW selection was silently ignored before 2026-08 -- see the MSv4
+        backend's equivalent docstring for the full history.  Callers that
+        must see the whole store (``open()``, ``metadata()``) pass no
+        *selection* and are unaffected.
         """
         dt = self._require_open()
+        n_total = n_kept = 0
         for node in dt.subtree:
             if not node.has_data:
                 continue
@@ -246,7 +290,20 @@ class MSv2Backend(XArrayReader):
                                                      "CORRECTED_DATA",
                                                      "MODEL_DATA")):
                 continue
+            n_total += 1
+            if not self._spw_selected(ds, selection):
+                continue
+            n_kept += 1
             yield ds
+
+        if n_total and not n_kept:
+            # Every partition filtered out.  Callers handle "no data"
+            # gracefully, but silence here would look identical to an
+            # empty selection range, so say which constraint emptied it.
+            log.warning(
+                "SPW selection %r matched none of the %d partitions in %s",
+                getattr(selection, "spw", None), n_total, self._path,
+            )
 
     def _flag_mask(self, ds: xr.Dataset) -> xr.DataArray:
         """Return boolean FLAG DataArray (True = flagged or padded).
@@ -544,7 +601,7 @@ class MSv2Backend(XArrayReader):
             key: [] for key in yaxes
         }
 
-        for raw_ds in self._iter_visibility_partitions():
+        for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
                 continue
@@ -777,7 +834,7 @@ class MSv2Backend(XArrayReader):
         all_x_vals: list[float] = []
         all_y_vals: list[float] = []
 
-        for raw_ds in self._iter_visibility_partitions():
+        for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
                 continue
@@ -980,7 +1037,7 @@ class MSv2Backend(XArrayReader):
         self._require_open()
         u_parts, v_parts = [], []
 
-        for raw_ds in self._iter_visibility_partitions():
+        for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
                 continue
@@ -1033,7 +1090,7 @@ class MSv2Backend(XArrayReader):
         y_name = _axis_to_dim(y_dim)
 
         total_x = total_y = 0
-        for raw_ds in self._iter_visibility_partitions():
+        for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             total_x = max(total_x, ds.sizes.get(x_name, 0))
             total_y = max(total_y, ds.sizes.get(y_name, 0))
@@ -1118,7 +1175,7 @@ class MSv2Backend(XArrayReader):
         antenna_pairs:  list[tuple[str, str]] = []
         freq_range_ghz: Optional[tuple[float, float]] = None
 
-        for raw_ds in self._iter_visibility_partitions():
+        for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
                 continue

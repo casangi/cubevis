@@ -185,7 +185,7 @@ def _axis_label(axis: "Axis") -> str:
     (e.g. populating a dropdown of choices, where the label describes the
     option rather than a rendered axis).
     """
-    from ..axes import AxisInfo
+    from .axes import AxisInfo
     return AxisInfo.direct(axis).display_label()
 
 
@@ -289,7 +289,7 @@ class VisibilityPlot(Model):
         self._x_dim     = x_dim
         # Seeded direct; _render() re-resolves against the backend once
         # the subclass has finished wiring itself up.
-        from ..axes import AxisInfo as _AxisInfo
+        from .axes import AxisInfo as _AxisInfo
         self._x_info = _AxisInfo.direct(x_dim)
         self._y_info = _AxisInfo.direct(y_dim)
         self._width     = width
@@ -685,6 +685,9 @@ class VisibilityPlot(Model):
     # Axis resolution
     # ------------------------------------------------------------------
 
+    _axis_info_warned: set = set()
+    """Reader class names already warned about missing ``axis_info``."""
+
     def _refresh_axis_info(self, selection=None) -> None:
         """Re-resolve ``_x_info`` / ``_y_info`` from the backend.
 
@@ -702,12 +705,29 @@ class VisibilityPlot(Model):
         have been updated.  The fallback loses only the CHANNEL
         substitution, which is what the old behaviour was anyway.
         """
-        from ..axes import AxisInfo
+        from .axes import AxisInfo
         sel = selection if selection is not None else self._selection
         resolve = getattr(self._backend, "axis_info", None)
         if resolve is None:
+            # Log once per reader class.  This fallback produces the
+            # pre-AxisInfo behaviour, which looks correct -- the plot
+            # renders, the label just names the requested axis rather
+            # than the plotted one.  It stayed hidden exactly that way
+            # when LocalVisibilityReader (which narrows XArrayReader to
+            # the display protocol) was not given the new method.  A
+            # fallback indistinguishable from success is worse than none.
+            cls = type(self._backend).__name__
+            if cls not in VisibilityPlot._axis_info_warned:
+                VisibilityPlot._axis_info_warned.add(cls)
+                log.warning(
+                    "%s does not implement axis_info(); axis labels will "
+                    "name the requested axis rather than the one actually "
+                    "plotted (Axis.CHANNEL will read 'Channel' even when "
+                    "frequency is on the axis)", cls,
+                )
             self._x_info = AxisInfo.direct(self._x_dim)
             self._y_info = AxisInfo.direct(self._y_dim)
+            self._sync_axis_labels()
             return
         try:
             self._x_info = resolve(self._x_dim, sel)
@@ -716,6 +736,27 @@ class VisibilityPlot(Model):
             log.warning("axis_info failed (%s); using unresolved labels", exc)
             self._x_info = AxisInfo.direct(self._x_dim)
             self._y_info = AxisInfo.direct(self._y_dim)
+        self._sync_axis_labels()
+
+    def _sync_axis_labels(self) -> None:
+        """Push the resolved labels onto the live Bokeh figure.
+
+        ``_build()`` sets ``x_axis_label``/``y_axis_label`` once, from the
+        seeded direct resolution, before the backend has been consulted.
+        Re-resolving in ``_refresh_axis_info`` updates only the Python
+        object, so without this the figure title keeps saying "Channel"
+        while the status bar correctly says "Frequency".  Axis labels are
+        plain Bokeh properties, so assigning them propagates to the
+        browser through the normal document patch.
+        """
+        fig = getattr(self, "_fig", None)
+        if fig is None:
+            return                      # headless, or pre-_build
+        try:
+            fig.xaxis.axis_label = self.x_label
+            fig.yaxis.axis_label = self.y_label
+        except Exception as exc:        # pragma: no cover
+            log.debug("could not sync axis labels: %s", exc)
 
     @property
     def x_label(self) -> str:
@@ -1066,7 +1107,7 @@ window._cvRerenderTimer = setTimeout(function() {{
         was actually plotted rather than what was asked for.
         """
         from .tick_format import format_tick, si_scale
-        from ..axes import Axis
+        from .axes import Axis
 
         label = info.label
         if info.axis is Axis.TIME:
@@ -1099,7 +1140,7 @@ window._cvRerenderTimer = setTimeout(function() {{
         # time-vs-baseline raster the cell's frequency span is genuinely
         # extra information, but beside a Frequency axis it was printing
         # the same number twice under two names.
-        from ..axes import Axis
+        from .axes import Axis
         shows_freq = any(i.axis is Axis.FREQUENCY
                          for i in (self._x_info, self._y_info))
         fg = info.get("freq_range_ghz")

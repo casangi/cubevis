@@ -326,7 +326,8 @@ class MSv4Backend(XArrayReader):
         info = super().axis_info(axis, selection)
         try:
             dim = _axis_to_dim(axis, self._baseline_dim)
-        except (ValueError, AttributeError):
+        except ValueError:
+            # Derived axes have no dimension; that is not an error here.
             dim = ""
 
         if axis is not Axis.CHANNEL:

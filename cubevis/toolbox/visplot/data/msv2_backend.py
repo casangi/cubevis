@@ -257,8 +257,13 @@ class MSv2Backend(XArrayReader):
         """
         info = super().axis_info(axis, selection)
         try:
-            dim = _axis_to_dim(axis, self._baseline_dim)
-        except (ValueError, AttributeError):
+            # MSv2's _axis_to_dim takes the axis alone; MSv4's also takes
+            # a baseline dim.  Do not unify these by guessing -- passing
+            # MSv4's signature here raised AttributeError on the missing
+            # _baseline_dim and was swallowed into dim="".
+            dim = _axis_to_dim(axis)
+        except ValueError:
+            # Derived axes have no dimension; that is not an error here.
             dim = ""
 
         if axis is not Axis.CHANNEL:

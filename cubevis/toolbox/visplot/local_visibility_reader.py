@@ -200,6 +200,26 @@ class LocalVisibilityReader:
         """Forward to the backend's ``available_axes`` method."""
         return self._backend.available_axes()
 
+    def axis_info(self, axis: "Axis", selection: "SelectionSpec" = None):
+        """Forward to the backend's ``axis_info`` method.
+
+        Needed because a backend may plot a *different* axis than the one
+        requested -- ``Axis.CHANNEL`` resolves to frequency whenever more
+        than one spectral window is selected, since a channel index is
+        unique only within a partition.  Without this forwarding the
+        plot classes fall back to labelling from the bare ``Axis`` enum
+        and the axis reads "Channel" with ticks in Hz.
+
+        This adapter deliberately narrows ``XArrayReader`` to the display
+        protocol, so every method the widgets need has to be added here
+        explicitly.  When ``axis_info`` was added to the backends and not
+        to this class, ``VisibilityPlot._refresh_axis_info``'s
+        ``getattr(backend, "axis_info", None)`` guard silently produced
+        the old behaviour -- correct-looking output, wrong label.  That
+        guard now logs; see it for the reasoning.
+        """
+        return self._backend.axis_info(axis, selection)
+
     # ------------------------------------------------------------------ #
     # Repr                                                                 #
     # ------------------------------------------------------------------ #

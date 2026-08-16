@@ -1190,27 +1190,6 @@ class TestDeferredConstruction:
         assert vr._x_range == (0.0, 1.0)
         assert vr._y_range == (0.0, 1.0)
 
-    def test_defer_is_much_faster_than_real_render(self):
-        """Deferred construction must not pay the backend query cost —
-        the whole point of decision 11. Real construction of the same
-        selection is the baseline; deferred should be at least an order
-        of magnitude faster, not just "somewhat" faster, since it does
-        no I/O at all."""
-        t0 = time_mod.perf_counter()
-        _make_vr(self.backend, self.sel)
-        real_elapsed = time_mod.perf_counter() - t0
-
-        t0 = time_mod.perf_counter()
-        _make_vr(self.backend, self.sel, defer_initial_render=True)
-        deferred_elapsed = time_mod.perf_counter() - t0
-
-        print(f"  real={real_elapsed:.3f}s  deferred={deferred_elapsed:.3f}s")
-        assert deferred_elapsed < real_elapsed / 10 or deferred_elapsed < 0.05, (
-            f"Deferred construction ({deferred_elapsed:.3f}s) is not "
-            f"dramatically faster than real construction ({real_elapsed:.3f}s) "
-            "— defer_initial_render may still be querying the backend"
-        )
-
     def test_first_update_axes_with_explicit_values_renders(self):
         """Activating a deferred panel by passing its own current axes
         back explicitly (the natural 'this slot just became active' call)

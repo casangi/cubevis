@@ -183,6 +183,44 @@ def format_tick(tick: float, is_time: bool, t0: float = 0.0) -> str:
     return f"{sign}{m}m {s:02d}s"
 
 
+_SI_PREFIXES = (
+    (1e24, "Y"), (1e21, "Z"), (1e18, "E"), (1e15, "P"), (1e12, "T"),
+    (1e9,  "G"), (1e6,  "M"), (1e3,  "k"), (1.0,  ""),  (1e-3, "m"),
+    (1e-6, "\u00b5"), (1e-9, "n"), (1e-12, "p"), (1e-15, "f"),
+)
+
+
+def si_scale(value: float, unit: str) -> tuple[float, str]:
+    """Scale *value* to an SI-prefixed *unit*: ``(372.764, "GHz")``.
+
+    Returns *value* and *unit* unchanged when *unit* is empty (a
+    dimensionless or index axis takes no prefix) or when the magnitude is
+    already in range.  **Never infer a unit from magnitude alone** — a
+    bare float carries no dimension, and a magnitude-triggered "GHz"
+    would confidently mislabel a long baseline in metres as gigametres.
+
+    Python-only, and deliberately so.  This is used by ``_format_probe``,
+    whose output is rendered to HTML server-side, so unlike
+    ``format_tick`` it has no JavaScript counterpart to stay in step with
+    and needs no parity harness.  Axis *tick* text is the thing that must
+    match the browser; a status-bar readout is not.
+
+    Prefixes are not applied to units that already carry one or that are
+    compound (``"m/s"``), where naive prefixing would produce nonsense
+    like ``"km/s"`` from a value in m/s (correct) but ``"kdeg"`` from
+    degrees (not).
+    """
+    if not unit or "/" in unit or unit in ("deg", "rad", "h", "K", "\u03bb"):
+        return value, unit
+    if value == 0 or not math.isfinite(value):
+        return value, unit
+    mag = abs(value)
+    for factor, prefix in _SI_PREFIXES:
+        if mag >= factor:
+            return value / factor, f"{prefix}{unit}"
+    return value, unit
+
+
 def mpl_formatter(is_time: bool, t0: float = 0.0):
     """Return a ``matplotlib.ticker.FuncFormatter`` wrapping *format_tick*.
 

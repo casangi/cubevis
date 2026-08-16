@@ -172,8 +172,21 @@ def _json_num(v):
 
 
 def _axis_label(axis: "Axis") -> str:
-    """Format a display label with optional unit suffix."""
-    return f"{axis.label}" + (f" [{axis.unit}]" if axis.unit else "")
+    """Format a display label for a bare ``Axis``, with unit suffix.
+
+    DEPRECATED for plot code.  A bare ``Axis`` cannot know whether the
+    backend actually plotted it — ``Axis.CHANNEL`` is routinely resolved
+    as frequency — so labelling from the enum is how an axis came to read
+    "Channel" with ticks in Hz.  Plot classes must use
+    ``self._x_info`` / ``self._y_info``, which carry the axis that was
+    really plotted.
+
+    Retained only for callers that legitimately have no selection context
+    (e.g. populating a dropdown of choices, where the label describes the
+    option rather than a rendered axis).
+    """
+    from ..axes import AxisInfo
+    return AxisInfo.direct(axis).display_label()
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +287,11 @@ class VisibilityPlot(Model):
         self._selection = selection
         self._y_dim     = y_dim
         self._x_dim     = x_dim
+        # Seeded direct; _render() re-resolves against the backend once
+        # the subclass has finished wiring itself up.
+        from ..axes import AxisInfo as _AxisInfo
+        self._x_info = _AxisInfo.direct(x_dim)
+        self._y_info = _AxisInfo.direct(y_dim)
         self._width     = width
         self._height    = height
         self._title     = title   # None → subclass auto-generates
@@ -663,6 +681,56 @@ class VisibilityPlot(Model):
         from .axes import Axis
         return (self._x_dim == Axis.TIME, self._y_dim == Axis.TIME)
 
+    # ------------------------------------------------------------------
+    # Axis resolution
+    # ------------------------------------------------------------------
+
+    def _refresh_axis_info(self, selection=None) -> None:
+        """Re-resolve ``_x_info`` / ``_y_info`` from the backend.
+
+        Called at the top of each subclass's ``_render()``, which is the
+        one place that knows both the current axes and the current
+        selection, and which every axis- or selection-changing path
+        already funnels through.  Resolving here rather than inside
+        ``_panel_spec()`` matters: the backend counts partitions to
+        decide whether ``Axis.CHANNEL`` is unique, and ``_panel_spec()``
+        runs on every ``_state_source`` push.
+
+        Falls back to a direct, un-substituted resolution when the
+        backend does not implement ``axis_info`` — a remote reduction
+        context satisfies the reader protocol structurally and may not
+        have been updated.  The fallback loses only the CHANNEL
+        substitution, which is what the old behaviour was anyway.
+        """
+        from ..axes import AxisInfo
+        sel = selection if selection is not None else self._selection
+        resolve = getattr(self._backend, "axis_info", None)
+        if resolve is None:
+            self._x_info = AxisInfo.direct(self._x_dim)
+            self._y_info = AxisInfo.direct(self._y_dim)
+            return
+        try:
+            self._x_info = resolve(self._x_dim, sel)
+            self._y_info = resolve(self._y_dim, sel)
+        except Exception as exc:
+            log.warning("axis_info failed (%s); using unresolved labels", exc)
+            self._x_info = AxisInfo.direct(self._x_dim)
+            self._y_info = AxisInfo.direct(self._y_dim)
+
+    @property
+    def x_label(self) -> str:
+        """Display label for the x axis actually plotted."""
+        return self._x_info.display_label()
+
+    @property
+    def y_label(self) -> str:
+        """Display label for the y axis actually plotted."""
+        return self._y_info.display_label()
+
+    def axis_notes(self) -> list[str]:
+        """Substitution notes for either axis, for status/export display."""
+        return [i.note for i in (self._x_info, self._y_info) if i.note]
+
     def _update_state_source(self) -> None:
         """Push current state into ``_state_source`` (no-op before build)."""
         if self._state_source is not None:
@@ -697,8 +765,8 @@ class VisibilityPlot(Model):
             height        = self._height,
             x_range       = (x0, x1),
             y_range       = (y0, y1),
-            x_axis_label  = _axis_label(self._x_dim),
-            y_axis_label  = _axis_label(self._y_dim),
+            x_axis_label  = self.x_label,
+            y_axis_label  = self.y_label,
             tools         = "pan,wheel_zoom,box_zoom,reset,save",
             active_scroll = "wheel_zoom",
         )
@@ -977,6 +1045,38 @@ window._cvRerenderTimer = setTimeout(function() {{
         """
         return {"label": label, "probe": {"status": status, **extra}}
 
+    def _format_coord(self, value, info) -> str:
+        """Render one axis coordinate for the status bar.
+
+        The single place a coordinate becomes text, so the axis, the
+        probe, and the export cannot disagree.  Three behaviours, in
+        order:
+
+        * **Time** goes through ``tick_format.format_tick`` — the same
+          function the axis formatter and the matplotlib export use, so
+          the probe reads ``6m 20s`` where the axis reads ``6m 20s``.
+          It previously printed raw MJD seconds (``1.35331e+09``) beside
+          an axis showing elapsed time.
+        * **Dimensioned** values get an SI prefix: ``372.7640 GHz``, not
+          ``3.72764e+11``.  ``si_scale`` is Python-only and needs no
+          JS counterpart; see its docstring.
+        * **Index and dimensionless** values print plainly.
+
+        The label comes from *info*, so a substituted axis reports what
+        was actually plotted rather than what was asked for.
+        """
+        from .tick_format import format_tick, si_scale
+        from ..axes import Axis
+
+        label = info.label
+        if info.axis is Axis.TIME:
+            origin = (self._y_range[0] if info is self._y_info
+                      else self._x_range[0])
+            return f"<b>{label}:</b> {format_tick(float(value), True, origin)}"
+        scaled, unit = si_scale(float(value), info.unit)
+        text = f"{scaled:.6g}" if not unit else f"{scaled:.6g} {unit}"
+        return f"<b>{label}:</b> {text}"
+
     def _format_probe(self, info: dict, quantity_label: str = "") -> str:
         """Format a probe result dict as an HTML status-bar string."""
         parts: list[str] = []
@@ -991,13 +1091,28 @@ window._cvRerenderTimer = setTimeout(function() {{
         xc = info.get("x_centre")
         yc = info.get("y_centre")
         if xc is not None:
-            parts.append(f"<b>{self._x_dim.label}:</b> {xc:.6g}")
+            parts.append(self._format_coord(xc, self._x_info))
         if yc is not None:
-            parts.append(f"<b>{self._y_dim.label}:</b> {yc:.6g}")
+            parts.append(self._format_coord(yc, self._y_info))
 
+        # Only when neither axis already reports frequency -- on a
+        # time-vs-baseline raster the cell's frequency span is genuinely
+        # extra information, but beside a Frequency axis it was printing
+        # the same number twice under two names.
+        from ..axes import Axis
+        shows_freq = any(i.axis is Axis.FREQUENCY
+                         for i in (self._x_info, self._y_info))
         fg = info.get("freq_range_ghz")
-        if fg is not None:
-            parts.append(f"<b>Freq:</b> {fg[0]:.6g}–{fg[1]:.6g} GHz")
+        if fg is not None and not shows_freq:
+            lo, hi = float(fg[0]), float(fg[1])
+            # 6 significant figures cannot resolve one channel width
+            # (~15.6 MHz on a 372 GHz centre is the 7th digit), so a real
+            # range rendered as "372.764-372.764".  Widen, and collapse to
+            # a single value when the ends are genuinely equal.
+            if lo == hi:
+                parts.append(f"<b>Freq:</b> {lo:.9g} GHz")
+            else:
+                parts.append(f"<b>Freq:</b> {lo:.9g}\u2013{hi:.9g} GHz")
 
         for field in (info.get("field_names") or []):
             parts.append(f"<b>Field:</b> {field}")

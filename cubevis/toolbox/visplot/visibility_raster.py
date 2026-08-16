@@ -38,7 +38,7 @@ import numpy as np
 from bokeh.models import ColumnDataSource
 
 from .visibility_plot import (
-    VisibilityPlot, _img_to_uint32, _axis_label, _json_num,
+    VisibilityPlot, _img_to_uint32, _json_num,
 )
 from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
@@ -810,8 +810,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         return PanelSpec(
             kind       = "raster",
             title      = self._effective_title(),
-            x_label    = _axis_label(self._x_dim),
-            y_label    = _axis_label(self._y_dim),
+            x_label    = self.x_label,
+            y_label    = self.y_label,
             x_range    = (float(self._x_range[0]), float(self._x_range[1])),
             y_range    = (float(self._y_range[0]), float(self._y_range[1])),
             x_is_time  = x_is_time,
@@ -905,6 +905,13 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             check), so a later real ``_render()`` call is not mistaken
             for a redundant one.
         """
+        # Re-resolve axis labels before anything reads them: this is the
+        # one place that knows both the current axes and the current
+        # selection, and every axis- or selection-changing path funnels
+        # through it.  Resolving here rather than in _panel_spec()
+        # matters -- the backend counts partitions to decide whether
+        # Axis.CHANNEL is unique, and _panel_spec() runs on every push.
+        self._refresh_axis_info(selection)
         t0     = time.perf_counter()
         budget = max_cells if max_cells is not None else self._max_cells
 

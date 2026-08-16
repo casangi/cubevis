@@ -60,7 +60,7 @@ import numpy as np
 from bokeh.models import ColumnDataSource
 
 from .visibility_plot import (
-    VisibilityPlot, _img_to_uint32, _axis_label, _json_num,
+    VisibilityPlot, _img_to_uint32, _json_num,
 )
 from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
@@ -817,8 +817,8 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         return PanelSpec(
             kind       = "scatter",
             title      = self._effective_title(),
-            x_label    = _axis_label(self._x_dim),
-            y_label    = _axis_label(self._y_dim),
+            x_label    = self.x_label,
+            y_label    = self.y_label,
             x_range    = (float(full_x0), float(full_x1)),
             y_range    = (float(full_y0), float(full_y1)),
             x_is_time  = x_is_time,
@@ -917,6 +917,13 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             same purpose and pattern as ``VisibilityRaster._render``'s
             ``defer``; see decision 11 in the grid/iteration design notes.
         """
+        # Re-resolve axis labels before anything reads them: this is the
+        # one place that knows both the current axes and the current
+        # selection, and every axis- or selection-changing path funnels
+        # through it.  Resolving here rather than in _panel_spec()
+        # matters -- the backend counts partitions to decide whether
+        # Axis.CHANNEL is unique, and _panel_spec() runs on every push.
+        self._refresh_axis_info(selection)
         t0 = time.perf_counter()
         if defer:
             self._layer_dfs  = [None] * len(self._layers)

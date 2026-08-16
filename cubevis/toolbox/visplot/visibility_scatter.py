@@ -751,7 +751,10 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         if self._title:
             return self._title
         labels = ", ".join(lyr.label for lyr in self._layers)
-        return f"{labels}  vs  {self._x_dim.label}"
+        # _x_info.label, not _x_dim.label: the title must name the axis
+        # that was actually plotted, for the same reason the axis label
+        # must.  Bare name, no unit suffix -- the axis label carries that.
+        return f"{labels}  vs  {self._x_info.label}"
 
     def _panel_spec(self) -> PanelSpec:
         """Describe this scatter: one colour band per ScatterLayer.

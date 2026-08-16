@@ -286,6 +286,14 @@ class AxisInfo:
     note:
         Human-readable explanation when a substitution occurred, for
         ``PanelSpec.note`` and the status bar.  ``None`` otherwise.
+    context:
+        Qualifier appended to the label in parentheses, e.g. ``"spw 0"``.
+
+        Exists because an index axis is meaningless without the scope it
+        indexes into.  "Channel 137" is ambiguous across four spectral
+        windows; "Channel (spw 0)" is the thing a user can retype as
+        ``spw='0:137'``.  The number must never be orphaned from the
+        context that makes it actionable.
     """
 
     axis:      Axis
@@ -293,14 +301,16 @@ class AxisInfo:
     dim:       str = ""
     is_index:  bool = False
     note:      Optional[str] = None
+    context:   Optional[str] = None
 
     # -- construction ---------------------------------------------------
 
     @classmethod
-    def direct(cls, axis: Axis, dim: str = "", is_index: bool = False
-               ) -> "AxisInfo":
+    def direct(cls, axis: Axis, dim: str = "", is_index: bool = False,
+               context: Optional[str] = None) -> "AxisInfo":
         """The axis was honoured as requested — the normal case."""
-        return cls(axis=axis, requested=axis, dim=dim, is_index=is_index)
+        return cls(axis=axis, requested=axis, dim=dim, is_index=is_index,
+                   context=context)
 
     @classmethod
     def substituted(cls, requested: Axis, actual: Axis, dim: str = "",
@@ -341,7 +351,10 @@ class AxisInfo:
         approach that works identically in both runtimes.
         """
         unit = self.unit if unit_override is None else unit_override
-        return f"{self.label}" + (f" [{unit}]" if unit else "")
+        base = self.label
+        if self.context:
+            base = f"{base} ({self.context})"
+        return base + (f" [{unit}]" if unit else "")
 
     def __repr__(self) -> str:      # pragma: no cover
         if self.substituted_axis:

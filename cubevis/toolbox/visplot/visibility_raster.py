@@ -66,11 +66,22 @@ _DEFAULT_CMAP = [
 _DEFAULT_SCALING = "eq_hist"
 
 
-def _auto_title(quantity: "Axis", y_dim: "Axis", x_dim: "Axis",
+def _auto_title(quantity: "Axis", y_label: str, x_label: str,
                 polarization: str) -> str:
+    """Compose the default panel title.
+
+    Takes *resolved* axis names, not ``Axis`` members: a title reading
+    "[Time vs Channel]" over an axis labelled "Frequency [Hz]" is the same
+    divergence AxisInfo exists to prevent, one layer up.  Callers pass
+    ``self._y_info.label`` / ``self._x_info.label``.
+
+    Bare names, without the unit suffix -- "[Time vs Frequency]" reads
+    better in a title than "[Time [s] vs Frequency [Hz]]", and the axis
+    labels carry the units already.
+    """
     return (
         f"{quantity.label}  "
-        f"[{y_dim.label} vs {x_dim.label}]"
+        f"[{y_label} vs {x_label}]"
         f"  pol={polarization}"
     )
 
@@ -255,7 +266,8 @@ class VisibilityRaster(VisibilityPlot):
 
     def _effective_title(self) -> str:
         return self._title or _auto_title(
-            self._quantity, self._y_dim, self._x_dim, self._polarization
+            self._quantity, self._y_info.label, self._x_info.label,
+            self._polarization,
         )
 
     def set_color_mode(self, mode: str) -> None:

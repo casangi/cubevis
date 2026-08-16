@@ -291,6 +291,23 @@ class MSv4Backend(XArrayReader):
 
 
 
+    _SUPPORTS_CHANNEL_INDEX = False
+    """Whether ``query_raster`` plots ``Axis.CHANNEL`` as a channel index.
+
+    ``False`` while ``_axis_to_dim`` resolves ``Axis.CHANNEL`` to the
+    ``"frequency"`` dimension and ``query_raster`` derives its extent from
+    ``ds.coords["frequency"]`` -- so the values on a CHANNEL axis are
+    frequencies regardless of the label.  ``axis_info`` reads this to
+    decide whether the single-partition case may honestly report a
+    channel index.
+
+    Channel number is CASA's public selection key, not an internal
+    index: an RFI spike found in the plot is acted on with
+    ``flagdata(spw='0:137~139')``, and edge-channel and bandpass work are
+    channel-domain by nature.  It is worth implementing -- see the
+    handoff -- and flipping this flag is what turns it on here.
+    """
+
     def axis_info(self, axis, selection=None):
         """Resolve *axis* for *selection*, substituting where necessary.
 
@@ -334,16 +351,66 @@ class MSv4Backend(XArrayReader):
             return AxisInfo(axis=info.axis, requested=info.requested,
                             dim=dim, is_index=info.is_index)
 
-        n_parts = sum(1 for _ in self._iter_visibility_partitions(selection))
-        if n_parts <= 1:
-            # One partition means one SPW's channel numbering: unambiguous.
-            return AxisInfo.direct(Axis.CHANNEL, dim=dim, is_index=True)
+        parts = list(self._iter_visibility_partitions(selection))
+        # Count distinct SPWs, NOT partitions.  Channel numbering is a
+        # property of the spectral window, so partitions that share an
+        # SPW share its frequency coordinate exactly and its channel
+        # numbering is identical -- several partitions carrying one SPW
+        # is completely unambiguous.  Partition schemas routinely split
+        # on other keys: MSv2's default is
+        # ["DATA_DESC_ID", "OBSERVATION_ID"], and a multi-field MS then
+        # yields several partitions per SPW.  Counting partitions here
+        # substituted frequency for datasets where the channel index was
+        # perfectly well defined.
+        spw_ids = {self._partition_spw_id(ds) for ds in parts}
+        spw_ids.discard(None)
+        n_spws = len(spw_ids)
 
-        return AxisInfo.substituted(
-            Axis.CHANNEL, Axis.FREQUENCY, dim=dim,
-            note=("channel index is not unique across the "
-                  + str(n_parts) + " selected spectral windows; showing "
-                  "frequency. Select a single spw to plot channel number."),
+        if n_spws > 1:
+            return AxisInfo.substituted(
+                Axis.CHANNEL, Axis.FREQUENCY, dim=dim,
+                note=("channel index is not unique across the "
+                      + str(n_spws) + " selected spectral windows; showing "
+                      "frequency. Select a single spw to plot channel "
+                      "number."),
+            )
+
+        if n_spws == 0:
+            # No partition declared an SPW id, so uniqueness is
+            # unknowable.  Substitute rather than claim a channel index
+            # that might span several windows -- the same tolerance
+            # _spw_selected applies in the opposite direction, where
+            # keeping an undeclared partition is the safe choice.
+            return AxisInfo.substituted(
+                Axis.CHANNEL, Axis.FREQUENCY, dim=dim,
+                note=("spectral window is not declared by this dataset, so "
+                      "channel numbering cannot be shown to be unique; "
+                      "showing frequency."),
+            )
+
+        if not self._SUPPORTS_CHANNEL_INDEX:
+            # One partition, so the index *would* be unambiguous -- but
+            # query_raster still resolves Axis.CHANNEL through
+            # _axis_to_dim to the "frequency" dimension and takes its
+            # extent from ds.coords["frequency"].  Labelling this axis
+            # "Channel" while the ticks carry Hz is the original defect,
+            # reasserted more confidently.  Substitute until the values
+            # follow the label; flipping _SUPPORTS_CHANNEL_INDEX is then
+            # the only change needed here.
+            return AxisInfo.substituted(
+                Axis.CHANNEL, Axis.FREQUENCY, dim=dim,
+                note=("channel index is not yet plotted by this backend; "
+                      "showing frequency."),
+            )
+
+        # Unambiguous, and the backend plots the index.  Carry the spw so
+        # the number is never orphaned from the scope it indexes into --
+        # "Channel 137" is ambiguous, "Channel (spw 0)" is what a user
+        # retypes as spw='0:137'.
+        spw_id = next(iter(spw_ids)) if spw_ids else None
+        return AxisInfo.direct(
+            Axis.CHANNEL, dim=dim, is_index=True,
+            context=None if spw_id is None else f"spw {spw_id}",
         )
 
     @staticmethod

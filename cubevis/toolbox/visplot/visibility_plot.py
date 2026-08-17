@@ -215,6 +215,17 @@ class VisibilityPlot(Model):
         Canvas dimensions in pixels.
     title : str | None
         Figure title; ``None`` → subclass generates from axes.
+    headless : bool
+        Build the data substrate but no browser chrome.  ``_render()``
+        runs and ``_state_source`` is populated -- so ``render_result()``
+        and therefore the PNG export path work normally -- but no
+        ``figure``, glyphs, tick formatters, hover, or flag tools are
+        created, and ``self._fig`` is ``None``.
+
+        For a pipeline export this skips work whose only consumer is a
+        browser that will never exist.  ``comm_mgr`` is independently
+        optional (see below), so a headless panel is also comm-free.
+
     comm_mgr :
         ``CommMgr`` from the active ``BokehAppContext``.  Auto-retrieved
         when ``None``.
@@ -260,6 +271,7 @@ class VisibilityPlot(Model):
         height: int = 600,
         title: Optional[str] = None,
         comm_mgr=None,
+        headless=False,
         cursor_source=None,
         enable_flagging: bool = True,
         compact_toolbar: bool = True,
@@ -304,6 +316,9 @@ class VisibilityPlot(Model):
         self._y_range: tuple[float, float] = (0.0, 1.0)
 
         # CommMgr / Comm
+        # Set before _build() runs; see the early return there.
+        self._headless = bool(headless)
+
         if comm_mgr is None:
             try:
                 from cubevis.bokeh import BokehInit
@@ -798,6 +813,21 @@ class VisibilityPlot(Model):
 
         # State source — created after _render() so _state_data() has ranges
         self._state_source = ColumnDataSource(data=self._state_data())
+
+        if self._headless:
+            # Everything below builds browser chrome: a figure, glyphs,
+            # tick formatters, hover, and the flag tools.  None of it
+            # contributes a pixel to the data area -- Datashader has
+            # already produced the RGBA array -- so an export path pays
+            # for it and uses none of it.
+            #
+            # The cut is here rather than earlier because _render() and
+            # _state_source are the substrate render_result() reads:
+            # _render fills _x_range/_y_range/_image_source, and the
+            # state dict is derived from _panel_spec().  Both are pure
+            # Python and need no browser.
+            self._fig = None
+            return
 
         # Figure
         self._fig = figure(

@@ -281,7 +281,14 @@ class VisibilityRaster(VisibilityPlot):
         self._reshade()
 
     def _reshade(self) -> None:
-        """Re-shade the cached agg at the current viewport."""
+        """Re-shade the cached agg at the current viewport.
+
+        ``update_scaling()`` re-shades at whatever range it finds, so
+        ``_current_viewport`` has to be honest for a theme or palette
+        change to redraw the *zoomed* view rather than snapping back to
+        the full extent.  Recording it is why
+        ``_do_viewport_rerender`` sets it on both branches.
+        """
         if self._agg is None:
             return
         self.update_scaling()      # no-op args: re-shades with current settings
@@ -824,16 +831,13 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             visible       = True,
         )
 
-        status, note = "ok", None
-        if agg is None:
-            status, note = "empty", "not rendered yet"
-        elif agg.ndim != 2 or agg.shape[0] < 2 or agg.shape[1] < 2:
-            status, note = "empty", f"aggregation too small ({agg.shape})"
-        elif not np.isfinite(agg.values).any():
-            status, note = "empty", "no finite values in selection"
-        elif self._x_range[0] == self._x_range[1] or \
-             self._y_range[0] == self._y_range[1]:
-            status, note = "empty", "zero-width axis range"
+        # Read what _render() recorded rather than re-deriving it: the
+        # two would drift, and only _render() can tell `defer` apart from
+        # a genuinely empty selection.
+        reason = getattr(self, "_degenerate_reason", None)
+        if agg is None and reason is None:
+            reason = "not rendered yet"
+        status, note = ("empty", reason) if reason else ("ok", None)
 
         return PanelSpec(
             kind       = "raster",
@@ -894,11 +898,32 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             log.debug("_crop_agg failed, using full agg: %s", exc)
             return None
 
+    _degenerate_reason: "Optional[str]" = None
+    """Why the last render produced a blank image, or ``None``.
+
+    Set by ``_render()`` and read by ``_panel_spec()``, so the export's
+    empty-cell note says which condition tripped.  See the branch in
+    ``_render`` for why a boolean was not enough.
+    """
+
+    _current_viewport: "Optional[tuple[float, float, float, float]]" = None
+    """Sub-range currently displayed, or ``None`` for the full extent.
+
+    Mirrors ``VisibilityScatter._current_viewport``.  The raster tracked
+    the viewport only in the browser, so Python believed it was always
+    showing the full extent -- harmless while every consumer passed a
+    viewport explicitly, but it meant a palette re-shade snapped a
+    zoomed panel back to full range.  The two classes now agree.
+    """
+
     def _shade_for_export(self, viewport=None) -> Optional[np.ndarray]:
         """Re-shade from the cached agg at *viewport*; no backend query."""
         if self._agg is None:
             return None
         if viewport is None:
+            if self._current_viewport is not None:
+                vx0, vx1, vy0, vy1 = self._current_viewport
+                return self._shade_viewport((vx0, vx1), (vy0, vy1))
             xr, yr = self._x_range, self._y_range
         else:
             x0, x1, y0, y1 = viewport
@@ -943,6 +968,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         # matters -- the backend counts partitions to decide whether
         # Axis.CHANNEL is unique, and _panel_spec() runs on every push.
         self._refresh_axis_info(selection)
+        # New data covers the full extent again; mirrors scatter.
+        self._current_viewport = None
         t0     = time.perf_counter()
         budget = max_cells if max_cells is not None else self._max_cells
 
@@ -973,17 +1000,36 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
 
         # `defer` first so the rest short-circuits — agg is None in that
         # case and must never be touched (no agg.shape access below).
-        _degenerate = (
-            defer
-            or agg.shape[0] < 2
-            or agg.shape[1] < 2
-            or not np.isfinite(agg.values).any()
-            or x0 == x1
-            or y0 == y1
-        )
+        #
+        # Record WHICH condition tripped, not merely that one did.  For
+        # the GUI a blank panel beside a live sidebar is self-explanatory,
+        # so a boolean sufficed; an exported PNG has no sidebar, and
+        # "not rendered yet" / "everything flagged" / "one channel
+        # selected" are different things a reader needs to tell apart.
+        # _panel_spec() previously re-derived this from self._agg, which
+        # duplicated the logic and could not distinguish `defer` at all.
+        if defer:
+            self._degenerate_reason = "not rendered yet"
+        elif agg.shape[0] < 2 or agg.shape[1] < 2:
+            self._degenerate_reason = (
+                f"aggregation too small to draw ({agg.shape[1]}x"
+                f"{agg.shape[0]} cells)")
+        elif not np.isfinite(agg.values).any():
+            self._degenerate_reason = (
+                "no unflagged data in this selection")
+        elif x0 == x1 or y0 == y1:
+            axis = "x" if x0 == x1 else "y"
+            self._degenerate_reason = (
+                f"{axis} axis has zero width; a single value cannot be "
+                f"rastered")
+        else:
+            self._degenerate_reason = None
+
+        _degenerate = self._degenerate_reason is not None
 
         if _degenerate:
-            log.debug("_render: degenerate agg — blank image")
+            log.debug("_render: degenerate agg (%s) — blank image",
+                      self._degenerate_reason)
             img32 = np.zeros((self._height, self._width), dtype=np.uint32)
         else:
             # Same resample rule as _shade_viewport.  Previously this
@@ -1039,11 +1085,15 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             img32 = self._shade_viewport(self._x_range, self._y_range)
             out_x0, out_x1 = self._x_range
             out_y0, out_y1 = self._y_range
+            # The re-query re-cached at the new extent, so the panel is
+            # once again showing all of what it holds.
+            self._current_viewport = None
         else:
             log.debug("_do_viewport_rerender: Level-1 resample")
             img32 = self._shade_viewport((x0, x1), (y0, y1))
             out_x0, out_x1 = x0, x1
             out_y0, out_y1 = y0, y1
+            self._current_viewport = (x0, x1, y0, y1)
 
         return {
             "image": img32,

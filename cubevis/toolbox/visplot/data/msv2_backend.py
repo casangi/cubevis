@@ -354,11 +354,31 @@ class MSv2Backend(XArrayReader):
         # _partition_spw_ident.
         kinds = {self._partition_spw_ident(ds)[1] for ds in parts}
         kinds.discard("none")
-        kind = "spw" if kinds == {"spw"} else "ddid"
         spw_id = next(iter(spw_ids)) if spw_ids else None
+
+        # Qualifier wording follows the kind, and the kind must be read
+        # rather than guessed: an earlier two-way branch predated the
+        # "name" kind and rendered a spectral window *name* as
+        # "ddid ALMA_RB_07#BB_2#SW-01#FULL_RES" -- a label asserting the
+        # number is a DATA_DESC_ID when it is not a number at all.
+        #
+        # A name is self-describing, so it takes no prefix.  A numeric id
+        # does, because "137" alone says nothing about what it indexes.
+        kind = kinds.pop() if len(kinds) == 1 else None
+        if spw_id is None:
+            context = None
+        elif kind == "name":
+            context = str(spw_id)
+        elif kind in ("spw", "ddid"):
+            context = f"{kind} {spw_id}"
+        else:
+            # Partitions disagree about how they identify their window;
+            # say nothing rather than pick one and be wrong about the
+            # rest.
+            context = None
+
         return AxisInfo.direct(
-            Axis.CHANNEL, dim=dim, is_index=True,
-            context=None if spw_id is None else f"{kind} {spw_id}",
+            Axis.CHANNEL, dim=dim, is_index=True, context=context,
         )
 
     @classmethod
@@ -374,27 +394,31 @@ class MSv2Backend(XArrayReader):
         return ident
 
     @staticmethod
-    def _partition_spw_ident(ds) -> "tuple[Optional[int], str]":
-        """``(id, kind)`` where *kind* is ``"spw"``, ``"ddid"`` or ``"none"``.
+    def _partition_spw_ident(ds):
+        """``(identity, kind)`` for the partition's spectral window.
 
-        **These are not the same number.**  ``DATA_DESC_ID`` indexes
-        ``DATA_DESCRIPTION``, which maps to a *(spectral window,
-        polarization setup)* pair, so DDID 3 can be SPW 5 on an MS with
-        more than one polarization setup.  They coincide whenever there
-        is a single setup -- which is why sis14 shows no symptom -- but
-        labelling a DDID as "spw 3" would put a number in the axis label
-        and the SPW control that ``spw='3'`` does not select.  That is a
-        wrong-data bug wearing a correct-looking label.
+        *kind* is ``"spw"`` (a numeric id, directly usable as CASA's
+        ``spw=``), ``"ddid"`` (a DATA_DESC_ID -- **not** the same number,
+        it indexes DATA_DESCRIPTION, a (spw, polarization setup) pair),
+        ``"name"`` (the spectral window name), or ``"none"``.
 
-        Callers that merely need a partition-grouping key can use
-        ``_partition_spw_id`` and ignore the kind: filtering is
-        self-consistent either way, because ``metadata()`` collects ids
-        through the same fallback.  Callers that *display* the number
-        must branch on the kind and say "ddid" when that is what it is.
+        Lookup order, and why it ends where it does:
 
-        TODO: resolve DDID through ``DATA_DESCRIPTION`` and return a true
-        spw id.  Requires subtable access the backend does not currently
-        have; until then, reporting honestly is the correct behaviour.
+        1. ``ds.attrs["spectral_window_id"]`` -- xradio-written stores.
+        2. ``ds.attrs["DATA_DESC_ID"]`` -- some stores; reported as
+           ``"ddid"`` so a caller never prints it as an spw.
+        3. ``ds.frequency.attrs["spectral_window_name"]`` -- what
+           **xarray-ms 0.5.6 actually provides**.  Verified 2026-08-18 on
+           a real MS: ``ds.attrs`` carries none of the above, and the only
+           spectral identity in the MSv4 view is the name
+           (``'ALMA_RB_07#BB_2#SW-01#FULL_RES'``).
+
+        **The numeric id is therefore not always obtainable.** Turning a
+        name into CASA's ``spw=N`` needs a NAME -> row lookup in the MS's
+        SPECTRAL_WINDOW subtable, which this backend cannot reach.  That
+        is why FlagDB keys on *frequency ranges*: exact, always available,
+        and they survive the ``split``/``mstransform`` renumbering that
+        would invalidate an id anyway.
         """
         spw_id = ds.attrs.get("spectral_window_id")
         if spw_id is not None:
@@ -402,7 +426,34 @@ class MSv2Backend(XArrayReader):
         ddid = ds.attrs.get("DATA_DESC_ID")
         if ddid is not None:
             return int(ddid), "ddid"
+        freq = ds.coords.get("frequency") if hasattr(ds, "coords") else None
+        if freq is not None:
+            name = getattr(freq, "attrs", {}).get("spectral_window_name")
+            if name:
+                return str(name), "name"
         return None, "none"
+
+    @staticmethod
+    def _partition_channel_width(ds):
+        """Channel width in Hz from ``frequency.attrs``, or ``None``.
+
+        Stored as ``{"attrs": {...}, "data": 610351.5625}`` in xarray-ms
+        0.5.6.  Exists so the uniform-width assumption behind treating
+        channel index and frequency as affine can be *checked* rather
+        than assumed -- an irregular or concatenated window breaks the
+        affinity silently.
+        """
+        freq = ds.coords.get("frequency") if hasattr(ds, "coords") else None
+        if freq is None:
+            return None
+        cw = getattr(freq, "attrs", {}).get("channel_width")
+        if isinstance(cw, dict):
+            cw = cw.get("data")
+        try:
+            return float(cw) if cw is not None else None
+        except (TypeError, ValueError):
+            return None
+
 
     def _spw_selected(self, ds, selection) -> bool:
         """Whether *ds* passes *selection*'s SPW filter.
@@ -414,10 +465,26 @@ class MSv2Backend(XArrayReader):
         """
         if selection is None or getattr(selection, "spw", None) is None:
             return True
-        spw_id = self._partition_spw_id(ds)
-        if spw_id is None:
+        ident, kind = self._partition_spw_ident(ds)
+        if ident is None:
             return True
-        return spw_id in set(selection.spw)
+        if kind == "name":
+            # selection.spw holds integers from _parse_spw_string, and a
+            # spectral-window *name* can never match one.  Keeping the
+            # partition is the same tolerance applied to an undeclared
+            # one -- but log it, because silently ignoring an spw
+            # selection is exactly the defect this whole path was added
+            # to fix, and on an xarray-ms store it is the normal case.
+            if not getattr(self, "_spw_name_warned", False):
+                self._spw_name_warned = True
+                log.warning(
+                    "spw selection %r cannot be applied: this store "
+                    "identifies spectral windows by name (%r), not by "
+                    "id.  All spectral windows will be included.",
+                    selection.spw, ident,
+                )
+            return True
+        return ident in set(selection.spw)
 
     def _iter_visibility_partitions(self, selection=None):
         """Yield each leaf Dataset that contains visibility data.
@@ -1341,6 +1408,19 @@ class MSv2Backend(XArrayReader):
         scan_names:     set[str]              = set()
         antenna_pairs:  list[tuple[str, str]] = []
         freq_range_ghz: Optional[tuple[float, float]] = None
+        # Per-SPW channel spans touched by this cell, for FlagDB.  A
+        # frequency range alone is not enough to write a flag back: CASA
+        # addresses channels as ``spw='0:137~139'``, and with several
+        # SPWs concatenated onto one axis a frequency window can span
+        # more than one.  Recording (spw -> channel span) here is exact,
+        # because it is read from the partition's own frequency
+        # coordinate rather than reconstructed from an average width.
+        chan_spans: dict = {}
+        # Recorded so the affine channel<->frequency assumption can be
+        # checked rather than assumed (see the handoff's CHROME-level
+        # Channel/Frequency switch): an irregular or concatenated window
+        # breaks the affinity silently.
+        chan_width: "Optional[float]" = None
 
         for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
@@ -1389,10 +1469,34 @@ class MSv2Backend(XArrayReader):
                     f_mask   = freq_vals == nearest
                 if f_mask.any():
                     f_sub = freq_vals[f_mask]
-                    freq_range_ghz = (
-                        float(f_sub.min()) / 1e9,
-                        float(f_sub.max()) / 1e9,
-                    )
+                    lo_g, hi_g = (float(f_sub.min()) / 1e9,
+                                  float(f_sub.max()) / 1e9)
+                    if freq_range_ghz is None:
+                        freq_range_ghz = (lo_g, hi_g)
+                    else:
+                        freq_range_ghz = (min(freq_range_ghz[0], lo_g),
+                                          max(freq_range_ghz[1], hi_g))
+                    # Channel indices are positional within THIS
+                    # partition's frequency coordinate, which is what
+                    # makes them invertible: no global index exists (see
+                    # section 8.3 of the handoff), but frequency ->
+                    # (partition, local index) is an exact lookup.
+                    idx = np.flatnonzero(f_mask)
+                    # Identity may be an int (spw/ddid) or a string
+                    # (spectral_window_name) -- see
+                    # _partition_spw_ident.  Both work as a dict key;
+                    # only "no identity at all" is excluded, because an
+                    # unnameable window cannot appear in a flag command.
+                    key = self._partition_spw_id(raw_ds)
+                    lo_c, hi_c = int(idx.min()), int(idx.max())
+                    if chan_width is None:
+                        chan_width = self._partition_channel_width(raw_ds)
+                    if key in chan_spans:
+                        prev = chan_spans[key]
+                        chan_spans[key] = (min(prev[0], lo_c),
+                                           max(prev[1], hi_c))
+                    else:
+                        chan_spans[key] = (lo_c, hi_c)
 
         return {
             "value":          value,
@@ -1404,6 +1508,14 @@ class MSv2Backend(XArrayReader):
             "scan_names":     sorted(scan_names),
             "antenna_pairs":  antenna_pairs,
             "freq_range_ghz": freq_range_ghz,
+            # Flagging identity: what a FlagOperation needs to address
+            # these visibilities in the original MS.  See
+            # XArrayReader.probe_raster_pixel for the contract.
+            "spw_channels":   {k: [int(v[0]), int(v[1])]
+                               for k, v in chan_spans.items()
+                               if k is not None},
+            "spw_ids":        [k for k in chan_spans if k is not None],
+            "channel_width_hz": chan_width,
         }
 
     def probe_scatter_pixel(

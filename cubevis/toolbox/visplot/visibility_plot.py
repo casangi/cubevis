@@ -1181,6 +1181,75 @@ window._cvRerenderTimer = setTimeout(function() {{
         """
         return {"label": label, "probe": {"status": status, **extra}}
 
+    def _flag_key(self, info: dict) -> dict:
+        """Everything needed to write this probe back as a flag.
+
+        A ``FlagOperation`` has to address visibilities *in the original
+        MS*, and a pixel on screen is not that: it is a Datashader cell
+        over a concatenated, selection-filtered view.  This assembles the
+        coordinate identity that survives the round trip.
+
+        Fields, and why each is needed:
+
+        ``spw_channels``
+            ``{spw: [c_lo, c_hi]}``.  The key is whatever identity the
+            store provides -- a numeric id where one exists, otherwise
+            the spectral window *name*, which is all xarray-ms 0.5.6
+            offers.  Only a numeric key can be pasted into CASA's
+            ``spw='0:137~139'`` directly; a name needs a SPECTRAL_WINDOW
+            lookup the backend cannot perform (see the handoff).  Read from each partition's own
+            frequency coordinate, so it is exact rather than
+            reconstructed from an average channel width.  A dict rather
+            than one range because a cell can span concatenated SPWs.
+        ``freq_range_ghz``
+            The physical equivalent.  Survives a repartition or an SPW
+            renumbering (``split``/``mstransform`` renumber; frequency
+            does not), so ``FlagDB`` stores this and ``spw_channels`` is
+            the convenience form.
+        ``time_range``
+            MJD seconds, from the cell bounds -- computed from *local*
+            neighbour spacing, not a global average, so inter-scan gaps
+            do not inflate it.
+        ``antenna_pairs`` / ``field_names`` / ``scan_names``
+            The remaining selection axes a flag command takes.
+        ``correlation``
+            The polarisation actually displayed; a raster shows one at a
+            time and flagging the others would be wrong.
+
+        Returns ``{}`` when the probe found nothing, so a caller can test
+        truthiness rather than inspecting fields.
+        """
+        from .axes import Axis
+
+        if info.get("value") is None and not info.get("spw_channels"):
+            return {}
+
+        # Time is whichever axis carries it; a raster can plot time on
+        # either, and the cell bounds are per-axis.
+        t_range = None
+        if self._y_dim is Axis.TIME:
+            t_range = info.get("y_range")
+        elif self._x_dim is Axis.TIME:
+            t_range = info.get("x_range")
+
+        key = {
+            "spw_channels":  info.get("spw_channels") or {},
+            "freq_range_ghz": info.get("freq_range_ghz"),
+            # Lets a consumer check the affine channel<->frequency
+            # assumption instead of trusting it: channel index is only
+            # linear in frequency when the width is uniform, and an
+            # irregular or concatenated window breaks that silently.
+            "channel_width_hz": info.get("channel_width_hz"),
+            "time_range":    [float(t_range[0]), float(t_range[1])]
+                             if t_range else None,
+            "antenna_pairs": info.get("antenna_pairs") or [],
+            "field_names":   info.get("field_names") or [],
+            "scan_names":    info.get("scan_names") or [],
+            "correlation":   getattr(self, "_polarization", None),
+            "data_column":   getattr(self._selection, "data_column", None),
+        }
+        return key
+
     def _format_coord(self, value, info) -> str:
         """Render one axis coordinate for the status bar.
 

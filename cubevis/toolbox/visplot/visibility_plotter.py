@@ -99,7 +99,6 @@ from .visibility_raster import VisibilityRaster
 from .visibility_scatter import VisibilityScatter, ScatterLayer, _LAYER_CMAPS
 from . import palettes as _palettes
 from .refresh import RefreshLevel as _RefreshLevel
-from .visibility_plot import _axis_label
 from .flag_db import FlagDB
 from .reduction_context import (
     FlagDelta,
@@ -2398,8 +2397,17 @@ for (const dt of other.tools) {
                     "x1":      float(x1)              if axes_changed else None,
                     "y0":      float(y0)              if axes_changed else None,
                     "y1":      float(y1)              if axes_changed else None,
-                    "x_label": _axis_label(x)          if axes_changed else None,
-                    "y_label": _axis_label(y)          if axes_changed else None,
+                    # panel.*, not _axis_label(x): a bare Axis has no
+                    # selection context, so it cannot know that CHANNEL
+                    # resolved to frequency, and no range, so it cannot
+                    # carry the SI prefix.  It produced "Frequency [Hz]"
+                    # under ticks the browser was already scaling to GHz.
+                    # _effective_title() and _state_data() beside this
+                    # already read the panel; the labels must too.
+                    "x_label": panel._panel_spec().axis_label("x")
+                               if axes_changed else None,
+                    "y_label": panel._panel_spec().axis_label("y")
+                               if axes_changed else None,
                     "title":   panel._effective_title() if axes_changed else None,
                     "state":   panel._state_data()      if axes_changed else None,
                 }
@@ -2479,8 +2487,12 @@ for (const dt of other.tools) {
                     "x1":      float(img_data["x"][0]) + float(img_data["dw"][0])      if axes_changed else None,
                     "y0":      float(img_data["y"][0])                                if axes_changed else None,
                     "y1":      float(img_data["y"][0]) + float(img_data["dh"][0])      if axes_changed else None,
-                    "x_label": _axis_label(x)             if axes_changed else None,
-                    "y_label": _axis_label(y)              if axes_changed else None,
+                    # See the raster branch: labels come from the panel
+                    # so they carry the resolved axis and its SI prefix.
+                    "x_label": panel._panel_spec().axis_label("x")
+                               if axes_changed else None,
+                    "y_label": panel._panel_spec().axis_label("y")
+                               if axes_changed else None,
                     "title":   panel._effective_title()    if axes_changed else None,
                     "state":   panel._state_data()         if axes_changed else None,
                 }

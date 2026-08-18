@@ -1151,6 +1151,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             value = value,
             empty = info.get("value") is None,
             pixel = [int(px), int(py)],
+            # Coordinate identity for FlagDB; see _flag_key.
+            flag_key = self._flag_key(info),
         )
 
     # ------------------------------------------------------------------

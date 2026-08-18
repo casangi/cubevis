@@ -756,6 +756,29 @@ class XArrayReader(abc.ABC):
     # Convenience                                                          #
     # ------------------------------------------------------------------ #
 
+    # ``probe_raster_pixel`` result keys used for flagging
+    # ---------------------------------------------------------------
+    # ``spw_channels`` : dict[int, [c_lo, c_hi]]
+    #     Channel span touched by the probed cell, per spectral window.
+    #     Read from each partition's own ``frequency`` coordinate, so it
+    #     is exact -- not reconstructed from an average channel width,
+    #     which would be wrong on a concatenated or irregular SPW.
+    #     A dict rather than a single range because one raster cell can
+    #     span several concatenated SPWs.
+    #
+    #     This is the CASA addressing form (``spw='0:137~139'``) and is
+    #     what makes a probe actionable: it is the string the astronomer
+    #     retypes into ``flagdata``.
+    #
+    # ``spw_ids`` : list[int]
+    #     The spectral windows touched, sorted.  Convenience view of
+    #     ``spw_channels``' keys.
+    #
+    # Partitions that declare no SPW id contribute to neither, rather
+    # than being reported under a sentinel key -- an unidentified window
+    # cannot be addressed in a flag command, so claiming otherwise would
+    # be worse than omitting it.
+
     def axis_info(
         self, axis: Axis, selection: Optional[SelectionSpec] = None,
         query: str = "columns",

@@ -822,8 +822,9 @@ class VisibilityPlot(Model):
         if fig is None:
             return                      # headless, or pre-_build
         try:
-            fig.xaxis.axis_label = self.x_label
-            fig.yaxis.axis_label = self.y_label
+            spec = self._panel_spec()
+            fig.xaxis.axis_label = spec.axis_label("x")
+            fig.yaxis.axis_label = spec.axis_label("y")
         except Exception as exc:        # pragma: no cover
             log.debug("could not sync axis labels: %s", exc)
 
@@ -890,8 +891,8 @@ class VisibilityPlot(Model):
             height        = self._height,
             x_range       = (x0, x1),
             y_range       = (y0, y1),
-            x_axis_label  = self.x_label,
-            y_axis_label  = self.y_label,
+            x_axis_label  = self._panel_spec().axis_label("x"),
+            y_axis_label  = self._panel_spec().axis_label("y"),
             tools         = "pan,wheel_zoom,box_zoom,reset,save",
             active_scroll = "wheel_zoom",
         )
@@ -911,12 +912,14 @@ class VisibilityPlot(Model):
         # passing against the shared string.
         self._fig.yaxis.formatter = CustomJSTickFormatter(
             args={"state": self._state_source,
-                  "axis_key": "y_is_time", "t0_key": "full_y0"},
+                  "axis_key": "y_is_time", "t0_key": "full_y0",
+                  "scale_key": "y_scale"},
             code=TICK_FORMATTER_JS,
         )
         self._fig.xaxis.formatter = CustomJSTickFormatter(
             args={"state": self._state_source,
-                  "axis_key": "x_is_time", "t0_key": "full_x0"},
+                  "axis_key": "x_is_time", "t0_key": "full_x0",
+                  "scale_key": "x_scale"},
             code=TICK_FORMATTER_JS,
         )
 

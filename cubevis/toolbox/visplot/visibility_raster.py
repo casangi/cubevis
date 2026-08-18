@@ -851,6 +851,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             status     = status,
             note       = note,
             theme      = self._theme_hint(),
+            x_unit     = self._x_info.unit,
+            y_unit     = self._y_info.unit,
         )
 
     def _bands_with_mappings(self, spec, viewport=None):

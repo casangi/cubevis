@@ -60,6 +60,11 @@ from typing import Optional
 # the Bokeh-specific preamble.
 _JS_CORE = r"""
 if (!is_time) {
+    // Scale is fixed from the full extent and supplied by _state_source,
+    // so a pan or zoom never changes the axis units mid-interaction.
+    if (typeof scale === 'number' && scale > 0 && scale !== 1) {
+        tick = tick / scale;
+    }
     // Trailing zeros are noise on a channel or distance axis: "10.0000"
     // reads worse than "10" and eats horizontal room that a crowded grid
     // export does not have.  Trim them, but never all the way to "0" for
@@ -91,10 +96,12 @@ return sign + m + 'm ' + s.toString().padStart(2, '0') + 's';
 """
 
 # The CustomJSTickFormatter body.  Requires args={"state": <source>,
-# "axis_key": "x_is_time"|"y_is_time", "t0_key": "full_x0"|"full_y0"}.
+# "axis_key": "x_is_time"|"y_is_time", "t0_key": "full_x0"|"full_y0",
+# "scale_key": "x_scale"|"y_scale"}.
 TICK_FORMATTER_JS = """
 const is_time = state.data[axis_key][0];
 const t0      = state.data[t0_key][0];
+const scale   = (state.data[scale_key] || [1])[0];
 """ + _JS_CORE
 
 
@@ -146,7 +153,8 @@ def _trim_zeros(s: str) -> str:
     return s.rstrip("0").rstrip(".")
 
 
-def format_tick(tick: float, is_time: bool, t0: float = 0.0) -> str:
+def format_tick(tick: float, is_time: bool, t0: float = 0.0,
+                scale: float = 1.0) -> str:
     """Format one axis tick, matching the browser byte for byte.
 
     Parameters
@@ -170,6 +178,8 @@ def format_tick(tick: float, is_time: bool, t0: float = 0.0) -> str:
         e.g. ``"1234.5678"``, ``"42.5 s"``, ``"2m 05s"``, ``"-1m 30s"``.
     """
     if not is_time:
+        if scale and scale > 0 and scale != 1.0:
+            tick = tick / scale
         s = _trim_zeros(_to_fixed(tick, 4))
         if tick != 0 and s in ("0", "-0"):
             s = _trim_zeros(_to_fixed(tick, 9))
@@ -188,6 +198,45 @@ _SI_PREFIXES = (
     (1e9,  "G"), (1e6,  "M"), (1e3,  "k"), (1.0,  ""),  (1e-3, "m"),
     (1e-6, "\u00b5"), (1e-9, "n"), (1e-12, "p"), (1e-15, "f"),
 )
+
+
+# Prefixes usable on an axis.  Deliberately coarser than si_scale's set:
+# an axis label reading "TB" or "fm" is more confusing than a slightly
+# large number, and the astronomy-relevant span is k..G with m/u below.
+_AXIS_PREFIXES = (
+    (1e9,  "G"), (1e6,  "M"), (1e3,  "k"), (1.0, ""),
+    (1e-3, "m"), (1e-6, "\u00b5"),
+)
+
+
+def si_prefix(lo: float, hi: float, unit: str) -> tuple[float, str]:
+    """Divisor and prefixed unit for an axis spanning ``[lo, hi]``.
+
+    Returns ``(1.0, unit)`` unchanged when *unit* is empty (an index or
+    dimensionless axis takes no prefix) or compound (``"m/s"``, where
+    naive prefixing produces nonsense).  **Never infer a unit from
+    magnitude alone** -- a bare float carries no dimension, and a
+    magnitude-triggered "GHz" would mislabel a long baseline in metres as
+    gigametres.
+
+    Chosen from the *full data extent*, not the current viewport, and
+    deliberately so: a unit that flips from GHz to MHz partway through a
+    zoom is more disorienting than a large number, and holding it fixed
+    means the axis label is computed once rather than on every pan.
+
+    Uses the larger magnitude of the two endpoints, so an axis running
+    from 0 to 372e9 is labelled GHz rather than being dragged to no
+    prefix by its zero end.
+    """
+    if not unit or "/" in unit or unit in ("deg", "rad", "h", "K", "\u03bb"):
+        return 1.0, unit
+    mag = max(abs(lo), abs(hi))
+    if not math.isfinite(mag) or mag == 0.0:
+        return 1.0, unit
+    for factor, prefix in _AXIS_PREFIXES:
+        if mag >= factor:
+            return factor, f"{prefix}{unit}"
+    return 1.0, unit
 
 
 def si_scale(value: float, unit: str) -> tuple[float, str]:
@@ -221,7 +270,7 @@ def si_scale(value: float, unit: str) -> tuple[float, str]:
     return value, unit
 
 
-def mpl_formatter(is_time: bool, t0: float = 0.0):
+def mpl_formatter(is_time: bool, t0: float = 0.0, scale: float = 1.0):
     """Return a ``matplotlib.ticker.FuncFormatter`` wrapping *format_tick*.
 
     matplotlib is imported lazily: this module is imported by
@@ -229,7 +278,7 @@ def mpl_formatter(is_time: bool, t0: float = 0.0):
     that has no matplotlib.
     """
     from matplotlib.ticker import FuncFormatter
-    return FuncFormatter(lambda v, _pos: format_tick(v, is_time, t0))
+    return FuncFormatter(lambda v, _pos: format_tick(v, is_time, t0, scale))
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +290,7 @@ def mpl_formatter(is_time: bool, t0: float = 0.0):
 # claim about what the user sees in *both* the browser and an exported
 # PNG; add to it whenever either implementation changes.
 GOLDEN_CASES: tuple[tuple[float, float, bool, str], ...] = (
-    # --- non-time axis: four decimals -----------------------------------
+    # --- non-time axis: trimmed to significant digits -------------------
     (0.0,          0.0, False, "0"),
     (10.0,         0.0, False, "10"),
     (24.0,         0.0, False, "24"),
@@ -272,6 +321,28 @@ GOLDEN_CASES: tuple[tuple[float, float, bool, str], ...] = (
     (-125.0,       0.0, True,  "-2m 05s"),
     (-119.6,       0.0, True,  "-2m 00s"),
     (1000.0,     100.0, True,  "15m 00s"),
+)
+
+# Scaled cases: ``(tick, t0, is_time, scale, expected)``.  Separate from
+# GOLDEN_CASES so the unscaled table stays a four-tuple and the existing
+# harnesses need no change.
+GOLDEN_SCALED: tuple[tuple[float, float, bool, float, str], ...] = (
+    # Frequency in Hz displayed as GHz -- the case this exists for.
+    (3.72649e11,   0.0, False, 1e9,  "372.649"),
+    (3.7255e11,    0.0, False, 1e9,  "372.55"),
+    (3.72766e11,   0.0, False, 1e9,  "372.766"),
+    # A scale of 1 must be indistinguishable from no scale at all.
+    (1234.5678,    0.0, False, 1.0,  "1234.5678"),
+    (0.0,          0.0, False, 1.0,  "0"),
+    # Sub-unit prefixes.
+    (0.0123,       0.0, False, 1e-3, "12.3"),
+    (-0.0005,      0.0, False, 1e-3, "-0.5"),
+    # Trailing-zero trimming still applies after scaling.
+    (3.72e11,      0.0, False, 1e9,  "372"),
+    # Time ignores scale entirely: elapsed formatting is already
+    # human-scaled, and dividing MJD seconds by 1e9 would be nonsense.
+    (125.0,        0.0, True,  1e9,  "2m 05s"),
+    (142.5,      100.0, True,  1e3,  "42.5 s"),
 )
 
 

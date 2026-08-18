@@ -826,3 +826,64 @@ class TestSpecThemeIsPopulated:
         pe.export_png(cells, str(tmp_path / "p.png"), nrows=1, ncols=2)
         assert spy_axes[0].get_facecolor()[:3] == pytest.approx(
             (1.0, 1.0, 1.0), abs=0.01)
+
+
+class TestAxisSIPrefix:
+    """The SI prefix lives in the label; ticks are divided to match."""
+
+    def _spec(self, **kw):
+        base = dict(kind="raster", title="t", x_label="Frequency",
+                    y_label="Time", x_range=(3.7255e11, 3.7276e11),
+                    y_range=(T0, T1), x_is_time=False, y_is_time=True,
+                    agg_n_x=96, agg_n_y=64, color_mode="global",
+                    x_unit="Hz", y_unit="s",
+                    bands=(ColorBand(label="Amplitude", cmap=PLASMA,
+                                     scaling="eq_hist"),))
+        base.update(kw)
+        return PanelSpec(**base)
+
+    def test_label_carries_the_prefix(self):
+        assert self._spec().axis_label("x") == "Frequency [GHz]"
+
+    def test_ticks_are_divided_to_match(self, tmp_path, spy_axes):
+        panel = RenderedPanel(spec=self._spec(), image=make_image(64, 96))
+        pe.export_png([panel], str(tmp_path / "p.png"))
+        fmt = spy_axes[0].xaxis.get_major_formatter()
+        assert fmt(3.72649e11, 0) == "372.649"
+
+    def test_time_axis_takes_no_prefix(self):
+        """Elapsed formatting is already human-scaled; dividing MJD
+        seconds by 1e9 would be nonsense."""
+        spec = self._spec()
+        assert spec.axis_scale("y") == (1.0, "s")
+        assert spec.axis_label("y") == "Time [s]"
+
+    def test_dimensionless_axis_is_unlabelled(self):
+        spec = self._spec(x_label="Amplitude", x_unit="", x_is_time=False)
+        assert spec.axis_label("x") == "Amplitude"
+        assert spec.axis_scale("x")[0] == 1.0
+
+    def test_compound_unit_is_not_prefixed(self):
+        """"km/s" from a value in m/s is right; "kdeg" from degrees is
+        not, so compound and angular units are left alone."""
+        spec = self._spec(x_label="Velocity", x_unit="m/s",
+                          x_range=(0.0, 1.5e4))
+        assert spec.axis_label("x") == "Velocity [m/s]"
+
+    def test_scale_uses_the_full_extent_not_the_viewport(self, tmp_path,
+                                                         spy_axes):
+        """Units must not flip mid-zoom.  A viewport deep inside the band
+        still gets GHz, because the scale comes from x_range."""
+        panel = RenderedPanel(spec=self._spec(), image=make_image(64, 96),
+                              viewport=(3.72600e11, 3.72601e11, T0, T1))
+        pe.export_png([panel], str(tmp_path / "p.png"))
+        assert spy_axes[0].get_xlabel() == "Frequency [GHz]"
+        assert spy_axes[0].xaxis.get_major_formatter()(
+            3.726e11, 0) == "372.6"
+
+    def test_existing_unit_in_label_is_not_duplicated(self):
+        """_axis_label already emits "UV Distance [m]"; prefixing must
+        not produce "UV Distance [m] [m]"."""
+        spec = self._spec(x_label="UV Distance [m]", x_unit="m",
+                          x_range=(0.0, 420.0), x_is_time=False)
+        assert spec.axis_label("x") == "UV Distance [m]"

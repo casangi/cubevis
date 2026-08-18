@@ -287,17 +287,22 @@ def _style_axes(ax, theme: Theme, spec: Optional[PanelSpec],
     ax.set_ylim(y0, y1)
 
     if spec is not None:
-        ax.set_xlabel(spec.x_label, color=theme.text, fontsize=9)
-        ax.set_ylabel(spec.y_label, color=theme.text, fontsize=9)
+        # axis_label()/axis_scale() rather than the raw label: the SI
+        # prefix lives in the label and the ticks are divided to match,
+        # exactly as the browser does it.
+        ax.set_xlabel(spec.axis_label("x"), color=theme.text, fontsize=9)
+        ax.set_ylabel(spec.axis_label("y"), color=theme.text, fontsize=9)
     src = tick_src if tick_src is not None else spec
     if src is not None:
         # Elapsed-time labels are relative to the FULL extent's origin,
         # not the viewport's -- so a zoomed export keeps the same tick
         # vocabulary as the unzoomed one, exactly as the browser does.
         ax.xaxis.set_major_formatter(
-            mpl_formatter(src.x_is_time, src.x_range[0]))
+            mpl_formatter(src.x_is_time, src.x_range[0],
+                          src.axis_scale("x")[0]))
         ax.yaxis.set_major_formatter(
-            mpl_formatter(src.y_is_time, src.y_range[0]))
+            mpl_formatter(src.y_is_time, src.y_range[0],
+                          src.axis_scale("y")[0]))
     ax.grid(True, color=theme.grid, linewidth=0.5, alpha=0.6)
     ax.set_axisbelow(True)
 

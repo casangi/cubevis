@@ -251,10 +251,43 @@ class PanelSpec:
     status:     str           = "ok"
     note:       Optional[str] = None
     theme:      str           = "dark"
+    x_unit:     str           = ""
+    y_unit:     str           = ""
 
     # ------------------------------------------------------------------
     # Bokeh interop
     # ------------------------------------------------------------------
+
+    def axis_scale(self, axis: str = "x") -> tuple[float, str]:
+        """``(divisor, prefixed_unit)`` for one axis.
+
+        Chosen from the *full extent* rather than the viewport, so units
+        do not flip from GHz to MHz partway through a zoom -- and so the
+        axis label can be computed once instead of on every pan.
+
+        Time axes are excluded: elapsed formatting is already
+        human-scaled, and dividing MJD seconds by 1e9 would be nonsense.
+        """
+        from .tick_format import si_prefix
+        is_time = self.x_is_time if axis == "x" else self.y_is_time
+        unit    = self.x_unit if axis == "x" else self.y_unit
+        if is_time:
+            return 1.0, unit
+        lo, hi = self.x_range if axis == "x" else self.y_range
+        return si_prefix(lo, hi, unit)
+
+    def axis_label(self, axis: str = "x") -> str:
+        """Axis label with the SI-prefixed unit, e.g. ``Frequency [GHz]``.
+
+        The prefix goes in the *label*, not on each tick: Bokeh's
+        ``CustomJSTickFormatter`` runs per tick and has no slot for a
+        shared multiplier annotation, so scaling the label is the one
+        approach that works identically in both runtimes.
+        """
+        base = self.x_label if axis == "x" else self.y_label
+        base = base.split(" [")[0]      # drop any unit already present
+        _, unit = self.axis_scale(axis)
+        return base + (f" [{unit}]" if unit else "")
 
     def with_bands(self, bands) -> "PanelSpec":
         """Copy with *bands* replaced — used to attach mappings late."""
@@ -281,11 +314,15 @@ class PanelSpec:
             "full_y1":   [float(self.y_range[1])],
             "y_is_time": [int(self.y_is_time)],
             "x_is_time": [int(self.x_is_time)],
-            "x_label":   [self.x_label],
-            "y_label":   [self.y_label],
+            "x_label":   [self.axis_label("x")],
+            "y_label":   [self.axis_label("y")],
             "agg_n_x":   [self.agg_n_x],
             "agg_n_y":   [self.agg_n_y],
             "color_mode": [self.color_mode],
+            # Divisors for the tick formatter.  Fixed from the full
+            # extent, so a pan or zoom never changes the axis units.
+            "x_scale":   [self.axis_scale("x")[0]],
+            "y_scale":   [self.axis_scale("y")[0]],
         }
 
         if self.kind == "scatter":

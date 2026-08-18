@@ -1222,23 +1222,59 @@ class TestDeferredConstruction:
         assert vs._x_range == (0.0, 1.0)
         assert vs._y_range == (0.0, 1.0)
 
-    def test_defer_is_much_faster_than_real_render(self):
-        """Deferred construction must not pay the backend query cost —
-        the whole point of decision 11."""
-        t0 = time_mod.perf_counter()
-        _make_single_layer(self.backend, self.sel)
-        real_elapsed = time_mod.perf_counter() - t0
+    def test_defer_makes_no_backend_query_calls(self):
+        """Deferred construction must not call the backend at all.
 
-        t0 = time_mod.perf_counter()
-        _make_single_layer(self.backend, self.sel, defer_initial_render=True)
-        deferred_elapsed = time_mod.perf_counter() - t0
+        Replaces test_defer_is_much_faster_than_real_render (removed
+        2026-08-17).  That test asserted
+        ``deferred < real/10 or deferred < 0.05``, which assumes real
+        construction is *dominated* by the backend query.  Once the MSv2
+        query got fast enough (observed real ~0.216s, deferred ~0.096s)
+        the fixed cost both paths pay -- Bokeh figure, tools, comm setup
+        -- became a large fraction of real, and the ratio failed while
+        the code was fine.  A faster machine makes it fail harder, which
+        is the wrong direction for a test to move.
 
-        print(f"  real={real_elapsed:.3f}s  deferred={deferred_elapsed:.3f}s")
-        assert deferred_elapsed < real_elapsed / 10 or deferred_elapsed < 0.05, (
-            f"Deferred construction ({deferred_elapsed:.3f}s) is not "
-            f"dramatically faster than real construction ({real_elapsed:.3f}s) "
-            "— defer_initial_render may still be querying the backend"
-        )
+        Counting calls measures the actual invariant.  It is also
+        stronger than the sibling test_defer_does_not_query_backend,
+        which checks that the layer DataFrames are None: a query whose
+        result was fetched and discarded would leave them None and still
+        be the bug this guards against.
+        """
+        calls = []
+        names = ("query_columns", "query_raster", "samples_per_pixel")
+        originals = {}
+        for name in names:
+            orig = getattr(self.backend, name, None)
+            if orig is None:
+                continue
+            originals[name] = orig
+
+            def _spy(*a, _n=name, _o=orig, **kw):
+                calls.append(_n)
+                return _o(*a, **kw)
+
+            setattr(self.backend, name, _spy)
+        try:
+            _make_single_layer(self.backend, self.sel,
+                               defer_initial_render=True)
+            assert calls == [], (
+                f"defer_initial_render still called the backend: {calls}"
+            )
+            # The spy must be capable of firing, or the assertion above
+            # proves nothing and would keep passing after a refactor
+            # renamed the query methods.
+            _make_single_layer(self.backend, self.sel)
+            assert calls, (
+                "the spy never fired on a real render — this test is "
+                "inert and is not checking what it claims"
+            )
+        finally:
+            for name, orig in originals.items():
+                try:
+                    delattr(self.backend, name)
+                except AttributeError:
+                    setattr(self.backend, name, orig)
 
     def test_first_update_axes_with_explicit_x_dim_renders(self):
         """Activating a deferred panel by passing its own current x_dim

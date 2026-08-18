@@ -85,6 +85,32 @@ except ImportError:
 _DEFAULT_SCALING = "eq_hist"
 
 # Default color maps for successive layers
+_MIN_ALPHA = 90
+"""Alpha floor for the sparsest populated pixel, of 255.
+
+Datashader defaults to 40, which makes a single-point pixel nearly
+invisible against either background -- the low-end complaint that
+``palettes.condition`` could only half-address, because conditioning
+moves the *colour* while alpha decides how much of it survives.
+
+Measured against the dark ground with the conditioned ``polar[0]`` ramp,
+distance from background at the sparse end:
+
+    min_alpha    40 ->  23.7
+                 60 ->  35.6
+                 90 ->  53.3      <- chosen
+                120 ->  71.1
+                160 ->  94.8
+
+Higher is not better: dense pixels stay at ~330 regardless, so raising
+the floor compresses the dynamic range.  At 160 a nearly-empty pixel is
+already a third of the way to a full one and genuine density structure
+flattens out.  90 roughly doubles sparse visibility while leaving the
+low quarter of the range distinguishable.
+
+Applies to scatter only.  A raster cell is opaque and has no sparse end.
+"""
+
 _LAYER_CMAPS = [
     # Plasma
     ["#0d0887","#46039f","#7201a8","#9c179e","#bd3786",
@@ -1603,6 +1629,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                     shade_kwargs = dict(
                         cmap=lyr.cmap,
                         how=_cms.DATASHADER_HOW[lyr.scaling],
+                        min_alpha=_MIN_ALPHA,
                     )
                     if span is not None:
                         shade_kwargs["span"] = span
@@ -1630,7 +1657,8 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                     )
                     scaled_agg = agg.copy(data=transformed)
                     img = tf.shade(
-                        scaled_agg, cmap=lyr.cmap, how="linear", span=[0.0, 1.0]
+                        scaled_agg, cmap=lyr.cmap, how="linear",
+                        span=[0.0, 1.0], min_alpha=_MIN_ALPHA,
                     )
                 else:
                     transformed = _cms.apply_explicit_scaling(
@@ -1643,7 +1671,8 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                     )
                     scaled_agg = agg.copy(data=transformed)
                     img = tf.shade(
-                        scaled_agg, cmap=lyr.cmap, how="linear", span=[0.0, 1.0]
+                        scaled_agg, cmap=lyr.cmap, how="linear",
+                        span=[0.0, 1.0], min_alpha=_MIN_ALPHA,
                     )
                 img_arr = np.array(img, dtype=np.uint32)
                 if layer_alpha > 0:

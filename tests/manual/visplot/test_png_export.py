@@ -264,7 +264,10 @@ class TestEmptyCells:
         pe.export_png([make_panel(),
                        make_empty(note="shade failed: bad reshape",
                                   status="error")],
-                      str(tmp_path / "p.png"), nrows=1, ncols=2)
+                      str(tmp_path / "p.png"), nrows=1, ncols=2,
+                      theme="light")     # explicit: the theme now defaults
+                                         # to PanelSpec.theme, which the
+                                         # fixtures leave at "dark"
         txt = spy_axes[1].texts[0]
         assert "ERROR" in txt.get_text()
         assert txt.get_color() == pe.THEMES["light"].error
@@ -713,3 +716,113 @@ class TestRealDataRegressions:
         lb = leg.get_window_extent()
         tb = title.get_window_extent()
         assert tb.y0 >= lb.y1 - 1.0, "cell title overlaps the panel legend"
+
+
+class TestColorbarAttachment:
+    """Found by the first real headless export (2026-08-16)."""
+
+    def test_lone_value_band_attaches_to_its_own_panel(self, tmp_path,
+                                                       spy_axes):
+        """A raster beside a scatter must not put the raster's bar at the
+        figure edge, next to the panel it does not describe.
+
+        _mappings_agree trivially returns True for a single mapping, so
+        "auto" resolved to "shared" and the bar landed against the
+        scatter.  Resolution now also requires that every drawable panel
+        contributes.
+        """
+        cells = [make_raster_with_bar(), make_scatter_with_bars()]
+        assert pe._resolve_colorbar("auto", cells) == "each"
+        pe.export_png(cells, str(tmp_path / "p.png"), nrows=1, ncols=2)
+        # 2 cells + 1 bar.  Creation order is per-cell: cell 0, then its
+        # bar, then cell 1 -- so the bar is spy_axes[1], not [-1].
+        assert len(spy_axes) == 3
+        raster_ax, bar_ax, scatter_ax = spy_axes
+        assert raster_ax.get_title() == "Amp"
+        assert scatter_ax.get_title() == "Amp vs UVDist"
+        # The bar sits between the raster it describes and the scatter.
+        assert (raster_ax.get_position().x1
+                <= bar_ax.get_position().x0
+                < scatter_ax.get_position().x0)
+
+    def test_homogeneous_grid_still_shares(self, tmp_path):
+        """Every panel contributing an identical mapping keeps one bar."""
+        m = _mapping()
+        cells = [make_raster_with_bar(f"spw={i}", m) for i in range(4)]
+        assert pe._resolve_colorbar("auto", cells) == "shared"
+
+    def test_swatch_is_mid_ramp_not_the_extreme(self):
+        """Layer cmaps are picked for a dark GUI background, so their top
+        end is near-white and vanishes as a swatch on a light export."""
+        band = ColorBand(label="XX", scaling="eq_hist",
+                         cmap=("#000000", "#7201a8", "#fdfdc0"))
+        assert pe._band_swatch(band) == "#7201a8"
+
+
+class TestThemeDefaulting:
+    """The chrome theme follows the theme the pixels were shaded for."""
+
+    def test_defaults_to_the_panels_shading_theme(self, tmp_path, spy_axes):
+        """A palette is baked in before export_png sees the image, and
+        ramps are conditioned against a specific background — so a fixed
+        "light" default drew dark-conditioned pixels on white and lost
+        ~2.5x contrast.  That was the default outcome of the obvious
+        headless usage, because the caller had to pass the theme twice."""
+        from dataclasses import replace
+        panel = make_panel()
+        dark = RenderedPanel(spec=replace(panel.spec, theme="dark"),
+                             image=panel.image)
+        pe.export_png([dark], str(tmp_path / "d.png"))
+        assert spy_axes[0].get_facecolor()[:3] == pytest.approx(
+            tuple(int(pe.THEMES["dark"].axes.lstrip("#")[i:i + 2], 16) / 255
+                  for i in (0, 2, 4)), abs=0.01)
+
+    def test_explicit_theme_still_wins(self, tmp_path, spy_axes):
+        from dataclasses import replace
+        panel = make_panel()
+        dark = RenderedPanel(spec=replace(panel.spec, theme="dark"),
+                             image=panel.image)
+        pe.export_png([dark], str(tmp_path / "l.png"), theme="light")
+        assert spy_axes[0].get_facecolor()[:3] == pytest.approx(
+            (1.0, 1.0, 1.0), abs=0.01)
+
+
+class TestSpecThemeIsPopulated:
+    """``PanelSpec.theme`` must reflect what the pixels were shaded for.
+
+    It defaults to ``"dark"`` on the dataclass, so a producer that never
+    sets it looks correct in every dark-themed test and silently mislabels
+    every light one.  That is precisely what happened: VisibilityPlotter
+    documented itself as stamping the theme onto each panel and did not,
+    so a light-themed headless export drew light-conditioned ramps on a
+    dark ground.
+
+    These assert the *contract* rather than a producer, so they hold for
+    any future producer too.
+    """
+
+    def test_export_follows_a_light_spec(self, tmp_path, spy_axes):
+        from dataclasses import replace
+        panel = make_panel()
+        light = RenderedPanel(spec=replace(panel.spec, theme="light"),
+                              image=panel.image)
+        pe.export_png([light], str(tmp_path / "p.png"))
+        assert spy_axes[0].get_facecolor()[:3] == pytest.approx(
+            (1.0, 1.0, 1.0), abs=0.01)
+
+    def test_mixed_specs_take_the_first_drawable(self, tmp_path, spy_axes):
+        """Panels in one figure share a background, so the first one wins.
+
+        Mixed themes in a single export are a producer bug -- the
+        compositor cannot paint two backgrounds -- but it should behave
+        predictably rather than by dict ordering.
+        """
+        from dataclasses import replace
+        a, b = make_panel(), make_panel()
+        cells = [RenderedPanel(spec=replace(a.spec, theme="light"),
+                               image=a.image),
+                 RenderedPanel(spec=replace(b.spec, theme="dark"),
+                               image=b.image)]
+        pe.export_png(cells, str(tmp_path / "p.png"), nrows=1, ncols=2)
+        assert spy_axes[0].get_facecolor()[:3] == pytest.approx(
+            (1.0, 1.0, 1.0), abs=0.01)

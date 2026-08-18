@@ -204,6 +204,7 @@ class VisibilityScatter(VisibilityPlot):
         selection: "SelectionSpec",
         x_axis: "Axis",
         layers: list[ScatterLayer],
+        layer_cmaps: Optional[list] = None,
         width: int  = 900,
         height: int = 600,
         title: Optional[str] = None,
@@ -217,7 +218,13 @@ class VisibilityScatter(VisibilityPlot):
         if not layers:
             raise ValueError("VisibilityScatter: layers must be non-empty")
 
-        # Assign default color maps by layer index
+        # Assign default color maps by layer index.  The family is an
+        # instance attribute, not the module constant, because it is
+        # theme-dependent: VisibilityPlotter resolves it through
+        # ``palettes`` and passes it in.  A layer arriving from a j2p
+        # payload has no cmap (the browser has no reason to send one) and
+        # is filled from here -- see _with_default_cmaps.
+        self._layer_cmaps = list(layer_cmaps or _LAYER_CMAPS)
         self._layers: list[ScatterLayer] = self._with_default_cmaps(layers)
 
         # Cached DataFrames and canvas aggs — one per layer
@@ -832,6 +839,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             bands      = bands,
             status     = status,
             note       = note,
+            theme      = self._theme_hint(),
         )
 
     def _bands_with_mappings(self, spec, viewport=None):
@@ -1722,6 +1730,32 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
     # j2p handlers (scatter-specific)
     # ------------------------------------------------------------------
 
+    def set_layer_cmaps(self, cmaps) -> None:
+        """Swap every layer's colormap and re-composite from cache.
+
+        A ``SHADE``-level change (``refresh.py``).  Assigns by layer
+        index modulo the family length, matching how the family is
+        applied at construction, so a scatter with more layers than the
+        family has entries still cycles rather than failing.
+        """
+        from dataclasses import replace
+        self._layer_cmaps = list(cmaps)
+        self._layers = [
+            replace(lyr, cmap=self._layer_cmaps[i % len(self._layer_cmaps)])
+            for i, lyr in enumerate(self._layers)
+        ]
+        self._reshade()
+
+    def _reshade(self) -> None:
+        """Re-composite the cached layer DataFrames; no backend query."""
+        if not any(df is not None for df in self._layer_dfs):
+            return
+        if self._current_viewport is not None:
+            x0, x1, y0, y1 = self._current_viewport
+            self._composite_and_push((x0, x1), (y0, y1))
+        else:
+            self._composite_and_push(self._x_range, self._y_range)
+
     def set_color_mode(self, mode: str) -> None:
         """Toggle color mode and re-composite without re-querying the backend.
 
@@ -1819,8 +1853,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             scaling_vmax  = lyr.scaling_vmax,
         )
 
-    @staticmethod
-    def _with_default_cmaps(layers) -> list:
+    def _with_default_cmaps(self, layers) -> list:
         """Return *layers* with any missing ``cmap`` filled in by index.
 
         Must be applied wherever ``self._layers`` is set, not only in
@@ -1839,7 +1872,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 lyr = ScatterLayer(
                     y_axis        = lyr.y_axis,
                     polarization  = lyr.polarization,
-                    cmap          = _LAYER_CMAPS[i % len(_LAYER_CMAPS)],
+                    cmap          = self._layer_cmaps[i % len(self._layer_cmaps)],
                     alpha         = lyr.alpha,
                     label         = lyr.label,
                     scaling       = lyr.scaling,

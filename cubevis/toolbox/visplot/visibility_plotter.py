@@ -97,6 +97,8 @@ from .axes import Axis
 from .selection import SelectionSpec
 from .visibility_raster import VisibilityRaster
 from .visibility_scatter import VisibilityScatter, ScatterLayer, _LAYER_CMAPS
+from . import palettes as _palettes
+from .refresh import RefreshLevel as _RefreshLevel
 from .visibility_plot import _axis_label
 from .flag_db import FlagDB
 from .reduction_context import (
@@ -536,6 +538,7 @@ def _make_scatter_layers(
     y_axis: "Axis",
     polarizations: list[str],
     scaling_alpha: float = 50.0,
+    cmaps: Optional[list] = None,
 ) -> list[ScatterLayer]:
     """Build one ``ScatterLayer`` per polarisation with assigned cmaps.
 
@@ -543,12 +546,19 @@ def _make_scatter_layers(
     but ``update_axes`` with a fresh layer list does not.  This helper
     always assigns cmaps explicitly so the shade step never receives
     ``cmap=None`` regardless of which code path constructs the layers.
+
+    *cmaps* is the theme-resolved family from ``palettes``; callers that
+    have a plotter should pass ``self._scatter_ramps`` so the layers match
+    the current theme.  ``None`` falls back to the module constant, which
+    is the dark-theme family -- correct for the default theme and merely
+    suboptimal otherwise, rather than a failure.
     """
+    cmaps = list(cmaps or _LAYER_CMAPS)
     return [
         ScatterLayer(
             y_axis        = y_axis,
             polarization  = pol,
-            cmap          = _LAYER_CMAPS[i % len(_LAYER_CMAPS)],
+            cmap          = cmaps[i % len(cmaps)],
             scaling_alpha = scaling_alpha,
         )
         for i, pol in enumerate(polarizations)
@@ -603,6 +613,183 @@ class _PanelSlot:
 # ---------------------------------------------------------------------------
 # VisibilityPlotter
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Theme restyle — one JS body, two callers
+# ---------------------------------------------------------------------------
+#
+# Extracted from the Light/Dark toggle's CustomJS so the same code can
+# run at document load.  The toggle restyles on the "active" *change*
+# event, and a change event does not fire at load -- so a constructor
+# theme="light" built dark chrome that nothing ever restyled, while the
+# palettes were resolved light.  That mismatch costs ~2.5x contrast (see
+# palettes.py) and rendered the scatter nearly black.
+#
+# The body expects a boolean ``light`` already in scope and refers to the
+# toggle nowhere, so the two callers differ only in how they obtain it:
+#
+#   toggle  : const light = cb_obj.active;   (+ label update after)
+#   startup : const light = true;            (baked in by Python)
+#
+# One copy matters more than usual here: the body covers figures, info
+# divs, sidebar, widgets, hint divs, path_div's regenerated HTML,
+# colormap histograms, icons and the gear tab strip -- and every one of
+# those was added after a *reported* light-mode gap.  A second copy would
+# silently miss the next one.
+_THEME_RESTYLE_JS = """
+const bg_fig    = light ? 'white'   : 'black';
+const bg_border = light ? '#ffffff' : '#1e1e2e';
+const label_c   = light ? '#222222' : '#cdd6f4';
+const grid_c    = light ? '#cccccc' : '#45475a';
+const page_bg   = light ? '#ffffff' : '#181825';
+const info_bg   = light ? '#ffffff' : '#1e1e2e';
+const info_c    = light ? '#222222' : '#cdd6f4';
+const status_c  = light ? '#155724' : '#a6e3a1';
+const title_c   = light ? '#222222' : '#cdd6f4';
+// Two new colors for the light-mode fixes above: hint_c stays visually
+// distinct from status_c in light mode too (dark teal vs. dark green),
+// matching the existing dark-mode intent ("cyan — distinct from status
+// green") rather than just reusing status_c and losing that distinction.
+// source_c is exactly label_c's value, reused under its own name since
+// it's conceptually "make the source path readable, matching the rest
+// of the sidebar's text" rather than tied to the same one label_c
+// happens to serve elsewhere.
+const hint_c    = light ? '#0c5460' : '#89dceb';
+const source_c  = light ? '#222222' : '#a6e3a1';
+// dark_css/light_css/dark_tabs_css/light_tabs_css are passed in via
+// args (see the CustomJS args dict above) rather than defined here --
+// single source of truth in _DARK_WIDGET_CSS/_LIGHT_WIDGET_CSS/
+// _DARK_TABS_CSS/_LIGHT_TABS_CSS.
+const widget_css = light ? light_css : dark_css;
+const tabs_css = light ? light_tabs_css : dark_tabs_css;
+
+// Page background
+for (const el of [document.body, document.documentElement]) {
+    try { el.style.background = page_bg; } catch(e) {}
+}
+for (const sel of ['.bk-root', '[data-root-id]', '.bk']) {
+    try {
+        document.querySelectorAll(sel).forEach(
+            el => el.style.background = page_bg
+        );
+    } catch(e) {}
+}
+
+// Figures (all four panel objects — see args comment above)
+for (const fig of figs) {
+    fig.background_fill_color = bg_fig;
+    fig.border_fill_color     = bg_border;
+    if (fig.title) fig.title.text_color = title_c;
+    for (const ax of [...fig.below, ...fig.left, ...fig.right, ...fig.above]) {
+        if (ax.axis_label_text_color  !== undefined) ax.axis_label_text_color  = label_c;
+        if (ax.major_label_text_color !== undefined) ax.major_label_text_color = label_c;
+        if (ax.axis_line_color        !== undefined) ax.axis_line_color        = label_c;
+        if (ax.major_tick_line_color  !== undefined) ax.major_tick_line_color  = label_c;
+        if (ax.minor_tick_line_color  !== undefined) ax.minor_tick_line_color  = label_c;
+    }
+    for (const g of fig.center) {
+        if (g.grid_line_color !== undefined) g.grid_line_color = grid_c;
+    }
+}
+
+// Info divs and status bar
+function recolor_div(div, bg, fg) {
+    try {
+        const s = Object.assign({}, div.styles);
+        s['background'] = bg;
+        s['color']      = fg;
+        div.styles = s;
+    } catch(e) {}
+}
+for (const info_div of info_divs) {
+    recolor_div(info_div, info_bg, info_c);
+}
+recolor_div(status_div, page_bg, status_c);
+recolor_div(notify_div, page_bg, light ? '#b02a37' : '#f38ba8');
+
+// Config-field hint divs (added 2026-08-03, fixing a reported gap) —
+// same page_bg as status_div, distinct text color from status_c to
+// preserve the dark-mode "cyan — distinct from status green" intent.
+for (const hint_div of hint_divs) {
+    recolor_div(hint_div, page_bg, hint_c);
+}
+
+// Source path (added 2026-08-03, fixing a reported gap) — the color was
+// baked into an inline HTML <span style=...> inside .text itself, which
+// no property-based recolor mechanism can reach; rebuilt here instead of
+// restyled. label_c already correctly tracks light/dark for the
+// "Source:" label; source_c (== label_c's value, see definition above)
+// does the same for the path itself, replacing the old permanently-green
+// value per the specific request that light mode read black, not green.
+path_div.text = "<b style='color:" + label_c + "'>Source:</b> " +
+    "<span style='font-family:monospace;font-size:11px;color:" +
+    source_c + "'>" + source_basename + "</span>";
+
+// Sidebar container background
+try {
+    const s = Object.assign({}, sidebar.styles);
+    s['background']   = light ? '#f8f8f0' : '#1e1e2e';
+    s['border-right'] = light ? '1px solid #ccc' : '1px solid #45475a';
+    sidebar.styles = s;
+} catch(e) {}
+
+// Sidebar widgets — update InlineStyleSheet CSS directly on each widget.
+// This is the only reliable way since InlineStyleSheet overrides all other CSS.
+try {
+    for (const w of widgets) {
+        if (w.stylesheets && w.stylesheets.length > 0) {
+            w.stylesheets[0].css = widget_css;
+        }
+    }
+} catch(e) { console.warn('widget stylesheet update failed:', e); }
+
+// Gear tab strip ("Panel A"/"Panel B") — previously had no light-mode
+// CSS defined anywhere and was never touched by this callback at all,
+// so it stayed dark regardless of mode (reported directly). Same
+// stylesheets[0].css swap pattern as the widgets loop above, just with
+// dedicated tab CSS since Bokeh's Tabs widget uses different shadow-DOM
+// classes (.bk-header/.bk-tab) than .bk-input/.bk-btn.
+try {
+    if (tabs.stylesheets && tabs.stylesheets.length > 0) {
+        tabs.stylesheets[0].css = tabs_css;
+    }
+} catch(e) { console.warn('tabs stylesheet update failed:', e); }
+
+// Colormap histogram figures (added to fix a reported light-mode gap —
+// see _style_cmap_column's docstring). Deliberately dimmer than the
+// main panels' stark black/white in BOTH modes — light mode reuses the
+// sidebar's own light background tone (#f8f8f0) rather than pure
+// white — so the plotted distribution stays legible either way, per
+// the original design intent for this figure.
+const cmap_bg = light ? '#f8f8f0' : '#1e1e2e';
+try {
+    for (const fig of cmap_figs) {
+        fig.background_fill_color = cmap_bg;
+        fig.border_fill_color     = cmap_bg;
+        if (fig.outline_line_color !== undefined) fig.outline_line_color = grid_c;
+        for (const ax of [...fig.below, ...fig.left, ...fig.right, ...fig.above]) {
+            if (ax.axis_line_color        !== undefined) ax.axis_line_color        = label_c;
+            if (ax.major_tick_line_color  !== undefined) ax.major_tick_line_color  = label_c;
+            if (ax.minor_tick_line_color  !== undefined) ax.minor_tick_line_color  = label_c;
+            if (ax.major_label_text_color !== undefined) ax.major_label_text_color = label_c;
+        }
+        for (const g of fig.center) {
+            if (g.grid_line_color !== undefined) g.grid_line_color = grid_c;
+        }
+    }
+} catch(e) { console.warn('colormap figure recolor failed:', e); }
+
+// Reset button icons — BuiltinIcon.color isn't reachable via
+// stylesheets at all, has to be set directly.
+try {
+    for (const icon of cmap_icons) {
+        if (icon.color !== undefined) icon.color = label_c;
+    }
+} catch(e) { console.warn('colormap icon recolor failed:', e); }
+
+"""
+
 
 class VisibilityPlotter:
     """Combined raster + scatter visibility inspection and flagging tool.
@@ -699,8 +886,76 @@ class VisibilityPlotter:
         uvdist_range:     tuple[float, float] | list[float] | None = None,
         enable_flagging:  bool           = True,
         compact_toolbar:  bool           = True,
+        plot_width:       Optional[int]  = None,
+        plot_height:      Optional[int]  = None,
+        theme:            str            = "dark",
+        raster_cmap:      Optional[str]  = None,
+        scatter_cmap:     Optional[str]  = None,
+        headless:         bool           = False,
     ) -> None:
+        """Construct the plotter.
 
+        Split into three phases so a headless export can stop after the
+        first two.  ``headless=True`` resolves configuration and opens the
+        data, builds only the panels it will actually export, and returns
+        without any browser chrome -- no ``CommMgr``, no control pipe, no
+        figure styling, no layout.
+
+        See ``_resolve_config``, ``_build_panels`` and ``_build_gui``.
+        """
+        self._headless = bool(headless)
+
+        self._resolve_config(
+            ms=ms, ps=ps, backend=backend, remote_endpoint=remote_endpoint,
+            field=field, spw=spw, antenna=antenna, scan=scan,
+            timerange=timerange, uvrange=uvrange, correlation=correlation,
+            datacolumn=datacolumn, layout=layout, preset=preset,
+            raster_y=raster_y, raster_x=raster_x, raster_qty=raster_qty,
+            scatter_x=scatter_x, scatter_y=scatter_y,
+            time_range=time_range, freq_range=freq_range,
+            uvdist_range=uvdist_range, enable_flagging=enable_flagging,
+            compact_toolbar=compact_toolbar,
+            theme=theme, raster_cmap=raster_cmap, scatter_cmap=scatter_cmap,
+            plot_width=plot_width, plot_height=plot_height,
+        )
+
+        # ------------------------------------------------------------------ #
+        # FlagDB + hotkey scope                                                #
+        # ------------------------------------------------------------------ #
+        self._flag_db         = FlagDB()
+        self._hotkey_scope_id = str(uuid4())
+
+        if self._headless:
+            # No comm layer: VisibilityPlot already treats comm_mgr=None
+            # as "no browser", so the panels are simply built without one.
+            self._comm_mgr = None
+            self._build_panels()
+            return
+
+        self._build_comm()
+        self._build_panels()
+        self._style_panel_figures()
+        self._build_gui()
+
+    def _resolve_config(
+        self,
+        *,
+        ms, ps, backend, remote_endpoint, field, spw, antenna, scan,
+        timerange, uvrange, correlation, datacolumn, layout, preset,
+        raster_y, raster_x, raster_qty, scatter_x, scatter_y,
+        time_range, freq_range, uvdist_range, enable_flagging,
+        compact_toolbar, theme, raster_cmap, scatter_cmap,
+        plot_width, plot_height,
+    ) -> None:
+        """Phase 1: validate, store arguments, open the data, resolve axes.
+
+        Everything here runs in every mode -- it is what a headless export
+        needs and nothing more.  Opens the MS/PS, builds the initial
+        ``SelectionSpec``, and resolves the preset/explicit axis choices
+        into ``_raster_x/_raster_y/_raster_qty/_scatter_x/_scatter_y``.
+
+        No Bokeh models are created and no browser state is assumed.
+        """
         # ------------------------------------------------------------------ #
         # Validate                                                             #
         # ------------------------------------------------------------------ #
@@ -730,6 +985,42 @@ class VisibilityPlotter:
         self._uvdist_range  = uvdist_range
         self._enable_flagging = enable_flagging
         self._compact_toolbar = compact_toolbar
+
+        # --- theme and palettes -------------------------------------- #
+        #
+        # A palette is a *render-time* choice: it is applied before
+        # tf.shade(), so it is baked into the pixels and cannot be
+        # changed by the export's chrome theme.  See palettes.py.
+        #
+        # Sticky override, per role: `theme` supplies the default, and
+        # once the user picks a palette by hand the theme stops driving
+        # THAT role for the session while the other keeps tracking.  An
+        # explicit constructor argument counts as user-set from the
+        # start -- otherwise the first Light/Dark toggle would silently
+        # discard it.
+        # Per-panel canvas size in pixels.  This is the Datashader canvas
+        # as well as the Bokeh figure size, so it sets the aggregation
+        # resolution, not just the display scale -- see png_export's
+        # `cell_size` note.  Defaults preserve the previous hardcoded
+        # constants.
+        self._plot_width  = int(plot_width or _PANEL_WIDTH_SIDE)
+        self._plot_height = int(plot_height or _PANEL_HEIGHT)
+
+        self._requested_theme = theme if theme in ("dark", "light") else "dark"
+        self._theme = self._requested_theme
+
+        # A light-themed GUI launch applies the same restyle the toggle
+        # runs, once, at document load -- see _apply_startup_theme().  The
+        # chrome and the palettes must agree: light-conditioned ramps on a
+        # dark ground cost ~2.5x contrast (palettes.py) and render the
+        # scatter nearly black, which is exactly what happened while this
+        # was unwired.
+        self._raster_cmap_name  = raster_cmap or _palettes.default_for(
+            "raster", self._theme)
+        self._scatter_cmap_name = scatter_cmap or _palettes.default_for(
+            "scatter", self._theme)
+        self._raster_cmap_user_set  = raster_cmap is not None
+        self._scatter_cmap_user_set = scatter_cmap is not None
 
         if self._layout not in ("one", "side", "over"):
             raise ValueError(f"layout must be 'one', 'side', or 'over'; got {layout!r}")
@@ -825,12 +1116,14 @@ class VisibilityPlotter:
         self._scatter_x  = _resolved_scatter_x
         self._scatter_y  = _resolved_scatter_y
 
-        # ------------------------------------------------------------------ #
-        # FlagDB + hotkey scope                                                #
-        # ------------------------------------------------------------------ #
-        self._flag_db         = FlagDB()
-        self._hotkey_scope_id = str(uuid4())
+    def _build_comm(self) -> None:
+        """Phase 2a (GUI only): comm layer and reconnection handlers.
 
+        Creates the ``BokehAppContext``/``CommMgr``, opens the control
+        pipe, and registers the plot/done handlers.  Skipped entirely
+        when headless -- there is no browser to talk to, and
+        ``VisibilityPlot`` accepts ``comm_mgr=None``.
+        """
         # ------------------------------------------------------------------ #
         # Communication infrastructure                                         #
         # ------------------------------------------------------------------ #
@@ -902,9 +1195,48 @@ class VisibilityPlotter:
         self._ids = {
             "plot": str(uuid4()),
             "done": str(uuid4()),
+            "theme": str(uuid4()),
+            "export": str(uuid4()),
         }
         self._pipe["control"].register(self._ids["plot"], self._handle_plot)
         self._pipe["control"].register(self._ids["done"], self._handle_done)
+        self._pipe["control"].register(self._ids["theme"], self._handle_theme)
+        self._pipe["control"].register(self._ids["export"], self._handle_export)
+
+    def _build_panels(self) -> None:
+        """Phase 2b: cursor/order sources, panel objects, slot bookkeeping.
+
+        Runs in every mode.  The two ``ColumnDataSource``s live here
+        rather than with the comm layer because the panels need them and
+        they are plain data models -- no browser required.
+
+        Panels are constructed with ``headless=self._headless``, which
+        makes each one build its Datashader substrate (``_render``,
+        ``_state_source``) and skip its figure and tools.
+
+        Palettes are resolved here rather than left to the plot classes'
+        module constants: the ramp depends on the theme, and only the
+        plotter knows it.  ``palettes.condition()`` also trims each ramp
+        away from the theme background so the sparse end does not vanish
+        into it -- see ``palettes.py``.
+
+        "Render only what is needed" needs no special casing here: the
+        existing ``defer_initial_render=(_slot_X_kind != "...")`` already
+        means the inactive kind of each slot never queries the backend.
+        Combined with ``headless``, an inactive panel builds neither a
+        figure nor an aggregation, so all four objects still exist -- and
+        ``_all_panels`` keeps its fixed length and positional meaning --
+        while only the two exported panels cost anything.
+        """
+        raster_ramp        = _palettes.raster_cmap(self._raster_cmap_name,
+                                                   self._theme)
+        scatter_ramps      = _palettes.scatter_cmaps(self._scatter_cmap_name,
+                                                     self._theme)
+        # Kept so paths that rebuild layers later -- update_axes, the
+        # polarisation checkboxes -- produce layers in the same palette
+        # as the ones built here.
+        self._raster_ramp  = raster_ramp
+        self._scatter_ramps = scatter_ramps
 
         # ------------------------------------------------------------------ #
         # Construct display widgets                                            #
@@ -966,13 +1298,15 @@ class VisibilityPlotter:
             x_dim         = self._raster_x,
             quantity      = self._raster_qty,
             polarization  = first_pol,
-            width         = _PANEL_WIDTH_SIDE,
-            height        = _PANEL_HEIGHT,
+            width         = self._plot_width,
+            height        = self._plot_height,
             comm_mgr      = self._comm_mgr,
             cursor_source = self._cursor_source,
             enable_flagging = self._enable_flagging,
             compact_toolbar = self._compact_toolbar,
             defer_initial_render = (_slot_a_kind != "raster"),
+            headless             = self._headless,
+            cmap                 = raster_ramp,
         )
         # One scatter layer per polarisation — multi-layer compositing
         # naturally boosts density and visibility vs a single layer. Slot
@@ -983,28 +1317,34 @@ class VisibilityPlotter:
             backend       = self._reader,
             selection     = self._selection,
             x_axis        = self._scatter_x,
-            layers        = _make_scatter_layers(self._scatter_y, pols),
-            width         = _PANEL_WIDTH_SIDE,
-            height        = _PANEL_HEIGHT,
+            layers        = _make_scatter_layers(
+                self._scatter_y, pols, cmaps=scatter_ramps),
+            width         = self._plot_width,
+            height        = self._plot_height,
             comm_mgr      = self._comm_mgr,
             cursor_source = self._cursor_source,
             enable_flagging = self._enable_flagging,
             compact_toolbar = self._compact_toolbar,
             defer_initial_render = (_slot_a_kind != "scatter"),
+            headless             = self._headless,
+            layer_cmaps          = scatter_ramps,
         )
 
         _slot_b_scatter = VisibilityScatter(
             backend       = self._reader,
             selection     = self._selection,
             x_axis        = self._scatter_x,
-            layers        = _make_scatter_layers(self._scatter_y, pols),
-            width         = _PANEL_WIDTH_SIDE,
-            height        = _PANEL_HEIGHT,
+            layers        = _make_scatter_layers(
+                self._scatter_y, pols, cmaps=scatter_ramps),
+            width         = self._plot_width,
+            height        = self._plot_height,
             comm_mgr      = self._comm_mgr,
             cursor_source = self._cursor_source,
             enable_flagging = self._enable_flagging,
             compact_toolbar = self._compact_toolbar,
             defer_initial_render = (_slot_b_kind != "scatter"),
+            headless             = self._headless,
+            layer_cmaps          = scatter_ramps,
         )
         # Slot B's raster mirrors slot A's raster defaults — same reasoning
         # as slot A's scatter above.
@@ -1015,13 +1355,15 @@ class VisibilityPlotter:
             x_dim         = self._raster_x,
             quantity      = self._raster_qty,
             polarization  = first_pol,
-            width         = _PANEL_WIDTH_SIDE,
-            height        = _PANEL_HEIGHT,
+            width         = self._plot_width,
+            height        = self._plot_height,
             comm_mgr      = self._comm_mgr,
             cursor_source = self._cursor_source,
             enable_flagging = self._enable_flagging,
             compact_toolbar = self._compact_toolbar,
             defer_initial_render = (_slot_b_kind != "raster"),
+            headless             = self._headless,
+            cmap                 = raster_ramp,
         )
 
         # Stage 1b.5: ordered slot records — self._slots[0] is "A",
@@ -1077,9 +1419,26 @@ class VisibilityPlotter:
         # panel already has. Fixed by applying setup uniformly to all four
         # here, at construction time, regardless of which is currently
         # displayed.
+        # Stamp the resolved theme onto each panel.  PanelSpec.theme is
+        # read from here (VisibilityPlot._theme_hint), and it is what
+        # export_png defaults its chrome to -- so without this every
+        # panel reports the class default "dark" and a light-themed
+        # headless export draws light-conditioned ramps on a dark
+        # ground.  The docstring claimed the plotter set this; it did
+        # not, and nothing failed loudly when it was missing.
+        for _p in [obj for slot in self._slots
+                   for obj in (slot.raster, slot.scatter)]:
+            _p._theme = self._theme
+
         self._all_panels = [obj for slot in self._slots
                             for obj in (slot.raster, slot.scatter)]
 
+    def _style_panel_figures(self) -> None:
+        """Phase 2c (GUI only): sizing mode and theme on each panel figure.
+
+        Dereferences ``panel.figure``, which is ``None`` for a headless
+        panel -- so this is gated rather than merely relocated.
+        """
         # Use stretch_width so figures expand to fill available space when
         # the sidebar is collapsed or layout changes. Both .figure and
         # .layout (the wrapper column: figure + info div) need this — the
@@ -1123,6 +1482,101 @@ class VisibilityPlotter:
                 if hasattr(g, "grid_line_color"):
                     g.grid_line_color = _gc
 
+    def set_theme(self, theme: str) -> None:
+        """Adopt *theme* and re-shade; never re-queries.
+
+        A theme change is a ``SHADE`` (``refresh.py``): it selects
+        different palettes, and a palette alters no rows, no aggregation
+        and no extent.  The cached ``agg`` and layer DataFrames are
+        enough.
+
+        This replaces an earlier design that flipped the chrome, marked
+        the plot stale and asked the user to press Plot.  That assumed
+        the intermediate state was merely suboptimal -- it is not.  A
+        theme change inverts the ramp/background relationship and costs
+        about 2.5x contrast (``palettes.py``), so the plot is
+        *unreadable* until re-shaded, and asking someone to press a
+        button to make an illegible plot legible is not a state to leave
+        them in.
+
+        Sticky override still holds: a role the user has set by hand
+        keeps its palette and is not re-resolved.
+        """
+        from .refresh import RefreshLevel
+
+        theme = theme if theme in ("dark", "light") else "dark"
+        if theme == self._theme:
+            return
+        self._theme = theme
+
+        changed = False
+        if not self._raster_cmap_user_set:
+            self._raster_cmap_name = _palettes.default_for("raster", theme)
+            changed = True
+        if not self._scatter_cmap_user_set:
+            self._scatter_cmap_name = _palettes.default_for("scatter", theme)
+            changed = True
+        # Even a user-set *name* resolves to different colours per theme,
+        # because condition() trims against the background -- so the
+        # ramps are recomputed either way.
+        self._raster_ramp = _palettes.raster_cmap(self._raster_cmap_name,
+                                                  theme)
+        self._scatter_ramps = _palettes.scatter_cmaps(
+            self._scatter_cmap_name, theme)
+
+        for panel in self._all_panels:
+            panel._theme = theme          # keeps PanelSpec.theme honest
+            try:
+                if hasattr(panel, "set_layer_cmaps"):
+                    panel.set_layer_cmaps(self._scatter_ramps)
+                elif hasattr(panel, "set_cmap"):
+                    panel.set_cmap(self._raster_ramp)
+            except Exception as exc:
+                log.warning("theme re-shade failed for %s: %s",
+                            type(panel).__name__, exc)
+        log.debug("set_theme(%r): %s re-shade of %d panels (defaults %s)",
+                  theme, RefreshLevel.SHADE.name, len(self._all_panels),
+                  "re-resolved" if changed else "kept (user-set)")
+
+    def _apply_startup_theme(self, layout) -> None:
+        """Run the theme restyle once at document load, if starting light.
+
+        The Light/Dark toggle restyles on its ``"active"`` change event,
+        which cannot fire at load, so a ``theme="light"`` launch would
+        otherwise build dark chrome and never restyle it.  This attaches
+        the *same* ``_THEME_RESTYLE_JS`` body to the document-ready
+        event with ``light`` baked in, so there is still only one copy of
+        the styling code.
+
+        Dark needs no startup pass: it is what the widgets are
+        constructed with.
+
+        Failure here is non-fatal and logged.  A document-ready hook is
+        the one part of this that depends on how the surrounding app
+        context emits its Document, so if it is unavailable the plot
+        still renders -- in dark chrome, with a warning, which is the
+        old behaviour rather than a broken one.
+        """
+        if self._theme != "light":
+            return
+        try:
+            from bokeh.events import DocumentReady
+            from bokeh.io import curdoc
+            from bokeh.models import CustomJS
+
+            cb = CustomJS(args=dict(self._theme_restyle_args),
+                          code="const light = true;\n" + _THEME_RESTYLE_JS)
+            curdoc().js_on_event(DocumentReady, cb)
+        except Exception as exc:
+            log.warning(
+                "could not apply theme='light' at startup (%s); the GUI "
+                "will open in dark chrome -- use the Light/Dark toggle. "
+                "Palettes were resolved for light, so contrast will be "
+                "poor until you do.", exc,
+            )
+
+    def _build_gui(self) -> None:
+        """Phase 3 (GUI only): toolbar sync, flag callbacks, layout."""
         # ------------------------------------------------------------------ #
         # Synchronise Bokeh toolbars between the two *currently displayed*  #
         # figures. js_on_change on the toolbar model property fires when    #
@@ -1196,6 +1650,9 @@ for (const dt of other.tools) {
         # ------------------------------------------------------------------ #
         inner_layout = self._build_layout()
         self._app_context.ui = inner_layout
+
+        # Last, so every model the restyle touches already exists.
+        self._apply_startup_theme(inner_layout)
 
     # ====================================================================== #
     # Stage 1b.5 — slot lookup + Stage 1b compatibility properties           #
@@ -1380,9 +1837,148 @@ for (const dt of other.tools) {
     # cubevis application protocol                                             #
     # ====================================================================== #
 
-    def __call__(self, exec_context, task_id=None):
-        self._open_channels()
-        return self._app_context, exe.Task(self._task_server)
+    def __call__(self, exec_context=None, task_id=None, *,
+                 plotfile=None, nrows=None, ncols=None,
+                 theme=None, dpi=100, layout=None, **selection):
+        """Do the thing — display in a GUI, or write a PNG.
+
+        The two modes are disjoint, so one verb serves both: a plotter
+        built with ``headless=True`` has no GUI to launch, and one built
+        without it has no reason to be called for output.
+
+        **GUI mode** (``headless=False``) — unchanged::
+
+            app_context, task = plotter(exec_context, app_id)
+
+        **Headless mode** (``headless=True``) — writes a PNG and returns
+        its absolute path::
+
+            path = plotter(plotfile="amp_vs_uvdist.png")
+
+        Iteration is repeated invocation.  The plotter holds the opened
+        MS, so each call reuses the open handle rather than reopening --
+        for a 43-antenna sweep that is one open instead of 43::
+
+            for spw in (0, 1, 2, 3):
+                plotter(plotfile=f"amp_spw{spw}.png", spw=[spw])
+
+        Parameters
+        ----------
+        plotfile:
+            Output path.  Defaults to a timestamped name derived from the
+            MS, in the working directory.
+        nrows, ncols:
+            Grid shape.  Defaults follow ``layout``/the constructor's
+            layout: ``"one"`` is 1x1, ``"side"`` 1x2, ``"over"`` 2x1.
+        theme:
+            ``"dark"`` or ``"light"``.  Sets **both** the palettes and
+            the chrome, re-shading from cache if it differs from the
+            constructor's -- so the two cannot diverge.  ``None``
+            (default) keeps the constructor's theme.
+
+            The constructor's ``theme`` *is* honoured in headless mode:
+            it chooses the colormaps, which are applied at shade time.
+            This parameter overrides it per call.
+        dpi:
+            Scales the chrome; the data area stays at the panel's canvas
+            size.  See ``png_export``.
+        layout:
+            Override the constructor's layout for this call only.
+        **selection:
+            Any ``SelectionSpec`` field (``spw``, ``field_names``,
+            ``scan``, ``time_range``, ``freq_range``, ``correlation``,
+            ``antenna_names``, ``baselines``, ``channel_range``,
+            ``data_column``).  Applied for this call and every subsequent
+            one, so a loop that narrows once stays narrowed -- pass the
+            field again to widen it back.
+        """
+        if not self._headless:
+            if exec_context is None:
+                raise TypeError(
+                    "VisibilityPlotter(...) in GUI mode requires an "
+                    "execution context; pass headless=True to write a PNG "
+                    "instead"
+                )
+            self._open_channels()
+            return self._app_context, exe.Task(self._task_server)
+
+        return self._export_png(
+            plotfile=plotfile, nrows=nrows, ncols=ncols,
+            theme=theme, dpi=dpi, layout=layout, selection=selection,
+        )
+
+    def _export_png(self, *, plotfile=None, nrows=None, ncols=None,
+                    theme=None, dpi=100, layout=None, selection=None):
+        """Render the current configuration to a PNG; return its path.
+
+        Re-queries only when *selection* actually changes something --
+        a QUERY-level refresh in the ``refresh.py`` sense.  Calling this
+        repeatedly with no selection change re-uses the cached
+        aggregations and costs only the shade.
+        """
+        from .png_export import export_png
+
+        if selection:
+            self._apply_selection_overrides(selection)
+
+        if theme is not None and theme != self._theme:
+            # One `theme` means one thing.  The constructor's `theme`
+            # selects *palettes* -- baked into the pixels before
+            # png_export ever sees them -- while export_png's selects
+            # *chrome*.  Passing them separately is how you get
+            # dark-conditioned ramps on a white ground: legible, but
+            # fading toward the wrong background at the sparse end.
+            #
+            # So a call-time theme re-resolves the palettes too.  This is
+            # a SHADE (refresh.py): no re-query, just a re-composite from
+            # the cached aggregations.
+            self.set_theme(theme)
+
+        lay = (layout or self._layout).lower()
+        if nrows is None or ncols is None:
+            nrows, ncols = {"one": (1, 1), "side": (1, 2),
+                            "over": (2, 1)}.get(lay, (1, 2))
+        n_panels = nrows * ncols
+
+        panels = [self._pos0, self._pos1][:n_panels]
+        rendered = [p.render_result() for p in panels]
+
+        path = str(plotfile or "").strip() or self._default_plotfile()
+        out = export_png(
+            rendered, path,
+            nrows=nrows, ncols=ncols,
+            footer=self._status_text(),
+            theme=theme, dpi=dpi,
+        )
+        log.info("wrote %s", out)
+        return out
+
+    def _apply_selection_overrides(self, overrides: dict) -> None:
+        """Update ``_selection`` in place and re-render the panels.
+
+        A ``QUERY``-level change (``refresh.py``): new rows are needed,
+        so this is the one part of a headless export that touches the
+        backend.  Unknown field names raise rather than being ignored --
+        a silently dropped ``spw=[2]`` would write a file that looks
+        right and contains the wrong data, which is the worst outcome
+        available here.
+        """
+        from dataclasses import fields as _fields
+        valid = {f.name for f in _fields(self._selection)}
+        unknown = set(overrides) - valid
+        if unknown:
+            raise TypeError(
+                f"unknown selection field(s): {sorted(unknown)}; "
+                f"valid fields are {sorted(valid)}"
+            )
+        for key, value in overrides.items():
+            setattr(self._selection, key, value)
+        for panel in self._all_panels:
+            try:
+                panel.apply_refresh(_RefreshLevel.QUERY)
+            except Exception as exc:
+                log.warning("re-render failed for %s: %s",
+                            type(panel).__name__, exc)
 
     async def _task_server(self):
         self._result_future = asyncio.Future()
@@ -1428,6 +2024,161 @@ for (const dt of other.tools) {
     # ====================================================================== #
     # j2p handlers                                                             #
     # ====================================================================== #
+
+    async def _handle_export(self, msg, context=None):
+        """Export the current view to a PNG.
+
+        The browser supplies what only it knows.  With no Bokeh server, a
+        pan or zoom performed in the browser never reaches Python -- the
+        figures' ``x_range``/``y_range`` are ``CustomJS``-mutated model
+        properties, and those do not propagate back -- so a viewport
+        obtained from ``self._pos0._x_range`` would be the *unzoomed*
+        extent.  The same applies to the layout radio and the panel
+        order.  Everything else (axes, selection, scaling, palettes,
+        cached aggregations) Python already holds and must NOT be taken
+        from the message.
+
+        Re-shades from cache at the supplied viewport; never re-queries,
+        so this is fast and shows exactly what is on screen rather than a
+        fresh query that might differ.
+        """
+        import os
+        from .png_export import export_png
+
+        panels_msg = msg.get("panels") or []
+        nrows = int(msg.get("nrows", 1) or 1)
+        ncols = int(msg.get("ncols", len(panels_msg) or 1) or 1)
+        path  = str(msg.get("path") or "").strip() or self._default_plotfile()
+
+        rendered = []
+        cell_size = None
+        for entry in panels_msg:
+            try:
+                idx = int(entry.get("panel"))
+                panel = self._all_panels[idx]
+            except (TypeError, ValueError, IndexError):
+                rendered.append(None)
+                continue
+            vp = entry.get("viewport")
+            viewport = (tuple(float(v) for v in vp)
+                        if vp and len(vp) == 4 else None)
+            sz = entry.get("size")
+            if cell_size is None and sz and len(sz) == 2:
+                try:
+                    w, h = int(sz[0]), int(sz[1])
+                    if w > 0 and h > 0:
+                        cell_size = (w, h)
+                except (TypeError, ValueError):
+                    pass
+            try:
+                rendered.append(panel.render_result(viewport))
+            except Exception as exc:
+                log.warning("render_result failed for panel %s: %s", idx, exc)
+                rendered.append(None)
+
+        if not any(r is not None for r in rendered):
+            return {"status": "error", "message": "nothing to export"}
+
+        try:
+            # cell_size comes from the browser so the exported aspect
+            # matches what is on screen.  It is NOT the canvas the image
+            # was shaded at -- the layout resizes are client-side only --
+            # so matplotlib scales the image into the box.  That trades
+            # 1:1 pixels (tier 1, section 1) for matching the GUI, which
+            # is the right trade for an export whose whole purpose is to
+            # reproduce the view.  Pass plot_width/plot_height at
+            # construction to get both.
+            out = export_png(
+                rendered, path,
+                nrows=nrows, ncols=ncols,
+                footer=self._status_text(),
+                theme=self._theme,
+                cell_size=cell_size,
+            )
+        except Exception as exc:
+            log.warning("export_png failed: %s", exc)
+            return {"status": "error", "message": str(exc)}
+
+        log.info("exported %s", out)
+        return {"status": "ok", "path": out,
+                "name": os.path.basename(out)}
+
+    def _default_plotfile(self) -> str:
+        """Where an export lands when the user names no file.
+
+        Server-side, beside the process's working directory.  There is no
+        Bokeh server and therefore no save dialog, and in
+        JupyterLab-over-SSH the Python process is on a different machine
+        from the browser -- so the file cannot be written "where the user
+        is".  The resolved absolute path is returned to the client and
+        shown, which is the honest substitute.
+        """
+        import os
+        import time
+        stem = os.path.basename(str(self._source_path or "visplot")).rstrip("/")
+        for ext in (".ms", ".zarr", ".ps"):
+            if stem.endswith(ext):
+                stem = stem[: -len(ext)]
+        return os.path.abspath(
+            f"{stem}_{time.strftime('%Y%m%d-%H%M%S')}.png")
+
+    async def _handle_theme(self, msg, context=None):
+        """Adopt a theme change from the Light/Dark toggle and re-shade.
+
+        The toggle restyles the chrome in JavaScript and tells Python
+        here, because the *palettes* live on the Python side and a theme
+        change makes the old ones illegible -- light ramps on a dark
+        ground lose ~2.5x contrast (``palettes.py``), which is what the
+        chrome-only toggle produced before this existed.
+
+        This is a ``SHADE`` (``refresh.py``): no rows, aggregation or
+        extent change, so it re-composites from cache and never touches
+        the backend.  That is why it can run on a button click at all.
+        """
+        theme = str(msg.get("theme", "dark"))
+        try:
+            self.set_theme(theme)
+        except Exception as exc:
+            log.warning("set_theme(%r) failed: %s", theme, exc)
+            return {"status": "error", "message": str(exc)}
+
+        # The re-shaded images must be RETURNED, not just assigned.
+        # There is no Bokeh server, so a Python-side
+        # ``ColumnDataSource.data = ...`` never reaches the browser --
+        # every other image-updating handler already works this way (see
+        # VisibilityScatter._image_response and _handle_set_color_mode).
+        # Without this the re-shade happened correctly and invisibly:
+        # the raster appeared to update only because its own scaling
+        # path pushes over the comm.
+        return {
+            "status": "ok",
+            "theme":  self._theme,
+            "images": self._panel_image_payloads(),
+        }
+
+    def _panel_image_payloads(self) -> list:
+        """Current image + extent for each panel, for a j2p response.
+
+        Ordered by ``_theme_img_panels`` -- the same index list the
+        toolbar used when it captured the image sources -- so the JS
+        side can zip the two together.  A panel whose source is missing
+        contributes ``None`` and is skipped client-side rather than
+        shifting everything after it.
+        """
+        out = []
+        for i in getattr(self, "_theme_img_panels", []):
+            panel = self._all_panels[i]
+            src = getattr(panel, "_image_source", None)
+            if src is None or not src.data.get("image"):
+                out.append(None)
+                continue
+            d = src.data
+            out.append({
+                "image": d["image"][0],
+                "x0": d["x"][0], "x1": d["x"][0] + d["dw"][0],
+                "y0": d["y"][0], "y1": d["y"][0] + d["dh"][0],
+            })
+        return out
 
     async def _handle_plot(self, msg, context=None):
         # Validation-error auto-switch-to-tab (added 2026-08-03) — the
@@ -1694,7 +2445,8 @@ for (const dt of other.tools) {
                 )
                 try:
                     if axes_changed:
-                        layers = _make_scatter_layers(y, pols)
+                        layers = _make_scatter_layers(
+                            y, pols, cmaps=self._scatter_ramps)
                         log.debug("_handle_plot: panel %s scatter update_axes "
                                   "x=%s layers=%s", slot.id, x,
                                   [(l.y_axis, l.polarization) for l in layers])
@@ -3437,6 +4189,100 @@ function doPlot(reload) {
         )
         self._layout_rbg = layout_rbg
 
+        # --- Export PNG ------------------------------------------------ #
+        export_btn = Button(label="Export PNG", button_type="default",
+                            width=104)
+        export_btn.js_on_click(CustomJS(
+            args={
+                "ctrl": ctrl,
+                "ids":  ids,
+                "slot0_raster_fig":     self._slots[0].raster.figure,
+                "slot0_raster_layout":  self._slots[0].raster.layout,
+                "slot0_scatter_fig":    self._slots[0].scatter.figure,
+                "slot0_scatter_layout": self._slots[0].scatter.layout,
+                "slot1_raster_fig":     self._slots[1].raster.figure,
+                "slot1_raster_layout":  self._slots[1].raster.layout,
+                "slot1_scatter_fig":    self._slots[1].scatter.figure,
+                "slot1_scatter_layout": self._slots[1].scatter.layout,
+                "display_order_source": self._display_order_source,
+                "layout_rbg":  layout_rbg,
+                "notify_div":  self._notify_div,
+                # Index of each (slot, kind) panel in _all_panels, so the
+                # message can name panels the way the handler indexes them.
+                "panel_index": {
+                    "0raster":  self._all_panels.index(self._slots[0].raster),
+                    "0scatter": self._all_panels.index(self._slots[0].scatter),
+                    "1raster":  self._all_panels.index(self._slots[1].raster),
+                    "1scatter": self._all_panels.index(self._slots[1].scatter),
+                },
+            },
+            code="""
+// Collect the state only the browser has.  With no Bokeh server the
+// figures' ranges, the layout radio and the panel order are all
+// CustomJS-mutated and never reach Python, so an export driven purely
+// from Python-side state would render the *unzoomed* full extent in the
+// default layout.  Everything else -- axes, selection, scaling,
+// palettes, cached aggregations -- Python already holds and is
+// deliberately not sent.
+const order = (display_order_source.data['order'] || [[0, 1]])[0];
+const kinds = [
+    slot0_raster_layout.visible ? 'raster' : 'scatter',
+    slot1_raster_layout.visible ? 'raster' : 'scatter',
+];
+const figs = [
+    kinds[0] === 'raster' ? slot0_raster_fig : slot0_scatter_fig,
+    kinds[1] === 'raster' ? slot1_raster_fig : slot1_scatter_fig,
+];
+const shown = [
+    slot0_raster_layout.visible || slot0_scatter_layout.visible,
+    slot1_raster_layout.visible || slot1_scatter_layout.visible,
+];
+
+// Display order, so the exported grid matches what the user sees after
+// a Swap rather than slot order.
+const panels = [];
+for (let k = 0; k < order.length; k++) {
+    const slot = order[k];
+    if (!shown[slot]) continue;               // "One" mode hides a slot
+    const f = figs[slot];
+    panels.push({
+        panel: panel_index[String(slot) + kinds[slot]],
+        viewport: [f.x_range.start, f.x_range.end,
+                   f.y_range.start, f.y_range.end],
+        // On-screen size.  The layout JS resizes the figures for One /
+        // Side / Over-Under (full_w, side_w, panel_h, over_h) and those
+        // assignments never reach Python, so without this the export
+        // uses the construction-time canvas and a wide One-mode panel
+        // comes out square.
+        size: [f.inner_width || f.width, f.inner_height || f.height],
+    });
+}
+if (panels.length === 0) { return; }
+
+// Translate the layout vocabulary here, so no layout string crosses the
+// wire -- the compositor takes only (nrows, ncols).
+const active = layout_rbg.active;
+let nrows = 1, ncols = panels.length;
+if (panels.length > 1 && active === 2) { nrows = 2; ncols = 1; }
+
+notify_div.text = "<i>Exporting…</i>";
+ctrl.send(ids['export'], {panels: panels, nrows: nrows, ncols: ncols},
+    function(resp) {
+        if (!resp) { notify_div.text = ""; return; }
+        if (resp.status !== 'ok') {
+            notify_div.text = "<b>Export failed:</b> " +
+                              (resp.message || 'unknown error');
+            return;
+        }
+        // Report the absolute server-side path: there is no save dialog
+        // without a Bokeh server, and in JupyterLab-over-SSH the file
+        // lands on a different machine from the browser.
+        notify_div.text = "Wrote <code>" + resp.path + "</code>";
+    });
+"""))
+        self._export_btn = export_btn
+
+
         layout_js = CustomJS(
             args={
                 # Swap follow-on fix (added 2026-08-03): all four
@@ -3649,9 +4495,21 @@ doPlot();
         waterfall_btn.js_on_click(self._preset_js_objects[2])
 
         # ---- Dark / Light mode toggle ------------------------------------- #
+        # The toggle's initial state must follow the constructor's
+        # ``theme``.  It did not, and the result was the worst possible
+        # combination: ``theme="light"`` selected light-conditioned
+        # palettes while the chrome stayed dark, so the scatter's
+        # light-ramp sparse end sat against a dark ground -- the exact
+        # mismatch that costs ~2.5x contrast (see palettes.py), and the
+        # panel rendered nearly black.
+        #
+        # The label is inverted by design: it names the mode the button
+        # switches *to*, matching the CustomJS below, so in light mode it
+        # reads "Dark".
+        _light = (self._theme == "light")   # effective, not requested
         dark_btn = Toggle(
-            label       = "☀ Light",
-            active      = False,        # False = currently dark
+            label       = "🌙 Dark" if _light else "☀ Light",
+            active      = _light,       # False = currently dark
             button_type = "default",
             width       = 78,
         )
@@ -3679,8 +4537,19 @@ doPlot();
                 _all_cmap_figs     += w["cmap_figs"]
                 _all_cmap_icons    += w["cmap_icons"]
 
-        dark_btn.js_on_change("active", CustomJS(
-            args={
+        # Panels that have an image source, and the sources themselves.
+        # Both the toolbar args and _panel_image_payloads() iterate this
+        # same index list, which is what keeps the two sides aligned.
+        self._theme_img_panels = [
+            i for i, pnl in enumerate(self._all_panels)
+            if getattr(pnl, "_image_source", None) is not None
+        ]
+        _theme_img_srcs = [self._all_panels[i]._image_source
+                           for i in self._theme_img_panels]
+
+        # Captured so _apply_startup_theme() can hand the same models to
+        # the same JS body -- one arg set, one code path.
+        self._theme_restyle_args = {
                 # All four panel figures/info-divs, not just the two
                 # kind-active ones (Group 2 rework, 2026-07-31) — a
                 # currently-inactive panel should already be in the
@@ -3741,160 +4610,52 @@ doPlot();
                 "light_css":      _LIGHT_WIDGET_CSS,
                 "dark_tabs_css":  _DARK_TABS_CSS,
                 "light_tabs_css": _LIGHT_TABS_CSS,
-            },
+                # For the p2j theme message appended to the restyle body.
+                "ctrl":           ctrl,
+                "ids":            ids,
+                # Image sources, so the theme response can be applied.
+                # Captured with their indices so _panel_image_payloads()
+                # returns a list in exactly this order.
+                "theme_img_srcs": _theme_img_srcs,
+        }
+
+        dark_btn.js_on_change("active", CustomJS(
+            args=dict(self._theme_restyle_args),
             code="""
 const light     = cb_obj.active;
-const bg_fig    = light ? 'white'   : 'black';
-const bg_border = light ? '#ffffff' : '#1e1e2e';
-const label_c   = light ? '#222222' : '#cdd6f4';
-const grid_c    = light ? '#cccccc' : '#45475a';
-const page_bg   = light ? '#ffffff' : '#181825';
-const info_bg   = light ? '#ffffff' : '#1e1e2e';
-const info_c    = light ? '#222222' : '#cdd6f4';
-const status_c  = light ? '#155724' : '#a6e3a1';
-const title_c   = light ? '#222222' : '#cdd6f4';
-// Two new colors for the light-mode fixes above: hint_c stays visually
-// distinct from status_c in light mode too (dark teal vs. dark green),
-// matching the existing dark-mode intent ("cyan — distinct from status
-// green") rather than just reusing status_c and losing that distinction.
-// source_c is exactly label_c's value, reused under its own name since
-// it's conceptually "make the source path readable, matching the rest
-// of the sidebar's text" rather than tied to the same one label_c
-// happens to serve elsewhere.
-const hint_c    = light ? '#0c5460' : '#89dceb';
-const source_c  = light ? '#222222' : '#a6e3a1';
-// dark_css/light_css/dark_tabs_css/light_tabs_css are passed in via
-// args (see the CustomJS args dict above) rather than defined here --
-// single source of truth in _DARK_WIDGET_CSS/_LIGHT_WIDGET_CSS/
-// _DARK_TABS_CSS/_LIGHT_TABS_CSS.
-const widget_css = light ? light_css : dark_css;
-const tabs_css = light ? light_tabs_css : dark_tabs_css;
+""" + _THEME_RESTYLE_JS + """
+cb_obj.label = light ? '\U0001f319 Dark' : '\u2600 Light';
 
-// Page background
-for (const el of [document.body, document.documentElement]) {
-    try { el.style.background = page_bg; } catch(e) {}
+// Tell Python, so the palettes follow.  The chrome above is JS-only;
+// the ramps are resolved server-side and conditioned against the
+// background, so without this the plot keeps ramps trimmed for the
+// *previous* theme and the scatter becomes nearly unreadable.
+// A SHADE-level refresh (refresh.py) -- no re-query, so this is fast
+// enough to run on the click rather than deferring to Plot.
+if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
+    ctrl.send(ids['theme'], { theme: light ? 'light' : 'dark' },
+        function(resp) {
+            // Apply the re-shaded images.  Assigning image_source.data
+            // in Python does nothing here -- no Bokeh server -- so the
+            // handler returns them and the client installs them, the
+            // same contract every other image-updating handler uses.
+            if (!resp || resp.status !== 'ok' || !resp.images) return;
+            if (typeof theme_img_srcs === 'undefined') return;
+            var n = Math.min(resp.images.length, theme_img_srcs.length);
+            for (var i = 0; i < n; i++) {
+                var im = resp.images[i], src = theme_img_srcs[i];
+                if (!im || !src) continue;      // deferred/blank panel
+                src.data = {
+                    image: [im.image],
+                    x:     [im.x0],
+                    y:     [im.y0],
+                    dw:    [im.x1 - im.x0],
+                    dh:    [im.y1 - im.y0],
+                };
+                src.change.emit();
+            }
+        });
 }
-for (const sel of ['.bk-root', '[data-root-id]', '.bk']) {
-    try {
-        document.querySelectorAll(sel).forEach(
-            el => el.style.background = page_bg
-        );
-    } catch(e) {}
-}
-
-// Figures (all four panel objects — see args comment above)
-for (const fig of figs) {
-    fig.background_fill_color = bg_fig;
-    fig.border_fill_color     = bg_border;
-    if (fig.title) fig.title.text_color = title_c;
-    for (const ax of [...fig.below, ...fig.left, ...fig.right, ...fig.above]) {
-        if (ax.axis_label_text_color  !== undefined) ax.axis_label_text_color  = label_c;
-        if (ax.major_label_text_color !== undefined) ax.major_label_text_color = label_c;
-        if (ax.axis_line_color        !== undefined) ax.axis_line_color        = label_c;
-        if (ax.major_tick_line_color  !== undefined) ax.major_tick_line_color  = label_c;
-        if (ax.minor_tick_line_color  !== undefined) ax.minor_tick_line_color  = label_c;
-    }
-    for (const g of fig.center) {
-        if (g.grid_line_color !== undefined) g.grid_line_color = grid_c;
-    }
-}
-
-// Info divs and status bar
-function recolor_div(div, bg, fg) {
-    try {
-        const s = Object.assign({}, div.styles);
-        s['background'] = bg;
-        s['color']      = fg;
-        div.styles = s;
-    } catch(e) {}
-}
-for (const info_div of info_divs) {
-    recolor_div(info_div, info_bg, info_c);
-}
-recolor_div(status_div, page_bg, status_c);
-recolor_div(notify_div, page_bg, light ? '#b02a37' : '#f38ba8');
-
-// Config-field hint divs (added 2026-08-03, fixing a reported gap) —
-// same page_bg as status_div, distinct text color from status_c to
-// preserve the dark-mode "cyan — distinct from status green" intent.
-for (const hint_div of hint_divs) {
-    recolor_div(hint_div, page_bg, hint_c);
-}
-
-// Source path (added 2026-08-03, fixing a reported gap) — the color was
-// baked into an inline HTML <span style=...> inside .text itself, which
-// no property-based recolor mechanism can reach; rebuilt here instead of
-// restyled. label_c already correctly tracks light/dark for the
-// "Source:" label; source_c (== label_c's value, see definition above)
-// does the same for the path itself, replacing the old permanently-green
-// value per the specific request that light mode read black, not green.
-path_div.text = "<b style='color:" + label_c + "'>Source:</b> " +
-    "<span style='font-family:monospace;font-size:11px;color:" +
-    source_c + "'>" + source_basename + "</span>";
-
-// Sidebar container background
-try {
-    const s = Object.assign({}, sidebar.styles);
-    s['background']   = light ? '#f8f8f0' : '#1e1e2e';
-    s['border-right'] = light ? '1px solid #ccc' : '1px solid #45475a';
-    sidebar.styles = s;
-} catch(e) {}
-
-// Sidebar widgets — update InlineStyleSheet CSS directly on each widget.
-// This is the only reliable way since InlineStyleSheet overrides all other CSS.
-try {
-    for (const w of widgets) {
-        if (w.stylesheets && w.stylesheets.length > 0) {
-            w.stylesheets[0].css = widget_css;
-        }
-    }
-} catch(e) { console.warn('widget stylesheet update failed:', e); }
-
-// Gear tab strip ("Panel A"/"Panel B") — previously had no light-mode
-// CSS defined anywhere and was never touched by this callback at all,
-// so it stayed dark regardless of mode (reported directly). Same
-// stylesheets[0].css swap pattern as the widgets loop above, just with
-// dedicated tab CSS since Bokeh's Tabs widget uses different shadow-DOM
-// classes (.bk-header/.bk-tab) than .bk-input/.bk-btn.
-try {
-    if (tabs.stylesheets && tabs.stylesheets.length > 0) {
-        tabs.stylesheets[0].css = tabs_css;
-    }
-} catch(e) { console.warn('tabs stylesheet update failed:', e); }
-
-// Colormap histogram figures (added to fix a reported light-mode gap —
-// see _style_cmap_column's docstring). Deliberately dimmer than the
-// main panels' stark black/white in BOTH modes — light mode reuses the
-// sidebar's own light background tone (#f8f8f0) rather than pure
-// white — so the plotted distribution stays legible either way, per
-// the original design intent for this figure.
-const cmap_bg = light ? '#f8f8f0' : '#1e1e2e';
-try {
-    for (const fig of cmap_figs) {
-        fig.background_fill_color = cmap_bg;
-        fig.border_fill_color     = cmap_bg;
-        if (fig.outline_line_color !== undefined) fig.outline_line_color = grid_c;
-        for (const ax of [...fig.below, ...fig.left, ...fig.right, ...fig.above]) {
-            if (ax.axis_line_color        !== undefined) ax.axis_line_color        = label_c;
-            if (ax.major_tick_line_color  !== undefined) ax.major_tick_line_color  = label_c;
-            if (ax.minor_tick_line_color  !== undefined) ax.minor_tick_line_color  = label_c;
-            if (ax.major_label_text_color !== undefined) ax.major_label_text_color = label_c;
-        }
-        for (const g of fig.center) {
-            if (g.grid_line_color !== undefined) g.grid_line_color = grid_c;
-        }
-    }
-} catch(e) { console.warn('colormap figure recolor failed:', e); }
-
-// Reset button icons — BuiltinIcon.color isn't reachable via
-// stylesheets at all, has to be set directly.
-try {
-    for (const icon of cmap_icons) {
-        if (icon.color !== undefined) icon.color = label_c;
-    }
-} catch(e) { console.warn('colormap icon recolor failed:', e); }
-
-cb_obj.label = light ? '🌙 Dark' : '☀ Light';
 """,
         ))
 
@@ -3924,6 +4685,10 @@ cb_obj.label = light ? '🌙 Dark' : '☀ Light';
             Tip(vplot_btn,     tooltip=self._tt("Preset: Baseline vs Time (raster) + Amplitude vs Time (scatter)")),
             Tip(radplot_btn,   tooltip=self._tt("Preset: Baseline vs Time (raster) + Amplitude vs UV Distance (scatter)")),
             Tip(waterfall_btn, tooltip=self._tt("Preset: Amplitude vs Channel waterfall (over/under layout)")),
+            _sep(),
+            Tip(export_btn, tooltip=self._tt(
+                "Write the current view to a PNG (server-side; the path is "
+                "reported below the plots)")),
             _sep(),
             Tip(dark_btn, tooltip=self._tt("Toggle between dark and light background")),
         )

@@ -270,6 +270,22 @@ class VisibilityRaster(VisibilityPlot):
             self._polarization,
         )
 
+    def set_cmap(self, cmap) -> None:
+        """Swap the colormap and re-shade from the cached agg.
+
+        A ``SHADE``-level change (``refresh.py``): the aggregation, the
+        extent and the transfer function are all untouched, so this must
+        not re-query.
+        """
+        self._cmap = list(cmap)
+        self._reshade()
+
+    def _reshade(self) -> None:
+        """Re-shade the cached agg at the current viewport."""
+        if self._agg is None:
+            return
+        self.update_scaling()      # no-op args: re-shades with current settings
+
     def set_color_mode(self, mode: str) -> None:
         """Toggle color mode and re-render.
 
@@ -834,6 +850,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             bands      = (band,),
             status     = status,
             note       = note,
+            theme      = self._theme_hint(),
         )
 
     def _bands_with_mappings(self, spec, viewport=None):

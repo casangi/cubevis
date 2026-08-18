@@ -1222,6 +1222,24 @@ class TestDeferredConstruction:
         assert vs._x_range == (0.0, 1.0)
         assert vs._y_range == (0.0, 1.0)
 
+    def test_defer_is_much_faster_than_real_render(self):
+        """Deferred construction must not pay the backend query cost —
+        the whole point of decision 11."""
+        t0 = time_mod.perf_counter()
+        _make_single_layer(self.backend, self.sel)
+        real_elapsed = time_mod.perf_counter() - t0
+
+        t0 = time_mod.perf_counter()
+        _make_single_layer(self.backend, self.sel, defer_initial_render=True)
+        deferred_elapsed = time_mod.perf_counter() - t0
+
+        print(f"  real={real_elapsed:.3f}s  deferred={deferred_elapsed:.3f}s")
+        assert deferred_elapsed < real_elapsed / 10 or deferred_elapsed < 0.05, (
+            f"Deferred construction ({deferred_elapsed:.3f}s) is not "
+            f"dramatically faster than real construction ({real_elapsed:.3f}s) "
+            "— defer_initial_render may still be querying the backend"
+        )
+
     def test_first_update_axes_with_explicit_x_dim_renders(self):
         """Activating a deferred panel by passing its own current x_dim
         back explicitly must perform a real render, even though nothing
@@ -1486,3 +1504,140 @@ if __name__ == "__main__":
     print(f"\n{'='*60}")
     print(f"  {total_passed} passed, {total_failed} failed, "
           f"{total_skipped} skipped")
+
+
+# ---------------------------------------------------------------------------
+# Multi-layer probe (added 2026-08-17)
+# ---------------------------------------------------------------------------
+
+class TestProbeMultiLayer:
+    """Probe behaviour with more than one layer.
+
+    ``TestProbe`` builds ``self.vs`` with ``_make_single_layer``, so the
+    *entire* probe test class exercises one layer.  Defect (1) of the
+    PB-series -- the probe consulting every layer rather than only the
+    first -- was the bulk of the 47.7% false-empty rate, and it has had
+    no coverage since it was fixed.  This class is that coverage.
+    """
+
+    def setup_method(self):
+        _require_datashader()
+        _suppress_warnings()
+        self.backend = _open_backend()
+        meta = self.backend.metadata()
+        t0, t1 = meta["time_range"]
+        self.sel = SelectionSpec(
+            time_range=(t0, t0 + (t1 - t0) * 0.15),
+            channel_range=(0, 48),
+        )
+        self.vs = _make_two_layer(self.backend, self.sel)
+
+    def teardown_method(self):
+        self.backend.close()
+
+    def _finite_data_coords(self):
+        """A coordinate where at least one layer has data."""
+        for agg in self.vs._layer_aggs:
+            if agg is None:
+                continue
+            ys, xs = np.where(np.isfinite(agg.values))
+            if len(ys) == 0:
+                continue
+            py, px = int(ys[len(ys) // 2]), int(xs[len(xs) // 2])
+            return (float(agg.coords[agg.dims[1]].values[px]),
+                    float(agg.coords[agg.dims[0]].values[py]))
+        pytest.skip("No populated bins in any layer")
+
+    # -- the defect this class exists for -------------------------------
+
+    def test_probe_reports_every_layer(self):
+        """One entry per layer, not just the first.
+
+        The single-layer test class cannot distinguish "consulted every
+        layer" from "consulted layer 0 and stopped", because those are
+        the same thing when there is only one.
+        """
+        x, y = self._finite_data_coords()
+        probe = self.vs._handle_probe({"x": x, "y": y})["probe"]
+        assert len(probe["layers"]) == len(self.vs.layers) == 2
+        assert [e["index"] for e in probe["layers"]] == [0, 1]
+        assert [e["label"] for e in probe["layers"]] == [
+            lyr.label for lyr in self.vs.layers]
+
+    def test_bin_populated_only_in_layer_1_is_found(self):
+        """A bin empty in XX but populated in YY must still report a value.
+
+        This is defect (1) exactly: the pre-fix probe consulted layer 0,
+        found nothing, and returned "empty" while layer 1 had data at the
+        same coordinate.  Skips when the two polarisations happen to be
+        populated identically, which is the common case on well-behaved
+        data -- a skip here means the dataset could not exercise the
+        defect, not that the behaviour is unverified elsewhere.
+        """
+        a0, a1 = self.vs._layer_aggs[0], self.vs._layer_aggs[1]
+        if a0 is None or a1 is None:
+            pytest.skip("Need both layers aggregated")
+        only1 = ~np.isfinite(a0.values) & np.isfinite(a1.values)
+        ys, xs = np.where(only1)
+        if len(ys) == 0:
+            pytest.skip("No bin populated in layer 1 but not layer 0")
+        py, px = int(ys[0]), int(xs[0])
+        x = float(a1.coords[a1.dims[1]].values[px])
+        y = float(a1.coords[a1.dims[0]].values[py])
+
+        probe = self.vs._handle_probe({"x": x, "y": y})["probe"]
+        assert probe["status"] == "ok"
+        assert probe["layers"][1]["value"] is not None, (
+            "layer 1 has data at this bin but the probe reported none — "
+            "the probe is not consulting every layer"
+        )
+
+    def test_winner_is_the_nearest_layer(self):
+        """``winner`` indexes the layer whose hit was closest."""
+        x, y = self._finite_data_coords()
+        probe = self.vs._handle_probe({"x": x, "y": y})["probe"]
+        hits = [e for e in probe["layers"] if e["value"] is not None]
+        if not hits:
+            pytest.skip("No layer hit at this coordinate")
+        winner = probe["layers"][probe["winner"]]
+        assert winner["value"] is not None
+        assert winner["distance_px"] == min(
+            e["distance_px"] for e in hits if e["distance_px"] is not None)
+
+    # -- hiding a layer --------------------------------------------------
+
+    def test_hidden_layer_reports_no_value(self):
+        """A hidden layer is never consulted, so it cannot carry a value.
+
+        The single-layer class skipped its equivalent
+        ("Need at least two layers"), so this path was untested.
+        """
+        self.vs.set_alpha(1, 0.0)
+        try:
+            x, y = self._finite_data_coords()
+            probe = self.vs._handle_probe({"x": x, "y": y})["probe"]
+            hidden = probe["layers"][1]
+            assert hidden["visible"] is False
+            assert hidden["value"] is None
+            assert hidden["distance_px"] is None
+            # ...and the visible one still reports normally.
+            assert probe["layers"][0]["visible"] is True
+        finally:
+            self.vs.set_alpha(1, 1.0)
+
+    def test_label_shows_one_reading_per_visible_layer(self):
+        """The status bar renders both layers, in index order."""
+        x, y = self._finite_data_coords()
+        label = self.vs._handle_probe({"x": x, "y": y})["label"]
+        for lyr in self.vs.layers:
+            assert lyr.label in label
+        assert label.index(self.vs.layers[0].label) < \
+               label.index(self.vs.layers[1].label)
+
+    def test_probe_envelope_is_json_safe(self):
+        """Two layers double the numeric fields that could carry a NaN."""
+        import json
+        x, y = self._finite_data_coords()
+        text = json.dumps(self.vs._handle_probe({"x": x, "y": y}))
+        assert "NaN" not in text and "Infinity" not in text
+        json.loads(text)

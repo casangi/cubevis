@@ -220,6 +220,16 @@ class PanelSpec:
         result (no rows selected, everything flagged); ``"error"`` is
         not, and an export must render it differently so a pipeline
         emitting 43 PNGs cannot silently swallow a failure.
+    theme : {"dark", "light"}
+        The theme the pixels were **shaded for**.  Carried because a
+        palette is baked into the image before ``png_export`` ever sees
+        it, and ramps are conditioned against a specific background
+        (``palettes.condition``).  Drawing dark-conditioned pixels on a
+        light ground, or the reverse, costs about 2.5x contrast.
+
+        ``export_png`` defaults its chrome theme to this, so the mismatch
+        cannot happen by forgetting to pass the theme twice -- which is
+        exactly how it happened in the first headless export.
     note : str | None
         Human-readable detail for a non-``"ok"`` status, e.g. scatter's
         ``_layer_skip_reason`` text or an exception string.  Rendered
@@ -240,6 +250,7 @@ class PanelSpec:
     bands:      tuple[ColorBand, ...] = field(default_factory=tuple)
     status:     str           = "ok"
     note:       Optional[str] = None
+    theme:      str           = "dark"
 
     # ------------------------------------------------------------------
     # Bokeh interop

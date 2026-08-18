@@ -319,7 +319,16 @@ class VisibilityPlot(Model):
         # Set before _build() runs; see the early return there.
         self._headless = bool(headless)
 
-        if comm_mgr is None:
+        if comm_mgr is None and not self._headless:
+            # Convenience for standalone use: adopt an existing app
+            # context's CommMgr when one is already around.
+            #
+            # Gated on headless because BokehInit.get_app_context()
+            # *creates* a context when none exists -- it logs "creating a
+            # BokehAppContext due to a BokehInit.get_app_context() call".
+            # A pipeline export would otherwise manufacture browser
+            # plumbing and open Comms against it for a figure that is
+            # never built.
             try:
                 from cubevis.bokeh import BokehInit
                 ctx = BokehInit.get_app_context()
@@ -752,6 +761,51 @@ class VisibilityPlot(Model):
             self._x_info = AxisInfo.direct(self._x_dim)
             self._y_info = AxisInfo.direct(self._y_dim)
         self._sync_axis_labels()
+
+    def apply_refresh(self, level) -> None:
+        """Recompute only as much as *level* requires.
+
+        The point of the ladder (see ``refresh.py``) is that a caller can
+        ask for the minimum and get it.  A palette change is a
+        ``SHADE``: it alters no rows, no aggregation and no extent, so
+        re-querying 30 million points for it is pure waste.
+
+        ``CHROME`` does nothing here -- chrome is either browser-side or
+        already applied by the caller.  ``SHADE`` and ``AGGREGATE``
+        delegate to ``_reshade()``, which subclasses implement over their
+        cached state.  ``QUERY`` is the only level that reaches the
+        backend.
+        """
+        from .refresh import RefreshLevel
+        if level <= RefreshLevel.CHROME:
+            return
+        if level <= RefreshLevel.AGGREGATE:
+            self._reshade()
+            return
+        self._render(self._selection)
+        self._update_state_source()
+
+    def _reshade(self) -> None:
+        """Re-shade from cached state; no backend query.
+
+        Default is a no-op so a subclass without a cheap path degrades to
+        "nothing visibly happens" rather than to a silent full re-query.
+        Both concrete subclasses override.
+        """
+        log.debug("%s has no _reshade(); ignoring refresh",
+                  type(self).__name__)
+
+    _theme: str = "dark"
+    """Theme the panel's palette was resolved for; set by VisibilityPlotter."""
+
+    def _theme_hint(self) -> str:
+        """Theme the pixels were shaded for, for ``PanelSpec.theme``.
+
+        Set by ``VisibilityPlotter`` alongside the palette, so a
+        ``RenderedPanel`` carries the background its ramps were
+        conditioned against and ``export_png`` can default to it.
+        """
+        return getattr(self, "_theme", "dark")
 
     def _sync_axis_labels(self) -> None:
         """Push the resolved labels onto the live Bokeh figure.

@@ -85,6 +85,36 @@ THEMES = {
                    error="#f38ba8"),
 }
 
+def _check_background_agreement() -> None:
+    """Assert ``palettes.BACKGROUNDS`` matches this module's axes colours.
+
+    The same fact lives in two files: ``palettes`` trims ramps away from
+    the background, and ``png_export`` paints it.  If they drift, ramps
+    are conditioned against a background that is never drawn and the
+    sparse end quietly vanishes again -- the exact defect conditioning
+    exists to prevent, and one that is invisible in a swatch.
+
+    Warns rather than raises: a colour mismatch degrades legibility, and
+    refusing to export over it would be a worse outcome than a slightly
+    faint plot.
+    """
+    try:
+        from .palettes import BACKGROUNDS
+    except Exception:                          # pragma: no cover
+        return
+    for name, theme in THEMES.items():
+        want = BACKGROUNDS.get(name)
+        if want is not None and want.lower() != theme.axes.lower():
+            log.warning(
+                "theme %r: png_export axes=%s but palettes.BACKGROUNDS=%s; "
+                "colormaps are being trimmed against the wrong background",
+                name, theme.axes, want,
+            )
+
+
+_check_background_agreement()
+
+
 # Chrome sizes in POINTS (1/72 inch), scaled to device pixels by dpi.
 #
 # Points rather than pixels so raising dpi does what people expect: the
@@ -216,7 +246,12 @@ def _band_swatch(band: ColorBand) -> str:
     hue, and the top of each layer's ramp is where that hue is most
     saturated.  Falls back to grey for a band with no cmap.
     """
-    return band.cmap[-1] if band.cmap else "#888888"
+    if not band.cmap:
+        return "#888888"
+    # Mid-ramp, not the top end.  Layer colormaps are chosen for the
+    # GUI's dark background, so their high end is near-white and vanishes
+    # as a swatch on a light export; the midpoint stays legible on both.
+    return band.cmap[len(band.cmap) // 2]
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +413,12 @@ def _cbar_mappings(cells, include_density: bool = True):
     return out
 
 
+def _drawable_specs(cells):
+    """Specs of cells that actually rendered an image."""
+    return [c.spec for c in cells
+            if c is not None and c.image is not None and c.spec is not None]
+
+
 def _mappings_agree(pairs) -> bool:
     """True when one colorbar would be correct for every pair.
 
@@ -419,6 +460,15 @@ def _resolve_colorbar(mode: str, cells) -> str:
     if not pairs:
         return "none"
     if mode == "auto":
+        # A bar at the figure edge only reads as "this applies to
+        # everything" when everything actually has one.  In a
+        # heterogeneous duo -- a raster beside a scatter, where the
+        # scatter's density bands are excluded above -- exactly one panel
+        # contributes, and a figure-edge bar sits next to the panel it
+        # does NOT describe.  Attach it to its own panel instead.
+        contributing = {id(spec) for spec, _ in pairs}
+        if len(contributing) < len(_drawable_specs(cells)):
+            return "each"
         return "shared" if _mappings_agree(pairs) else "each"
     if mode == "shared" and not _mappings_agree(pairs):
         log.warning(
@@ -559,7 +609,7 @@ def export_png(
     nrows: int = 1,
     ncols: int = 1,
     footer: Optional[str] = None,
-    theme: str = "light",
+    theme: Optional[str] = None,
     dpi: int = 100,
     cell_size: Optional[tuple[int, int]] = None,
     legend: str = "auto",
@@ -585,9 +635,13 @@ def export_png(
         status bar and no sidebar, so anything the reader needs six
         months from now has to be drawn on.  Derive it from
         ``VisibilityPlotter._status_text()`` so the two cannot diverge.
-    theme : {"light", "dark"}
-        ``"light"`` by default: the GUI is dark, but a PNG is usually
-        headed for a paper.
+    theme : {"light", "dark"} or None
+        Chrome colours.  ``None`` (default) adopts the theme the panels
+        were *shaded* for, via ``PanelSpec.theme`` -- see the note at the
+        defaulting site.  Pass a value explicitly only when you know the
+        pixels suit it; a light theme over dark-conditioned ramps is
+        legible but poor, which is what the fixed ``"light"`` default
+        used to produce.
     dpi : int
         Scales the chrome only.  Panel images stay 1:1 with output
         pixels, so a panel's data area is exactly its own width and
@@ -638,6 +692,16 @@ def export_png(
         )
     cells += [None] * (nrows * ncols - len(cells))
 
+    # Default to the theme the pixels were SHADED for, not to a fixed
+    # "light".  A palette is baked into the image before this module sees
+    # it, and ramps are conditioned against a specific background
+    # (palettes.condition), so drawing dark-conditioned pixels on white
+    # costs ~2.5x contrast.  Requiring the caller to pass the theme twice
+    # -- once to the plotter, once here -- made that mismatch the default
+    # outcome of the obvious headless usage.
+    if theme is None:
+        theme = next((c.spec.theme for c in cells
+                      if c is not None and c.spec is not None), "light")
     th = THEMES.get(theme)
     if th is None:
         raise ValueError(f"export_png: unknown theme {theme!r}; "

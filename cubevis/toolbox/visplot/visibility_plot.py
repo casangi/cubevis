@@ -754,8 +754,8 @@ class VisibilityPlot(Model):
             self._sync_axis_labels()
             return
         try:
-            self._x_info = resolve(self._x_dim, sel)
-            self._y_info = resolve(self._y_dim, sel)
+            self._x_info = resolve(self._x_dim, sel, self._QUERY_PATH)
+            self._y_info = resolve(self._y_dim, sel, self._QUERY_PATH)
         except Exception as exc:
             log.warning("axis_info failed (%s); using unresolved labels", exc)
             self._x_info = AxisInfo.direct(self._x_dim)
@@ -794,6 +794,14 @@ class VisibilityPlot(Model):
         """
         log.debug("%s has no _reshade(); ignoring refresh",
                   type(self).__name__)
+
+    _QUERY_PATH = "columns"
+    """Which backend query path this plot uses; see ``axis_info``.
+
+    Capability is per-path: ``query_columns`` returns a real channel
+    index while ``query_raster`` does not, so a plot must say which one
+    it will call or the resolved label will not match the values drawn.
+    """
 
     _theme: str = "dark"
     """Theme the panel's palette was resolved for; set by VisibilityPlotter."""

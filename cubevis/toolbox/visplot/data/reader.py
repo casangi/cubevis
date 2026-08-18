@@ -757,7 +757,8 @@ class XArrayReader(abc.ABC):
     # ------------------------------------------------------------------ #
 
     def axis_info(
-        self, axis: Axis, selection: Optional[SelectionSpec] = None
+        self, axis: Axis, selection: Optional[SelectionSpec] = None,
+        query: str = "columns",
     ) -> AxisInfo:
         """Resolve what will actually be plotted along *axis*.
 
@@ -773,6 +774,16 @@ class XArrayReader(abc.ABC):
         honour *axis* under *selection* returns
         ``AxisInfo.substituted(...)`` with a note explaining what would
         restore it.
+
+        *query* names the path the caller will actually use --
+        ``"columns"`` (scatter, via ``query_columns``) or ``"raster"``
+        (via ``query_raster``).  It matters because **capability is
+        per-path, not per-backend**: ``query_columns`` returns
+        ``_compute_axis_values(Axis.CHANNEL)``, a real channel index,
+        while ``query_raster`` resolves through ``_axis_to_dim`` to the
+        frequency *coordinate*.  A single backend-level answer made the
+        two panels of one plotter disagree about the same requested axis
+        -- scatter labelled "Channel", raster "Frequency [GHz]".
 
         This default returns the axis unchanged, which is correct for
         every axis a backend does not special-case.  ``Axis.CHANNEL`` is

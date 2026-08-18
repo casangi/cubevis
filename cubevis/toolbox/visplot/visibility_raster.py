@@ -898,6 +898,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             log.debug("_crop_agg failed, using full agg: %s", exc)
             return None
 
+    _QUERY_PATH = "raster"
+
     _degenerate_reason: "Optional[str]" = None
     """Why the last render produced a blank image, or ``None``.
 

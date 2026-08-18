@@ -291,8 +291,13 @@ class MSv4Backend(XArrayReader):
 
 
 
-    _SUPPORTS_CHANNEL_INDEX = False
+    _SUPPORTS_RASTER_CHANNEL_INDEX = False
     """Whether ``query_raster`` plots ``Axis.CHANNEL`` as a channel index.
+
+    Named for the *raster path specifically*: ``query_columns`` (which
+    the scatter uses) already returns a real channel index via
+    ``_compute_axis_values``, so capability is per-path and a single
+    backend-level flag made the two panels of one plotter disagree.
 
     ``False`` while ``_axis_to_dim`` resolves ``Axis.CHANNEL`` to the
     ``"frequency"`` dimension and ``query_raster`` derives its extent from
@@ -308,7 +313,7 @@ class MSv4Backend(XArrayReader):
     handoff -- and flipping this flag is what turns it on here.
     """
 
-    def axis_info(self, axis, selection=None):
+    def axis_info(self, axis, selection=None, query="columns"):
         """Resolve *axis* for *selection*, substituting where necessary.
 
         ``Axis.CHANNEL`` is the case that matters.  ``_axis_to_dim`` maps
@@ -340,7 +345,7 @@ class MSv4Backend(XArrayReader):
         by scan or field yields several partitions within one SPW, and
         their frequency coordinates would be identical.
         """
-        info = super().axis_info(axis, selection)
+        info = super().axis_info(axis, selection, query)
         try:
             dim = _axis_to_dim(axis, self._baseline_dim)
         except ValueError:
@@ -388,7 +393,7 @@ class MSv4Backend(XArrayReader):
                       "showing frequency."),
             )
 
-        if not self._SUPPORTS_CHANNEL_INDEX:
+        if query == "raster" and not self._SUPPORTS_RASTER_CHANNEL_INDEX:
             # One partition, so the index *would* be unambiguous -- but
             # query_raster still resolves Axis.CHANNEL through
             # _axis_to_dim to the "frequency" dimension and takes its
@@ -399,8 +404,9 @@ class MSv4Backend(XArrayReader):
             # the only change needed here.
             return AxisInfo.substituted(
                 Axis.CHANNEL, Axis.FREQUENCY, dim=dim,
-                note=("channel index is not yet plotted by this backend; "
-                      "showing frequency."),
+                note=("the raster path does not yet plot a channel index; "
+                      "showing frequency.  Scatter panels can plot "
+                      "channel number."),
             )
 
         # Unambiguous, and the backend plots the index.  Carry the spw so

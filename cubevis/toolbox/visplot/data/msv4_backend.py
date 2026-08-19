@@ -102,6 +102,9 @@ except ImportError:
     HAS_DASK = False
 
 from .reader import (
+    channel_axis_is_unambiguous,
+    to_channel_index,
+    channel_range_to_freq,
     XArrayReader,
     _compute_axis_values,
     _agg_value,
@@ -291,7 +294,7 @@ class MSv4Backend(XArrayReader):
 
 
 
-    _SUPPORTS_RASTER_CHANNEL_INDEX = False
+    _SUPPORTS_RASTER_CHANNEL_INDEX = True
     """Whether ``query_raster`` plots ``Axis.CHANNEL`` as a channel index.
 
     Named for the *raster path specifically*: ``query_columns`` (which
@@ -299,12 +302,14 @@ class MSv4Backend(XArrayReader):
     ``_compute_axis_values``, so capability is per-path and a single
     backend-level flag made the two panels of one plotter disagree.
 
-    ``False`` while ``_axis_to_dim`` resolves ``Axis.CHANNEL`` to the
-    ``"frequency"`` dimension and ``query_raster`` derives its extent from
-    ``ds.coords["frequency"]`` -- so the values on a CHANNEL axis are
-    frequencies regardless of the label.  ``axis_info`` reads this to
-    decide whether the single-partition case may honestly report a
-    channel index.
+    ``True`` since 2026-08-18: ``query_raster`` relabels the frequency
+    coordinate as a channel index (``to_channel_index``) when a single
+    spectral window survives selection, so the values match the label.
+    ``axis_info`` reads this to decide whether the single-window case may
+    honestly report a channel index.
+
+    Set to ``False`` to fall back to plotting frequency under a
+    substituted label -- the behaviour before the relabelling existed.
 
     Channel number is CASA's public selection key, not an internal
     index: an RFI spike found in the plot is acted on with
@@ -1284,6 +1289,9 @@ class MSv4Backend(XArrayReader):
                 if np.issubdtype(yv.dtype, np.number):
                     all_y_vals.extend([float(yv.min()), float(yv.max())])
 
+            if "frequency" in ds.coords:
+                freq_coords.append(np.asarray(ds.coords["frequency"].values))
+
             arr = self._raster_2d(ds, y_dim, x_dim, quantity, polarization)
             if arr is not None:
                 arr, _ = _decimate_agg(arr, y_name, x_name, max_cells)
@@ -1348,6 +1356,27 @@ class MSv4Backend(XArrayReader):
                 y_range = (0.0, 1.0)
 
         agg, is_decimated = _decimate_agg(agg, y_name, x_name, max_cells)
+        # Relabel the frequency axis as a channel index when asked, and
+        # when a channel index is actually well defined.  Done *after*
+        # the final decimation so the indices are true positions in the
+        # original coordinate -- striding retains channels 0, 4, 8 ...,
+        # and numbering those consecutively would produce an axis that
+        # looks right and is wrong, precisely on zoomed-out views.
+        #
+        # The reference frequencies ride along in the agg's attrs so the
+        # mapping stays invertible: the probe has to turn a channel range
+        # back into Hz to look up fields, scans and antennas, and FlagDB
+        # needs frequencies because they outlive spectral-window
+        # renumbering.
+        if x_dim is Axis.CHANNEL and channel_axis_is_unambiguous(freq_coords):
+            agg = to_channel_index(agg, "x", freq_coords[0])
+            x_range = (float(agg.coords[x_name].values.min()),
+                       float(agg.coords[x_name].values.max()))
+        elif y_dim is Axis.CHANNEL and channel_axis_is_unambiguous(freq_coords):
+            agg = to_channel_index(agg, "y", freq_coords[0])
+            y_range = (float(agg.coords[y_name].values.min()),
+                       float(agg.coords[y_name].values.max()))
+
         return agg, x_range, y_range, is_decimated
 
     def _raster_2d(
@@ -1646,6 +1675,15 @@ class MSv4Backend(XArrayReader):
                 f_lo, f_hi = (
                     x_range if x_dim_name == "frequency" else y_range
                 )
+                # When the axis was relabelled as a channel index, those
+                # bounds are indices, not Hz.  Comparing them to the
+                # partition's frequency coordinate matches nothing, which
+                # looks like an empty cell rather than an error -- so
+                # invert first.  The reference coordinate travels in the
+                # agg's attrs precisely for this.
+                inv = channel_range_to_freq(raw_grid, f_lo, f_hi)
+                if inv is not None:
+                    f_lo, f_hi = inv
                 freq_vals = ds.coords["frequency"].values
                 f_mask    = (freq_vals >= f_lo) & (freq_vals <= f_hi)
                 if not f_mask.any():

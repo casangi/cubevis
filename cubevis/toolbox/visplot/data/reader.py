@@ -374,6 +374,104 @@ def _resolve_vis_variable(ds: xr.Dataset, data_column: str) -> str:
 # Abstract base class
 # ======================================================================
 
+# ---------------------------------------------------------------------------
+# Channel-index axis support (shared by both backends)
+# ---------------------------------------------------------------------------
+#
+# Lives here rather than in each backend because per-backend copies of
+# spectral-window logic have diverged three times already (``_axis_to_dim``
+# arity, the DDID qualifier, the kind resolution).  The probe-geometry
+# helpers were hoisted for the same reason.
+
+CHANNEL_AXIS_ATTR = "cubevis_channel_axis"
+"""Agg attribute naming which axis carries a channel index (``"x"``/``"y"``)."""
+
+CHANNEL_REF_ATTR = "cubevis_channel_ref_hz"
+"""Agg attribute holding the reference frequency coordinate, in Hz.
+
+Kept alongside the index so the mapping is **invertible**: the probe must
+turn a channel range back into a frequency range to look up fields,
+scans and antennas, and ``FlagDB`` needs frequencies because they survive
+the ``split``/``mstransform`` renumbering that invalidates ids.
+"""
+
+
+def channel_axis_is_unambiguous(freq_coords: "list[np.ndarray]") -> bool:
+    """Whether a channel index is well defined across *freq_coords*.
+
+    Requires that every partition present the **same** frequency
+    coordinate.  Two partitions of one spectral window do (they differ by
+    scan, field or observation, never by channel); two *different*
+    windows do not, and there is no global channel numbering to fall back
+    on -- MSv4 has no notion of one.
+
+    Compared by value rather than by counting spectral windows, because
+    the window identity may be only a name (see ``_partition_spw_ident``)
+    and the coordinate is the thing that actually has to match.
+    """
+    if not freq_coords:
+        return False
+    first = np.asarray(freq_coords[0])
+    for other in freq_coords[1:]:
+        other = np.asarray(other)
+        if other.shape != first.shape or not np.array_equal(other, first):
+            return False
+    return True
+
+
+def to_channel_index(agg, axis: str, ref_freq: "np.ndarray"):
+    """Relabel *agg*'s frequency coordinate as a channel index.
+
+    Indices are positions in *ref_freq*, **not** ``arange(len(coord))``:
+    ``_decimate_agg`` may have strided the axis, and after striding the
+    retained cells are channels 0, 4, 8 ... not 0, 1, 2.  Numbering them
+    consecutively would produce an axis that looks right and is wrong,
+    and it would be wrong precisely on the zoomed-out views where
+    decimation applies.
+
+    The original frequencies are stored in ``CHANNEL_REF_ATTR`` so the
+    mapping can be inverted; see ``channel_range_to_freq``.
+    """
+    dim = agg.dims[1] if axis == "x" else agg.dims[0]
+    coord = np.asarray(agg.coords[dim].values, dtype=np.float64)
+    ref = np.asarray(ref_freq, dtype=np.float64)
+
+    # searchsorted + neighbour comparison rather than exact equality:
+    # concat and decimation can perturb the last bit of a float.
+    pos = np.searchsorted(ref, coord)
+    pos = np.clip(pos, 0, len(ref) - 1)
+    left = np.clip(pos - 1, 0, len(ref) - 1)
+    take_left = np.abs(ref[left] - coord) < np.abs(ref[pos] - coord)
+    idx = np.where(take_left, left, pos).astype(np.int64)
+
+    out = agg.assign_coords({dim: idx})
+    out.attrs = dict(agg.attrs)
+    out.attrs[CHANNEL_AXIS_ATTR] = axis
+    out.attrs[CHANNEL_REF_ATTR] = ref
+    return out
+
+
+def channel_range_to_freq(agg, lo: float, hi: float):
+    """Invert a channel-index range on *agg* back to Hz, or ``None``.
+
+    The probe compares its cell bounds against each partition's
+    ``frequency`` coordinate.  When the axis has been relabelled those
+    bounds are channel indices, and comparing them to Hz silently matches
+    nothing -- which would look like an empty cell rather than an error.
+    """
+    ref = agg.attrs.get(CHANNEL_REF_ATTR) if hasattr(agg, "attrs") else None
+    if ref is None:
+        return None
+    ref = np.asarray(ref, dtype=np.float64)
+    if ref.size == 0:
+        return None
+    i_lo = int(np.clip(np.floor(lo), 0, ref.size - 1))
+    i_hi = int(np.clip(np.ceil(hi), 0, ref.size - 1))
+    f_a, f_b = float(ref[i_lo]), float(ref[i_hi])
+    return (min(f_a, f_b), max(f_a, f_b))
+
+
+
 class XArrayReader(abc.ABC):
     """Abstract base class for MSv2 and MSv4 data readers.
 

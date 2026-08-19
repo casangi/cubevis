@@ -223,6 +223,8 @@ query.  A note beneath each reads *"Full selection — full release"*.
 - Multi-layer *controls* (user-facing add/remove layer UI): absent
 - Colour-by-metadata axis: absent
 
+Axis labels use SI-prefix formatting (e.g. "GHz" rather than raw Hz) derived from `AxisInfo`, which records what was actually plotted rather than relying on `Axis.label` (the enum display name, which does not know about data ranges or units chosen at query time). This parity is enforced by a JS/Python harness.
+
 ### 6. Colormap controls (sidebar — working)
 
 Both panels default to Datashader's `eq_hist` (histogram equalization)
@@ -253,6 +255,7 @@ will remain fast at full scale.
 | **[vplot] [radplot] [Waterfall]** | JS: switches to Both, sets axes and layout |
 | **FlagTool 🚩** | Custom drag tool demonstrating the flagging gesture. Drag → draws rubber-band selection box; status bar confirms the drawn region (gated on 1:1 pixel resolution; rejected with message otherwise). Click → zooms to 1:1. "Not unselectable" — re-click re-triggers zoom. No `FlagDB` or `FlagDelta` in the preview. |
 | **UnflagTool 🏳** | Same `FlagTool`, `flag=False`. Demonstrates the unflag selection gesture; no `FlagDB` in the preview. |
+| **Export PNG 📷** | Writes the current view (zoom included) to a server-side path; absolute path reported in the status bar. GUI defaults to light theme for PNG output regardless of current GUI theme. |
 | **Flag ⚑** | `TipButton`; tooltip: *"Write flags to disk — full release"* |
 
 
@@ -298,7 +301,7 @@ Absent with no stubs:
 - Iteration (Prev/Next antenna/baseline)
 - Calibration sidebar section
 - Colour-by-metadata axis in scatter
-- PNG export
+- Colorbar (partial — `plot_left`/`plot_right` placement works; display-scope GUI colorbar deferred)
 - Multi-layer scatter *controls* (the rendering machinery and probe both handle multiple layers; the absent piece is user-facing UI to add/remove layers)
 - Draggable panel divider
 
@@ -358,6 +361,13 @@ plotter = VisibilityPlotter(
 )
 
 plotter.show()  # returns a Bokeh layout for notebook embedding
+
+# Headless scripted export — no Bokeh figure, no browser needed
+vp = VisibilityPlotter(ms="sis14.ms", headless=True,
+                       plot_width=1400, plot_height=700)
+vp(plotfile="amp.png", theme="light")               # full-extent view
+for spw in (0, 1, 2, 3):
+    vp(plotfile=f"amp_spw{spw}.png", spw=[spw])     # iterate over SPWs
 ```
 
 Passing both `ms` and `ps` raises a `ValueError` immediately with a
@@ -460,6 +470,7 @@ A reviewer in a Jupyter notebook should be able to:
 11b. Hover a scatter point at high zoom; the status bar reports a value for each visible polarisation, with an em dash (—) for any layer with no data at that location.
 12. Activate `UnflagTool`; draw a box; status bar confirms the unflag gesture.
 13. Read the status bar and know which dataset, mode, layout, and selection is active.
+14. Press Export PNG; a PNG file appears at the path shown in the status bar, with light-theme chrome regardless of the current GUI theme.
 
 That is sufficient to validate the no-server layout approach, communicate
 the design intent for both independent and preset operating modes, and

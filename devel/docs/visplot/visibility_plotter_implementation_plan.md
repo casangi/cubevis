@@ -233,6 +233,28 @@ the current two-panel flagging case — both panels always show the same field/S
 `shared_selection=False` is required for the caltable antenna grid (each panel
 shows a different antenna's solutions) and for any future multi-SPW tiled view.
 
+### 3.1c Five architecture rules (learned from defects)
+
+Each was re-derived from a defect that **looked like success** during the
+export and reference-testing phases. They apply throughout the codebase.
+
+1. **A Python-side model change is invisible without a Bokeh server.** Any
+   handler that alters what is drawn must *return* the new data for the client
+   to install. Assigning `ColumnDataSource.data` in Python succeeds, changes
+   nothing on screen, and logs nothing.
+2. **`Axis.label` is never the right source for displayed text.** Only
+   `AxisInfo` knows what was actually plotted — e.g. the SI-prefixed string
+   and the actual frequency range used.
+3. **A value fixed at construction will not follow a later mechanism** unless
+   explicitly re-pushed. Anything visual added to the sidebar must be added to
+   `_THEME_RESTYLE_JS` in the same change — the two are one unit.
+4. **The two backends diverge.** Fixes have landed in one and not the other
+   multiple times. Shared logic belongs in `reader.py`; `METADATA_KEYS` and
+   parameterised backend tests catch the rest.
+5. **Assert on structure, not presentation**, and **assert in the same units
+   you compute in**. A check that measures luminance while the code conditions
+   on RGB distance silently passes what it was written to catch.
+
 ### 3.2 The VisibilityReader boundary
 
 `VisibilityRaster` and `VisibilityScatter` depend **only** on `VisibilityReader`.
@@ -448,10 +470,11 @@ RADPS without a CASA6 session), calibration buttons are hidden.
 
 ### 4.11 Export / scripting
 
-- **Save plot** — PNG export of current view
+- **Save plot / Export PNG** — ✅ Done: GUI button writes the current view (zoom included) server-side; absolute path reported in status bar. No browser download (JupyterLab-over-SSH means Python process may be on a different machine than the browser; base64-over-comm deferred by decision).
+- **Headless API** — ✅ Done: `VisibilityPlotter(ms=..., headless=True); vp(plotfile="out.png")`. See E-2.
 - **Copy flagdata command** — generate equivalent `flagdata()` call for current `FlagDB` state
 - **Python API** — `VisibilityPlotter(ms=..., field=..., preset=...)` usable in Jupyter
-- **Reload ↺ vs Plot ▶** — `Plot ▶` re-queries and re-renders, preserving `FlagDB` state; `Reload ↺` re-queries, re-renders, and **clears `FlagDB`** (safe reset, since nothing has been written to disk) — matches the expectation that "start over" discards in-progress uncommitted flag state
+- **Reload ↺ vs Plot ▶** — `Plot ▶` re-queries and re-renders, preserving `FlagDB` state; `Reload ↺` re-queries, re-renders, and **clears `FlagDB`** (safe reset) — matches the expectation that "start over" discards in-progress uncommitted flag state
 
 ### 4.12 Astronomer-facing constructor
 
@@ -893,6 +916,13 @@ reported empty under the old algorithm; 0% under the fix.
 | PB-9 | Unify `Canvas.raster()` upsample method between `_render` and `_shade_viewport` via shared `_resample_method()`; add `raster_interpolate` constructor parameter (`"auto"` default: nearest when either axis upsamples, linear when downsampling; `"nearest"` and `"linear"` force the choice). Previous inconsistency: `_shade_viewport` chose nearest-when-upsampling correctly, but `_render` always took Datashader's linear default — so the first image seen was interpolated and every pan/zoom thereafter was not. Linear upsampling is wrong for both raster axes: `baseline_id` is categorical (interpolating between adjacent IDs invents a baseline that does not exist); `time` has inter-scan gaps (interpolating across a gap invents observations). Measured peak dilution at 5× upsample: 4.6% under linear, 0% under nearest. Linear also fabricated 12 distinct levels where the true data had 2. `test_raster_resample.py` (8 tests, standalone, AST-extracted) added; `test_probe_fix.py` unaffected. `raster_interpolate="nearest"` recommended when comparing against reference tools that do not interpolate. | ✅ Done | `visibility_raster.py`, `test_raster_resample.py` *(new)* |
 | PB-9 | Unify `Canvas.raster()` upsample method between `_render` and `_shade_viewport` via shared `_resample_method()`; add `raster_interpolate` constructor parameter (`"auto"` default applies nearest when either axis upsamples, linear when downsampling; `"nearest"` and `"linear"` are explicit overrides). Previous inconsistency: `_shade_viewport` already chose nearest-when-upsampling correctly, but `_render` always passed `Canvas.raster()` bare and took Datashader's linear default — so the first image seen by the user was interpolated and every subsequent pan/zoom image was not. Linear upsampling is wrong for both axes: `baseline_id` is categorical (interpolation between adjacent IDs invents a baseline that does not exist), and `time` has inter-scan gaps (interpolation across a gap invents observations). Measured peak dilution at a 5× upsample ratio: 4.6% under linear vs 0% under nearest. Verified: `test_raster_resample.py` (8 tests, standalone, AST-extracted) passes; existing `test_probe_fix.py` unaffected. Note: `raster_interpolate="nearest"` is recommended when comparing against reference tools that do not interpolate. | ✅ Done | `visibility_raster.py`, `test_raster_resample.py` *(new)* |
 
+**Export testing discipline (from E-2 work, carries forward):**
+- Compositor tests need no MS, no Bokeh, no display — 76 tests run in seconds; preserve that property
+- Cross-runtime parity needs a harness, not discipline: `node` is available; use it
+- Assert on structure not presentation; assert on bboxes not pixel counts
+- Synthetic fixtures miss things: defects were found only by exporting real data
+- Golden tables over ad-hoc assertions for anything two implementations must agree on
+
 **Forward links:** F-11 (nearest-point flag) needs the same `_nearest_populated_bin` primitive — differing only in returning a row identifier; do not reimplement. F-10 (scatter flag overlay) interacts with PB-1: a flagged layer would appear in the multi-layer status bar — whether it *should* is a design question to settle when F-10 is scheduled.
 
 ---
@@ -948,10 +978,13 @@ decisions rather than guessing.)*
 
 | ID | Task | Files affected |
 |---|---|---|
-| E-1 | Generator/iteration API over duo mode: lightweight re-selection over an open backend, enabling scripted export without a new `VisibilityPlotter` per value. Does not depend on grid infrastructure. | `visibility_plotter.py` |
-| E-2 | Headless PNG export via matplotlib — rendering path resolved to matplotlib (July 29 2026; webdriver export_png failed in pipeline-like environment; matplotlib worked immediately). Feed the already-composited RGBA array to `imshow`, guaranteeing byte-identical pixels between interactive and headless output. `headless: bool` constructor flag skips Bokeh Figure/toolbar/tick-formatter construction for this path. | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
-| E-3 | Colorbar for headless export: accurate colorbar requires the eq_hist scalar-to-color mapping function itself, not just pre-colored pixels — not a standard matplotlib norm. Acknowledged hard piece; known follow-up, not a preview/E-2 blocker. | `colormap_scaling.py`, export module |
-| E-4 | Real query→render→export timing benchmarks vs. PlotMS — provides data-backed decisions for iteration/grid-mode sizing (default/cap grid dimensions) rather than the currently-unconfirmed 3×3/6×6 guess. | benchmarking scripts |
+| E-1 | Generator/iteration API: `__call__` is the terminal verb; iteration is repeated calls (`vp(plotfile=f"amp_spw{spw}.png", spw=[spw])` in a loop). No separate generator class needed — the existing flat constructor vocabulary handles per-call re-selection. ✅ **Done (August 2026).** | `visibility_plotter.py` |
+| E-2 | Headless PNG export. ✅ **Done (August 2026).** GUI `Export PNG` button writes current view including zoom; headless path via `VisibilityPlotter(ms=..., headless=True)` skips Bokeh Figure/toolbar/tick-formatter construction. Matplotlib chrome over the byte-identical `(H, W) uint32` array already produced by Datashader — not a parallel renderer, a parallel *chrome* over the same pixels. Fidelity in three tiers: Tier 1 RGBA byte-identical at matched canvas size (hash-verified); Tier 2 ranges, tick label strings, titles, labels identical (JS/Python parity harness, 2243 fuzzed cases); Tier 3 fonts/chrome pixel positions best-effort. Theme is a deliberate Tier-3 exception: GUI defaults dark, PNG export defaults light (headed for a paper). SPW `DataTable` rework (§6a) done as part of this work. Key architectural finding: Bokeh contributes no data-area pixels — only chrome (title, axis labels, ticks, toolbar, hover). Export is not "keep two renderers in sync" but "keep two chrome-drawers in sync over an identical array." | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py`, `png_export.py` *(new)*, `panel_spec.py` *(new)*, `tick_format.py` *(new)*, `palettes.py` *(new)*, `refresh.py` *(new)* |
+| E-2a | **Known gap from export work:** constructor API only exposes `layout="one"|"side"|"over"` with slot A hardcoded raster and slot B scatter. Two rasters side by side is reachable from the GUI (P-5b) but unreachable from the API. Fixing this — adding per-slot kind control to the constructor, likely via a `panels=` escape hatch (list of dicts of primitives) — is independent of export but was identified during it and is the natural entry point to a more expressive constructor API. |
+| E-3 | GUI colorbar (`ColorBar`). **Partially done.** `plot_left`/`plot_right` placement works in both GUI and PNG. Display-scope colorbar (a separate narrow figure, mapper/theme/range kept in sync on every `update_scaling()` and viewport change) done in PNG; GUI version deferred until someone requests it — better than shipping a GUI option that silently means something different from the PNG option. Under `eq_hist` in local mode the mapper must be rebuilt on every `update_scaling()` and viewport change. GUI colorbars should default **off** (gear panel histogram already conveys value distribution); PNG colorbars default **on** (no gear panel). | `colormap_scaling.py` (`ScalarMapping` added), GUI colorbar checkbox |
+| E-4 | Real query→render→export timing benchmarks vs. PlotMS — data-backed decisions for grid-mode sizing (default/cap grid dimensions). Still open. | benchmarking scripts |
+| E-5 | `query_columns` result cache keyed on `(x_axis, y_axes, selection)` — accepted alternative to affine remap; helps every axis toggle. Still open. | `visibility_scatter.py` |
+| E-6 | SPW name→ID resolution through SPECTRAL_WINDOW subtable — blocks CASA-form `spw=N` output in export filenames. Still open. The sis14 test dataset has one SPW identified by name only, so both SPW *selection* (selecting the one window changes nothing) and CASA-form `spw=N` output are untestable with sis14; a multi-window MS is needed. | `msv2_backend.py`, `msv4_backend.py` |
 
 ---
 
@@ -1455,3 +1488,33 @@ visibilities directly from the MS.
 
 **What would make it actionable:** a "copy hover coordinates" feature or session-persistent
 hover log; confirmed user demand beyond testing workflows.
+
+---
+
+### C.12 SPW name-to-ID resolution gap
+
+**Source:** export work (E-2 / E-6, August 2026)
+
+**Description:** SPW selection via CASA-form `spw=N` (integer ID) in export
+filenames is blocked because there is no reliable path from SPW name → integer
+ID through the SPECTRAL_WINDOW subtable. The sis14 test dataset has exactly one
+SPW identified by name only, so both SPW *selection* testing (selecting the one
+window changes nothing observable) and `spw=N` output are untestable with it. A
+multi-window MS is needed.
+
+**What would make it actionable:** subtable access for SPECTRAL_WINDOW; a
+multi-SPW test dataset; or confirmation of an alternative ID source.
+
+---
+
+### C.13 GUI export path vs headless state split
+
+**Source:** export work (§9.2, August 2026)
+
+**Description:** With no Bokeh server, `CustomJS`-set model properties never
+propagate back to Python. GUI state splits into: (a) Python already knows
+(axes, quantity, selection, scaling, cached agg/dfs); (b) browser-only, must
+ship in the export payload (viewport per figure, layout radio, display-mode
+radio, panel order); (c) deliberately different (theme). The export button's
+`CustomJS` handler collects and ships (b). This is already implemented, but the
+boundary is worth documenting for anyone extending the export path.

@@ -81,9 +81,9 @@ import websockets
 from bokeh.events import MouseEnter, MouseLeave
 from bokeh.layouts import column, row
 from bokeh.models import (
-    Button, CheckboxGroup, ColumnDataSource, CustomAction, CustomJS, Div,
-    InlineStyleSheet, MultiSelect, RadioButtonGroup, Select,
-    TabPanel, Tabs, TextInput, Toggle,
+    Button, CheckboxGroup, ColumnDataSource, CustomAction, CustomJS,
+    DataTable, Div, InlineStyleSheet, MultiSelect, RadioButtonGroup,
+    Select, TabPanel, Tabs, TableColumn, TextInput, Toggle,
 )
 
 from cubevis.bokeh import BokehInit
@@ -119,6 +119,42 @@ _PANEL_WIDTH_SIDE  = 500    # each panel in side-by-side mode
 _PANEL_WIDTH_FULL  = 1020   # single-panel or over/under mode
 _PANEL_HEIGHT      = 550
 _PANEL_HEIGHT_OVER = 280    # each panel height in over/under mode
+_SECTION_DARK      = "#cdd6f4"
+_SECTION_LIGHT     = "#1e293b"
+"""Sidebar section-heading colours.
+
+Previously hardcoded inline at construction with nothing able to change
+them, so the headings stayed dark-blue on a light sidebar and read as
+disabled.  Named so the restyle callback can swap them.
+"""
+
+_DARK_TABLE_CSS = """
+:host { --bk-table-bg: #1e1e2e; --bk-table-fg: #cdd6f4;
+        --bk-table-hdr: #313244; --bk-table-line: #45475a;
+        --bk-table-sel: #313244; }
+.slick-header-columns, .slick-header-column {
+    background: var(--bk-table-hdr) !important;
+    color: var(--bk-table-fg) !important;
+    border-color: var(--bk-table-line) !important; }
+.slick-viewport, .grid-canvas, .slick-row, .slick-cell {
+    background: var(--bk-table-bg) !important;
+    color: var(--bk-table-fg) !important;
+    border-color: var(--bk-table-line) !important; }
+.slick-row.odd .slick-cell { background: #181825 !important; }
+.slick-row.active .slick-cell, .slick-row.selected .slick-cell {
+    background: var(--bk-table-sel) !important; }
+"""
+"""DataTable is SlickGrid, so a generic widget stylesheet never reaches it.
+
+Bokeh renders DataTable through SlickGrid's own DOM inside a shadow root,
+and none of the `.bk-input`-style rules that theme a Select or TextInput
+apply.  The table therefore stayed light-on-white in dark mode while
+every other sidebar widget followed the theme.
+"""
+
+_LIGHT_TABLE_CSS = ""
+"""Empty: SlickGrid's own defaults are already a light theme."""
+
 _SIDEBAR_WIDTH     = 260
 _SIDEBAR_WIDTH_COL = 268    # column width including padding
 
@@ -707,6 +743,45 @@ class _PanelSlot:
 # those was added after a *reported* light-mode gap.  A second copy would
 # silently miss the next one.
 _THEME_RESTYLE_JS = """
+// Each block below is wrapped by _step() so that one failure cannot
+// silently abort the rest.  This body has grown by accretion -- figures,
+// info divs, sidebar, widgets, hint divs, path_div, colormap histograms,
+// icons, gear tabs, section headings, the SPW table -- and every addition
+// runs in the same try-less sequence.  A single TypeError in the middle
+// (`Bokeh.InlineStyleSheet is not a constructor`, 2026-08-19) stopped the
+// theme changing ANYWHERE, including the toggle's own label, which made
+// a one-line mistake look like the whole feature had broken.
+function _step(name, fn) {
+    try { fn(); }
+    catch (e) { console.error('[visplot theme] ' + name + ' failed:', e); }
+}
+
+// --- sidebar section headings ---------------------------------------
+// Their colour was baked into the Div's inline style at construction, so
+// nothing could change it and they stayed dark-blue on a light sidebar.
+_step('section headings', () => {
+    if (typeof section_divs === 'undefined' || !section_divs) return;
+    const _sc = light ? section_light : section_dark;
+    for (const d of section_divs) {
+        if (!d || !d.text) continue;
+        d.text = d.text.replace(/color:#[0-9a-fA-F]{3,8}/, 'color:' + _sc);
+    }
+});
+
+// --- SPW DataTable ---------------------------------------------------
+// DataTable renders through SlickGrid inside a shadow root, so the
+// generic widget CSS above never reaches it: it needs its own sheet.
+// Both sheets are constructed in Python and passed in; this only swaps
+// which is attached.  Building one here would need
+// `Bokeh.InlineStyleSheet`, which is not a constructor -- and the
+// TypeError aborted every block after this one, so the whole theme
+// silently stopped changing.
+_step('spw table', () => {
+    if (typeof spw_table === 'undefined' || !spw_table) return;
+    spw_table.stylesheets = [sidebar_css,
+                             light ? table_css_light : table_css_dark];
+});
+
 const bg_fig    = light ? 'white'   : 'black';
 const bg_border = light ? '#ffffff' : '#1e1e2e';
 const label_c   = light ? '#222222' : '#cdd6f4';
@@ -733,75 +808,79 @@ const source_c  = light ? '#222222' : '#a6e3a1';
 const widget_css = light ? light_css : dark_css;
 const tabs_css = light ? light_tabs_css : dark_tabs_css;
 
-// Page background
-for (const el of [document.body, document.documentElement]) {
-    try { el.style.background = page_bg; } catch(e) {}
-}
-for (const sel of ['.bk-root', '[data-root-id]', '.bk']) {
-    try {
-        document.querySelectorAll(sel).forEach(
-            el => el.style.background = page_bg
-        );
-    } catch(e) {}
-}
-
-// Figures (all four panel objects — see args comment above)
-for (const fig of figs) {
-    fig.background_fill_color = bg_fig;
-    fig.border_fill_color     = bg_border;
-    if (fig.title) fig.title.text_color = title_c;
-    for (const ax of [...fig.below, ...fig.left, ...fig.right, ...fig.above]) {
-        if (ax.axis_label_text_color  !== undefined) ax.axis_label_text_color  = label_c;
-        if (ax.major_label_text_color !== undefined) ax.major_label_text_color = label_c;
-        if (ax.axis_line_color        !== undefined) ax.axis_line_color        = label_c;
-        if (ax.major_tick_line_color  !== undefined) ax.major_tick_line_color  = label_c;
-        if (ax.minor_tick_line_color  !== undefined) ax.minor_tick_line_color  = label_c;
+_step('page background', () => {
+    // Page background
+    for (const el of [document.body, document.documentElement]) {
+        try { el.style.background = page_bg; } catch(e) { console.error('[visplot theme] sidebar container failed:', e); }
     }
-    for (const g of fig.center) {
-        if (g.grid_line_color !== undefined) g.grid_line_color = grid_c;
+    for (const sel of ['.bk-root', '[data-root-id]', '.bk']) {
+        try {
+            document.querySelectorAll(sel).forEach(
+                el => el.style.background = page_bg
+            );
+        } catch(e) { console.error('[visplot theme] sidebar container failed:', e); }
     }
-}
+});
+_step('figures', () => {
+    // Figures (all four panel objects — see args comment above)
+    for (const fig of figs) {
+        fig.background_fill_color = bg_fig;
+        fig.border_fill_color     = bg_border;
+        if (fig.title) fig.title.text_color = title_c;
+        for (const ax of [...fig.below, ...fig.left, ...fig.right, ...fig.above]) {
+            if (ax.axis_label_text_color  !== undefined) ax.axis_label_text_color  = label_c;
+            if (ax.major_label_text_color !== undefined) ax.major_label_text_color = label_c;
+            if (ax.axis_line_color        !== undefined) ax.axis_line_color        = label_c;
+            if (ax.major_tick_line_color  !== undefined) ax.major_tick_line_color  = label_c;
+            if (ax.minor_tick_line_color  !== undefined) ax.minor_tick_line_color  = label_c;
+        }
+        for (const g of fig.center) {
+            if (g.grid_line_color !== undefined) g.grid_line_color = grid_c;
+        }
+    }
+});
+_step('info divs', () => {
+    // Info divs and status bar
+    function recolor_div(div, bg, fg) {
+        try {
+            const s = Object.assign({}, div.styles);
+            s['background'] = bg;
+            s['color']      = fg;
+            div.styles = s;
+        } catch(e) { console.error('[visplot theme] sidebar container failed:', e); }
+    }
+    for (const info_div of info_divs) {
+        recolor_div(info_div, info_bg, info_c);
+    }
+    recolor_div(status_div, page_bg, status_c);
+    recolor_div(notify_div, page_bg, light ? '#b02a37' : '#f38ba8');
 
-// Info divs and status bar
-function recolor_div(div, bg, fg) {
-    try {
-        const s = Object.assign({}, div.styles);
-        s['background'] = bg;
-        s['color']      = fg;
-        div.styles = s;
-    } catch(e) {}
-}
-for (const info_div of info_divs) {
-    recolor_div(info_div, info_bg, info_c);
-}
-recolor_div(status_div, page_bg, status_c);
-recolor_div(notify_div, page_bg, light ? '#b02a37' : '#f38ba8');
-
-// Config-field hint divs (added 2026-08-03, fixing a reported gap) —
-// same page_bg as status_div, distinct text color from status_c to
-// preserve the dark-mode "cyan — distinct from status green" intent.
-for (const hint_div of hint_divs) {
-    recolor_div(hint_div, page_bg, hint_c);
-}
-
-// Source path (added 2026-08-03, fixing a reported gap) — the color was
-// baked into an inline HTML <span style=...> inside .text itself, which
-// no property-based recolor mechanism can reach; rebuilt here instead of
-// restyled. label_c already correctly tracks light/dark for the
-// "Source:" label; source_c (== label_c's value, see definition above)
-// does the same for the path itself, replacing the old permanently-green
-// value per the specific request that light mode read black, not green.
-path_div.text = "<b style='color:" + label_c + "'>Source:</b> " +
-    "<span style='font-family:monospace;font-size:11px;color:" +
-    source_c + "'>" + source_basename + "</span>";
-
+    // Config-field hint divs (added 2026-08-03, fixing a reported gap) —
+    // same page_bg as status_div, distinct text color from status_c to
+    // preserve the dark-mode "cyan — distinct from status green" intent.
+    for (const hint_div of hint_divs) {
+        recolor_div(hint_div, page_bg, hint_c);
+    }
+});
+_step('source path', () => {
+    // Source path (added 2026-08-03, fixing a reported gap) — the color was
+    // baked into an inline HTML <span style=...> inside .text itself, which
+    // no property-based recolor mechanism can reach; rebuilt here instead of
+    // restyled. label_c already correctly tracks light/dark for the
+    // "Source:" label; source_c (== label_c's value, see definition above)
+    // does the same for the path itself, replacing the old permanently-green
+    // value per the specific request that light mode read black, not green.
+    path_div.text = "<b style='color:" + label_c + "'>Source:</b> " +
+        "<span style='font-family:monospace;font-size:11px;color:" +
+        source_c + "'>" + source_basename + "</span>";
+});
 // Sidebar container background
 try {
     const s = Object.assign({}, sidebar.styles);
     s['background']   = light ? '#f8f8f0' : '#1e1e2e';
     s['border-right'] = light ? '1px solid #ccc' : '1px solid #45475a';
     sidebar.styles = s;
-} catch(e) {}
+} catch(e) { console.error('[visplot theme] sidebar container failed:', e); }
 
 // Sidebar widgets — update InlineStyleSheet CSS directly on each widget.
 // This is the only reliable way since InlineStyleSheet overrides all other CSS.
@@ -811,7 +890,7 @@ try {
             w.stylesheets[0].css = widget_css;
         }
     }
-} catch(e) { console.warn('widget stylesheet update failed:', e); }
+} catch(e) { console.error('[visplot theme] sidebar widgets failed:', e); }
 
 // Gear tab strip ("Panel A"/"Panel B") — previously had no light-mode
 // CSS defined anywhere and was never touched by this callback at all,
@@ -823,7 +902,7 @@ try {
     if (tabs.stylesheets && tabs.stylesheets.length > 0) {
         tabs.stylesheets[0].css = tabs_css;
     }
-} catch(e) { console.warn('tabs stylesheet update failed:', e); }
+} catch(e) { console.error('[visplot theme] gear tabs failed:', e); }
 
 // Colormap histogram figures (added to fix a reported light-mode gap —
 // see _style_cmap_column's docstring). Deliberately dimmer than the
@@ -855,8 +934,7 @@ try {
     for (const icon of cmap_icons) {
         if (icon.color !== undefined) icon.color = label_c;
     }
-} catch(e) { console.warn('colormap icon recolor failed:', e); }
-
+} catch(e) { console.error('[visplot theme] reset icons failed:', e); }
 """
 
 
@@ -1041,6 +1119,9 @@ class VisibilityPlotter:
         self._source_path   = ms or ps
         self._field_str     = field
         self._spw_str       = spw
+        # Identities chosen in the SPW table, or None to fall back to
+        # parsing _spw_str.  Set by the Plot handler.
+        self._spw_ids       = None
         self._antenna_str   = antenna
         self._scan_str      = scan
         self._timerange_str = timerange
@@ -2292,7 +2373,16 @@ for (const dt of other.tools) {
             log.debug("_handle_plot: reload requested — FlagDB cleared")
 
         if "field"       in msg: self._field_str   = msg["field"]
-        if "spw"         in msg: self._spw_str      = msg["spw"]
+        if "spw_ids" in msg:
+            # Identities straight from the table, no text round trip.
+            # `_spw_str` is left alone so the constructor's spw= remains
+            # the record of what was *asked for*, while these are what
+            # was *chosen*; _build_selection prefers the latter.
+            self._spw_ids = list(msg["spw_ids"])
+        elif "spw" in msg:
+            # Legacy string form (constructor, older clients).
+            self._spw_str = msg["spw"]
+            self._spw_ids = None
         if "correlation" in msg: self._corr_str     = msg["correlation"]
         if "datacolumn"  in msg: self._datacolumn   = msg["datacolumn"].upper()
 
@@ -2671,7 +2761,13 @@ for (const dt of other.tools) {
 
     def _build_selection(self) -> SelectionSpec:
         field_name = _parse_field_string(self._field_str, self._meta)
-        spw_ids    = _parse_spw_string(self._spw_str, self._meta)
+        # Explicit identities from the SPW table win over the string
+        # form: they are already the values _spw_selected compares
+        # against, and re-deriving them from text could only lose
+        # information.
+        chosen = getattr(self, "_spw_ids", None)
+        spw_ids = (list(chosen) if chosen is not None
+                   else _parse_spw_string(self._spw_str, self._meta))
         corrs      = _parse_correlation_string(self._corr_str, self._meta)
         return SelectionSpec(
             field_names = [field_name] if field_name else None,
@@ -3061,6 +3157,21 @@ conflict_div.text = conflict ? msg : '';
         )
         self._path_div = path_div
 
+        # Section headings are collected so the theme restyle can reach
+        # them.  They previously hardcoded color:#cdd6f4 inline at
+        # construction with nothing to ever change it -- the same defect
+        # the restyle body's own comments describe -- so they stayed
+        # dark-blue on a light sidebar and read as disabled.
+        self._section_divs = []
+
+        def _section(text):
+            d = Div(text=f"<span style='color:{_SECTION_DARK};"
+                         f"font-weight:bold'>{text}</span>",
+                    width=_SIDEBAR_WIDTH)
+            d.tags = ["section-label", text]
+            self._section_divs.append(d)
+            return d
+
         # ---- Data column -------------------------------------------------- #
         col_options = list(meta.data_columns) or ["DATA"]
         self._col_select = Select(
@@ -3087,22 +3198,74 @@ conflict_div.text = conflict ? msg : '';
         )
 
         # ---- SPW ----------------------------------------------------------- #
-        spw_options = [
-            (str(s.spw_id),
-             f"SPW {s.spw_id}  ({s.centre_freq_hz/1e9:.3f} GHz)"
-             if s.centre_freq_hz else f"SPW {s.spw_id}")
-            for s in meta.spws
+        # ---- Spectral windows ---------------------------------------- #
+        #
+        # A DataTable rather than a MultiSelect: an ASDM-imported MS can
+        # carry 30 windows with non-contiguous ids, and the id alone does
+        # not say which is the science window.  The frequency span and
+        # channel count do -- a 1-channel window at 7 GHz is a WVR at a
+        # glance.  DataTable also gives scrolling and checkbox selection
+        # natively, where a CheckboxGroup would need both hand-built.
+        #
+        # The identity is carried in the source as-is, NOT stringified.
+        # It may be an int or a spectral-window name (see
+        # _partition_spw_ident), and the old MultiSelect path stringified
+        # it into a comma-joined value only for _parse_spw_string to take
+        # it apart again -- a round trip through text that a name
+        # containing a comma would have broken.
+        # Both stylesheets are built HERE, in Python, and the restyle
+        # callback only swaps which one is attached.  Constructing one in
+        # JS needs `Bokeh.InlineStyleSheet`, which is not a constructor in
+        # that namespace -- and the resulting TypeError aborted the rest
+        # of the restyle body, so a single bad line stopped the theme
+        # changing anywhere at all.
+        self._table_css_dark  = InlineStyleSheet(css=_DARK_TABLE_CSS)
+        self._table_css_light = InlineStyleSheet(css=_LIGHT_TABLE_CSS)
+        self._sidebar_css     = dark
+
+        spws = list(meta.spws)
+        preselected = _parse_spw_string(self._spw_str, meta)
+        self._spw_source = ColumnDataSource(data=dict(
+            ident   = [s.spw_id for s in spws],
+            name    = [s.name or str(s.spw_id) for s in spws],
+            freq    = [f"{(s.centre_freq_hz - s.bandwidth_hz / 2) / 1e9:.2f}"
+                       f"–{(s.centre_freq_hz + s.bandwidth_hz / 2) / 1e9:.2f}"
+                       if s.bandwidth_hz else "" for s in spws],
+            nchan   = [str(s.n_channels) if s.n_channels else "" for s in spws],
+        ))
+        self._spw_source.selected.indices = [
+            i for i, s in enumerate(spws) if s.spw_id in preselected
         ]
-        if not spw_options:
-            spw_options = [("0", "SPW 0")]
-        selected_spws = [str(i) for i in _parse_spw_string(self._spw_str, meta)]
-        self._spw_select = MultiSelect(
-            title       = "SPW",
-            value       = selected_spws,
-            options     = spw_options,
-            size        = min(len(spw_options), 5),
-            width       = _SIDEBAR_WIDTH,
-            stylesheets = [dark],
+        self._spw_table = DataTable(
+            source          = self._spw_source,
+            columns         = [
+                TableColumn(field="name",  title="Spectral window", width=180),
+                TableColumn(field="freq",  title="GHz",             width=96),
+                TableColumn(field="nchan", title="Ch",              width=44),
+            ],
+            selectable      = "checkbox",
+            index_position  = None,
+            width           = _SIDEBAR_WIDTH,
+            height          = min(max(len(spws), 1) * 26 + 30, 170),
+            stylesheets     = [dark, self._table_css_dark],
+            sizing_mode     = "fixed",
+        )
+        # No All/None buttons: DataTable's checkbox column puts a
+        # select-all toggle in the header row, which does both jobs.  The
+        # separate buttons duplicated it and were the one sidebar control
+        # the theme restyle still did not reach -- removing them is a
+        # better answer than styling a redundant widget.
+        #
+        # The distinction the buttons were meant to carry survives
+        # regardless: "none selected" is a real state, not a synonym for
+        # "all", because Plot refuses an empty selection (see the doPlot
+        # guard).  Unchecking everything is a transient step on the way to
+        # checking two, so the empty case is only reachable by pressing
+        # Plot deliberately.
+        self._spw_select = column(
+            _section("SPW"),
+            self._spw_table,
+            width=_SIDEBAR_WIDTH,
         )
 
         # ---- Correlations -------------------------------------------------- #
@@ -3115,10 +3278,7 @@ conflict_div.text = conflict ? msg : '';
             width       = _SIDEBAR_WIDTH,
             stylesheets = [dark],
         )
-        corr_label = Div(
-            text  = "<span style='color:#cdd6f4;font-weight:bold'>Correlation</span>",
-            width = _SIDEBAR_WIDTH,
-        )
+        corr_label = _section("Correlation")
 
         # ---- Stub inputs for unwired selections ---------------------------- #
         # ---- Context-sensitive hint text from MS metadata ------------------- #
@@ -3219,7 +3379,10 @@ conflict_div.text = conflict ? msg : '';
 
         # Wire focus/blur on the already-created select/checkbox widgets too
         _focus_blur(self._field_select, self._hint_field)
-        _focus_blur(self._spw_select,   self._hint_spw)
+        # The table, not the column wrapper: _focus_blur attaches
+        # MouseEnter/MouseLeave, which a layout container does not
+        # emit, and the hint would silently never appear.
+        _focus_blur(self._spw_table,    self._hint_spw)
         _focus_blur(self._corr_cbg,     self._hint_corr)
 
         # ---- Global raster/scatter axis sections removed (Group 3 piece
@@ -3271,8 +3434,7 @@ conflict_div.text = conflict ? msg : '';
         # in the dark/light JS callback.
         self._sidebar_col = column(
             path_div,
-            Div(text="<span style='color:#cdd6f4;font-weight:bold'>"
-                     "Data</span>", width=_SIDEBAR_WIDTH),
+            _section("Data"),
             self._col_select, self._field_select, self._spw_select,
             corr_label, self._corr_cbg,
             scan_inp, antenna_inp, time_inp, uv_inp,
@@ -3897,9 +4059,26 @@ function doPlot(reload) {
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
 
+    // Identities as a LIST, in the source's own types.  Joining them
+    // into a string only for Python to split it again is a round trip a
+    // spectral-window name containing a comma would break -- and the
+    // identity is deliberately opaque (int or name), so text is the
+    // wrong carrier for it.
+    const _spw_idx = spw_src.selected.indices || [];
+    const spw_ids = _spw_idx.map(i => spw_src.data['ident'][i]);
+    if (spw_src.data['ident'].length && spw_ids.length === 0) {
+        // Empty is a real state, not a synonym for "all" -- which is
+        // what makes the All and None buttons distinct.  Refusing here
+        // costs nothing because Plot is an explicit commit: unchecking
+        // everything is a transient step on the way to checking two.
+        if (notify_div)
+            notify_div.text = "<b>Select at least one spectral window.</b>";
+        return;
+    }
+
     ctrl.send(ids['plot'], {
         field:       field_sel.value,
-        spw:         spw_sel.value.join(','),
+        spw_ids:     spw_ids,
         correlation: corr.join(','),
         datacolumn:  col_sel.value,
         panels:      panels,
@@ -4173,7 +4352,7 @@ function doPlot(reload) {
             "ctrl":       ctrl,
             "ids":        ids,
             "field_sel":  self._field_select,
-            "spw_sel":    self._spw_select,
+            "spw_src":    self._spw_source,
             "corr_cbg":   self._corr_cbg,
             "col_sel":    self._col_select,
             "status_div": self._status_div,
@@ -4657,8 +4836,11 @@ doPlot();
                                  self._hint_uvrange],
                 "path_div":         self._path_div,
                 "source_basename":  os.path.basename(self._source_path),
+                # _spw_table, not _spw_select: the latter is now a column
+                # wrapping the label, the All/None row and the table, and
+                # the restyle walks widgets rather than containers.
                 "widgets":      [self._col_select, self._field_select,
-                                 self._spw_select, self._corr_cbg]
+                                 self._spw_table, self._corr_cbg]
                                 + _all_axis_widgets,
                 # Colormap histogram figures + reset-button icons (added
                 # to fix a reported light-mode gap: these previously had
@@ -4691,6 +4873,18 @@ doPlot();
                 "dark_css":       _DARK_WIDGET_CSS,
                 "light_css":      _LIGHT_WIDGET_CSS,
                 "dark_tabs_css":  _DARK_TABS_CSS,
+                # Section headings and the SPW table: both were styled
+                # once at construction with no way to change them, so
+                # they did not follow the theme (headings read as
+                # disabled on light; the table stayed light-on-white on
+                # dark).
+                "section_divs":   self._section_divs,
+                "section_dark":   _SECTION_DARK,
+                "section_light":  _SECTION_LIGHT,
+                "spw_table":       self._spw_table,
+                "sidebar_css":     self._sidebar_css,
+                "table_css_dark":  self._table_css_dark,
+                "table_css_light": self._table_css_light,
                 "light_tabs_css": _LIGHT_TABS_CSS,
                 # For the p2j theme message appended to the restyle body.
                 "ctrl":           ctrl,

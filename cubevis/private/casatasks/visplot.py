@@ -69,6 +69,11 @@ def _validate_params(
         freq_range,
         uvdist_range,
         compact_toolbar,
+        plot_width,
+        plot_height,
+        theme,
+        raster_cmap,
+        scatter_cmap,
 ):
     import re as _re
 
@@ -95,6 +100,11 @@ def _validate_params(
         'freq_range': 'tuple[float, float] | list[float] | None',
         'uvdist_range': 'tuple[float, float] | list[float] | None',
         'compact_toolbar': 'bool',
+        'plot_width': 'Optional[int]',
+        'plot_height': 'Optional[int]',
+        'theme': 'str',
+        'raster_cmap': 'Optional[str]',
+        'scatter_cmap': 'Optional[str]',
     }
 
     _simple = {
@@ -179,6 +189,11 @@ def _validate_params(
     _check('freq_range', freq_range, _type_map['freq_range'])
     _check('uvdist_range', uvdist_range, _type_map['uvdist_range'])
     _check('compact_toolbar', compact_toolbar, _type_map['compact_toolbar'])
+    _check('plot_width', plot_width, _type_map['plot_width'])
+    _check('plot_height', plot_height, _type_map['plot_height'])
+    _check('theme', theme, _type_map['theme'])
+    _check('raster_cmap', raster_cmap, _type_map['raster_cmap'])
+    _check('scatter_cmap', scatter_cmap, _type_map['scatter_cmap'])
 
 
 def _visplot_t(
@@ -205,6 +220,11 @@ def _visplot_t(
         freq_range: tuple[float, float] | list[float] | None = None,
         uvdist_range: tuple[float, float] | list[float] | None = None,
         compact_toolbar: bool = True,
+        plot_width: Optional[int] = None,
+        plot_height: Optional[int] = None,
+        theme: str = 'dark',
+        raster_cmap: Optional[str] = None,
+        scatter_cmap: Optional[str] = None,
 ):
     _app = VisibilityPlotter(
         # user-supplied arguments
@@ -230,9 +250,15 @@ def _visplot_t(
         freq_range = freq_range,
         uvdist_range = uvdist_range,
         compact_toolbar = compact_toolbar,
+        plot_width = plot_width,
+        plot_height = plot_height,
+        theme = theme,
+        raster_cmap = raster_cmap,
+        scatter_cmap = scatter_cmap,
         # layer-supplied arguments
         remote_endpoint = None,
         enable_flagging = True,
+        headless = False,
     )
 
     id = uuid4( )
@@ -338,7 +364,21 @@ class _visplot:
             freq_range: tuple[float, float] | list[float] | None = None,
             uvdist_range: tuple[float, float] | list[float] | None = None,
             compact_toolbar: bool = True,
+            plot_width: Optional[int] = None,
+            plot_height: Optional[int] = None,
+            theme: str = 'dark',
+            raster_cmap: Optional[str] = None,
+            scatter_cmap: Optional[str] = None,
     )  -> None:
+        """Construct the plotter.
+
+Split into three phases so a headless export can stop after the
+first two.  ``headless=True`` resolves configuration and opens the
+data, builds only the panels it will actually export, and returns
+without any browser chrome -- no ``CommMgr``, no control pipe, no
+figure styling, no layout.
+
+See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
 
         _validate_params(
             ms = ms,
@@ -363,6 +403,11 @@ class _visplot:
             freq_range = freq_range,
             uvdist_range = uvdist_range,
             compact_toolbar = compact_toolbar,
+            plot_width = plot_width,
+            plot_height = plot_height,
+            theme = theme,
+            raster_cmap = raster_cmap,
+            scatter_cmap = scatter_cmap,
         )
         _logging_state_ = _start_log(
             'visplot',
@@ -389,6 +434,11 @@ class _visplot:
                 'freq_range=' + repr(freq_range),
                 'uvdist_range=' + repr(uvdist_range),
                 'compact_toolbar=' + repr(compact_toolbar),
+                'plot_width=' + repr(plot_width),
+                'plot_height=' + repr(plot_height),
+                'theme=' + repr(theme),
+                'raster_cmap=' + repr(raster_cmap),
+                'scatter_cmap=' + repr(scatter_cmap),
             ],
         )
         task_result = None
@@ -416,6 +466,11 @@ class _visplot:
                 freq_range = freq_range,
                 uvdist_range = uvdist_range,
                 compact_toolbar = compact_toolbar,
+                plot_width = plot_width,
+                plot_height = plot_height,
+                theme = theme,
+                raster_cmap = raster_cmap,
+                scatter_cmap = scatter_cmap,
             )
         except Exception as exc:
             _except_log('visplot', exc)

@@ -13,6 +13,7 @@ sources:
     layer_args:
       remote_endpoint: None
       enable_flagging: True
+      headless: False
     short_desc_overrides:
       mode:   'Display mode: both, raster, or scatter.'
       preset: 'Named startup preset (vplot, radplot, waterfall).'

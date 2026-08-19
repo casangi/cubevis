@@ -273,14 +273,38 @@ class TestMetadata:
     def teardown_method(self):
         self.backend.close()
 
-    def test_required_keys_present(self):
-        required = {
-            "scan_names", "field_names", "antenna_names", "spw_ids",
-            "correlation_labels", "time_range", "freq_range",
-            "n_baselines", "data_columns",
-        }
-        missing = required - self.meta.keys()
-        assert not missing, f"Missing metadata keys: {missing}"
+    def test_metadata_keys_match_the_contract(self):
+        """Keys must match ``reader.METADATA_KEYS`` exactly, plus any
+        documented optional key.
+
+        Asserted against the shared constant rather than a list in this
+        file.  Two hand-maintained lists is how the suites drifted: this
+        one checked a *subset* while ``test_msv4_backend`` checked exact
+        equality, so they disagreed about what the contract was and
+        neither actually compared the backends.
+
+        Both directions matter.  A **missing** key breaks whichever
+        consumer reads it.  An **extra** key is a feature that silently
+        works against one store and not the other -- which has happened
+        three times, each time surviving until someone ran the other
+        backend.
+
+        ``METADATA_OPTIONAL_KEYS`` covers real, documented asymmetries
+        (currently ``field_ids``, which MSv2 has and MSv4 does not);
+        anything outside both sets is undocumented drift.
+        """
+        from cubevis.toolbox.visplot.data.reader import (
+            METADATA_KEYS, METADATA_OPTIONAL_KEYS,
+        )
+        keys = set(self.meta.keys())
+        missing = METADATA_KEYS - keys
+        assert not missing, f"missing required metadata keys: {sorted(missing)}"
+        extra = keys - METADATA_KEYS - METADATA_OPTIONAL_KEYS
+        assert not extra, (
+            f"undocumented metadata keys: {sorted(extra)} -- add them to "
+            f"reader.METADATA_KEYS (and to the other backend) or to "
+            f"METADATA_OPTIONAL_KEYS with a reason"
+        )
 
     def test_value_types(self):
         m = self.meta

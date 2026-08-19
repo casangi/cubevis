@@ -473,23 +473,24 @@ class MSv2Backend(XArrayReader):
         ident, kind = self._partition_spw_ident(ds)
         if ident is None:
             return True
-        if kind == "name":
-            # selection.spw holds integers from _parse_spw_string, and a
-            # spectral-window *name* can never match one.  Keeping the
-            # partition is the same tolerance applied to an undeclared
-            # one -- but log it, because silently ignoring an spw
-            # selection is exactly the defect this whole path was added
-            # to fix, and on an xarray-ms store it is the normal case.
-            if not getattr(self, "_spw_name_warned", False):
-                self._spw_name_warned = True
-                log.warning(
-                    "spw selection %r cannot be applied: this store "
-                    "identifies spectral windows by name (%r), not by "
-                    "id.  All spectral windows will be included.",
-                    selection.spw, ident,
-                )
+        # Compare identities directly, whatever kind they are.
+        # ``SelectionSpec.spw`` holds whatever ``_partition_spw_ident``
+        # returns -- a numeric id where the store provides one, otherwise
+        # the spectral window *name* -- so a name selects a name.  An
+        # earlier version bailed out on names because the field was
+        # assumed to hold parsed integers; that made SPW filtering a
+        # silent no-op on every xarray-ms store (see the handoff).
+        wanted = set(selection.spw)
+        if ident in wanted:
             return True
-        return ident in set(selection.spw)
+        # A caller may still supply a name where the store reports an id,
+        # or the reverse, if it resolved against different metadata.
+        # Compare stringified as a last resort rather than dropping the
+        # partition, which would silently show *less* data than asked
+        # for -- the worse of the two failure directions.
+        if str(ident) in {str(w) for w in wanted}:
+            return True
+        return False
 
     def _iter_visibility_partitions(self, selection=None):
         """Yield each leaf Dataset that contains visibility data.
@@ -729,7 +730,8 @@ class MSv2Backend(XArrayReader):
         scan_names:   set[str] = set()
         field_names:  set[str] = set()
         ant_names:    set[str] = set()
-        spw_ids:      set[int] = set()
+        spw_ids:      set = set()
+        spw_detail:   dict = {}
         pol_labels:   set[str] = set()
         t_min = float("inf");  t_max = float("-inf")
         f_min = float("inf");  f_max = float("-inf")
@@ -742,12 +744,41 @@ class MSv2Backend(XArrayReader):
             _collect_string_coord(ds, "baseline_antenna1_name", ant_names)
             _collect_string_coord(ds, "baseline_antenna2_name", ant_names)
 
-            # SPW id from partition attributes (set by xarray-ms)
-            for attr_key in ("spectral_window_id", "DATA_DESC_ID"):
-                spw_id = ds.attrs.get(attr_key)
-                if spw_id is not None:
-                    spw_ids.add(int(spw_id))
-                    break
+            # Spectral window identity and per-window detail.
+            #
+            # Goes through _partition_spw_ident rather than reading
+            # attrs directly: xarray-ms 0.5.6 puts the identity on the
+            # *frequency coordinate* as a name, not in ds.attrs, so the
+            # old attrs-only lookup reported no spectral windows at all
+            # ("spws=0") on a perfectly ordinary MS.  With nothing to
+            # list, the SPW control had nothing to filter by and
+            # _spw_selected fell through to keeping every partition.
+            ident, ident_kind = self._partition_spw_ident(ds)
+            if ident is not None:
+                spw_ids.add(ident)
+                if ident not in spw_detail and "frequency" in ds.coords:
+                    fv = np.asarray(ds.coords["frequency"].values,
+                                    dtype=np.float64)
+                    width = self._partition_channel_width(ds)
+                    if fv.size:
+                        # Bandwidth spans the channel *edges*, not the
+                        # centres, so a single-channel window still has a
+                        # non-zero width.
+                        half = (width or 0.0) / 2.0
+                        spw_detail[ident] = {
+                            "id":             ident,
+                            "kind":           ident_kind,
+                            "name":           str(
+                                ds.coords["frequency"].attrs.get(
+                                    "spectral_window_name", "") or ""),
+                            "n_channels":     int(fv.size),
+                            "centre_freq_hz": float((fv.min() + fv.max()) / 2),
+                            "bandwidth_hz":   float(
+                                (fv.max() + half) - (fv.min() - half)),
+                            "channel_width_hz": width,
+                            "freq_min_hz":    float(fv.min()),
+                            "freq_max_hz":    float(fv.max()),
+                        }
 
             if "polarization" in ds.coords:
                 pol_labels.update(
@@ -784,7 +815,9 @@ class MSv2Backend(XArrayReader):
             "field_names":       sorted_field_names,
             "field_ids":         field_ids,
             "antenna_names":     sorted(ant_names),
-            "spw_ids":           sorted(spw_ids),
+            "spw_ids":           sorted(spw_ids, key=lambda v: (isinstance(v, str), v)),
+            "spws": [spw_detail[k] for k in
+                     sorted(spw_detail, key=lambda v: (isinstance(v, str), v))],
             "correlation_labels": sorted(pol_labels),
             "time_range":        (t_min, t_max),
             "freq_range":        (f_min, f_max),

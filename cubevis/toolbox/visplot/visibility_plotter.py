@@ -348,15 +348,85 @@ _LIGHT_TABS_CSS = """
 # MSSelection string parsers (preview-grade — full parser in Phase 2)
 # ---------------------------------------------------------------------------
 
-def _parse_spw_string(spw_str: str, meta: ObservationMetadata) -> list[int]:
+def _parse_spw_string(spw_str: str, meta: ObservationMetadata) -> list:
+    """Resolve an ``spw=`` string to the identities the backend uses.
+
+    Returns whatever ``_partition_spw_ident`` reports -- a numeric id
+    where the store provides one, otherwise the spectral window *name*
+    -- because that is what ``_spw_selected`` compares against.
+
+    An earlier version kept only ``tok.isdigit()`` tokens and returned
+    ints.  On an xarray-ms store, where windows are identified by name,
+    that produced a list matching nothing, and SPW filtering became a
+    silent no-op (see the handoff).
+
+    Each token is matched, in order:
+
+    1. exactly against a window's identity, stringified;
+    2. exactly against its ``name``;
+    3. as a case-insensitive substring of its name -- so
+       ``spw='SW-01'`` picks ``ALMA_RB_07#BB_2#SW-01#FULL_RES`` without
+       requiring the full ASDM name to be typed.  **Skipped for
+       purely-numeric tokens**, which would otherwise match by
+       coincidence (``"0"`` occurs in ``ALMA_RB_07#...``);
+    4. for a purely numeric token only, against the *ordinal position*
+       in ``meta.spws``.
+
+    Step 4 is a deliberate last resort and is logged.  ``spw='0'`` is
+    what a user reaching for CASA habits will type, and refusing it
+    outright would be unhelpful -- but a position is **not** a CASA
+    ``spw`` id, and on a store that reports names there is no way to
+    recover the real one.  Saying so is better than either silently
+    selecting the wrong window or silently selecting none.
+
+    An unmatched token is logged and skipped.  Returning everything on a
+    token that matched nothing would show *more* data than asked for
+    without saying so.
+    """
+    all_ids = [s.spw_id for s in meta.spws]
     if not spw_str or spw_str.strip() == "":
-        return [s.spw_id for s in meta.spws]
-    result = []
-    for tok in spw_str.split(","):
-        tok = tok.strip()
-        if tok.isdigit():
-            result.append(int(tok))
-    return result or [s.spw_id for s in meta.spws]
+        return all_ids
+
+    result: list = []
+    for tok in (t.strip() for t in spw_str.split(",")):
+        if not tok:
+            continue
+        hit = None
+        for s in meta.spws:
+            if str(s.spw_id) == tok or (s.name and s.name == tok):
+                hit = s.spw_id
+                break
+        if hit is None and not tok.isdigit():
+            # Substring matching is skipped for purely-numeric tokens.
+            # "0" occurs inside "ALMA_RB_07#BB_2#SW-01#FULL_RES", so a
+            # bare digit would match a name by coincidence and silently
+            # preempt the positional branch below -- picking a window the
+            # user did not mean, with no warning, because the match
+            # "succeeded".
+            low = tok.lower()
+            for s in meta.spws:
+                if s.name and low in s.name.lower():
+                    hit = s.spw_id
+                    break
+        if hit is None and tok.isdigit():
+            pos = int(tok)
+            if 0 <= pos < len(all_ids):
+                hit = all_ids[pos]
+                log.warning(
+                    "spw=%r matched no spectral window id or name; using "
+                    "position %d (%r).  This store does not expose CASA "
+                    "spw numbers, so a positional match is a guess -- "
+                    "name the window to be certain.", tok, pos, hit,
+                )
+        if hit is None:
+            log.warning("spw=%r matched no spectral window; ignoring it "
+                        "(available: %s)", tok,
+                        ", ".join(str(s.spw_id) for s in meta.spws) or "none")
+            continue
+        if hit not in result:
+            result.append(hit)
+
+    return result or all_ids
 
 
 def _parse_correlation_string(corr_str: str,

@@ -154,12 +154,37 @@ class FieldInfo:
 @dataclass(frozen=True)
 class SpwInfo:
     """Metadata for a single spectral window."""
-    spw_id:         int
+    spw_id:         object
+    """Window identity: a numeric id where the store provides one,
+    otherwise the spectral window *name*.
+
+    Not always an ``int``.  xarray-ms 0.5.6 exposes only
+    ``frequency.attrs["spectral_window_name"]``, and turning a name into
+    CASA's ``spw=N`` needs a SPECTRAL_WINDOW lookup the backend cannot
+    perform -- so a consumer must treat this as an opaque key and use
+    ``label()`` for display.
+    """
+
     centre_freq_hz: float
     bandwidth_hz:   float
     n_channels:     int
     polarizations:  tuple[str, ...]   # e.g. ("XX", "YY")
     name:           str = ""
+
+    def label(self) -> str:
+        """One-line description for a selection control.
+
+        e.g. ``"ALMA_RB_07#BB_2#SW-01#FULL_RES   372.53-372.77 GHz   384 ch"``.
+        The frequency span and channel count are what let a user pick the
+        science window out of the WVR and channel-average windows that
+        sit beside it in an ASDM-imported MS -- the id alone does not.
+        """
+        head = self.name or str(self.spw_id)
+        if not self.n_channels or not self.bandwidth_hz:
+            return head
+        lo = (self.centre_freq_hz - self.bandwidth_hz / 2) / 1e9
+        hi = (self.centre_freq_hz + self.bandwidth_hz / 2) / 1e9
+        return f"{head}   {lo:.2f}-{hi:.2f} GHz   {self.n_channels} ch"
 
 
 @dataclass(frozen=True)
@@ -250,16 +275,34 @@ class ObservationMetadata:
             FieldInfo(field_id=fid, name=n)
             for fid, n in zip(field_ids, field_names)
         )
-        spws = tuple(
-            SpwInfo(
-                spw_id=sid,
-                centre_freq_hz=0.0,   # not available from raw metadata dict
-                bandwidth_hz=0.0,
-                n_channels=0,
-                polarizations=tuple(meta.get("correlation_labels", [])),
+        # Per-window detail, when the backend supplies it.  ``spws`` is
+        # the richer form added 2026-08-18; ``spw_ids`` remains the
+        # fallback for a backend that has not been updated, in which
+        # case the numeric fields stay zero as before.
+        spw_details = meta.get("spws") or []
+        if spw_details:
+            spws = tuple(
+                SpwInfo(
+                    spw_id=d.get("id"),
+                    centre_freq_hz=float(d.get("centre_freq_hz") or 0.0),
+                    bandwidth_hz=float(d.get("bandwidth_hz") or 0.0),
+                    n_channels=int(d.get("n_channels") or 0),
+                    polarizations=tuple(meta.get("correlation_labels", [])),
+                    name=str(d.get("name") or ""),
+                )
+                for d in spw_details
             )
-            for sid in meta.get("spw_ids", [])
-        )
+        else:
+            spws = tuple(
+                SpwInfo(
+                    spw_id=sid,
+                    centre_freq_hz=0.0,
+                    bandwidth_hz=0.0,
+                    n_channels=0,
+                    polarizations=tuple(meta.get("correlation_labels", [])),
+                )
+                for sid in meta.get("spw_ids", [])
+            )
         antennas = tuple(
             AntennaInfo(antenna_id=i, name=n)
             for i, n in enumerate(sorted(meta.get("antenna_names", [])))

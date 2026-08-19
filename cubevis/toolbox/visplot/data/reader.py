@@ -375,6 +375,73 @@ def _resolve_vis_variable(ds: xr.Dataset, data_column: str) -> str:
 # ======================================================================
 
 # ---------------------------------------------------------------------------
+# metadata() contract
+# ---------------------------------------------------------------------------
+
+METADATA_KEYS = frozenset({
+    "scan_names",
+    "field_names",
+    "antenna_names",
+    "spw_ids",
+    "correlation_labels",
+    "time_range",
+    "freq_range",
+    "n_baselines",
+    "data_columns",
+    "spws",
+})
+"""Exactly the keys every ``metadata()`` implementation must return.
+
+Defined here rather than repeated in each backend's test suite, which is
+how the two drifted: ``test_msv4_backend`` asserted **exact** equality
+against one hardcoded list while ``test_msv2_backend`` asserted a
+**subset** against another.  So the suites disagreed about what the
+contract was, and neither actually compared the backends -- each compared
+one backend to a list a human had to keep in sync.
+
+Exact equality is the right rule in both directions.  A *missing* key
+breaks whichever consumer reads it.  An *extra* key on one backend is a
+feature that silently works against one store and not the other -- which
+has happened three times (``_axis_to_dim`` arity, the DDID qualifier, the
+kind resolution), each time surviving until someone ran the other
+backend.
+
+Adding a key means editing this set, which is also the place to say what
+the key means:
+
+``spw_ids``
+    Window identities, as ``_partition_spw_ident`` reports them --
+    numeric where the store provides ids, otherwise names.  **Not
+    necessarily ints.**
+``spws``
+    Per-window detail: ``id``, ``kind``, ``name``, ``n_channels``,
+    ``centre_freq_hz``, ``bandwidth_hz``, ``channel_width_hz``,
+    ``freq_min_hz``, ``freq_max_hz``.  One entry per id in ``spw_ids``,
+    in the same order.
+"""
+
+METADATA_OPTIONAL_KEYS = frozenset({
+    "field_ids",
+})
+"""Keys a backend *may* return, with a known consumer and a known gap.
+
+Separate from ``METADATA_KEYS`` because these represent real asymmetries
+rather than drift, and collapsing the two would hide them.  A key belongs
+here only while there is a documented reason a backend cannot supply it.
+
+``field_ids``
+    Authoritative FIELD_IDs, positionally aligned with ``field_names``.
+    **MSv2 supplies these; MSv4 does not.**  Without them
+    ``ObservationMetadata`` falls back to a positional index, which is
+    *wrong* whenever the source FIELD_IDs are non-contiguous -- confirmed
+    on a real MS, where alphabetically sorted ``field_names`` do not line
+    up with FIELD_ID order at all.  Numeric ``field=`` selection against
+    a Processing Set is therefore unreliable until MSv4 grows an
+    equivalent source.  See ``ObservationMetadata.from_backend_metadata``.
+"""
+
+
+# ---------------------------------------------------------------------------
 # Channel-index axis support (shared by both backends)
 # ---------------------------------------------------------------------------
 #

@@ -356,13 +356,58 @@ class TestMetadata:
     def test_data_column_in_metadata(self):
         assert "DATA" in self.meta["data_columns"]
 
-    def test_metadata_matches_msv2_keys(self):
-        expected_keys = {
-            "scan_names", "field_names", "antenna_names", "spw_ids",
-            "correlation_labels", "time_range", "freq_range",
-            "n_baselines", "data_columns",
-        }
-        assert set(self.meta.keys()) == expected_keys
+    def test_metadata_keys_match_the_contract(self):
+        """Keys must match ``reader.METADATA_KEYS`` exactly, plus any
+        documented optional key.
+
+        Asserted against the shared constant rather than a list in this
+        file.  Two hand-maintained lists is how the suites drifted: this
+        one checked a *subset* while ``test_msv4_backend`` checked exact
+        equality, so they disagreed about what the contract was and
+        neither actually compared the backends.
+
+        Both directions matter.  A **missing** key breaks whichever
+        consumer reads it.  An **extra** key is a feature that silently
+        works against one store and not the other -- which has happened
+        three times, each time surviving until someone ran the other
+        backend.
+
+        ``METADATA_OPTIONAL_KEYS`` covers real, documented asymmetries
+        (currently ``field_ids``, which MSv2 has and MSv4 does not);
+        anything outside both sets is undocumented drift.
+        """
+        from cubevis.toolbox.visplot.data.reader import (
+            METADATA_KEYS, METADATA_OPTIONAL_KEYS,
+        )
+        keys = set(self.meta.keys())
+        missing = METADATA_KEYS - keys
+        assert not missing, f"missing required metadata keys: {sorted(missing)}"
+        extra = keys - METADATA_KEYS - METADATA_OPTIONAL_KEYS
+        assert not extra, (
+            f"undocumented metadata keys: {sorted(extra)} -- add them to "
+            f"reader.METADATA_KEYS (and to the other backend) or to "
+            f"METADATA_OPTIONAL_KEYS with a reason"
+        )
+
+    def test_spws_detail_is_consistent_with_spw_ids(self):
+        """`spws` and `spw_ids` must describe the same windows.
+
+        They are collected in the same loop but by different conditions --
+        `spw_ids` needs only an identity, `spws` also needs a frequency
+        coordinate -- so they can diverge on a store where one partition
+        lacks coordinates.
+        """
+        ids = list(self.meta["spw_ids"])
+        detail = self.meta.get("spws") or []
+        assert [d["id"] for d in detail] == ids
+        for d in detail:
+            assert d["n_channels"] > 0
+            assert d["freq_min_hz"] <= d["centre_freq_hz"] <= d["freq_max_hz"]
+            # Bandwidth spans channel edges, so it exceeds the centre
+            # span by one channel width -- and a single-channel window is
+            # non-zero rather than collapsing.
+            assert d["bandwidth_hz"] >= d["freq_max_hz"] - d["freq_min_hz"]
+            assert d["kind"] in ("spw", "ddid", "name")
 
 
 # ---------------------------------------------------------------------------
@@ -1066,82 +1111,6 @@ class TestProbePixel:
         assert info["value"] is None
         assert info["n_scatter_samples"] == 0
 
-
-# ---------------------------------------------------------------------------
-# Standalone runner (no pytest required)
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    _suppress_warnings()
-
-    test_classes = [
-        TestLifecycle,
-        TestMetadata,
-        TestApplySelection,
-        TestQueryColumnsStructure,
-        TestQueryColumnsRendered,
-        TestQueryRaster,
-        TestQueryUVCoverage,
-        TestSamplesPerPixel,
-        TestProbePixel,
-        TestDataGroup,
-        TestXRadioNativeStructure,
-        TestSingleDish,
-    ]
-
-    total_passed = total_failed = total_skipped = 0
-
-    for cls in test_classes:
-        print(f"\n{'='*60}\n  {cls.__name__}\n{'='*60}")
-        obj = cls()
-
-        # Call class-level setup if present
-        if hasattr(cls, "setup_class"):
-            try:
-                cls.setup_class()
-            except Exception as exc:
-                print(f"  setup_class FAILED: {exc}")
-                continue
-
-        methods = sorted(m for m in dir(obj) if m.startswith("test_"))
-        for name in methods:
-            print(f"\n  --- {name} ---")
-            try:
-                if hasattr(obj, "setup_method"):
-                    obj.setup_method()
-                getattr(obj, name)()
-                if hasattr(obj, "teardown_method"):
-                    obj.teardown_method()
-                print("  PASS")
-                total_passed += 1
-            except pytest.skip.Exception as exc:
-                print(f"  SKIP: {exc}")
-                total_skipped += 1
-                try:
-                    if hasattr(obj, "teardown_method"):
-                        obj.teardown_method()
-                except Exception:
-                    pass
-            except Exception as exc:
-                import traceback
-                print(f"  FAIL: {exc}")
-                traceback.print_exc()
-                total_failed += 1
-                try:
-                    if hasattr(obj, "teardown_method"):
-                        obj.teardown_method()
-                except Exception:
-                    pass
-
-        if hasattr(cls, "teardown_class"):
-            try:
-                cls.teardown_class()
-            except Exception:
-                pass
-
-    print(f"\n{'='*60}")
-    print(f"  {total_passed} passed, {total_failed} failed, "
-          f"{total_skipped} skipped")
 
 # ---------------------------------------------------------------------------
 # 10. Data group selection  (class-level open, uses synthetic multi-group store)
@@ -1907,4 +1876,81 @@ class TestSingleDish:
             f"Expected ratio ≈ 1.0 when canvas_width == n_ant, got {rx:.4f}"
         )
 
+
+
+# ---------------------------------------------------------------------------
+# Standalone runner (no pytest required)
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    _suppress_warnings()
+
+    test_classes = [
+        TestLifecycle,
+        TestMetadata,
+        TestApplySelection,
+        TestQueryColumnsStructure,
+        TestQueryColumnsRendered,
+        TestQueryRaster,
+        TestQueryUVCoverage,
+        TestSamplesPerPixel,
+        TestProbePixel,
+        TestDataGroup,
+        TestXRadioNativeStructure,
+        TestSingleDish,
+    ]
+
+    total_passed = total_failed = total_skipped = 0
+
+    for cls in test_classes:
+        print(f"\n{'='*60}\n  {cls.__name__}\n{'='*60}")
+        obj = cls()
+
+        # Call class-level setup if present
+        if hasattr(cls, "setup_class"):
+            try:
+                cls.setup_class()
+            except Exception as exc:
+                print(f"  setup_class FAILED: {exc}")
+                continue
+
+        methods = sorted(m for m in dir(obj) if m.startswith("test_"))
+        for name in methods:
+            print(f"\n  --- {name} ---")
+            try:
+                if hasattr(obj, "setup_method"):
+                    obj.setup_method()
+                getattr(obj, name)()
+                if hasattr(obj, "teardown_method"):
+                    obj.teardown_method()
+                print("  PASS")
+                total_passed += 1
+            except pytest.skip.Exception as exc:
+                print(f"  SKIP: {exc}")
+                total_skipped += 1
+                try:
+                    if hasattr(obj, "teardown_method"):
+                        obj.teardown_method()
+                except Exception:
+                    pass
+            except Exception as exc:
+                import traceback
+                print(f"  FAIL: {exc}")
+                traceback.print_exc()
+                total_failed += 1
+                try:
+                    if hasattr(obj, "teardown_method"):
+                        obj.teardown_method()
+                except Exception:
+                    pass
+
+        if hasattr(cls, "teardown_class"):
+            try:
+                cls.teardown_class()
+            except Exception:
+                pass
+
+    print(f"\n{'='*60}")
+    print(f"  {total_passed} passed, {total_failed} failed, "
+          f"{total_skipped} skipped")
 

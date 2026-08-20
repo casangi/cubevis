@@ -1,8 +1,22 @@
 # VisibilityPlotter — Implementation Plan
 
 **Project:** cubevis / casangi  
-**Status:** Pre-implementation — architecture settled, no code written  
-**Last updated:** 2025-06
+**Repository:** https://github.com/casangi/cubevis/blob/main/devel/docs/visplot/visibility_plotter_implementation_plan.md  
+**Status:** Phase 0 (architecture foundations) complete; **pre-preview** stage in progress
+with internal team members (since August 2026), exercising the current build toward the
+single **preview** release specified in `visibility_plotter_preview.md`.  
+**Last updated:** 2026-08
+
+> **Release staging.** There is one external release, **preview**, specified by
+> `visibility_plotter_preview.md`. **Pre-preview** is not a separate release with its
+> own spec — it is the current internal, team-members-only staging period during which
+> the team exercises the build and feeds back before that document's full scope is met.
+> Pre-preview feedback and collaboration happen in an internal document; when `preview`
+> ships to general external users, feedback is expected to move to a separate,
+> external-facing mechanism (e.g. GitHub tickets — not yet decided). Newly confirmed
+> requirements for `preview` (e.g. Duo-mode iteration, Phase 2.5 below) are folded into
+> `visibility_plotter_preview.md`'s scope as they're identified, same as any other item
+> in that document.
 
 ---
 
@@ -36,7 +50,11 @@ and two-level pan/zoom architecture. `VisibilityPlotter` wraps them in a single 
 with a shared selection panel, flagging toolbar, and the `ReductionContext` abstraction for
 calibration and flag commit.
 
-Requirements from JIRA ticket **CASR-385** (Plotting tool improvements, 12-month horizon)
+CASR-385 has a long history, but the current push carries specific urgency: supporting
+**HRS Commissioning**'s initial needs — targeted for **summer 2027** — is what elevates
+this from a long-languishing ticket to an active development priority. The Phase 0–3
+punch list below is the architecture and core functionality that timeline depends on;
+requirements from JIRA ticket **CASR-385** (Plotting tool improvements, 12-month horizon)
 inform the Phase 4 punch list items prefixed **X-**:
 
 - Faster and more reliable than `plotms` — addressed by architecture (Datashader, two-level
@@ -914,7 +932,6 @@ reported empty under the old algorithm; 0% under the fix.
 | PB-7 | Probe diagnostics: `probe_debug` / `VISPLOT_PROBE_DEBUG`; per-layer skip reasons; extent logging; duplicate-layer-key warnings | ✅ Done | `visibility_scatter.py`, `visibility_raster.py` |
 | PB-8 | `test_probe_fix.py` — 11 tests, standalone, AST-extracted from shipped sources | ✅ Done | `test_probe_fix.py` *(new)* |
 | PB-9 | Unify `Canvas.raster()` upsample method between `_render` and `_shade_viewport` via shared `_resample_method()`; add `raster_interpolate` constructor parameter (`"auto"` default: nearest when either axis upsamples, linear when downsampling; `"nearest"` and `"linear"` force the choice). Previous inconsistency: `_shade_viewport` chose nearest-when-upsampling correctly, but `_render` always took Datashader's linear default — so the first image seen was interpolated and every pan/zoom thereafter was not. Linear upsampling is wrong for both raster axes: `baseline_id` is categorical (interpolating between adjacent IDs invents a baseline that does not exist); `time` has inter-scan gaps (interpolating across a gap invents observations). Measured peak dilution at 5× upsample: 4.6% under linear, 0% under nearest. Linear also fabricated 12 distinct levels where the true data had 2. `test_raster_resample.py` (8 tests, standalone, AST-extracted) added; `test_probe_fix.py` unaffected. `raster_interpolate="nearest"` recommended when comparing against reference tools that do not interpolate. | ✅ Done | `visibility_raster.py`, `test_raster_resample.py` *(new)* |
-| PB-9 | Unify `Canvas.raster()` upsample method between `_render` and `_shade_viewport` via shared `_resample_method()`; add `raster_interpolate` constructor parameter (`"auto"` default applies nearest when either axis upsamples, linear when downsampling; `"nearest"` and `"linear"` are explicit overrides). Previous inconsistency: `_shade_viewport` already chose nearest-when-upsampling correctly, but `_render` always passed `Canvas.raster()` bare and took Datashader's linear default — so the first image seen by the user was interpolated and every subsequent pan/zoom image was not. Linear upsampling is wrong for both axes: `baseline_id` is categorical (interpolation between adjacent IDs invents a baseline that does not exist), and `time` has inter-scan gaps (interpolation across a gap invents observations). Measured peak dilution at a 5× upsample ratio: 4.6% under linear vs 0% under nearest. Verified: `test_raster_resample.py` (8 tests, standalone, AST-extracted) passes; existing `test_probe_fix.py` unaffected. Note: `raster_interpolate="nearest"` is recommended when comparing against reference tools that do not interpolate. | ✅ Done | `visibility_raster.py`, `test_raster_resample.py` *(new)* |
 
 **Export testing discipline (from E-2 work, carries forward):**
 - Compositor tests need no MS, no Bokeh, no display — 76 tests run in seconds; preserve that property
@@ -935,10 +952,9 @@ comparison points.*
 
 The plan is to validate against PlotMS and msview tutorial results for:
 
-- Selection controls (antenna=, scan=, timerange=, uvrange=) — not yet confirmed to constrain plotted data; concrete consequence: Time-vs-Channel raster comparison against msview cannot run fairly (msview requires single-baseline selection; antenna= not wired)
+- Selection controls (antenna=, scan=, timerange=, uvrange=) — not yet confirmed to constrain plotted data; concrete consequence: Time-vs-Channel raster comparison against msview cannot run fairly (msview requires single-baseline selection; antenna= not wired). **This same gap is what currently blocks Duo-mode iteration (Phase 2.5, I-series below) from covering the antenna/baseline/scan/time axes** — wiring it unblocks both.
 - PB-5 raster hover probe metadata attribution against a real multi-scan/multi-SPW MS — local-cell-bounds fix verified synthetically, not yet validated against known-good plotms values
 - Raster rendering fidelity at full extent (PB-9) — visplot now uses nearest-neighbour whenever either axis upsamples. Reference comparisons should note which tool interpolates; `raster_interpolate="nearest"` should be set when comparing against a tool that does not interpolate, since resampling-method differences are a plausible source of visual discrepancy in side-by-side comparisons
-- Raster rendering fidelity at full extent — visplot now uses nearest-neighbour whenever either axis upsamples (PB-9). Reference comparisons should note which tool interpolates; `raster_interpolate="nearest"` should be set explicitly when comparing against a tool that does not interpolate, since visual discrepancy from resampling choices is a plausible source of false disagreement in side-by-side comparisons
 - Whether selection controls (scan range, antenna, time range, UV range) actually
   constrain the plotted data, and correctly — not yet confirmed either way
 - `colormap_controls()` correctness, once the `.on_change()` → `js_on_change` +
@@ -948,7 +964,8 @@ The plan is to validate against PlotMS and msview tutorial results for:
 
 See `visplot-testing-handoff.md` for structural (does-the-UI-work) testing
 already completed; this phase is the separate, harder question of value
-correctness against ground truth.
+correctness against ground truth. Reference-testing artifacts live at
+https://github.com/casangi/cubevis/tree/main/tests/reference/visplot.
 
 ---
 
@@ -979,7 +996,7 @@ decisions rather than guessing.)*
 | ID | Task | Files affected |
 |---|---|---|
 | E-1 | Generator/iteration API: `__call__` is the terminal verb; iteration is repeated calls (`vp(plotfile=f"amp_spw{spw}.png", spw=[spw])` in a loop). No separate generator class needed — the existing flat constructor vocabulary handles per-call re-selection. ✅ **Done (August 2026).** | `visibility_plotter.py` |
-| E-2 | Headless PNG export. ✅ **Done (August 2026).** GUI `Export PNG` button writes current view including zoom; headless path via `VisibilityPlotter(ms=..., headless=True)` skips Bokeh Figure/toolbar/tick-formatter construction. Matplotlib chrome over the byte-identical `(H, W) uint32` array already produced by Datashader — not a parallel renderer, a parallel *chrome* over the same pixels. Fidelity in three tiers: Tier 1 RGBA byte-identical at matched canvas size (hash-verified); Tier 2 ranges, tick label strings, titles, labels identical (JS/Python parity harness, 2243 fuzzed cases); Tier 3 fonts/chrome pixel positions best-effort. Theme is a deliberate Tier-3 exception: GUI defaults dark, PNG export defaults light (headed for a paper). SPW `DataTable` rework (§6a) done as part of this work. Key architectural finding: Bokeh contributes no data-area pixels — only chrome (title, axis labels, ticks, toolbar, hover). Export is not "keep two renderers in sync" but "keep two chrome-drawers in sync over an identical array." | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py`, `png_export.py` *(new)*, `panel_spec.py` *(new)*, `tick_format.py` *(new)*, `palettes.py` *(new)*, `refresh.py` *(new)* |
+| E-2 | Headless PNG export. ✅ **Done (August 2026).** GUI `Export PNG` button writes current view including zoom; headless path via `VisibilityPlotter(ms=..., headless=True)` skips Bokeh Figure/toolbar/tick-formatter construction. Matplotlib chrome over the byte-identical `(H, W) uint32` array already produced by Datashader — not a parallel renderer, a parallel *chrome* over the same pixels. Fidelity in three tiers: Tier 1 RGBA byte-identical at matched canvas size (hash-verified); Tier 2 ranges, tick label strings, titles, labels identical (JS/Python parity harness, 2243 fuzzed cases); Tier 3 fonts/chrome pixel positions best-effort. Theme is a deliberate Tier-3 exception: GUI defaults dark, PNG export defaults light (headed for a paper). SPW `DataTable` rework (§6a) done as part of this work. Key architectural finding: Bokeh contributes no data-area pixels — only chrome (title, axis labels, ticks, toolbar, hover). Export is not "keep two renderers in sync" but "keep two chrome-drawers in sync over an identical array." **Why this moved out of its original Phase 4 slot:** investigation surfaced that Bokeh's own `export_png` depends on a headless/virtualized browser (webkit) to render the page before rasterising it — a poor fit for the minimally-configured, headless hosts pipeline deployments run on. The matplotlib path avoids that dependency entirely, and was worth bringing forward for two further reasons: (a) it gives pre-preview reviewers real hardcopy output to test against, despite GUI/PNG chrome now diverging more than a native Bokeh export would have (mitigated since both consume the identical Datashader-generated pixel array), and (b) it supports performance testing against larger datasets ahead of the ngVLA-scale benchmarking in E-4/X-4. This supersedes the originally-planned G-5 (see Phase 4). | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py`, `png_export.py` *(new)*, `panel_spec.py` *(new)*, `tick_format.py` *(new)*, `palettes.py` *(new)*, `refresh.py` *(new)* |
 | E-2a | **Known gap from export work:** constructor API only exposes `layout="one"|"side"|"over"` with slot A hardcoded raster and slot B scatter. Two rasters side by side is reachable from the GUI (P-5b) but unreachable from the API. Fixing this — adding per-slot kind control to the constructor, likely via a `panels=` escape hatch (list of dicts of primitives) — is independent of export but was identified during it and is the natural entry point to a more expressive constructor API. |
 | E-3 | GUI colorbar (`ColorBar`). **Partially done.** `plot_left`/`plot_right` placement works in both GUI and PNG. Display-scope colorbar (a separate narrow figure, mapper/theme/range kept in sync on every `update_scaling()` and viewport change) done in PNG; GUI version deferred until someone requests it — better than shipping a GUI option that silently means something different from the PNG option. Under `eq_hist` in local mode the mapper must be rebuilt on every `update_scaling()` and viewport change. GUI colorbars should default **off** (gear panel histogram already conveys value distribution); PNG colorbars default **on** (no gear panel). | `colormap_scaling.py` (`ScalarMapping` added), GUI colorbar checkbox |
 | E-4 | Real query→render→export timing benchmarks vs. PlotMS — data-backed decisions for grid-mode sizing (default/cap grid dimensions). Still open. | benchmarking scripts |
@@ -1010,8 +1027,78 @@ decisions rather than guessing.)*
 
 ---
 
-### Phase 3 — Averaging and iteration
-*Backend changes required before either feature can be correctly implemented.*
+### Phase 2.5 — Duo-mode iteration (preview-scoped)
+*(Added August 2026, following pre-preview review. Pre-preview's own known-deficits
+list names iteration as important for both panel types — "currently the single raster
+plot combines all planes via a two-level combination" — and iteration is a key `msview`
+feature this application must replace. Duo-mode iteration must be delivered before the
+single **preview** release specified in this document can ship (see the release-staging
+note at the top). This phase pulls forward a scoped subset of Phase 3's V-8/V-9 rather
+than waiting for the full iteration engine, following the same "pull forward what's
+ready" precedent as Phase 1.5's export work.)*
+
+**Scoping rationale.** Iteration, at its core, is discrete re-selection — narrow
+`SelectionSpec` to one value along an axis, re-query, re-render — not binning, so it
+does not inherently require the V-1–V-7 averaging backend work Phase 3 bundles it
+with. What it *does* require is that the iterated axis's selection control actually
+constrains the backend query. Per §4.2/preview.md §4, Field and SPW selection are
+already wired and working; Antenna, Baseline, Scan, and Time are present in the
+sidebar but **not yet wired** to the backend (same gap the reference-testing phase
+flags as blocking a fair msview comparison — see Appendix C.8). Scoping this phase to
+the axes already wired avoids duplicating that prerequisite work here.
+
+**Confirmed against `visibility_plotter.py` (August 2026).** `_build_selection()`
+already builds `SelectionSpec` from `self._field_str` and `self._spw_ids`; `_handle_plot()`
+already accepts `field` and `spw_ids` in an incoming message and updates that state before
+rebuilding the selection. Both axes genuinely reach the backend query today — this is
+direct evidence from the code, not inference from the docs, so I-1 needs no new
+Python-side selection plumbing. It does need to handle two different widget mechanisms:
+Field is a plain `Select` (`self._field_select`) with an "All fields" sentinel as its
+first option, which Prev/Next must skip, cycling only real entries from
+`self._meta.fields` (a stable ordered tuple); SPW is a `DataTable`/`ColumnDataSource`
+(`self._spw_source`) using row-selection (`selected.indices`), not a dropdown value,
+because SPW identities can be non-contiguous ids or bare names (documented ASDM-import
+case). Single-SPW iteration means setting `selected.indices` to exactly one row, stepping
+through `self._meta.spws` (also a stable ordered tuple). The existing `doPlot()` CustomJS
+— already shared across Plot ▶, Reload ↺, and every preset button — already reads
+`spw_src.selected.indices` and sends the result via `ctrl.send()`; Prev/Next should reuse
+that same send path rather than build a new one.
+
+**Resolved — single iteration-axis selector, confirmed against CASA documentation
+(August 2026).** `msview`'s own documentation settles this with real precedent rather
+than a guess. `msview` treats the MS internally as a five-axis array (Time, Baseline,
+Polarization, Channel, Spectral Window); the user picks two axes for the raster, then
+explicitly assigns exactly **one** of the three remaining axes to be the animator — the
+other two are pinned to a single position each via sliders, not animated. Source:
+CASAdocs, "2-D Visualization and Flagging of Visibility Data (viewer/msview)" —
+https://casa.nrao.edu/casadocs/casa-5.4.1/data-examination-and-editing/2-d-visualization-of-visibility-data-msview
+(accessed August 2026); the image-cube side of the same viewer uses the identical
+pattern (one hidden axis scrolls via the animator, the rest are pinned by a slider).
+This settles I-1 as a single "Animate: Field | SPW" selector with one Prev/Next pair,
+**not** independent Prev/Next per axis, superseding the earlier open design question.
+Further confirmation: `msview`'s own documented example shows that when a selection
+restricts an axis to a non-contiguous subset (their example: SPW ids 7, 8, 23, 24), the
+animator steps through sequential slice positions mapped onto the selected subset, not
+the MS's raw ids — exactly how `self._spw_source`'s row-selection already behaves, so
+no rework needed there. One free implementation detail this surfaces: `_handle_plot()`
+already leaves any axis absent from the incoming message at its last value, so "holding
+the non-animated axis fixed" during Prev/Next needs no new mechanism — simply omitting
+it from the payload is sufficient. Appendix C.8 has been corrected to match (it
+previously described "the remaining axis" as if there were only one, rather than three
+with one explicitly assigned).
+
+| ID | Task | Files affected |
+|---|---|---|
+| I-1 | Duo-mode iteration MVP: single "Animate: Field \| SPW" selector plus one Prev/Next pair (mechanism per above and per confirmed `msview` precedent — `Select` value cycling for Field, single-row `selected.indices` for SPW; the non-animated axis is simply omitted from the Prev/Next payload, leaving `_handle_plot()`'s existing state-retention handle it); re-query and re-render both panels synchronously on each step via the existing `doPlot()`/`_handle_plot()` path; title appends current iteration value. | `visibility_plotter.py` |
+| I-2 | Extend iteration to Polarization/Correlation if it can be exposed as a single-value-at-a-time selection (currently `CheckboxGroup` for multi-select display, not iteration) | `visibility_plotter.py` |
+| I-3 | **Blocked on selection wiring, not iteration logic.** Antenna, Baseline, Scan, and Time iteration require `antenna=`, `scan=`, `timerange=` selection to actually constrain backend queries — tracked as open in the reference-testing phase and Appendix C.8, not new work introduced by this phase. Once wired, extending I-1's mechanism to these axes should be mechanical. | `visibility_plotter.py`, backend query paths |
+
+---
+
+### Phase 3 — Averaging and full iteration
+*Backend changes required before averaging can be correctly implemented. A
+preview-scoped subset of iteration (Field/SPW, not requiring these backend changes)
+has already been pulled forward — see Phase 2.5.*
 
 | ID | Task | Files affected |
 |---|---|---|
@@ -1022,8 +1109,8 @@ decisions rather than guessing.)*
 | V-5 | Channel and time averaging in `MSv4Backend.query_columns()` | `msv4_backend.py` |
 | V-6 | Averaging in `LocalVisibilityReader` pass-through (update signatures) | `local_visibility_reader.py` |
 | V-7 | Averaging in `VisibilityReader` protocol (update signatures) | `visibility_reader.py` |
-| V-8 | Iteration engine in `VisibilityPlotter`: state machine over (antenna, baseline, field, SPW, scan, time); Prev / Next buttons | `visibility_plotter.py` |
-| V-9 | Iteration updates both panels synchronously; title appends current iteration value | `visibility_plotter.py` |
+| V-8 | Full iteration engine in `VisibilityPlotter`: state machine over the axes not covered by I-1/I-2 (antenna, baseline, scan, time), plus averaging-aware iteration semantics (e.g. per-scan grouping); extends the I-series mechanism rather than replacing it. Blocked on the same antenna=/scan=/timerange= selection wiring noted in Appendix C.8 and the reference-testing phase. | `visibility_plotter.py` |
+| V-9 | Iteration updates both panels synchronously; title appends current iteration value — already delivered for Field/SPW via I-1 (Phase 2.5); this item extends it to V-8's remaining axes | `visibility_plotter.py` |
 
 ---
 
@@ -1047,7 +1134,7 @@ decisions rather than guessing.)*
 | G-2 | Locate sidebar: `DataTable` below plot area populated by locate handler | `visibility_plotter.py` |
 | G-3 | Flag summary bar: fraction flagged per SPW and antenna after each commit | `visibility_plotter.py` |
 | G-4 | Copy `flagdata` command: format pending flags as `flagdata()` call string | `visibility_plotter.py` |
-| G-5 | PNG export via Bokeh `export_png` | `visibility_plotter.py` |
+| ~~G-5~~ | ~~PNG export via Bokeh `export_png`~~ — **superseded by E-2 (Phase 1.5), ✅ Done, August 2026.** Bokeh's `export_png` requires a headless/virtualized browser (webkit), a poor fit for minimally-configured pipeline hosts; PNG export shipped instead via matplotlib chrome over the shared Datashader pixel array. Row kept (rationale preserved rather than deleted) rather than removed outright. | `visibility_plotter.py` |
 | G-6 | `Axis.CLOSURE_PHASE` enum value and backend query path (triangle sum of phase over antenna triples) | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
 | G-7 | Synchronized cursor, Tier 1 (same-axis Span crosshair): cursor-span sync observed working live in all panel-kind combinations in duo mode (raster+scatter, raster+raster, scatter+scatter). ✅ **Substantially done** — implemented earlier, confirmed live August 2026; documents were stale. Generalized to N panels. | `visibility_plotter.py` |
 | G-8 | Synchronized cursor, Tier 2 (cross-axis row-level highlight): distinct from G-7's Span sync; requires j2p round-trip to resolve which MS row a hovered pixel corresponds to, then highlight the matching point in the other panel's axis space. **Not yet built.** PB-series probe machinery and F-11's `_nearest_populated_bin` are the prerequisites. | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
@@ -1360,16 +1447,26 @@ back-end rather than Bokeh, for pipeline or scripting use where no browser is
 available. Matplotlib output is more easily customizable by astronomers than
 Bokeh's `export_png`.
 
-**Current status:** G-5 covers PNG export via Bokeh's own `export_png`, which
-requires a headless browser (via selenium or playwright). A true matplotlib
-back-end would require a parallel rendering path through the same backends
-(`query_raster`, `query_columns`) but a different output layer.
+**Current status: largely superseded by E-2 (✅ Done, August 2026, Phase 1.5).**
+Investigation during Phase 1.5 found that Bokeh's own `export_png` depends on a
+headless/virtualized browser (webkit) to render the page before rasterising it —
+a poor fit for the minimally-configured, headless hosts pipeline deployments
+typically run on. PNG export therefore ships via matplotlib chrome (title, axes,
+ticks, colorbar) drawn over the same `(H, W) uint32` Datashader pixel array used
+by the GUI — not a parallel renderer, a parallel *chrome* over identical data
+pixels, with three fidelity tiers documented under E-2. This was deliberately
+brought forward ahead of its original Phase 4 slot: it lets pre-preview reviewers
+test against real hardcopy output despite the resulting GUI/PNG divergence
+(mitigated by the shared Datashader source), and it supports performance
+benchmarking against larger datasets ahead of E-4/X-4. G-5, the original
+Bokeh-`export_png`-based item, is marked superseded in Phase 4 rather than
+removed.
 
-**What would make it actionable:** A concrete pipeline use case where Bokeh's
-`export_png` is insufficient (e.g. publication-quality figure customization,
-environments without a headless browser); and a design decision about whether
-the matplotlib path shares the `VisibilityRaster`/`VisibilityScatter` classes
-or is a separate thin layer on top of the backend query API.
+**What remains open:** E-2's matplotlib path targets parity with the GUI view,
+not astronomer-driven customization of the output (arbitrary matplotlib styling,
+multi-panel publication layouts, PDF/vector output — none of which E-2 touches).
+A confirmed pipeline or publication use case where E-2's tiered-fidelity PNG is
+insufficient would be needed to scope that as a distinct item.
 
 ---
 
@@ -1441,15 +1538,28 @@ diagnostic inspection (which could be served by listobs output).
 
 ### C.8 `msview` animator vs `visplot` averager
 
-**Source:** reference-testing session (Time-vs-Channel raster test, August 2026)
+**Source:** reference-testing session (Time-vs-Channel raster test, August 2026);
+mechanism confirmed against CASAdocs, August 2026 (see Phase 2.5)
 
-**Description:** `msview` picks 2 display axes; the remaining axis becomes an Animator
-stepped one frame at a time — never averaged. `visplot` averages over whatever isn't
-displayed. These are different reductions; comparison for axis pairs beyond Time-vs-Baseline
-is not apples-to-apples. Phase 3 averaging work (V-1 through V-9) may unblock fair comparison.
+**Description:** `msview` treats the MS as a five-axis array (Time, Baseline,
+Polarization, Channel, Spectral Window) and picks 2 for the raster display. Of the
+**three** remaining axes, the user explicitly assigns **one** to be the Animator,
+stepped one frame at a time — never averaged; the other two are pinned to a single
+position each via sliders. (Earlier phrasing here said "the remaining axis," as if
+there were only one — corrected: there are three, and only one is animated at a time.)
+`visplot` averages over whatever isn't displayed. These are different reductions;
+comparison for axis pairs beyond Time-vs-Baseline is not apples-to-apples. Phase 3
+averaging work (V-1 through V-9) may unblock fair comparison. Note the connection to
+Phase 2.5 (`I-series`): `msview`'s Animator is functionally the same feature as
+visplot's Duo-mode iteration — this is direct evidence that stepping through
+un-averaged planes, not just averaging over them, is a real `msview` workflow worth
+replacing faithfully, not just a nice-to-have. It's also what settled Phase 2.5's
+single-selector-vs-independent-buttons design question: `msview` assigns exactly one
+axis to the animator at a time, which is the precedent I-1 now follows.
 
-**What would make it actionable:** wire `antenna=` for single-baseline selection (§4.2),
-or confirm whether msview has an averaging option.
+**What would make it actionable:** wire `antenna=` for single-baseline selection (§4.2) —
+tracked as I-3's prerequisite in Phase 2.5 — or confirm whether msview has an averaging
+option.
 
 ---
 
@@ -1518,3 +1628,31 @@ ship in the export payload (viewport per figure, layout radio, display-mode
 radio, panel order); (c) deliberately different (theme). The export button's
 `CustomJS` handler collects and ships (b). This is already implemented, but the
 boundary is worth documenting for anyone extending the export path.
+
+---
+
+### C.14 User-scriptable filter-function flagging
+
+**Source:** pre-preview feedback ("Features and Discussion Items")
+
+**Description:** Rather than (or alongside) drawing a flag region, let the user
+supply a filter function; data that survives the filter stays unflagged, and
+everything else in the current selection is flagged. Distinct from Y-1 (autoflag
+calculate+display, Phase 4): Y-1 runs a fixed CASA algorithm (e.g. `tfcrop`) and
+proposes flags for accept/reject; this item lets the astronomer supply arbitrary
+selection logic directly.
+
+**Current status:** Not designed. Open questions include the filter function's
+input/output contract (a row predicate over which columns/axes?), whether/how to
+sandbox user-supplied code, and how filter results map back to `FlagDB`'s
+coordinate-range `FlagDelta` model (F-1–F-4) — a filter over arbitrary rows does
+not obviously reduce to a coordinate range the way a drawn box does. Priority is
+higher than a typical Appendix C item: MSv4 Processing Sets are expected to be
+very large, and a filter-based approach scales in a way that per-region
+box-drawing does not. Expected to be considered as soon as core flagging (Phase 1)
+lands, and — per stakeholder intent — targeted for the `preview` release itself
+rather than deferred indefinitely; not necessarily present during `pre-preview`.
+
+**What would make it actionable:** A decision on the filter function's contract
+and a trust/sandboxing model for user-supplied code, plus a design for mapping
+filter results into `FlagDelta` entries `FlagDB` can commit.

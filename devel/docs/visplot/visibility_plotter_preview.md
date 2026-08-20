@@ -1,5 +1,19 @@
 # VisibilityPlotter — Preview Specification
 
+**Repository:** https://github.com/casangi/cubevis/blob/main/devel/docs/visplot/visibility_plotter_preview.md
+
+> **Release staging note (August 2026).** This document specs the single, eventual
+> **preview** release for general external users — the filename is accurate as-is. What
+> has actually gone out so far is **pre-preview**: an internal, team-members-only
+> staging period (in progress since August 2026) where team members exercise the
+> current build and feed back before this document's full scope is met. Sections below
+> marked as working reflect what pre-preview reviewers can currently exercise; sections
+> still open (e.g. Duo-mode iteration — see the implementation plan's Phase 2.5) are
+> requirements this document must still satisfy before `preview` itself ships.
+> Pre-preview feedback is tracked in an internal document; feedback after `preview`
+> ships to general external users is expected to move to a separate, external-facing
+> mechanism (e.g. GitHub tickets — not yet decided).
+
 **Purpose:** A minimal working preview that demonstrates the combined
 `VisibilityRaster` + `VisibilityScatter` display in a single Bokeh layout,
 gives astronomers a feel for the flagging workflow, and establishes the GUI
@@ -298,7 +312,7 @@ Absent with no stubs:
 - Full Locate sidebar (cursor tracking info divs work; locate results table — full release)
 - Synchronized cross-panel cursor, Tier 1 (same-axis Span crosshair) — ✅ working in duo mode for all panel-kind combinations; documents were stale. Tier 2 (cross-axis row-level highlight via CommMgr probe) — not yet built; see §4.7 of the implementation plan
 - Averaging controls
-- Iteration (Prev/Next antenna/baseline)
+- Iteration (Prev/Next antenna/baseline) — absent from this (pre-preview) release, but now required for the general-user `preview` release; a scoped Field/SPW MVP is planned as Phase 2.5 (`I-series`) in the implementation plan, ahead of the full antenna/baseline/scan/time iteration engine in Phase 3
 - Calibration sidebar section
 - Colour-by-metadata axis in scatter
 - Colorbar (partial — `plot_left`/`plot_right` placement works; display-scope GUI colorbar deferred)

@@ -1443,7 +1443,7 @@ class MSv4Backend(XArrayReader):
             )
             if eit is not None:
                 frac = frac.where(np.isfinite(eit))
-            return frac
+            return _drop_non_raster_coords(frac, y_name, x_name)
 
         if polarization is None:
             log.warning(
@@ -1491,7 +1491,7 @@ class MSv4Backend(XArrayReader):
             )
             return None
 
-        return q.transpose(y_name, x_name)
+        return _drop_non_raster_coords(q, y_name, x_name).transpose(y_name, x_name)
 
     # ------------------------------------------------------------------ #
     # UV-coverage                                                          #
@@ -2078,6 +2078,37 @@ def _collect_string_coord(
         return
     vals = da.values if hasattr(da, "values") else da.compute().values
     target.update(str(v) for v in vals.ravel() if v)
+
+
+def _drop_non_raster_coords(
+    arr: xr.DataArray, y_name: str, x_name: str,
+) -> xr.DataArray:
+    """Strip every coordinate except the two the 2D raster actually needs.
+
+    Mirrors ``msv2_backend._drop_non_raster_coords`` exactly — kept as a
+    separate copy rather than shared, matching this project's existing
+    convention of two independent (not base-classed) backend
+    implementations that are allowed to diverge (§3.1c Rule 4) but are
+    fixed in lockstep when the same defect is found in both, as here.
+    See the msv2 copy's docstring for the full explanation; the short
+    version: auxiliary display-label coordinates (e.g. antenna/baseline
+    name strings riding on the baseline dimension) survive
+    ``_raster_2d``'s reduction untouched, and ``query_raster()``'s
+    ``xr.concat(..., join="outer")`` across partitions whose categorical-
+    axis membership differs — which fields see which antennas differs in
+    practice — then has to reconcile them, producing
+    ``ufunc 'minimum' did not contain a loop with signature matching
+    types (dtype('<U...')...)`` on a Field change/step. Confirmed as the
+    root cause during I-1's manual round-trip testing, August 2026.
+
+    Only ``y_name``/``x_name`` themselves are ever kept regardless of
+    their own dtype — MSv4's ``baseline_dim`` can itself be
+    ``"antenna_name"`` for single-dish data (see ``_axis_to_dim``), and
+    that is an unrelated, pre-existing question this fix does not touch
+    either way.
+    """
+    extra = [c for c in arr.coords if c not in (y_name, x_name)]
+    return arr.drop_vars(extra) if extra else arr
 
 
 def _axis_to_dim(axis: Axis, baseline_dim: str = "baseline_id") -> str:

@@ -57,9 +57,15 @@ Preview scope
 
 Absent from the preview (Phase 2+):
 * Writing flags to disk
-* Iteration (Prev/Next), Locate, Save plot, Copy flagdata
+* Locate, Save plot, Copy flagdata
 * Averaging controls
 * Calibration sidebar section
+
+Iteration (I-1, Phase 2.5, added 2026-08-19): one "Animate: Field | SPW"
+selector plus Prev/Next buttons in the toolbar, stepping through
+``meta.fields`` / ``meta.spws`` with wrap-around at the ends. Antenna,
+Baseline, Scan, and Time iteration (I-3) and grid-mode iteration (X-1)
+remain out of scope — see ``visplot_duo_iteration_kickoff.md``.
 
 Package location
 ----------------
@@ -73,7 +79,7 @@ import base64
 import logging
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, ClassVar, Optional
 from uuid import uuid4
 
 import websockets
@@ -100,6 +106,7 @@ from .visibility_scatter import VisibilityScatter, ScatterLayer, _LAYER_CMAPS
 from . import palettes as _palettes
 from .refresh import RefreshLevel as _RefreshLevel
 from .flag_db import FlagDB
+from .iteration_step import STEP_INDEX_JS
 from .reduction_context import (
     FlagDelta,
     NullReductionContext,
@@ -294,6 +301,36 @@ label {
     background: #f0f0f0 !important;
     color:      #222 !important;
     border-color: #aaa !important;
+}
+"""
+
+# Compact Prev/Next iteration buttons (I-1, Phase 2.5 — sidebar redesign).
+# Theme-*independent* on purpose, and deliberately a SEPARATE stylesheet
+# from _DARK_WIDGET_CSS/_LIGHT_WIDGET_CSS rather than folded into them.
+# The restyle callback's generic widgets loop does
+# `w.stylesheets[0].css = widget_css` — it overwrites index 0 wholesale
+# with whichever of the two constants above applies, on every toggle.
+# Sizing rules living inside that same constant would therefore need
+# duplicating into both _DARK_WIDGET_CSS and _LIGHT_WIDGET_CSS to
+# survive a toggle at all — this way, sizing lives once, attached at
+# stylesheets[1] (see _field_prev_btn / _spw_prev_btn's construction in
+# _build_sidebar()), a slot the widgets loop never touches, while
+# stylesheets[0] still gets the normal dark/light colour swap like every
+# other themed sidebar widget. Same two-stylesheet shape as
+# self._spw_table's [dark, table_css_dark] — that pairing exists for a
+# different reason (SlickGrid needs its own sheet) but the mechanism is
+# identical: index 0 is the generically-swapped one, index 1 is not.
+_ICON_BTN_CSS = """
+.bk-btn {
+    padding:    0     !important;
+    min-width:  22px  !important;
+    min-height: 22px  !important;
+    font-size:  11px  !important;
+    line-height: 20px !important;
+}
+.bk-btn:disabled {
+    opacity: 0.35     !important;
+    cursor: not-allowed !important;
 }
 """
 
@@ -509,6 +546,62 @@ def _parse_field_string(field_str: str,
 
 
 # ---------------------------------------------------------------------------
+# Iteration position helpers (I-1, Phase 2.5)
+# ---------------------------------------------------------------------------
+#
+# Pure lookups, not stepping -- ``iteration_step.step_index`` computes
+# *where Prev/Next should go next*; these compute *where the current
+# selection already is*, for the status bar's "Field 3/7: 0637-752" /
+# "SPW 2/4: 1" readout (visplot_duo_iteration_kickoff.md §1). Reusable
+# regardless of whether the current position was reached via Prev/Next or
+# a manual Select/DataTable pick -- no separate "was this an iteration
+# step" state needs to be tracked anywhere.
+
+def _field_iteration_position(field_str: str,
+                              meta: ObservationMetadata) -> Optional[tuple]:
+    """1-based ``(position, count)`` of the field ``field_str`` resolves
+    to within ``meta.fields``, or ``None`` when nothing resolves to
+    exactly one field.
+
+    ``meta.fields`` is the same stable ordered tuple Prev/Next steps
+    through client-side (see ``iteration_step.py`` and the "Animate:
+    Field | SPW" toolbar controls in ``_build_toolbar``) -- excluding the
+    Field ``Select``'s ``("", "All fields")`` sentinel entry, which is
+    not itself a steppable position. Returns ``None`` for that sentinel
+    (``field_str`` empty) and for a string that fails to resolve at all,
+    both of which ``_parse_field_string`` already reports as ``None``.
+    """
+    name = _parse_field_string(field_str, meta)
+    if name is None:
+        return None
+    names = [f.name for f in meta.fields]
+    if name not in names:
+        return None
+    return names.index(name) + 1, len(names)
+
+
+def _spw_iteration_position(spw_ids,
+                            meta: ObservationMetadata) -> Optional[tuple]:
+    """1-based ``(position, count)`` within ``meta.spws`` when *spw_ids*
+    names exactly one spectral window, else ``None``.
+
+    Unlike Field, SPW is a genuine multi-select (the sidebar's checkbox
+    ``DataTable``) -- a manual multi-window pick is a normal, common
+    state, not a sentinel, and correctly reports no position here (the
+    existing ``self._spw_str or "all"`` fallback in ``_status_text()``
+    covers it). Only Prev/Next -- which always narrows to exactly one row
+    when stepping SPW, per the kickoff's §3 -- or a manual single-row
+    pick produce a position.
+    """
+    if not spw_ids or len(spw_ids) != 1:
+        return None
+    ids = [s.spw_id for s in meta.spws]
+    if spw_ids[0] not in ids:
+        return None
+    return ids.index(spw_ids[0]) + 1, len(ids)
+
+
+# ---------------------------------------------------------------------------
 # Backend probes and open_ms / open_ps factory functions
 # ---------------------------------------------------------------------------
 
@@ -713,6 +806,223 @@ class _PanelSlot:
     def active(self):
         """Whichever of ``raster``/``scatter`` matches ``self.kind``."""
         return self.raster if self.kind == "raster" else self.scatter
+
+
+def _iter_guard_js(count_var: str, axis_label: str) -> str:
+    """JS snippet: if ``count_var`` <= 1, write a "nothing to iterate"
+    message to ``notify_div`` and return -- shared verbatim by every
+    ``doIterateX()`` function body (see ``_IterButtons`` below for why
+    this can't just live inside that class).
+
+    Backstop, not the primary guard, for every axis this is used on:
+    ``_IterButtons`` already disables the buttons outright when count
+    is <=1 at construction time (see its own docstring), so in normal
+    use this branch is only reachable via some other path setting the
+    widget's value/selection directly. Kept anyway on the same belt-
+    and-suspenders principle this file already applies elsewhere (e.g.
+    the raster Y/X conflict guard) -- the cost of checking is one
+    comparison, and the alternative is a disabled-looking control that
+    can still silently do nothing if something else does manage to
+    trigger it.
+
+    Parameters
+    ----------
+    count_var : str
+        The JS variable/expression holding the item count, already in
+        scope at the point this snippet is spliced in (e.g. ``"names.length"``
+        or ``"idents.length"``).
+    axis_label : str
+        Singular noun for the message, e.g. ``"field"``, ``"spectral window"``
+        -- pluralized with a trailing "s", which covers every axis this
+        project has or has planned (I-2 Polarization, I-3 Antenna/Baseline/
+        Scan/Time); revisit if a future axis's plural is irregular.
+    """
+    return f"""
+    if ({count_var} <= 1) {{
+        if (notify_div)
+            notify_div.text = {count_var} === 0
+                ? "<b>No {axis_label}s to iterate.</b>"
+                : "<b>Only one {axis_label} in this dataset — nothing to iterate.</b>";
+        return;
+    }}"""
+
+
+@dataclass
+class _IterButtons:
+    """One axis's Prev/Next button pair, plus the row it shares with
+    that axis's own control -- sized, themed, tooltipped, and aligned
+    uniformly across every iteration axis (I-1, Phase 2.5).
+
+    Why this class exists
+    ----------------------
+    Field's and SPW's Prev/Next controls were each fixed, by hand, in
+    three separate rounds of live-MS-testing feedback: oversized
+    buttons and stray whitespace (Tip is its own ``LayoutDOM`` with
+    independent default sizing -- unset margins on both the Button
+    *and* its Tip wrapper, not the CSS, was the actual cause); light/
+    dark theming (a themed sidebar Select needs its color stylesheet
+    swapped on toggle the way a toolbar Button never did, since the
+    toolbar itself is never restyled); horizontal misalignment between
+    the two axes' button pairs (independently-chosen label widths, 194
+    vs 200px, that only looked equal); and vertical crowding against
+    the next sidebar section (a wrapper column's margin zeroed for one
+    reason -- fixing the row's *internal* alignment -- silently zeroed
+    a different thing, the gap to whatever comes *after* it, too).
+
+    Every one of those was a Python/Bokeh-layout concern with no real
+    per-axis content -- the actual stepping logic (what "current index"
+    means for a ``Select`` vs. a ``DataTable``'s row selection, and
+    likely something else again for a future free-text ``EvTextInput``
+    axis) is genuinely different per widget type and stays out of this
+    class, written directly in ``_build_toolbar()`` per axis. Folding
+    that in too would trade three real, already-debugged fixes for one
+    speculative one, guessed at ahead of I-2/I-3 actually needing it.
+
+    Two-phase construction, matching this file's existing split between
+    ``_build_sidebar()`` (widgets exist) and ``_build_toolbar()``
+    (``self._do_plot_js``/``_plot_js_args`` exist): build the instance
+    in ``_build_sidebar()`` -- buttons and the row are ready and can be
+    placed immediately -- then call ``.wire()`` from ``_build_toolbar()``
+    once there's a ``doPlot()`` to call into.
+
+    Attributes
+    ----------
+    axis_label : str
+        Singular noun used in tooltips and the disabled-state/"nothing
+        to iterate" message, e.g. ``"field"``, ``"spectral window"``.
+    control : UIElement
+        What sits to the left of the buttons: either the axis's own
+        single-line widget (Field's title-less ``Select``) or a heading
+        ``Div`` beside a control that lives on its own row underneath
+        (SPW's ``DataTable``). Either way, its width must already equal
+        ``LABEL_WIDTH`` and its margin must already be ``(0,0,0,0)`` --
+        this class positions the buttons beside it, not the control
+        itself, the same division of responsibility ``_section()``
+        already has from the widgets it labels.
+    count : int
+        Number of steppable items. ``<= 1`` disables both buttons
+        outright (not just the click-time guard in ``_iter_guard_js``)
+        and switches both tooltips to explain why, rather than leaving
+        a control that looks enabled but silently does nothing.
+    dark : InlineStyleSheet
+        The sidebar's shared color stylesheet (from ``self._dark()``) --
+        stylesheets[0] on both buttons, following the light/dark toggle
+        exactly like every other themed sidebar widget (see
+        ``_ICON_BTN_CSS``'s own comment for why sizing lives in a
+        second, untouched slot instead).
+    icon_btn_css : InlineStyleSheet
+        ``self._icon_btn_css`` -- stylesheets[1] on both buttons.
+    tt : Callable[[str], Tooltip]
+        ``self._tt`` -- building each button's ``Tip`` tooltip needs the
+        same ``Tooltip``-construction helper every other toolbar/sidebar
+        tooltip in this file already uses.
+    vertical_nudge : int
+        Extra top margin (px) on both buttons, beyond the shared
+        ``align="center"`` the row already applies. 0 for a ``Div``-
+        backed control (SPW) -- a plain ``Div`` centers predictably
+        against a ``Button`` at the same declared height. Field's
+        ``Select`` needed 2: a ``<select>`` element's own intrinsic box
+        metrics center a couple of pixels differently than a ``<div>``
+        does even at an identical declared height, and that difference
+        has to be supplied per control type -- there's no way to derive
+        it structurally, only to name it once here instead of
+        rediscovering it by hand for the next ``Select``-backed axis
+        (Antenna/Scan/Time, I-3, all currently ``EvTextInput`` with a
+        similar-enough box model to likely need the same nudge, but
+        this is exactly the kind of thing worth actually checking
+        against a real browser rather than assuming carries over).
+
+    Not attributes, class-level instead, deliberately: ``BTN_DIMS`` and
+    ``LABEL_WIDTH`` are shared across *all* axes, computed once here
+    rather than passed in or recomputed per call site the way the first
+    two rounds did (194 vs 200px was exactly that recomputation
+    silently drifting) -- callers reference ``_IterButtons.LABEL_WIDTH``
+    directly when sizing their own control/heading before constructing
+    one of these.
+    """
+
+    axis_label:     str
+    control:        "UIElement"
+    count:          int
+    dark:           InlineStyleSheet
+    icon_btn_css:   InlineStyleSheet
+    tt:             "Callable[[str], Tooltip]"
+    vertical_nudge: int = 0
+
+    BTN_DIMS: ClassVar[dict] = {"width": 24, "height": 24}
+    # Two 24px buttons plus the 6px+2px gaps used between them and their
+    # neighbour below -- _SIDEBAR_WIDTH minus exactly that footprint.
+    LABEL_WIDTH: ClassVar[int] = _SIDEBAR_WIDTH - (2 * 24 + 6 + 2)
+
+    def __post_init__(self):
+        enabled = self.count > 1
+        if enabled:
+            prev_tip = f"Previous {self.axis_label} (wraps at the ends)"
+            next_tip = f"Next {self.axis_label} (wraps at the ends)"
+        else:
+            why = (f"This dataset has only {self.count} "
+                   f"{self.axis_label}{'s' if self.count != 1 else ''} "
+                   "— nothing to iterate")
+            prev_tip = next_tip = why
+
+        self.prev_btn = Button(
+            label="◀", button_type="default",
+            stylesheets=[self.dark, self.icon_btn_css],
+            disabled=not enabled,
+            margin=(0, 0, 0, 0), **self.BTN_DIMS,
+        )
+        self.next_btn = Button(
+            label="▶", button_type="default",
+            stylesheets=[self.dark, self.icon_btn_css],
+            disabled=not enabled,
+            margin=(0, 0, 0, 0), **self.BTN_DIMS,
+        )
+        self.row = row(
+            self.control,
+            Tip(self.prev_btn, tooltip=self.tt(prev_tip),
+                margin=(self.vertical_nudge, 0, 0, 6), **self.BTN_DIMS),
+            Tip(self.next_btn, tooltip=self.tt(next_tip),
+                margin=(self.vertical_nudge, 0, 0, 2), **self.BTN_DIMS),
+            align="center", margin=(0, 0, 0, 0),
+        )
+
+    def wire(self, plot_js_args: dict, do_plot_js: str, step_js: str,
+             fn_name: str) -> None:
+        """Attach the Prev/Next click handlers. Call once, from
+        ``_build_toolbar()``, after ``self._do_plot_js``/``_plot_js_args``
+        exist -- see this class's own docstring for why construction and
+        wiring are split across two methods/two builder passes at all.
+
+        Parameters
+        ----------
+        plot_js_args : dict
+            ``self._plot_js_args``, or that dict extended with whatever
+            extra widgets *this axis's* stepping logic needs beyond the
+            standard set (Field/SPW need nothing extra -- both read/
+            write widgets already in ``_plot_js_args``).
+        do_plot_js : str
+            ``self._do_plot_js`` -- the shared ``doPlot()`` definition
+            every Prev/Next reuses rather than duplicating the send
+            logic again (kickoff §3).
+        step_js : str
+            The axis-specific ``function doIterate<Axis>(delta) {...}``
+            body, e.g. built with ``STEP_INDEX_JS + "..." + _iter_guard_js(...) + "..."``.
+            Not generated here -- see the class docstring for why the
+            actual stepping logic per widget type stays out of this
+            class and is written directly at each call site.
+        fn_name : str
+            The function name ``step_js`` defines, e.g.
+            ``"doIterateField"`` -- called with ``-1``/``+1`` to build
+            each button's full ``CustomJS`` code.
+        """
+        self.prev_btn.js_on_click(CustomJS(
+            args=plot_js_args,
+            code=step_js + do_plot_js + f"{fn_name}(-1);\ndoPlot(false);",
+        ))
+        self.next_btn.js_on_click(CustomJS(
+            args=plot_js_args,
+            code=step_js + do_plot_js + f"{fn_name}(1);\ndoPlot(false);",
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -2804,15 +3114,41 @@ for (const dt of other.tools) {
         fname        = os.path.basename(self._source_path)
         layout_label = {"one": "One panel", "side": "Side by Side",
                         "over": "Over / Under"}.get(self._layout, self._layout)
-        field   = self._field_str or "all"
-        spw     = self._spw_str or "all"
-        col     = self._datacolumn
+
+        # I-1 (Phase 2.5): once a single field/SPW is selected -- via
+        # Prev/Next or a manual pick, the two are indistinguishable here
+        # by design (see _field_iteration_position's docstring) -- show
+        # its position, e.g. "Field 3/7: 0637-752". Falls back to the
+        # pre-I-1 "Field: <str or 'all'>" display otherwise (unset, or,
+        # for SPW, a genuine multi-selection).
+        field_pos = _field_iteration_position(self._field_str, self._meta)
+        if field_pos:
+            pos, n_fields = field_pos
+            field_name = _parse_field_string(self._field_str, self._meta)
+            field = f"Field {pos}/{n_fields}: {field_name}"
+        else:
+            field = f"Field: {self._field_str or 'all'}"
+
+        chosen  = getattr(self, "_spw_ids", None)
+        spw_ids = (list(chosen) if chosen is not None
+                   else _parse_spw_string(self._spw_str, self._meta))
+        spw_pos = _spw_iteration_position(spw_ids, self._meta)
+        if spw_pos:
+            pos, n_spws = spw_pos
+            spw_label = next(
+                (s.name or str(s.spw_id) for s in self._meta.spws
+                 if s.spw_id == spw_ids[0]), str(spw_ids[0]))
+            spw = f"SPW {pos}/{n_spws}: {spw_label}"
+        else:
+            spw = f"SPW: {self._spw_str or 'all'}"
+
+        col = self._datacolumn
         count = self._flag_db.pending_count
         flag_note = (f"  |  <b>Flag count:</b> {count}"
                      if count > 0 else "")
         return (
             f"<b>{fname}</b>  |  Layout: {layout_label}<br>"
-            f"Field: {field}  |  SPW: {spw}  |  Col: {col}{flag_note}"
+            f"{field}  |  {spw}  |  Col: {col}{flag_note}"
         )
 
     def _update_status_bar(self) -> None:
@@ -3144,6 +3480,10 @@ conflict_div.text = conflict ? msg : '';
         """
         meta = self._meta
         dark = self._dark()
+        # Shared by every Prev/Next icon button (Field and SPW) — see
+        # _ICON_BTN_CSS's own comment for why this is a second,
+        # untouched stylesheet slot rather than folded into `dark`.
+        self._icon_btn_css = InlineStyleSheet(css=_ICON_BTN_CSS)
 
         # ---- Source path -------------------------------------------------- #
         path_div = Div(
@@ -3164,10 +3504,13 @@ conflict_div.text = conflict ? msg : '';
         # dark-blue on a light sidebar and read as disabled.
         self._section_divs = []
 
-        def _section(text):
-            d = Div(text=f"<span style='color:{_SECTION_DARK};"
-                         f"font-weight:bold'>{text}</span>",
-                    width=_SIDEBAR_WIDTH)
+        def _section(text, width=_SIDEBAR_WIDTH, margin=None):
+            kwargs = dict(text=f"<span style='color:{_SECTION_DARK};"
+                               f"font-weight:bold'>{text}</span>",
+                          width=width)
+            if margin is not None:
+                kwargs["margin"] = margin
+            d = Div(**kwargs)
             d.tags = ["section-label", text]
             self._section_divs.append(d)
             return d
@@ -3186,15 +3529,69 @@ conflict_div.text = conflict ? msg : '';
         # ---- Field --------------------------------------------------------- #
         # Include an "All fields" sentinel so the widget can represent the
         # initial state (field_names=None) without auto-selecting a specific field.
+        #
+        # No title= on the Select itself, unlike every other Select in
+        # this sidebar (col_select, the per-slot axis pickers, …) —
+        # field_select uses an external _section("Field") label instead,
+        # matching SPW's own heading-above-control shape. This isn't
+        # just cosmetic: a Select's title renders as extra height
+        # *inside* the widget, above its input, which the row below
+        # measures as part of field_select's total height. The first
+        # cut tried compensating for that with row(align="end") and
+        # got the buttons wrong anyway — bottom-aligning against a
+        # child whose true "control" (the input) doesn't sit at that
+        # measured bottom edge either, just closer to it than the top.
+        # Removing the title from the widget entirely removes the
+        # mismatch instead of trying to compensate for it.
         field_options = [("", "All fields")] + [(f.name, f.name) for f in meta.fields]
         current_field = _parse_field_string(self._field_str, meta) or ""
         self._field_select = Select(
-            title       = "Field",
             value       = current_field if current_field in [v for v, _ in field_options]
                           else "",
             options     = field_options,
-            width       = _SIDEBAR_WIDTH,
+            width       = _IterButtons.LABEL_WIDTH,
+            margin      = (0, 0, 0, 0),
             stylesheets = [dark],
+        )
+        # Prev/Next live beside the widget they step, not in the toolbar
+        # (I-1 originally shipped a single toolbar "Animate: <axis>"
+        # selector; reworked here per live-MS testing feedback — see
+        # the implementation plan's Phase 2.5 design note). Built by
+        # _IterButtons -- see that class's docstring for the three
+        # rounds of sizing/theming/alignment/spacing feedback it exists
+        # to not repeat -- and wired in _build_toolbar() once
+        # self._do_plot_js/_plot_js_args exist (same split every other
+        # sidebar control the toolbar's shared doPlot() reaches into
+        # already uses). vertical_nudge=2: empirical, a <select>'s own
+        # box metrics center a couple of pixels differently than the
+        # plain <div> SPW's heading uses (its own row needs none) --
+        # see _IterButtons' vertical_nudge docstring for the caveat
+        # about whether this transfers to a future EvTextInput-backed
+        # axis unchanged.
+        self._field_iter = _IterButtons(
+            axis_label="field", control=self._field_select,
+            count=len(meta.fields), dark=dark,
+            icon_btn_css=self._icon_btn_css, tt=self._tt,
+            vertical_nudge=2,
+        )
+        self._field_prev_btn = self._field_iter.prev_btn
+        self._field_next_btn = self._field_iter.next_btn
+        field_col = column(
+            _section("Field"),
+            self._field_iter.row,
+            width=_SIDEBAR_WIDTH,
+            # Bottom margin only, not all-around: zeroing every margin
+            # inside the row (the select, the buttons, the row itself --
+            # all handled by _IterButtons) fixed the horizontal button-
+            # alignment defect; this is a different margin, on the
+            # *column wrapping* that row, governing space to the *next*
+            # sidebar section (SPW) -- left at 0 the first time this was
+            # written, which crowded SPW directly against Field with no
+            # gap at all. 10px matches the ~10px gap every other
+            # adjacent pair of sidebar sections gets for free from
+            # Bokeh's default (5,5,5,5) margin on ordinary un-wrapped
+            # widgets like self._col_select.
+            margin=(0, 0, 10, 0),
         )
 
         # ---- SPW ----------------------------------------------------------- #
@@ -3262,10 +3659,37 @@ conflict_div.text = conflict ? msg : '';
         # guard).  Unchecking everything is a transient step on the way to
         # checking two, so the empty case is only reachable by pressing
         # Plot deliberately.
+        #
+        # Prev/Next: built by _IterButtons, same as Field's -- see that
+        # class's docstring. axis_label="spectral window", not "SPW",
+        # since it's what the disabled-state tooltip reads out in full
+        # ("This dataset has only 1 spectral window — nothing to
+        # iterate"); the heading itself stays the short "SPW" via
+        # _section() below, unrelated to axis_label. No vertical_nudge:
+        # a plain Div centers predictably against a Button at an
+        # identical declared height, unlike a <select> (see Field's
+        # vertical_nudge=2 and _IterButtons' docstring on why) --
+        # this row was in fact the reference point used to diagnose
+        # that Field's own row needed one at all.
+        spw_heading = _section("SPW", width=_IterButtons.LABEL_WIDTH,
+                               margin=(0, 0, 0, 0))
+        self._spw_iter = _IterButtons(
+            axis_label="spectral window", control=spw_heading,
+            count=len(meta.spws), dark=dark,
+            icon_btn_css=self._icon_btn_css, tt=self._tt,
+        )
+        self._spw_prev_btn = self._spw_iter.prev_btn
+        self._spw_next_btn = self._spw_iter.next_btn
         self._spw_select = column(
-            _section("SPW"),
+            self._spw_iter.row,
             self._spw_table,
             width=_SIDEBAR_WIDTH,
+            # Same 10px-bottom-only fix as field_col, same reason: this
+            # wrapper's all-zero margin fixed the row's internal
+            # horizontal alignment but also zeroed the gap to whatever
+            # sidebar section comes next (Correlation) — restored here
+            # rather than left crowded the same way Field/SPW was.
+            margin=(0, 0, 10, 0),
         )
 
         # ---- Correlations -------------------------------------------------- #
@@ -3435,7 +3859,7 @@ conflict_div.text = conflict ? msg : '';
         self._sidebar_col = column(
             path_div,
             _section("Data"),
-            self._col_select, self._field_select, self._spw_select,
+            self._col_select, field_col, self._spw_select,
             corr_label, self._corr_cbg,
             scan_inp, antenna_inp, time_inp, uv_inp,
             # "Axes" header removed (Group 3 piece 2, 2026-07-31) along
@@ -4437,6 +4861,130 @@ function doPlot(reload) {
         self._do_plot_js   = _do_plot_js
         self._plot_js_args = _plot_js_args
 
+        # ---- Iteration: Prev/Next, wired to the sidebar's own Field/SPW
+        # controls (I-1, Phase 2.5) ------------------------------------- #
+        #
+        # Placed here, after self._do_plot_js/_plot_js_args exist, for the
+        # same reason _preset_js below is: Prev/Next reuse doPlot() itself
+        # rather than duplicating the send logic a fourth time (kickoff
+        # §3). The mechanism: mutate field_sel.value (Field) or
+        # spw_src.selected.indices (SPW) to the stepped value, then call
+        # the exact same doPlot(false) Plot ▶ uses. doPlot() always reads
+        # field_sel.value and spw_src.selected.indices at send time
+        # regardless of which one changed, so the *other*, unmutated axis
+        # is resent unchanged -- the "omit the non-animated axis's key"
+        # behaviour the kickoff describes falls out of reusing doPlot()
+        # as-is, with no new "hold fixed" flag or partial-message shape
+        # needed on either side (kickoff §3's "don't invent a parallel
+        # one").
+        #
+        # Wraps at the ends (does not clamp) -- the design choice the
+        # kickoff asked to be made and stated explicitly (§1). Index
+        # arithmetic lives in iteration_step.py, shared with Python via a
+        # golden-table parity test (test_iteration_step.py) rather than
+        # written inline here a second time -- see that module's
+        # docstring for why a Python copy exists even though only the JS
+        # copy is on this feature's critical path.
+        #
+        # Two revisions since I-1's first cut, both from live-MS testing
+        # feedback, documented in the implementation plan's Phase 2.5
+        # section:
+        #
+        # 1. A single toolbar "Animate: <axis>" selector (first a
+        #    RadioButtonGroup, briefly a Select) chose which of
+        #    field_sel/spw_src Prev/Next acted on. Dropped entirely: the
+        #    buttons now live beside field_row / the SPW section heading
+        #    in the *sidebar* (self._field_prev_btn/_next_btn,
+        #    self._spw_prev_btn/_next_btn -- constructed in
+        #    _build_sidebar(), wired here once self._do_plot_js exists,
+        #    the same split every other sidebar-reaching toolbar control
+        #    already uses). Which widget a press acts on is no longer a
+        #    mode to track or display anywhere -- it's simply whichever
+        #    pair was clicked -- and the toolbar's iteration footprint is
+        #    now zero rather than growing with every future axis (I-2
+        #    Polarization, I-3 Antenna/Baseline/Scan/Time each just need
+        #    their own pair beside their own sidebar control, exactly
+        #    this shape, with no toolbar change at all). This also
+        #    resolves the toolbar-width concern the Select revision only
+        #    partially addressed.
+        # 2. Per-axis Prev/Next are now disabled at construction (see
+        #    _build_sidebar()) when that axis has ≤1 item, rather than
+        #    only guarded at click time -- a real single-SPW MS (I-1's
+        #    live testing) made "visibly disabled" clearly better than
+        #    "silently does nothing when clicked".
+        #
+        # Consistency across panels (raised in live-MS testing): Field/
+        # SPW are not per-panel state. _handle_plot() builds exactly one
+        # SelectionSpec per request (self._selection = self._build_
+        # selection(), ~L2514) and assigns the *same object* to every
+        # panel (self._all_panels) before either panel re-renders — so a
+        # Prev/Next press is structurally guaranteed to move both panels
+        # together, raster and scatter alike, regardless of which kind
+        # is active in which slot. There is no code path where one panel
+        # could see a field/SPW change and the other not.
+        _iterate_field_js = STEP_INDEX_JS + """
+function doIterateField(delta) {
+    // options[0] is the ("", "All fields") sentinel -- not itself a
+    // steppable position, same exclusion _field_iteration_position()
+    // applies on the Python side (status-bar readout) and meta.fields
+    // applies for the count iteration_step.step_index() receives.
+    const names = field_sel.options.slice(1).map(o => o[0]);""" + \
+    _iter_guard_js("names.length", "field") + """
+    const cur = names.indexOf(field_sel.value);
+    const idx = stepIterationIndex(cur === -1 ? null : cur, names.length, delta, true);
+    if (idx === null) return;
+    field_sel.value = names[idx];
+}
+"""
+        _iterate_spw_js = STEP_INDEX_JS + """
+function doIterateSpw(delta) {
+    // SPW is a DataTable (row-selection), not a dropdown -- see
+    // _parse_spw_string's docstring for why (non-contiguous ids / bare
+    // names). spw_src.data['ident'] is the full ordered meta.spws list,
+    // already on the client with nothing further to fetch. Stepping
+    // always narrows to exactly one selected row -- the same mechanism
+    // a manual single-SPW pick already uses correctly (kickoff §3) --
+    // even if multiple rows happen to be checked when Prev/Next is
+    // pressed; the lowest checked index is used as the "current"
+    // reference point in that case.
+    const idents = spw_src.data['ident'] || [];""" + \
+    _iter_guard_js("idents.length", "spectral window") + """
+    const sel = spw_src.selected.indices || [];
+    const cur = sel.length ? Math.min.apply(null, sel) : null;
+    const idx = stepIterationIndex(cur, idents.length, delta, true);
+    if (idx === null) return;
+    spw_src.selected.indices = [idx];
+}
+"""
+        # .wire() (see _IterButtons) assembles each button's CustomJS
+        # from these bodies + self._do_plot_js exactly the way the
+        # hand-written js_on_click() calls this replaced did -- the
+        # only thing that moved is who writes the boilerplate.
+        self._field_iter.wire(self._plot_js_args, self._do_plot_js,
+                              _iterate_field_js, "doIterateField")
+        self._spw_iter.wire(self._plot_js_args, self._do_plot_js,
+                            _iterate_spw_js, "doIterateSpw")
+
+        # Rule 3 (§3.1c of the plan): superseded by the sidebar move.
+        # I-1's toolbar-resident controls (RadioButtonGroup, then
+        # Select) correctly concluded no _THEME_RESTYLE_JS entry was
+        # needed, because the *toolbar* area is never restyled either
+        # way — Button/RadioButtonGroup there rely on Bokeh's own
+        # button_type coloring and that was already fine in both
+        # themes. That precedent stopped applying the moment these four
+        # buttons moved into the *sidebar*: unthemed default Buttons
+        # sitting directly beside themed Select/DataTable widgets is
+        # exactly the light/dark mismatch reported from a real screen
+        # (buttons staying pale in dark mode). Fixed at construction —
+        # see field_prev_btn/field_next_btn/spw_prev_btn/spw_next_btn
+        # above, each `stylesheets=[dark, self._icon_btn_css]` — and
+        # all four are in self._theme_restyle_args["widgets"] below, so
+        # stylesheets[0] (colour) follows the toggle exactly like every
+        # other themed sidebar widget; stylesheets[1] (_ICON_BTN_CSS,
+        # sizing only) is deliberately never touched by that loop — see
+        # _ICON_BTN_CSS's own comment for why.
+
+
         # ---- Layout (unified — replaces the former separate mode +
         # layout toggles as of July 29 2026) -------------------------------- #
         # "One" reuses side_container (pos0_layout visible, pos1_layout
@@ -4840,7 +5388,9 @@ doPlot();
                 # wrapping the label, the All/None row and the table, and
                 # the restyle walks widgets rather than containers.
                 "widgets":      [self._col_select, self._field_select,
-                                 self._spw_table, self._corr_cbg]
+                                 self._spw_table, self._corr_cbg,
+                                 self._field_prev_btn, self._field_next_btn,
+                                 self._spw_prev_btn, self._spw_next_btn]
                                 + _all_axis_widgets,
                 # Colormap histogram figures + reset-button icons (added
                 # to fix a reported light-mode gap: these previously had

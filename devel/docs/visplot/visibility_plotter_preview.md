@@ -1,19 +1,5 @@
 # VisibilityPlotter — Preview Specification
 
-**Repository:** https://github.com/casangi/cubevis/blob/main/devel/docs/visplot/visibility_plotter_preview.md
-
-> **Release staging note (August 2026).** This document specs the single, eventual
-> **preview** release for general external users — the filename is accurate as-is. What
-> has actually gone out so far is **pre-preview**: an internal, team-members-only
-> staging period (in progress since August 2026) where team members exercise the
-> current build and feed back before this document's full scope is met. Sections below
-> marked as working reflect what pre-preview reviewers can currently exercise; sections
-> still open (e.g. Duo-mode iteration — see the implementation plan's Phase 2.5) are
-> requirements this document must still satisfy before `preview` itself ships.
-> Pre-preview feedback is tracked in an internal document; feedback after `preview`
-> ships to general external users is expected to move to a separate, external-facing
-> mechanism (e.g. GitHub tickets — not yet decided).
-
 **Purpose:** A minimal working preview that demonstrates the combined
 `VisibilityRaster` + `VisibilityScatter` display in a single Bokeh layout,
 gives astronomers a feel for the flagging workflow, and establishes the GUI
@@ -273,17 +259,61 @@ will remain fast at full scale.
 | **Flag ⚑** | `TipButton`; tooltip: *"Write flags to disk — full release"* |
 
 
-Iteration (Prev/Next), Locate, Save plot, and Copy flagdata are absent
-from the toolbar — no stubs, to keep the toolbar uncluttered.
+Locate, Save plot, and Copy flagdata are absent from the toolbar — no
+stubs, to keep the toolbar uncluttered. Iteration (Prev/Next) is present
+for Field/SPW as of I-1 (Phase 2.5) — see §8 below.
 
-### 8. Linked axis behaviour (working)
+### 8. Iteration: per-axis Prev/Next (working, I-1)
+
+A small ◀ / ▶ pair sits beside each iterable axis's own sidebar
+control — not a centralized toolbar selector. Field's pair sits beside
+the Field dropdown; SPW's sits beside the SPW section heading:
+
+```
+Field  [ 0637-752        ▾] [◀] [▶]
+
+── SPW ──                    [◀] [▶]
+  ☑ 0   372.53-372.77 GHz  384 ch
+  ☐ 1   ...
+```
+
+Departs from msview's own "assign exactly one animator" model (Appendix
+C.8) — msview's single-selector design comes from its continuous,
+slider-driven autoplay architecture, which duo mode's discrete
+click-to-step mechanism doesn't share, so there's no "current animator"
+mode to track or display: whichever pair is clicked steps that axis,
+full stop. Toolbar iteration footprint is zero and stays zero as I-2
+(Polarization) and I-3 (Antenna/Baseline/Scan/Time) add their own pairs
+beside their own sidebar controls.
+
+Pressing Next/Prev steps through `meta.fields` (skipping the "All
+fields" sentinel) or `meta.spws`, wrapping at either end, and re-plots
+both panels through the same `Plot ▶` path. A pair is disabled outright
+(not just inert) when its axis has ≤1 item — a single-SPW MS is common
+and was the concrete case that prompted this in live testing.
+
+Consistency between raster and scatter, or between Panel A and Panel B
+regardless of kind, is structural: `_handle_plot()` builds exactly one
+`SelectionSpec` per request and hands the same object to every panel
+before either re-renders, so Field/SPW can never differ between panels.
+
+The status bar reflects the current position once it resolves to a
+single field or spectral window, e.g. `Field 3/7: 0637-752` or
+`SPW 2/4: 1` — whether that position was reached via Prev/Next or a
+manual Field/SPW pick.
+
+Antenna, Baseline, Scan, Time (I-3) and Polarization (I-2) iteration, and
+grid-mode iteration (X-1), are not present — see Appendix C.8 and the
+Phase 2.5 punch list in the implementation plan.
+
+### 9. Linked axis behaviour (working)
 
 When both panels share the same x-axis dimension (e.g. both show TIME),
 a shared Bokeh `Range1d` links their x-axes.  Panning or zooming one
 panel moves the other in sync.  Hidden figures remain linked — switching
 back to Both mode restores the synchronised view correctly.
 
-### 9. Status bar
+### 10. Status bar
 
 A single `row()` layout with two halves, updated on every Plot press and
 every mode/layout change:
@@ -312,7 +342,7 @@ Absent with no stubs:
 - Full Locate sidebar (cursor tracking info divs work; locate results table — full release)
 - Synchronized cross-panel cursor, Tier 1 (same-axis Span crosshair) — ✅ working in duo mode for all panel-kind combinations; documents were stale. Tier 2 (cross-axis row-level highlight via CommMgr probe) — not yet built; see §4.7 of the implementation plan
 - Averaging controls
-- Iteration (Prev/Next antenna/baseline) — absent from this (pre-preview) release, but now required for the general-user `preview` release; a scoped Field/SPW MVP is planned as Phase 2.5 (`I-series`) in the implementation plan, ahead of the full antenna/baseline/scan/time iteration engine in Phase 3
+- Antenna/Baseline/Scan/Time iteration (I-3) and Polarization iteration (I-2) — Field/SPW iteration is present, see §8
 - Calibration sidebar section
 - Colour-by-metadata axis in scatter
 - Colorbar (partial — `plot_left`/`plot_right` placement works; display-scope GUI colorbar deferred)

@@ -1257,7 +1257,7 @@ class MSv2Backend(XArrayReader):
             )
             if eit is not None:
                 frac = frac.where(np.isfinite(eit))
-            return frac
+            return _drop_non_raster_coords(frac, y_name, x_name)
 
         # Visibility-derived quantities require polarization selection
         if polarization is None:
@@ -1309,7 +1309,7 @@ class MSv2Backend(XArrayReader):
             return None
 
         # Transpose to (y_name, x_name) as required by Canvas.raster()
-        return q.transpose(y_name, x_name)
+        return _drop_non_raster_coords(q, y_name, x_name).transpose(y_name, x_name)
 
     # ------------------------------------------------------------------ #
     # UV-coverage (special case — both axes from UVW)                     #
@@ -1719,6 +1719,47 @@ def _collect_string_coord(
         return
     vals = da.values if hasattr(da, "values") else da.compute().values
     target.update(str(v) for v in vals.ravel() if v)
+
+
+def _drop_non_raster_coords(
+    arr: xr.DataArray, y_name: str, x_name: str,
+) -> xr.DataArray:
+    """Strip every coordinate except the two the 2D raster actually needs.
+
+    ``_raster_2d`` builds its quantity array from ``vis_pol``/``flag``,
+    which — as an MSv2 partition Dataset's derived arrays — carry every
+    coordinate that happened to ride along the ``baseline_id`` (or
+    ``time``/``frequency``) dimension, including auxiliary *display*
+    labels such as ``baseline_antenna1_name`` / ``baseline_antenna2_name``
+    (string dtype). Reduction (``.mean(dim=...)``) only drops coordinates
+    *along the reduced dimensions*, so these survive into the returned
+    2D array untouched.
+
+    That is harmless for a single partition, but ``query_raster()`` then
+    concatenates partitions with ``xr.concat(..., join="outer")``. When
+    partitions disagree on which categorical-axis members are present —
+    which fields observe which antennas differs in practice — that
+    concat has to reconcile the categorical (``baseline_id``) dimension
+    across partitions, which drags these string auxiliary coordinates
+    into an alignment/fill-value computation library code does not
+    expect a string dtype in. Confirmed as the source of
+    ``ufunc 'minimum' did not contain a loop with signature matching
+    types (dtype('<U...')...)`` on a Field change/step in duo mode
+    (I-1's manual round-trip testing, August 2026) — the same message a
+    manual Field ``Select`` + Plot ▶ would produce, since both paths
+    funnel through this exact function.
+
+    Safe to drop unconditionally: the probe/hover path
+    (``_probe_pixel`` and friends) re-reads ``baseline_antenna1_name`` /
+    ``baseline_antenna2_name`` / ``field_name`` / ``scan_name`` directly
+    from the source partition's own ``ds.coords`` — never from
+    ``_raster_2d``'s return value — so nothing downstream of this
+    function actually uses these coordinates. Only ``y_name``/``x_name``
+    (the dimension coordinates ``Canvas.raster()`` and the extent
+    computation in ``query_raster()`` need) are kept.
+    """
+    extra = [c for c in arr.coords if c not in (y_name, x_name)]
+    return arr.drop_vars(extra) if extra else arr
 
 
 def _axis_to_dim(axis: Axis) -> str:

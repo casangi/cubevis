@@ -1,11 +1,11 @@
-# VisibilityPlotter — Preview Specification
+# visplot — Preview Specification
 
 **Repository:** https://github.com/casangi/cubevis/blob/main/devel/docs/visplot/visibility_plotter_preview.md
 
 > **Release staging note (August 2026).** This document specs the single, eventual
 > **preview** release for general external users — the filename is accurate as-is. What
 > has actually gone out so far is **pre-preview**: an internal, team-members-only
-> staging period (in progress) where team members exercise the
+> staging period (in progress since August 2026) where team members exercise the
 > current build and feed back before this document's full scope is met. Sections below
 > marked as working reflect what pre-preview reviewers can currently exercise; sections
 > still open (e.g. Duo-mode iteration — see the implementation plan's Phase 2.5) are
@@ -18,6 +18,13 @@
 `VisibilityRaster` + `VisibilityScatter` display in a single Bokeh layout,
 gives astronomers a feel for the flagging workflow, and establishes the GUI
 skeleton that the full implementation will fill in.
+
+`visplot` is what astronomers run (`from cubevis import visplot; visplot(ms=...)`) —
+this document uses `visplot` throughout for what the astronomer experiences.
+`VisibilityPlotter` is the underlying Python class `visplot()` constructs and
+returns; it appears here only where the distinction actually matters (mainly
+"Construction approach" below). See the implementation plan §1 for the full
+relationship between the two.
 
 ---
 
@@ -325,15 +332,16 @@ Absent with no stubs:
 
 ### Astronomer-facing API
 
-`VisibilityPlotter` is an end-user application, not a composable
-programmer component.  Its constructor accepts strings, numbers, and
-lists — no internal objects.  The same call works in the preview and in
-the full release; no API changes will be needed later.
+`visplot` is the end-user application, not a composable programmer
+component. Its signature accepts strings, numbers, and lists — no internal
+objects. It forwards these to construct a `VisibilityPlotter` instance and
+returns it. The same call works in the preview and in the full release; no
+API changes will be needed later.
 
 ```python
-from cubevis.toolbox.visplot import VisibilityPlotter
+from cubevis import visplot
 
-plotter = VisibilityPlotter(
+plotter = visplot(
     # Data source — exactly one of ms or ps
     ms   = "sis14_twhya_calibrated_flagged.ms",   # MSv2
     # ps = "sis14_twhya_calibrated_flagged.ps.zarr", # MSv4
@@ -377,8 +385,8 @@ plotter = VisibilityPlotter(
 plotter.show()  # returns a Bokeh layout for notebook embedding
 
 # Headless scripted export — no Bokeh figure, no browser needed
-vp = VisibilityPlotter(ms="sis14.ms", headless=True,
-                       plot_width=1400, plot_height=700)
+vp = visplot(ms="sis14.ms", headless=True,
+             plot_width=1400, plot_height=700)
 vp(plotfile="amp.png", theme="light")               # full-extent view
 for spw in (0, 1, 2, 3):
     vp(plotfile=f"amp_spw{spw}.png", spw=[spw])     # iterate over SPWs
@@ -395,7 +403,8 @@ enum value.  In the preview `"auto"` falls through to
 and `RadpsReductionContext` are not yet implemented), so display-only use
 works cleanly in any environment.  Pass `"null"` explicitly to suppress
 the warning.  See §4.12 of the implementation plan for the full
-context-selection matrix.
+context-selection matrix, and for how to reach `VisibilityPlotter` directly
+if you want the class rather than `visplot()`.
 
 ### What VisibilityPlotter does internally
 

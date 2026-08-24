@@ -3,7 +3,7 @@
 **Project:** cubevis / casangi  
 **Repository:** https://github.com/casangi/cubevis/blob/main/devel/docs/visplot/visibility_plotter_implementation_plan.md  
 **Status:** Phase 0 (architecture foundations) complete; **pre-preview** stage in progress
-with internal team members (ongoing), exercising the current build toward the
+with internal team members (since August 2026), exercising the current build toward the
 single **preview** release specified in `visibility_plotter_preview.md`.  
 **Last updated:** 2026-08
 
@@ -25,7 +25,7 @@ single **preview** release specified in `visibility_plotter_preview.md`.
 1. [Background and motivation](#1-background-and-motivation)
 2. [Astronomer flagging workflow](#2-astronomer-flagging-workflow)
 3. [Architecture overview](#3-architecture-overview)
-4. [VisibilityPlotter capability set](#4-visibilityplotter-capability-set)
+4. [visplot capability set](#4-visplot-capability-set)
 5. [GUI layout](#5-gui-layout)
 6. [Implementation phases and punch list](#6-implementation-phases-and-punch-list)
 7. [Appendix A — API stubs](#appendix-a--api-stubs)
@@ -36,9 +36,25 @@ single **preview** release specified in `visibility_plotter_preview.md`.
 
 ## 1. Background and Motivation
 
-`VisibilityPlotter` is a replacement for `plotms` and `msview` in CASA6, targeting both
+`visplot` is a replacement for `plotms` and `msview` in CASA6, targeting both
 MSv2 and MSv4 / Processing Set data as used by NRAO (ALMA, VLA), RADPS/AstroVIPER, and
-future ngVLA pipelines. It combines two already-implemented display classes:
+future ngVLA pipelines. `visplot` is the top-level, end-user-facing entry point
+astronomers actually invoke — `from cubevis import visplot; visplot(ms=...)` — see the
+real usage pattern in the pre-preview install/usage instructions. `VisibilityPlotter` is
+the object-oriented class underneath it: `visplot()` exposes `VisibilityPlotter`'s
+interface in functional form for astronomers, while `VisibilityPlotter` itself remains
+directly usable by Python developers who want the class-based, composable interface
+(embedding in a larger application, subclassing, testing against a mock context, etc.)
+rather than the one-call functional one. See §4.12 for the exact relationship between
+the two, including what `visplot()` forwards to `VisibilityPlotter.__init__`.
+
+Documents and sections about *implementation* (architecture, class design, the punch
+list) generally use `VisibilityPlotter`, since that's what's actually being built.
+Documents and sections about the *astronomer's experience* (workflow, GUI, what the
+preview release does) generally use `visplot`, since that's what astronomers actually
+run. Where a section mixes both, the more specific term is used for the specific claim.
+
+`VisibilityPlotter` combines two already-implemented display classes:
 
 - **`VisibilityRaster`** — Datashader-rendered 2D heatmap of a visibility quantity
   (amplitude, phase, flag fraction, etc.) over two native axes (time × channel, baseline × time, etc.)
@@ -46,9 +62,9 @@ future ngVLA pipelines. It combines two already-implemented display classes:
   quantities vs a free x-axis
 
 Both classes share the same `CommMgr`/`Comm` j2p/p2j transport, `_state_source` pattern,
-and two-level pan/zoom architecture. `VisibilityPlotter` wraps them in a single application
+and two-level pan/zoom architecture. `VisibilityPlotter` wraps them in a single class
 with a shared selection panel, flagging toolbar, and the `ReductionContext` abstraction for
-calibration and flag commit.
+calibration and flag commit — exposed to astronomers as `visplot`.
 
 CASR-385 has a long history, but the current push carries specific urgency: supporting
 **HRS Commissioning**'s initial needs — targeted for **summer 2027** — is what elevates
@@ -69,7 +85,7 @@ inform the Phase 4 punch list items prefixed **X-**:
 
 ### Key advantages over plotms / msview
 
-| Capability | plotms | msview | VisibilityPlotter |
+| Capability | plotms | msview | visplot |
 |---|---|---|---|
 | Raster display | ✗ | ✓ | ✓ |
 | Scatter display | ✓ | ✗ | ✓ |
@@ -91,7 +107,7 @@ Flagging is not a single step — it recurs throughout the reduction cycle:
 ```
 Import (ASDM → MS / Processing Set)
     ↓
-Pre-calibration inspection & flagging       ← primary VisibilityPlotter use case
+Pre-calibration inspection & flagging       ← primary visplot use case
     ↓
 Calibration (bandpass → gaincal → fluxscale → applycal)
     ↓
@@ -122,7 +138,7 @@ CASA tools. The following difmap capabilities inform this design:
 
 - **`vplot` mode** — amplitude/phase vs time per baseline and IF, colour-coded by flag
   state (green = unflagged, yellow = flagged, blue = selfcal-flagged, red = antenna flagged).
-  Planned as a named view preset in `VisibilityPlotter`.
+  Planned as a named view preset in `visplot`.
 - **`radplot` mode** — amplitude/phase vs UV-radius; single-click nearest-point flagging
   (no box required). Planned as an additional flagging tool mode.
 - **`corplot`** — accumulated self-cal corrections vs time per antenna; identifies
@@ -322,7 +338,7 @@ inventory needed to populate the sidebar dropdowns and is passed directly to
 
 ---
 
-## 4. VisibilityPlotter Capability Set
+## 4. visplot Capability Set
 
 ### 4.1 Display modes
 
@@ -489,22 +505,28 @@ RADPS without a CASA6 session), calibration buttons are hidden.
 ### 4.11 Export / scripting
 
 - **Save plot / Export PNG** — ✅ Done: GUI button writes the current view (zoom included) server-side; absolute path reported in status bar. No browser download (JupyterLab-over-SSH means Python process may be on a different machine than the browser; base64-over-comm deferred by decision).
-- **Headless API** — ✅ Done: `VisibilityPlotter(ms=..., headless=True); vp(plotfile="out.png")`. See E-2.
+- **Headless API** — ✅ Done: `visplot(ms=..., headless=True); vp(plotfile="out.png")`. See E-2.
 - **Copy flagdata command** — generate equivalent `flagdata()` call for current `FlagDB` state
-- **Python API** — `VisibilityPlotter(ms=..., field=..., preset=...)` usable in Jupyter
+- **Python API** — `visplot(ms=..., field=..., preset=...)` usable in Jupyter
 - **Reload ↺ vs Plot ▶** — `Plot ▶` re-queries and re-renders, preserving `FlagDB` state; `Reload ↺` re-queries, re-renders, and **clears `FlagDB`** (safe reset) — matches the expectation that "start over" discards in-progress uncommitted flag state
 
-### 4.12 Astronomer-facing constructor
+### 4.12 Astronomer-facing entry point: `visplot()`
 
-`VisibilityPlotter` is an end-user application, not a composable
-programmer component.  Its public constructor accepts only strings,
-numbers, and lists — no internal objects (`VisibilityReader`,
-`ReductionContext`, `ObservationMetadata`, `SelectionSpec`).
+`visplot` is the end-user application — a function, not a composable
+programmer component — that astronomers actually call. Its public signature
+accepts only strings, numbers, and lists — no internal objects
+(`VisibilityReader`, `ReductionContext`, `ObservationMetadata`,
+`SelectionSpec`). It forwards these same keyword arguments to construct a
+`VisibilityPlotter` instance and returns that instance to the caller;
+`VisibilityPlotter` is what a Python developer would reach for directly if
+they wanted the class-based, composable interface instead of the one-call
+functional one (see §"Role of `open_ms()` / `open_ps()`" and the "Composable
+layer for developers" note below).
 
 ```python
-from cubevis.toolbox.visplot import VisibilityPlotter
+from cubevis import visplot
 
-plotter = VisibilityPlotter(
+plotter = visplot(
     # Data source — exactly one of ms or ps (ValueError if both or neither)
     ms   = "sis14_twhya_calibrated_flagged.ms",
     # ps = "sis14_twhya_calibrated_flagged.ps.zarr",
@@ -545,6 +567,15 @@ plotter = VisibilityPlotter(
 plotter.show()  # returns a Bokeh layout for notebook embedding
 ```
 
+A Python developer who wants the class directly, rather than going through
+`visplot()`, can do so with the identical keyword arguments:
+
+```python
+from cubevis.toolbox.visplot import VisibilityPlotter
+
+plotter = VisibilityPlotter(ms="sis14_twhya_calibrated_flagged.ms", ...)
+```
+
 ### The `backend=` parameter and `ReductionBackend`
 
 `backend` accepts a plain string or a `ReductionBackend` enum value
@@ -574,19 +605,20 @@ drafts of this document described one; it was never created, and there's no
 confirmed plan to extract one. If that changes, update this section and
 Appendix B together rather than letting one drift from the other.
 
-They are not imported directly by astronomer-facing code; they're an
-implementation layer that could in principle be extracted or replaced (e.g.
-for testing with a mock context) without changing the `VisibilityPlotter`
-constructor signature — but that's a hypothetical future refactor, not
-something currently planned.
+They are not imported directly by `visplot()` or other astronomer-facing code;
+they're an implementation layer that could in principle be extracted or
+replaced (e.g. for testing with a mock context) without changing the
+`VisibilityPlotter` constructor signature — but that's a hypothetical future
+refactor, not something currently planned.
 
 **Composable layer for developers.**  `VisibilityRaster`,
 `VisibilityScatter`, `LocalVisibilityReader`, and `ReductionContext`
 remain fully accessible as independent programmer-facing components for
-embedding in pipelines or custom tools.  `VisibilityPlotter` does not
-replace them — it wraps them behind an astronomer-friendly interface.
-Developers who want to build their own application shell can do so using
-these lower-level classes directly, optionally naming their own class
+embedding in pipelines or custom tools, alongside `VisibilityPlotter` itself
+(the class `visplot()` wraps — see above). None of them are replaced by
+`visplot`; `visplot` is simply the astronomer-friendly functional entry point
+built on top. Developers who want to build their own application shell can do
+so using these lower-level classes directly, optionally naming their own class
 `VisibilityWidget` or similar to signal its composable nature.
 
 ---
@@ -1001,7 +1033,7 @@ decisions rather than guessing.)*
 | ID | Task | Files affected |
 |---|---|---|
 | E-1 | Generator/iteration API: `__call__` is the terminal verb; iteration is repeated calls (`vp(plotfile=f"amp_spw{spw}.png", spw=[spw])` in a loop). No separate generator class needed — the existing flat constructor vocabulary handles per-call re-selection. ✅ **Done (August 2026).** | `visibility_plotter.py` |
-| E-2 | Headless PNG export. ✅ **Done (August 2026).** GUI `Export PNG` button writes current view including zoom; headless path via `VisibilityPlotter(ms=..., headless=True)` skips Bokeh Figure/toolbar/tick-formatter construction. Matplotlib chrome over the byte-identical `(H, W) uint32` array already produced by Datashader — not a parallel renderer, a parallel *chrome* over the same pixels. Fidelity in three tiers: Tier 1 RGBA byte-identical at matched canvas size (hash-verified); Tier 2 ranges, tick label strings, titles, labels identical (JS/Python parity harness, 2243 fuzzed cases); Tier 3 fonts/chrome pixel positions best-effort. Theme is a deliberate Tier-3 exception: GUI defaults dark, PNG export defaults light (headed for a paper). SPW `DataTable` rework (§6a) done as part of this work. Key architectural finding: Bokeh contributes no data-area pixels — only chrome (title, axis labels, ticks, toolbar, hover). Export is not "keep two renderers in sync" but "keep two chrome-drawers in sync over an identical array." **Why this moved out of its original Phase 4 slot:** investigation surfaced that Bokeh's own `export_png` depends on a headless/virtualized browser (webkit) to render the page before rasterising it — a poor fit for the minimally-configured, headless hosts pipeline deployments run on. The matplotlib path avoids that dependency entirely, and was worth bringing forward for two further reasons: (a) it gives pre-preview reviewers real hardcopy output to test against, despite GUI/PNG chrome now diverging more than a native Bokeh export would have (mitigated since both consume the identical Datashader-generated pixel array), and (b) it supports performance testing against larger datasets ahead of the ngVLA-scale benchmarking in E-4/X-4. This supersedes the originally-planned G-5 (see Phase 4). | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py`, `png_export.py` *(new)*, `panel_spec.py` *(new)*, `tick_format.py` *(new)*, `palettes.py` *(new)*, `refresh.py` *(new)* |
+| E-2 | Headless PNG export. ✅ **Done (August 2026).** GUI `Export PNG` button writes current view including zoom; headless path via `visplot(ms=..., headless=True)` skips Bokeh Figure/toolbar/tick-formatter construction. Matplotlib chrome over the byte-identical `(H, W) uint32` array already produced by Datashader — not a parallel renderer, a parallel *chrome* over the same pixels. Fidelity in three tiers: Tier 1 RGBA byte-identical at matched canvas size (hash-verified); Tier 2 ranges, tick label strings, titles, labels identical (JS/Python parity harness, 2243 fuzzed cases); Tier 3 fonts/chrome pixel positions best-effort. Theme is a deliberate Tier-3 exception: GUI defaults dark, PNG export defaults light (headed for a paper). SPW `DataTable` rework (§6a) done as part of this work. Key architectural finding: Bokeh contributes no data-area pixels — only chrome (title, axis labels, ticks, toolbar, hover). Export is not "keep two renderers in sync" but "keep two chrome-drawers in sync over an identical array." **Why this moved out of its original Phase 4 slot:** investigation surfaced that Bokeh's own `export_png` depends on a headless/virtualized browser (webkit) to render the page before rasterising it — a poor fit for the minimally-configured, headless hosts pipeline deployments run on. The matplotlib path avoids that dependency entirely, and was worth bringing forward for two further reasons: (a) it gives pre-preview reviewers real hardcopy output to test against, despite GUI/PNG chrome now diverging more than a native Bokeh export would have (mitigated since both consume the identical Datashader-generated pixel array), and (b) it supports performance testing against larger datasets ahead of the ngVLA-scale benchmarking in E-4/X-4. This supersedes the originally-planned G-5 (see Phase 4). | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py`, `png_export.py` *(new)*, `panel_spec.py` *(new)*, `tick_format.py` *(new)*, `palettes.py` *(new)*, `refresh.py` *(new)* |
 | E-2a | **Known gap from export work:** constructor API only exposes `layout="one"\|"side"\|"over"` with slot A hardcoded raster and slot B scatter. Two rasters side by side is reachable from the GUI (P-5b) but unreachable from the API. Fixing this — adding per-slot kind control to the constructor, likely via a `panels=` escape hatch (list of dicts of primitives) — is independent of export but was identified during it and is the natural entry point to a more expressive constructor API. | `visibility_plotter.py` |
 | E-3 | GUI colorbar (`ColorBar`). **Partially done.** `plot_left`/`plot_right` placement works in both GUI and PNG. Display-scope colorbar (a separate narrow figure, mapper/theme/range kept in sync on every `update_scaling()` and viewport change) done in PNG; GUI version deferred until someone requests it — better than shipping a GUI option that silently means something different from the PNG option. Under `eq_hist` in local mode the mapper must be rebuilt on every `update_scaling()` and viewport change. GUI colorbars should default **off** (gear panel histogram already conveys value distribution); PNG colorbars default **on** (no gear panel). | `colormap_scaling.py` (`ScalarMapping` added), GUI colorbar checkbox |
 | E-4 | Real query→render→export timing benchmarks vs. PlotMS — data-backed decisions for grid-mode sizing (default/cap grid dimensions). Still open. | benchmarking scripts |
@@ -1015,7 +1047,7 @@ decisions rather than guessing.)*
 
 | ID | Task | Files affected |
 |---|---|---|
-| P-1 | `VisibilityPlotter` class skeleton: astronomer-facing constructor (see §4.12); internally calls `open_ms()`/`open_ps()`, constructs `VisibilityRaster`, `VisibilityScatter`, `FlagDB`, sidebar, toolbar, and preference `ColumnDataSource`; no internal objects exposed as public attributes | `visibility_plotter.py` *(new)* |
+| P-1 | `VisibilityPlotter` class skeleton, constructed internally by `visplot()` (see §4.12); internally calls `open_ms()`/`open_ps()`, constructs `VisibilityRaster`, `VisibilityScatter`, `FlagDB`, sidebar, toolbar, and preference `ColumnDataSource`; no internal objects exposed as public attributes | `visibility_plotter.py` *(new)* |
 | P-2 | Sidebar widget set — accordion layout with Data, Axes, Display, Flagging sections; Bokeh `Select`, `MultiSelect`, `TextInput`, `CheckboxGroup`, `Slider` | `visibility_plotter.py` |
 | P-3 | Toolbar — Plot, Reload, `FlagTool`, `UnflagTool`, Flag ⚑ (write to disk), Locate, Save Plot, Copy flagdata. `enable_flagging=False` omits flag tools entirely. | `visibility_plotter.py` |
 | P-4 | Display mode toggle — Scatter / Raster / Both; dynamically show/hide panels | `visibility_plotter.py` |
@@ -1417,7 +1449,7 @@ whether the 3D view lives in `VisibilityPlotter` or as a separate application.
 **Description:** A packaged desktop application for rendering and user
 interaction, independent of a Jupyter notebook session.
 
-**Current status:** Not planned. `VisibilityPlotter` runs in a Jupyter
+**Current status:** Not planned. `visplot` runs in a Jupyter
 notebook or browser tab via the existing iclean/casagui infrastructure.
 The architecture does not preclude this — the Bokeh layout is already
 self-contained — but packaging it as an Electron app (or similar) is a

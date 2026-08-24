@@ -5,7 +5,7 @@
 > **Release staging note (August 2026).** This document specs the single, eventual
 > **preview** release for general external users — the filename is accurate as-is. What
 > has actually gone out so far is **pre-preview**: an internal, team-members-only
-> staging period (in progress since August 2026) where team members exercise the
+> staging period (in progress) where team members exercise the
 > current build and feed back before this document's full scope is met. Sections below
 > marked as working reflect what pre-preview reviewers can currently exercise; sections
 > still open (e.g. Duo-mode iteration — see the implementation plan's Phase 2.5) are

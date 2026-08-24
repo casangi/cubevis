@@ -3,7 +3,7 @@
 **Project:** cubevis / casangi  
 **Repository:** https://github.com/casangi/cubevis/blob/main/devel/docs/visplot/visibility_plotter_implementation_plan.md  
 **Status:** Phase 0 (architecture foundations) complete; **pre-preview** stage in progress
-with internal team members (since August 2026), exercising the current build toward the
+with internal team members (ongoing), exercising the current build toward the
 single **preview** release specified in `visibility_plotter_preview.md`.  
 **Last updated:** 2026-08
 

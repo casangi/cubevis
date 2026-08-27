@@ -444,6 +444,8 @@ user only wants to inspect data. Threads through to `VisibilityRaster` /
 
 - Hover: multi-layer probe reports every visible layer; em dash (—) for any layer with no data at that location (hidden layers omitted entirely). Stable field order so status bar does not shift as cursor moves. Prefers exact-bin hit; near-miss search uses screen-pixel budget (`probe_slop_px` = 6 px), bin-aspect-weighted distances, lowest-layer-index tiebreak.
 - **Locate** button: for a drawn region, list all matching rows in a sidebar table
+> [!NOTE]
+> **Feedback BE:** Maybe this is the intention already, but there is a strong use-case for matching the plotms logger functionality that gives the full information on the selected points (time, amp, chan, antenna, correlation, etc).
 
 ### 4.7 Synchronized cursor (cross-panel)
 
@@ -523,6 +525,8 @@ RADPS without a CASA6 session), calibration buttons are hidden.
 ### 4.11 Export / scripting
 
 - **Save plot / Export PNG** — ✅ Done: GUI button writes the current view (zoom included) server-side; absolute path reported in status bar. No browser download (JupyterLab-over-SSH means Python process may be on a different machine than the browser; base64-over-comm deferred by decision).
+> [!NOTE]
+> **Feedback BE:** 1). For publishable quality figures, it would be useful if the axes labels can be adjusted to be properly readable in letter size mandated by journals. Export options PDF and EPS would also be useful (but note that I am not up-to-date on the latest imaging standard among the community). 2). There are use cases for being able to export the plotted data into an ascii table. Is that feasible to implement?
 - **Headless API** — ✅ Done: `visplot(ms=..., headless=True); vp(plotfile="out.png")`. See E-2.
 - **Copy flagdata command** — generate equivalent `flagdata()` call for current `FlagDB` state
 - **Python API** — `visplot(ms=..., field=..., preset=...)` usable in Jupyter

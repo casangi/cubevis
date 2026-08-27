@@ -34,7 +34,6 @@ import sys
 from uuid import uuid4
 from os.path import exists
 from bokeh.plotting import show
-from casatasks.private.imagerhelpers.input_parameters import ImagerParameters
 
 from cubevis.utils import find_pkg, load_pkg
 from cubevis.toolbox import InteractiveCleanUI

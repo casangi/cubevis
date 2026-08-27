@@ -360,6 +360,8 @@ the same rows in `FlagDB`.
 ### 4.2 Data selection
 
 - MS / Processing Set path (file picker or text entry)
+> [!NOTE]
+> **Feedback BE:** 1). Does RADPS development adopt 'ms' as the new selection parameter instead of the 'vis' used in CASA? Whatever the choice, we should make this parameter name uniform with the one adopted by tasks in RADPS. 2). Will visplot also handle scatter plots for caltables, given that caltable plotting was brought into plotms previously.  
 - Field — dropdown from `ObservationMetadata.fields`
 - SPW — multi-select; label shows centre frequency and bandwidth
 - Scan — range or list (`1~5,8,10~12`)

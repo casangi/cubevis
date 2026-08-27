@@ -56,12 +56,6 @@ from cubevis.bokeh import BokehInit
 from cubevis.utils import resource_manager, reset_resource_manager, is_interactive_jupyter, find_pkg, load_pkg
 from cubevis.utils import MutualExclusionManager
 
-# pylint: disable=no-name-in-module
-from casatasks.private.imagerhelpers.imager_return_dict import ImagingDict
-
-from casatasks.private.imagerhelpers.input_parameters import ImagerParameters
-# pylint: enable=no-name-in-module
-
 from cubevis.utils import convert_masks
 from cubevis.toolbox import CubeMask
 from cubevis.bokeh.utils import svg_icon
@@ -411,6 +405,10 @@ class InteractiveCleanUI:
             imdetails['gui']['cube']._init_pipes( )
 
     def _create_convergence_gui( self, imdetails, orient='horizontal', sizing_mode='stretch_width', **kw ):
+        # pylint: disable=no-name-in-module
+        from casatasks.private.imagerhelpers.imager_return_dict import ImagingDict
+
+
         TOOLTIPS='''<div>
                         <div>
                             <span style="font-weight: bold;">@type</span>
@@ -584,6 +582,9 @@ class InteractiveCleanUI:
     def _build_bokeh( self ):
         '''create and show GUI
         '''
+        # pylint: disable=no-name-in-module
+        from casatasks.private.imagerhelpers.imager_return_dict import ImagingDict
+
         ###
         ### Will contain the top level GUI
         ###

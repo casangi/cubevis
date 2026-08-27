@@ -413,7 +413,7 @@ a `ReductionContext.commit_flags()` responsibility, not a display responsibility
   raster this is exact; for scatter it uses a proxy based on the sparse-data
   canvas-shrink logic (acknowledged approximation — see F-10 for the scatter
   flagging open question).
-  > [!NOTE]
+> [!NOTE]
 > **Feedback BE:** With a resolution of 500x500 pixels, one may run into this limitation quite easily, especially with ngVLA. Often it is much more efficient to flag slightly more without loss of quality. Should there be an option to relax this, to allow flagging even if data cells overlap in a pixel?
 - **Nearest-point flag** — click to flag the point closest to cursor (difmap-style);
   same `FlagTool` mechanism, `flag=True`, applied at point granularity

@@ -126,10 +126,16 @@ Final image analysis
 | RFI (broadband/transient) | Spike at specific time, all channels | Scatter: amp vs time |
 | Bad antenna | All baselines to one antenna deviant | Scatter: amp vs time, colour-by-baseline, iterate by antenna |
 | Bad baseline | One pair consistently deviant | Scatter: amp vs UVdist |
+| Failed scans | Scan missing | Scatter: time vs amp, color by field, iterate by antenna |
 | Phase decorrelation | Rapidly varying phase for a scan | Scatter: phase vs time |
+| Opacity / pointing problem | Decrease in amplitude | Scatter: time vs amp, iterate by baseline | 
 | Shadowing | Zero amplitude at short baselines | Scatter: amp vs time (automated) |
 | Edge channels | Rolloff at band edges | Raster or scatter: amp vs channel |
 | Quack (settle time) | Bad data in first N seconds of each scan | Scatter: amp vs time per scan |
+
+> [!NOTE]
+> **Feedback:** Added "Failed scans" and "Opacity/pointing problem" as signatures for flagging often used by astronomers.
+
 
 ### 2.2 Lessons from difmap
 
@@ -406,7 +412,7 @@ a `ReductionContext.commit_flags()` responsibility, not a display responsibility
   feel broken) but is rejected with an explanatory message in the status bar. For
   raster this is exact; for scatter it uses a proxy based on the sparse-data
   canvas-shrink logic (acknowledged approximation — see F-10 for the scatter
-  flagging open question).
+  flagging open question). :math:`\color{red}\text{BE: With a resolution of 500x500 pixels, one may run into this limitation quite easily, especially with ngVLA. Often it is much more efficient to flag slightly more without loss of quality. Should there be an option to relax this, to allow flagging even if data cells overlap in a pixel?}`
 - **Nearest-point flag** — click to flag the point closest to cursor (difmap-style);
   same `FlagTool` mechanism, `flag=True`, applied at point granularity
 - **Flag extend** — per-delta controls: all correlations, all channels, all SPWs, all times in scan

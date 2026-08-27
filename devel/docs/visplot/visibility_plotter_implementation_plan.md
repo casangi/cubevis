@@ -500,7 +500,12 @@ panels happen to share an axis.
 - **vplot mode** — amplitude vs time, colour-by-baseline, flag-state overlay,
   one-per-antenna iteration
 - **radplot mode** — amplitude vs UVdist, nearest-point flag tool active
+> [!NOTE]
+> **Feedback BE:** When switching from vplot to radplot, only the scatter plot is changed to amp vs UVdist. It would be more intuitive if also the raster plot would switch to UVdist on the X-axis.
 - **projplot mode** — amplitude vs projected UV cut (selectable position angle)
+
+> [!NOTE]
+> **Feedback BE:** The ‘waterfall’ plot (not mentioned in this document) shows time vs channel in the raster, and amp vs time in the scatter plot. It would be more intuitive to have the raster plot show channel vs time (i.e., switch the axes).
 
 ### 4.10 Calibration integration (loose coupling)
 

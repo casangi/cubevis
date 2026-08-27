@@ -41,9 +41,7 @@ from cubevis import exe
 {%- if _ns.needed %}
 from typing import {{ _ns.needed | sort | join(', ') }}
 {%- endif %}
-from casatasks.private.task_logging import start_log as _start_log
-from casatasks.private.task_logging import end_log as _end_log
-from casatasks.private.task_logging import except_log as _except_log
+
 from {{ app_module }} import {{ class_name }}
 
 
@@ -166,7 +164,6 @@ class _{{ task_name }}:
     r"""
     {{ docstring | strip_quotes }}
     """
-
     _info_group_ = """{{ info_group }}"""
     _info_desc_  = """{{ info_desc }}"""
 
@@ -178,6 +175,10 @@ class _{{ task_name }}:
 {%- if _ds %}
         """{{ _ds }}"""
 {%- endif %}
+
+        from casatasks.private.task_logging import start_log as _start_log
+        from casatasks.private.task_logging import end_log as _end_log
+        from casatasks.private.task_logging import except_log as _except_log
 
         _validate_params(
 {%- for arg in methods['__init__'].args if not arg.is_self and not arg.is_star and not arg.is_layer %}

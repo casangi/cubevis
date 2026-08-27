@@ -30,9 +30,7 @@ from __future__ import absolute_import
 from uuid import uuid4
 from cubevis import exe
 from typing import Optional
-from casatasks.private.task_logging import start_log as _start_log
-from casatasks.private.task_logging import end_log as _end_log
-from casatasks.private.task_logging import except_log as _except_log
+
 from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
 
 
@@ -335,7 +333,6 @@ class _visplot:
         Whether each figure's toolbar auto-hides until the mouse is over
         that plot.  Defaults to ``True``.
     """
-
     _info_group_ = """visualization, information,editing, manipulation"""
     _info_desc_  = """A plotter/interactive flagger for visibility data"""
 
@@ -379,6 +376,10 @@ without any browser chrome -- no ``CommMgr``, no control pipe, no
 figure styling, no layout.
 
 See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
+
+        from casatasks.private.task_logging import start_log as _start_log
+        from casatasks.private.task_logging import end_log as _end_log
+        from casatasks.private.task_logging import except_log as _except_log
 
         _validate_params(
             ms = ms,

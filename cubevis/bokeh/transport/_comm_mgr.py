@@ -155,6 +155,38 @@ class Comm( Model ):
             await self._mgr.send(self, message_id, message, callback)
 
 
+### Direction/role tags used to tell "a message I originated" apart from
+### "a message the peer originated" when routing an incoming message.
+###
+### Historically these were hardcoded literals ('p2j' for anything this
+### CommMgr sent, 'j2p' for anything it received and had to reply to) --
+### safe only because the browser leg is genuinely asymmetric: Python
+### always originates 'p2j', JS always originates 'j2p'. Two unmodified
+### CommMgr instances talking to each other (e.g. P_local's kernel-facing
+### side and a kernel-side CommMgr, both Python) would both tag their own
+### outgoing traffic 'p2j' and both be unable to tell their own replies
+### apart from the peer's fresh requests -- see the design doc, and
+### test_task1_bug_reproduction.py for the concrete failure this caused.
+###
+### 'default' reproduces today's literals exactly, so the browser-facing
+### path (and anything else already constructing a plain `CommMgr()`) is
+### unaffected. Give the *other* end of a Python<->Python link 'mirror'
+### so the two sides no longer collide.
+###
+### Exposed as named constants (module-level, and mirrored as CommMgr
+### class attributes below) rather than leaving 'default'/'mirror' as
+### magic strings, so callers outside this module -- notably the
+### cubevis.remote subpackage -- don't have to hardcode them.
+ROLE_DEFAULT = 'default'
+ROLE_MIRROR = 'mirror'
+
+_ROLE_DIRECTION_TAGS = {
+    #        (self_direction, peer_direction)
+    ROLE_DEFAULT: ('p2j', 'j2p'),
+    ROLE_MIRROR:  ('j2p', 'p2j'),
+}
+
+
 class CommMgr( Model, BokehInit ):
     """
     Single communications manager for entire application.
@@ -162,7 +194,19 @@ class CommMgr( Model, BokehInit ):
     Provides per-category (Comm) message handling with concurrent processing.
     Different Comm categories can process messages in parallel, while
     messages within a category are serialized.
+
+    ``role`` selects which direction tag this instance uses for messages it
+    originates, and which tag it therefore expects on incoming requests from
+    its peer -- see ``_ROLE_DIRECTION_TAGS``. Two CommMgrs that talk directly
+    to each other (as opposed to one Python CommMgr and one JS frontend) must
+    use opposite roles: one ``ROLE_DEFAULT``, the other ``ROLE_MIRROR``.
     """
+
+    # Convenience aliases so callers can write CommMgr.ROLE_MIRROR instead
+    # of importing the module-level constants separately.
+    ROLE_DEFAULT = ROLE_DEFAULT
+    ROLE_MIRROR = ROLE_MIRROR
+
     transport_type = String( default='auto',
                              help="which type of low level transport to use" )
     address = Nullable( Tuple(String, Int), default=None,
@@ -177,15 +221,23 @@ class CommMgr( Model, BokehInit ):
     def __init__( self, *args,
                   on_shutdown: Optional[Callable] = None,
                   on_error: Optional[Callable[[Exception], None]] = None,
+                  role: str = ROLE_DEFAULT,
                   **kwargs ):
         if 'comm_mgr_id' not in kwargs:
             kwargs['comm_mgr_id'] = str(uuid4( ))
 
         # JavaScript Comm object find their manager using this
         kwargs['name'] = kwargs['comm_mgr_id']
-        logger.debug(f"CommMgr.__init__: {args}, on_shutdown={on_shutdown}, on_error={on_error}, {kwargs}")
+        logger.debug(f"CommMgr.__init__: {args}, on_shutdown={on_shutdown}, on_error={on_error}, role={role}, {kwargs}")
 
         super( ).__init__( *args, **kwargs )
+
+        if role not in _ROLE_DIRECTION_TAGS:
+            raise ValueError(
+                f"CommMgr: unknown role {role!r}; expected one of {sorted(_ROLE_DIRECTION_TAGS)}"
+            )
+        self._role = role
+        self._self_direction, self._peer_direction = _ROLE_DIRECTION_TAGS[role]
 
         # Auto-detect transport type (sync operation)
         if self.transport_type == 'auto':
@@ -284,6 +336,17 @@ class CommMgr( Model, BokehInit ):
         old_state = self._state
         self._state = new_state
         logger.debug(f"Application state: {old_state.value} -> {new_state.value}")
+
+    @property
+    def role(self) -> str:
+        """
+        This CommMgr's direction/role tag ('default' or 'mirror').
+
+        Read-only: fixed at construction, since changing it mid-session
+        while requests are in flight would make in-progress ``request_id``
+        bookkeeping ambiguous. See ``_ROLE_DIRECTION_TAGS``.
+        """
+        return self._role
 
     @property
     def connection_generation(self) -> int:
@@ -525,7 +588,7 @@ class CommMgr( Model, BokehInit ):
             'comm_id': comm_id,
             'message_id': message_id,
             'message': message,
-            'direction': 'p2j',
+            'direction': self._self_direction,
             'request_id': request_id
         }
 
@@ -557,7 +620,7 @@ class CommMgr( Model, BokehInit ):
             'comm_id': comm_id,
             'message_id': message_id,
             'message': message,
-            'direction': 'p2j',
+            'direction': self._self_direction,
             'request_id': request_id
         }
 
@@ -612,8 +675,21 @@ class CommMgr( Model, BokehInit ):
             # Send it
             await self._send_immediate(comm_id, message_id, message, request_id, callback)
 
-    async def initialize(self):
-        """Initialize the transport (for Colab/Jupyter)."""
+    async def initialize(self, transport: Optional['TransportBase'] = None):
+        """
+        Initialize the transport (for Colab/Jupyter/remote_kernel).
+
+        `transport`, if given, is assigned to `self._transport` before
+        the usual checks run -- equivalent to setting `self._transport`
+        directly beforehand (which is still what this does internally),
+        but lets external callers such as cubevis.remote's
+        `open_remote_kernel_link()` avoid reaching past the underscore
+        for what is, for the 'colab'/'jupyter'/'remote_kernel' transport
+        types, otherwise a required step.
+        """
+        if transport is not None:
+            self._transport = transport
+
         if self._initialized and self.transport_type != 'auto':
             return  # Already done
 
@@ -626,8 +702,17 @@ class CommMgr( Model, BokehInit ):
 
         logger.debug(f"CommMgr.initialize: {self.transport_type}")
 
-        # Create and initialize non-WebSocket transports
-        if self.transport_type == 'colab' or self.transport_type == 'jupyter':
+        # Create and initialize non-WebSocket transports.
+        #
+        # 'remote_kernel' is handled identically to 'colab'/'jupyter' here
+        # (a transport constructed and assigned to self._transport by the
+        # caller before initialize() is called -- the same expectation the
+        # RuntimeError below already documents for 'colab'/'jupyter') --
+        # it's a separate label purely so cubevis.remote's KernelClientTransport
+        # doesn't have to masquerade as a notebook-embedded 'jupyter' transport
+        # (which would also make transport_type=='auto' autodetection, used
+        # elsewhere for the browser leg, ambiguous with this new leg).
+        if self.transport_type in ('colab', 'jupyter', 'remote_kernel'):
             if not self._transport:
                 raise RuntimeError(f"transport should be set earlier for {self.transport_type}")
             self._transport.set_message_callback(self._route_message)
@@ -1052,17 +1137,29 @@ class CommMgr( Model, BokehInit ):
         """
         Route incoming message to appropriate handler.
 
-        This handles both responses (p2j) and requests (j2p).
+        This handles both responses (tagged with this instance's own
+        ``self._self_direction``) and requests (tagged with the peer's
+        ``self._peer_direction``). For the default role these are the
+        literal 'p2j'/'j2p' strings the browser leg has always used; see
+        ``_ROLE_DIRECTION_TAGS`` for why a Python<->Python link needs one
+        side to use 'mirror' instead.
         """
         direction = msg.get('direction')
 
-        if direction == 'p2j':
-            # Response to our request
+        if direction == self._self_direction:
+            # Response to a request we made ourselves.
             await self._handle_response(msg)
 
-        elif direction == 'j2p':
-            # Request from frontend
+        elif direction == self._peer_direction:
+            # Fresh request (or push) from the peer.
             await self._handle_request(msg)
+
+        else:
+            logger.warning(
+                f"CommMgr[{self._role}]._route_message: unrecognized direction "
+                f"{direction!r} (expected {self._self_direction!r} or "
+                f"{self._peer_direction!r}); dropping message"
+            )
 
     async def _handle_response(self, msg: Dict[str, Any]):
         """Handle response from frontend to our request."""
@@ -1115,7 +1212,7 @@ class CommMgr( Model, BokehInit ):
                     'message_id': message_id,
                     'request_id': request_id,
                     'message': {'error': f'No handler for {comm_id}.{message_id}'},
-                    'direction': 'j2p'
+                    'direction': self._peer_direction
                 })
             return
 
@@ -1147,7 +1244,7 @@ class CommMgr( Model, BokehInit ):
                     'message_id': message_id,
                     'request_id': request_id,
                     'message': result,
-                    'direction': 'j2p'
+                    'direction': self._peer_direction
                 }
 
                 if getattr(self, '_pending_user_shutdown', False):
@@ -1170,7 +1267,7 @@ class CommMgr( Model, BokehInit ):
                         'error': str(e),
                         'traceback': traceback.format_exc()
                     },
-                    'direction': 'j2p'
+                    'direction': self._peer_direction
                 })
 
         # Fire any shutdown that was requested during handler execution,

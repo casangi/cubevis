@@ -456,6 +456,9 @@ figure's `MouseMove` event reads the x-coordinate and positions a
 vertical `Span` annotation at that x position on both figures. Zero
 backend cost, zero latency. Only applies when axes correspond.
 
+> [!NOTE]
+> **Feedback BE:** I suggest this to be the default setting when first starting visplot, with probably the most intuitive case of ‘time vs amp’ shown by default. Right now, when I start visplot(ms='sis14_twhya_calibrated_flagged.ms.tar’), the raster plot shows time (y) vs channel (x) with amp in color, while the scatter plot shows UV Distance vs amp. It would be more intuitive for users if the raster plot would by default show channel (y) vs time (x) with amp in color (iterating by baseline), and the scatter plot time (x) vs amp (y).
+
 **Tier 2 — cross-axis row-level sync (CommMgr round-trip).** When the
 panels show unrelated axis pairs (e.g. raster TIME × CHANNEL, scatter
 AMP vs UVDIST), translating a hovered raster pixel into a scatter

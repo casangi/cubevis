@@ -21,36 +21,61 @@
 from __future__ import annotations
 
 import asyncio
-from queue import Empty
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from cubevis.bokeh.transport import CommMgr
 from ._bridge import request, SyncBridge
-from ._kernel_transport import KernelClientTransport, DEFAULT_TARGET_NAME
+from ._kernel_transport import KernelClientTransport
+from ._worker import DEFAULT_TARGET_NAME
 from ._supervisor import build_worker_process_delegate, DEFAULT_WORKER_MODULE
+
+if TYPE_CHECKING:
+    from jupyter_client.manager import AsyncKernelManager
 
 DEFAULT_WORKER_TARGET_NAME = "cubevis-remote-worker"
 
-
 async def open_remote_kernel_link(
-    kernel_manager,
+    kernel_manager: "AsyncKernelManager",
     target_name: str = DEFAULT_TARGET_NAME,
-    timeout: float = 30.0,
+    comm_mgr_id: Optional[str] = None,
+    ready_timeout: float = 60.0,
 ) -> Tuple[CommMgr, KernelClientTransport]:
     """
-    P_local's side, one call: construct a `ROLE_MIRROR` `CommMgr`, wire a
-    `KernelClientTransport` to it, and connect -- discovering whichever
-    worker's `comm_open` shows up first on ``target_name`` (the kernel
-    is assumed to have already been bootstrapped via
-    `ensure_remote_worker()` before this is called; see Chunk 1's
-    two-step demo script for the ordering this depends on).
+    Build and connect P_local's kernel-facing link in one call.
+
+    Constructs a `CommMgr(role=CommMgr.ROLE_MIRROR)` and a
+    `KernelClientTransport` bound to `kernel_manager`, wires them
+    together, and calls `CommMgr.initialize()` (via the `'remote_kernel'`
+    transport_type) to connect and mark the manager RUNNING -- the same
+    sequence `_build_comm()` already uses for any local app, just against
+    a pre-built transport instead of one `initialize()` constructs
+    itself.
+
+    Returns `(mgr, transport)`. The caller still owns scheduling
+    `transport.run()` -- deliberately not started here, since *how* to
+    run it (a bare `asyncio.ensure_future(...)` in an already-async
+    context, vs. `SyncBridge.run_background(...)` when the caller has one
+    -- see Chunk 2's construction-time case in `_bridge.py`'s docstring)
+    is a choice this helper shouldn't make on the caller's behalf::
+
+        mgr, transport = await open_remote_kernel_link(km)
+        run_task = asyncio.ensure_future(transport.run())
+        # ... later, on teardown:
+        run_task.cancel()
+        await transport.close()
+
+    `comm_mgr_id`, if given, fixes the mirrored CommMgr's own id (purely
+    internal bookkeeping -- routing is keyed on `target_name`, not this)
+    rather than letting `CommMgr` generate one; mainly useful for tests
+    that want a predictable id to assert against.
     """
-    mgr = CommMgr(role=CommMgr.ROLE_MIRROR, transport_type='remote_kernel')
-    transport = KernelClientTransport(None, kernel_manager, target_name=target_name,
-                                       timeout=timeout)
+    mgr = CommMgr(role=CommMgr.ROLE_MIRROR, **({"comm_mgr_id": comm_mgr_id} if comm_mgr_id else {}))
+    transport = KernelClientTransport(
+        mgr.comm_mgr_id, kernel_manager, target_name=target_name, ready_timeout=ready_timeout
+    )
+    mgr.transport_type = "remote_kernel"
     await mgr.initialize(transport=transport)
     return mgr, transport
-
 
 async def _execute_and_collect(client, code: str, timeout: float = 30.0) -> List[str]:
     """Minimal execute-and-collect-stdout helper, same shape as Chunk

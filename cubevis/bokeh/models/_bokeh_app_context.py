@@ -53,6 +53,25 @@ class BokehAppContext(LayoutDOM):
     ## Class-level session ID shared across all apps in the same Python session
     _backend_id = None
 
+    ## Chunk 1b, Task 6: the per-instance RemoteAppLink, if any. A plain
+    ## Python attribute (backed by this underscore-prefixed slot, exposed
+    ## via the read-only property below) -- deliberately NOT a Bokeh
+    ## Instance(...) Property: it holds a transport, an event loop, and a
+    ## subprocess handle, none of which are JS-serializable or have any
+    ## business being JS-visible. A bare `self.remote_link = link`
+    ## assignment does not work here (confirmed): HasProps.__setattr__
+    ## rejects any attribute name that isn't a declared Bokeh Property,
+    ## the same restriction CommMgr.role hit -- hence the property shim.
+    _remote_link = None
+
+    @property
+    def remote_link(self):
+        return self._remote_link
+
+    @remote_link.setter
+    def remote_link(self, value) -> None:
+        self._remote_link = value
+
     @classmethod
     def _get_backend_id(cls):
         """Get or create a session ID for this Python session"""

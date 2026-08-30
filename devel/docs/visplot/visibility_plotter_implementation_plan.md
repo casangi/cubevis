@@ -126,10 +126,16 @@ Final image analysis
 | RFI (broadband/transient) | Spike at specific time, all channels | Scatter: amp vs time |
 | Bad antenna | All baselines to one antenna deviant | Scatter: amp vs time, colour-by-baseline, iterate by antenna |
 | Bad baseline | One pair consistently deviant | Scatter: amp vs UVdist |
+| Failed scans | Scan missing | Scatter: time vs amp, color by field, iterate by antenna |
 | Phase decorrelation | Rapidly varying phase for a scan | Scatter: phase vs time |
+| Opacity / pointing problem | Decrease in amplitude | Scatter: time vs amp, iterate by baseline | 
 | Shadowing | Zero amplitude at short baselines | Scatter: amp vs time (automated) |
 | Edge channels | Rolloff at band edges | Raster or scatter: amp vs channel |
 | Quack (settle time) | Bad data in first N seconds of each scan | Scatter: amp vs time per scan |
+
+> [!NOTE]
+> **Feedback BE:** Added "Failed scans" and "Opacity/pointing problem" as signatures for flagging often used by astronomers.
+
 
 ### 2.2 Lessons from difmap
 
@@ -354,6 +360,8 @@ the same rows in `FlagDB`.
 ### 4.2 Data selection
 
 - MS / Processing Set path (file picker or text entry)
+> [!NOTE]
+> **Feedback BE:** 1). Does RADPS development adopt 'ms' as the new selection parameter instead of the 'vis' used in CASA? Whatever the choice, we should make this parameter name uniform with the one adopted by tasks in RADPS. 2). Will visplot also handle scatter plots for caltables, given that caltable plotting was brought into plotms previously? 3). Would it be possible to load a new MS from inside the visplot environment? This can be useful when comparing MSs, while leaving the chosen settings the same.  
 - Field — dropdown from `ObservationMetadata.fields`
 - SPW — multi-select; label shows centre frequency and bandwidth
 - Scan — range or list (`1~5,8,10~12`)
@@ -407,6 +415,8 @@ a `ReductionContext.commit_flags()` responsibility, not a display responsibility
   raster this is exact; for scatter it uses a proxy based on the sparse-data
   canvas-shrink logic (acknowledged approximation — see F-10 for the scatter
   flagging open question).
+> [!NOTE]
+> **Feedback BE:** With a resolution of 500x500 pixels, one may run into this limitation quite easily, especially with ngVLA. Often it is much more efficient to flag slightly more without loss of quality. Should there be an option to relax this, to allow flagging even if data cells overlap in a pixel?
 - **Nearest-point flag** — click to flag the point closest to cursor (difmap-style);
   same `FlagTool` mechanism, `flag=True`, applied at point granularity
 - **Flag extend** — per-delta controls: all correlations, all channels, all SPWs, all times in scan
@@ -434,6 +444,8 @@ user only wants to inspect data. Threads through to `VisibilityRaster` /
 
 - Hover: multi-layer probe reports every visible layer; em dash (—) for any layer with no data at that location (hidden layers omitted entirely). Stable field order so status bar does not shift as cursor moves. Prefers exact-bin hit; near-miss search uses screen-pixel budget (`probe_slop_px` = 6 px), bin-aspect-weighted distances, lowest-layer-index tiebreak.
 - **Locate** button: for a drawn region, list all matching rows in a sidebar table
+> [!NOTE]
+> **Feedback BE:** Maybe this is the intention already, but there is a strong use-case for matching the plotms logger functionality that gives the full information on the selected points (time, amp, chan, antenna, correlation, etc).
 
 ### 4.7 Synchronized cursor (cross-panel)
 
@@ -447,6 +459,9 @@ When both panels share an x-axis dimension (the same case where the
 figure's `MouseMove` event reads the x-coordinate and positions a
 vertical `Span` annotation at that x position on both figures. Zero
 backend cost, zero latency. Only applies when axes correspond.
+
+> [!NOTE]
+> **Feedback BE:** I suggest this to be the default setting when first starting visplot, with probably the most intuitive case of ‘time vs amp’ shown by default. Right now, when I start visplot(ms='sis14_twhya_calibrated_flagged.ms.tar’), the raster plot shows time (y) vs channel (x) with amp in color, while the scatter plot shows UV Distance vs amp. It would be more intuitive for users if the raster plot would by default show channel (y) vs time (x) with amp in color (iterating by baseline), and the scatter plot time (x) vs amp (y).
 
 **Tier 2 — cross-axis row-level sync (CommMgr round-trip).** When the
 panels show unrelated axis pairs (e.g. raster TIME × CHANNEL, scatter
@@ -487,7 +502,12 @@ panels happen to share an axis.
 - **vplot mode** — amplitude vs time, colour-by-baseline, flag-state overlay,
   one-per-antenna iteration
 - **radplot mode** — amplitude vs UVdist, nearest-point flag tool active
+> [!NOTE]
+> **Feedback BE:** When switching from vplot to radplot, only the scatter plot is changed to amp vs UVdist. It would be more intuitive if also the raster plot would switch to UVdist on the X-axis.
 - **projplot mode** — amplitude vs projected UV cut (selectable position angle)
+
+> [!NOTE]
+> **Feedback BE:** The ‘waterfall’ plot (not mentioned in this document) shows time vs channel in the raster, and amp vs time in the scatter plot. It would be more intuitive to have the raster plot show channel vs time (i.e., switch the axes).
 
 ### 4.10 Calibration integration (loose coupling)
 
@@ -505,6 +525,8 @@ RADPS without a CASA6 session), calibration buttons are hidden.
 ### 4.11 Export / scripting
 
 - **Save plot / Export PNG** — ✅ Done: GUI button writes the current view (zoom included) server-side; absolute path reported in status bar. No browser download (JupyterLab-over-SSH means Python process may be on a different machine than the browser; base64-over-comm deferred by decision).
+> [!NOTE]
+> **Feedback BE:** 1). For publishable quality figures, it would be useful if the axes labels can be adjusted to be properly readable in letter size mandated by journals. Export options PDF and EPS would also be useful (but note that I am not up-to-date on the latest imaging standard among the community). 2). There are use cases for being able to export the plotted data into an ascii table. Is that feasible to implement?
 - **Headless API** — ✅ Done: `visplot(ms=..., headless=True); vp(plotfile="out.png")`. See E-2.
 - **Copy flagdata command** — generate equivalent `flagdata()` call for current `FlagDB` state
 - **Python API** — `visplot(ms=..., field=..., preset=...)` usable in Jupyter

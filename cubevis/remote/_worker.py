@@ -42,11 +42,32 @@ __all__ = ["ensure_remote_worker", "RemoteWorkerHandle", "DEFAULT_TARGET_NAME"]
 
 # The design doc's multiplexing discipline is "exactly one Jupyter comm
 # per kernel" -- there is only ever one cubevis worker per remote kernel
-# process, so a single well-known constant is enough. Using a constant
-# (rather than a freshly-generated id each bootstrap) is what lets a
-# *new* P_local process, after a full restart, dial straight back in
-# without first having to learn a previous session's generated id from
-# anywhere -- it already knows the name to ask for.
+# process. This is about letting CommMgr's own sub-multiplexing (Comm/
+# comm_id categories within one channel) do the work of addressing
+# "which logical destination," rather than needing N independent
+# AsyncKernelClients each polling the same kernel's iopub stream with
+# their own reconnect bookkeeping -- see the design doc's §1/§2e for the
+# full reasoning.
+#
+# target_name itself does NOT need to be a fixed, well-known string for
+# reconnection to work, and defaulting it to one (an earlier version of
+# this module did) was based on incorrect reasoning: a *new* P_local
+# process, after a full restart, does not need to already know the name
+# to ask for. The idempotency check below returns the existing worker's
+# comm_mgr_id unconditionally, regardless of what target_name a later
+# call passes -- so a reattaching P_local session just re-runs this same
+# bootstrap and reads the identifier back from its own output, exactly
+# like it already does for comm_mgr_id. Defaulting target_name to a
+# value generated from the newly-constructed CommMgr's own comm_mgr_id
+# (see below) removes the collision risk a shared global constant
+# carried (two independent cubevis deployments bootstrapping into the
+# same kernel would otherwise silently share one marker) without losing
+# anything reconnection actually needs.
+#
+# DEFAULT_TARGET_NAME is kept as a named constant for callers who have a
+# specific reason to want a fixed, predictable name (e.g. manual/CLI
+# debugging against a known target) -- pass it explicitly if so. It is
+# no longer ensure_remote_worker's own default.
 DEFAULT_TARGET_NAME = "cubevis-remote-worker"
 
 _NAMESPACE_KEY = "__cubevis_remote_worker__"
@@ -73,7 +94,7 @@ class RemoteWorkerHandle:
 def ensure_remote_worker(
     build_worker: Callable[[CommMgr], Any],
     *,
-    target_name: str = DEFAULT_TARGET_NAME,
+    target_name: Optional[str] = None,
     namespace: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
@@ -152,6 +173,13 @@ def ensure_remote_worker(
         return existing.comm_mgr_id
 
     mgr = CommMgr(role=CommMgr.ROLE_DEFAULT)
+    if target_name is None:
+        # No fixed constant needed -- see the module comment above.
+        # Self-referential (the comm_mgr_id doubles as its own target
+        # name) rather than a second generated value, matching the
+        # convention this module's own spike/validation code already
+        # used at the protocol level.
+        target_name = mgr.comm_mgr_id
     transport = KernelCommTransport(mgr.comm_mgr_id, target_name=target_name)
     mgr._transport = transport
     transport.set_message_callback(mgr._route_message)

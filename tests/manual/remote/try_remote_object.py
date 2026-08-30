@@ -63,12 +63,16 @@ async def main() -> int:
                               "kernel can legitimately need much longer here than a local "
                               "one -- raise this before assuming a TimeoutError means the "
                               "spawn actually failed.")
-    parser.add_argument("--log-level", default="DEBUG",
+    parser.add_argument("--log-level", default="INFO",
                          help="Root log level for THIS process (P_local). Note: a "
                               "failure inside create_context()'s worker spawn is logged "
                               "by the *supervisor kernel process*, not here -- for a "
                               "real sshpyk-provisioned kernel that means the remote "
-                              "kernel's own log, regardless of this setting.")
+                              "kernel's own log, regardless of this setting. Default: "
+                              "INFO -- sshpyk's own breadcrumbs print, its much noisier "
+                              "DEBUG-level ssh/ps-poll/bootstrap-line output does not; "
+                              "pass --log-level DEBUG for that when diagnosing a real "
+                              "hang or a slow remote host.")
     args = parser.parse_args()
 
     logging.basicConfig(

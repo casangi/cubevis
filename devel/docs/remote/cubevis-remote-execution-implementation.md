@@ -1179,6 +1179,182 @@ that surfaced this (this sandbox still has no SSH/cluster access) — the
 fix is inference from a now-understood, structural cause, not a
 confirmed fix against the exact host that failed.
 
+### Real-world timing observed against a live `sshpyk` cluster kernel, and what it does and doesn't change
+
+After the fix above, the same `--kernel-name zuul06_python312` run that
+previously hit the `create_context()` `TimeoutError` completed
+successfully — confirming the fix, not just plausibly explaining the bug.
+The user then shared the full `--log-level DEBUG` output from that
+successful run (1575 lines, ~158 seconds end to end) and asked three
+things: why so much `sshpyk` debug output suddenly appeared, how to turn
+it back off, and whether the timing it revealed means anything in this
+chunk's code should change. All three are answered below from a
+line-by-line analysis of that log (timestamps parsed, gaps between
+consecutive lines sorted to find where the wall-clock time actually
+went, and the phase boundaries cross-checked against `jupyter_client`'s
+own installed source for `_async_wait_for_ready`/`_async_start_kernel`).
+
+**Why the `sshpyk` debug output appeared now, and not before.** It was
+always being *produced* — `sshpyk`/`jupyter_client`/`traitlets` call
+`self.log.debug(...)`/`self.log.info(...)` at exactly this volume on
+every run, real cluster or local — but essentially none of it was ever
+*displayed* before this chunk's post-delivery fix, for a structural
+reason, not a configuration the user changed: a bare script that never
+calls `logging.basicConfig()` leaves the root logger at Python's default
+effective level (`WARNING`), so every `DEBUG`/`INFO` call from these
+`traitlets`-based loggers gets filtered out before it reaches anywhere,
+regardless of `sshpyk`/`jupyter_client`'s own internal log calls. This
+chunk's timeout fix added exactly that missing `logging.basicConfig()`
+call (plus a `--log-level` flag) to all three of this chunk's demo
+scripts, specifically so a *future* hang or failure inside
+`create_context()`'s worker spawn would be diagnosable at all — see the
+fix section above. That is what surfaced it: a deliberate new default in
+this chunk's own demo scripts, not a change to `cubevis`'s library code,
+not anything the user configured, and not new `sshpyk` behavior.
+
+**How to turn it down (and back up).** `--log-level` is a plain CLI flag
+on all three scripts. Following this exchange, its default has been
+changed from `DEBUG` to `INFO` in all three (`try_worker_process.py`,
+`try_remote_object.py`, `try_remote_eval.py`) — `sshpyk`'s own
+`INFO`-level breadcrumbs (`Remote kernel launched, RPID=...`,
+`Done launching kernel`, `shutdown_requested`, the persistent-file path)
+still print, since those are a useful narrative of what stage a real
+remote run is in, but the much higher-volume `DEBUG`-level output (every
+`ssh` invocation, every remote liveness `ps` check, every raw
+stdout/stderr line relayed from the remote bootstrap shell) no longer
+does. Pass `--log-level DEBUG` explicitly whenever a real hang or a
+slow/misbehaving remote host needs the full detail back — exactly the
+situation this exchange started from. `--log-level WARNING` is available
+too, for the rare case even the `INFO` breadcrumbs are unwanted.
+
+**Timeline reconstruction.** The log's ~158 seconds break into five
+phases, in order:
+
+1. **~49.5s** — silence between the remote bootstrap shell reporting
+   `SSHPYK_KERNELAPP_PID` and `SSHKernelApp`'s own first log line. This is
+   the remote host actually starting a fresh Python process (conda
+   environment activation, interpreter startup, `sshpyk`/`traitlets`
+   import cost) over `nohup`, on what the log's own paths
+   (`/users/dschieb/...`) show is a networked home filesystem. Nothing in
+   `cubevis` or `sshpyk`'s own control flow runs during this phase; it is
+   pure remote-host process-startup latency.
+2. **~1s** — `SSHKernelApp` launches the real `ipykernel` subprocess on
+   the remote host (`local-provisioner`), `sshpyk` fetches its connection
+   info over one more `ssh ... cat ...` round trip, and opens the five
+   SSH port-forward tunnels for the kernel's ZMQ ports.
+3. **~51s** — waiting for that freshly spawned remote `ipykernel` to
+   become responsive to a `kernel_info_request` sent over the
+   now-tunneled shell channel. Confirmed against the installed
+   `jupyter_client` source: `AsyncKernelClient._async_wait_for_ready()`
+   loops sending `kernel_info()`, waiting up to 1 second for a shell-channel
+   reply, and — if none arrives — calling `is_alive()` before retrying.
+   For a local kernel `is_alive()` is a cheap `Popen.poll()`; for an
+   `sshpyk`-provisioned kernel it cannot be, since the process lives on a
+   different host, so it becomes a full SSH round trip (one invocation to
+   check the `ControlMaster` socket, one `ps -p <pid> -o pid,state,args`
+   on the remote host). `1.0s + ~0.25s ≈ 1.25s` matches the observed
+   polling cadence exactly, and it repeats — about 40 times here,
+   accounting for all 80 `SSHPYK_PS_OUTPUT_START` lines in the log — for
+   as long as the remote kernel takes to finish its own startup. This
+   confirmation almost certainly happens inside `sshpyk`'s own
+   provisioner as part of what it considers `launch_kernel()` complete
+   (not inside generic `jupyter_client`'s `_async_start_kernel`, which —
+   confirmed by reading its installed source — launches the process and
+   returns without itself waiting for readiness); see the open question
+   below on why this matters for `--timeout`.
+4. **~54.4s** — the single largest gap in the entire log, and it is silent
+   for a good reason: once the remote kernel is confirmed ready, this
+   chunk's own `RemoteAppLink.open()` call (`setup_client.wait_for_ready()`)
+   succeeds immediately, since the kernel is already known-responsive, and
+   everything from that point on — the bootstrap cell that constructs the
+   `ExecutionContextPool`, `open_remote_kernel_link`'s own comm connect,
+   and `create_context()` spawning the actual worker subprocess — runs
+   entirely over the already-open, already-tunneled ZMQ channels. None of
+   that touches SSH or the `sshpyk`/`traitlets` loggers, so it is
+   invisible in this log despite being real elapsed time. The scripted
+   demo's own fast steps (`ping`, `add`, the 3-second `slow_echo` job plus
+   its 0.5s-interval status polling) only account for about 4 of these 54
+   seconds, so roughly 50 seconds of this phase is `create_context()`
+   itself — the worker subprocess (a fresh `sys.executable`, importing
+   `cubevis`/`numpy`) starting up on the same remote host and networked
+   filesystem as phase 1.
+5. **~1.75s** — clean shutdown: `shutdown_requested(restart=False)`, a
+   last round of control-socket/`ps` checks confirming the remote
+   processes are actually gone, and `Cleanup done`.
+
+One artifact worth flagging on its own, since it delayed pinning phase 4
+down correctly: this script's own `print()` "Step" banners all landed at
+the very end of the raw log file, far out of true chronological order
+relative to the interleaved `logging`-module lines. That's ordinary
+stdout buffering — Python fully buffers stdout when it isn't a tty
+(redirected to a file), while `stderr`, where `logging.basicConfig`
+writes, is not buffered — not a sign anything hung. `python -u` (or
+`PYTHONUNBUFFERED=1`) would make a future log's `print()` banners
+interleave correctly with the debug output for this kind of timing
+analysis.
+
+**Does anything in this chunk's code need to change because of this
+timing?** Two different answers, deliberately kept apart:
+
+- **The timeout fix itself: no change, and this run is good evidence
+  it's well-calibrated.** The observed real `create_context()` cost
+  (~50s) sits comfortably inside both the server-side `_CONFIGURE_TIMEOUT`
+  (90s) and the client-side `_CREATE_CONTEXT_TIMEOUT` (180s) — roughly
+  3.6x headroom on the client budget over one real observed sample.
+  That's a reasonable safety margin without being so large that a
+  genuinely hung spawn would take minutes to surface as an error; no
+  constant here is being changed on the strength of a single sample in
+  either direction.
+- **A related configurability gap, found while tracing phase 3, that is
+  worth flagging even though it is not a bug and nothing timed out:**
+  none of this chunk's `--timeout`/`--create-context-timeout` flags reach
+  phase 3 above. `--timeout` is wired only to `RemoteAppLink.open()`
+  (phase 4's own `wait_for_ready()` plus the bootstrap-cell-execution
+  timeout); `km.start_kernel()` is called bare, with no `timeout=`
+  argument at all, in all three demo scripts. Phases 1–3 (roughly 100 of
+  this run's 158 seconds — the majority of it) all happen inside that
+  bare `await km.start_kernel()` call, apparently governed by whatever
+  internal readiness-timeout `sshpyk`'s own provisioner uses by default —
+  a value this sandbox cannot inspect directly, since `sshpyk` is not
+  installed here (no SSH/cluster access, consistent with every other
+  chunk's stated limitation). It didn't matter this time because nothing
+  in that phase actually timed out. But if a slower node or a colder
+  filesystem cache ever pushed phases 1–3 past whatever that internal
+  default is, the failure would look exactly like the original
+  `create_context()` bug this chunk already fixed once — a timeout firing
+  somewhere `P_local` has no CLI knob to influence — except one step
+  further upstream. **Recommended follow-up, not yet implemented:** check
+  whether `sshpyk`'s `KernelProvisioner`/`KernelManager` subclass exposes
+  a configurable startup/readiness timeout (a kernelspec `argv` option, an
+  environment variable, or a trait), and if so, add a corresponding CLI
+  flag to these three demo scripts so one place governs the *entire*
+  kernel-startup path, not just the half after `km.start_kernel()`
+  returns. Left as an open question rather than a blind change, since it
+  needs `sshpyk`'s actual source or documentation to answer correctly —
+  neither is available in this sandbox.
+- **One concrete efficiency observation worth relaying to `sshpyk`'s own
+  maintainers, if `cubevis` is in a position to do that, though it is not
+  a `cubevis`-side fix:** phase 3's `is_alive()` fallback forks two fresh
+  local `ssh` subprocesses roughly every 1.25 seconds for as long as a
+  freshly launched remote kernel takes to become responsive (it does
+  reuse the existing SSH `ControlMaster` connection each time, so this is
+  a lightweight fork-and-round-trip rather than a fresh handshake, and it
+  already batches when checking multiple pids at once — e.g. one observed
+  check covered both the kernel-app and kernel pids together in a single
+  `ps -p 3023292,3023551` call — so this is not a naive implementation).
+  Still, for `cubevis`'s actual target use case — a long-lived remote GUI
+  session, plausibly with several execution contexts or several
+  `sshpyk`-provisioned kernels open against the same or different
+  cluster nodes at once — that pattern means local `ssh` process forks
+  scale with `(number of kernels) × (startup-wait seconds) / 1.25`, all
+  spent purely confirming "still starting, not dead yet." A short-TTL
+  cache on `is_alive()` (trust the last successful check for a second or
+  two before re-checking over SSH again) would be a reasonable, low-risk
+  suggestion to raise with `sshpyk`'s maintainers, if there's a channel
+  for that — worth a heads-up not because anything broke, but because the
+  cost of that polling scales with exactly the kind of session `cubevis`
+  is being built to support.
+
 ### Open questions carried forward
 
 - Execution-context lifecycle: nothing yet cleans up a context nobody
@@ -1195,8 +1371,17 @@ confirmed fix against the exact host that failed.
   specific pre-existing execution context by something other than a
   remembered id) — explicitly out of scope until a real scenario demands
   it.
-- The real `sshpyk`/SSH/cluster path for this chunk's own new demos and
-  tests, for the reason stated above.
+- The real `sshpyk`/SSH/cluster path for this chunk's own new demos: one
+  real run against `zuul06_python312` has now succeeded end to end
+  (`create_context()`'s fix confirmed, timing analyzed — see the section
+  above), but this chunk's actual *test suite* has still only run against
+  local kernels; this sandbox still has no SSH/cluster access to change
+  that.
+- Whether `sshpyk`'s own kernel-startup readiness wait (inside
+  `km.start_kernel()`, ahead of anything `RemoteAppLink.open()` does) has
+  a separately configurable timeout, and if so, whether these demo
+  scripts' `--timeout` should be extended to reach it too — found while
+  analyzing the timing above; see that section's last recommendation.
 
 ---
 

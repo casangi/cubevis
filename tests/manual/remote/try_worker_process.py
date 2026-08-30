@@ -125,16 +125,22 @@ async def main() -> int:
     )
     parser.add_argument(
         "--log-level",
-        default="DEBUG",
+        default="INFO",
         help="Root log level for THIS process (P_local). Chunk 1's own hard-learned "
              "lesson: sshpyk/jupyter_client are traitlets LoggingConfigurable objects "
              "whose .log falls back to a NullHandler with zero output when no real "
              "Application is running -- a bare script gets no diagnostics at all "
-             "without this. NOTE: this only configures logging in THIS process. Any "
-             "failure inside create_context()'s worker spawn (Step 3) is logged by "
-             "the *supervisor kernel process* instead -- for a real sshpyk-provisioned "
-             "kernel, that means the remote kernel's own log, not anything visible "
-             "here, however this is set. Default: DEBUG.",
+             "without this call existing at all, regardless of level. NOTE: this only "
+             "configures logging in THIS process. Any failure inside create_context()'s "
+             "worker spawn (Step 3) is logged by the *supervisor kernel process* "
+             "instead -- for a real sshpyk-provisioned kernel, that means the remote "
+             "kernel's own log, not anything visible here, however this is set. "
+             "Default: INFO -- sshpyk's own INFO-level breadcrumbs (kernel launched, "
+             "RPID, persistent-file path, shutdown) print, but its much higher-volume "
+             "DEBUG-level output (every ssh invocation, every remote-liveness ps check, "
+             "every raw stdout/stderr line from the remote bootstrap) does not. Pass "
+             "--log-level DEBUG to get that full firehose back -- worth it when "
+             "diagnosing a real hang or a slow remote host, noisy for routine runs.",
     )
     args = parser.parse_args()
 

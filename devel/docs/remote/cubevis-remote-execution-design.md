@@ -511,4 +511,11 @@ questions live in the implementation document.
    longer blocked on anything since Chunk 1c is done.
 
 Each implementation chat should start from this document and the
-implementation document, rather than from prior chat history.
+implementation document, rather than from prior chat history. Two more
+documents exist alongside these: `cubevis-remote-execution-developer-guide.md`
+(general-audience usage advice for anyone building on this framework —
+not chunk-specific) and dedicated handoff documents for Chunk 2
+(`cubevis-remote-execution-chunk2-handoff.md`) and Chunk 3
+(`cubevis-remote-execution-chunk3-handoff.md`), each self-contained
+enough to start an implementation chat from directly rather than from
+this document's own brief chunk-breakdown summary above.

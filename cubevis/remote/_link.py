@@ -49,11 +49,29 @@ if TYPE_CHECKING:
 
 DEFAULT_WORKER_TARGET_NAME = "cubevis-remote-worker"
 
-# How long create_context()/dispatch_fast()/job_status()/shutdown_context()
-# wait for the supervisor's own reply before giving up. Generous for
-# create_context specifically, since it includes the worker's opening
-# `configure` round trip (which may import a real backend module).
+# How long dispatch_fast()/job_status()/shutdown_context()/list_contexts()/
+# supervisor_info() wait for the supervisor's own reply before giving up.
+# These are all meant to return promptly (that's dispatch_fast's whole
+# contract -- see _async_dispatch.py for dispatch_async's very different,
+# unbounded-duration shape), so 30s is a generous ceiling for a hung/
+# unreachable supervisor, not a budget anything here is expected to need.
 _DEFAULT_CALL_TIMEOUT = 30.0
+
+# create_context() specifically gets its own, much larger default --
+# found necessary against a real sshpyk-provisioned cluster kernel
+# (this sandbox's local-kernel testing never caught it): create_context
+# includes the *supervisor's own* _CONFIGURE_TIMEOUT-bounded wait
+# (_supervisor.py) for the freshly spawned worker's opening `configure`
+# round trip, all nested inside this client-side wait. A client-side
+# default equal to (or smaller than) the server's own internal budget
+# is unsafe by construction -- it can legitimately fire while the server
+# is still doing real, un-hung work (subprocess spawn + fresh
+# interpreter startup, slower over a real network/shared filesystem
+# than any local sandbox), misreporting a slow-but-succeeding spawn as a
+# failure. Kept comfortably above _supervisor.py's own
+# _CONFIGURE_TIMEOUT (90s) plus real round-trip overhead on an
+# SSH-tunneled connection, rather than assumed equal to it.
+_CREATE_CONTEXT_TIMEOUT = 180.0
 
 
 async def open_remote_kernel_link(
@@ -281,12 +299,29 @@ class RemoteAppLink:
 
     async def create_context(self, worker_module: str = DEFAULT_WORKER_MODULE,
                               config: Optional[Dict[str, Any]] = None,
-                              timeout: float = _DEFAULT_CALL_TIMEOUT) -> ExecutionContext:
+                              timeout: float = _CREATE_CONTEXT_TIMEOUT) -> ExecutionContext:
         """Spawns a fresh execution-context worker subprocess under this
         link's supervisor kernel and returns a handle to it. `config`,
         if given, is handed unopened to the worker as its `configure`
         payload (see worker_main.py); the most common shape is
-        `{"register_function": "some.module:register"}`."""
+        `{"register_function": "some.module:register"}`.
+
+        `timeout` defaults to `_CREATE_CONTEXT_TIMEOUT` (see module
+        docstring for why this needs its own, larger default than the
+        other operations here) -- pass a larger value explicitly for a
+        `register_function` that imports something even heavier than
+        this default already assumes, or for a cluster host known to be
+        slow to spawn on. A `TimeoutError` here does NOT necessarily mean
+        the spawn failed -- the worker subprocess may simply still be
+        starting up on the remote host when this gives up. Any actual
+        failure (a bad `register_function` import, the worker module
+        itself failing to start) is logged by the *supervisor kernel
+        process*, not this caller -- for a real sshpyk-provisioned
+        kernel, that means the remote kernel's own log, which this
+        process cannot see; there is no local stderr to check the way
+        there is for this sandbox's local-kernel tests, since the
+        supervisor kernel is a separate process on a separate host.
+        """
         reply = await asyncio.wait_for(
             request(self._comm, "create_context",
                     {"worker_module": worker_module, "config": config}),

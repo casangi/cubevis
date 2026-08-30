@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 
@@ -121,11 +122,30 @@ async def main() -> int:
     parser.add_argument("--kernel-name", default="python3",
                          help="Kernel name from `jupyter kernelspec list`. Default: python3 (local).")
     parser.add_argument("--worker-target-name", default=DEFAULT_WORKER_TARGET_NAME)
-    parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--timeout", type=float, default=60.0,
+                         help="Seconds to wait for kernel readiness/bootstrap/connect.")
+    parser.add_argument("--create-context-timeout", type=float, default=180.0,
+                         help="Seconds to wait for create_context() (worker subprocess "
+                              "spawn + its opening configure round trip, on the "
+                              "supervisor's own host). A real sshpyk-provisioned cluster "
+                              "kernel can legitimately need much longer here than a local "
+                              "one -- raise this before assuming a TimeoutError means the "
+                              "spawn actually failed.")
     parser.add_argument("--interactive", action="store_true",
                          help="Drop into a real read-eval-print loop against the live "
                               "remote worker, instead of running the scripted demo steps.")
+    parser.add_argument("--log-level", default="DEBUG",
+                         help="Root log level for THIS process (P_local). Note: a "
+                              "failure inside create_context()'s worker spawn is logged "
+                              "by the *supervisor kernel process*, not here -- for a "
+                              "real sshpyk-provisioned kernel that means the remote "
+                              "kernel's own log, regardless of this setting.")
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.DEBUG),
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+    )
 
     print("=" * 70)
     print(f"cubevis.remote generalized remote eval demo (Chunk 1c) -- "
@@ -149,7 +169,8 @@ async def main() -> int:
             print(f"    supervisor kernel: pid={supervisor_info['pid']} "
                   f"hostname={supervisor_info['hostname']}")
 
-            ctx = await link.create_context(config={"register_function": REGISTER_FUNCTION})
+            ctx = await link.create_context(config={"register_function": REGISTER_FUNCTION},
+                                             timeout=args.create_context_timeout)
             worker_info = await ctx.worker_info()
             print(f"    worker subprocess: pid={worker_info['pid']} "
                   f"hostname={worker_info['hostname']} executable={worker_info['executable']}")

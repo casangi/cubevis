@@ -65,11 +65,23 @@ logger = logging.getLogger(__name__)
 DEFAULT_WORKER_MODULE = "cubevis.remote.worker_main"
 
 # Timeout for the opening `configure` round trip create_context() makes
-# to a freshly spawned worker before returning -- generous, since a
-# real `register_function` may need to import a heavy backend module
-# (an MSv2/MSv4 reader stack, say), not just register a couple of toy
-# handlers.
-_CONFIGURE_TIMEOUT = 30.0
+# to a freshly spawned worker before returning -- generous, since a real
+# `register_function` may need to import a heavy backend module (an
+# MSv2/MSv4 reader stack, say), not just register a couple of toy
+# handlers, and because on a real sshpyk-provisioned remote host, even
+# spawning the bare subprocess and starting a fresh Python interpreter
+# can cost real time (network filesystem home directories, cold import
+# caches) that this sandbox's local-kernel testing never exercised.
+#
+# MUST stay comfortably below whatever timeout the P_local-side caller
+# uses for its own create_context() wait (see _link.py's
+# _CREATE_CONTEXT_TIMEOUT) -- create_context()'s reply is only sent
+# after this configure round trip completes, so if the two budgets were
+# equal (an actual bug found against a real cluster kernel, fixed here),
+# the client's own wait_for could legitimately expire at the same
+# instant the server is still doing real, un-hung work, misreporting a
+# slow-but-succeeding spawn as a failure.
+_CONFIGURE_TIMEOUT = 90.0
 
 
 class WorkerDelegate:

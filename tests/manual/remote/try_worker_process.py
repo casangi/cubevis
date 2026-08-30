@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 import time
@@ -110,7 +111,37 @@ async def main() -> int:
              "sshpyk-provisioned kernels pay an SSH-connect cost here; local ones "
              "don't need nearly this long. Default: 60.",
     )
+    parser.add_argument(
+        "--create-context-timeout",
+        type=float,
+        default=180.0,
+        help="Seconds to wait for create_context() -- spawning the worker "
+             "subprocess AND its opening configure round trip, on the "
+             "supervisor's own host. A real sshpyk-provisioned cluster kernel "
+             "can need meaningfully longer here than a local kernel does (a "
+             "fresh Python interpreter starting on a networked home "
+             "filesystem, in particular) -- raise this before assuming a "
+             "TimeoutError here means the spawn actually failed. Default: 180.",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="DEBUG",
+        help="Root log level for THIS process (P_local). Chunk 1's own hard-learned "
+             "lesson: sshpyk/jupyter_client are traitlets LoggingConfigurable objects "
+             "whose .log falls back to a NullHandler with zero output when no real "
+             "Application is running -- a bare script gets no diagnostics at all "
+             "without this. NOTE: this only configures logging in THIS process. Any "
+             "failure inside create_context()'s worker spawn (Step 3) is logged by "
+             "the *supervisor kernel process* instead -- for a real sshpyk-provisioned "
+             "kernel, that means the remote kernel's own log, not anything visible "
+             "here, however this is set. Default: DEBUG.",
+    )
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.DEBUG),
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+    )
 
     print("=" * 70)
     print(f"cubevis.remote worker-process demo (Chunk 1b/1c) -- kernel_name={args.kernel_name!r}")
@@ -156,7 +187,7 @@ async def main() -> int:
             supervisor_info = await link.supervisor_info()
             print(f"    supervisor kernel process: {supervisor_info}")
 
-            ctx = await link.create_context()
+            ctx = await link.create_context(timeout=args.create_context_timeout)
             print(f"    execution_context_id = {ctx.context_id}")
             print(f"    worker subprocess pid = {ctx.pid}")
 

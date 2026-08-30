@@ -1092,6 +1092,93 @@ inference from a shared API surface, not a substitute for actually
 running it against a real cluster kernel — stated as such, not implied
 to be equivalent.
 
+### Post-delivery finding, against a real `sshpyk` cluster kernel: `create_context()`'s timeout was unsafe by construction, fixed
+
+Found on first real-cluster use (`--kernel-name zuul06_python312`, an
+actual sshpyk-provisioned kernel over SSH), exactly the path flagged
+above as unverified in this sandbox — confirming that flag was the right
+thing to call out, not just caution for its own sake. `create_context()`
+timed out (`asyncio.TimeoutError`) after the supervisor kernel connected
+successfully and reported its own `supervisor_info()` promptly; the
+worker subprocess's spawn+configure round trip itself never got the
+chance to be confirmed working or failing from `P_local`'s side.
+
+**Root cause, not merely "needed a bigger number":** `_link.py`'s
+client-side `create_context()` wait and `_supervisor.py`'s server-side
+`_CONFIGURE_TIMEOUT` (the budget `_handle_create_context` gives the
+freshly spawned worker's opening `configure` round trip, entirely nested
+*inside* the client's own wait) were both hardcoded to the identical
+value, 30.0 seconds. That equality is unsafe by construction, independent
+of how slow or fast any given host actually is: the client's own
+`asyncio.wait_for` can legitimately expire at the same instant the server
+is still doing real, un-hung work, because the server's internal budget
+consumes the *entire* client-side allowance before the server has even
+sent its reply back over the second network hop. This sandbox's
+local-kernel tests never caught it because a local subprocess spawn +
+Python startup completes in well under a second, leaving enormous slack
+under either 30-second budget — real subprocess creation and fresh
+interpreter startup on a networked-filesystem cluster home directory,
+reached over an actual SSH tunnel, is a different regime entirely, and
+apparently didn't fit inside 30 seconds even before `configure`'s own
+work began.
+
+**A second, related gap found investigating this:** any actual failure
+during the spawn (a bad import, the worker module crashing on startup)
+is logged by `_worker_transport.py`'s stderr relay (`logger.warning(...)`
+inside `WorkerProcessTransport._relay_stderr`) — but that code runs
+*inside the supervisor kernel process*, which for a real `sshpyk` kernel
+is a separate process on a separate host. Its log output goes wherever
+that kernel process's own stdout/stderr is directed (typically nowhere
+visible to `P_local`'s terminal, unlike this sandbox's local-kernel
+tests, where supervisor and test process happen to share one terminal).
+A `TimeoutError` on `create_context()` therefore cannot, by itself, be
+told apart from a real remote-side failure without checking the
+supervisor kernel's own log on the remote host (or an OS-level check,
+e.g. `ps aux | grep worker_main` on the remote host, for whether a
+worker subprocess is even running) — this is a genuine observability gap
+for the real `sshpyk` path this sandbox could not have surfaced on its
+own, now documented rather than left implicit.
+
+**Fix, applied:**
+
+- `_supervisor.py`'s `_CONFIGURE_TIMEOUT`: `30.0` → `90.0`.
+- `_link.py` now has two separate timeout constants instead of one
+  shared one: `_DEFAULT_CALL_TIMEOUT` (`30.0`, unchanged, used by
+  `dispatch_fast`/`job_status`/`shutdown_context`/`list_contexts`/
+  `supervisor_info` — all meant to return promptly, so 30s remains a
+  generous ceiling for a hung/unreachable supervisor) and a new
+  `_CREATE_CONTEXT_TIMEOUT` (`180.0`), which is `create_context()`'s own
+  default — comfortably above the server's own 90s internal budget plus
+  real round-trip overhead, rather than assumed equal to it. Both
+  constants' docstrings now state this ordering requirement explicitly
+  (client budget for an operation must exceed whatever server-internal
+  budget is nested inside it) so a future change to one doesn't quietly
+  reintroduce the same class of bug.
+- `create_context()`'s own docstring now says plainly that a
+  `TimeoutError` here does not by itself mean the spawn failed, and that
+  diagnosing an actual failure means checking the supervisor kernel
+  process's own log, not anything visible to the `P_local` caller.
+- All three of this chunk's demo scripts (`try_worker_process.py`,
+  `try_remote_object.py`, `try_remote_eval.py`) gained a
+  `--create-context-timeout` flag (default `180.0`, matching the new
+  library default) actually wired to their `create_context()` calls —
+  previously each script's `--timeout` flag only reached
+  `RemoteAppLink.open()`, leaving `create_context()` silently stuck on
+  the old hardcoded default regardless of what the user passed. They also
+  gained a `--log-level`/`logging.basicConfig()` call
+  (`DEFAULT_TARGET_NAME`'s Chunk 1 lesson about `sshpyk`/`jupyter_client`
+  swallowing diagnostics under a bare script's default logging config —
+  see this document's Chunk 1 section — applies here too, and had been
+  omitted from these three scripts specifically; `try_local_or_remote_kernel.py`,
+  Chunk 1's own unmodified file, was left untouched).
+
+Re-verified against the full local test suite (39/39 still passing) and
+by re-running all three edited demo scripts end-to-end against a local
+kernel after the change. Not re-verified against the real cluster kernel
+that surfaced this (this sandbox still has no SSH/cluster access) — the
+fix is inference from a now-understood, structural cause, not a
+confirmed fix against the exact host that failed.
+
 ### Open questions carried forward
 
 - Execution-context lifecycle: nothing yet cleans up a context nobody

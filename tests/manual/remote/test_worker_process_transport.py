@@ -7,6 +7,18 @@ mocked) -- matching Chunk 1's own bar for `KernelClientTransport`.
 Chunk 1b, Task 3 definition-of-done: a deliberately-crashing toy
 worker's failure is diagnosable from the supervisor's log output in a
 test, not just "it died."
+
+Chunk 1c note (otherwise unchanged): `worker_main.py` no longer
+registers the toy `ping`/`add`/`slow_echo`/`crash`/`trigger_push`
+handlers at import time -- it starts generic and only installs them
+once it receives the opening `configure` message (empty payload ->
+Chunk 1b-compatible toy handlers; see worker_main.py's module
+docstring). `_supervisor.py`'s `ExecutionContextPool.create_context`
+always sends that message for real callers. Since these tests talk to
+`WorkerProcessTransport` directly, below the pool, `_spawn_supervisor_side`
+now sends that one opening `configure` itself before returning -- the
+same handshake a real caller gets for free from the pool. Nothing else
+in this file changed.
 """
 import asyncio
 import logging
@@ -29,6 +41,10 @@ async def _spawn_supervisor_side():
     await mgr.initialize(transport=transport)
     run_task = asyncio.ensure_future(transport.run())
     comm = mgr.open("worker")
+    # Chunk 1c: the opening configuration handshake -- empty payload
+    # means "install the default (toy) handlers." Any real caller gets
+    # this for free from ExecutionContextPool.create_context.
+    await asyncio.wait_for(request(comm, "configure", {}), timeout=15)
     return mgr, comm, transport, run_task
 
 
@@ -119,7 +135,10 @@ async def test_worker_startup_failure_is_diagnosable_via_stderr_relay(caplog):
     CommMgr reply channel to carry an error at all yet. Verify
     concretely that the supervisor's log shows *why* it died, not just
     that it died (the exact failure Chunk 1's sshpyk-diagnostics lesson
-    was about)."""
+    was about).
+
+    This test never sends `configure` (the process dies before it could
+    ever be sent) so it is unaffected by the Chunk 1c note above."""
     caplog.set_level(logging.WARNING, logger="cubevis.remote._worker_transport")
 
     mgr = CommMgr(role=CommMgr.ROLE_MIRROR, transport_type='remote_kernel')

@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 """
 Step-by-step, hand-run demo of the Chunk 1b remote-execution machinery:
-`RemoteAppLink.open()` (bootstrap + connect in one call), a fast
-command, a push message, a background/async command with status
-polling, and a clean `close()` that confirms the worker subprocess
-actually exited -- not just that this script's references to it were
-dropped.
+`RemoteAppLink.open()` (bootstrap the execution-context pool + connect
+in one call), a fast command, a push message, a background/async
+command with status polling, and a clean `close()` that confirms the
+worker subprocess actually exited -- not just that this script's
+references to it were dropped.
+
+Chunk 1c change from the original version of this demo: `open()` no
+longer spawns a worker subprocess by itself -- it only connects to the
+kernel's Layer-1 execution-context pool (`_supervisor.py`). Getting an
+actual worker subprocess to talk to now takes one more explicit call,
+`link.create_context()`, which is Step 3 below. See
+`cubevis-remote-execution-implementation.md`'s Chunk 1c section for the
+full three-layer id model (comm_mgr_id -> execution_context_id ->
+object handle) this reflects.
 
 Run it against a local kernel first (no SSH, no cluster, fast iteration):
 
@@ -24,13 +33,15 @@ registers itself as a normal jupyter_client provisioner underneath it:
 
 What this demonstrates that Chunk 1's own demo doesn't:
 
-  - `RemoteAppLink.open()`/`.close()` -- the one-call bootstrap+connect,
-    and a teardown that confirms actual subprocess exit.
+  - `RemoteAppLink.open()`/`.create_context()`/`.close()` -- bootstrap
+    the pool, spawn a worker subprocess inside it, and a teardown that
+    confirms actual subprocess exit for every context the link created.
   - A *third* process in the picture, not just two: this script
     (P_local) drives the supervisor *kernel* (Chunk 1's remote-kernel
     side), which in turn spawns and drives its own *worker subprocess*
-    (Chunk 1b) -- three distinct pids, potentially two distinct hosts
-    once run against a real remote kernel name.
+    (Chunk 1b/1c) inside one execution context -- three distinct pids,
+    potentially two distinct hosts once run against a real remote
+    kernel name.
   - Two different dispatch shapes, and why both exist: `dispatch_fast`
     awaits the worker directly and returns inline -- fine for anything
     that answers promptly. `dispatch_async` returns a `job_id`
@@ -69,7 +80,7 @@ import time
 
 from jupyter_client import AsyncKernelManager
 
-from cubevis.remote import RemoteAppLink, DEFAULT_WORKER_TARGET_NAME, request
+from cubevis.remote import RemoteAppLink, DEFAULT_WORKER_TARGET_NAME
 
 
 def _banner(step: int, title: str) -> None:
@@ -88,7 +99,7 @@ async def main() -> int:
     parser.add_argument(
         "--worker-target-name",
         default=DEFAULT_WORKER_TARGET_NAME,
-        help=f"Comm target the supervisor's worker-delegate bootstraps under. "
+        help=f"Comm target the supervisor's execution-context pool bootstraps under. "
              f"Default: {DEFAULT_WORKER_TARGET_NAME!r}.",
     )
     parser.add_argument(
@@ -102,7 +113,7 @@ async def main() -> int:
     args = parser.parse_args()
 
     print("=" * 70)
-    print(f"cubevis.remote worker-process demo (Chunk 1b) -- kernel_name={args.kernel_name!r}")
+    print(f"cubevis.remote worker-process demo (Chunk 1b/1c) -- kernel_name={args.kernel_name!r}")
     print("=" * 70)
 
     # ------------------------------------------------------------------
@@ -113,63 +124,71 @@ async def main() -> int:
     km = AsyncKernelManager(kernel_name=args.kernel_name)
     print(f"    AsyncKernelManager(kernel_name={args.kernel_name!r}) constructed")
     print(f"    this script's own pid: {os.getpid()}")
-    print(f"    (compare against the worker subprocess's pid reported in Step 3 --")
+    print(f"    (compare against the worker subprocess's pid reported in Step 4 --")
     print(f"     they must differ, and with a real remote kernel name, so may the host)")
 
     try:
         # ----------------------------------------------------------
-        _banner(2, "RemoteAppLink.open() -- bootstrap the worker-delegate AND connect, one call")
+        _banner(2, "RemoteAppLink.open() -- bootstrap the execution-context pool AND connect")
         print("    starting kernel (an sshpyk kernel pays the SSH-connect cost here)...")
         await km.start_kernel()
         print("    kernel process started; RemoteAppLink.open() will now:")
-        print("      (a) run a bootstrap cell inside the supervisor kernel that spawns")
-        print("          a worker subprocess and registers its proxy handlers")
-        print("          (ensure_remote_worker + build_worker_process_delegate --")
-        print("           idempotent: a second open() against the same still-running")
-        print("           kernel would reattach instead of building a second worker)")
+        print("      (a) run a bootstrap cell inside the supervisor kernel that")
+        print("          constructs the Layer-1 execution-context pool and registers")
+        print("          its proxy handlers (ensure_remote_worker + build_worker_pool --")
+        print("          idempotent: a second open() against the same still-running")
+        print("          kernel would reattach to the SAME pool, contexts and all,")
+        print("          instead of building a fresh empty one)")
         print("      (b) connect P_local's own CommMgr to the supervisor")
         print("          (Chunk 1's request()/KernelClientTransport, unchanged)")
+        print("    note: this alone does NOT spawn any worker subprocess yet --")
+        print("    that's Step 3's job (Chunk 1c: the pool always exists at Layer 1;")
+        print("    an execution context is only created at Layer 2, explicitly).")
         link = await RemoteAppLink.open(
             km, worker_target_name=args.worker_target_name, timeout=args.timeout
         )
         print(f"    link.mgr.role                 = {link.mgr.role!r}  (should be 'mirror')")
         print(f"    link.transport.is_connected() = {link.transport.is_connected()}")
 
-        comm = link.mgr.open("worker")
-
         try:
             # ----------------------------------------------------------
-            _banner(3, "fast dispatch: ping (direct request/response, no job registry)")
-            reply = await request(comm, "dispatch_fast", {"message_id": "ping", "payload": {}})
+            _banner(3, "create_context() -- spawn a worker subprocess inside the pool")
+            supervisor_info = await link.supervisor_info()
+            print(f"    supervisor kernel process: {supervisor_info}")
+
+            ctx = await link.create_context()
+            print(f"    execution_context_id = {ctx.context_id}")
+            print(f"    worker subprocess pid = {ctx.pid}")
+
+            # ----------------------------------------------------------
+            _banner(4, "fast dispatch: ping (direct request/response, no job registry)")
+            reply = await ctx.dispatch_fast("ping", {})
             print(f"    reply: {reply}")
             print(f"    -> pid={reply['pid']} is the WORKER SUBPROCESS's pid: a child of")
-            print(f"       the supervisor kernel, itself a separate process from this")
-            print(f"       script (pid={os.getpid()}) -- three processes, confirmed distinct")
+            print(f"       the supervisor kernel (pid={supervisor_info['pid']}), itself a")
+            print(f"       separate process from this script (pid={os.getpid()}) -- three")
+            print(f"       processes, confirmed distinct")
 
             # ----------------------------------------------------------
-            _banner(4, "fast dispatch: add")
-            reply = await request(
-                comm, "dispatch_fast", {"message_id": "add", "payload": {"a": 19, "b": 23}}
-            )
+            _banner(5, "fast dispatch: add")
+            reply = await ctx.dispatch_fast("add", {"a": 19, "b": 23})
             print(f"    reply: {reply}")
 
             # ----------------------------------------------------------
-            _banner(5, "async dispatch: slow_echo -- returns a job_id immediately")
+            _banner(6, "async dispatch: slow_echo -- returns a job_id immediately")
             t0 = time.monotonic()
-            reply = await request(
-                comm, "dispatch_async",
-                {"message_id": "slow_echo", "payload": {"duration": 3.0, "value": "background job"}},
+            job_id = await ctx.dispatch_async(
+                "slow_echo", {"duration": 3.0, "value": "background job"}
             )
-            job_id = reply["job_id"]
             print(f"    dispatch_async returned in {time.monotonic() - t0:.3f}s -- job_id={job_id}")
             print(f"    (that's the whole point: it did NOT wait 3 seconds for the worker)")
 
             # ----------------------------------------------------------
-            _banner(6, "poll job_status while the worker is genuinely still busy")
+            _banner(7, "poll job_status while the worker is genuinely still busy")
             status = {}
             while True:
                 poll_t0 = time.monotonic()
-                status = await request(comm, "job_status", {"job_id": job_id})
+                status = await ctx.job_status(job_id)
                 poll_elapsed = time.monotonic() - poll_t0
                 print(f"    [t={time.monotonic() - t0:5.1f}s] status={status['status']!r} "
                       f"(this poll itself took {poll_elapsed * 1000:.0f}ms)")
@@ -184,14 +203,14 @@ async def main() -> int:
 
         finally:
             # ----------------------------------------------------------
-            _banner(7, "close() -- confirms the worker subprocess actually exits")
-            result = await link.close()
-            print(f"    close() result: {result}")
-            print(f"    -> 'closed': True and a real returncode, not just P_local")
-            print(f"       dropping its own references to the transport")
+            _banner(8, "close() -- confirms every execution context's worker actually exits")
+            results = await link.close()
+            print(f"    close() results (by context_id): {results}")
+            print(f"    -> 'closed': True and a real returncode per context, not just")
+            print(f"       P_local dropping its own references to the transport")
 
     finally:
-        _banner(8, "shut down the supervisor kernel")
+        _banner(9, "shut down the supervisor kernel")
         await km.shutdown_kernel()
         print("    kernel shut down")
 

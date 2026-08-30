@@ -1,6 +1,6 @@
 """
 Chunk 1, Task 1 -- reproduce the bug described in the design doc (Section 3)
-before touching any working code.
+before touching any working code. Unchanged by Chunk 1c.
 
 Scenario: two `CommMgr` instances, both running in today's only mode (no
 role/direction parameter exists yet), wired directly together with a

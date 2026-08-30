@@ -1,5 +1,9 @@
 """
-Chunk 1b, Task 6.
+Chunk 1b, Task 6. Unchanged by Chunk 1c -- out of scope for this chunk
+per the kickoff doc (no application-specific/Bokeh-integration changes
+here); `RemoteAppLink.close()`'s contract (tear down everything this
+link owns, confirm actual exit) is the same shape Chunk 1c's multi-
+context version still satisfies, so this cascade needed no changes.
 
 Investigation finding (Task 6 required reading `_bokeh_app_context.py`
 closely enough to answer this before writing any code): `show()`'s call

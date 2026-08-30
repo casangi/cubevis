@@ -14,6 +14,10 @@ Spawned via `asyncio.create_subprocess_exec(sys.executable, "-m",
 multi-threaded parent is a documented hazard, and an ipykernel process
 is multi-threaded (its own event loop plus whatever thread pools
 `SyncBridge` instances have spun up).
+
+Unchanged by Chunk 1c -- the pool (see _supervisor.py) spawns one of
+these per execution context instead of exactly one per kernel, but the
+transport itself needed no changes to support that.
 """
 from __future__ import annotations
 

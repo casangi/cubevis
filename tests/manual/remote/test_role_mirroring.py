@@ -1,5 +1,5 @@
 """
-Chunk 1, Task 2 + definition-of-done bullet 1.
+Chunk 1, Task 2 + definition-of-done bullet 1. Unchanged by Chunk 1c.
 
 With one CommMgr in the 'default' role and its peer in the 'mirror' role,
 both a request/response round trip and an unsolicited push round trip

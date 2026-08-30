@@ -17,22 +17,44 @@
 # existing behavior) to also accept 'remote_kernel', so this helper can
 # use the public `initialize()` entry point rather than duplicating its
 # state transitions.
+#
+# Chunk 1c change (Task 2): `RemoteAppLink.open()` used to bootstrap AND
+# spawn a single worker subprocess in one call (Chunk 1b). It no longer
+# spawns anything itself -- it connects to the kernel's one Layer-1
+# worker (the execution-context *pool*, from _supervisor.py), which is
+# bootstrapped exactly as idempotently as Chunk 1b's single worker was,
+# and stops there. `RemoteAppLink.create_context(worker_module=...,
+# config=...)` is the new entry point for actually spawning a worker
+# subprocess -- it wraps the `create_context` wire operation and returns
+# an `ExecutionContext`, the light P_local-side handle application code
+# interacts with. `RemoteAppLink.close()` tears down *every* context it
+# created (via the pool's own `shutdown_context`/`shutdown_all`), not
+# just one -- the same "confirm actual subprocess exit" standard Chunk
+# 1b held `shutdown_worker` to, now applied per context.
 ########################################################################
 from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 from cubevis.bokeh.transport import CommMgr
 from ._bridge import request, SyncBridge
 from ._kernel_transport import KernelClientTransport
 from ._worker import DEFAULT_TARGET_NAME
-from ._supervisor import build_worker_process_delegate, DEFAULT_WORKER_MODULE
+from ._supervisor import build_worker_pool, DEFAULT_WORKER_MODULE
 
 if TYPE_CHECKING:
     from jupyter_client.manager import AsyncKernelManager
 
 DEFAULT_WORKER_TARGET_NAME = "cubevis-remote-worker"
+
+# How long create_context()/dispatch_fast()/job_status()/shutdown_context()
+# wait for the supervisor's own reply before giving up. Generous for
+# create_context specifically, since it includes the worker's opening
+# `configure` round trip (which may import a real backend module).
+_DEFAULT_CALL_TIMEOUT = 30.0
+
 
 async def open_remote_kernel_link(
     kernel_manager: "AsyncKernelManager",
@@ -97,33 +119,114 @@ async def _execute_and_collect(client, code: str, timeout: float = 30.0) -> List
 
 _BOOTSTRAP_TEMPLATE = """
 from cubevis.remote import ensure_remote_worker
-from cubevis.remote._supervisor import build_worker_process_delegate
+from cubevis.remote._supervisor import build_worker_pool
 
 _comm_mgr_id = ensure_remote_worker(
-    build_worker_process_delegate({worker_module!r}),
+    build_worker_pool(),
     target_name={target_name!r},
 )
 print("COMM_MGR_ID=" + _comm_mgr_id)
 """
 
 
-class RemoteAppLink:
+class ExecutionContext:
     """
-    P_local's handle on a supervisor-managed compute worker for one app
-    instance. Owns ``(mgr, transport, sync_bridge, worker_target_name)``
-    as one unit -- `mgr`/`transport` are the P_local<->supervisor leg
-    (Chunk 1, unchanged), `sync_bridge` lets synchronous application code
-    drive `request()` calls against it, and `worker_target_name` is the
-    comm target this link's worker-delegate was bootstrapped under.
+    P_local-side handle for one execution context (Chunk 1c, Task 2) --
+    the object application code actually interacts with. Holds
+    `context_id` plus a reference back to the owning `RemoteAppLink` for
+    issuing further calls; carries no transport/process state of its
+    own (that lives in the supervisor's `WorkerDelegate`, one layer
+    away, per the design doc §2f -- Layer 2 is process isolation on the
+    *supervisor* side, not something duplicated here).
     """
 
-    def __init__(self, mgr: CommMgr, transport: KernelClientTransport,
-                 sync_bridge: SyncBridge, worker_target_name: str):
+    def __init__(self, link: "RemoteAppLink", context_id: str, pid: Optional[int] = None):
+        self._link = link
+        self.context_id = context_id
+        self.pid = pid
+
+    async def dispatch_fast(self, message_id: str, payload: Optional[Dict[str, Any]] = None,
+                             timeout: float = _DEFAULT_CALL_TIMEOUT) -> Any:
+        return await asyncio.wait_for(
+            request(self._link._comm, "dispatch_fast",
+                    {"context_id": self.context_id, "message_id": message_id,
+                     "payload": payload or {}}),
+            timeout=timeout,
+        )
+
+    async def dispatch_async(self, message_id: str, payload: Optional[Dict[str, Any]] = None,
+                              timeout: float = _DEFAULT_CALL_TIMEOUT) -> str:
+        reply = await asyncio.wait_for(
+            request(self._link._comm, "dispatch_async",
+                    {"context_id": self.context_id, "message_id": message_id,
+                     "payload": payload or {}}),
+            timeout=timeout,
+        )
+        return reply["job_id"]
+
+    async def job_status(self, job_id: str, timeout: float = _DEFAULT_CALL_TIMEOUT) -> Dict[str, Any]:
+        return await asyncio.wait_for(
+            request(self._link._comm, "job_status",
+                    {"context_id": self.context_id, "job_id": job_id}),
+            timeout=timeout,
+        )
+
+    # -- object creation/invocation (Task 4), via dispatch_fast ---------
+    async def create_object(self, class_name: str, args: Optional[List[Any]] = None,
+                             kwargs: Optional[Dict[str, Any]] = None) -> str:
+        reply = await self.dispatch_fast(
+            "create_object", {"class_name": class_name, "args": args or [], "kwargs": kwargs or {}}
+        )
+        return reply["handle"]
+
+    async def call_method(self, handle: str, method: str, args: Optional[List[Any]] = None,
+                           kwargs: Optional[Dict[str, Any]] = None) -> Any:
+        return await self.dispatch_fast(
+            "call_method",
+            {"handle": handle, "method": method, "args": args or [], "kwargs": kwargs or {}},
+        )
+
+    async def dispose_object(self, handle: str) -> bool:
+        reply = await self.dispatch_fast("dispose_object", {"handle": handle})
+        return bool(reply.get("disposed"))
+
+    async def eval_code(self, code: str) -> Any:
+        return await self.dispatch_fast("eval_code", {"code": code})
+
+    async def exec_code(self, code: str) -> Any:
+        return await self.dispatch_fast("exec_code", {"code": code})
+
+    async def worker_info(self) -> Dict[str, Any]:
+        return await self.dispatch_fast("worker_info", {})
+
+    async def shutdown(self, timeout: float = 20.0) -> Optional[Dict[str, Any]]:
+        return await asyncio.wait_for(
+            request(self._link._comm, "shutdown_context", {"context_id": self.context_id}),
+            timeout=timeout,
+        )
+
+
+class RemoteAppLink:
+    """
+    P_local's handle on a supervisor-managed execution-context pool for
+    one app instance. Owns ``(mgr, transport, sync_bridge)`` -- `mgr`/
+    `transport` are the P_local<->supervisor leg (Chunk 1, unchanged),
+    and `sync_bridge` lets synchronous application code drive `request()`
+    calls against it.
+
+    Chunk 1c: `open()` no longer spawns a worker subprocess itself --
+    see `create_context()`. A link with no contexts created against it
+    is a perfectly normal, if useless, state (mirroring the pool always
+    existing at Layer 1 regardless of how many Layer-2 contexts have
+    been created inside it -- see the design doc §2f).
+    """
+
+    def __init__(self, mgr: CommMgr, transport: KernelClientTransport, sync_bridge: SyncBridge):
         self.mgr = mgr
         self.transport = transport
         self.sync_bridge = sync_bridge
-        self.worker_target_name = worker_target_name
         self._comm = mgr.open("worker")
+        self._contexts: Dict[str, ExecutionContext] = {}
         self._closed = False
 
     @classmethod
@@ -131,7 +234,6 @@ class RemoteAppLink:
         cls,
         kernel_manager,
         worker_target_name: str = DEFAULT_WORKER_TARGET_NAME,
-        worker_module: str = DEFAULT_WORKER_MODULE,
         timeout: float = 30.0,
     ) -> "RemoteAppLink":
         setup_client = kernel_manager.client()
@@ -140,8 +242,7 @@ class RemoteAppLink:
             await setup_client.wait_for_ready(timeout=timeout)
             await _execute_and_collect(
                 setup_client,
-                _BOOTSTRAP_TEMPLATE.format(worker_module=worker_module,
-                                            target_name=worker_target_name),
+                _BOOTSTRAP_TEMPLATE.format(target_name=worker_target_name),
                 timeout=timeout,
             )
         finally:
@@ -157,45 +258,76 @@ class RemoteAppLink:
         # (e.g. a SyncBridge's own dedicated loop) is a real cross-loop
         # hazard, not just a style choice: it deadlocks silently rather
         # than raising, since asyncio.Lock isn't thread-safe across loops.
-        # Found this the hard way -- see the writeup accompanying this
-        # chunk for the repro.
+        # Found this the hard way during Chunk 1b -- see the implementation
+        # doc's writeup for the repro.
         asyncio.ensure_future(transport.run())
 
-        # `sync_bridge` is kept on the link per the kickoff doc's suggested
-        # shape, for a *future* caller with no ambient loop at all (e.g.
-        # Chunk 2/3's next(gclean)) to drive request() calls against this
-        # same mgr. That's NOT yet wired up here: doing it safely requires
-        # either routing such calls through asyncio.run_coroutine_threadsafe
-        # against *this* ambient loop (not the bridge's own loop), or
-        # constructing this entire link from inside bridge.run() in the
-        # first place so everything shares one loop from the start. Left
-        # unresolved rather than shipping a version that looks like it
-        # works and doesn't -- flagging this explicitly for the next chunk
-        # rather than glossing over it.
+        # `sync_bridge` is kept on the link per the original kickoff doc's
+        # suggested shape, for a *future* caller with no ambient loop at
+        # all (e.g. Chunk 2/3's next(gclean)) to drive request() calls
+        # against this same mgr. That's NOT yet wired up here (unchanged
+        # from Chunk 1b): doing it safely requires either routing such
+        # calls through asyncio.run_coroutine_threadsafe against *this*
+        # ambient loop (not the bridge's own loop), or constructing this
+        # entire link from inside bridge.run() in the first place so
+        # everything shares one loop from the start. Left unresolved
+        # rather than shipping a version that looks like it works and
+        # doesn't -- still flagged for whichever chunk needs a
+        # synchronous call site against a RemoteAppLink-backed mgr first.
         bridge = SyncBridge(name=f"remote-app-link-{mgr.comm_mgr_id}")
         bridge.start()
 
-        return cls(mgr, transport, bridge, worker_target_name)
+        return cls(mgr, transport, bridge)
 
-    async def close(self, timeout: float = 20.0) -> Optional[Dict[str, Any]]:
-        """Confirms the worker subprocess actually exits (via the
-        supervisor's own `shutdown_worker` handler, which awaits
-        `WorkerProcessTransport.close()` before replying) -- not just
-        that P_local's references to it are dropped."""
+    async def create_context(self, worker_module: str = DEFAULT_WORKER_MODULE,
+                              config: Optional[Dict[str, Any]] = None,
+                              timeout: float = _DEFAULT_CALL_TIMEOUT) -> ExecutionContext:
+        """Spawns a fresh execution-context worker subprocess under this
+        link's supervisor kernel and returns a handle to it. `config`,
+        if given, is handed unopened to the worker as its `configure`
+        payload (see worker_main.py); the most common shape is
+        `{"register_function": "some.module:register"}`."""
+        reply = await asyncio.wait_for(
+            request(self._comm, "create_context",
+                    {"worker_module": worker_module, "config": config}),
+            timeout=timeout,
+        )
+        ctx = ExecutionContext(self, reply["context_id"], pid=reply.get("pid"))
+        self._contexts[ctx.context_id] = ctx
+        return ctx
+
+    async def list_contexts(self, timeout: float = _DEFAULT_CALL_TIMEOUT) -> List[Dict[str, Any]]:
+        reply = await asyncio.wait_for(
+            request(self._comm, "list_contexts", {}), timeout=timeout
+        )
+        return reply["contexts"]
+
+    async def supervisor_info(self, timeout: float = _DEFAULT_CALL_TIMEOUT) -> Dict[str, Any]:
+        return await asyncio.wait_for(
+            request(self._comm, "supervisor_info", {}), timeout=timeout
+        )
+
+    async def close(self, timeout: float = 20.0) -> Dict[str, Any]:
+        """Tears down *every* execution context this link created --
+        Chunk 1b's single-worker `close()` standard (confirm actual
+        subprocess exit, not just that P_local's references were
+        dropped), now applied per context rather than once."""
         if self._closed:
-            return None
+            return {}
 
-        result: Optional[Dict[str, Any]] = None
-        try:
-            result = await asyncio.wait_for(
-                request(self._comm, "shutdown_worker", {}), timeout=timeout
-            )
-        except Exception:
-            # Supervisor unreachable (kernel gone, connection lost) --
-            # nothing more we can confirm from P_local's side.
-            pass
+        results: Dict[str, Any] = {}
+        for context_id, ctx in list(self._contexts.items()):
+            try:
+                results[context_id] = await ctx.shutdown(timeout=timeout)
+            except Exception as e:
+                # Supervisor unreachable (kernel gone, connection lost) --
+                # nothing more we can confirm from P_local's side for
+                # this context; still proceed to tear down the others
+                # and this link's own transport.
+                results[context_id] = {"closed": False, "error": str(e)}
+        self._contexts.clear()
 
         await self.transport.close()
         self.sync_bridge.stop()
         self._closed = True
-        return result
+        return results

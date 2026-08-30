@@ -4,6 +4,17 @@ tested without requiring a full Bokeh GUI/browser (construct
 `BokehAppContext` instances directly) -- confirms `remote_link` is
 per-instance, not shared globally, and that the teardown cascade
 actually runs.
+
+Chunk 1c rewrite: each `RemoteAppLink` no longer carries a worker
+subprocess by itself -- a context is created explicitly via
+`link.create_context()`, and dispatch goes through the returned
+`ExecutionContext` (`ctx.dispatch_fast(...)`) rather than a hand-built
+`{"message_id": ..., "payload": ...}` envelope sent to
+`link.mgr.open("worker")` directly. `_bokeh_integration.py` itself
+(`new_comm_mgr_with_remote_teardown`/`attach_remote_link`) is unchanged
+by Chunk 1c -- `RemoteAppLink.close()`'s contract (tear down everything
+this link owns, confirm actual exit) still holds, just now covering
+however many contexts the link created rather than exactly one.
 """
 import asyncio
 import os
@@ -35,9 +46,10 @@ def _pid_alive(pid: int) -> bool:
 async def test_remote_link_is_per_instance_with_two_concurrent_worker_subprocesses():
     """No GUI required -- constructs two BokehAppContext instances
     directly, each with its own RemoteAppLink talking to its own
-    supervisor kernel, and confirms two independent worker subprocesses
-    are genuinely running at once (not structurally separate attributes
-    that happen to share state)."""
+    supervisor kernel, each opening its own execution context, and
+    confirms two independent worker subprocesses are genuinely running
+    at once (not structurally separate attributes that happen to share
+    state)."""
     src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
     km_a = AsyncKernelManager(kernel_name="python3")
@@ -63,18 +75,11 @@ async def test_remote_link_is_per_instance_with_two_concurrent_worker_subprocess
         assert ctx_b.remote_link is link_b
         assert ctx_a.remote_link is not ctx_b.remote_link
 
-        from cubevis.remote import request
+        exec_ctx_a = await ctx_a.remote_link.create_context()
+        exec_ctx_b = await ctx_b.remote_link.create_context()
 
-        comm_a = ctx_a.remote_link.mgr.open("worker")
-        comm_b = ctx_b.remote_link.mgr.open("worker")
-        reply_a = await asyncio.wait_for(
-            request(comm_a, "dispatch_fast", {"message_id": "ping", "payload": {}}),
-            timeout=15,
-        )
-        reply_b = await asyncio.wait_for(
-            request(comm_b, "dispatch_fast", {"message_id": "ping", "payload": {}}),
-            timeout=15,
-        )
+        reply_a = await exec_ctx_a.dispatch_fast("ping", {})
+        reply_b = await exec_ctx_b.dispatch_fast("ping", {})
         pid_a, pid_b = reply_a["pid"], reply_b["pid"]
         assert pid_a != pid_b, "the two apps' worker subprocesses must be genuinely distinct"
         assert _pid_alive(pid_a) and _pid_alive(pid_b), (
@@ -112,12 +117,8 @@ async def test_comm_mgr_shutdown_cascades_into_remote_link_close():
         link = await RemoteAppLink.open(km, worker_target_name="shutdown-cascade-test")
         attach_remote_link(ctx, link, holder)
 
-        from cubevis.remote import request
-        comm = ctx.remote_link.mgr.open("worker")
-        reply = await asyncio.wait_for(
-            request(comm, "dispatch_fast", {"message_id": "ping", "payload": {}}),
-            timeout=15,
-        )
+        exec_ctx = await ctx.remote_link.create_context()
+        reply = await exec_ctx.dispatch_fast("ping", {})
         worker_pid = reply["pid"]
         assert _pid_alive(worker_pid)
 

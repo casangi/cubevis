@@ -1,5 +1,5 @@
 """
-Chunk 1, Task 5 + definition-of-done bullet 4.
+Chunk 1, Task 5 + definition-of-done bullet 4. Unchanged by Chunk 1c.
 
 `KernelClientTransport` connects to and exchanges a message with a real
 remote kernel -- a genuine spike, not just a design sketch. "Remote" here

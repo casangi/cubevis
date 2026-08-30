@@ -1,5 +1,7 @@
 """
-Chunk 1b, Task 4.
+Chunk 1b, Task 4. Unchanged by Chunk 1c -- _supervisor.py now owns one
+JobRegistry per execution context (instead of one, singular) but the
+registry class itself needed no changes to support that.
 
 Two things live here, deliberately together:
 

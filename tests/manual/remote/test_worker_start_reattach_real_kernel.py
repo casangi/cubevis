@@ -1,5 +1,6 @@
 """
 Chunk 1, Task 6 -- start-vs-reattach against a real remote kernel process.
+Unchanged by Chunk 1c.
 
 Simulates: P_local session #1 starts a remote kernel and bootstraps the
 cubevis worker in it (constructing a counter-backed "worker" object and

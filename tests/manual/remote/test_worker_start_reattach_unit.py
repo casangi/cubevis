@@ -1,7 +1,11 @@
 """
 Chunk 1, Task 6 -- fast, in-process coverage of `ensure_remote_worker`'s
 idempotency contract, independent of any real kernel process (that part
-is covered separately in test_task6_start_reattach_real_kernel.py).
+is covered separately in test_worker_start_reattach_real_kernel.py).
+Unchanged by Chunk 1c -- `ensure_remote_worker` itself is untouched by
+this chunk (see _worker.py's module docstring); the pool object it
+bootstraps (Chunk 1c) is exactly the kind of opaque return value this
+mechanism was already designed to keep alive across a reattach.
 """
 import pytest
 

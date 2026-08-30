@@ -1,5 +1,5 @@
 """
-Chunk 1, Task 4 + definition-of-done bullet 3.
+Chunk 1, Task 4 + definition-of-done bullet 3. Unchanged by Chunk 1c.
 
 `request()` and `SyncBridge` both need at least one test exercising the
 "no running loop" call path -- that's the path most likely to have

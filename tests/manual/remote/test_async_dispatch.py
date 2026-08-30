@@ -13,6 +13,11 @@ stays fast no matter how busy or how long-running the dispatched job is.
 That's what these tests prove: `dispatch()` returns immediately, and
 `status()` stays instant throughout, while a real subprocess is
 genuinely blocked processing the job in the background.
+
+Chunk 1c note (otherwise unchanged): see test_worker_process_transport.py's
+module docstring -- `_spawn_supervisor_side` here sends the same opening
+`configure` handshake before returning, since these tests also talk to
+`WorkerProcessTransport` directly, below `_supervisor.py`'s pool.
 """
 import asyncio
 import os
@@ -33,6 +38,9 @@ async def _spawn_supervisor_side():
     await mgr.initialize(transport=transport)
     run_task = asyncio.ensure_future(transport.run())
     comm = mgr.open("worker")
+    # Chunk 1c: opening configuration handshake -- see this file's
+    # module docstring.
+    await asyncio.wait_for(request(comm, "configure", {}), timeout=15)
     return mgr, comm, transport, run_task
 
 

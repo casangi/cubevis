@@ -182,9 +182,13 @@ class MSv2Backend(XArrayReader):
                     # available variable names in each partition Dataset.
                     # self._data_column is kept for metadata() reporting.
                 )
+            except NotImplementedError as exc:
+                raise RuntimeError(
+                    f"{self._path!r} not supported: {exc}"
+                ) from exc
             except Exception as exc:
                 raise RuntimeError(
-                    f"xarray-ms failed to open {self._path!r}: {exc}"
+                    f"xarray-ms failed to open {self._path!r}: {exc} <{type(exc)}>"
                 ) from exc
 
         n = sum(1 for _ in self._iter_visibility_partitions())

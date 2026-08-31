@@ -166,9 +166,12 @@ class LocalVisibilityReader:
         gx: int,
         gy: int,
         selection: "SelectionSpec",
+        polarization: Optional[str] = None,
     ) -> dict:
         """Delegate to ``backend.probe_raster_pixel``."""
-        return self._backend.probe_raster_pixel(raw_grid, gx, gy, selection)
+        return self._backend.probe_raster_pixel(
+            raw_grid, gx, gy, selection, polarization=polarization
+        )
 
     def probe_scatter_pixel(
         self,

@@ -3015,24 +3015,44 @@ for (const dt of other.tools) {
             return {"notify_text": text, "notify_color": color_warn}
 
         if panel == "raster":
+            # A raster shows exactly one polarization at a time (see
+            # _flag_key()'s documented contract) -- an unset `correlation`
+            # here previously meant "all", which would flag polarizations
+            # never actually shown at this box. Sourced from self._raster,
+            # the same "whichever slot currently holds this kind"
+            # compatibility shim already used elsewhere in this class
+            # (hover probes, crosshair sync, etc.) for the same "only one
+            # of this kind can fire a select today" simplification that
+            # self._raster_x/_scatter_x below already rely on; becomes
+            # Group 3's problem (see that shim's docstring) once per-slot
+            # select-source identity exists.
             delta = FlagDelta(
-                flag       = flag,
-                time_range = (min(x0, x1), max(x0, x1))
-                             if self._raster_x == Axis.TIME else None,
-                freq_range = (min(x0, x1), max(x0, x1))
-                             if self._raster_x in (Axis.CHANNEL, Axis.FREQUENCY)
-                             else None,
+                flag        = flag,
+                time_range  = (min(x0, x1), max(x0, x1))
+                              if self._raster_x == Axis.TIME else None,
+                freq_range  = (min(x0, x1), max(x0, x1))
+                              if self._raster_x in (Axis.CHANNEL, Axis.FREQUENCY)
+                              else None,
+                correlation = [self._raster._polarization],
                 source  = f"raster_box_{verb}",
                 comment = f"raster {verb} box x=[{x0:.4g},{x1:.4g}] y=[{y0:.4g},{y1:.4g}]",
             )
         else:
+            # A scatter panel can overlay several polarization layers at
+            # once, so the box scopes to every *visible* layer (alpha >
+            # 0 -- a hidden/toggled-off layer isn't actually on screen,
+            # matching the same "flag what's displayed" principle).
+            # Same self._scatter compatibility-shim caveat as above.
+            visible_pols = [lyr.polarization for lyr in self._scatter._layers
+                            if lyr.alpha > 0.0]
             delta = FlagDelta(
-                flag       = flag,
-                time_range = (min(x0, x1), max(x0, x1))
-                             if self._scatter_x == Axis.TIME else None,
-                freq_range = (min(x0, x1), max(x0, x1))
-                             if self._scatter_x in (Axis.CHANNEL, Axis.FREQUENCY)
-                             else None,
+                flag        = flag,
+                time_range  = (min(x0, x1), max(x0, x1))
+                              if self._scatter_x == Axis.TIME else None,
+                freq_range  = (min(x0, x1), max(x0, x1))
+                              if self._scatter_x in (Axis.CHANNEL, Axis.FREQUENCY)
+                              else None,
+                correlation = visible_pols or None,
                 source  = f"scatter_box_{verb}",
                 comment = f"scatter {verb} box x=[{x0:.4g},{x1:.4g}] y=[{y0:.4g},{y1:.4g}]",
             )

@@ -910,13 +910,34 @@ class MSv2Backend(XArrayReader):
         """Build scatter DataFrames for a single partition.
 
         Returns a dict mapping (Axis, pol) → DataFrame(x, y).
+
+        Not every partition carries every polarization requested in
+        ``yaxes`` (see ``_raster_2d`` for the identical condition on the
+        raster path -- an MS can split one nominal SPW across DDIDs with
+        different correlation setups, e.g. RR-only vs LL-only vs full-pol
+        scans on the same spectral window; confirmed on 3c84scan1.ms).
+        ``yaxes`` is filtered down to this partition's locally-present
+        polarizations *before* any lazy array is built.  A partition
+        missing every requested polarization contributes no keys at all;
+        the caller's accumulator dict is pre-seeded with every key in
+        the full, unfiltered ``yaxes``, so a key missing here just stays
+        empty for this partition while other partitions that do carry it
+        still contribute normally -- no polarization becomes globally
+        unreachable, only absent from partitions that never recorded it.
         """
         vis  = self._resolve_vis(ds)
         flag = self._flag_mask(ds)
 
-        # Build lazy derived arrays for every requested (axis, pol)
+        local_pols = ({str(p) for p in ds.coords["polarization"].values}
+                      if "polarization" in ds.coords else set())
+        yaxes_local = [key for key in yaxes if key[1] in local_pols]
+        if not yaxes_local:
+            return {}
+
+        # Build lazy derived arrays for every requested (axis, pol) this
+        # partition actually carries.
         lazy_y: dict[tuple[Axis, str], xr.DataArray] = {}
-        for axis, pol in yaxes:
+        for axis, pol in yaxes_local:
             lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, axis, pol, ds)
 
         # x-axis lazy array — broadcast to match a representative y shape
@@ -1267,6 +1288,22 @@ class MSv2Backend(XArrayReader):
             )
             polarization = str(ds.coords["polarization"].values[0])
 
+        # Not every partition carries every polarization product: an MS
+        # can split one nominal SPW across DDIDs with different
+        # correlation setups (e.g. RR-only vs LL-only vs full-pol scans
+        # on the same spectral window -- confirmed on 3c84scan1.ms).  A
+        # partition that doesn't have the requested polarization simply
+        # has nothing to contribute to *this* render -- exactly like a
+        # partition outside the requested time/baseline/SPW range -- so
+        # it is skipped here rather than raising.  ``query_raster``'s
+        # caller already tolerates a ``None`` return (see the ``arr is
+        # not None`` check around its ``_raster_2d`` call).  This does
+        # not make the data unreachable: selecting a polarization that a
+        # given partition *does* carry (e.g. via the sidebar Correlation
+        # control) still renders it normally.
+        if polarization not in {str(p) for p in ds.coords["polarization"].values}:
+            return None
+
         vis_pol  = vis.sel(polarization=polarization)
         flag_pol = flag.sel(polarization=polarization)
 
@@ -1408,6 +1445,7 @@ class MSv2Backend(XArrayReader):
         gx: int,
         gy: int,
         selection: SelectionSpec,
+        polarization: Optional[str] = None,
     ) -> dict:
         """Return the value and metadata for raw grid cell (gx, gy).
 
@@ -1430,6 +1468,18 @@ class MSv2Backend(XArrayReader):
             dim 0); ``gx`` = column (x-axis, dim 1).
         selection :
             The ``SelectionSpec`` active when ``raw_grid`` was produced.
+        polarization :
+            The polarization actually displayed on the raster this pixel
+            came from (``VisibilityRaster._polarization``).  When given,
+            a partition that doesn't locally carry this polarization is
+            excluded from the identity lookup below -- it contributed
+            nothing to ``raw_grid``'s value at this cell (see
+            ``_raster_2d``), so including its field/scan/antenna/SPW
+            identity would describe data that was never actually on
+            screen at this pixel, and a flag built from that identity
+            would over-scope.  ``None`` (the default) keeps the previous,
+            polarization-blind behavior for callers that don't have a
+            single displayed polarization to pass.
 
         Returns
         -------
@@ -1489,6 +1539,15 @@ class MSv2Backend(XArrayReader):
         for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
+                continue
+
+            # See the `polarization` parameter docstring above: a
+            # partition that doesn't carry the displayed polarization
+            # contributed nothing to this cell's rendered value, so it's
+            # excluded from identity-gathering too.
+            if (polarization is not None and "polarization" in ds.coords
+                    and polarization not in
+                        {str(p) for p in ds.coords["polarization"].values}):
                 continue
 
             if x_dim_name == "time" or y_dim_name == "time":

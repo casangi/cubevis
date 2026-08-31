@@ -1085,6 +1085,18 @@ class MSv4Backend(XArrayReader):
         partition, issues a single ``dask.compute(*all_lazy)`` so Dask can
         schedule all Zarr chunk reads in parallel, then ravels and filters
         each result into a DataFrame.
+
+        Not every partition carries every polarization requested in
+        ``yaxes`` -- see ``_query_partition_scatter`` for the full
+        rationale (mirrored here since this is an independent code path,
+        not a caller of that method).  ``yaxes`` is filtered down to
+        each partition's locally-present polarizations before any lazy
+        array for that partition is built; a partition missing every
+        requested polarization contributes no ``all_lazy``/``layout``
+        entries at all.  This also fixes the x-axis template, which
+        previously always used ``yaxes[0]``'s polarization even for a
+        partition that didn't carry it -- the template now comes from
+        that partition's own first *locally-present* key instead.
         """
         # Build flat list: [y00, y01, ..., y0K, x0, y10, ..., y1K, x1, ...]
         # where index encodes (partition_idx, yaxis_idx | x_sentinel)
@@ -1095,15 +1107,29 @@ class MSv4Backend(XArrayReader):
         for p_idx, ds in enumerate(selected):
             vis  = self._resolve_vis(ds)
             flag = self._flag_mask(ds)
-            for key in yaxes:
+
+            local_pols = ({str(p) for p in ds.coords["polarization"].values}
+                          if "polarization" in ds.coords else set())
+            yaxes_local = [key for key in yaxes if key[1] in local_pols]
+            if not yaxes_local:
+                continue
+
+            for key in yaxes_local:
                 axis, pol = key
                 lazy_y = self._lazy_quantity(vis, flag, axis, pol)
                 all_lazy.append(lazy_y)
                 layout.append((p_idx, key))
-            # x — use a representative y to get the right shape for broadcast
-            template = self._lazy_quantity(vis, flag, yaxes[0][0], yaxes[0][1])
+            # x — use a representative *locally-present* y to get the
+            # right shape for broadcast (yaxes_local[0], guaranteed
+            # present on this partition -- yaxes[0] is not).
+            template = self._lazy_quantity(
+                vis, flag, yaxes_local[0][0], yaxes_local[0][1]
+            )
             all_lazy.append(self._lazy_x_axis(ds, xaxis, template))
             layout.append((p_idx, None))   # None marks the x entry
+
+        if not all_lazy:
+            return {key: pd.DataFrame({"x": [], "y": []}) for key in yaxes}
 
         # Single fused compute across all partitions
         computed = dask.compute(*all_lazy)
@@ -1121,8 +1147,14 @@ class MSv4Backend(XArrayReader):
         # Ravel, mask NaN, build DataFrames per key
         accumulator: dict[tuple, list[pd.DataFrame]] = {k: [] for k in yaxes}
         for p_idx in range(len(selected)):
+            # A partition that carried none of the requested polarizations
+            # has no x entry either (see the ``continue`` above).
+            if p_idx not in x_by_partition:
+                continue
             x_arr = x_by_partition[p_idx]
             for key in yaxes:
+                if (p_idx, key) not in y_by_partition_key:
+                    continue
                 y_arr = y_by_partition_key[(p_idx, key)]
                 x_flat = x_arr.ravel()
                 y_flat = y_arr.ravel()
@@ -1155,12 +1187,31 @@ class MSv4Backend(XArrayReader):
         use_fused: bool,
         use_parallel: bool,
     ) -> dict[tuple[Axis, str], pd.DataFrame]:
-        """Build scatter DataFrames for a single partition."""
+        """Build scatter DataFrames for a single partition.
+
+        Mirrors ``MSv2Backend._query_partition_scatter`` exactly: not
+        every partition carries every polarization requested in
+        ``yaxes`` (an MS can split one nominal SPW across DDIDs with
+        different correlation setups), so ``yaxes`` is filtered down to
+        this partition's locally-present polarizations before any lazy
+        array is built.  A partition missing every requested
+        polarization contributes no keys at all; the caller's
+        accumulator is pre-seeded with every key in the full,
+        unfiltered ``yaxes``, so a missing key here just stays empty for
+        this partition while other partitions that do carry it still
+        contribute -- no polarization becomes globally unreachable.
+        """
         vis  = self._resolve_vis(ds)
         flag = self._flag_mask(ds)
 
+        local_pols = ({str(p) for p in ds.coords["polarization"].values}
+                      if "polarization" in ds.coords else set())
+        yaxes_local = [key for key in yaxes if key[1] in local_pols]
+        if not yaxes_local:
+            return {}
+
         lazy_y: dict[tuple[Axis, str], xr.DataArray] = {}
-        for axis, pol in yaxes:
+        for axis, pol in yaxes_local:
             lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, axis, pol)
 
         template = next(iter(lazy_y.values()))
@@ -1452,6 +1503,15 @@ class MSv4Backend(XArrayReader):
             )
             polarization = str(ds.coords["polarization"].values[0])
 
+        # Not every partition carries every polarization product -- see
+        # MSv2Backend._raster_2d for the full rationale (mirrored here
+        # exactly).  A partition missing the requested polarization
+        # contributes nothing to this render rather than raising; other
+        # partitions/selections that do carry it still render normally,
+        # so no polarization becomes unreachable.
+        if polarization not in {str(p) for p in ds.coords["polarization"].values}:
+            return None
+
         vis_pol  = vis.sel(polarization=polarization)
         flag_pol = flag.sel(polarization=polarization)
 
@@ -1607,11 +1667,17 @@ class MSv4Backend(XArrayReader):
         gx: int,
         gy: int,
         selection: SelectionSpec,
+        polarization: Optional[str] = None,
     ) -> dict:
         """Return the value and metadata for raw grid cell (gx, gy).
 
-        Mirrors ``MSv2Backend.probe_raster_pixel`` exactly.  Uses the
-        partition cache (OPT-A) for the coordinate lookup pass.
+        Mirrors ``MSv2Backend.probe_raster_pixel`` exactly, including the
+        ``polarization`` parameter: when given, a partition that doesn't
+        locally carry it is excluded from the identity lookup below,
+        since it contributed nothing to ``raw_grid``'s value at this cell
+        (see ``_raster_2d``).  ``None`` keeps the previous,
+        polarization-blind behavior.  Uses the partition cache (OPT-A)
+        for the coordinate lookup pass.
         """
         self._require_open()
 
@@ -1676,6 +1742,12 @@ class MSv4Backend(XArrayReader):
         for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
+                continue
+
+            # See the `polarization` parameter docstring above.
+            if (polarization is not None and "polarization" in ds.coords
+                    and polarization not in
+                        {str(p) for p in ds.coords["polarization"].values}):
                 continue
 
             if x_dim_name == "time" or y_dim_name == "time":

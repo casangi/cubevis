@@ -1121,7 +1121,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             )
         try:
             info  = self._backend.probe_raster_pixel(
-                self._agg, px, py, self._selection
+                self._agg, px, py, self._selection,
+                polarization=self._polarization,
             )
             label = self._format_probe(info, self._quantity.label)
             if self._probe_debug:

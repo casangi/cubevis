@@ -773,6 +773,7 @@ class XArrayReader(abc.ABC):
         gx: int,
         gy: int,
         selection: SelectionSpec,
+        polarization: Optional[str] = None,
     ) -> dict:
         """Return metadata for a raster pixel at raw grid indices (gx, gy).
 
@@ -829,6 +830,19 @@ class XArrayReader(abc.ABC):
             Derived from hover ``{x, y}`` via ``_data_to_pixel()``.
         selection :
             The ``SelectionSpec`` active when ``raw_grid`` was produced.
+        polarization :
+            The polarization actually displayed on the raster this pixel
+            came from (``VisibilityRaster._polarization``).  A raster
+            renders one polarization at a time (see ``query_raster``),
+            and a partition that doesn't locally carry it contributes
+            nothing to a given cell's rendered value.  When
+            ``polarization`` is given, such a partition is excluded from
+            this method's identity lookup too, so the returned
+            field/scan/antenna/SPW identity -- and any flag built from
+            it -- only describes data that was actually on screen at
+            this pixel.  ``None`` (the default) keeps the previous,
+            polarization-blind behavior for callers with no single
+            displayed polarization to pass.
 
         Returns
         -------

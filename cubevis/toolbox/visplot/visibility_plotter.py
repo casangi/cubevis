@@ -1378,6 +1378,34 @@ class VisibilityPlotter:
     compact_toolbar : bool
         Whether each figure's toolbar auto-hides until the mouse is over
         that plot.  Defaults to ``True``.
+
+    Resource lifecycle
+    ------------------
+    Constructing a ``VisibilityPlotter`` opens the underlying MSv2/MSv4
+    backend (``open_ms``/``open_ps``), which holds real OS file
+    descriptors (an ``xr.open_datatree()`` handle -- for MSv2 this is
+    backed by ``arcae``/casacore table handles across the main table
+    *and* every subtable, so a single open can easily account for
+    dozens of descriptors).
+
+    Call ``close()`` -- or use the instance as a context manager --
+    once you are done with a plotter, especially in scripts or
+    interactive sessions that construct many ``VisibilityPlotter``
+    instances in a row (each unclosed instance leaks its backend's
+    file descriptors for the life of the process)::
+
+        with VisibilityPlotter(ms=path, headless=True) as vp:
+            ...  # export, inspect, etc.
+        # backend closed here
+
+    In interactive GUI use, ``close()`` is also called automatically
+    when the browser session ends for good (see ``_build_comm``'s
+    shutdown handler) and, as a last-resort safety net, from
+    ``__del__``.  Neither of those is a substitute for an explicit
+    ``close()``/``with`` block: session shutdown only fires if the
+    browser tab is actually closed, and ``__del__`` timing is not
+    guaranteed once Bokeh/CustomJS callbacks create reference cycles
+    back to ``self``.
     """
 
     def __init__(
@@ -1458,6 +1486,64 @@ class VisibilityPlotter:
         self._build_panels()
         self._style_panel_figures()
         self._build_gui()
+
+    # ------------------------------------------------------------------ #
+    # Resource lifecycle                                                   #
+    # ------------------------------------------------------------------ #
+    #
+    # FD-leak fix (2026-09-01): _resolve_config() opens self._reader (an
+    # MSv2Backend/MSv4Backend wrapping an xr.open_datatree() handle) but
+    # historically nothing ever called .close() on it again -- not on GUI
+    # shutdown, not in headless mode, not anywhere.  Every
+    # VisibilityPlotter(ms=...)/VisibilityPlotter(ps=...) call leaked one
+    # backend's worth of open file descriptors for the life of the
+    # process; with MSv2 (arcae/casacore) this is dozens of descriptors
+    # per instance (main table + every subtable), which is why it was
+    # observed there first even though the same leak applies to ps=.
+    #
+    # close() is idempotent and defensive (getattr/try-except) because it
+    # must be safe to call from __del__, from the shutdown handler, from
+    # user code, and even if __init__ raised partway through and never
+    # finished setting up attributes.
+
+    def close(self) -> None:
+        """Release the backend/data-source resources this plotter opened.
+
+        Safe to call more than once and safe to call even if
+        construction failed before ``self._reader`` was set.  Prefer
+        calling this explicitly (or via ``with VisibilityPlotter(...) as
+        vp:``) rather than relying on GUI-shutdown or ``__del__`` cleanup
+        -- see "Resource lifecycle" in the class docstring.
+        """
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        reader = getattr(self, "_reader", None)
+        if reader is not None:
+            try:
+                reader.close()
+            except Exception:
+                log.exception(
+                    "VisibilityPlotter.close(): error closing data reader"
+                )
+
+    def __enter__(self) -> "VisibilityPlotter":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        # Last-resort safety net only -- see "Resource lifecycle" above
+        # for why this is not sufficient on its own (reference cycles
+        # through Bokeh/CustomJS callbacks mean CPython refcounting will
+        # not collect this promptly, if at all, without an explicit
+        # gc.collect() sweep). Never let teardown raise during
+        # interpreter shutdown.
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _resolve_config(
         self,
@@ -1661,6 +1747,7 @@ class VisibilityPlotter:
         # ------------------------------------------------------------------ #
         def _shutdown_handler(reason, description):
             self._stop()
+            self.close()
             BokehInit.clear_app_context(self._app_context)
 
         def _connection_closed_handler(reason, description):

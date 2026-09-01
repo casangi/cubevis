@@ -462,7 +462,8 @@ implemented. Required for the general-user `preview` release** — see the
 A `config=` constructor parameter loads a previously saved arrangement:
 
 ```python
-visplot(ms="sis14.ms", config="my_layout.json")
+visplot(ms="sis14.ms", config="my_layout.json")            # GUI
+visplot(ms="sis14.ms", headless=True, config="grid.json")  # PNG export
 ```
 
 **`config` deliberately captures layout, not data.** It never contains
@@ -481,11 +482,25 @@ colleague and load against an entirely different observation: every
 value in it is guaranteed valid for *any* MS, because none of it was
 ever looked up against one.
 
-**Schema:**
+**GUI and headless PNG output use two different, but closely related,
+schemas — not one shape with unused fields.** The GUI needs both panel
+kinds saved for every panel, in case you flip Raster/Scatter after
+loading; a batch PNG grid never switches anything, so saving an unused
+second kind per cell would just be waste, and waste that scales with
+however large the grid is. What the two schemas *do* share exactly is
+the description of a single axis configuration (which axes, which
+colormap, which scaling) — only how panels are addressed and paired
+around that shared piece differs. `config=` stays one parameter either
+way; the file declares which kind it is, and loading a `"png"` file into
+a GUI session (or vice versa) fails immediately with a clear message,
+not a confusing error partway through.
+
+**GUI schema:**
 
 ```json
 {
   "schema_version": 1,
+  "target": "gui",
   "layout": "side",
   "theme": "dark",
   "panels": [
@@ -509,13 +524,54 @@ ever looked up against one.
 }
 ```
 
+`"slot": "A"` means *whichever panel is currently on the left, beside
+the sidebar* — not whichever panel started there. Panels can be swapped
+on screen after launch, and that swap only lives in the browser, so
+Save always re-checks which one is actually on the left at the moment
+you save, rather than assuming it's still the original one. Loading is
+simpler: a fresh launch always starts with `"A"` on the left, so this
+takes care of itself on the way back in.
+
 Each slot always carries both its `raster` and `scatter` sub-configs —
-matching `_PanelSlot`'s own model, where both kinds are always built and
-only one is active — so toggling kind after loading lands on a
-sensibly-configured panel rather than a hardcoded default. `panels` is
-two entries today regardless of `layout` (even `"one"` saves the hidden
-second slot, since it is still live underneath); it grows unchanged if
-N-panel split ever ships.
+matching how the GUI already works internally, where both kinds are
+always built and only one is shown — so toggling kind after loading
+lands on a sensibly-configured panel rather than a hardcoded default.
+`panels` is two entries today regardless of `layout` (even `"one"`
+saves the hidden second slot, since it is still live underneath, just
+not shown); it grows unchanged if a future larger split-panel mode
+ships.
+
+**PNG schema** (for `headless=True` / batch export — e.g. a grid of
+per-antenna raster plots, no GUI ever built):
+
+```json
+{
+  "schema_version": 1,
+  "target": "png",
+  "rows": 2,
+  "cols": 2,
+  "panels": [
+    [
+      { "kind": "raster",  "raster":  { "y": "BASELINE", "x": "TIME", "quantity": "AMPLITUDE",
+                                          "cmap": "inferno", "scaling": "eq_hist" } },
+      { "kind": "scatter", "scatter": { "x": "TIME", "y": "AMPLITUDE",
+                                          "cmap": "viridis", "scaling": "linear" } }
+    ],
+    [
+      { "kind": "scatter", "scatter": { "x": "UVDIST", "y": "AMPLITUDE",
+                                          "cmap": "viridis", "scaling": "linear" } },
+      { "kind": "raster",  "raster":  { "y": "TIME", "x": "CHANNEL", "quantity": "AMPLITUDE",
+                                          "cmap": "inferno", "scaling": "eq_hist" } }
+    ]
+  ]
+}
+```
+
+Read row by row, left to right, matching how the grid actually lays
+out; each cell has exactly the one kind it will render, nothing
+unused. This is display configuration only, same as the GUI schema —
+which antenna/SPW/etc. each cell iterates over is data selection, still
+supplied fresh per call the ordinary way, not stored in the file.
 
 **Precedence**, extending the rule already used for axes (`explicit
 argument > preset > hardcoded default`): `explicit kwarg > config file >
@@ -527,16 +583,17 @@ which the file never contained.
 in this no-server architecture, Python's own panel objects already stay
 current for almost everything (`self._raster_y`, `self._cmap`,
 `self._scaling`, etc. are refreshed on every Plot press and every
-cmap/scaling widget submit) — the *only* client-side state Python never
-learns at all is the layout arrangement itself, since the layout radio's
-`CustomJS` never calls back to Python. So the Save Layout action needs
-exactly one small comm round-trip, gathering only that gap — the
-arrangement and each slot's current kind (re-derived from live
-`.visible` state at click time, not assumed from the last Plot press,
-mirroring Export PNG's own "determine at click time" fix for the same
-class of staleness) — and lets Python build the rest of the JSON from
-the panel objects' own already-current attributes before writing the
-file.
+cmap/scaling widget submit) — the client-side state Python never learns
+on its own is the layout arrangement and which panel is currently on
+which side, since neither the layout toggle nor the panel-swap button
+ever calls back to Python. So the Save Layout action needs exactly one
+small comm round-trip, gathering only that gap — arrangement, current
+left/right assignment, and each slot's current kind (re-derived from
+live state at the moment of the click, not assumed from the last Plot
+press, mirroring Export PNG's own "determine at click time" fix for the
+same class of staleness) — and lets Python build the rest of the JSON
+from the panel objects' own already-current attributes before writing
+the file.
 
 Passing both `ms` and `ps` raises a `ValueError` immediately with a
 clear message.  Omitting both also raises `ValueError`.  All other

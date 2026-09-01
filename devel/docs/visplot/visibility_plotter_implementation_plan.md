@@ -440,11 +440,16 @@ kwarg, so loading never needs new per-MS validation logic and can never
 fail against a legitimately different dataset the way a saved
 `field="0637-752"` could.
 
-**Schema:**
+**Schema — two variants sharing a discriminator and a common building
+block, not one shape (decided 2026-08-31, see below for why).**
+
+**GUI variant** (`target: "gui"` — loaded by `visplot(..., config=...)`
+when `headless=False`):
 
 ```json
 {
   "schema_version": 1,
+  "target": "gui",
   "layout": "side",
   "theme": "dark",
   "panels": [
@@ -468,25 +473,118 @@ fail against a legitimately different dataset the way a saved
 }
 ```
 
-Design notes:
+**PNG variant** (`target: "png"` — loaded by `visplot(..., headless=True,
+config=...)`, or directly by `_export_png(config=...)`):
 
-* **Each slot always carries both `raster` and `scatter` sub-configs**,
-  mirroring `_PanelSlot` (§3.1b) exactly — both kinds are always built,
-  only one is active — rather than saving only the active kind and
-  leaving the other to a hardcoded default after a post-load kind
-  toggle.
+```json
+{
+  "schema_version": 1,
+  "target": "png",
+  "rows": 2,
+  "cols": 2,
+  "panels": [
+    [
+      { "kind": "raster",  "raster":  { "y": "BASELINE", "x": "TIME", "quantity": "AMPLITUDE",
+                                          "cmap": "inferno", "scaling": "eq_hist" } },
+      { "kind": "scatter", "scatter": { "x": "TIME", "y": "AMPLITUDE",
+                                          "cmap": "viridis", "scaling": "linear" } }
+    ],
+    [
+      { "kind": "scatter", "scatter": { "x": "UVDIST", "y": "AMPLITUDE",
+                                          "cmap": "viridis", "scaling": "linear" } },
+      { "kind": "raster",  "raster":  { "y": "TIME", "x": "CHANNEL", "quantity": "AMPLITUDE",
+                                          "cmap": "inferno", "scaling": "eq_hist" } }
+    ]
+  ]
+}
+```
+
+**Why two variants instead of one shape with unused fields.** This is
+the same fork already recommended in §3.1d for `_build_panels` itself,
+one layer up: GUI's shape carries a complementary kind per panel
+*because runtime switching is a first-class feature* — every panel
+needs its other kind pre-populated in case the user flips it after
+loading, mirroring `_PanelSlot`'s own always-build-both model. PNG has
+no switching concept at all; a cell renders once and is never toggled,
+so a stored-but-unused complementary kind per cell would be pure waste,
+multiplied by however large the grid is — and X-7 commits PNG grids to
+being architecturally unbounded, so that waste is not hypothetical.
+Forcing one shape to cover both means either GUI bloating for no reason
+headless needs, or headless inheriting a 2-panel ceiling it shouldn't
+have. Kept separate, `panels` addressing also gets to match what each
+target's execution path actually already does: GUI's position-labelled
+`A`/`B` pairing matches `_slots`/`_PanelSlot`; PNG's row-major
+`rows`×`cols` grid matches `_export_png`'s own existing internal
+`{"one": (1,1), "side": (1,2), "over": (2,1)}` mapping almost exactly,
+so a PNG-variant loader is close to "feed `rows`/`cols`/`panels`
+straight into the export path that already exists" rather than new
+machinery. What *is* shared, verbatim, between the two variants is the
+per-axis-set building block itself — `{y, x, quantity, cmap, scaling}`
+for raster, `{x, y, cmap, scaling}` for scatter — since the same
+portable-axis-vocabulary rule above applies identically to both; that
+shared block is what makes the two variants "very similar" rather than
+unrelated. `config=` stays a single constructor parameter either way;
+which shape it expects is determined by `headless=`, and the loader
+validates the file's `"target"` against that and raises immediately on
+a mismatch (e.g. a `"target": "png"` file passed to a `headless=False`
+construction) rather than failing confusingly several layers down where
+a GUI loader would find no `rows`/`cols` key, or a PNG loader would find
+no `layout` key.
+
+Design notes (GUI variant):
+
+* **Panel labels reflect current screen position, not construction
+  identity — this matters, and isn't automatic.** Panels can be swapped
+  on screen at runtime (`swap_js`, wired to an existing toolbar
+  action), and that swap is *itself* client-side-only: it mutates
+  `self._display_order_source` in the browser and never calls
+  `ctrl.send()`. The code's own comment on the Python-side mirror,
+  `self._slot_display_order`, says plainly it is "fixed, only ever read
+  at construction" — meaning `self._pos0`/`self._pos1` (which read that
+  same list) can *also* silently disagree with what's on screen after a
+  swap, the identical failure class as the `layout_rbg` gap below, just
+  discovered in a second place. So Save must read
+  `display_order_source.data['order']` fresh from the client (see the
+  round-trip below), not trust any Python-side copy, and whichever slot
+  identity that live array currently puts in position 0 is written out
+  as `"slot": "A"`. Load needs no special handling for this: construction
+  always starts with identity slot A in position 0, before any swap can
+  happen, so a loaded `"A"` becomes construction identity A directly —
+  exactly what Save produced.
+* **Each slot always carries both `raster` and `scatter` sub-configs,
+  including the currently-hidden one** — mirroring `_PanelSlot` (§3.1b)
+  exactly, both kinds always built, only one active — rather than
+  saving only the active kind and leaving the other to a hardcoded
+  default after a post-load kind toggle. This falls out of the existing
+  round-trip for free: `defer_initial_render` only ever gates the
+  *initial backend query*, never the axis-picker widgets, and
+  `doPlot`'s payload builder (`buildPanelPayload`) already reads both
+  kinds' widgets unconditionally on every Plot press — so the hidden
+  kind's config is exactly as current in Python as the shown one,
+  no new plumbing needed for this part.
 * **`panels` is length-2 today, unconditionally** — even
   `layout="one"` saves slot B, since (per the `defer_initial_render`
   gap noted in §3.1d) it is still actually built and queried, not
   lazily skipped. No schema change needed if/when N-panel split (§3.1d)
-  or grid mode (X-1) land; `panels` just grows or gains a `cell`/`row`,
-  `col` addressing scheme for grid's case.
+  lands; `panels` just grows.
 * **Optional `scaling_params`** (e.g. `gamma`'s exponent, `log`'s
   `alpha`) per axis, for completeness — these are algorithm parameters,
   not data-range values, so they pass the same portability test.
 * **Precedence** extends the rule already established for axes
   (`explicit argument > preset > hardcoded default`) by one link:
   `explicit kwarg > config file > preset > hardcoded default`.
+
+Design notes (PNG variant):
+
+* Row-major: `len(panels) == rows`, `len(panels[i]) == cols` for every
+  row; each cell has exactly the one sub-config matching its `kind` —
+  no complementary pair, since nothing ever switches it.
+* Not addressed by X-1's grid-mode "Iterate by" axis (antenna/SPW/etc.)
+  at all — that is a *data* concept (which value each cell iterates
+  over), out of `config`'s scope by the same portability rule as
+  `field=`/`spw=`. A PNG-variant config only ever describes what each
+  cell *looks like*, supplied fresh per invocation via the ordinary
+  `**selection` kwargs, same as any other headless call today.
 
 **Save mirrors Export PNG (E-2), deliberately, and for a precise
 reason, not just consistency.** In this no-server architecture, most of
@@ -503,12 +601,14 @@ re-derived from `.visible` at click time rather than assumed stale from
 construction or the last Plot press. Checking the toolbar wiring
 confirms `layout_rbg`'s `CustomJS` (`layout_js`) never calls `ctrl.send()`
 at all — **the layout arrangement is the one piece of client state
-Python never learns through any existing mechanism.** So Save Layout
-needs exactly one small new comm round-trip — gathering `layout_rbg
-.active` and each slot's current kind (same defensive "derive from
-`.visible` at click time" pattern as Export PNG's `kinds` array, not
-assumed from the last Plot press) — and Python builds the rest of the
-JSON from panel attributes it already has, before writing the file.
+Python never learns through any existing mechanism** — and, per the
+panel-position finding above, `display_order_source` is a second. So
+Save Layout needs exactly one small new comm round-trip — gathering
+`layout_rbg.active`, `display_order_source.data['order']`, and each
+slot's current kind (same defensive "derive from `.visible` at click
+time" pattern as Export PNG's `kinds` array, not assumed from the last
+Plot press) — and Python builds the rest of the JSON from panel
+attributes it already has, before writing the file.
 **Load** is the mirror in reverse: each field flows through the same
 `_resolve_axis_arg`-gated path an explicit kwarg would use, so a loaded
 config is validated identically to hand-typed kwargs, nothing
@@ -1305,7 +1405,7 @@ decisions rather than guessing.)*
 | P-8 | `open_ms()` / `open_ps()` factory with full `ReductionBackend` context-selection matrix (see §4.12). ✅ Done (subsequent session) — completes A-8's basic version; delivered in `visibility_plotter.py`, not a separate `factory.py` (see §"Role of `open_ms()` / `open_ps()`"). | `visibility_plotter.py` |
 | P-10 | Async plot with loading indicator: spinner `Div` overlay on figures while backend query is in flight; Cancel button sets a threading `Event` checked by the backend; Plot button disabled during query | `visibility_plotter.py` |
 | P-11 | `kind=` constructor parameter (`"raster"`/`"scatter"`, orthogonal to `layout=`) plus the `layout="raster"`/`"scatter"` shortcut for `layout="one", kind=X` — see §3.1d for full design and the alternative rejected (folding raster/scatter into `layout=`'s own enum). ✅ **Done (August 31 2026).** `_normalize_layout_kind()` resolves the shortcut once, before `self._layout`/`self._kind` are set; `_build_panels` derives `_slot_a_kind`/`_slot_b_kind` from `self._kind` instead of the previous hardcoded `"raster"`/`"scatter"`, with slot B always taking the complementary kind. No other mechanism needed changes — `kind_switch`'s initial `.active`, each panel's config-section `.visible`, `defer_initial_render`'s kind-matching (see the known gap noted in §3.1d), `_pos0`/`_pos1`, and headless `_export_png`'s panel selection all already keyed off `slot.kind` generically. | `visibility_plotter.py` |
-| P-12 | **Required for the general-user `preview` release** (see `visibility_plotter_preview.md`'s "What the preview explicitly omits"). `config=` constructor parameter to load a saved layout, plus a "Save Layout" toolbar action to write one — schema, the layout-vs-data portability rule, and the Export-PNG-mirrored save/load round-trip design are settled in §3.1e. Precedence: `explicit kwarg > config file > preset > hardcoded default`, extending the existing axis-resolution precedence. Design settled 2026-08-31; not yet implemented. | `visibility_plotter.py` *(new: `layout_config.py`?, TBD at implementation time)* |
+| P-12 | **Required for the general-user `preview` release** (see `visibility_plotter_preview.md`'s "What the preview explicitly omits"). `config=` constructor parameter to load a saved layout, plus a "Save Layout" toolbar action to write one. Two schema variants (`target: "gui"` / `target: "png"`, selected by `headless=`) sharing a common per-axis-set building block but different addressing — GUI's position-labelled `A`/`B` pairing (each with both kinds) vs. PNG's row-major `rows`×`cols` grid (each cell exactly one kind) — plus the layout-vs-data portability rule and the Export-PNG-mirrored save/load round-trip design (including reading `display_order_source` fresh, not the stale Python-side `_slot_display_order`) are settled in §3.1e. Precedence: `explicit kwarg > config file > preset > hardcoded default`. Design settled 2026-08-31 (amended same day re: panel-position staleness and the GUI/PNG schema split); not yet implemented. | `visibility_plotter.py` *(new: `layout_config.py`?, TBD at implementation time)* |
 
 ---
 

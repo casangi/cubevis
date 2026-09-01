@@ -39,6 +39,12 @@ set of controls that all do something real breeds confidence.
 
 ## Layout architecture
 
+> **Note:** this section (Display modes, Layout toggle, Skeleton) predates
+> the unified `layout=` control and per-panel `kind=` described in
+> "Layout and `kind`" under Construction approach below, which is
+> authoritative for current constructor behavior. Flagged 2026-08-31,
+> not yet rewritten — see that section's doc note for detail.
+
 ### No-server constraint
 
 `VisibilityPlotter` uses the same CommMgr/Comm j2p/p2j transport as
@@ -214,8 +220,19 @@ manually toggles the layout or display mode, the JS callback writes the
 current key and chosen mode into the source.  When axes change and Plot
 is pressed, JS reads the source and restores the previously chosen layout
 for that combination, falling back to the preset default if no preference
-is recorded.  The source is accessible from Python via CommMgr if
-cross-session JSON file persistence is added later.
+is recorded.
+
+> This section originally noted the source "is accessible from Python via
+> CommMgr if cross-session JSON file persistence is added later" — that
+> need is now a settled requirement, not a maybe: see "Save/load layout
+> configuration" below and §3.1e of the implementation plan. The two
+> mechanisms stay distinct rather than merging, though: this one is an
+> automatic, silent, per-axis-combination *sticky preference*, reset every
+> page load; `config=`/Save Layout is an explicit, user-triggered,
+> durable *file*, save-then-share-then-reload. Same underlying idea
+> (remember an arrangement choice), different persistence layer and
+> different trigger — worth keeping separate rather than trying to make
+> one subsume the other.
 
 ### 4. Data selection (sidebar — working)
 
@@ -320,6 +337,7 @@ Absent with no stubs:
 - Synchronized cross-panel cursor, Tier 1 (same-axis Span crosshair) — ✅ working in duo mode for all panel-kind combinations; documents were stale. Tier 2 (cross-axis row-level highlight via CommMgr probe) — not yet built; see §4.7 of the implementation plan
 - Averaging controls
 - Iteration (Prev/Next antenna/baseline) — absent from this (pre-preview) release, but now required for the general-user `preview` release; a scoped Field/SPW MVP is planned as Phase 2.5 (`I-series`) in the implementation plan, ahead of the full antenna/baseline/scan/time iteration engine in Phase 3
+- Save/load layout configuration (`config=` constructor parameter, Save Layout toolbar action) — absent from this (pre-preview) release, but now required for the general-user `preview` release. Schema and round-trip design settled 2026-08-31 (see "Saving and loading layout" below and §3.1e of the implementation plan); not yet implemented — tracked as P-12
 - Calibration sidebar section
 - Colour-by-metadata axis in scatter
 - Colorbar (partial — `plot_left`/`plot_right` placement works; display-scope GUI colorbar deferred)
@@ -369,8 +387,12 @@ plotter = visplot(
     scatter_y  = None,          # e.g. "Amplitude", "V"
 
     # Initial display configuration
-    mode        = "both",           # "both", "raster", "scatter"
-    layout      = "side",           # "side", "over"
+    layout      = "side",           # "one", "side", "over" — or "raster"/"scatter"
+                                     # as shorthand for layout="one", kind=<that>
+    kind        = None,             # "raster" (default) or "scatter" — which panel
+                                     # kind leads; see "Layout and kind" below
+    config      = None,             # path to a saved layout JSON file — see
+                                     # "Saving and loading layout" below
     preset      = None,             # "vplot", "radplot", "waterfall"
 
     # Flagging
@@ -391,6 +413,130 @@ vp(plotfile="amp.png", theme="light")               # full-extent view
 for spw in (0, 1, 2, 3):
     vp(plotfile=f"amp_spw{spw}.png", spw=[spw])     # iterate over SPWs
 ```
+
+### Layout and `kind`
+
+`layout=` controls arrangement only: `"one"` (single panel), `"side"`
+(both panels, side by side — default), or `"over"` (both panels, one
+above the other). `kind=` (`"raster"` or `"scatter"`, default `"raster"`)
+controls which panel kind leads, and is independent of arrangement:
+
+* With `layout="one"`, `kind` is the single visible panel's kind.
+* With `layout="side"`/`"over"`, both panels are always shown, one
+  raster and one scatter, exactly as today — `kind` only decides which
+  one starts in the primary/first position on screen; the other always
+  takes the complementary kind.
+
+`layout="raster"` and `layout="scatter"` are also accepted, as shorthand
+for `layout="one", kind="raster"`/`"scatter"` — so a single scatter
+launch can be written either way:
+
+```python
+visplot(ms="sis14.ms", layout="one", kind="scatter")
+visplot(ms="sis14.ms", layout="scatter")           # equivalent shorthand
+```
+
+Supplying both the shorthand and a conflicting explicit `kind=` (e.g.
+`layout="scatter", kind="raster"`) raises `ValueError` immediately.
+Either kind can still be switched at runtime from the sidebar's
+per-panel Raster/Scatter toggle after launch, same as today —
+`layout=`/`kind=` only set the *initial* state.
+
+> **Doc note (2026-08-31).** The "Layout architecture" section above
+> (Display modes, the separate Layout toggle, and the Skeleton diagram)
+> describes an earlier design — a standalone `mode=` toggle
+> (Both/Raster only/Scatter only) plus a separate Side-by-Side/Over-Under
+> toggle. The shipped toolbar has since unified those into the single
+> layout control described here and in the implementation plan's §3.1b;
+> `mode=` no longer exists as a constructor parameter. That section is
+> flagged as stale rather than rewritten in this pass — treat this
+> subsection and the implementation plan as authoritative for
+> `layout=`/`kind=` until the fuller rewrite happens.
+
+### Saving and loading layout
+
+**Status: design settled 2026-08-31 (implementation plan §3.1e); not yet
+implemented. Required for the general-user `preview` release** — see the
+"What the preview explicitly omits" entry above.
+
+A `config=` constructor parameter loads a previously saved arrangement:
+
+```python
+visplot(ms="sis14.ms", config="my_layout.json")
+```
+
+**`config` deliberately captures layout, not data.** It never contains
+which MS/PS was open, which field/SPW/correlation/data-column was
+selected, the current pan/zoom viewport, or a colormap's manual clip
+range (`vmin`/`vmax`) — all of that is specific to the dataset that was
+open when it was saved, and would not necessarily make sense against a
+different one. The line is drawn precisely: a field is included if its
+valid values come from a fixed vocabulary baked into the code (an axis
+dimension name, a palette name, a scaling mode) — the same static
+per-role options lists `raster_y=`/`scatter_x=`/etc. are already
+validated against — and excluded if its valid values depend on what is
+actually in the loaded MS/PS (an identifier, or a numeric range
+reflecting real data). This is what makes a saved file safe to hand to a
+colleague and load against an entirely different observation: every
+value in it is guaranteed valid for *any* MS, because none of it was
+ever looked up against one.
+
+**Schema:**
+
+```json
+{
+  "schema_version": 1,
+  "layout": "side",
+  "theme": "dark",
+  "panels": [
+    {
+      "slot": "A",
+      "kind": "raster",
+      "raster":  { "y": "BASELINE", "x": "TIME", "quantity": "AMPLITUDE",
+                   "cmap": "inferno", "scaling": "eq_hist" },
+      "scatter": { "x": "TIME", "y": "AMPLITUDE",
+                   "cmap": "viridis", "scaling": "linear" }
+    },
+    {
+      "slot": "B",
+      "kind": "scatter",
+      "raster":  { "y": "TIME", "x": "CHANNEL", "quantity": "AMPLITUDE",
+                   "cmap": "inferno", "scaling": "eq_hist" },
+      "scatter": { "x": "UVDIST", "y": "AMPLITUDE",
+                   "cmap": "viridis", "scaling": "linear" }
+    }
+  ]
+}
+```
+
+Each slot always carries both its `raster` and `scatter` sub-configs —
+matching `_PanelSlot`'s own model, where both kinds are always built and
+only one is active — so toggling kind after loading lands on a
+sensibly-configured panel rather than a hardcoded default. `panels` is
+two entries today regardless of `layout` (even `"one"` saves the hidden
+second slot, since it is still live underneath); it grows unchanged if
+N-panel split ever ships.
+
+**Precedence**, extending the rule already used for axes (`explicit
+argument > preset > hardcoded default`): `explicit kwarg > config file >
+preset > hardcoded default`. `visplot(ms=..., config="saved.json",
+correlation="XX")` loads everything from the file except correlation,
+which the file never contained.
+
+**Save** works the same way as **Export PNG**, and for the same reason:
+in this no-server architecture, Python's own panel objects already stay
+current for almost everything (`self._raster_y`, `self._cmap`,
+`self._scaling`, etc. are refreshed on every Plot press and every
+cmap/scaling widget submit) — the *only* client-side state Python never
+learns at all is the layout arrangement itself, since the layout radio's
+`CustomJS` never calls back to Python. So the Save Layout action needs
+exactly one small comm round-trip, gathering only that gap — the
+arrangement and each slot's current kind (re-derived from live
+`.visible` state at click time, not assumed from the last Plot press,
+mirroring Export PNG's own "determine at click time" fix for the same
+class of staleness) — and lets Python build the rest of the JSON from
+the panel objects' own already-current attributes before writing the
+file.
 
 Passing both `ms` and `ps` raises a `ValueError` immediately with a
 clear message.  Omitting both also raises `ValueError`.  All other

@@ -5,7 +5,7 @@
 **Status:** Phase 0 (architecture foundations) complete; **pre-preview** stage in progress
 with internal team members (since August 2026), exercising the current build toward the
 single **preview** release specified in `visibility_plotter_preview.md`.  
-**Last updated:** 2026-08
+**Last updated:** 2026-08-31
 
 > **Release staging.** There is one external release, **preview**, specified by
 > `visibility_plotter_preview.md`. **Pre-preview** is not a separate release with its
@@ -294,6 +294,227 @@ export and reference-testing phases. They apply throughout the codebase.
 5. **Assert on structure, not presentation**, and **assert in the same units
    you compute in**. A check that measures luminance while the code conditions
    on RGB distance silently passes what it was written to catch.
+
+### 3.1d `layout=`/`kind=` constructor API and the GUI grid-size boundary
+(decided 2026-08-31)
+
+Prompted by a design conversation working forward from the `layout="one"`
+blank-plot-area defect (§6a-equivalent fix, `_build_layout`'s container
+visibility) toward the eventual grid mode (X-1): what does specifying
+"the single panel is a scatter plot" look like, and how far does that
+idea extend as panel count grows toward a grid?
+
+**`kind=` is a new constructor parameter, orthogonal to `layout=`, not a
+new `layout=` enum value.** `layout=` stays arrangement-only
+(`"one"`/`"side"`/`"over"`, later `"grid"`); `kind=` (`"raster"`/
+`"scatter"`) says which panel kind leads. Rejected alternative: folding
+raster/scatter into `layout=` itself (`layout="raster"` meaning
+something structurally different from `layout="one"`). That would widen
+`self._layout`'s validated enum irregularly and require every one of the
+~15 places that compare against it (the layout radio mapping,
+`layout_js`, the export button's JS, preset JS, `_build_plot_area`) to
+also understand the alias — exactly the kind of duplicated,
+inconsistently-maintained layout logic that caused the blank-plot-area
+defect in the first place. Instead:
+
+* `layout="raster"` / `layout="scatter"` are accepted as pure syntactic
+  sugar for `layout="one", kind="raster"` / `kind="scatter"`, resolved
+  once by `_normalize_layout_kind()` before `self._layout`/`self._kind`
+  are ever set. Nothing downstream ever sees a `self._layout` value
+  outside `{"one", "side", "over"}`. ✅ **Done (2026-08-31)** — see P-11.
+* For `layout="side"`/`"over"`, `kind=` does **not** change today's
+  duo-mode pairing (always one raster + one scatter shown together) —
+  it only decides which of the two starts in the primary/first screen
+  position, the other always taking the complementary kind. This is
+  deliberate: independent per-panel configuration and the semantic
+  (axis-label-matching) cursor-sync link are specifically what defines
+  "duo/split" as a regime, and both assume exactly two panels; `kind=`
+  reusing that regime rather than inventing a third one keeps the
+  concept count down.
+* **Known gap, not fixed in this pass.** `defer_initial_render` (the
+  mechanism that lets an inactive panel skip its backend query) is
+  keyed off "does this object's kind match the slot's *designated*
+  active kind" (`_slot_a_kind`/`_slot_b_kind`), not "will this panel
+  actually be visible under the current `layout`". Concretely,
+  `layout="one"` (via the shortcut or directly) still eagerly queries
+  and aggregates the hidden second-position panel, in both GUI and
+  headless mode — contradicting `__init__`'s own docstring promise for
+  headless ("builds only the panels it will actually export"). Small
+  today (bounded to one wasted panel), but the same failure class as
+  the grid-mode pre-compute concern below, and worth fixing by gating
+  deferral on visibility-under-current-layout rather than
+  kind-matching, in a follow-on change.
+
+**GUI grid size is bounded by three independent constraints, not one.**
+Originally framed as a single "space/compute" budget; sharpened during
+this discussion into three, because they don't scale the same way and
+won't be resolved by the same fix:
+
+1. **Live-object/compute cost** — build cost per panel (bounded, mostly
+   amortized per selection change; the concern X-1's "paginate not
+   scroll" decision already addresses for grid's cardinality).
+2. **Cursor-sync cost is per-move, not per-build, and is mode-bound, not
+   just N-bound.** Duo/split's linked-crosshair does semantic
+   axis-label matching across all panels on every mouse move (necessary
+   because panels can have genuinely heterogeneous, only-sometimes-
+   correlated axes) — this doesn't scale the way grid's cross-cell sync
+   does, which reuses cheap native Bokeh linked-crosshair specifically
+   *because* grid cells share uniform axes (G-7/X-1). A larger N under
+   duo's semantic mechanism gets laggy well before a build-cost budget
+   would flag it.
+3. **Sidebar/per-panel-config UI scalability.** Independent
+   configuration means each panel carries its own full axis-picker
+   section (raster Y/X/qty, scatter X/Y, kind switch, colormap
+   controls) — already a documented scroll-position pain point at N=1
+   extra section (see the kind-switch scroll-clamp comment in
+   `_build_gui`). This is a UX problem, not a performance one, so E-4
+   benchmarking won't resolve it the way it resolves (1) and (2).
+
+Given all three, and following the plan's existing "grid dimensions
+should be set from E-4 benchmark numbers, not guessed" discipline:
+**GUI independent/heterogeneous multi-panel mode is capped at 2×2 by
+default.** 3×3 is an open question, not a planned default, pending real
+numbers on (2) and a design answer to (3) — see X-6.
+
+**There is no third regime between duo/split and grid.** Split and grid
+are separated by a hard boundary (which cursor-sync mechanism applies,
+semantic vs. native — see X-6), not points on one N-panel continuum.
+Grid mode (X-1) — uniform kind per grid, one shared config panel, native
+linked-crosshair, paginated — is already the correct answer for "more
+panels than independent/heterogeneous mode supports." No separate
+"medium-N" mode is needed.
+
+**Headless/PNG output is architecturally unlimited**, because none of
+the three GUI constraints apply: nothing switches at runtime (no
+shadow/complementary-kind objects needed), no cursor moves (no sync
+cost), and there's no sidebar. Bounded only by ordinary batch-job
+resources (wall-clock, memory for one export canvas) — see X-7.
+Per-cell heterogeneous `kind` (a nested `kind=[["raster","scatter"],...]`
+list matching `rows`/`cols`, `rows`/`cols` inferable from the nested
+shape when given) is a natural fit for headless specifically, and would
+land there before GUI grid mode has any reason to expose it, since GUI
+grid stays uniform-kind through phase 1 for UI-effort reasons that don't
+apply to a UI-less batch path. Not yet implemented — flagged for X-7.
+
+### 3.1e `config=` save/load: schema and the layout-vs-data boundary
+(decided 2026-08-31; **required for the `preview` release** — see
+`visibility_plotter_preview.md`'s "What the preview explicitly omits")
+
+Prompted by a user suggestion: `VisibilityPlotter` should let someone
+save a GUI-arranged configuration and recreate it later, ideally by
+handing the file to someone else entirely. The question that shaped the
+design: how "deep" should the saved spec reach — does it capture the
+data selection (MS/PS, field, SPW, correlation, viewport) as well as
+the display arrangement?
+
+**Decision: `config=` captures layout, not data**, via a single
+mechanical rule rather than a case-by-case list: **a field belongs in
+`config` if its valid values are drawn from a fixed, code-defined
+vocabulary; it is data selection — excluded — if its valid values
+depend on what is actually in the loaded MS/PS.** This is not a new
+concept invented for this feature — it is exactly the distinction
+`_resolve_axis_arg` already enforces today: `raster_y=`/`raster_x=`/
+`scatter_x=`/etc. validate against static Python lists
+(`_RASTER_AXIS_OPTIONS` etc.), true for any MS, while `field=`/`spw=`
+validate against *that MS's* metadata. Applying the same test to every
+candidate field:
+
+| Portable (→ `config`) | Not portable (→ excluded, stays a constructor kwarg) |
+|---|---|
+| `layout` (one/side/over) | `ms`/`ps` path |
+| `kind` (raster/scatter) | `field`, `spw`, `antenna`, `scan` |
+| `raster_y/x/qty`, `scatter_x/y` (axis *dimensions*, fixed enum) | `correlation`, `datacolumn` |
+| `cmap` (palette name), `scaling` (linear/sqrt/log/eq_hist/sqrt/square/gamma/power — `colormap_scaling.ALL_SCALINGS`, a fixed tuple) | `time_range`/`freq_range`/`uvdist_range`, current pan/zoom viewport |
+| `theme` | colormap manual clip (`vmin`/`vmax`) |
+
+The bottom-right two are the deliberate calls, not oversights: a
+`vmin`/`vmax` clip or a viewport range is numeric and *type*-wise looks
+like display config, but its *value* reflects the specific dataset's
+actual amplitude/frequency/UV range — the same reason `field=` is
+excluded, not a different one. Excluding them (rather than including
+as a best-effort/optional extra) is what makes a saved file
+*structurally guaranteed valid* against an arbitrary MS: every value in
+`config` re-validates through the exact same static-options-list
+`_resolve_axis_arg` calls that already gate the equivalent explicit
+kwarg, so loading never needs new per-MS validation logic and can never
+fail against a legitimately different dataset the way a saved
+`field="0637-752"` could.
+
+**Schema:**
+
+```json
+{
+  "schema_version": 1,
+  "layout": "side",
+  "theme": "dark",
+  "panels": [
+    {
+      "slot": "A",
+      "kind": "raster",
+      "raster":  { "y": "BASELINE", "x": "TIME", "quantity": "AMPLITUDE",
+                   "cmap": "inferno", "scaling": "eq_hist" },
+      "scatter": { "x": "TIME", "y": "AMPLITUDE",
+                   "cmap": "viridis", "scaling": "linear" }
+    },
+    {
+      "slot": "B",
+      "kind": "scatter",
+      "raster":  { "y": "TIME", "x": "CHANNEL", "quantity": "AMPLITUDE",
+                   "cmap": "inferno", "scaling": "eq_hist" },
+      "scatter": { "x": "UVDIST", "y": "AMPLITUDE",
+                   "cmap": "viridis", "scaling": "linear" }
+    }
+  ]
+}
+```
+
+Design notes:
+
+* **Each slot always carries both `raster` and `scatter` sub-configs**,
+  mirroring `_PanelSlot` (§3.1b) exactly — both kinds are always built,
+  only one is active — rather than saving only the active kind and
+  leaving the other to a hardcoded default after a post-load kind
+  toggle.
+* **`panels` is length-2 today, unconditionally** — even
+  `layout="one"` saves slot B, since (per the `defer_initial_render`
+  gap noted in §3.1d) it is still actually built and queried, not
+  lazily skipped. No schema change needed if/when N-panel split (§3.1d)
+  or grid mode (X-1) land; `panels` just grows or gains a `cell`/`row`,
+  `col` addressing scheme for grid's case.
+* **Optional `scaling_params`** (e.g. `gamma`'s exponent, `log`'s
+  `alpha`) per axis, for completeness — these are algorithm parameters,
+  not data-range values, so they pass the same portability test.
+* **Precedence** extends the rule already established for axes
+  (`explicit argument > preset > hardcoded default`) by one link:
+  `explicit kwarg > config file > preset > hardcoded default`.
+
+**Save mirrors Export PNG (E-2), deliberately, and for a precise
+reason, not just consistency.** In this no-server architecture, most of
+what `config` needs is already current on the Python side without any
+new plumbing — `self._raster_y`, `self._cmap`, `self._scaling` (and
+their per-slot/per-kind equivalents) are refreshed on every Plot press
+and every cmap/scaling widget submit, the same way `field=`/`spw=`/
+`correlation=` already are. Checking what Export PNG's own JS payload
+actually sends confirms this: it does *not* re-send axes, cmap, or
+scaling — Python already has them — it sends only what Python has no
+other way of knowing: the current pan/zoom viewport (never pushed to
+Python by anything else) and which kind is active per slot, deliberately
+re-derived from `.visible` at click time rather than assumed stale from
+construction or the last Plot press. Checking the toolbar wiring
+confirms `layout_rbg`'s `CustomJS` (`layout_js`) never calls `ctrl.send()`
+at all — **the layout arrangement is the one piece of client state
+Python never learns through any existing mechanism.** So Save Layout
+needs exactly one small new comm round-trip — gathering `layout_rbg
+.active` and each slot's current kind (same defensive "derive from
+`.visible` at click time" pattern as Export PNG's `kinds` array, not
+assumed from the last Plot press) — and Python builds the rest of the
+JSON from panel attributes it already has, before writing the file.
+**Load** is the mirror in reverse: each field flows through the same
+`_resolve_axis_arg`-gated path an explicit kwarg would use, so a loaded
+config is validated identically to hand-typed kwargs, nothing
+loader-specific.
+
+Not yet implemented — tracked as P-12.
 
 ### 3.2 The VisibilityReader boundary
 
@@ -1083,6 +1304,8 @@ decisions rather than guessing.)*
 | P-7 | `Casa6ReductionContext` metadata methods: `list_fields()`, `list_spws()`, `list_antennas()`, `list_scans()`, `list_data_columns()` | `casa6_reduction_context.py` |
 | P-8 | `open_ms()` / `open_ps()` factory with full `ReductionBackend` context-selection matrix (see §4.12). ✅ Done (subsequent session) — completes A-8's basic version; delivered in `visibility_plotter.py`, not a separate `factory.py` (see §"Role of `open_ms()` / `open_ps()`"). | `visibility_plotter.py` |
 | P-10 | Async plot with loading indicator: spinner `Div` overlay on figures while backend query is in flight; Cancel button sets a threading `Event` checked by the backend; Plot button disabled during query | `visibility_plotter.py` |
+| P-11 | `kind=` constructor parameter (`"raster"`/`"scatter"`, orthogonal to `layout=`) plus the `layout="raster"`/`"scatter"` shortcut for `layout="one", kind=X` — see §3.1d for full design and the alternative rejected (folding raster/scatter into `layout=`'s own enum). ✅ **Done (August 31 2026).** `_normalize_layout_kind()` resolves the shortcut once, before `self._layout`/`self._kind` are set; `_build_panels` derives `_slot_a_kind`/`_slot_b_kind` from `self._kind` instead of the previous hardcoded `"raster"`/`"scatter"`, with slot B always taking the complementary kind. No other mechanism needed changes — `kind_switch`'s initial `.active`, each panel's config-section `.visible`, `defer_initial_render`'s kind-matching (see the known gap noted in §3.1d), `_pos0`/`_pos1`, and headless `_export_png`'s panel selection all already keyed off `slot.kind` generically. | `visibility_plotter.py` |
+| P-12 | **Required for the general-user `preview` release** (see `visibility_plotter_preview.md`'s "What the preview explicitly omits"). `config=` constructor parameter to load a saved layout, plus a "Save Layout" toolbar action to write one — schema, the layout-vs-data portability rule, and the Export-PNG-mirrored save/load round-trip design are settled in §3.1e. Precedence: `explicit kwarg > config file > preset > hardcoded default`, extending the existing axis-resolution precedence. Design settled 2026-08-31; not yet implemented. | `visibility_plotter.py` *(new: `layout_config.py`?, TBD at implementation time)* |
 
 ---
 
@@ -1205,11 +1428,13 @@ has already been pulled forward — see Phase 2.5.*
 | T-2 | Synthetic xradio-native DataTree structure tests | `tests/` |
 | T-3 | Single-dish test coverage | `tests/` |
 | T-4 | `RemoteReductionContext` skeleton and transport protocol | `remote_reduction_context.py` *(new)* |
-| X-1 | **CASR-385** SPFLG-style **grid mode**: paginated N×M grid of panels sharing the same axes, iterating through a selection value (antenna, SPW, field, scan) per cell. Each cell is a real interactive `VisibilityRaster`/`VisibilityScatter` instance (own `ColumnDataSource`s, comm registrations, flag tools) — not a static image. Object pool sized to the page, not the full iteration count; page turns re-select via existing `update_axes()` path, never rebuild. Depends on A-10 (`_PanelSlot` list, ✅ done) and P-4a (autohide, ✅ done). Grid/iteration layout is a sibling value on the same `layout_rbg` control as duo mode — switching between duo and iteration mid-session is supported by construction. Default/cap grid dimensions (proposed 3×3/6×6) should be set from E-4 benchmark numbers, not guessed. Key design decisions already settled: real interactive panels per cell; bounded grid size; paginate not scroll; uniform axes/mode per grid by default (data model supports heterogeneous, UI does not expose it in phase 1); object count sized to page; cross-cell pan/zoom sync gated by toggle; cross-cell crosshair position sync (reuses Bokeh native linked-crosshair, cheaper than the raster↔scatter crosshair link in duo mode). **Open questions:** exact default/max dimensions; compound "Iterate by" (single axis vs. antenna+SPW simultaneously); cross-cell flagging propagation; pan/zoom per-axis granularity; concurrent-backend-query burst mitigation; N-panel swap-trigger UI (coordinate dropdown vs. spatial button grid). Full detail in `visplot-development-handoff.md`. | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
+| X-1 | **CASR-385** SPFLG-style **grid mode**: paginated N×M grid of panels sharing the same axes, iterating through a selection value (antenna, SPW, field, scan) per cell. Each cell is a real interactive `VisibilityRaster`/`VisibilityScatter` instance (own `ColumnDataSource`s, comm registrations, flag tools) — not a static image. Object pool sized to the page, not the full iteration count; page turns re-select via existing `update_axes()` path, never rebuild. Depends on A-10 (`_PanelSlot` list, ✅ done) and P-4a (autohide, ✅ done). Grid/iteration layout is a sibling value on the same `layout_rbg` control as duo mode — switching between duo and iteration mid-session is supported by construction. Default/cap grid dimensions (proposed 3×3/6×6) should be set from E-4 benchmark numbers, not guessed. Key design decisions already settled: real interactive panels per cell; bounded grid size; paginate not scroll; uniform axes/mode per grid by default (data model supports heterogeneous, UI does not expose it in phase 1); object count sized to page; cross-cell pan/zoom sync gated by toggle; cross-cell crosshair position sync (reuses Bokeh native linked-crosshair, cheaper than the raster↔scatter crosshair link in duo mode). **Open questions:** exact default/max dimensions; compound "Iterate by" (single axis vs. antenna+SPW simultaneously); cross-cell flagging propagation; pan/zoom per-axis granularity; concurrent-backend-query burst mitigation; N-panel swap-trigger UI (coordinate dropdown vs. spatial button grid). Full detail in `visplot-development-handoff.md`. See X-6 for why GUI heterogeneous/independent configuration does **not** extend into this mode's larger N (different cursor-sync mechanism, uniform-kind-only), and X-7 for the headless/PNG counterpart, which is not subject to grid's paginated/bounded constraints. | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
 | X-2 | **CASR-385** `Axis.PHASE_RMS`: phase RMS vs time or frequency as a scatter y-axis quantity; backend computes `std(angle(visibility))` across the baseline axis per time/channel cell; same Phase 4 bucket as `CLOSURE_PHASE` | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
 | X-3 | **CASR-385** User-specified colours in colour-by-metadata mode: colour picker widget per category value (SPW, antenna, baseline); supplements the automatic categorical palette in S-1 | `visibility_plotter.py`, `visibility_scatter.py` |
 | X-4 | **CASR-385** Performance benchmarks: explicit test cases at ngVLA scale (200+ antennas, 8000 channels, 1-second integrations, 10 SPWs) and ALMA/VLA scale (50+ antennas, 1000 channels); used to validate Datashader pipeline and `is_decimated` gate | `tests/` |
 | X-5 | **CASR-385** Elevate `RemoteReductionContext` from stub to working implementation: serialise `ReductionOperation`, dispatch to remote worker (Dask or HTTP), return real `Future`; required for ngVLA TB-scale datasets where data cannot be local | `remote_reduction_context.py` |
+| X-6 | GUI independent/heterogeneous multi-panel mode (per-panel `kind=`, independent axis config, semantic cursor-sync — the N>2 generalization of today's duo/split, distinct from grid mode) capped at **2×2 by default** — see §3.1d for the three constraints (live-object cost, per-move semantic cursor-sync cost, sidebar/config-UI scalability) and why they don't resolve on the same schedule. **Open questions:** whether 3×3 is supportable, pending E-4-style benchmark numbers for cursor-sync specifically (not just build/query cost) and a design answer for presenting N full per-panel config sections in the sidebar without repeating the scroll-clamp issue `kind_switch` already hit at N=1 extra section. No work scheduled beyond capturing the boundary; revisit once E-4 numbers exist. | `visibility_plotter.py` |
+| X-7 | Headless/PNG grid output: architecturally unbounded (no cursor-sync cost, no shadow/complementary-kind objects, no sidebar — see §3.1d), bounded only by ordinary batch-job wall-clock/memory. Extends `kind=` to a nested per-cell form (`kind=[["raster","scatter"],[...]]`, one row-major list per grid row) for heterogeneous cells, with `rows`/`cols` inferred from the nested shape when `kind=` is given that way and required (as today) only when `kind=` is a plain scalar. Natural fit for headless ahead of GUI grid mode, which stays uniform-kind through phase 1 (X-1) for UI-effort reasons that don't apply to a UI-less batch path. Per-cell axis config (`raster_y`/`scatter_x`/etc., not just `kind`) beyond phase 1 is a known follow-on, not yet designed. Not yet implemented. | `visibility_plotter.py`, `png_export.py` |
 | Y-1 | **CASR-385** Autoflag "calculate+display" mode: run an autoflag algorithm (e.g. `flagdata(mode='tfcrop', action='calculate')`), receive proposed flags, display them as a distinct overlay colour (e.g. orange, distinct from the committed-flag red), allow the astronomer to accept or reject before any disk write. Requires a new `ReductionContext.calculate_flags()` method returning proposed `FlagDelta` entries that flow into a separate "proposed" layer in `FlagDB` without entering the pending-commit queue. | `reduction_context.py`, `flag_db.py`, `visibility_raster.py`, `visibility_scatter.py`, `visibility_plotter.py` |
 | Y-2 | **CASR-385** `Axis.RESIDUAL`: DATA − MODEL and CORRECTED − MODEL as displayable quantities in both raster and scatter, computed by the backend from the existing data column infrastructure | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
 | Y-3 | **CASR-385** Frequency frame conversion (topo → LSRK/BARY/etc.) and velocity axis: display-time approximation analogous to plotms `transform` / `freqframe` / `restfreq` / `veldef` parameters; uses casacore `VelocityMachine` for MSv2 and equivalent MSv4 machinery. New `TransformSpec` dataclass to carry `freqframe`, `restfreq`, `veldef` alongside `SelectionSpec`. Note: on-the-fly frame conversion at display time is not as accurate as `cvel`/`mstransform` regridding; this limitation should be documented in the UI. | `axes.py` (`Axis.VELOCITY`), `msv2_backend.py`, `msv4_backend.py`, new `transform_spec.py` |

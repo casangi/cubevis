@@ -187,6 +187,61 @@ _PRESETS = {
 }
 
 
+def _normalize_layout_kind(layout, kind):
+    """Resolve the ``layout="raster"``/``"scatter"`` shortcut into
+    ``(layout, kind)``.
+
+    ``layout="raster"``/``"scatter"`` is pure syntactic sugar for
+    ``layout="one", kind=<that value>`` -- introduced so a single-panel
+    launch reads naturally (``visplot(..., layout="scatter")``)
+    without teaching any of the many downstream comparisons against
+    ``self._layout`` (the layout radio mapping, ``layout_js``, the
+    export button's JS, preset JS, ...) a fourth/fifth enum value.
+    Resolved once, here, before ``self._layout``/``self._kind`` are
+    ever set -- everything downstream only ever sees
+    ``layout in ("one", "side", "over")`` and
+    ``kind in ("raster", "scatter")``. See the design discussion
+    settled 2026-08-31: the shortcut, and ``kind`` generally, stay
+    orthogonal to ``layout`` rather than growing its enum -- ``kind``
+    picks which panel leads (the only panel, for ``"one"``; which of
+    the two starts in the primary screen position, for
+    ``"side"``/``"over"``).
+
+    Parameters
+    ----------
+    layout : str
+        The raw ``layout=`` constructor argument.
+    kind : str | None
+        The raw ``kind=`` constructor argument, or ``None`` if omitted.
+
+    Returns
+    -------
+    (layout, kind) : tuple[str, str]
+        Normalized, lower-cased values. ``kind`` defaults to
+        ``"raster"`` when neither the shortcut nor an explicit
+        ``kind=`` supplies one -- preserves today's exact default
+        appearance (``layout="one"`` -> a raster panel).
+
+    Raises
+    ------
+    ValueError
+        If the shortcut and an explicit, conflicting ``kind=`` are
+        both given, e.g. ``layout="scatter", kind="raster"``.
+    """
+    layout_norm = (layout or "").strip().lower()
+    kind_norm   = kind.strip().lower() if kind else None
+
+    if layout_norm in ("raster", "scatter"):
+        if kind_norm is not None and kind_norm != layout_norm:
+            raise ValueError(
+                f"layout={layout!r} already implies kind={layout_norm!r}; "
+                f"got conflicting kind={kind!r}"
+            )
+        return "one", layout_norm
+
+    return layout_norm, (kind_norm or "raster")
+
+
 def _resolve_axis_arg(value, options, role_name, default):
     """Resolve a user-supplied axis= constructor string to an Axis enum
     member.
@@ -1280,10 +1335,19 @@ class VisibilityPlotter:
     datacolumn : str
         Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.
     layout : str
-        Panel layout: ``"one"`` (single panel, raster by default in this
-        preview — per-panel kind switching is a later addition),
-        ``"side"`` (both panels, side by side), or ``"over"`` (both
-        panels, one above the other). Default ``"side"``.
+        Panel layout: ``"one"`` (single panel), ``"side"`` (both
+        panels, side by side), or ``"over"`` (both panels, one above
+        the other). Default ``"side"``. ``"raster"``/``"scatter"`` are
+        also accepted as shorthand for ``layout="one", kind="raster"``/
+        ``"scatter"`` — see ``kind`` below. Combining the shortcut with
+        an explicit, conflicting ``kind=`` raises ``ValueError``.
+    kind : str | None
+        Which panel kind leads: ``"raster"`` (default when omitted) or
+        ``"scatter"``. For ``layout="one"`` this is the single visible
+        panel's kind. For ``layout="side"``/``"over"`` both panels are
+        always shown (one raster, one scatter, unchanged) — ``kind``
+        only decides which one starts in the primary/first screen
+        position; the other always takes the complementary kind.
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
     raster_y, raster_x : str | None
@@ -1332,6 +1396,7 @@ class VisibilityPlotter:
         correlation:      str           = "",
         datacolumn:       str           = "data",
         layout:           str           = "side",
+        kind:             Optional[str] = None,
         preset:           Optional[str] = None,
         raster_y:         Optional[str] = None,
         raster_x:         Optional[str] = None,
@@ -1366,7 +1431,7 @@ class VisibilityPlotter:
             ms=ms, ps=ps, backend=backend, remote_endpoint=remote_endpoint,
             field=field, spw=spw, antenna=antenna, scan=scan,
             timerange=timerange, uvrange=uvrange, correlation=correlation,
-            datacolumn=datacolumn, layout=layout, preset=preset,
+            datacolumn=datacolumn, layout=layout, kind=kind, preset=preset,
             raster_y=raster_y, raster_x=raster_x, raster_qty=raster_qty,
             scatter_x=scatter_x, scatter_y=scatter_y,
             time_range=time_range, freq_range=freq_range,
@@ -1398,7 +1463,7 @@ class VisibilityPlotter:
         self,
         *,
         ms, ps, backend, remote_endpoint, field, spw, antenna, scan,
-        timerange, uvrange, correlation, datacolumn, layout, preset,
+        timerange, uvrange, correlation, datacolumn, layout, kind, preset,
         raster_y, raster_x, raster_qty, scatter_x, scatter_y,
         time_range, freq_range, uvdist_range, enable_flagging,
         compact_toolbar, theme, raster_cmap, scatter_cmap,
@@ -1438,7 +1503,12 @@ class VisibilityPlotter:
         self._uvrange_str   = uvrange
         self._corr_str      = correlation
         self._datacolumn    = datacolumn.upper()
-        self._layout        = layout.lower()
+        # layout="raster"/"scatter" is sugar for layout="one", kind=X --
+        # resolved once here, before either attribute is set, so nothing
+        # downstream (the layout radio, layout_js, export/preset JS,
+        # _build_panels' slot-kind assignment below) ever needs to know
+        # the shortcut exists. See _normalize_layout_kind.
+        self._layout, self._kind = _normalize_layout_kind(layout, kind)
         self._preset        = preset.lower() if preset else None
         self._time_range    = time_range
         self._freq_range    = freq_range
@@ -1484,6 +1554,8 @@ class VisibilityPlotter:
 
         if self._layout not in ("one", "side", "over"):
             raise ValueError(f"layout must be 'one', 'side', or 'over'; got {layout!r}")
+        if self._kind not in ("raster", "scatter"):
+            raise ValueError(f"kind must be 'raster' or 'scatter'; got {kind!r}")
 
         # ------------------------------------------------------------------ #
         # Open data source                                                     #
@@ -1748,8 +1820,23 @@ class VisibilityPlotter:
         # changes, from four named attributes to two _PanelSlot records in
         # self._slots. See decision 9's "Stage 1b.5" note in
         # visplot-grid-iteration-notes.md.
-        _slot_a_kind = "raster"
-        _slot_b_kind = "scatter"
+        #
+        # kind= constructor parameter (added 2026-08-31): slot A's
+        # *starting* kind is now the resolved self._kind instead of a
+        # hardcoded "raster"; slot B always takes the complementary
+        # kind, so duo mode's one-raster-one-scatter pairing is
+        # unchanged either way -- kind="scatter" with layout="side"/
+        # "over" just starts the scatter panel in the primary/first
+        # screen position instead of the raster one. For layout="one"
+        # (including the layout="raster"/"scatter" shortcut) this is
+        # what picks which single panel is shown. Every other mechanism
+        # that already keyed off slot.kind -- kind_switch's initial
+        # .active, each panel's config-section .visible, defer_initial_
+        # render below -- needed no changes, since none of them assumed
+        # "A is raster" specifically, only "A's kind is whatever
+        # _slot_a_kind says".
+        _slot_a_kind = self._kind
+        _slot_b_kind = "scatter" if self._kind == "raster" else "raster"
 
         _slot_a_raster = VisibilityRaster(
             backend       = self._reader,
@@ -3242,7 +3329,11 @@ document.documentElement.style.background = '#181825';
         side_container, over_container = self._build_plot_area()
 
         # Both containers always in the document; only one visible.
-        side_container.visible = (self._layout == "side")
+        # "one" reuses side_container (see _build_plot_area and layout_js,
+        # which both treat side_container as covering "one" and "side"
+        # alike) — this must match, or single-panel layout starts with
+        # neither container visible and renders a blank plot area.
+        side_container.visible = (self._layout in ("one", "side"))
         over_container.visible = (self._layout == "over")
 
         # stretch_width lets containers fill the browser window as it resizes

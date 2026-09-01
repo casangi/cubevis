@@ -57,6 +57,7 @@ def _validate_params(
         correlation,
         datacolumn,
         layout,
+        kind,
         preset,
         raster_y,
         raster_x,
@@ -88,6 +89,7 @@ def _validate_params(
         'correlation': 'str',
         'datacolumn': 'str',
         'layout': 'str',
+        'kind': 'Optional[str]',
         'preset': 'Optional[str]',
         'raster_y': 'Optional[str]',
         'raster_x': 'Optional[str]',
@@ -177,6 +179,7 @@ def _validate_params(
     _check('correlation', correlation, _type_map['correlation'])
     _check('datacolumn', datacolumn, _type_map['datacolumn'])
     _check('layout', layout, _type_map['layout'])
+    _check('kind', kind, _type_map['kind'])
     _check('preset', preset, _type_map['preset'])
     _check('raster_y', raster_y, _type_map['raster_y'])
     _check('raster_x', raster_x, _type_map['raster_x'])
@@ -208,6 +211,7 @@ def _visplot_t(
         correlation: str = '',
         datacolumn: str = 'data',
         layout: str = 'side',
+        kind: Optional[str] = None,
         preset: Optional[str] = None,
         raster_y: Optional[str] = None,
         raster_x: Optional[str] = None,
@@ -238,6 +242,7 @@ def _visplot_t(
         correlation = correlation,
         datacolumn = datacolumn,
         layout = layout,
+        kind = kind,
         preset = preset,
         raster_y = raster_y,
         raster_x = raster_x,
@@ -298,10 +303,19 @@ class _visplot:
     datacolumn : str
         Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.
     layout : str
-        Panel layout: ``"one"`` (single panel, raster by default in this
-        preview — per-panel kind switching is a later addition),
-        ``"side"`` (both panels, side by side), or ``"over"`` (both
-        panels, one above the other). Default ``"side"``.
+        Panel layout: ``"one"`` (single panel), ``"side"`` (both
+        panels, side by side), or ``"over"`` (both panels, one above
+        the other). Default ``"side"``. ``"raster"``/``"scatter"`` are
+        also accepted as shorthand for ``layout="one", kind="raster"``/
+        ``"scatter"`` — see ``kind`` below. Combining the shortcut with
+        an explicit, conflicting ``kind=`` raises ``ValueError``.
+    kind : str | None
+        Which panel kind leads: ``"raster"`` (default when omitted) or
+        ``"scatter"``. For ``layout="one"`` this is the single visible
+        panel's kind. For ``layout="side"``/``"over"`` both panels are
+        always shown (one raster, one scatter, unchanged) — ``kind``
+        only decides which one starts in the primary/first screen
+        position; the other always takes the complementary kind.
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
     raster_y, raster_x : str | None
@@ -351,6 +365,7 @@ class _visplot:
             correlation: str = '',
             datacolumn: str = 'data',
             layout: str = 'side',
+            kind: Optional[str] = None,
             preset: Optional[str] = None,
             raster_y: Optional[str] = None,
             raster_x: Optional[str] = None,
@@ -394,6 +409,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             correlation = correlation,
             datacolumn = datacolumn,
             layout = layout,
+            kind = kind,
             preset = preset,
             raster_y = raster_y,
             raster_x = raster_x,
@@ -425,6 +441,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'correlation=' + repr(correlation),
                 'datacolumn=' + repr(datacolumn),
                 'layout=' + repr(layout),
+                'kind=' + repr(kind),
                 'preset=' + repr(preset),
                 'raster_y=' + repr(raster_y),
                 'raster_x=' + repr(raster_x),
@@ -457,6 +474,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 correlation = correlation,
                 datacolumn = datacolumn,
                 layout = layout,
+                kind = kind,
                 preset = preset,
                 raster_y = raster_y,
                 raster_x = raster_x,

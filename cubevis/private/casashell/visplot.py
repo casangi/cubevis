@@ -67,6 +67,7 @@ def _visplot_t(
         correlation: str = '',
         datacolumn: str = 'data',
         layout: str = 'side',
+        kind: Optional[str] = None,
         preset: Optional[str] = None,
         raster_y: Optional[str] = None,
         raster_x: Optional[str] = None,
@@ -97,6 +98,7 @@ def _visplot_t(
         correlation = correlation,
         datacolumn = datacolumn,
         layout = layout,
+        kind = kind,
         preset = preset,
         raster_y = raster_y,
         raster_x = raster_x,
@@ -153,10 +155,19 @@ class _visplot:
     datacolumn : str
         Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.
     layout : str
-        Panel layout: ``"one"`` (single panel, raster by default in this
-        preview — per-panel kind switching is a later addition),
-        ``"side"`` (both panels, side by side), or ``"over"`` (both
-        panels, one above the other). Default ``"side"``.
+        Panel layout: ``"one"`` (single panel), ``"side"`` (both
+        panels, side by side), or ``"over"`` (both panels, one above
+        the other). Default ``"side"``. ``"raster"``/``"scatter"`` are
+        also accepted as shorthand for ``layout="one", kind="raster"``/
+        ``"scatter"`` — see ``kind`` below. Combining the shortcut with
+        an explicit, conflicting ``kind=`` raises ``ValueError``.
+    kind : str | None
+        Which panel kind leads: ``"raster"`` (default when omitted) or
+        ``"scatter"``. For ``layout="one"`` this is the single visible
+        panel's kind. For ``layout="side"``/``"over"`` both panels are
+        always shown (one raster, one scatter, unchanged) — ``kind``
+        only decides which one starts in the primary/first screen
+        position; the other always takes the complementary kind.
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
     raster_y, raster_x : str | None
@@ -205,7 +216,8 @@ class _visplot:
         'uvrange': 'UV range string.',
         'correlation': 'Comma-separated correlation labels (``"XX,YY"``).',
         'datacolumn': 'Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.',
-        'layout': 'Panel layout: ``"one"`` (single panel, raster by default in this preview — per-panel kind switching is a later addition), ``"side"`` (both panels, side by side), or ``"over"`` (both panels, one above the other).',
+        'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), or ``"over"`` (both panels, one above the other).',
+        'kind': 'Which panel kind leads: ``"raster"`` (default when omitted) or ``"scatter"``.',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
         'raster_y': '',
         'raster_x': '',
@@ -237,6 +249,7 @@ class _visplot:
         'correlation': '',
         'datacolumn': 'data',
         'layout': 'side',
+        'kind': None,
         'preset': None,
         'raster_y': None,
         'raster_x': None,
@@ -303,6 +316,7 @@ class _visplot:
             'correlation': 'str',
             'datacolumn': 'str',
             'layout': 'str',
+            'kind': 'Optional[str]',
             'preset': 'Optional[str]',
             'raster_y': 'Optional[str]',
             'raster_x': 'Optional[str]',
@@ -589,6 +603,21 @@ class _visplot:
             desc, fmt,
         )
 
+    def __kind_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('kind', self._arg_default['kind'])
+        default = self._arg_default['kind']
+        desc    = self._arg_description.get('kind', '')
+        if self.__validate_('kind', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('kind', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     def __preset_inp(self):
         glb     = self.__globals_()
         value   = glb.get('preset', self._arg_default['preset'])
@@ -831,6 +860,7 @@ class _visplot:
         if 'correlation' in glb: del glb['correlation']
         if 'datacolumn' in glb: del glb['datacolumn']
         if 'layout' in glb: del glb['layout']
+        if 'kind' in glb: del glb['kind']
         if 'preset' in glb: del glb['preset']
         if 'raster_y' in glb: del glb['raster_y']
         if 'raster_x' in glb: del glb['raster_x']
@@ -862,6 +892,7 @@ class _visplot:
         self.__correlation_inp()
         self.__datacolumn_inp()
         self.__layout_inp()
+        self.__kind_inp()
         self.__preset_inp()
         self.__raster_y_inp()
         self.__raster_x_inp()
@@ -918,6 +949,7 @@ class _visplot:
         _invocation_parameters['correlation'] = glb.get('correlation', self._arg_default['correlation'])
         _invocation_parameters['datacolumn'] = glb.get('datacolumn', self._arg_default['datacolumn'])
         _invocation_parameters['layout'] = glb.get('layout', self._arg_default['layout'])
+        _invocation_parameters['kind'] = glb.get('kind', self._arg_default['kind'])
         _invocation_parameters['preset'] = glb.get('preset', self._arg_default['preset'])
         _invocation_parameters['raster_y'] = glb.get('raster_y', self._arg_default['raster_y'])
         _invocation_parameters['raster_x'] = glb.get('raster_x', self._arg_default['raster_x'])
@@ -965,6 +997,7 @@ class _visplot:
             correlation = _UNSET,
             datacolumn = _UNSET,
             layout = _UNSET,
+            kind = _UNSET,
             preset = _UNSET,
             raster_y = _UNSET,
             raster_x = _UNSET,
@@ -1005,6 +1038,7 @@ class _visplot:
             correlation,
             datacolumn,
             layout,
+            kind,
             preset,
             raster_y,
             raster_x,
@@ -1062,6 +1096,9 @@ class _visplot:
             _invocation_parameters['layout'] = \
                 layout if layout is not _UNSET \
                 else glb.get('layout', self._arg_default['layout'])
+            _invocation_parameters['kind'] = \
+                kind if kind is not _UNSET \
+                else glb.get('kind', self._arg_default['kind'])
             _invocation_parameters['preset'] = \
                 preset if preset is not _UNSET \
                 else glb.get('preset', self._arg_default['preset'])
@@ -1133,6 +1170,8 @@ class _visplot:
                 glb.get('datacolumn', self._arg_default['datacolumn'])
             _invocation_parameters['layout'] = \
                 glb.get('layout', self._arg_default['layout'])
+            _invocation_parameters['kind'] = \
+                glb.get('kind', self._arg_default['kind'])
             _invocation_parameters['preset'] = \
                 glb.get('preset', self._arg_default['preset'])
             _invocation_parameters['raster_y'] = \
@@ -1195,6 +1234,7 @@ class _visplot:
                     'correlation=' + repr(_invocation_parameters['correlation']),
                     'datacolumn=' + repr(_invocation_parameters['datacolumn']),
                     'layout=' + repr(_invocation_parameters['layout']),
+                    'kind=' + repr(_invocation_parameters['kind']),
                     'preset=' + repr(_invocation_parameters['preset']),
                     'raster_y=' + repr(_invocation_parameters['raster_y']),
                     'raster_x=' + repr(_invocation_parameters['raster_x']),
@@ -1225,6 +1265,7 @@ class _visplot:
                 correlation = _invocation_parameters['correlation'],
                 datacolumn = _invocation_parameters['datacolumn'],
                 layout = _invocation_parameters['layout'],
+                kind = _invocation_parameters['kind'],
                 preset = _invocation_parameters['preset'],
                 raster_y = _invocation_parameters['raster_y'],
                 raster_x = _invocation_parameters['raster_x'],

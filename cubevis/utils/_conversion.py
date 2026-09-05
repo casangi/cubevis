@@ -76,6 +76,17 @@ from ._static import static_vars
 # (bokeh's _encode_tuple -> _encode_list, no wire-level marker to
 # reconstruct a tuple; JSON has no tuple type) -- structural, not a bug,
 # not fixed here.
+#
+# Deliberately generic, and deliberately the LAST word on genericity.
+# Enum/dataclass are Python-language concepts any consumer of
+# serialize()/deserialize() might hit, so the fix belongs here, once,
+# for everyone. A DOMAIN-specific type (xr.DataArray, pd.DataFrame, a
+# future CASA-image wrapper for iclean, ...) does NOT belong here even
+# though the mechanism looks similar -- see
+# cubevis/toolbox/visplot/_wire_types.py for why, and for where
+# visplot's own array-like wire types are actually registered from
+# (Serializer.register()/Deserializer.register(), called from
+# visplot's own code, not hardcoded into this shared module).
 # ----------------------------------------------------------------------
 
 class CubevisSerializer(Serializer):

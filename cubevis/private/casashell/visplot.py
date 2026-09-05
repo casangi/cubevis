@@ -58,6 +58,7 @@ def _visplot_t(
         ms: Optional[str] = None,
         ps: Optional[str] = None,
         backend: str = 'auto',
+        kernel_name: Optional[str] = None,
         field: str = '',
         spw: str = '',
         antenna: str = '',
@@ -89,6 +90,7 @@ def _visplot_t(
         ms = ms,
         ps = ps,
         backend = backend,
+        kernel_name = kernel_name,
         field = field,
         spw = spw,
         antenna = antenna,
@@ -138,6 +140,16 @@ class _visplot:
         ``"remote"``, or ``"null"``.  Default ``"auto"``.
     remote_endpoint : str | None
         Required only when ``backend="remote"``.
+    kernel_name : str | None
+        Kernelspec name (``jupyter kernelspec list``) to run the
+        MSv2/MSv4 access and Datashader rendering on, via
+        ``cubevis.remote``.  Required when ``backend="remote"``.  The
+        same string you'd pass to ``AsyncKernelManager(kernel_name=...)``
+        directly — a local kernel (``"python3"``) works for testing the
+        remote *path* without an actual cluster.  Construction blocks
+        for the whole connect sequence: seconds against a local kernel,
+        up to a couple of minutes on first connect to a real
+        ``sshpyk``-provisioned cluster kernel.
     field : str
         Field name or integer index string.  Default: first field.
     spw : str
@@ -198,6 +210,34 @@ class _visplot:
     compact_toolbar : bool
         Whether each figure's toolbar auto-hides until the mouse is over
         that plot.  Defaults to ``True``.
+
+    Resource lifecycle
+    ------------------
+    Constructing a ``VisibilityPlotter`` opens the underlying MSv2/MSv4
+    backend (``open_ms``/``open_ps``), which holds real OS file
+    descriptors (an ``xr.open_datatree()`` handle -- for MSv2 this is
+    backed by ``arcae``/casacore table handles across the main table
+    *and* every subtable, so a single open can easily account for
+    dozens of descriptors).
+
+    Call ``close()`` -- or use the instance as a context manager --
+    once you are done with a plotter, especially in scripts or
+    interactive sessions that construct many ``VisibilityPlotter``
+    instances in a row (each unclosed instance leaks its backend's
+    file descriptors for the life of the process)::
+
+        with VisibilityPlotter(ms=path, headless=True) as vp:
+            ...  # export, inspect, etc.
+        # backend closed here
+
+    In interactive GUI use, ``close()`` is also called automatically
+    when the browser session ends for good (see ``_build_comm``'s
+    shutdown handler) and, as a last-resort safety net, from
+    ``__del__``.  Neither of those is a substitute for an explicit
+    ``close()``/``with`` block: session shutdown only fires if the
+    browser tab is actually closed, and ``__del__`` timing is not
+    guaranteed once Bokeh/CustomJS callbacks create reference cycles
+    back to ``self``.
     """
 
     _info_group_ = """visualization, information,editing, manipulation"""
@@ -208,6 +248,7 @@ class _visplot:
         'ms': 'Path to an MSv2 measurement set.',
         'ps': 'Path to an MSv4 / Processing Set Zarr store.',
         'backend': 'Reduction backend: ``"auto"``, ``"casa6"``, ``"radps"``, ``"remote"``, or ``"null"``.',
+        'kernel_name': 'Remote kernel to run data access/rendering on (cubevis.remote).',
         'field': 'Field name or integer index string.',
         'spw': 'Comma-separated SPW indices (``"0,1,2,3"``).',
         'antenna': 'MSSelection antenna string.',
@@ -240,6 +281,7 @@ class _visplot:
         'ms': None,
         'ps': None,
         'backend': 'auto',
+        'kernel_name': None,
         'field': '',
         'spw': '',
         'antenna': '',
@@ -307,6 +349,7 @@ class _visplot:
             'ms': 'Optional[str]',
             'ps': 'Optional[str]',
             'backend': 'str',
+            'kernel_name': 'Optional[str]',
             'field': 'str',
             'spw': 'str',
             'antenna': 'str',
@@ -465,6 +508,21 @@ class _visplot:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
         self.__do_inp_output(
             '%-23.23s = %s%-23s%s' % ('backend', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __kernel_name_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('kernel_name', self._arg_default['kernel_name'])
+        default = self._arg_default['kernel_name']
+        desc    = self._arg_description.get('kernel_name', '')
+        if self.__validate_('kernel_name', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('kernel_name', pre, self.__to_string_(value), post),
             desc, fmt,
         )
 
@@ -851,6 +909,7 @@ class _visplot:
         if 'ms' in glb: del glb['ms']
         if 'ps' in glb: del glb['ps']
         if 'backend' in glb: del glb['backend']
+        if 'kernel_name' in glb: del glb['kernel_name']
         if 'field' in glb: del glb['field']
         if 'spw' in glb: del glb['spw']
         if 'antenna' in glb: del glb['antenna']
@@ -883,6 +942,7 @@ class _visplot:
         self.term_width, self.term_height = shutil.get_terminal_size(fallback=(80, 24))
         self.__ms_inp()
         self.__ps_inp()
+        self.__kernel_name_inp()
         self.__field_inp()
         self.__spw_inp()
         self.__antenna_inp()
@@ -940,6 +1000,7 @@ class _visplot:
         _invocation_parameters['ms'] = glb.get('ms', self._arg_default['ms'])
         _invocation_parameters['ps'] = glb.get('ps', self._arg_default['ps'])
         _invocation_parameters['backend'] = glb.get('backend', self._arg_default['backend'])
+        _invocation_parameters['kernel_name'] = glb.get('kernel_name', self._arg_default['kernel_name'])
         _invocation_parameters['field'] = glb.get('field', self._arg_default['field'])
         _invocation_parameters['spw'] = glb.get('spw', self._arg_default['spw'])
         _invocation_parameters['antenna'] = glb.get('antenna', self._arg_default['antenna'])
@@ -988,6 +1049,7 @@ class _visplot:
             ms = _UNSET,
             ps = _UNSET,
             backend = _UNSET,
+            kernel_name = _UNSET,
             field = _UNSET,
             spw = _UNSET,
             antenna = _UNSET,
@@ -1029,6 +1091,7 @@ class _visplot:
             ms,
             ps,
             backend,
+            kernel_name,
             field,
             spw,
             antenna,
@@ -1069,6 +1132,9 @@ class _visplot:
             _invocation_parameters['backend'] = \
                 backend if backend is not _UNSET \
                 else glb.get('backend', self._arg_default['backend'])
+            _invocation_parameters['kernel_name'] = \
+                kernel_name if kernel_name is not _UNSET \
+                else glb.get('kernel_name', self._arg_default['kernel_name'])
             _invocation_parameters['field'] = \
                 field if field is not _UNSET \
                 else glb.get('field', self._arg_default['field'])
@@ -1152,6 +1218,8 @@ class _visplot:
                 glb.get('ps', self._arg_default['ps'])
             _invocation_parameters['backend'] = \
                 glb.get('backend', self._arg_default['backend'])
+            _invocation_parameters['kernel_name'] = \
+                glb.get('kernel_name', self._arg_default['kernel_name'])
             _invocation_parameters['field'] = \
                 glb.get('field', self._arg_default['field'])
             _invocation_parameters['spw'] = \
@@ -1225,6 +1293,7 @@ class _visplot:
                     'ms=' + repr(_invocation_parameters['ms']),
                     'ps=' + repr(_invocation_parameters['ps']),
                     'backend=' + repr(_invocation_parameters['backend']),
+                    'kernel_name=' + repr(_invocation_parameters['kernel_name']),
                     'field=' + repr(_invocation_parameters['field']),
                     'spw=' + repr(_invocation_parameters['spw']),
                     'antenna=' + repr(_invocation_parameters['antenna']),
@@ -1256,6 +1325,7 @@ class _visplot:
                 ms = _invocation_parameters['ms'],
                 ps = _invocation_parameters['ps'],
                 backend = _invocation_parameters['backend'],
+                kernel_name = _invocation_parameters['kernel_name'],
                 field = _invocation_parameters['field'],
                 spw = _invocation_parameters['spw'],
                 antenna = _invocation_parameters['antenna'],

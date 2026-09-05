@@ -114,6 +114,16 @@ from uuid import uuid4
 import pandas as pd
 import xarray as xr
 
+from . import _wire_types  # noqa: F401 -- import for its Serializer/Deserializer
+                            # registration side effect (xr.DataArray wire
+                            # support), not for any name used directly here.
+                            # Must happen before the first real call crosses
+                            # the wire; module-import caching makes this a
+                            # no-op on any subsequent import within the
+                            # process. See _wire_types.py's own docstring for
+                            # why this lives here and not in
+                            # cubevis.utils._conversion.
+
 from .reduction_context import (
     AntennaInfo,
     ApplycalParams,

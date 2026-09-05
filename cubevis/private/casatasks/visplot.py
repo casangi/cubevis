@@ -48,6 +48,7 @@ def _validate_params(
         ms,
         ps,
         backend,
+        kernel_name,
         field,
         spw,
         antenna,
@@ -80,6 +81,7 @@ def _validate_params(
         'ms': 'Optional[str]',
         'ps': 'Optional[str]',
         'backend': 'str',
+        'kernel_name': 'Optional[str]',
         'field': 'str',
         'spw': 'str',
         'antenna': 'str',
@@ -170,6 +172,7 @@ def _validate_params(
     _check('ms', ms, _type_map['ms'])
     _check('ps', ps, _type_map['ps'])
     _check('backend', backend, _type_map['backend'])
+    _check('kernel_name', kernel_name, _type_map['kernel_name'])
     _check('field', field, _type_map['field'])
     _check('spw', spw, _type_map['spw'])
     _check('antenna', antenna, _type_map['antenna'])
@@ -202,6 +205,7 @@ def _visplot_t(
         ms: Optional[str] = None,
         ps: Optional[str] = None,
         backend: str = 'auto',
+        kernel_name: Optional[str] = None,
         field: str = '',
         spw: str = '',
         antenna: str = '',
@@ -233,6 +237,7 @@ def _visplot_t(
         ms = ms,
         ps = ps,
         backend = backend,
+        kernel_name = kernel_name,
         field = field,
         spw = spw,
         antenna = antenna,
@@ -286,6 +291,16 @@ class _visplot:
         ``"remote"``, or ``"null"``.  Default ``"auto"``.
     remote_endpoint : str | None
         Required only when ``backend="remote"``.
+    kernel_name : str | None
+        Kernelspec name (``jupyter kernelspec list``) to run the
+        MSv2/MSv4 access and Datashader rendering on, via
+        ``cubevis.remote``.  Required when ``backend="remote"``.  The
+        same string you'd pass to ``AsyncKernelManager(kernel_name=...)``
+        directly — a local kernel (``"python3"``) works for testing the
+        remote *path* without an actual cluster.  Construction blocks
+        for the whole connect sequence: seconds against a local kernel,
+        up to a couple of minutes on first connect to a real
+        ``sshpyk``-provisioned cluster kernel.
     field : str
         Field name or integer index string.  Default: first field.
     spw : str
@@ -346,6 +361,34 @@ class _visplot:
     compact_toolbar : bool
         Whether each figure's toolbar auto-hides until the mouse is over
         that plot.  Defaults to ``True``.
+
+    Resource lifecycle
+    ------------------
+    Constructing a ``VisibilityPlotter`` opens the underlying MSv2/MSv4
+    backend (``open_ms``/``open_ps``), which holds real OS file
+    descriptors (an ``xr.open_datatree()`` handle -- for MSv2 this is
+    backed by ``arcae``/casacore table handles across the main table
+    *and* every subtable, so a single open can easily account for
+    dozens of descriptors).
+
+    Call ``close()`` -- or use the instance as a context manager --
+    once you are done with a plotter, especially in scripts or
+    interactive sessions that construct many ``VisibilityPlotter``
+    instances in a row (each unclosed instance leaks its backend's
+    file descriptors for the life of the process)::
+
+        with VisibilityPlotter(ms=path, headless=True) as vp:
+            ...  # export, inspect, etc.
+        # backend closed here
+
+    In interactive GUI use, ``close()`` is also called automatically
+    when the browser session ends for good (see ``_build_comm``'s
+    shutdown handler) and, as a last-resort safety net, from
+    ``__del__``.  Neither of those is a substitute for an explicit
+    ``close()``/``with`` block: session shutdown only fires if the
+    browser tab is actually closed, and ``__del__`` timing is not
+    guaranteed once Bokeh/CustomJS callbacks create reference cycles
+    back to ``self``.
     """
     _info_group_ = """visualization, information,editing, manipulation"""
     _info_desc_  = """A plotter/interactive flagger for visibility data"""
@@ -356,6 +399,7 @@ class _visplot:
             ms: Optional[str] = None,
             ps: Optional[str] = None,
             backend: str = 'auto',
+            kernel_name: Optional[str] = None,
             field: str = '',
             spw: str = '',
             antenna: str = '',
@@ -400,6 +444,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             ms = ms,
             ps = ps,
             backend = backend,
+            kernel_name = kernel_name,
             field = field,
             spw = spw,
             antenna = antenna,
@@ -432,6 +477,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'ms=' + repr(ms),
                 'ps=' + repr(ps),
                 'backend=' + repr(backend),
+                'kernel_name=' + repr(kernel_name),
                 'field=' + repr(field),
                 'spw=' + repr(spw),
                 'antenna=' + repr(antenna),
@@ -465,6 +511,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 ms = ms,
                 ps = ps,
                 backend = backend,
+                kernel_name = kernel_name,
                 field = field,
                 spw = spw,
                 antenna = antenna,

@@ -49,6 +49,13 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from . import _wire_types  # noqa: F401 -- registers xr.DataArray wire support
+                            # (Serializer/Deserializer side effect) before any
+                            # method below can return one. See
+                            # remote_reduction_context.py's matching import
+                            # and _wire_types.py's own docstring for why this
+                            # lives here rather than in cubevis.utils._conversion.
+
 
 class VisplotRemoteBackend:
     """Worker-side object registered under ``"VisplotRemoteBackend"``.

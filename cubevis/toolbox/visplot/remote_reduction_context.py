@@ -107,6 +107,7 @@ Package location (proposed)
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from uuid import uuid4
 
@@ -267,7 +268,16 @@ class RemoteReductionContext(ReductionContext):
             "connect to a real cluster kernel)",
             kernel_name, path, backend_kind,
         )
+        # Phase timing -- connect time turned out to NOT be dominated by
+        # kernel startup alone (measured 51s of a 154s connect against a
+        # real sshpyk cluster kernel); logging each phase separately here
+        # is cheap and turns "connect is slow" into "THIS phase is slow",
+        # rather than re-deriving it from raw sshpyk log timestamps by
+        # hand every time, as this number was.
+        t0 = time.perf_counter()
         self._bridge.run(self._km.start_kernel())
+        t1 = time.perf_counter()
+        log.info("RemoteReductionContext: start_kernel() took %.1fs", t1 - t0)
         try:
             self._link = self._bridge.run(
                 RemoteAppLink.open(
@@ -276,18 +286,26 @@ class RemoteReductionContext(ReductionContext):
                     timeout=open_timeout,
                 )
             )
+            t2 = time.perf_counter()
+            log.info("RemoteReductionContext: RemoteAppLink.open() took %.1fs", t2 - t1)
             self._ctx = self._bridge.run(
                 self._link.create_context(
                     config={"register_function": register_function},
                     timeout=create_context_timeout,
                 )
             )
+            t3 = time.perf_counter()
+            log.info("RemoteReductionContext: create_context() took %.1fs "
+                      "(worker subprocess spawn + register_function import)", t3 - t2)
             self._handle = self._bridge.run(
                 self._acreate_object(
                     _BACKEND_CLASS_NAME,
                     kwargs={"path": path, "backend_kind": backend_kind},
                 )
             )
+            t4 = time.perf_counter()
+            log.info("RemoteReductionContext: create_object() took %.1fs "
+                      "(includes opening the MS/PS on the remote host)", t4 - t3)
         except BaseException:
             # Don't leak a half-connected kernel if any step above
             # fails -- best-effort, and deliberately swallows its own

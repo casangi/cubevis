@@ -1,8 +1,8 @@
 # ┌─────────────────┬─────────┬────────────────┬──────────────┬───────────────┬───────────────┬─────────┬────────────────┐
 # │                 │  inp()  │ User signature │ Global frame │ _arg_default  │  tput / tget  │ Logging │ Canonical call │
 # ├─────────────────┼─────────┼────────────────┼──────────────┼───────────────┼───────────────┼─────────┼────────────────┤
-# │ Normal arg      │    ✓    │       ✓        │      ✓      │       ✓       │       ✓       │    ✓   │       ✓        │
-# │ hidden_args     │    ✗    │       ✓        │      ✓      │       ✓       │       ✓       │    ✓   │       ✓        │
+# │ Normal arg      │    ✓    │       ✓        │      ✓       │       ✓       │       ✓       │    ✓    │       ✓        │
+# │ hidden_args     │    ✗    │       ✓        │      ✓       │       ✓       │       ✓       │    ✓    │       ✓        │
 # │ layer_args      │    ✗    │       ✗        │      ✗       │       ✗       │       ✗       │    ✗    │   ✓ (injected) │
 # └─────────────────┴─────────┴────────────────┴──────────────┴───────────────┴───────────────┴─────────┴────────────────┘
 sources:
@@ -15,8 +15,9 @@ sources:
       enable_flagging: True
       headless: False
     short_desc_overrides:
-      mode:   'Display mode: both, raster, or scatter.'
-      preset: 'Named startup preset (vplot, radplot, waterfall).'
+      mode:        'Display mode: both, raster, or scatter.'
+      preset:      'Named startup preset (vplot, radplot, waterfall).'
+      kernel_name: 'Remote kernel to run data access/rendering on (cubevis.remote).'
     methods:
       - __init__
       - __call__

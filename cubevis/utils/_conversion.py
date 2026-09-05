@@ -28,12 +28,89 @@
 '''Contains for conversion of data passed between Python and JavaScript
 via websockets'''
 
+import importlib
 import json
+from enum import Enum
+
 import numpy as np
 from bokeh.util.serialization import transform_array
 from bokeh.core.serialization import Serializer, Deserializer
 from bokeh.core.json_encoder import serialize_json
 from ._static import static_vars
+
+# ----------------------------------------------------------------------
+# Enum + dataclass wire support (2026-09-04)
+#
+# Two confirmed gaps in bokeh's stock Serializer/Deserializer (bokeh
+# 3.10.0's actual bokeh/core/serialization.py, not assumed):
+#
+# 1. Serializer has NO Enum handling at all -- _encode falls through
+#    every built-in case (bool/str/int/float/tuple/list/set/dict/bytes/
+#    slice/ndarray/dataclass) to _encode_other, which only knows
+#    datetime/numpy-scalar/pandas types, then raises
+#    "can't serialize <enum '...'>". Fixed below by overriding
+#    _encode_other in a subclass -- not via Serializer.register(), which
+#    keys on the *exact* type(obj) and would need one call per concrete
+#    Enum class as new ones are introduced; overriding the fallback
+#    hook instead covers every Enum subclass generically, forever.
+#
+# 2. Serializer DOES encode arbitrary @dataclass instances natively
+#    (is_dataclass()/_encode_dataclass() -- confirmed it just checks
+#    hasattr(type(obj), "__dataclass_fields__"), so any plain stdlib
+#    dataclass qualifies, no bokeh-specific decoration needed), but the
+#    matching Deserializer._decode_object() is `raise
+#    NotImplementedError()` in bokeh's own base class -- a stub clearly
+#    meant to be overridden downstream, never implemented here. Fixed
+#    below by overriding _decode_object in a subclass -- deliberately
+#    NOT via Deserializer.register("object", ...), which would also
+#    intercept bokeh's own Model-reference decoding (real Bokeh widgets
+#    also use type="object", distinguished only by an "id" key) and
+#    require reimplementing that path to avoid breaking it elsewhere in
+#    cubevis. Overriding the one unimplemented method leaves bokeh's own
+#    "object"-with-"id" (_decode_object_ref) path completely untouched.
+#
+# Both were caught by running a real query_raster() round trip through
+# a live remote execution context (cubevis.remote) -- see
+# cubevis-remote-execution-implementation.md / Chunk 2's own smoke test
+# -- not found by inspection. Tuples become lists on the way through
+# (bokeh's _encode_tuple -> _encode_list, no wire-level marker to
+# reconstruct a tuple; JSON has no tuple type) -- structural, not a bug,
+# not fixed here.
+# ----------------------------------------------------------------------
+
+class CubevisSerializer(Serializer):
+    def _encode_other(self, obj):
+        if isinstance(obj, Enum):
+            cls = type(obj)
+            return {
+                "type": "cubevis_enum",
+                "cls": f"{cls.__module__}.{cls.__qualname__}",
+                "name": obj.name,
+            }
+        return super()._encode_other(obj)
+
+
+class CubevisDeserializer(Deserializer):
+    def _decode_object(self, obj):
+        module_name, _, qualname = obj["name"].rpartition(".")
+        cls = getattr(importlib.import_module(module_name), qualname)
+        attributes = obj.get("attributes", {})
+        decoded = {key: self._decode(val) for key, val in attributes.items()}
+        return cls(**decoded)
+
+
+def _decode_cubevis_enum(obj, deserializer):
+    module_name, _, qualname = obj["cls"].rpartition(".")
+    cls = getattr(importlib.import_module(module_name), qualname)
+    return cls[obj["name"]]
+
+# Deserializer._decoders is a ClassVar dict shared by every Deserializer
+# (and subclass) instance in the process -- this registers "cubevis_enum"
+# exactly once, at import time of this module, which Python only
+# executes once per process regardless of how many times this module is
+# imported elsewhere.
+Deserializer.register("cubevis_enum", _decode_cubevis_enum)
+
 
 def strip_arrays( val ):
     '''convert all numpy arrays contained within val to lists
@@ -49,13 +126,13 @@ def strip_arrays( val ):
         return list(val)
     return val
 
-@static_vars( encoder=Serializer(deferred=False) )
+@static_vars( encoder=CubevisSerializer(deferred=False) )
 def serialize( val ):
     '''convert python values to a string that can be sent via websockets
     '''
     return serialize_json(serialize.encoder.serialize(val))
 
-@static_vars( decoder=Deserializer( ) )
+@static_vars( decoder=CubevisDeserializer( ) )
 def deserialize( val ):
     '''convert an encoded value received from websockets
     '''

@@ -695,20 +695,21 @@ def _make_radps_context(path: str) -> ReductionContext:
     )
 
 
-def _make_remote_context(path: str, endpoint: str) -> ReductionContext:
-    raise NotImplementedError(
-        f"RemoteReductionContext is not yet implemented (preview release). "
-        f"endpoint={endpoint!r} path={path!r}"
-    )
-
+def _make_remote_context(path: str, kernel_name, backend_kind: str,
+                          remote_endpoint=None) -> ReductionContext:
+    if not kernel_name:
+        raise ValueError(
+            "backend='remote' requires kernel_name= (a kernelspec name "
+            "resolvable by `jupyter kernelspec list`)."
+        )
+    from .remote_reduction_context import RemoteReductionContext
+    return RemoteReductionContext(path, kernel_name, backend_kind=backend_kind)
 
 def _resolve_context_msv2(path, backend, remote_endpoint):
     if backend == ReductionBackend.NULL:
         return NullReductionContext()
-    if backend == ReductionBackend.REMOTE:
-        if not remote_endpoint:
-            raise ValueError("backend='remote' requires remote_endpoint.")
-        return _make_remote_context(path, remote_endpoint)
+    # REMOTE removed -- handled earlier, in open_ms(), before any local
+    # backend is constructed. See open_ms's own docstring/comment.
     if backend == ReductionBackend.CASA6:
         if not _probe_casatasks():
             raise RuntimeError("backend='casa6' requested but casatasks not importable.")
@@ -732,14 +733,12 @@ def _resolve_context_msv2(path, backend, remote_endpoint):
 
 
 def _resolve_context_msv4(path, backend, remote_endpoint):
-    if backend == ReductionBackend.CASA6:
-        raise ValueError("backend='casa6' is not valid for MSv4/PS data.")
     if backend == ReductionBackend.NULL:
         return NullReductionContext()
-    if backend == ReductionBackend.REMOTE:
-        if not remote_endpoint:
-            raise ValueError("backend='remote' requires remote_endpoint.")
-        return _make_remote_context(path, remote_endpoint)
+    # REMOTE removed -- handled earlier, in open_ms(), before any local
+    # backend is constructed. See open_ms's own docstring/comment.
+    if backend == ReductionBackend.CASA6:
+        raise ValueError("backend='casa6' is not valid for MSv4/PS data.")
     if backend == ReductionBackend.RADPS:
         if not _probe_radps():
             raise RuntimeError("backend='radps' requested but RADPS not available.")
@@ -753,11 +752,21 @@ def _resolve_context_msv4(path, backend, remote_endpoint):
     return NullReductionContext()
 
 
-def open_ms(path, *, backend=ReductionBackend.AUTO, remote_endpoint=None):
+def open_ms(path, *, backend=ReductionBackend.AUTO, remote_endpoint=None,
+            kernel_name=None):
     """Open an MSv2 measurement set; return (metadata, reader, context)."""
+    backend = ReductionBackend(backend)
+    if backend == ReductionBackend.REMOTE:
+        context = _make_remote_context(
+            path, kernel_name, "msv2", remote_endpoint=remote_endpoint,
+        )
+        log.debug("open_ms: fields=%d spws=%d context=%s (remote)",
+                  len(context.list_fields()), len(context.list_spws()),
+                  type(context).__name__)
+        return context.metadata_dto(), context, context
+
     from .local_visibility_reader import LocalVisibilityReader
     from .data.msv2_backend import MSv2Backend
-    backend = ReductionBackend(backend)
     b = MSv2Backend(path)
     b.open()
     reader = LocalVisibilityReader(b)
@@ -770,11 +779,21 @@ def open_ms(path, *, backend=ReductionBackend.AUTO, remote_endpoint=None):
     return meta, reader, context
 
 
-def open_ps(path, *, backend=ReductionBackend.AUTO, remote_endpoint=None):
+def open_ps(path, *, backend=ReductionBackend.AUTO, remote_endpoint=None,
+            kernel_name=None):
     """Open an MSv4 / Processing Set; return (metadata, reader, context)."""
+    backend = ReductionBackend(backend)
+    if backend == ReductionBackend.REMOTE:
+        context = _make_remote_context(
+            path, kernel_name, "msv4", remote_endpoint=remote_endpoint,
+        )
+        log.debug("open_ps: fields=%d spws=%d context=%s (remote)",
+                  len(context.list_fields()), len(context.list_spws()),
+                  type(context).__name__)
+        return context.metadata_dto(), context, context
+
     from .local_visibility_reader import LocalVisibilityReader
     from .data.msv4_backend import MSv4Backend
-    backend = ReductionBackend(backend)
     b = MSv4Backend(path)
     b.open()
     reader = LocalVisibilityReader(b)
@@ -785,7 +804,6 @@ def open_ps(path, *, backend=ReductionBackend.AUTO, remote_endpoint=None):
     log.debug("open_ps: fields=%d spws=%d context=%s",
               len(meta.fields), len(meta.spws), type(context).__name__)
     return meta, reader, context
-
 
 def _make_scatter_layers(
     y_axis: "Axis",
@@ -1318,6 +1336,16 @@ class VisibilityPlotter:
         ``"remote"``, or ``"null"``.  Default ``"auto"``.
     remote_endpoint : str | None
         Required only when ``backend="remote"``.
+    kernel_name : str | None
+        Kernelspec name (``jupyter kernelspec list``) to run the
+        MSv2/MSv4 access and Datashader rendering on, via
+        ``cubevis.remote``.  Required when ``backend="remote"``.  The
+        same string you'd pass to ``AsyncKernelManager(kernel_name=...)``
+        directly — a local kernel (``"python3"``) works for testing the
+        remote *path* without an actual cluster.  Construction blocks
+        for the whole connect sequence: seconds against a local kernel,
+        up to a couple of minutes on first connect to a real
+        ``sshpyk``-provisioned cluster kernel.
     field : str
         Field name or integer index string.  Default: first field.
     spw : str
@@ -1415,6 +1443,7 @@ class VisibilityPlotter:
         ps:               Optional[str] = None,
         backend:          str           = "auto",
         remote_endpoint:  Optional[str] = None,
+        kernel_name:      Optional[str] = None,
         field:            str           = "",
         spw:              str           = "",
         antenna:          str           = "",
@@ -1457,7 +1486,7 @@ class VisibilityPlotter:
 
         self._resolve_config(
             ms=ms, ps=ps, backend=backend, remote_endpoint=remote_endpoint,
-            field=field, spw=spw, antenna=antenna, scan=scan,
+            kernel_name=kernel_name, field=field, spw=spw, antenna=antenna, scan=scan,
             timerange=timerange, uvrange=uvrange, correlation=correlation,
             datacolumn=datacolumn, layout=layout, kind=kind, preset=preset,
             raster_y=raster_y, raster_x=raster_x, raster_qty=raster_qty,
@@ -1548,7 +1577,7 @@ class VisibilityPlotter:
     def _resolve_config(
         self,
         *,
-        ms, ps, backend, remote_endpoint, field, spw, antenna, scan,
+        ms, ps, backend, remote_endpoint, kernel_name, field, spw, antenna, scan,
         timerange, uvrange, correlation, datacolumn, layout, kind, preset,
         raster_y, raster_x, raster_qty, scatter_x, scatter_y,
         time_range, freq_range, uvdist_range, enable_flagging,
@@ -1648,11 +1677,13 @@ class VisibilityPlotter:
         # ------------------------------------------------------------------ #
         if ms is not None:
             self._meta, self._reader, self._context = open_ms(
-                ms, backend=backend, remote_endpoint=remote_endpoint
+                ms, backend=backend, remote_endpoint=remote_endpoint,
+                kernel_name=kernel_name
             )
         else:
             self._meta, self._reader, self._context = open_ps(
-                ps, backend=backend, remote_endpoint=remote_endpoint
+                ps, backend=backend, remote_endpoint=remote_endpoint,
+                kernel_name=kernel_name
             )
 
         self._selection = self._build_selection()
@@ -1745,10 +1776,11 @@ class VisibilityPlotter:
         # ------------------------------------------------------------------ #
         # Communication infrastructure                                         #
         # ------------------------------------------------------------------ #
+
         def _shutdown_handler(reason, description):
             self._stop()
-            self.close()
             BokehInit.clear_app_context(self._app_context)
+            self.close()
 
         def _connection_closed_handler(reason, description):
             #
@@ -1925,6 +1957,12 @@ class VisibilityPlotter:
         _slot_a_kind = self._kind
         _slot_b_kind = "scatter" if self._kind == "raster" else "raster"
 
+        from .remote_reduction_context import RemoteReductionContext, DEFAULT_REMOTE_MAX_CELLS
+        _raster_max_cells = (
+            DEFAULT_REMOTE_MAX_CELLS if isinstance(self._context, RemoteReductionContext)
+            else 2_000_000
+        )
+
         _slot_a_raster = VisibilityRaster(
             backend       = self._reader,
             selection     = self._selection,
@@ -1941,6 +1979,7 @@ class VisibilityPlotter:
             defer_initial_render = (_slot_a_kind != "raster"),
             headless             = self._headless,
             cmap                 = raster_ramp,
+            max_cells            = _raster_max_cells,
         )
         # One scatter layer per polarisation — multi-layer compositing
         # naturally boosts density and visibility vs a single layer. Slot
@@ -1998,6 +2037,7 @@ class VisibilityPlotter:
             defer_initial_render = (_slot_b_kind != "raster"),
             headless             = self._headless,
             cmap                 = raster_ramp,
+            max_cells            = _raster_max_cells,
         )
 
         # Stage 1b.5: ordered slot records — self._slots[0] is "A",

@@ -7,33 +7,36 @@ Each layer is a ``ScatterLayer`` specifying a y-axis quantity, polarization,
 color map, and alpha value.  All layers share the same x-axis and
 ``SelectionSpec``.
 
-Rendering pipeline
-------------------
-For each layer::
+Rendering pipeline (2026-09 redesign)
+--------------------------------------
+Binning and shading now happen inside ``backend.query_columns()``
+itself (``MSv2Backend``/``MSv4Backend``, in-process for a local
+session or in the worker subprocess for a remote one) -- see
+``ScatterRenderResult``'s docstring in ``data/reader.py`` for the full
+rationale (in short: the pre-redesign contract shipped raw DataFrames
+that could reach tens of millions of rows, which was fine in-process
+but unworkable over the wire for a remote session). For each layer,
+the backend returns a small ``ScatterLayerRender``: an already-shaded
+RGBA image plus a handful of scalars/small arrays (``n_in_view``, a
+histogram, a colorbar mapping curve) -- never raw rows.
 
-    query_columns(x_axis, [(y_axis, pol)], selection)
-        -> DataFrame with columns "x", "y"
+What still happens here, in ``_collapse_and_composite``::
 
-    Canvas.points(df, "x", "y", agg=mean("y"))
-        -> canvas-resolution float64 agg (H × W)
+    layer_alpha = auto_alpha(n_in_view, canvas_pixels) * layer.alpha
+    <collapse the returned image's alpha channel to layer_alpha>
 
-    tf.shade(agg, cmap=layer.cmap, alpha=int(layer.alpha * 255))
-        -> Datashader Image (uint32, RGBA)
+    tf.stack(*images, how="over")  [reimplemented in numpy on uint32 ARGB]
+        -> single composite image
 
-Then composite all layer images::
-
-    tf.stack(*images, how="over")
-        -> single composite Datashader Image
+This split is what keeps ``set_alpha()`` a free, no-backend-call
+operation: it only needs ``n_in_view`` (returned) and the live
+``layer.alpha``, never the raw data. Everything else that used to be
+"free" (pan/zoom, ``update_scaling``, ``set_color_mode``,
+``set_layer_cmaps``) is now a backend round trip, because it changes
+something the backend's shading step depends on -- see ``_rerender``.
 
 The composite is pushed to a single Bokeh ``image_rgba`` glyph via
-``_image_source``.  This avoids painter's-order artefacts and lets
-Datashader handle alpha compositing correctly in float space.
-
-Alpha control
--------------
-Each layer's ``alpha`` (0.0–1.0) is stored in ``_state_source`` as
-``layer_alpha_N`` for JS widgets to read.  Changing alpha only re-runs
-the shade + stack step (no re-query), so it is fast.
+``_image_source``, as before.
 
 Axis switching
 --------------
@@ -64,6 +67,7 @@ from .visibility_plot import (
 )
 from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
+from .data.reader import ScatterLayerSpec
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -253,11 +257,33 @@ class VisibilityScatter(VisibilityPlot):
         self._layer_cmaps = list(layer_cmaps or _LAYER_CMAPS)
         self._layers: list[ScatterLayer] = self._with_default_cmaps(layers)
 
-        # Cached DataFrames and canvas aggs — one per layer
-        self._layer_dfs:  list[Optional["pd.DataFrame"]] = [None] * len(layers)
-        self._layer_aggs: list[Optional["xr.DataArray"]] = [None] * len(layers)
-        self._layer_skip_reason: list[Optional[str]] = [None] * len(layers)
-        self._layer_extents: list[Optional[tuple]] = [None] * len(layers)
+        # Per-layer render state, cached from the last backend
+        # query_columns() call (2026-09 redesign -- see
+        # ScatterRenderResult's docstring in data/reader.py). The
+        # backend now bins and shades; what's cached here is its
+        # bounded result, not raw data.
+        n = len(layers)
+        self._layer_images:      list[Optional[np.ndarray]] = [None] * n
+        self._layer_n_in_view:   list[int]                  = [0] * n
+        self._layer_peak:        list[Optional[float]]      = [None] * n
+        self._layer_hist_counts: list[Optional[np.ndarray]] = [None] * n
+        self._layer_hist_edges:  list[Optional[np.ndarray]] = [None] * n
+        self._layer_mapping:     list[Optional["_cms.ScalarMapping"]] = [None] * n
+        self._layer_skip_reason: list[Optional[str]]        = [None] * n
+        self._canvas_width, self._canvas_height           = width, height
+        self._full_canvas_width, self._full_canvas_height = width, height
+
+        # Vestigial -- kept ONLY so _handle_probe's existing guards
+        # ("if agg is None or df is None...") degrade gracefully to a
+        # clean "no data" response instead of an AttributeError. Never
+        # populated with real data anymore: probe_scatter_pixel needs
+        # its own redesign (a targeted backend re-query at the hovered
+        # pixel) now that raw per-layer DataFrames/aggs don't exist
+        # client-side -- deliberately out of scope for this pass. See
+        # the scatter remote-execution design notes.
+        self._layer_dfs:     list[Optional["pd.DataFrame"]] = [None] * n
+        self._layer_aggs:    list[Optional["xr.DataArray"]] = [None] * n
+        self._layer_extents: list[Optional[tuple]]          = [None] * n
 
         # Hover-probe tuning.  ``probe_slop_px`` is how far, in *screen*
         # pixels, the probe will look beyond the hovered bin for a
@@ -353,7 +379,7 @@ class VisibilityScatter(VisibilityPlot):
             scaling_vmin  = lyr.scaling_vmin,
             scaling_vmax  = lyr.scaling_vmax,
         )
-        self._composite_and_push()
+        self._recomposite()
         self._update_state_source()
 
     def update_scaling(
@@ -366,10 +392,14 @@ class VisibilityScatter(VisibilityPlot):
         vmax: Optional[float] = None,
         reset_range: bool = False,
     ) -> None:
-        """Change one layer's value-to-color transfer function and re-composite.
+        """Change one layer's value-to-color transfer function and re-render.
 
-        Does NOT re-query the backend — only re-runs shade + stack, mirroring
-        ``set_alpha()``.
+        POST-2026-09: this now issues a backend ``query_columns()`` call
+        (see ``_rerender``) rather than only re-running shade + stack
+        locally -- scaling/vmin/vmax are ``tf.shade()``/eq_hist
+        parameters, and that step now runs backend-side (see
+        ``ScatterRenderResult``'s docstring in ``data/reader.py``).
+        Unlike ``set_alpha()``, this is no longer a free operation.
 
         Parameters
         ----------
@@ -386,8 +416,9 @@ class VisibilityScatter(VisibilityPlot):
             current value.
         vmin, vmax : float | None
             Manual value-domain clip range, overriding the automatic
-            ``color_mode``-based range (see ``_shade_all_layers``) once
-            set. ``None`` keeps the current value on its own — use
+            ``color_mode``-based range (see
+            ``data._scatter_render.render_layer``) once set. ``None``
+            keeps the current value on its own — use
             ``reset_range=True`` to clear a previously-set override
             (``colormap_controls()``'s reset button). Clips the
             reference population (rather than setting a Datashader
@@ -418,27 +449,43 @@ class VisibilityScatter(VisibilityPlot):
             scaling_vmin  = vmin if vmin is not None else new_vmin,
             scaling_vmax  = vmax if vmax is not None else new_vmax,
         )
-        self._composite_and_push()
+        self._rerender()
         self._update_state_source()
 
     def histogram(
         self, layer_index: int, bins: int = 254,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Return ``(counts, bin_edges)`` for one layer's cached agg values.
+        """Return ``(counts, bin_edges)`` for one layer, from the backend.
 
-        Used by ``colormap_controls()`` for an eventual histogram display
+        POST-2026-09: computed server-side, against the true per-sample
+        reference population, and cached from the last render (see
+        ``ScatterLayerRender.hist_counts``/``hist_edges`` in
+        ``data/reader.py``) -- not rebinned here from a local agg, which
+        no longer exists client-side.
+
+        Used by ``colormap_controls()`` for the histogram display
         alongside the scaling controls.  Returns empty arrays if the
         layer hasn't been rendered yet.
+
+        ``bins`` is honored only in that the backend always computes
+        254 bins (matching this method's own default); a caller asking
+        for a different count gets a warning and the cached result
+        anyway, rather than an exact rebin the true per-sample values
+        aren't available here to produce.
         """
-        if not (0 <= layer_index < len(self._layer_aggs)):
+        if not (0 <= layer_index < len(self._layer_hist_counts)):
             raise IndexError(f"layer_index {layer_index} out of range")
-        agg = self._layer_aggs[layer_index]
-        if agg is None:
+        counts = self._layer_hist_counts[layer_index]
+        edges  = self._layer_hist_edges[layer_index]
+        if counts is None or edges is None:
             return np.array([]), np.array([])
-        finite = agg.values[np.isfinite(agg.values)]
-        if finite.size == 0:
-            return np.array([]), np.array([])
-        counts, edges = np.histogram(finite, bins=bins)
+        if bins != len(counts):
+            log.warning(
+                "histogram(layer_index=%d, bins=%d): backend always "
+                "computes %d bins; returning that instead of an exact "
+                "rebin (the per-sample values aren't available here)",
+                layer_index, bins, len(counts),
+            )
         return counts, edges
 
     def colormap_controls(self, layer_index: int = 0):
@@ -749,10 +796,17 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             # carries no cmap field, and an unfilled None reaches
             # tf.shade and blanks the panel.
             self._layers = self._with_default_cmaps(layers)
-            self._layer_dfs  = [None] * len(layers)
-            self._layer_aggs = [None] * len(layers)
-            self._layer_skip_reason = [None] * len(layers)
-            self._layer_extents = [None] * len(layers)
+            n = len(layers)
+            self._layer_images      = [None] * n
+            self._layer_n_in_view   = [0] * n
+            self._layer_peak        = [None] * n
+            self._layer_hist_counts = [None] * n
+            self._layer_hist_edges  = [None] * n
+            self._layer_mapping     = [None] * n
+            self._layer_skip_reason = [None] * n
+            self._layer_dfs         = [None] * n   # vestigial -- see __init__
+            self._layer_aggs        = [None] * n   # vestigial -- see __init__
+            self._layer_extents     = [None] * n   # vestigial -- see __init__
             changed = True
         if title is not None:
             self._title = title;  changed = True
@@ -761,10 +815,10 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         # render on its first update_axes() call regardless of what else
         # changed — same rationale as VisibilityRaster's identical guard.
         # Scatter has no single self._agg; "never rendered" here means
-        # every layer's DataFrame is still None (set that way by
+        # every layer's cached image is still None (set that way by
         # _render(defer=True), and by the layers-replacement branch above,
         # which is why this check must come after it).
-        if all(df is None for df in self._layer_dfs):
+        if all(img is None for img in self._layer_images):
             changed = True
 
         if not changed:
@@ -826,27 +880,34 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         # zoom-to-1:1 math (flag_tool.ts) works unchanged here too. Unlike
         # raster, scatter points are exact (not binned/decimated), so this
         # isn't about resolving averaged data -- it's the same
-        # sparse-data canvas-shrink logic _shade_all_layers uses
-        # (_compute_canvas_size), which means "1:1" for scatter
-        # effectively means "zoomed in enough that the full-extent view's
-        # overplot-driven canvas shrink no longer applies" -- a reasonable
-        # proxy for "not looking at an overplotted, ambiguous cluster."
+        # sparse-data canvas-shrink logic the backend's
+        # compute_canvas_size applies (see data/_scatter_render.py),
+        # which means "1:1" for scatter effectively means "zoomed in
+        # enough that the full-extent view's overplot-driven canvas
+        # shrink no longer applies" -- a reasonable proxy for "not
+        # looking at an overplotted, ambiguous cluster."
+        #
+        # POST-2026-09: no longer recomputed here -- the backend
+        # computes it as part of every full-extent query_columns()
+        # call, and _render_all_layers caches it in
+        # _full_canvas_width/height specifically (as opposed to
+        # _canvas_width/height, which tracks whatever the *last* call
+        # used, full-extent or viewport).
         full_x0, full_x1 = self._x_range
         full_y0, full_y1 = self._y_range
-        agg_n_x, agg_n_y = self._compute_canvas_size(
-            full_x0, full_x1, full_y0, full_y1)
+        agg_n_x, agg_n_y = self._full_canvas_width, self._full_canvas_height
 
         drawable = any(
-            df is not None and len(df) > 0 and lyr.alpha > 0.0
-            for lyr, df in zip(self._layers, self._layer_dfs)
+            img is not None and self._effective_skip_reason(i) is None
+            for i, img in enumerate(self._layer_images)
         )
         status, note = "ok", None
         if not drawable:
             status = "empty"
             reasons = [
-                f"{lyr.label}: {r}"
-                for lyr, r in zip(self._layers, self._layer_skip_reason)
-                if r
+                f"{lyr.label}: {self._effective_skip_reason(i)}"
+                for i, lyr in enumerate(self._layers)
+                if self._effective_skip_reason(i)
             ]
             note = "; ".join(reasons) if reasons else "no layers with data"
 
@@ -871,70 +932,70 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         )
 
     def _bands_with_mappings(self, spec, viewport=None):
-        """One mapping per layer, plus each layer's peak per-pixel count.
+        """One mapping per layer, plus each layer's peak per-pixel value.
 
-        A scatter agg is a *count*, so these bands are ``kind="density"``
-        -- which is what stops the compositor labelling the ramp with the
-        layer's amplitude label.  ``peak_density`` feeds the legend
-        annotation that scatter panels show instead of a colorbar.
+        These bands are ``kind="density"`` -- which is what stops the
+        compositor labelling the ramp with the layer's amplitude label.
+        ``peak_density`` feeds the legend annotation that scatter panels
+        show instead of a colorbar.
 
-        Uses whatever ``_layer_aggs`` the last shade left, so the curve
-        matches the pixels on screen.  A layer that was skipped has no
-        agg and keeps ``mapping=None``, which the compositor reads as
-        "no bar for this band".
+        POST-2026-09: ``mapping``/``peak`` now come straight from the
+        backend's last render (``ScatterLayerRender.mapping_x``/
+        ``mapping_u``/``peak_value`` in ``data/reader.py``), computed
+        server-side against the true per-sample reference population,
+        rather than being rebuilt here from a locally-cached agg (which
+        no longer exists client-side) -- see that docstring for why. A
+        layer with no cached mapping (never rendered, or currently
+        skipped) keeps ``mapping=None``, which the compositor reads as
+        "no bar for this band" -- unchanged.
         """
         from dataclasses import replace
-        from .colormap_scaling import ScalarMapping
 
         out = []
         for i, band in enumerate(spec.bands):
-            agg = (self._layer_aggs[i]
-                   if i < len(self._layer_aggs) else None)
-            if agg is None or not band.visible:
+            mapping = (self._layer_mapping[i]
+                       if i < len(self._layer_mapping) else None)
+            if mapping is None or not band.visible:
                 out.append(replace(band, kind="density"))
                 continue
-            values = np.asarray(agg.values, dtype=np.float64)
-            finite = values[np.isfinite(values)]
-            peak = float(finite.max()) if finite.size else None
-            lyr = self._layers[i]
-            m = ScalarMapping.from_values(
-                values, lyr.scaling,
-                alpha = lyr.scaling_alpha,
-                gamma = lyr.scaling_gamma,
-                vmin  = lyr.scaling_vmin,
-                vmax  = lyr.scaling_vmax,
-            )
-            out.append(replace(band, kind="density", mapping=m,
+            peak = self._layer_peak[i] if i < len(self._layer_peak) else None
+            out.append(replace(band, kind="density", mapping=mapping,
                                peak_density=peak))
         return tuple(out)
 
     def _shade_for_export(self, viewport=None) -> Optional[np.ndarray]:
-        """Re-composite from cached DataFrames at *viewport*; no re-query.
+        """Render a composite at *viewport* without disturbing the live
+        widget's cached render state.
 
-        _shade_all_layers has side effects -- it rebuilds self._layer_aggs
-        and self._layer_skip_reason -- and _handle_probe indexes those
-        aggs with coordinates derived from whatever viewport the *browser*
-        is showing.  An export at any other viewport would therefore
-        silently corrupt the next hover, which is defect (2) in the probe
-        notes above arriving by a new route.  Snapshot and restore rather
-        than relying on the export viewport happening to match.
+        POST-2026-09: rendering is now a backend round trip (see
+        ``_rerender``), so this can no longer "peek" at a locally-cached
+        agg the way the pre-redesign version did -- it issues its own
+        backend query at the requested viewport and restores the
+        previous cached render state afterward, so an export at some
+        other viewport doesn't alter what's on screen (or what
+        ``_panel_spec``/``colormap_controls()`` would report next).
+        Snapshot and restore rather than relying on the export viewport
+        happening to match the live one.
         """
-        saved_aggs    = self._layer_aggs
-        saved_reasons = self._layer_skip_reason
+        saved = (
+            self._layer_images, self._layer_n_in_view, self._layer_peak,
+            self._layer_hist_counts, self._layer_hist_edges,
+            self._layer_mapping, self._layer_skip_reason,
+            self._canvas_width, self._canvas_height,
+        )
         try:
             if viewport is None:
-                if self._current_viewport is not None:
-                    vx0, vx1, vy0, vy1 = self._current_viewport
-                    xr, yr = (vx0, vx1), (vy0, vy1)
-                else:
-                    xr, yr = self._x_range, self._y_range
+                xr, yr = self._current_render_range()
             else:
                 x0, x1, y0, y1 = viewport
                 xr, yr = (x0, x1), (y0, y1)
-            return self._shade_all_layers(xr, yr)
+            self._render_all_layers(self._selection, x_range=xr, y_range=yr)
+            return self._collapse_and_composite()
         finally:
-            self._layer_aggs        = saved_aggs
-            self._layer_skip_reason = saved_reasons
+            (self._layer_images, self._layer_n_in_view, self._layer_peak,
+             self._layer_hist_counts, self._layer_hist_edges,
+             self._layer_mapping, self._layer_skip_reason,
+             self._canvas_width, self._canvas_height) = saved
 
     def _build_glyphs(self) -> None:
         """Add the single composite image_rgba glyph."""
@@ -945,16 +1006,16 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         )
 
     def _render(self, selection: "SelectionSpec", defer: bool = False, **kwargs) -> None:
-        """Query all layers and push the composite image.
+        """Query+bin+shade all layers via the backend and push the composite.
 
         Parameters
         ----------
         defer : bool
             If ``True``, skip the backend query entirely and leave all
             layers empty with the same placeholder ``(0.0, 1.0)`` ranges
-            ``_query_all_layers`` already uses for genuinely empty data —
-            same purpose and pattern as ``VisibilityRaster._render``'s
-            ``defer``; see decision 11 in the grid/iteration design notes.
+            used for genuinely empty data — same purpose and pattern as
+            ``VisibilityRaster._render``'s ``defer``; see decision 11 in
+            the grid/iteration design notes.
         """
         # Re-resolve axis labels before anything reads them: this is the
         # one place that knows both the current axes and the current
@@ -964,31 +1025,54 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         # Axis.CHANNEL is unique, and _panel_spec() runs on every push.
         self._refresh_axis_info(selection)
         t0 = time.perf_counter()
+        self._current_viewport = None   # reset — new data covers full range
         if defer:
-            self._layer_dfs  = [None] * len(self._layers)
-            self._layer_aggs = [None] * len(self._layers)
-            self._layer_skip_reason = (
-                ["deferred (never rendered)"] * len(self._layers)
-            )
-            self._layer_extents = [None] * len(self._layers)
+            n = len(self._layers)
+            self._layer_images      = [None] * n
+            self._layer_n_in_view   = [0] * n
+            self._layer_peak        = [None] * n
+            self._layer_hist_counts = [None] * n
+            self._layer_hist_edges  = [None] * n
+            self._layer_mapping     = [None] * n
+            self._layer_skip_reason = ["deferred (never rendered)"] * n
+            self._layer_dfs         = [None] * n   # vestigial -- see __init__
+            self._layer_aggs        = [None] * n   # vestigial -- see __init__
+            self._layer_extents     = [None] * n   # vestigial -- see __init__
             self._x_range    = (0.0, 1.0)
             self._y_range    = (0.0, 1.0)
+            self._canvas_width, self._canvas_height = self._width, self._height
+            self._full_canvas_width  = self._width
+            self._full_canvas_height = self._height
+            img32 = np.zeros((self._height, self._width), dtype=np.uint32)
+            self._push_image(img32, self._x_range, self._y_range)
         else:
-            self._query_all_layers(selection)
-        self._current_viewport = None   # reset — new data covers full range
-        self._composite_and_push()
+            self._rerender(x_range=None, y_range=None)
         log.debug("VisibilityScatter._render: %.3fs", time.perf_counter() - t0)
         self._update_state_source()
 
     def _do_viewport_rerender(
         self, x0: float, x1: float, y0: float, y1: float
     ) -> dict:
-        """Re-composite cached DataFrames over the new viewport."""
+        """Re-render at the new viewport via a fresh backend call.
+
+        POST-2026-09: no longer a local recomposite of a cached
+        DataFrame -- binning and shading both happen backend-side now
+        (see ``ScatterRenderResult``'s docstring in ``data/reader.py``),
+        so every pan/zoom now costs a full ``query_columns()`` round
+        trip. This applies to LOCAL sessions too, not just remote ones:
+        the backend re-reads the selected data from disk on every call:
+        nothing is cached between calls the way the widget-side
+        DataFrame used to be. A known, deliberate cost for this pass —
+        see the scatter remote-execution design notes' discussion of
+        debouncing / a stale-while-revalidate placeholder / an
+        overscan margin as possible later mitigations, none implemented
+        yet.
+        """
         # Normalise — Bokeh box-zoom can produce start > end
         x0, x1 = min(x0, x1), max(x0, x1)
         y0, y1 = min(y0, y1), max(y0, y1)
         self._current_viewport = (x0, x1, y0, y1)
-        img32 = self._shade_all_layers(x_range=(x0, x1), y_range=(y0, y1))
+        img32 = self._rerender(x_range=(x0, x1), y_range=(y0, y1))
         return {
             "image": img32,
             "x0": x0, "x1": x1,
@@ -1388,318 +1472,191 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
     # Scatter-specific internals
     # ------------------------------------------------------------------
 
-    def _query_all_layers(self, selection: "SelectionSpec") -> None:
-        """Query backend for all layers; update _layer_dfs."""
-        # Build combined y-axes list for a single query_columns call
-        y_axes = [(lyr.y_axis, lyr.polarization) for lyr in self._layers]
-        result = self._backend.query_columns(
-            self._x_dim, y_axes, selection
-        )
-
-        # A layer whose key is absent from the result is a different
-        # failure from one whose frame is empty, and both are different
-        # from a frame that arrived holding the wrong quantity.  Record
-        # enough to tell them apart: the requested key, whether the
-        # backend returned it, and the frame's actual data extent.
-        missing = [
-            (lyr.y_axis, lyr.polarization)
-            for lyr in self._layers
-            if (lyr.y_axis, lyr.polarization) not in result
-        ]
-        if missing:
-            log.warning(
-                "query_columns returned no frame for %d of %d requested "
-                "keys: %s (requested %s, got %s)",
-                len(missing), len(self._layers), missing,
-                y_axes, list(result.keys()),
-            )
-        if len(set(y_axes)) != len(y_axes):
-            # y_axes is a list but the backend keys its result by these
-            # pairs, so duplicates silently collapse and two layers end
-            # up sharing one frame.
-            log.warning(
-                "duplicate (y_axis, polarization) across layers: %s — "
-                "layers sharing a key will share a DataFrame", y_axes,
-            )
-
-        x0_all, x1_all, y0_all, y1_all = [], [], [], []
-        self._layer_extents = [None] * len(self._layers)
-        for i, lyr in enumerate(self._layers):
-            key = (lyr.y_axis, lyr.polarization)
-            df  = result.get(key)
-            self._layer_dfs[i] = df
-            if df is not None and len(df) > 0:
-                xmin, xmax = float(df["x"].min()), float(df["x"].max())
-                ymin, ymax = float(df["y"].min()), float(df["y"].max())
-                self._layer_extents[i] = (len(df), xmin, xmax, ymin, ymax)
-                x0_all.append(xmin)
-                x1_all.append(xmax)
-                y0_all.append(ymin)
-                y1_all.append(ymax)
-
-        if self._probe_debug:
-            for i, (lyr, ext) in enumerate(
-                zip(self._layers, self._layer_extents)
-            ):
-                if ext is None:
-                    log.info("[query] L%d[%s]: no rows", i, lyr.label)
-                    continue
-                n, xmin, xmax, ymin, ymax = ext
-                log.info(
-                    "[query] L%d[%s]: n=%d x=[%.6g, %.6g] y=[%.6g, %.6g]",
-                    i, lyr.label, n, xmin, xmax, ymin, ymax,
-                )
-
-        if x0_all:
-            self._x_range = (min(x0_all), max(x1_all))
-            self._y_range = (min(y0_all), max(y1_all))
-        else:
-            self._x_range = (0.0, 1.0)
-            self._y_range = (0.0, 1.0)
-
-    def _compute_canvas_size(
-        self, x0: float, x1: float, y0: float, y1: float,
-    ) -> tuple[int, int]:
-        """Canvas pixel dimensions used to render the given range.
-
-        Normally just ``(self._width, self._height)``, but for sparse
-        data (few points relative to canvas area) a smaller canvas is
-        used to visually boost apparent point density — see the
-        ``pts_per_px`` scaling below. Factored out of ``_shade_all_layers``
-        so ``_panel_spec`` can also compute this for the *full*
-        data extent (see ``agg_n_x``/``agg_n_y`` there), independent of
-        whatever sub-range is currently in view.
-        """
-        total_in_view = sum(
-            int(((df["x"] >= x0) & (df["x"] <= x1) &
-                 (df["y"] >= y0) & (df["y"] <= y1)).sum())
-            for lyr, df in zip(self._layers, self._layer_dfs)
-            if df is not None and len(df) > 0 and lyr.alpha > 0.0
-        )
-        pts_per_px = total_in_view / (self._width * self._height)
-        if pts_per_px < 0.01 and total_in_view > 0:
-            scale = max(0.05, math.sqrt(
-                total_in_view / (self._width * self._height * 0.01)
-            ))
-            shared_w = max(10, int(self._width  * scale))
-            shared_h = max(10, int(self._height * scale))
-        else:
-            shared_w, shared_h = self._width, self._height
-        return shared_w, shared_h
-
-    def _shade_all_layers(
+    def _render_all_layers(
         self,
+        selection: "SelectionSpec",
         x_range: Optional[tuple[float, float]] = None,
         y_range: Optional[tuple[float, float]] = None,
-    ) -> np.ndarray:
-        """Run cvs.points + shade for each layer; stack and return uint32.
+    ) -> None:
+        """Query, bin, and shade all layers via the backend.
+
+        POST-2026-09: replaces the pre-redesign ``_query_all_layers`` +
+        ``_shade_all_layers`` split. A single ``backend.query_columns()``
+        call now does the querying *and* the binning/shading (see
+        ``ScatterRenderResult``'s docstring in ``data/reader.py``), so
+        this one method replaces both -- updating ``_x_range``/
+        ``_y_range`` (the full data extent) exactly as
+        ``_query_all_layers`` did, plus the new per-layer render-state
+        caches that used to be rebuilt locally in ``_shade_all_layers``.
 
         Parameters
         ----------
         x_range, y_range :
-            Viewport extents.  ``None`` → use full data range.
+            Viewport to bin/shade at. ``None`` (both) -> full data
+            extent -- see ``MSv2Backend.query_columns``.
         """
-        xr = x_range or self._x_range
-        yr = y_range or self._y_range
-        # Normalise so x0 < x1 and y0 < y1 — Bokeh's box-zoom can produce
-        # inverted ranges when the figure y-axis is flipped for image display.
-        x0, x1 = (min(xr), max(xr))
-        y0, y1 = (min(yr), max(yr))
+        layer_specs = [
+            ScatterLayerSpec(
+                y_axis        = lyr.y_axis,
+                polarization  = lyr.polarization,
+                cmap          = tuple(lyr.cmap or ()),
+                alpha         = lyr.alpha,
+                scaling       = lyr.scaling,
+                scaling_alpha = lyr.scaling_alpha,
+                scaling_gamma = lyr.scaling_gamma,
+                scaling_vmin  = lyr.scaling_vmin,
+                scaling_vmax  = lyr.scaling_vmax,
+            )
+            for lyr in self._layers
+        ]
 
-        # Invalidate every cached agg up front.  Only layers that are
-        # actually shaded below re-populate their slot, so a layer that
-        # is skipped this pass (alpha == 0, no points in view, or a
-        # shade exception) can no longer leave behind an agg built for a
-        # *previous* viewport — which _handle_probe would then index
-        # with current-viewport pixel coordinates.  See defect (2) in
-        # the probe notes above.
-        self._layer_aggs = [None] * len(self._layers)
+        result = self._backend.query_columns(
+            self._x_dim, layer_specs, selection,
+            x_range=x_range, y_range=y_range, color_mode=self._color_mode,
+            width=self._width, height=self._height,
+        )
 
-        if x0 == x1 or y0 == y1:
-            return np.zeros((self._height, self._width), dtype=np.uint32)
+        if len(result.layers) != len(self._layers):
+            # Positional correspondence is the whole contract here (no
+            # (Axis,pol)-keyed dict to fall back on the way the
+            # pre-redesign version had) -- a length mismatch means
+            # something upstream reordered or dropped a layer, and
+            # zipping the mismatched lists below would silently pair
+            # each remaining layer with the wrong render.
+            raise RuntimeError(
+                f"query_columns returned {len(result.layers)} layer "
+                f"results for {len(self._layers)} requested layers"
+            )
 
-        # Global amplitude scale — anchor span to the full data y_range so
-        # the same amplitude value always maps to the same color regardless
-        # of zoom level.  This makes it possible to visually track features
-        # across pan/zoom without the color shifting under the user's feet.
-        span_arg = None
-        if self._color_mode == "global":
-            global_y0, global_y1 = self._y_range
-            span_arg = [global_y0, global_y1]
+        self._x_range = result.x_range
+        self._y_range = result.y_range
+        self._canvas_width  = result.canvas_width
+        self._canvas_height = result.canvas_height
+        if x_range is None and y_range is None:
+            # Only a full-extent call updates the reference size
+            # _panel_spec's agg_n_x/agg_n_y reports -- see that
+            # method's docstring for why this must stay independent of
+            # whatever sub-range a pan/zoom last rendered.
+            self._full_canvas_width  = result.canvas_width
+            self._full_canvas_height = result.canvas_height
 
-        # Compute total points in viewport across all layers to determine
-        # a single canvas size shared by all layers — this ensures the
-        # Porter-Duff compositing loop always gets arrays of the same shape.
-        shared_w, shared_h = self._compute_canvas_size(x0, x1, y0, y1)
-
-        # Why each layer did or did not contribute to this composite.
-        # Consumed by _handle_probe so a hover that finds no data can
-        # say which of the several quite different causes applies --
-        # "never queried", "query came back empty", "hidden by the user"
-        # and "no samples in this viewport" are not the same event, and
-        # only the last is routine.
-        self._layer_skip_reason = [None] * len(self._layers)
-
-        shaded_images = []
-        for i, (lyr, df) in enumerate(zip(self._layers, self._layer_dfs)):
-            if df is None:
-                self._layer_skip_reason[i] = "not queried"
-                continue
-            if len(df) == 0:
-                self._layer_skip_reason[i] = "query returned 0 rows"
-                continue
-            if lyr.alpha == 0.0:
-                self._layer_skip_reason[i] = "hidden (alpha=0)"
-                continue
-            try:
-                # Count points in viewport for this layer's auto-alpha.
-                n_in_view = int(
-                    ((df["x"] >= x0) & (df["x"] <= x1) &
-                     (df["y"] >= y0) & (df["y"] <= y1)).sum()
+        self._layer_images      = []
+        self._layer_n_in_view   = []
+        self._layer_peak        = []
+        self._layer_hist_counts = []
+        self._layer_hist_edges  = []
+        self._layer_mapping     = []
+        self._layer_skip_reason = []
+        for lyr, rendered in zip(self._layers, result.layers):
+            self._layer_images.append(rendered.image)
+            self._layer_n_in_view.append(rendered.n_in_view)
+            self._layer_peak.append(rendered.peak_value)
+            self._layer_hist_counts.append(rendered.hist_counts)
+            self._layer_hist_edges.append(rendered.hist_edges)
+            mapping = None
+            if rendered.mapping_x is not None and rendered.mapping_u is not None:
+                mapping = _cms.ScalarMapping(
+                    rendered.mapping_x, rendered.mapping_u, lyr.scaling,
                 )
-                if n_in_view == 0:
-                    self._layer_skip_reason[i] = (
-                        f"0 of {len(df)} samples in viewport"
-                    )
-                    continue
+            self._layer_mapping.append(mapping)
+            self._layer_skip_reason.append(rendered.skip_reason)
 
-                cvs_layer = ds.Canvas(
-                    plot_width  = shared_w,
-                    plot_height = shared_h,
-                    x_range     = (x0, x1),
-                    y_range     = (y0, y1),
+        # Vestigial -- kept only so _handle_probe's existing guards
+        # degrade gracefully. See __init__'s comment on these fields.
+        n = len(self._layers)
+        self._layer_dfs     = [None] * n
+        self._layer_aggs    = [None] * n
+        self._layer_extents = [None] * n
+
+        if self._probe_debug:
+            for i, (lyr, rendered) in enumerate(zip(self._layers, result.layers)):
+                log.info(
+                    "[query] L%d[%s]: n_in_view=%d skip=%s",
+                    i, lyr.label, rendered.n_in_view, rendered.skip_reason,
                 )
-                agg = cvs_layer.points(df, "x", "y", ds_agg.mean("y"))
-                self._layer_aggs[i] = agg
 
-                # Auto-scale opacity by overplot ratio
-                # Use shared canvas pixels so alpha is consistent across layers
-                canvas_pixels = shared_w * shared_h
-                ratio        = max(1.0, n_in_view / canvas_pixels)
-                auto_alpha   = int(255.0 / math.log1p(ratio))
-                auto_alpha   = max(80, min(255, auto_alpha))
-                layer_alpha  = max(0, min(255, int(auto_alpha * lyr.alpha)))
+    def _current_render_range(
+        self,
+    ) -> tuple[tuple[float, float], tuple[float, float]]:
+        """(x_range, y_range) currently in effect: the pan/zoom viewport
+        if set, else the full data extent."""
+        if self._current_viewport is not None:
+            vx0, vx1, vy0, vy1 = self._current_viewport
+            return (vx0, vx1), (vy0, vy1)
+        return self._x_range, self._y_range
 
-                # Color mapping controlled by color_mode:
-                #   "global" → span=[full_y0, full_y1]
-                #       Stable colors across all zoom levels — a 50 Jy point
-                #       always maps to the same color.  Best for flagging.
-                #   "local" → span=[viewport_y_min, viewport_y_max]
-                #       Full palette spans whatever amplitudes are visible
-                #       in the current viewport.  Colors change on zoom
-                #       (expected).  Best for exploring structure.
-                #
-                # Within either color_mode, lyr.scaling selects the actual
-                # value-to-color transform (Phase 0 CM-1).  "eq_hist" is
-                # the default — see colormap_scaling module docstring for
-                # why linear scaling saturates on real visibility data.
-                #
-                # Unlike VisibilityRaster (where the y-axis is often a
-                # different quantity than the rendered color, e.g. TIME
-                # vs AMPLITUDE), here the y-axis IS the rendered quantity,
-                # so df["y"] directly gives the reference value array
-                # needed for "global" eq_hist equalization — no separate
-                # full-data cache is needed.
-                if self._color_mode == "local":
-                    visible_y = df.loc[
-                        (df["x"] >= x0) & (df["x"] <= x1) &
-                        (df["y"] >= y0) & (df["y"] <= y1),
-                        "y"
-                    ]
-                    if len(visible_y) > 0:
-                        span = [float(visible_y.min()), float(visible_y.max())]
-                        eq_hist_reference = visible_y.to_numpy()
-                    else:
-                        span = [float(self._y_range[0]), float(self._y_range[1])]
-                        eq_hist_reference = None
-                else:  # "global"
-                    span = span_arg
-                    eq_hist_reference = df["y"].to_numpy()
+    def _effective_skip_reason(self, i: int) -> Optional[str]:
+        """skip_reason for layer *i*, accounting for a live ``alpha``
+        change that ``set_alpha()``'s free fast path doesn't re-derive
+        server-side.
 
-                # Manual override (colormap_controls' min/max fields)
-                # takes precedence over the automatic global/local span
-                # above, in either color_mode. Applied to DATASHADER_HOW
-                # scalings via `span` here; eq_hist gets an equivalent
-                # clip applied directly to its inputs below instead,
-                # since it doesn't take a span= (see VisibilityRaster.
-                # _shade_agg's eq_hist branch for the identical
-                # reasoning).
-                if lyr.scaling_vmin is not None and lyr.scaling_vmax is not None:
-                    span = [lyr.scaling_vmin, lyr.scaling_vmax]
+        ``self._layer_skip_reason[i]`` reflects whatever the backend
+        said at the *last actual render* -- it can go stale the moment
+        ``set_alpha()`` changes ``lyr.alpha`` without a backend call
+        (see ``_collapse_and_composite``'s docstring). Checking
+        ``lyr.alpha == 0.0`` fresh here, ahead of the cached reason,
+        is what keeps ``_panel_spec``/probe reporting consistent with
+        what ``set_alpha()`` actually did.
+        """
+        if i < len(self._layers) and self._layers[i].alpha == 0.0:
+            return "hidden (alpha=0)"
+        if i < len(self._layer_skip_reason):
+            return self._layer_skip_reason[i]
+        return None
 
-                if lyr.scaling in _cms.DATASHADER_HOW:
-                    shade_kwargs = dict(
-                        cmap=lyr.cmap,
-                        how=_cms.DATASHADER_HOW[lyr.scaling],
-                        min_alpha=_MIN_ALPHA,
-                    )
-                    if span is not None:
-                        shade_kwargs["span"] = span
-                    img = tf.shade(agg, **shade_kwargs)
-                elif lyr.scaling == "eq_hist":
-                    eq_reference = eq_hist_reference
-                    # See VisibilityRaster._shade_agg's eq_hist branch
-                    # for the full rationale: restricting the reference
-                    # population (not clipping agg.values in place) is
-                    # what actually concentrates color resolution into
-                    # the selected range, verified empirically.
-                    if lyr.scaling_vmin is not None or lyr.scaling_vmax is not None:
-                        pool = eq_reference if eq_reference is not None else agg.values
-                        pool_finite = pool[np.isfinite(pool)]
-                        lo = lyr.scaling_vmin if lyr.scaling_vmin is not None else (
-                            float(pool_finite.min()) if pool_finite.size else None)
-                        hi = lyr.scaling_vmax if lyr.scaling_vmax is not None else (
-                            float(pool_finite.max()) if pool_finite.size else None)
-                        if lo is not None and hi is not None and hi > lo:
-                            in_band = pool_finite[(pool_finite >= lo) & (pool_finite <= hi)]
-                            if in_band.size > 0:
-                                eq_reference = in_band
-                    transformed = _cms.equalize_histogram(
-                        agg.values, reference=eq_reference,
-                    )
-                    scaled_agg = agg.copy(data=transformed)
-                    img = tf.shade(
-                        scaled_agg, cmap=lyr.cmap, how="linear",
-                        span=[0.0, 1.0], min_alpha=_MIN_ALPHA,
-                    )
-                else:
-                    transformed = _cms.apply_explicit_scaling(
-                        agg.values,
-                        lyr.scaling,
-                        alpha=lyr.scaling_alpha,
-                        gamma=lyr.scaling_gamma,
-                        vmin=span[0] if span is not None else None,
-                        vmax=span[1] if span is not None else None,
-                    )
-                    scaled_agg = agg.copy(data=transformed)
-                    img = tf.shade(
-                        scaled_agg, cmap=lyr.cmap, how="linear",
-                        span=[0.0, 1.0], min_alpha=_MIN_ALPHA,
-                    )
-                img_arr = np.array(img, dtype=np.uint32)
-                if layer_alpha > 0:
-                    nonempty = (img_arr >> 24) > 0
-                    img_arr[nonempty] = (
-                        (img_arr[nonempty] & 0x00FFFFFF)
-                        | (np.uint32(layer_alpha) << np.uint32(24))
-                    )
-                shaded_images.append(img_arr)
-            except Exception as exc:
-                self._layer_skip_reason[i] = f"shade failed: {exc}"
-                log.warning("shade layer %d failed: %s", i, exc)
+    def _collapse_and_composite(self) -> np.ndarray:
+        """Alpha-collapse + Porter-Duff composite the last rendered images.
 
-        if not shaded_images:
-            return np.zeros((self._height, self._width), dtype=np.uint32)
+        POST-2026-09: binning and shading themselves now happen
+        backend-side (see ``ScatterRenderResult``'s docstring in
+        ``data/reader.py``); this is the only rendering math still done
+        here -- applying each layer's density-derived opacity
+        (``auto_alpha * lyr.alpha``) to its cached image, then stacking.
+        Ported from the second half of the pre-redesign
+        ``_shade_all_layers`` (the part after ``tf.shade()``), unchanged
+        in the actual math.
 
-        if len(shaded_images) == 1:
-            return shaded_images[0]
+        Needs only ``n_in_view``/canvas pixel count -- no raw data --
+        which is what keeps ``set_alpha()`` free of a backend round
+        trip. A layer is excluded here if either the backend marked it
+        skipped at render time, OR its *current* ``alpha`` is 0 --
+        see ``_effective_skip_reason``; the second check is what lets
+        ``set_alpha(i, 0.0)`` actually hide a layer without a fresh
+        render.
+        """
+        canvas_pixels = max(1, self._canvas_width * self._canvas_height)
+        shaded = []
+        for i, lyr in enumerate(self._layers):
+            img = self._layer_images[i] if i < len(self._layer_images) else None
+            if img is None or self._effective_skip_reason(i) is not None:
+                continue
+            n_in_view = self._layer_n_in_view[i]
+
+            img_arr = img.copy()
+            ratio       = max(1.0, n_in_view / canvas_pixels)
+            auto_alpha  = int(255.0 / math.log1p(ratio))
+            auto_alpha  = max(80, min(255, auto_alpha))
+            layer_alpha = max(0, min(255, int(auto_alpha * lyr.alpha)))
+            if layer_alpha > 0:
+                nonempty = (img_arr >> 24) > 0
+                img_arr[nonempty] = (
+                    (img_arr[nonempty] & 0x00FFFFFF)
+                    | (np.uint32(layer_alpha) << np.uint32(24))
+                )
+            shaded.append(img_arr)
+
+        if not shaded:
+            return np.zeros(
+                (self._canvas_height, self._canvas_width), dtype=np.uint32)
+        if len(shaded) == 1:
+            return shaded[0]
 
         # Porter-Duff "over" compositing in numpy on uint32 ARGB arrays.
         # For each pixel: result = src + dst * (1 - src_alpha/255).
         # This is equivalent to tf.stack(..., how="over") but works on
         # plain ndarray so we don't need Datashader Image objects.
-        composite = shaded_images[0].copy()
-        for layer_arr in shaded_images[1:]:
+        composite = shaded[0].copy()
+        for layer_arr in shaded[1:]:
             src_a = ((layer_arr >> 24) & 0xFF).astype(np.float32) / 255.0
             dst_a = ((composite  >> 24) & 0xFF).astype(np.float32) / 255.0
             out_a = src_a + dst_a * (1.0 - src_a)
@@ -1723,28 +1680,15 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
 
         return composite
 
-    def _composite_and_push(
+    def _push_image(
         self,
-        x_range: Optional[tuple[float, float]] = None,
-        y_range: Optional[tuple[float, float]] = None,
+        img32: np.ndarray,
+        x_range: tuple[float, float],
+        y_range: tuple[float, float],
     ) -> None:
-        """Shade + stack all layers; push result into _image_source.
-
-        Uses _current_viewport when set (i.e. user has panned/zoomed) so
-        that set_alpha / set_color_mode re-composite over the correct region
-        rather than the full data range.
-        """
-        if x_range is None and y_range is None and self._current_viewport:
-            vx0, vx1, vy0, vy1 = self._current_viewport
-            xr = (vx0, vx1)
-            yr = (vy0, vy1)
-        else:
-            xr = x_range or self._x_range
-            yr = y_range or self._y_range
-        x0, x1 = xr
-        y0, y1 = yr
-
-        img32    = self._shade_all_layers(xr, yr)
+        """Push a composite image into ``_image_source`` at the given range."""
+        x0, x1 = x_range
+        y0, y1 = y_range
         new_data = {
             "image": [img32],
             "x":     [x0],
@@ -1757,12 +1701,48 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         else:
             self._image_source.data = new_data
 
+    def _rerender(
+        self,
+        x_range: Optional[tuple[float, float]] = None,
+        y_range: Optional[tuple[float, float]] = None,
+    ) -> np.ndarray:
+        """Full backend round trip: query+bin+shade, then collapse+composite.
+
+        POST-2026-09: every call here costs a ``query_columns()`` round
+        trip -- axis/layer changes, pan/zoom, ``color_mode``/scaling/cmap
+        changes all end up here now, because binning and shading happen
+        backend-side (see ``ScatterRenderResult``'s docstring in
+        ``data/reader.py``). Only ``set_alpha()`` avoids this, via
+        ``_recomposite()`` reusing the last render's cached per-layer
+        images.
+
+        Parameters
+        ----------
+        x_range, y_range :
+            Viewport to render at. ``None`` (both) -> the current
+            pan/zoom viewport if set, else the full data extent (see
+            ``_current_render_range``).
+        """
+        if x_range is None and y_range is None:
+            x_range, y_range = self._current_render_range()
+        self._render_all_layers(self._selection, x_range=x_range, y_range=y_range)
+        img32 = self._collapse_and_composite()
+        self._push_image(img32, x_range, y_range)
+        return img32
+
+    def _recomposite(self) -> None:
+        """Alpha-only fast path: no backend call, reuses the last
+        render's cached per-layer images. Used by ``set_alpha()``."""
+        img32 = self._collapse_and_composite()
+        xr, yr = self._current_render_range()
+        self._push_image(img32, xr, yr)
+
     # ------------------------------------------------------------------
     # j2p handlers (scatter-specific)
     # ------------------------------------------------------------------
 
     def set_layer_cmaps(self, cmaps) -> None:
-        """Swap every layer's colormap and re-composite from cache.
+        """Swap every layer's colormap and re-render.
 
         A ``SHADE``-level change (``refresh.py``).  Assigns by layer
         index modulo the family length, matching how the family is
@@ -1778,17 +1758,28 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         self._reshade()
 
     def _reshade(self) -> None:
-        """Re-composite the cached layer DataFrames; no backend query."""
-        if not any(df is not None for df in self._layer_dfs):
+        """Re-render from the backend with the current layer params.
+
+        POST-2026-09: despite the name (kept for call-site continuity
+        with ``set_layer_cmaps``), this is now a full backend round
+        trip, not a local-only recomposite -- ``cmap`` is a
+        ``tf.shade()`` parameter, which runs backend-side now (see
+        ``ScatterRenderResult``'s docstring in ``data/reader.py``).
+        No-ops if the panel has never been rendered (deferred
+        construction, axes not yet chosen).
+        """
+        if all(img is None for img in self._layer_images):
             return
-        if self._current_viewport is not None:
-            x0, x1, y0, y1 = self._current_viewport
-            self._composite_and_push((x0, x1), (y0, y1))
-        else:
-            self._composite_and_push(self._x_range, self._y_range)
+        self._rerender()
 
     def set_color_mode(self, mode: str) -> None:
-        """Toggle color mode and re-composite without re-querying the backend.
+        """Toggle color mode and re-render.
+
+        POST-2026-09: this now issues a backend ``query_columns()``
+        call (see ``_rerender``) -- ``color_mode`` selects the eq_hist/
+        span reference population, which is resolved backend-side now
+        (see ``ScatterRenderResult``'s docstring in ``data/reader.py``).
+        No longer free the way it was before that redesign.
 
         Parameters
         ----------
@@ -1808,7 +1799,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 f"color_mode must be 'global' or 'local', got {mode!r}"
             )
         self._color_mode = mode
-        self._composite_and_push()
+        self._rerender()
         self._update_state_source()
 
     def _image_response(self, status: str = "ok", **extra) -> dict:

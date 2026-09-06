@@ -78,12 +78,14 @@ class ScatterLayerSpec:
     dataclass wire support with no new registration needed.
 
     ``alpha`` is carried through even though the actual opacity blend
-    happens client-side (see ``ScatterLayerRender``): this value is
-    only used here to decide whether a hidden (``alpha == 0``) layer
-    should be skipped entirely and excluded from the shared adaptive
-    canvas-size calculation, mirroring
-    ``VisibilityScatter._compute_canvas_size``'s and
-    ``_shade_all_layers``'s pre-redesign behavior exactly.
+    happens client-side (see ``ScatterLayerRender``): it is used only
+    by ``compute_canvas_size`` to exclude a hidden (``alpha <= 0``)
+    layer from the shared adaptive canvas-size estimate, matching
+    ``VisibilityScatter._compute_canvas_size``'s pre-redesign behavior.
+    It does NOT skip shading a hidden layer (see
+    ``_scatter_render.render_layer``'s 2026-09 correction note) --
+    that would leave nothing cached for
+    ``VisibilityScatter.set_alpha()`` to un-hide without a backend call.
     """
     y_axis:        Axis
     polarization:  str

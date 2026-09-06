@@ -403,27 +403,27 @@ class RemoteReductionContext(ReductionContext):
     def query_columns(
         self,
         xaxis: "Axis",
-        yaxes: list,
+        layers: list,
         selection: "SelectionSpec",
         *,
-        canvas_width: int = 800,
-        canvas_height: int = 600,
-    ) -> Dict[Any, pd.DataFrame]:
-        # STRAIGHT RELAY -- NOT the handoff §4 fix. VisplotRemoteBackend's
-        # query_columns is, as of this pass, still MSv2Backend's existing
-        # eager, unbounded-materialization implementation, just running
-        # on the remote host instead of locally. A broad scatter
-        # selection against a huge remote MS is exactly as memory-unsafe
-        # remotely as it already is locally today -- moving it off
-        # P_local doesn't fix that, and this relay makes no attempt to.
-        # The real fix (lazy Dask -> Canvas.points(), no intermediate
-        # materialization) is separate, real design work -- see the
-        # handoff's §4/§5 -- and belongs in MSv2Backend/MSv4Backend
-        # itself, independent of remoting.
+        x_range: Optional[tuple] = None,
+        y_range: Optional[tuple] = None,
+        color_mode: str = "global",
+        width: int = 800,
+        height: int = 600,
+    ):
+        # STRAIGHT RELAY -- and correctly so now. MSv2Backend.query_columns
+        # (2026-09 redesign) bins and shades server-side and returns a
+        # bounded ScatterRenderResult (an RGBA image + a few small
+        # arrays per layer), so a straight relay no longer ships raw
+        # rows over the wire the way it did before that redesign -- see
+        # ScatterRenderResult's docstring in data/reader.py.
+        # MSv4Backend has not been updated to this contract yet.
         return self._call(
             "query_columns",
-            xaxis=xaxis, yaxes=yaxes, selection=selection,
-            canvas_width=canvas_width, canvas_height=canvas_height,
+            xaxis=xaxis, layers=layers, selection=selection,
+            x_range=x_range, y_range=y_range, color_mode=color_mode,
+            width=width, height=height,
         )
 
     def probe_raster_pixel(

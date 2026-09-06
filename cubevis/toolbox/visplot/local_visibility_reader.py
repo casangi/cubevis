@@ -145,19 +145,24 @@ class LocalVisibilityReader:
     def query_columns(
         self,
         xaxis: "Axis",
-        yaxes: list[tuple["Axis", str]],
+        layers: list,
         selection: "SelectionSpec",
         *,
-        canvas_width: int = 800,
-        canvas_height: int = 600,
-    ) -> dict[tuple["Axis", str], pd.DataFrame]:
-        """Delegate to ``backend.query_columns``."""
+        x_range: Optional[tuple] = None,
+        y_range: Optional[tuple] = None,
+        color_mode: str = "global",
+        width: int = 800,
+        height: int = 600,
+    ):
+        """Delegate to ``backend.query_columns``.
+
+        ``layers`` is a ``list[ScatterLayerSpec]``; returns a
+        ``ScatterRenderResult`` -- see ``data/reader.py``.
+        """
         return self._backend.query_columns(
-            xaxis,
-            yaxes,
-            selection,
-            canvas_width=canvas_width,
-            canvas_height=canvas_height,
+            xaxis, layers, selection,
+            x_range=x_range, y_range=y_range, color_mode=color_mode,
+            width=width, height=height,
         )
 
     def probe_raster_pixel(

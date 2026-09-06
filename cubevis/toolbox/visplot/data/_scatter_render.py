@@ -118,6 +118,19 @@ def render_layer(
     body (pre-redesign) -- see that method for the line-by-line
     precedent this mirrors. Stops short of alpha-channel collapse and
     cross-layer compositing -- see this module's docstring.
+
+    CORRECTION (2026-09, post-chunk-1): does NOT skip shading when
+    ``lyr.alpha == 0.0``, unlike the very first version of this
+    function. A hidden layer still needs a real cached image: toggling
+    visibility back on happens via ``VisibilityScatter.set_alpha()``,
+    which by design makes no backend call and can only work with
+    whatever image is already cached -- there is nothing to un-hide if
+    the backend never bothered to shade it. ``compute_canvas_size``
+    still excludes ``alpha <= 0`` layers from its density estimate
+    (that's a free, canvas-sizing-only decision with no such
+    asymmetry). The widget now derives "hidden" purely from its own
+    live ``lyr.alpha`` at composite time -- see
+    ``VisibilityScatter._collapse_and_composite``.
     """
     if not HAS_DATASHADER:
         raise ImportError(
@@ -128,8 +141,6 @@ def render_layer(
         return _empty_render(canvas_h, canvas_w, "not queried")
     if len(df) == 0:
         return _empty_render(canvas_h, canvas_w, "query returned 0 rows")
-    if lyr.alpha == 0.0:
-        return _empty_render(canvas_h, canvas_w, "hidden (alpha=0)")
 
     in_view = (
         (df["x"] >= x0) & (df["x"] <= x1) &

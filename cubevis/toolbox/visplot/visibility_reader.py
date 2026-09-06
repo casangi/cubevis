@@ -111,21 +111,25 @@ class VisibilityReader(Protocol):
     def query_columns(
         self,
         xaxis: "Axis",
-        yaxes: list[tuple["Axis", str]],
+        layers: list,
         selection: "SelectionSpec",
         *,
-        canvas_width: int = 800,
-        canvas_height: int = 600,
-    ) -> dict[tuple["Axis", str], pd.DataFrame]:
-        """Return flat DataFrames for scatter mode, one per (axis, pol) pair.
+        x_range: Optional[tuple] = None,
+        y_range: Optional[tuple] = None,
+        color_mode: str = "global",
+        width: int = 800,
+        height: int = 600,
+    ):
+        """Query, bin, and shade scatter layers; return a bounded result.
 
         Signature is identical to ``MSv2Backend.query_columns`` /
-        ``MSv4Backend.query_columns``.
-
-        Returns
-        -------
-        dict mapping each ``(Axis, polarization)`` key to a pandas
-        DataFrame with columns ``"x"`` and ``"y"`` (NaN rows dropped).
+        ``MSv4Backend.query_columns``. ``layers`` is a
+        ``list[ScatterLayerSpec]`` (see ``data/reader.py``); the return
+        value is a ``ScatterRenderResult``. Replaces the pre-2026-09
+        ``dict[(Axis,pol), DataFrame]`` contract -- see
+        ``ScatterRenderResult``'s docstring in ``data/reader.py`` for
+        why (in short: that contract shipped up to ~30M raw rows over
+        the wire for a remote session).
         """
         ...
 

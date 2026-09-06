@@ -49,13 +49,6 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from . import _wire_types  # noqa: F401 -- registers xr.DataArray wire support
-                            # (Serializer/Deserializer side effect) before any
-                            # method below can return one. See
-                            # remote_reduction_context.py's matching import
-                            # and _wire_types.py's own docstring for why this
-                            # lives here rather than in cubevis.utils._conversion.
-
 
 class VisplotRemoteBackend:
     """Worker-side object registered under ``"VisplotRemoteBackend"``.
@@ -110,17 +103,16 @@ class VisplotRemoteBackend:
             polarization=polarization, max_cells=max_cells,
         )
 
-    def query_columns(self, xaxis, yaxes, selection, *,
-                       canvas_width: int = 800, canvas_height: int = 600):
-        # See remote_reduction_context.py's query_columns docstring:
-        # this is still MSv2Backend/MSv4Backend's existing eager
-        # implementation, not the handoff §4 lazy-Dask fix. Once that
-        # fix lands in the backends themselves, this forwarding line
-        # does not need to change at all -- it already just relays
-        # whatever the backend returns.
+    def query_columns(self, xaxis, layers, selection, *,
+                       x_range=None, y_range=None, color_mode="global",
+                       width: int = 800, height: int = 600):
+        # See RemoteReductionContext.query_columns's comment: this now
+        # relays a bounded ScatterRenderResult, not raw DataFrames --
+        # MSv2Backend.query_columns does the binning+shading (2026-09).
         return self._reader.query_columns(
-            xaxis, yaxes, selection,
-            canvas_width=canvas_width, canvas_height=canvas_height,
+            xaxis, layers, selection,
+            x_range=x_range, y_range=y_range, color_mode=color_mode,
+            width=width, height=height,
         )
 
     def probe_raster_pixel(self, raw_grid, gx: int, gy: int, selection):

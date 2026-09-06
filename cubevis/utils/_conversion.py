@@ -30,6 +30,7 @@ via websockets'''
 
 import importlib
 import json
+import sys
 from enum import Enum
 
 import numpy as np
@@ -37,6 +38,32 @@ from bokeh.util.serialization import transform_array
 from bokeh.core.serialization import Serializer, Deserializer
 from bokeh.core.json_encoder import serialize_json
 from ._static import static_vars
+
+
+def _resolve_class(module_name: str, qualname: str):
+    """Resolve a class from its module path without acquiring Python's
+    import lock in the common case.
+
+    Used on SyncBridge's background thread when decoding a reply -- a
+    genuine deadlock risk was observed in practice (2026-09-05): a
+    concurrent import elsewhere in the process (e.g. IPython's own
+    background completion/introspection activity) holding the import
+    lock while this thread's importlib.import_module() call blocked on
+    it, hanging the whole call until _DEFAULT_CALL_TIMEOUT gave up --
+    confirmed absent when the identical call ran as a plain script with
+    no such background activity. sys.modules.get() is a plain dict
+    lookup with no locking at all, and covers the overwhelming majority
+    of real cases: the class being decoded had to be imported by this
+    same process already, to have been passed into the original call in
+    the first place. import_module() is the correct fallback only for
+    the rare case where the module genuinely isn't loaded yet -- that
+    path still pays the same lock-acquisition cost the original code
+    always did, just no longer unconditionally.
+    """
+    module = sys.modules.get(module_name)
+    if module is None:
+        module = importlib.import_module(module_name)
+    return getattr(module, qualname)
 
 # ----------------------------------------------------------------------
 # Enum + dataclass wire support (2026-09-04)
@@ -72,13 +99,26 @@ from ._static import static_vars
 # Both were caught by running a real query_raster() round trip through
 # a live remote execution context (cubevis.remote) -- see
 # cubevis-remote-execution-implementation.md / Chunk 2's own smoke test
-# -- not found by inspection. Tuples become lists on the way through
-# (bokeh's _encode_tuple -> _encode_list, no wire-level marker to
-# reconstruct a tuple; JSON has no tuple type) -- structural, not a bug,
-# not fixed here.
+# -- not found by inspection.
+#
+# 3. Tuples become lists on the way through (bokeh's _encode_tuple ->
+#    _encode_list, no wire-level marker to reconstruct a tuple; JSON has
+#    no tuple type). Originally noted here as "structural, not a bug"
+#    when it only affected value equality (e.g. a (min, max) metadata
+#    pair) -- confirmed genuinely load-bearing (2026-09-06) once a tuple
+#    was used as a dict key downstream (MSv2Backend.query_columns()'s
+#    `{key: [] for key in yaxes}`), where a list can never substitute
+#    for a tuple no matter what, since lists aren't hashable at all.
+#    Fixed the same way as Enum: registered via Serializer.register()/
+#    Deserializer.register() below, since tuple (like DataArray/
+#    DataFrame in _wire_types.py) is exactly one concrete type, not a
+#    family of subclasses -- register() takes priority over Serializer's
+#    own built-in tuple handling because the _encoders lookup happens
+#    earlier in _encode()'s dispatch than the hardcoded tuple case,
+#    confirmed against a real round trip, not just reasoned about.
 #
 # Deliberately generic, and deliberately the LAST word on genericity.
-# Enum/dataclass are Python-language concepts any consumer of
+# Enum/dataclass/tuple are Python-language concepts any consumer of
 # serialize()/deserialize() might hit, so the fix belongs here, once,
 # for everyone. A DOMAIN-specific type (xr.DataArray, pd.DataFrame, a
 # future CASA-image wrapper for iclean, ...) does NOT belong here even
@@ -88,6 +128,9 @@ from ._static import static_vars
 # (Serializer.register()/Deserializer.register(), called from
 # visplot's own code, not hardcoded into this shared module).
 # ----------------------------------------------------------------------
+
+_TUPLE_TAG = "cubevis_tuple"
+
 
 class CubevisSerializer(Serializer):
     def _encode_other(self, obj):
@@ -104,7 +147,7 @@ class CubevisSerializer(Serializer):
 class CubevisDeserializer(Deserializer):
     def _decode_object(self, obj):
         module_name, _, qualname = obj["name"].rpartition(".")
-        cls = getattr(importlib.import_module(module_name), qualname)
+        cls = _resolve_class(module_name, qualname)
         attributes = obj.get("attributes", {})
         decoded = {key: self._decode(val) for key, val in attributes.items()}
         return cls(**decoded)
@@ -112,8 +155,20 @@ class CubevisDeserializer(Deserializer):
 
 def _decode_cubevis_enum(obj, deserializer):
     module_name, _, qualname = obj["cls"].rpartition(".")
-    cls = getattr(importlib.import_module(module_name), qualname)
+    cls = _resolve_class(module_name, qualname)
     return cls[obj["name"]]
+
+
+def _encode_cubevis_tuple(obj, serializer):
+    return {"type": _TUPLE_TAG, "items": [serializer.encode(item) for item in obj]}
+
+
+def _decode_cubevis_tuple(obj, deserializer):
+    return tuple(deserializer._decode(item) for item in obj["items"])
+
+
+Serializer.register(tuple, _encode_cubevis_tuple)
+Deserializer.register(_TUPLE_TAG, _decode_cubevis_tuple)
 
 # Deserializer._decoders is a ClassVar dict shared by every Deserializer
 # (and subclass) instance in the process -- this registers "cubevis_enum"

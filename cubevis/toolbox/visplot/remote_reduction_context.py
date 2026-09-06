@@ -300,7 +300,19 @@ class RemoteReductionContext(ReductionContext):
             log.info("RemoteReductionContext: RemoteAppLink.open() took %.1fs", t2 - t1)
             self._ctx = self._bridge.run(
                 self._link.create_context(
-                    config={"register_function": register_function},
+                    config={
+                        "register_function": register_function,
+                        # Same reasoning as register_function, one layer
+                        # up: the supervisor relays every message between
+                        # P_local and the worker and must be able to
+                        # deserialize() them to do so, including this
+                        # application's own wire types (xr.DataArray) --
+                        # see _supervisor.py's _handle_create_context and
+                        # _wire_types.py's own docstring for why this
+                        # can't just be hardcoded into the generic
+                        # supervisor instead.
+                        "wire_types": ["cubevis.toolbox.visplot._wire_types"],
+                    },
                     timeout=create_context_timeout,
                 )
             )

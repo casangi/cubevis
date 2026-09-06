@@ -105,17 +105,49 @@ def _decode_dataarray(obj: Dict[str, Any], deserializer: Deserializer) -> xr.Dat
 
 
 def _encode_dataframe(obj: pd.DataFrame, serializer: Serializer) -> Dict[str, Any]:
+    # Temporary diagnostic (2026-09-06) -- same technique as the
+    # DataArray investigation, this time for a genuinely different
+    # hang: wire_types registration on the supervisor is confirmed
+    # correct this time (checked directly), so this isn't a repeat of
+    # that bug. Remove once root-caused.
+    def _dbg(msg):
+        with open("/tmp/cubevis_dataframe_debug.log", "a") as f:
+            f.write(msg + "\n")
+            f.flush()
+
+    _dbg(f"START columns={list(obj.columns)!r} dtypes={dict(obj.dtypes.astype(str))!r} "
+          f"index_dtype={obj.index.dtype!r} shape={obj.shape!r}")
+    data = {}
+    for col in obj.columns:
+        _dbg(f"encoding column {col!r} (dtype={obj[col].dtype!r}) ...")
+        data[str(col)] = serializer.encode(obj[col].to_numpy())
+        _dbg(f"column {col!r} encoded OK")
+    _dbg("encoding index ...")
+    index = serializer.encode(obj.index.to_numpy())
+    _dbg("DONE")
     return {
         "type": _DATAFRAME_TAG,
         "columns": list(obj.columns),
-        "data": {str(col): serializer.encode(obj[col].to_numpy()) for col in obj.columns},
-        "index": serializer.encode(obj.index.to_numpy()),
+        "data": data,
+        "index": index,
     }
 
 
 def _decode_dataframe(obj: Dict[str, Any], deserializer: Deserializer) -> pd.DataFrame:
-    data = {col: deserializer._decode(val) for col, val in obj["data"].items()}
+    def _dbg(msg):
+        with open("/tmp/cubevis_dataframe_debug.log", "a") as f:
+            f.write(msg + "\n")
+            f.flush()
+
+    _dbg(f"DECODE START columns={obj.get('columns')!r}")
+    data = {}
+    for col, val in obj["data"].items():
+        _dbg(f"decoding column {col!r} ...")
+        data[col] = deserializer._decode(val)
+        _dbg(f"column {col!r} decoded OK")
+    _dbg("decoding index ...")
     index = deserializer._decode(obj["index"])
+    _dbg("DECODE DONE")
     return pd.DataFrame(data, columns=obj["columns"], index=index)
 
 

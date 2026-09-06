@@ -78,7 +78,10 @@ from .reader import (
     _bin_membership,
     _cell_bounds,
     _widen_if_degenerate,
+    ScatterLayerSpec,
+    ScatterRenderResult,
 )
+from . import _scatter_render
 from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
 
@@ -836,13 +839,120 @@ class MSv2Backend(XArrayReader):
     def query_columns(
         self,
         xaxis: Axis,
-        yaxes: list[tuple[Axis, str]],   # (Axis, polarization_label)
+        layers: list[ScatterLayerSpec],
         selection: SelectionSpec,
         *,
-        canvas_width:  int = 800,
-        canvas_height: int = 600,
+        x_range: Optional[tuple[float, float]] = None,
+        y_range: Optional[tuple[float, float]] = None,
+        color_mode: str = "global",
+        width: int = 800,
+        height: int = 600,
+    ) -> ScatterRenderResult:
+        """Query, bin, and shade scatter layers; return a bounded render result.
+
+        Replaces the pre-2026-09 contract (a raw ``dict[(Axis,pol),
+        DataFrame]``) -- see ``ScatterRenderResult``'s docstring in
+        ``reader.py`` for why. Step 1 below (the actual per-partition
+        data query, via ``_query_columns_raw``) is unchanged from that
+        contract; only what happens to the resulting DataFrames, and
+        what gets returned, is new -- binning and shading now happen
+        here instead of in ``VisibilityScatter``, so only a small
+        bounded result per layer (see ``ScatterLayerRender``) ever
+        leaves this method, whether it's called in-process
+        (``LocalVisibilityReader``) or from a remote worker subprocess
+        (``VisplotRemoteBackend``).
+
+        Parameters
+        ----------
+        xaxis :
+            Axis for the x column.
+        layers :
+            Rendering parameters for each layer -- see
+            ``ScatterLayerSpec``. Always pass every layer regardless of
+            its current ``alpha`` (including hidden ones): the adaptive
+            canvas-size calculation and the "hidden (alpha=0)" skip
+            reason both need to see the full layer list, exactly as
+            ``VisibilityScatter`` did locally before this moved here. A
+            layer's *opacity* is applied by the caller afterward (see
+            ``ScatterLayerRender``'s docstring) -- this only decides
+            whether alpha==0 means "don't bother shading".
+        selection :
+            Data selection constraints.
+        x_range, y_range :
+            Viewport extent. ``None`` (either or both) -> use the full
+            resolved data extent for that axis. Pass both ``None`` for
+            a fresh axis/selection/layer change; pass the current
+            viewport for a pan/zoom re-render (this now requires a
+            fresh call -- see the scatter remote-execution design notes
+            for why that's no longer free the way it was when the
+            DataFrame lived client-side).
+        color_mode :
+            ``"global"`` or ``"local"`` -- see
+            ``VisibilityScatter.set_color_mode``'s docstring; behavior
+            is unchanged, just relocated.
+        width, height :
+            Requested canvas size; the actual size used (after the
+            sparse-data adaptive shrink) is returned in
+            ``ScatterRenderResult.canvas_width/height``.
+
+        Returns
+        -------
+        ScatterRenderResult
+        """
+        self._require_open()
+        if not layers:
+            raise ValueError("query_columns: layers must be non-empty")
+
+        yaxes = [(lyr.y_axis, lyr.polarization) for lyr in layers]
+        dataframes = self._query_columns_raw(xaxis, yaxes, selection)
+
+        x0_all, x1_all, y0_all, y1_all = [], [], [], []
+        for lyr in layers:
+            df = dataframes.get((lyr.y_axis, lyr.polarization))
+            if df is not None and len(df) > 0:
+                x0_all.append(float(df["x"].min())); x1_all.append(float(df["x"].max()))
+                y0_all.append(float(df["y"].min())); y1_all.append(float(df["y"].max()))
+        full_x_range = (min(x0_all), max(x1_all)) if x0_all else (0.0, 1.0)
+        full_y_range = (min(y0_all), max(y1_all)) if y0_all else (0.0, 1.0)
+
+        xr_ = x_range if x_range is not None else full_x_range
+        yr_ = y_range if y_range is not None else full_y_range
+        x0, x1 = (min(xr_), max(xr_))
+        y0, y1 = (min(yr_), max(yr_))
+
+        canvas_w, canvas_h = _scatter_render.compute_canvas_size(
+            dataframes, layers, x0, x1, y0, y1, width, height,
+        )
+
+        rendered = tuple(
+            _scatter_render.render_layer(
+                dataframes.get((lyr.y_axis, lyr.polarization)), lyr,
+                x0, x1, y0, y1, canvas_w, canvas_h, color_mode, full_y_range,
+            )
+            for lyr in layers
+        )
+
+        return ScatterRenderResult(
+            x_range=full_x_range, y_range=full_y_range,
+            canvas_width=canvas_w, canvas_height=canvas_h,
+            layers=rendered,
+        )
+
+    def _query_columns_raw(
+        self,
+        xaxis: Axis,
+        yaxes: list[tuple[Axis, str]],   # (Axis, polarization_label)
+        selection: SelectionSpec,
     ) -> dict[tuple[Axis, str], pd.DataFrame]:
         """Return flat DataFrames for scatter mode, one per (axis, pol) pair.
+
+        Internal step of ``query_columns`` (2026-09) -- unchanged since
+        before that redesign; the eager, per-partition-concatenated
+        DataFrame this builds was never the problem (see
+        ``ScatterRenderResult``'s docstring in ``reader.py``), and stays
+        exactly as it was. What changed is that this result no longer
+        leaves this process -- ``query_columns`` now bins and shades it
+        here instead of returning it directly.
 
         Uses the adaptive pipeline from test_11:
           < 500K samples  → serial xarray stack
@@ -861,9 +971,6 @@ class MSv2Backend(XArrayReader):
             E.g. ``[(Axis.AMPLITUDE, "XX"), (Axis.AMPLITUDE, "YY")]``.
         selection :
             Data selection constraints.
-        canvas_width, canvas_height :
-            Canvas dimensions (used only for the flagging-safe threshold
-            calculation in the returned metadata).
 
         Returns
         -------

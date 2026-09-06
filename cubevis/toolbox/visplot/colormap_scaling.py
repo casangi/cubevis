@@ -389,6 +389,19 @@ class ScalarMapping:
 
     # -- the two directions ---------------------------------------------
 
+    @property
+    def curve(self) -> tuple[np.ndarray, np.ndarray]:
+        """(x, u) sample arrays underlying forward()/inverse().
+
+        Exposed so a caller on the other side of a process/wire boundary
+        (the scatter remote render path -- see
+        ``cubevis.toolbox.visplot.data._scatter_render``) can reconstruct
+        an equivalent ``ScalarMapping`` via
+        ``ScalarMapping(x, u, scaling)`` without recomputing it against
+        data it doesn't have.
+        """
+        return self._x, self._u
+
     def forward(self, v):
         """Data value(s) -> colour position in [0, 1]."""
         return np.interp(v, self._x, self._u,

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import abc
 import logging
+from dataclasses import dataclass
 from typing import Optional, Union
 
 import numpy as np
@@ -46,6 +47,96 @@ from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
 
 log = logging.getLogger(__name__)
+
+
+# ======================================================================
+# Scatter render DTOs (2026-09)
+# ======================================================================
+#
+# Replace the old dict[(Axis,pol), pd.DataFrame] query_columns() contract.
+# See ScatterRenderResult's docstring for why: that contract shipped up
+# to ~30,913,392 raw rows over the wire for a remote session (confirmed
+# against a real MS), which outran dispatch_fast's 30s default timeout
+# well before any bug in the encode/decode logic itself. Binning and
+# shading now happen wherever query_columns() itself runs -- in-process
+# for LocalVisibilityReader, in the worker subprocess for a remote
+# session -- so only a small, bounded per-layer result crosses a
+# process or wire boundary either way.
+
+@dataclass(frozen=True)
+class ScatterLayerSpec:
+    """One layer's rendering parameters, as ``query_columns`` needs them.
+
+    Deliberately NOT ``VisibilityScatter.ScatterLayer`` itself --
+    ``XArrayReader`` subclasses live in the data layer and must not
+    import upward from the widget layer. ``VisibilityScatter``
+    constructs one of these per ``ScatterLayer`` at the call site
+    (``label`` and other widget-only fields are dropped).
+
+    A plain frozen dataclass of JSON-primitive/Enum/tuple fields --
+    round-trips via ``cubevis.utils._conversion``'s existing generic
+    dataclass wire support with no new registration needed.
+
+    ``alpha`` is carried through even though the actual opacity blend
+    happens client-side (see ``ScatterLayerRender``): this value is
+    only used here to decide whether a hidden (``alpha == 0``) layer
+    should be skipped entirely and excluded from the shared adaptive
+    canvas-size calculation, mirroring
+    ``VisibilityScatter._compute_canvas_size``'s and
+    ``_shade_all_layers``'s pre-redesign behavior exactly.
+    """
+    y_axis:        Axis
+    polarization:  str
+    cmap:          tuple[str, ...]
+    alpha:         float = 1.0
+    scaling:       str   = "eq_hist"
+    scaling_alpha: float = 10.0
+    scaling_gamma: float = 1.0
+    scaling_vmin:  Optional[float] = None
+    scaling_vmax:  Optional[float] = None
+
+
+@dataclass(frozen=True)
+class ScatterLayerRender:
+    """One layer's rendered result from ``query_columns``.
+
+    ``image`` carries Datashader's own per-pixel occupancy alpha (via
+    ``tf.shade(..., min_alpha=...)``), deliberately NOT yet collapsed
+    to a single density-derived opacity value. That collapse
+    (``layer_alpha = auto_alpha * lyr.alpha``, where ``auto_alpha``
+    derives from ``n_in_view`` and the canvas pixel count) is cheap
+    and stays client-side -- it's what keeps
+    ``VisibilityScatter.set_alpha()`` a free, no-requery operation,
+    exactly as it is today.
+
+    ``hist_counts``/``hist_edges`` and ``mapping_x``/``mapping_u`` are
+    computed against the *true* per-sample reference population (the
+    real column values, filtered to the viewport for
+    ``color_mode="local"``) -- not an approximation from the binned
+    agg -- because this is the one place that population still exists.
+    They feed ``VisibilityScatter.histogram()``/``colormap_controls()``
+    and ``_bands_with_mappings()``'s ``ScalarMapping`` respectively;
+    reconstruct the latter via
+    ``ScalarMapping(mapping_x, mapping_u, lyr.scaling)``.
+    """
+    image:       np.ndarray             # HxW uint32 RGBA
+    n_in_view:   int
+    skip_reason: Optional[str]
+    peak_value:  Optional[float]
+    hist_counts: Optional[np.ndarray]
+    hist_edges:  Optional[np.ndarray]
+    mapping_x:   Optional[np.ndarray]
+    mapping_u:   Optional[np.ndarray]
+
+
+@dataclass(frozen=True)
+class ScatterRenderResult:
+    """Return type of ``query_columns`` (see the DTOs above)."""
+    x_range:       tuple[float, float]   # resolved full-data extent
+    y_range:       tuple[float, float]
+    canvas_width:  int                   # adaptive size actually used
+    canvas_height: int
+    layers:        tuple[ScatterLayerRender, ...]
 
 
 # ======================================================================
@@ -630,44 +721,31 @@ class XArrayReader(abc.ABC):
     def query_columns(
         self,
         xaxis: Axis,
-        yaxis: Axis,
+        layers: list["ScatterLayerSpec"],
         selection: SelectionSpec,
         *,
-        color_axis: Optional[Axis] = None,
-    ) -> xr.Dataset:
-        """Return a lazy, Dask-backed Dataset for scatter/line mode.
+        x_range: Optional[tuple[float, float]] = None,
+        y_range: Optional[tuple[float, float]] = None,
+        color_mode: str = "global",
+        width: int = 800,
+        height: int = 600,
+    ) -> "ScatterRenderResult":
+        """Query, bin, and shade scatter layers; return a bounded result.
 
-        The returned dataset always includes:
+        See ``MSv2Backend.query_columns`` for the full contract and
+        ``ScatterRenderResult``/``ScatterLayerRender`` for the return
+        shape. Binning (Datashader ``Canvas.points()``) and shading
+        (``tf.shade()``, plus the eq_hist/explicit-scaling transforms in
+        ``colormap_scaling``) both happen inside this method now, not in
+        ``VisibilityScatter`` -- see ``ScatterRenderResult``'s docstring
+        for why (in short: the old raw-DataFrame contract shipped up to
+        ~30M rows over the wire for a remote session).
 
-        * ``x`` — values for *xaxis*, computed via ``_compute_axis_values``.
-        * ``y`` — values for *yaxis*.
-        * ``flag`` — the FLAG column (``bool``), for three-colour overlay.
-        * ``scan_name`` — non-index string coordinate on the time dim.
-        * ``field_name`` — non-index string coordinate on the time dim.
-        * ``baseline_antenna1_name`` — non-index coordinate on baseline dim.
-        * ``baseline_antenna2_name`` — non-index coordinate on baseline dim.
-        * ``color`` — values for *color_axis* if supplied, else absent.
-
-        Datashader consumes this Dataset directly via
-        ``Canvas.points()``.  No pre-averaging is performed; Datashader
-        aggregates to pixel resolution.
-
-        Parameters
-        ----------
-        xaxis:
-            Axis member for the horizontal axis.
-        yaxis:
-            Axis member for the vertical axis.
-        selection:
-            Data selection specification.
-        color_axis:
-            Optional axis to encode as point colour.
-
-        Returns
-        -------
-        xr.Dataset
-            Lazy, Dask-backed Dataset.  Call ``.compute()`` only inside
-            Datashader (never materialise the full array in Python).
+        NOTE (2026-09): ``MSv4Backend`` has not been updated to this
+        contract yet -- this is ``MSv2Backend``-only so far, and
+        ``VisibilityScatter`` still calls the pre-redesign signature, so
+        nothing end-to-end works yet. Deliberate, incremental scope --
+        not an oversight.
         """
 
     # ------------------------------------------------------------------ #

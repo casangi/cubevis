@@ -38,26 +38,43 @@ Must be imported on **both** ends of the wire before any DataArray
 crosses it, since registration is required for both directions:
 ``query_raster()``'s result flows worker -> P_local (worker encodes,
 P_local decodes), while ``probe_raster_pixel(raw_grid: xr.DataArray,
-...)`` flows P_local -> worker (P_local encodes, worker decodes). In
-practice: imported by ``remote_reduction_context.py`` (P_local side)
-and by ``remote_registrations.py`` (worker side) — see each file's own
-import of this module.
+...)`` flows P_local -> worker (P_local encodes, worker decodes). The
+same applies to ``pd.DataFrame`` below: ``query_columns()``'s result
+flows worker -> P_local, while ``probe_scatter_pixel(..., scatter_df:
+pd.DataFrame)`` flows P_local -> worker. In practice: imported by
+``remote_reduction_context.py`` (P_local side) and by
+``remote_registrations.py`` (worker side) — see each file's own import
+of this module. Also required by ``_supervisor.py``'s generic relay
+process, which sits between the two and must be able to
+``deserialize()`` every message passing through it — confirmed by
+direct investigation (2026-09-05) that a message containing an
+unregistered custom type tag kills that process's relay loop silently.
+The supervisor gets this without importing this module directly: its
+``create_context()`` call is configured with ``"wire_types":
+["cubevis.toolbox.visplot._wire_types"]``, which it dynamically
+imports itself, the same way it already does for ``register_function``
+— see ``_supervisor.py``'s ``_handle_create_context`` and
+``remote_reduction_context.py``'s own ``create_context()`` call.
 
 ``pd.DataFrame`` has the identical ``__array__()`` fallback problem as
-`xr.DataArray` did, by the same reasoning, not yet reproduced against a
-real round trip — this is the natural place to add it (a
-``Serializer.register(pd.DataFrame, ...)`` call below) once scatter
-mode actually needs it, rather than back in ``_conversion.py``.
+`xr.DataArray` did, by the same reasoning — confirmed against a real
+round trip (2026-09-06), fixed below the same way. Index dtype is not
+preserved exactly (an int64 index comes back int32, a Bokeh
+ndarray-encoding default) — confirmed harmless for label-based access
+(``.loc[]``, boolean indexing, aggregation) but worth knowing about if
+anything downstream ever does a strict index-dtype check.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict
 
+import pandas as pd
 import xarray as xr
 from bokeh.core.serialization import Serializer, Deserializer
 
 _DATAARRAY_TAG = "cubevis_dataarray"
+_DATAFRAME_TAG = "cubevis_dataframe"
 
 
 def _encode_dataarray(obj: xr.DataArray, serializer: Serializer) -> Dict[str, Any]:
@@ -87,6 +104,21 @@ def _decode_dataarray(obj: Dict[str, Any], deserializer: Deserializer) -> xr.Dat
     return xr.DataArray(data, dims=obj["dims"], coords=coords, attrs=attrs, name=obj["name"])
 
 
+def _encode_dataframe(obj: pd.DataFrame, serializer: Serializer) -> Dict[str, Any]:
+    return {
+        "type": _DATAFRAME_TAG,
+        "columns": list(obj.columns),
+        "data": {str(col): serializer.encode(obj[col].to_numpy()) for col in obj.columns},
+        "index": serializer.encode(obj.index.to_numpy()),
+    }
+
+
+def _decode_dataframe(obj: Dict[str, Any], deserializer: Deserializer) -> pd.DataFrame:
+    data = {col: deserializer._decode(val) for col, val in obj["data"].items()}
+    index = deserializer._decode(obj["index"])
+    return pd.DataFrame(data, columns=obj["columns"], index=index)
+
+
 def _register() -> None:
     """Idempotent -- Serializer.register()/Deserializer.register() both
     assert against double-registration, and this module may legitimately
@@ -96,6 +128,10 @@ def _register() -> None:
         Serializer.register(xr.DataArray, _encode_dataarray)
     if _DATAARRAY_TAG not in Deserializer._decoders:
         Deserializer.register(_DATAARRAY_TAG, _decode_dataarray)
+    if pd.DataFrame not in Serializer._encoders:
+        Serializer.register(pd.DataFrame, _encode_dataframe)
+    if _DATAFRAME_TAG not in Deserializer._decoders:
+        Deserializer.register(_DATAFRAME_TAG, _decode_dataframe)
 
 
 _register()

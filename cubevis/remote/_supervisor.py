@@ -49,6 +49,7 @@ mechanism.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
 import socket
@@ -142,6 +143,26 @@ class ExecutionContextPool:
     async def _handle_create_context(self, msg):
         worker_module = msg.get("worker_module") or DEFAULT_WORKER_MODULE
         config = msg.get("config")
+
+        # Wire-type registrations for application-specific types
+        # (e.g. visplot's xr.DataArray support -- see
+        # cubevis/toolbox/visplot/_wire_types.py's own docstring for why
+        # that module deliberately does NOT live in the generic
+        # cubevis.utils._conversion). This supervisor process relays
+        # every message between P_local and the worker, calling
+        # deserialize() on each one to do so -- confirmed by direct
+        # investigation (2026-09-05) that a message containing an
+        # unregistered custom type tag makes that deserialize() call
+        # raise inside this process's own background read-loop task,
+        # which nothing awaits or checks, silently killing the relay
+        # loop for the rest of the session. Mirrors register_function's
+        # own dynamic-import pattern (below) rather than hardcoding any
+        # one application's import here, which would break this
+        # process's own deliberate application-agnosticism -- the
+        # calling application specifies what it needs, exactly as it
+        # already does for register_function.
+        for module_name in (config or {}).get("wire_types") or []:
+            importlib.import_module(module_name)
 
         worker_mgr = CommMgr(role=CommMgr.ROLE_MIRROR, transport_type="remote_kernel")
         transport = WorkerProcessTransport(str(uuid4()), worker_module=worker_module)

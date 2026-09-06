@@ -22,9 +22,7 @@ transport itself needed no changes to support that.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
-import os
 import struct
 import sys
 from typing import Any, Callable, Dict, List, Optional
@@ -37,64 +35,25 @@ logger = logging.getLogger(__name__)
 _HEADER = struct.Struct(">I")  # 4-byte big-endian length prefix
 
 
-def _dbg(msg: str) -> None:
-    # Temporary diagnostic (2026-09-05) -- see _wire_types.py's own
-    # _encode_dataarray for why this writes straight to a file rather
-    # than through logging. PID-prefixed since this file is shared by
-    # both worker and supervisor processes. Remove once root-caused.
-    with open("/tmp/cubevis_frame_debug.log", "a") as f:
-        f.write(f"[pid={os.getpid()}] {msg}\n")
-        f.flush()
-
-
 async def _write_frame(writer: asyncio.StreamWriter, message: Dict[str, Any]) -> None:
-    _dbg(f"_write_frame: START, message_id={message.get('message_id')!r}")
     payload = serialize(message).encode("utf-8")
-    digest = hashlib.md5(payload).hexdigest()
-    _dbg(f"_write_frame: serialize() done, {len(payload)} bytes, md5={digest}")
     writer.write(_HEADER.pack(len(payload)))
     writer.write(payload)
-    _dbg("_write_frame: write() calls issued, awaiting drain()")
     await writer.drain()
-    _dbg(f"_write_frame: drain() complete -- {len(payload)} bytes (md5={digest}) "
-          f"are with the OS/pipe now")
 
 
 async def _read_frame(reader: asyncio.StreamReader) -> Optional[Dict[str, Any]]:
     """Returns None on clean EOF (peer closed its write side)."""
-    _dbg("_read_frame: waiting for 4-byte header ...")
     try:
         header = await reader.readexactly(4)
     except asyncio.IncompleteReadError:
-        _dbg("_read_frame: EOF while reading header")
         return None
     (n,) = _HEADER.unpack(header)
-    _dbg(f"_read_frame: header says {n} bytes; reading payload in chunks "
-          f"(temporary: replacing readexactly with a progress-visible loop) ...")
-
-    # Temporary diagnostic: readexactly() gives no visibility into partial
-    # progress -- it either returns everything or never returns at all,
-    # which is exactly the blind spot in this investigation right now.
-    # This manual loop reports how many bytes actually arrive and when,
-    # even if it ultimately stalls the same way readexactly() did.
-    chunks = []
-    remaining = n
-    while remaining > 0:
-        chunk = await reader.read(min(4096, remaining))
-        if not chunk:
-            _dbg(f"_read_frame: EOF mid-payload -- got {n - remaining} of {n} "
-                  f"bytes before the peer closed its write side")
-            return None
-        chunks.append(chunk)
-        remaining -= len(chunk)
-        _dbg(f"_read_frame: chunk of {len(chunk)} bytes arrived, "
-              f"{n - remaining}/{n} total so far")
-    payload = b"".join(chunks)
-    digest = hashlib.md5(payload).hexdigest()
-    _dbg(f"_read_frame: payload read OK ({n} bytes, md5={digest}); deserializing ...")
-    result = deserialize(payload.decode("utf-8"))
-    _dbg("_read_frame: deserialize() done")
-    return result
+    try:
+        payload = await reader.readexactly(n)
+    except asyncio.IncompleteReadError:
+        return None
+    return deserialize(payload.decode("utf-8"))
 
 
 # ============================================================================

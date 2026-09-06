@@ -61,44 +61,18 @@ _DATAARRAY_TAG = "cubevis_dataarray"
 
 
 def _encode_dataarray(obj: xr.DataArray, serializer: Serializer) -> Dict[str, Any]:
-    # Temporary diagnostic (2026-09-05) -- investigating a reproducible,
-    # size-independent hang in query_raster()'s reply path. Writing
-    # directly to a fixed file on the remote host rather than through
-    # Python's logging module: this function runs inside the worker
-    # subprocess on zuul06, and the supervisor kernel that spawns it is
-    # itself launched via sshpyk's `nohup $FP_PY -c '...'` -- nohup
-    # detaches stdout/stderr from the SSH session by design, so anything
-    # relying on logging's default handler chain (which ultimately
-    # writes to stderr) very likely lands in a nohup.out on zuul06 or is
-    # discarded outright, not anywhere visible from P_local. A plain
-    # file write, flushed immediately, sidesteps that question entirely
-    # -- check with `ssh zuul06 cat /tmp/cubevis_dataarray_debug.log`
-    # after the run. Remove once root-caused.
-    def _dbg(msg):
-        with open("/tmp/cubevis_dataarray_debug.log", "a") as f:
-            f.write(msg + "\n")
-            f.flush()
-
-    _dbg(f"START dims={obj.dims!r}")
-    data = serializer.encode(obj.values)
-    _dbg(f"obj.values encoded OK, shape={obj.values.shape!r}")
-    coords = {}
-    for name, coord in obj.coords.items():
-        _dbg(f"encoding coord {name!r} ...")
-        coords[name] = {
-            "dims": list(coord.dims),
-            "data": serializer.encode(coord.values),
-        }
-        _dbg(f"coord {name!r} encoded OK")
-    _dbg("encoding attrs ...")
-    attrs = serializer.encode(dict(obj.attrs))
-    _dbg("DONE")
     return {
         "type": _DATAARRAY_TAG,
-        "data": data,
+        "data": serializer.encode(obj.values),
         "dims": list(obj.dims),
-        "coords": coords,
-        "attrs": attrs,
+        "coords": {
+            name: {
+                "dims": list(coord.dims),
+                "data": serializer.encode(coord.values),
+            }
+            for name, coord in obj.coords.items()
+        },
+        "attrs": serializer.encode(dict(obj.attrs)),
         "name": obj.name,
     }
 

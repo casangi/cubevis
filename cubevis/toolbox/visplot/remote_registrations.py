@@ -49,6 +49,19 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+# Registers Serializer/Deserializer support for xr.DataArray and
+# pd.DataFrame (see _wire_types.py's own docstring) in THIS process.
+# Mirrors remote_reduction_context.py's identical import on the
+# P_local side -- each side of the wire needs its own explicit import
+# to register serialization in that process; one process importing
+# _wire_types has no effect on any other process's registry. Without
+# this, query_raster()'s xr.DataArray reply serializes via whatever
+# generic fallback Bokeh's serializer gives an array-like object --
+# which drops the DataArray wrapper (dims/coords) and arrives at
+# P_local as a bare ndarray with a matching .shape but no .values,
+# exactly the failure mode this import prevents.
+from . import _wire_types  # noqa: F401
+
 
 class VisplotRemoteBackend:
     """Worker-side object registered under ``"VisplotRemoteBackend"``.

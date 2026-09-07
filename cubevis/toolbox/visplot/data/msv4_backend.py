@@ -111,7 +111,10 @@ from .reader import (
     _bin_membership,
     _cell_bounds,
     _widen_if_degenerate,
+    ScatterLayerSpec,
+    ScatterRenderResult,
 )
+from . import _scatter_render
 from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
 
@@ -1008,16 +1011,80 @@ class MSv4Backend(XArrayReader):
     def query_columns(
         self,
         xaxis: Axis,
-        yaxes: list[tuple[Axis, str]],   # (Axis, polarization_label)
+        layers: list[ScatterLayerSpec],
         selection: SelectionSpec,
         *,
-        canvas_width:  int = 800,
-        canvas_height: int = 600,
+        x_range: Optional[tuple[float, float]] = None,
+        y_range: Optional[tuple[float, float]] = None,
+        color_mode: str = "global",
+        width: int = 800,
+        height: int = 600,
+    ) -> ScatterRenderResult:
+        """Query, bin, and shade scatter layers; return a bounded render result.
+
+        Mirrors ``MSv2Backend.query_columns`` exactly — same signature,
+        same return type, same two-step structure (query via
+        ``_query_columns_raw``, then bin+shade via ``_scatter_render``).
+        See ``ScatterRenderResult``'s docstring in ``reader.py`` for the
+        full rationale for this contract, and ``MSv2Backend.query_columns``
+        for the parameter docs (identical here).
+        """
+        self._require_open()
+        if not layers:
+            raise ValueError("query_columns: layers must be non-empty")
+
+        yaxes = [(lyr.y_axis, lyr.polarization) for lyr in layers]
+        dataframes = self._query_columns_raw(xaxis, yaxes, selection)
+
+        x0_all, x1_all, y0_all, y1_all = [], [], [], []
+        for lyr in layers:
+            df = dataframes.get((lyr.y_axis, lyr.polarization))
+            if df is not None and len(df) > 0:
+                x0_all.append(float(df["x"].min())); x1_all.append(float(df["x"].max()))
+                y0_all.append(float(df["y"].min())); y1_all.append(float(df["y"].max()))
+        full_x_range = (min(x0_all), max(x1_all)) if x0_all else (0.0, 1.0)
+        full_y_range = (min(y0_all), max(y1_all)) if y0_all else (0.0, 1.0)
+
+        xr_ = x_range if x_range is not None else full_x_range
+        yr_ = y_range if y_range is not None else full_y_range
+        x0, x1 = (min(xr_), max(xr_))
+        y0, y1 = (min(yr_), max(yr_))
+
+        canvas_w, canvas_h = _scatter_render.compute_canvas_size(
+            dataframes, layers, x0, x1, y0, y1, width, height,
+        )
+
+        rendered = tuple(
+            _scatter_render.render_layer(
+                dataframes.get((lyr.y_axis, lyr.polarization)), lyr,
+                x0, x1, y0, y1, canvas_w, canvas_h, color_mode, full_y_range,
+            )
+            for lyr in layers
+        )
+
+        return ScatterRenderResult(
+            x_range=full_x_range, y_range=full_y_range,
+            canvas_width=canvas_w, canvas_height=canvas_h,
+            layers=rendered,
+        )
+
+    def _query_columns_raw(
+        self,
+        xaxis: Axis,
+        yaxes: list[tuple[Axis, str]],   # (Axis, polarization_label)
+        selection: SelectionSpec,
     ) -> dict[tuple[Axis, str], pd.DataFrame]:
         """Return flat DataFrames for scatter mode, one per (axis, pol) pair.
 
-        Mirrors ``MSv2Backend.query_columns`` exactly — same signature, same
-        return type, same adaptive pipeline logic.
+        Internal step of ``query_columns`` (2026-09) -- unchanged since
+        before that redesign; mirrors ``MSv2Backend._query_columns_raw``
+        exactly, same signature, same return type, same adaptive
+        pipeline logic. This eager, per-partition-concatenated
+        DataFrame this builds was never the problem (see
+        ``ScatterRenderResult``'s docstring in ``reader.py``), and stays
+        exactly as it was. What changed is that this result no longer
+        leaves this process -- ``query_columns`` now bins and shades it
+        here instead of returning it directly.
 
         OPT-B: when the total sample count across all partitions exceeds
         ``_THRESH_FUSED``, all per-partition lazy arrays (y values for every

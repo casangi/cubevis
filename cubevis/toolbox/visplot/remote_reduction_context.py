@@ -418,7 +418,7 @@ class RemoteReductionContext(ReductionContext):
         # arrays per layer), so a straight relay no longer ships raw
         # rows over the wire the way it did before that redesign -- see
         # ScatterRenderResult's docstring in data/reader.py.
-        # MSv4Backend has not been updated to this contract yet.
+        # MSv4Backend.query_columns matches this contract too (2026-09).
         return self._call(
             "query_columns",
             xaxis=xaxis, layers=layers, selection=selection,
@@ -432,9 +432,19 @@ class RemoteReductionContext(ReductionContext):
         gx: int,
         gy: int,
         selection: "SelectionSpec",
+        polarization: Optional[str] = None,
     ) -> dict:
+        # Pre-existing gap, unrelated to this change: this relay never
+        # forwarded `polarization`, even though probe_raster_pixel's
+        # real signature (reader.py/MSv2Backend) has taken it as a
+        # keyword since before this file was touched here. Harmless
+        # today only because VisibilityRaster's hover no longer calls
+        # this method at all (see identity_tables/_match_identity) --
+        # fixed anyway since it's a one-line, directly-adjacent,
+        # correct fix, in case anything else still calls this.
         return self._call(
-            "probe_raster_pixel", raw_grid=raw_grid, gx=gx, gy=gy, selection=selection
+            "probe_raster_pixel", raw_grid=raw_grid, gx=gx, gy=gy,
+            selection=selection, polarization=polarization,
         )
 
     def probe_scatter_pixel(
@@ -448,6 +458,16 @@ class RemoteReductionContext(ReductionContext):
         return self._call(
             "probe_scatter_pixel", canvas_agg=canvas_agg, px=px, py=py,
             selection=selection, scatter_df=scatter_df,
+        )
+
+    def identity_tables(
+        self,
+        selection: "SelectionSpec",
+        *,
+        polarization: Optional[str] = None,
+    ):
+        return self._call(
+            "identity_tables", selection=selection, polarization=polarization,
         )
 
     # ------------------------------------------------------------------ #

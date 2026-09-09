@@ -5,8 +5,11 @@ Chunk 1b, Task 1 + Task 3.
 (worker side) -- a `TransportBase` pair one level deeper than Chunk 1's
 `KernelClientTransport`/`KernelCommTransport`, over a real OS subprocess
 instead of the Jupyter Comm protocol. Length-prefixed framing (4-byte
-big-endian length + JSON payload) via `cubevis.utils.serialize`/
-`deserialize`, matching the wire format used elsewhere for consistency.
+big-endian length + JSON payload) via `cubevis.utils.remote_serialize`/
+`remote_deserialize` (2026-09-08: split from the browser-facing
+`serialize`/`deserialize` -- see `cubevis/utils/_conversion.py`'s
+module docstring), matching the wire format used elsewhere in
+`cubevis.remote` for consistency.
 
 Spawned via `asyncio.create_subprocess_exec(sys.executable, "-m",
 "cubevis.remote.worker_main", ...)` -- deliberately NOT
@@ -30,7 +33,7 @@ import sys
 from typing import Any, Callable, Dict, List, Optional
 
 from cubevis.bokeh.transport import TransportBase
-from cubevis.utils import serialize, deserialize
+from cubevis.utils import remote_serialize, remote_deserialize
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +53,9 @@ def _dbg(msg: str) -> None:
 
 async def _write_frame(writer: asyncio.StreamWriter, message: Dict[str, Any]) -> None:
     _dbg(f"_write_frame: START, message_id={message.get('message_id')!r}")
-    payload = serialize(message).encode("utf-8")
+    payload = remote_serialize(message).encode("utf-8")
     digest = hashlib.md5(payload).hexdigest()
-    _dbg(f"_write_frame: serialize() done, {len(payload)} bytes, md5={digest}")
+    _dbg(f"_write_frame: remote_serialize() done, {len(payload)} bytes, md5={digest}")
     writer.write(_HEADER.pack(len(payload)))
     writer.write(payload)
     _dbg("_write_frame: write() calls issued, awaiting drain()")
@@ -88,11 +91,11 @@ async def _read_frame(reader: asyncio.StreamReader) -> Optional[Dict[str, Any]]:
     digest = hashlib.md5(payload).hexdigest()
     _dbg(f"_read_frame: payload read OK ({n} bytes, md5={digest}); deserializing ...")
     try:
-        result = deserialize(payload.decode("utf-8"))
+        result = remote_deserialize(payload.decode("utf-8"))
     except BaseException as e:
-        _dbg(f"_read_frame: deserialize() RAISED: {type(e).__name__}: {e}")
+        _dbg(f"_read_frame: remote_deserialize() RAISED: {type(e).__name__}: {e}")
         raise
-    _dbg("_read_frame: deserialize() done")
+    _dbg("_read_frame: remote_deserialize() done")
     return result
 
 

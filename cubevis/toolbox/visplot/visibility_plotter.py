@@ -2463,7 +2463,17 @@ for (const dt of other.tools) {
         if kind == "raster":
             never_rendered = panel.agg is None
         else:
-            never_rendered = all(df is None for df in panel._layer_dfs)
+            # POST-2026-09: _layer_dfs is permanently [None] * n now (see
+            # ScatterRenderResult's docstring in data/reader.py) -- kept
+            # only so VisibilityScatter._handle_probe's own guards
+            # degrade gracefully, never populated with real data. Using
+            # it here always evaluated True, forcing an unconditional
+            # re-render on every _activate_slot_kind() call regardless
+            # of whether the panel had already rendered. _layer_images
+            # is the field that actually reflects render state now --
+            # same check VisibilityScatter.update_axes()/_reshade() use
+            # internally.
+            never_rendered = all(img is None for img in panel._layer_images)
 
         if never_rendered:
             # Force-activate via the same mechanism update_axes() already
@@ -3116,14 +3126,24 @@ for (const dt of other.tools) {
                 # _make_scatter_layers() always builds one layer per
                 # polarization sharing the same y_axis, so any layer's
                 # y_axis is representative. never_rendered mirrors
-                # _activate_slot_kind()'s own check (all layer_dfs None)
-                # for the same reason: a never-rendered panel's stored
-                # dims could otherwise coincidentally match the request
-                # and wrongly skip its first real render.
+                # _activate_slot_kind()'s own check for the same reason:
+                # a never-rendered panel's stored dims could otherwise
+                # coincidentally match the request and wrongly skip its
+                # first real render.
+                #
+                # POST-2026-09: checks _layer_images, not _layer_dfs --
+                # the latter is now permanently [None] * n regardless of
+                # render state (see ScatterRenderResult's docstring in
+                # data/reader.py), which made this always evaluate True,
+                # silently defeating the whole recompute-cost fix this
+                # comment describes: every Plot press re-rendered scatter
+                # unconditionally again, exactly the cost this was
+                # written to avoid. _layer_images is the field that
+                # actually reflects render state now.
                 current_y_axis = panel._layers[0].y_axis if panel._layers else None
                 current_pols   = [lyr.polarization for lyr in panel._layers]
                 never_rendered = (not panel._layers or
-                                  all(df is None for df in panel._layer_dfs))
+                                  all(img is None for img in panel._layer_images))
                 axes_changed = (
                     slot.id in switched_kind_this_round or
                     never_rendered or
@@ -3144,9 +3164,16 @@ for (const dt of other.tools) {
                                   [(l.y_axis, l.polarization) for l in layers])
                         panel._x_dim = None
                         panel.update_axes(x_dim=x, layers=layers)
-                        log.debug("_handle_plot: panel %s scatter _layer_aggs "
+                        # POST-2026-09: _layer_aggs is permanently
+                        # [None] * n now (vestigial -- see
+                        # ScatterRenderResult's docstring in
+                        # data/reader.py), so this used to always log
+                        # "False" for every layer regardless of whether
+                        # the render actually succeeded. _layer_images
+                        # is the field that reflects real render state.
+                        log.debug("_handle_plot: panel %s scatter _layer_images "
                                   "after render: %s", slot.id,
-                                  [a is not None for a in panel._layer_aggs])
+                                  [img is not None for img in panel._layer_images])
                         self._last_scatter_selection_by_slot[slot.id] = self._selection
                 except Exception as exc:
                     log.error("_handle_plot: panel %s scatter update_axes "
@@ -4208,6 +4235,64 @@ btn.label        = collapsing ? '⟩' : '⟨';
         self._swap_js_objects = []
 
         gear_click_js = """
+// Shared with switchToTab() below (a separate, non-concatenated
+// CustomJS string, hence defined as a global rather than a local
+// function) -- see the 2026-09 tabs-orphan investigation notes at this
+// function's only call site in this script for the full mechanism and
+// why this is the right fix rather than another timing workaround.
+if (!window.__cvInstallSelectViewGuard) {
+    window.__cvInstallSelectViewGuard = function() {
+        if (window.__cvSelectViewGuarded) return;
+        // Deferred: the just-added tab's views build asynchronously
+        // (Bokeh's own lazy_initialize()/build_views() are awaited
+        // internally), so none may exist yet at the point this is
+        // called. A macrotask boundary (setTimeout 0) runs after any
+        // pending view-construction microtasks/promises have settled,
+        // by which point at least the one view that WILL render must
+        // already exist for the user to have anything to click.
+        setTimeout(function() {
+            if (window.__cvSelectViewGuarded) return;
+            function findSelectView(v) {
+                if (v.model && v.model.type === 'Select') return v;
+                if (v._child_views) {
+                    for (const c of v._child_views.values()) {
+                        const found = findSelectView(c);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            }
+            const roots = (window.Bokeh && Bokeh.index)
+                ? Object.values(Bokeh.index).map(function(e) { return e.model_view || e; })
+                : [];
+            let found = null;
+            for (let i = 0; i < roots.length; i++) {
+                found = findSelectView(roots[i]);
+                if (found) break;
+            }
+            if (found) {
+                const proto = found.constructor.prototype;
+                const orig  = proto._update_value;
+                proto._update_value = function() {
+                    // The orphaned twin every Select-containing tab
+                    // gets the first time it's added to a Tabs widget
+                    // (unavoidable in this no-Bokeh-server app -- see
+                    // the full explanation at the call site below)
+                    // never attaches to the DOM, so it has no
+                    // input_el. It's otherwise harmless -- the view
+                    // that DOES render always re-syncs via its own
+                    // render() -- this guard just stops Bokeh's
+                    // default _update_value() from assuming input_el
+                    // exists unconditionally.
+                    if (!this.input_el) return;
+                    return orig.apply(this, arguments);
+                };
+                window.__cvSelectViewGuarded = true;
+            }
+        }, 0);
+    };
+}
+
 const idx = tabs.tabs.indexOf(my_panel);
 if (idx === -1) {
     // First time opening this round: remember the real title text+color
@@ -4241,6 +4326,35 @@ if (idx === -1) {
     // for consistency — see cancel_click_js for the reasoning.
     fig.change.emit();
 
+    // 2026-09 investigation, resolved: this always builds TWO views for
+    // every widget in a tab's subtree the first time that tab's
+    // TabPanel is added to tabs.tabs (confirmed via SelectView.
+    // initialize/render instrumentation against a REAL gear-tool click
+    // -- three different timing-based workarounds tried here first
+    // (setv() batching, deferring active, deferring the entire
+    // mutation) ALL failed to prevent it, because it isn't a timing
+    // race at all. Root confirmed cause: this app has no Bokeh server,
+    // so every panel/kind widget combination must exist from
+    // construction time -- there's no other opportunity to create
+    // them later on demand. Bokeh's TabsView reliably builds two views
+    // for a TabPanel's subtree the first time it's added, via two
+    // independent internal listeners (one direct, one via a
+    // "transitive change" dependency path) -- this is simply how
+    // Bokeh handles a previously-detached, pre-existing model entering
+    // an active view tree in this no-server architecture, not
+    // something fixable by sequencing this code differently.
+    //
+    // The second (orphaned) view is otherwise completely harmless --
+    // it never attaches to the DOM, never becomes visible, and the
+    // view that DOES render always calls _update_value() again from
+    // its own render(), so nothing goes out of sync. The ONLY problem
+    // is SelectView._update_value() unconditionally assuming
+    // this.input_el exists, with no guard for the orphaned case --
+    // confirmed live (via prototype instrumentation against a real
+    // gear click + real axis change) that guarding just that one
+    // method fully resolves the crash. See __cvInstallSelectViewGuard()
+    // defined once, above.
+    window.__cvInstallSelectViewGuard();
     tabs.tabs = tabs.tabs.concat([my_panel]);
     tabs.active = tabs.tabs.length - 1;
 } else {
@@ -4642,6 +4756,50 @@ if (sidebarEl && prevScrollTop !== null) {
 
         # Shared plot-send logic used by Plot ▶, Reload ↺, and all presets.
         _do_plot_js = """
+// Shared with gear_click_js (a separate, non-concatenated CustomJS
+// string, hence a global rather than a local function) -- defining it
+// here too, identically, since switchToTab() below can be the very
+// first place a gear tab ever opens (e.g. an axis conflict detected on
+// the first Plot press, before the user has manually clicked any gear
+// icon). Idempotent: whichever of this script or gear_click_js runs
+// first is the one that actually sets window.__cvInstallSelectViewGuard;
+// the other's identical definition here is a no-op.
+if (!window.__cvInstallSelectViewGuard) {
+    window.__cvInstallSelectViewGuard = function() {
+        if (window.__cvSelectViewGuarded) return;
+        setTimeout(function() {
+            if (window.__cvSelectViewGuarded) return;
+            function findSelectView(v) {
+                if (v.model && v.model.type === 'Select') return v;
+                if (v._child_views) {
+                    for (const c of v._child_views.values()) {
+                        const found = findSelectView(c);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            }
+            const roots = (window.Bokeh && Bokeh.index)
+                ? Object.values(Bokeh.index).map(function(e) { return e.model_view || e; })
+                : [];
+            let found = null;
+            for (let i = 0; i < roots.length; i++) {
+                found = findSelectView(roots[i]);
+                if (found) break;
+            }
+            if (found) {
+                const proto = found.constructor.prototype;
+                const orig  = proto._update_value;
+                proto._update_value = function() {
+                    if (!this.input_el) return;
+                    return orig.apply(this, arguments);
+                };
+                window.__cvSelectViewGuarded = true;
+            }
+        }, 0);
+    };
+}
+
 // Shared by both the early client-side conflict guard inside doPlot()
 // below and the server-error response handling further down (added
 // 2026-08-03, factored out once it became clear both needed the exact
@@ -4653,6 +4811,15 @@ function switchToTab(target_tab, gear_tabs, sidebar, toggle_btn) {
     if (target_tab == null) return;
     const idx = gear_tabs.tabs.indexOf(target_tab);
     if (idx === -1) {
+        // 2026-09 investigation, resolved -- see gear_click_js's
+        // identical call and full rationale in that script for why
+        // three timing-based attempts here (setv() batch, deferred
+        // active, deferred entire mutation) were each invalidated
+        // rather than superseded, and why the real fix is
+        // __cvInstallSelectViewGuard() instead: the double view-build
+        // this is guarding against is expected/unavoidable in this
+        // no-Bokeh-server app, not a race to prevent.
+        window.__cvInstallSelectViewGuard();
         gear_tabs.tabs = gear_tabs.tabs.concat([target_tab]);
         gear_tabs.active = gear_tabs.tabs.length - 1;
     } else {
@@ -5511,11 +5678,29 @@ pos1_raster_layout.visible  = false;
 panel0_kind_switch.active = 0;
 panel1_kind_switch.active = 1;
 
-panel0_ry_sel.value = '{ry.name}';
-panel0_rx_sel.value = '{rx.name}';
-panel0_rq_sel.value = '{rq.name}';
-panel1_sx_sel.value = '{sx.name}';
-panel1_sy_sel.value = '{sy.name}';
+// Wrapped (2026-09): a preset can set one of these Selects' .value
+// before its containing gear tab has ever been opened -- gear tabs are
+// hidden by default (see the Tabs construction above), and Bokeh only
+// creates a hidden tab's child widget views lazily, on first reveal.
+// SelectView._update_value() runs synchronously off this property
+// change regardless of whether its view exists yet; when it doesn't,
+// `this.input_el` is undefined and _update_value() throws
+// (confirmed in a live debugger session: `vplot`/`waterfall` both set
+// panel1_sx_sel.value = 'TIME', and neither preset ever opens panel1's
+// scatter gear tab first). The model's own .value is still set
+// correctly either way -- Bokeh initializes a widget's view from its
+// model's current property values when that view is finally created,
+// so opening the tab later still shows the right selection -- this
+// try/catch only stops that view-sync attempt from throwing uncaught
+// and aborting the rest of this preset's script (the layout-visibility
+// toggle a few lines down would otherwise never run).
+try {{
+    panel0_ry_sel.value = '{ry.name}';
+    panel0_rx_sel.value = '{rx.name}';
+    panel0_rq_sel.value = '{rq.name}';
+    panel1_sx_sel.value = '{sx.name}';
+    panel1_sy_sel.value = '{sy.name}';
+}} catch(e) {{ console.warn('preset axis-select sync failed:', e); }}
 
 const over = (active_layout === 2);
 side_container.visible = !over;

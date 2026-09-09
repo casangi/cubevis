@@ -84,6 +84,7 @@ from .tick_format import TICK_FORMATTER_JS
 if TYPE_CHECKING:
     from .visibility_reader import VisibilityReader
     from .selection import SelectionSpec
+    from .data.reader import IdentityTables
     from .axes import Axis
 
 log = logging.getLogger(__name__)
@@ -314,6 +315,14 @@ class VisibilityPlot(Model):
         # Coordinate extents — set by _render()
         self._x_range: tuple[float, float] = (0.0, 1.0)
         self._y_range: tuple[float, float] = (0.0, 1.0)
+
+        # Cached static hover-probe identity tables (scans, baseline->
+        # antenna mapping, per-SPW frequency arrays) -- see
+        # _ensure_identity_tables/_match_identity below. None until the
+        # first probe or render that needs them; refetched only when
+        # the (selection, polarization) cache key changes.
+        self._identity_tables: Optional["IdentityTables"] = None
+        self._identity_tables_key = None
 
         # CommMgr / Comm
         # Set before _build() runs; see the early return there.
@@ -1180,6 +1189,140 @@ window._cvRerenderTimer = setTimeout(function() {{
             one field.
         """
         return {"label": label, "probe": {"status": status, **extra}}
+
+    def _ensure_identity_tables(
+        self, polarization: Optional[str] = None,
+    ) -> "IdentityTables":
+        """Fetch (once per selection+polarization) and cache the static
+        identity tables used for local hover-probe matching -- see
+        ``IdentityTables``'s docstring in ``data/reader.py``.
+
+        Cache key is ``(selection, polarization)``. ``SelectionSpec``
+        is a plain dataclass (not frozen, but still ``eq``-generating),
+        so equality comparison is cheap and correct without needing an
+        explicit "did selection change" signal from callers -- safe to
+        call unconditionally on every render (see
+        ``VisibilityRaster._render``,
+        ``VisibilityScatter._render_all_layers``): the fetch only
+        actually happens when the key changes, so a pan/zoom or a
+        scaling change that leaves selection and polarization alone
+        costs nothing here.
+        """
+        key = (self._selection, polarization)
+        if self._identity_tables_key != key:
+            self._identity_tables = self._backend.identity_tables(
+                self._selection, polarization=polarization,
+            )
+            self._identity_tables_key = key
+        return self._identity_tables
+
+    def _match_identity(
+        self,
+        *,
+        t_range: Optional[tuple[float, float]] = None,
+        bl_range: Optional[tuple[float, float]] = None,
+        freq_range: Optional[tuple[float, float]] = None,
+        polarization: Optional[str] = None,
+    ) -> dict:
+        """Resolve field/scan/antenna/spw identity from native-coordinate
+        ranges against the cached ``IdentityTables`` -- pure lookup, no
+        backend call.
+
+        Ported from ``probe_raster_pixel``'s pre-2026-09 per-partition
+        inline identity-gathering (``MSv2Backend``/``MSv4Backend``) --
+        same comparisons, same edge-case handling (e.g. the
+        nearest-channel fallback when an exact frequency-range match
+        misses entirely), now run once against tables fetched once per
+        selection instead of by re-scanning every partition on every
+        hover. See ``IdentityTables``'s docstring in ``data/reader.py``
+        for the full rationale, and ``VisibilityRaster``'s and
+        ``VisibilityScatter``'s hover-probe implementations for how
+        each derives the ``*_range`` arguments passed in here -- that
+        derivation is the only part that differs between the two
+        widgets; everything past it is identical.
+
+        Any of ``t_range``/``bl_range``/``freq_range`` left ``None``
+        skips that axis's contribution entirely -- exactly like the
+        pre-redesign code's ``x_dim_name``/``y_dim_name`` guards, which
+        only ever compared the axes actually present on the probed
+        grid.
+
+        Returns
+        -------
+        dict with keys ``field_names``, ``scan_names``,
+        ``antenna_pairs``, ``freq_range_ghz``, ``spw_channels``,
+        ``spw_ids``, ``channel_width_hz`` -- the same shape
+        ``probe_raster_pixel`` already returned, so ``_format_probe``
+        and ``_flag_key`` need no changes to consume it.
+        """
+        tables = self._ensure_identity_tables(polarization)
+
+        field_names: set = set()
+        scan_names:  set = set()
+        if t_range is not None:
+            t0, t1 = min(t_range), max(t_range)
+            for s in tables.scans:
+                if s.t_end >= t0 and s.t_start <= t1:
+                    field_names.add(s.field_name)
+                    scan_names.add(s.scan_name)
+
+        antenna_pairs: list = []
+        if bl_range is not None:
+            bl_lo, bl_hi = min(bl_range), max(bl_range)
+            for bid, pair in tables.baseline_antennas.items():
+                if bl_lo <= bid <= bl_hi and pair not in antenna_pairs:
+                    antenna_pairs.append(pair)
+
+        freq_range_ghz: Optional[tuple[float, float]] = None
+        spw_channels: dict = {}
+        spw_ids: list = []
+        channel_width: Optional[float] = None
+        if freq_range is not None:
+            f_lo, f_hi = min(freq_range), max(freq_range)
+            for spw in tables.spws:
+                freqs = spw.frequencies
+                if freqs.size == 0:
+                    continue
+                mask = (freqs >= f_lo) & (freqs <= f_hi)
+                if not mask.any():
+                    # Same nearest-channel fallback as the pre-redesign
+                    # inline code: an exact range miss (e.g. the cell is
+                    # narrower than one channel) would otherwise report
+                    # this SPW as untouched even though the nearest
+                    # channel is plainly the one under the cursor.
+                    f_centre = (f_lo + f_hi) / 2.0
+                    nearest  = freqs[np.argmin(np.abs(freqs - f_centre))]
+                    mask = freqs == nearest
+                if not mask.any():
+                    continue
+                f_sub = freqs[mask]
+                lo_g, hi_g = float(f_sub.min()) / 1e9, float(f_sub.max()) / 1e9
+                if freq_range_ghz is None:
+                    freq_range_ghz = (lo_g, hi_g)
+                else:
+                    freq_range_ghz = (min(freq_range_ghz[0], lo_g),
+                                       max(freq_range_ghz[1], hi_g))
+                idx = np.flatnonzero(mask)
+                lo_c, hi_c = int(idx.min()), int(idx.max())
+                if channel_width is None:
+                    channel_width = spw.channel_width_hz
+                key = spw.spw_id
+                if key in spw_channels:
+                    prev = spw_channels[key]
+                    spw_channels[key] = [min(prev[0], lo_c), max(prev[1], hi_c)]
+                else:
+                    spw_channels[key] = [lo_c, hi_c]
+                spw_ids.append(key)
+
+        return {
+            "field_names":      sorted(field_names),
+            "scan_names":       sorted(scan_names),
+            "antenna_pairs":    antenna_pairs,
+            "freq_range_ghz":   freq_range_ghz,
+            "spw_channels":     spw_channels,
+            "spw_ids":          sorted(set(spw_ids), key=str),
+            "channel_width_hz": channel_width,
+        }
 
     def _flag_key(self, info: dict) -> dict:
         """Everything needed to write this probe back as a flag.

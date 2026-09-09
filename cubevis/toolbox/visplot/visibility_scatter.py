@@ -1577,13 +1577,40 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
 
     def _current_render_range(
         self,
-    ) -> tuple[tuple[float, float], tuple[float, float]]:
-        """(x_range, y_range) currently in effect: the pan/zoom viewport
-        if set, else the full data extent."""
+    ) -> tuple[Optional[tuple[float, float]], Optional[tuple[float, float]]]:
+        """(x_range, y_range) to re-query at: the pan/zoom viewport if
+        one is active, else ``(None, None)``.
+
+        BUG FIX (2026-09): this used to return ``self._x_range``/
+        ``self._y_range`` (the cached full extent) instead of ``(None,
+        None)`` when no viewport was active. That's wrong: those two
+        fields can be stale -- most importantly, right after an axis
+        change, before the query this very call is about to make has
+        had a chance to refresh them. Passing the *stale* extent
+        through to ``query_columns()`` as an explicit ``x_range``/
+        ``y_range`` treats it as a binning constraint, not a "this is
+        roughly where things are" hint -- so a fresh axis (e.g.
+        switching X to ``Axis.TIME``, whose real values sit nowhere
+        near whatever the previous axis's range was) would have every
+        sample fall outside it, giving ``n_in_view=0`` for every layer
+        and a blank render. The very same call's response then
+        correctly refreshes ``self._x_range``/``self._y_range`` from
+        the backend's real answer (``ScatterRenderResult.x_range``/
+        ``y_range`` are always the true full extent, independent of
+        whatever viewport was requested) -- which is exactly why a
+        second, identical Plot press "fixed itself": the second call's
+        stale values happened to already be correct, left over from
+        the first call's response.
+
+        Returning ``(None, None)`` here instead lets that ``None``
+        propagate all the way to ``query_columns()`` unresolved, which
+        is what actually triggers the backend to compute and report
+        the full extent fresh on *this* call -- not the next one.
+        """
         if self._current_viewport is not None:
             vx0, vx1, vy0, vy1 = self._current_viewport
             return (vx0, vx1), (vy0, vy1)
-        return self._x_range, self._y_range
+        return None, None
 
     def _effective_skip_reason(self, i: int) -> Optional[str]:
         """skip_reason for layer *i*, accounting for a live ``alpha``
@@ -1720,14 +1747,25 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         ----------
         x_range, y_range :
             Viewport to render at. ``None`` (both) -> the current
-            pan/zoom viewport if set, else the full data extent (see
-            ``_current_render_range``).
+            pan/zoom viewport if set, else ``(None, None)``, meaning
+            "let the backend resolve and report the true full extent
+            fresh on this call" -- see ``_current_render_range``'s
+            docstring for why this must stay ``None`` here rather than
+            being pre-resolved to a possibly-stale cached value.
         """
         if x_range is None and y_range is None:
             x_range, y_range = self._current_render_range()
         self._render_all_layers(self._selection, x_range=x_range, y_range=y_range)
         img32 = self._collapse_and_composite()
-        self._push_image(img32, x_range, y_range)
+        # _render_all_layers() just refreshed self._x_range/self._y_range
+        # from the backend's real answer when x_range/y_range were None
+        # (full-extent request) -- push THOSE, now correct, for display
+        # positioning. An explicit viewport (pan/zoom or a preserved one
+        # from _current_render_range) is already a real, non-None range
+        # and gets pushed as-is.
+        push_x_range = x_range if x_range is not None else self._x_range
+        push_y_range = y_range if y_range is not None else self._y_range
+        self._push_image(img32, push_x_range, push_y_range)
         return img32
 
     def _recomposite(self) -> None:

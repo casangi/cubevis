@@ -32,10 +32,22 @@
 # the thing being bridged to a remote kernel, not an incidental coupling.
 # Two narrower dependencies remain, both on non-underscore-prefixed-only
 # modules, called out explicitly rather than silently relied on:
-#   - cubevis.utils.serialize/deserialize: the wire-format encoding used
-#     by CommsTransport/WebSocketTransport too, so staying consistent
-#     with it (rather than rolling a separate JSON encoding here) matters
-#     more than avoiding the import. Public module, low risk.
+#   - cubevis.utils.remote_serialize/remote_deserialize: the wire-format
+#     encoding for this subpackage's own P_local<->supervisor<->worker
+#     traffic. Until 2026-09-08 this used the same serialize/deserialize
+#     CommsTransport/WebSocketTransport use for real browser traffic,
+#     deliberately, on the reasoning that staying consistent with one
+#     shared encoding mattered more than avoiding the import. That
+#     reasoning held right up until it didn't: a fix needed here (exact
+#     tuple round-tripping, including tuple-as-dict-key, for Python-to-
+#     Python traffic) has no sound equivalent for JavaScript, which has
+#     no tuple type at all -- sharing the function meant either browser
+#     traffic broke (an actual incident) or this subpackage's traffic
+#     silently lost tuple fidelity. remote_serialize/remote_deserialize
+#     keep the same JSON wire format and the same Enum/dataclass support
+#     as serialize/deserialize -- only tuple handling differs -- so this
+#     is a narrower divergence than "a separate encoding," not the thing
+#     the original reasoning was trying to avoid.
 #   - cubevis.bokeh.transport._environment.get_ipython_kernel_shell: a
 #     small, generic "am I running inside a Jupyter kernel" check that
 #     happens to live in a *private* (underscore-prefixed) module inside
@@ -54,7 +66,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 from uuid import uuid4
 
 from cubevis.bokeh.transport import TransportBase
-from cubevis.utils import deserialize, serialize
+from cubevis.utils import remote_deserialize, remote_serialize
 
 if TYPE_CHECKING:
     from jupyter_client.asynchronous.client import AsyncKernelClient
@@ -160,7 +172,7 @@ class KernelClientTransport(TransportBase):
 
         msg = self._client.session.msg(
             "comm_msg",
-            content={"comm_id": self._comm_id, "data": {"envelope": serialize(message)}},
+            content={"comm_id": self._comm_id, "data": {"envelope": remote_serialize(message)}},
         )
         self._client.shell_channel.send(msg)
 
@@ -203,7 +215,7 @@ class KernelClientTransport(TransportBase):
                 continue
 
             try:
-                inner = deserialize(envelope)
+                inner = remote_deserialize(envelope)
             except Exception:
                 logger.exception("KernelClientTransport.run: deserialize failed")
                 continue
@@ -337,7 +349,7 @@ class KernelCommTransport(TransportBase):
             logger.warning("KernelCommTransport._on_comm_msg: no envelope, dropping")
             return
         try:
-            inner = deserialize(envelope)
+            inner = remote_deserialize(envelope)
         except Exception:
             logger.exception("KernelCommTransport._on_comm_msg: deserialize failed")
             return
@@ -354,7 +366,7 @@ class KernelCommTransport(TransportBase):
     async def send_message(self, message: Dict[str, Any]) -> None:
         if self._comm is None:
             raise RuntimeError("KernelCommTransport: no comm open yet")
-        self._comm.send({"envelope": serialize(message)})
+        self._comm.send({"envelope": remote_serialize(message)})
 
     async def run(self) -> None:
         while not self._closed:

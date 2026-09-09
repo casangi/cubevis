@@ -163,3 +163,16 @@ class VisibilityReader(Protocol):
         Signature is identical to ``XArrayReader.probe_scatter_pixel``.
         """
         ...
+
+    def identity_tables(
+        self,
+        selection: "SelectionSpec",
+        *,
+        polarization: Optional[str] = None,
+    ):
+        """Static per-selection identity tables for local hover-probe matching.
+
+        Signature is identical to ``XArrayReader.identity_tables``.
+        Returns an ``IdentityTables`` (see ``data/reader.py``).
+        """
+        ...

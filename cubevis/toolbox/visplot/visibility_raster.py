@@ -42,6 +42,7 @@ from .visibility_plot import (
 )
 from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
+from .data.reader import _agg_value, _cell_bounds, channel_range_to_freq
 
 if TYPE_CHECKING:
     import xarray as xr
@@ -991,6 +992,15 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 agg.shape, x_range, y_range, is_decimated,
                 time.perf_counter() - t0,
             )
+            # Warm the hover-probe identity-tables cache here rather
+            # than waiting for the first hover -- see
+            # VisibilityPlot._ensure_identity_tables. Cheap: a no-op
+            # whenever (selection, polarization) hasn't changed since
+            # the last render, which covers every pan/zoom and scaling
+            # change (neither touches either). Skipped under `defer`
+            # since there's nothing to warm for a panel that isn't
+            # even shown yet.
+            self._ensure_identity_tables(polarization=self._polarization)
 
         self._agg          = agg
         self._x_range      = x_range
@@ -1120,10 +1130,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 "out_of_range", "<i>out of range</i>", x=x, y=y,
             )
         try:
-            info  = self._backend.probe_raster_pixel(
-                self._agg, px, py, self._selection,
-                polarization=self._polarization,
-            )
+            info  = self._probe_raster_pixel_local(px, py)
             label = self._format_probe(info, self._quantity.label)
             if self._probe_debug:
                 log.info(
@@ -1134,7 +1141,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                     info.get("y_range"),
                 )
         except Exception as exc:
-            log.warning("probe_raster_pixel failed: %s", exc)
+            log.warning("probe_raster_pixel (local) failed: %s", exc)
             return self._probe_envelope(
                 "error",
                 f"<span style='color:#f38ba8'>probe error: {exc}</span>",
@@ -1155,6 +1162,82 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             # Coordinate identity for FlagDB; see _flag_key.
             flag_key = self._flag_key(info),
         )
+
+    def _probe_raster_pixel_local(self, gx: int, gy: int) -> dict:
+        """Value + identity for raw grid cell (gx, gy), entirely locally.
+
+        POST-2026-09: replaces a per-hover
+        ``self._backend.probe_raster_pixel(...)`` call, which re-scanned
+        every selected partition's coordinate arrays on every single
+        hover event. That scan never touched VISIBILITY data even
+        before this change -- it only ever read partition *coordinate*
+        arrays -- so nothing about its correctness needed to change,
+        only how often it runs: once per (selection, polarization) via
+        ``VisibilityPlot._ensure_identity_tables``/``_match_identity``,
+        not once per mouse-move. See ``IdentityTables``'s docstring in
+        ``data/reader.py`` for the full rationale.
+
+        The value/cell-bounds half of this was already local (``self._agg``
+        is always cached client-side -- raster's shading design was
+        never part of the wire-cost problem this whole redesign
+        addressed) -- only the identity half is new here.
+        """
+        agg = self._agg
+        if agg is None or agg.ndim != 2:
+            raise ValueError("no cached aggregation to probe")
+        h, w = agg.shape
+        if not (0 <= gx < w and 0 <= gy < h):
+            raise IndexError(
+                f"Pixel ({gx}, {gy}) out of range for grid ({w}x{h})"
+            )
+
+        value = _agg_value(agg.values, gy, gx)
+
+        y_dim_name = agg.dims[0]
+        x_dim_name = agg.dims[1]
+        x_coords = agg.coords[x_dim_name].values
+        y_coords = agg.coords[y_dim_name].values
+        x_centre = float(x_coords[gx])
+        y_centre = float(y_coords[gy])
+        x_range  = _cell_bounds(x_coords, gx)
+        y_range  = _cell_bounds(y_coords, gy)
+
+        t_range = bl_range = freq_range = None
+        if x_dim_name == "time":
+            t_range = x_range
+        elif y_dim_name == "time":
+            t_range = y_range
+        if x_dim_name == "baseline_id":
+            bl_range = x_range
+        elif y_dim_name == "baseline_id":
+            bl_range = y_range
+        if x_dim_name == "frequency":
+            freq_range = x_range
+        elif y_dim_name == "frequency":
+            freq_range = y_range
+
+        if freq_range is not None:
+            # Same inversion as the pre-redesign inline code: when the
+            # axis was relabelled as a channel index, these bounds are
+            # indices, not Hz, and comparing them to the tables'
+            # frequency arrays as-is would silently match nothing.
+            inv = channel_range_to_freq(agg, *freq_range)
+            if inv is not None:
+                freq_range = inv
+
+        identity = self._match_identity(
+            t_range=t_range, bl_range=bl_range, freq_range=freq_range,
+            polarization=self._polarization,
+        )
+
+        return {
+            "value":    value,
+            "x_range":  x_range,
+            "y_range":  y_range,
+            "x_centre": x_centre,
+            "y_centre": y_centre,
+            **identity,
+        }
 
     # ------------------------------------------------------------------
     # Raster-specific internals

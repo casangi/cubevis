@@ -128,11 +128,19 @@ class VisplotRemoteBackend:
             width=width, height=height,
         )
 
-    def probe_raster_pixel(self, raw_grid, gx: int, gy: int, selection):
-        return self._reader.probe_raster_pixel(raw_grid, gx, gy, selection)
+    def probe_raster_pixel(self, raw_grid, gx: int, gy: int, selection,
+                            polarization=None):
+        # Same pre-existing gap noted in remote_reduction_context.py's
+        # matching relay -- fixed here too for the same reason.
+        return self._reader.probe_raster_pixel(
+            raw_grid, gx, gy, selection, polarization=polarization,
+        )
 
     def probe_scatter_pixel(self, canvas_agg, px: int, py: int, selection, scatter_df):
         return self._reader.probe_scatter_pixel(canvas_agg, px, py, selection, scatter_df)
+
+    def identity_tables(self, selection, *, polarization=None):
+        return self._reader.identity_tables(selection, polarization=polarization)
 
     # ------------------------------------------------------------------ #
     # Extra methods LocalVisibilityReader also exposes                    #

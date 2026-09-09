@@ -191,6 +191,17 @@ class LocalVisibilityReader:
             canvas_agg, px, py, selection, scatter_df
         )
 
+    def identity_tables(
+        self,
+        selection: "SelectionSpec",
+        *,
+        polarization: Optional[str] = None,
+    ):
+        """Delegate to ``backend.identity_tables``."""
+        return self._backend.identity_tables(
+            selection, polarization=polarization,
+        )
+
     # ------------------------------------------------------------------ #
     # Pass-through for ObservationMetadata construction                    #
     # ------------------------------------------------------------------ #

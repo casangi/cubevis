@@ -141,6 +141,58 @@ class ScatterRenderResult:
     layers:        tuple[ScatterLayerRender, ...]
 
 
+@dataclass(frozen=True)
+class ScanInfo:
+    """One scan's time span and field, for local hover-probe identity
+    matching (see ``VisibilityPlot._match_identity``)."""
+    scan_name:  str
+    field_name: str
+    t_start:    float
+    t_end:      float
+
+
+@dataclass(frozen=True)
+class SpwInfo:
+    """One spectral window's per-channel frequency array, for local
+    hover-probe frequency->channel matching.
+
+    ``spw_id`` may be an ``int`` (a real SPW id) or a ``str`` (a
+    spectral window name, when no numeric id is available -- see
+    ``MSv2Backend._partition_spw_ident``). A partition with no
+    identity at all (``None``) is excluded from
+    ``IdentityTables.spws`` entirely -- an unidentifiable window
+    cannot be addressed in a flag command, so carrying it here would
+    only be reported later anyway.
+    """
+    spw_id:           object   # int | str
+    frequencies:      np.ndarray   # Hz, per-channel, local index = position
+    channel_width_hz: Optional[float]
+
+
+@dataclass(frozen=True)
+class IdentityTables:
+    """Static per-(selection, polarization) identity tables.
+
+    Built once from partition *coordinate* arrays only -- no
+    VISIBILITY read, see ``MSv2Backend.identity_tables`` -- and cached
+    client-side by ``VisibilityPlot._ensure_identity_tables``. Used by
+    both ``VisibilityRaster`` and ``VisibilityScatter``'s hover probes
+    to resolve field/scan/antenna/spw identity from native-coordinate
+    ranges entirely locally, with no per-hover backend call -- see
+    ``VisibilityPlot._match_identity``.
+
+    Replaces the pre-2026-09 design where this same information was
+    re-scanned from every selected partition on every single hover
+    event (``probe_raster_pixel``'s original inline implementation).
+    That scan touched no VISIBILITY data even then -- it was always
+    this cheap -- it just ran far more often than the data underlying
+    it ever changed (once per selection, not once per mouse-move).
+    """
+    scans:             tuple[ScanInfo, ...]
+    baseline_antennas: dict   # baseline_id (int) -> (ant1_name, ant2_name)
+    spws:              tuple[SpwInfo, ...]
+
+
 # ======================================================================
 # Probe geometry helpers
 # ======================================================================
@@ -743,11 +795,8 @@ class XArrayReader(abc.ABC):
         for why (in short: the old raw-DataFrame contract shipped up to
         ~30M rows over the wire for a remote session).
 
-        NOTE (2026-09): ``MSv4Backend`` has not been updated to this
-        contract yet -- this is ``MSv2Backend``-only so far, and
-        ``VisibilityScatter`` still calls the pre-redesign signature, so
-        nothing end-to-end works yet. Deliberate, incremental scope --
-        not an oversight.
+        Implemented identically by both ``MSv2Backend`` and
+        ``MSv4Backend`` (2026-09).
         """
 
     # ------------------------------------------------------------------ #
@@ -1009,6 +1058,42 @@ class XArrayReader(abc.ABC):
         ``"y_centre"`` : float
         ``"n_scatter_samples"`` : int
             Number of scatter samples in this pixel bin.
+        """
+
+    @abc.abstractmethod
+    def identity_tables(
+        self,
+        selection: SelectionSpec,
+        *,
+        polarization: Optional[str] = None,
+    ) -> IdentityTables:
+        """Static per-selection identity tables for local hover-probe matching.
+
+        Scans partition *coordinate* arrays only -- no VISIBILITY read,
+        same access pattern ``probe_raster_pixel``'s identity lookup
+        already used -- to build: every scan's (name, field, time
+        span); every baseline's antenna-pair names; every SPW's
+        per-channel frequency array. See ``IdentityTables``'s
+        docstring for the full rationale.
+
+        Parameters
+        ----------
+        selection :
+            Data selection constraints.
+        polarization :
+            When given, a partition that doesn't locally carry this
+            polarization is excluded entirely -- mirrors
+            ``probe_raster_pixel``'s identical parameter and
+            rationale: such a partition contributes no rendered
+            pixels for that polarization, so its identity shouldn't
+            be reported either. ``None`` (the default) includes every
+            partition regardless of polarization -- the right default
+            for a caller with no single displayed polarization to
+            pass (e.g. a multi-polarization scatter overlay).
+
+        Returns
+        -------
+        IdentityTables
         """
 
     # ------------------------------------------------------------------ #

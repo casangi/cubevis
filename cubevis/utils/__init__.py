@@ -63,6 +63,7 @@ logger = get_logger()
 from ._conversion import pack_arrays
 from ._conversion import strip_arrays
 from ._conversion import serialize, deserialize
+from ._conversion import remote_serialize, remote_deserialize
 from ._static import static_vars, static_dir
 from ._tiles import TMSTiles
 from ._contextmgrchain import ContextMgrChain

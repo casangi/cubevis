@@ -113,6 +113,9 @@ from .reader import (
     _widen_if_degenerate,
     ScatterLayerSpec,
     ScatterRenderResult,
+    ScanInfo,
+    SpwInfo,
+    IdentityTables,
 )
 from . import _scatter_render
 from ..axes import Axis, AxisInfo, AxisType
@@ -1970,6 +1973,90 @@ class MSv4Backend(XArrayReader):
             "y_centre":          y_centre,
             "n_scatter_samples": n_scatter,
         }
+
+    def identity_tables(
+        self,
+        selection: SelectionSpec,
+        *,
+        polarization: Optional[str] = None,
+    ) -> IdentityTables:
+        """Static per-selection identity tables. Mirrors
+        ``MSv2Backend.identity_tables`` exactly -- same signature,
+        same return type, same coordinate names (confirmed identical
+        between the two backends via their existing
+        ``probe_raster_pixel`` implementations). See ``IdentityTables``'s
+        docstring in ``reader.py`` for the full rationale.
+        """
+        self._require_open()
+
+        scans: dict[tuple[str, str], list] = {}
+        baseline_antennas: dict[int, tuple[str, str]] = {}
+        spw_freqs: dict = {}   # spw_id -> (frequencies ndarray, channel_width)
+
+        for raw_ds in self._iter_visibility_partitions(selection):
+            ds = self._apply_selection(raw_ds, selection)
+            if ds.sizes.get("time", 0) == 0:
+                continue
+
+            if (polarization is not None and "polarization" in ds.coords
+                    and polarization not in
+                        {str(p) for p in ds.coords["polarization"].values}):
+                continue
+
+            if ("scan_name" in ds.coords and "field_name" in ds.coords
+                    and "time" in ds.coords):
+                t  = ds.coords["time"].values
+                sc = ds.coords["scan_name"].values.astype(str)
+                fl = ds.coords["field_name"].values.astype(str)
+                local = pd.DataFrame({"scan": sc, "field": fl, "t": t})
+                grouped = local.groupby(["scan", "field"], sort=False)["t"] \
+                                .agg(["min", "max"])
+                for (s, f), row in grouped.iterrows():
+                    key = (s, f)
+                    lo, hi = float(row["min"]), float(row["max"])
+                    if key not in scans:
+                        scans[key] = [lo, hi]
+                    else:
+                        entry = scans[key]
+                        entry[0] = min(entry[0], lo)
+                        entry[1] = max(entry[1], hi)
+
+            if ("baseline_antenna1_name" in ds.coords
+                    and "baseline_id" in ds.coords):
+                bl_ids = ds.coords["baseline_id"].values.astype(np.int64)
+                ant1 = ds.coords["baseline_antenna1_name"].values.astype(str)
+                ant2 = ds.coords["baseline_antenna2_name"].values.astype(str)
+                uniq_ids, first_idx = np.unique(bl_ids, return_index=True)
+                for bid, idx in zip(uniq_ids, first_idx):
+                    bid_i = int(bid)
+                    if bid_i not in baseline_antennas:
+                        baseline_antennas[bid_i] = (
+                            str(ant1[idx]), str(ant2[idx])
+                        )
+
+            if "frequency" in ds.coords:
+                key = self._partition_spw_id(raw_ds)
+                if key is not None and key not in spw_freqs:
+                    freqs = np.asarray(
+                        ds.coords["frequency"].values, dtype=np.float64
+                    ).copy()
+                    width = self._partition_channel_width(raw_ds)
+                    spw_freqs[key] = (freqs, width)
+
+        scan_infos = tuple(
+            ScanInfo(scan_name=k[0], field_name=k[1],
+                     t_start=v[0], t_end=v[1])
+            for k, v in scans.items()
+        )
+        spw_infos = tuple(
+            SpwInfo(spw_id=k, frequencies=freqs, channel_width_hz=width)
+            for k, (freqs, width) in spw_freqs.items()
+        )
+        return IdentityTables(
+            scans=scan_infos,
+            baseline_antennas=baseline_antennas,
+            spws=spw_infos,
+        )
 
     # ------------------------------------------------------------------ #
     # Representation                                                        #

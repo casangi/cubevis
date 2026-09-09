@@ -59,6 +59,7 @@ from typing import Optional, TYPE_CHECKING
 from uuid import uuid4
 
 import numpy as np
+import xarray as xr
 
 from bokeh.models import ColumnDataSource
 
@@ -71,7 +72,6 @@ from .data.reader import ScatterLayerSpec
 
 if TYPE_CHECKING:
     import pandas as pd
-    import xarray as xr
     from .visibility_reader import VisibilityReader
     from .selection import SelectionSpec
     from .axes import Axis
@@ -243,6 +243,7 @@ class VisibilityScatter(VisibilityPlot):
         probe_slop_px: float = 6.0,
         probe_search_radius: Optional[int] = None,
         probe_debug: bool = False,
+        probe_grid_max_cells: int = 3072,
         **kwargs,
     ) -> None:
         if not layers:
@@ -273,14 +274,31 @@ class VisibilityScatter(VisibilityPlot):
         self._canvas_width, self._canvas_height           = width, height
         self._full_canvas_width, self._full_canvas_height = width, height
 
-        # Vestigial -- kept ONLY so _handle_probe's existing guards
-        # ("if agg is None or df is None...") degrade gracefully to a
-        # clean "no data" response instead of an AttributeError. Never
-        # populated with real data anymore: probe_scatter_pixel needs
-        # its own redesign (a targeted backend re-query at the hovered
-        # pixel) now that raw per-layer DataFrames/aggs don't exist
-        # client-side -- deliberately out of scope for this pass. See
-        # the scatter remote-execution design notes.
+        # Hover-probe redesign piece 2 (2026-09): coarse per-bin
+        # native-coordinate-range + value grid, one entry per layer,
+        # cached from the same query_columns() response as everything
+        # above. Each entry is a dict with keys "value", "t_lo", "t_hi",
+        # "bl_lo", "bl_hi", "f_lo", "f_hi", "x_range", "y_range" (any of
+        # the six range keys may be absent if that native coordinate
+        # wasn't available -- see ScatterLayerRender.id_grid_*'s
+        # docstring), or None for a layer with no data at all
+        # (skip_reason set). This is what lets _handle_probe resolve
+        # hover locally -- no backend call -- for both an approximate
+        # value AND field/scan/antenna/spw identity together, matching
+        # (coarsely) everything the pre-redesign per-hover backend call
+        # used to provide. probe_scatter_pixel (click-to-exact, piece 3)
+        # remains the source of an exact reading on demand.
+        self._layer_id_grid: list[Optional[dict]] = [None] * n
+        self._probe_grid_max_cells: int = int(probe_grid_max_cells)
+
+        # Vestigial -- kept ONLY so any remaining code path that still
+        # checks these guards degrades gracefully instead of an
+        # AttributeError. Never populated with real data since the
+        # 2026-09 redesign moved binning/shading server-side --
+        # _handle_probe itself no longer reads these (see
+        # _layer_id_grid above and the piece-2 rewrite of
+        # _handle_probe), but _layer_extents in particular is still
+        # referenced by debug logging below.
         self._layer_dfs:     list[Optional["pd.DataFrame"]] = [None] * n
         self._layer_aggs:    list[Optional["xr.DataArray"]] = [None] * n
         self._layer_extents: list[Optional[tuple]]          = [None] * n
@@ -804,6 +822,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._layer_hist_edges  = [None] * n
             self._layer_mapping     = [None] * n
             self._layer_skip_reason = [None] * n
+            self._layer_id_grid     = [None] * n
             self._layer_dfs         = [None] * n   # vestigial -- see __init__
             self._layer_aggs        = [None] * n   # vestigial -- see __init__
             self._layer_extents     = [None] * n   # vestigial -- see __init__
@@ -1035,6 +1054,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._layer_hist_edges  = [None] * n
             self._layer_mapping     = [None] * n
             self._layer_skip_reason = ["deferred (never rendered)"] * n
+            self._layer_id_grid     = [None] * n
             self._layer_dfs         = [None] * n   # vestigial -- see __init__
             self._layer_aggs        = [None] * n   # vestigial -- see __init__
             self._layer_extents     = [None] * n   # vestigial -- see __init__
@@ -1151,6 +1171,15 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         py = max(0, min(int(np.argmin(np.abs(y_coords - y))), h - 1))
         return px, py
 
+    # VESTIGIAL as of the 2026-09 hover-probe redesign's second pass --
+    # _populated_mask/_bin_screen_size/_search_radius_bins/
+    # _nearest_populated_bin (the next four methods) are no longer
+    # called by _handle_probe, which now does exact-coarse-cell lookup
+    # only -- see that method's docstring for why the neighbor-search
+    # tolerance these implement doesn't belong on a coarse grid. Kept
+    # rather than deleted on the chance something else (tests, a future
+    # caller) still references them; genuinely dead from
+    # _handle_probe's own perspective.
     @staticmethod
     def _populated_mask(values: np.ndarray) -> np.ndarray:
         """Boolean mask of bins that actually contain samples.
@@ -1245,15 +1274,52 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         return float(dist[k]), int(xs[k] + x0), int(ys[k] + y0)
 
     def _handle_probe(self, message: dict) -> dict:
-        """Probe every visible layer at the hover coordinates."""
+        """Probe every visible layer at the hover coordinates.
+
+        POST-2026-09 (hover-probe redesign piece 2): resolved entirely
+        locally now, against each layer's cached coarse id grid (see
+        ``_layer_id_grid``, ``ScatterLayerRender.id_grid_*`` in
+        ``data/reader.py``) -- no backend call. Identity comes from
+        ``VisibilityPlot._match_identity`` (shared with
+        ``VisibilityRaster``; ``polarization=None`` here rather than a
+        specific layer's, since this hover can win on any layer and the
+        coarse grid's whole point is an approximate range anyway --
+        exact, polarization-scoped identity is what click-to-exact,
+        piece 3, is for).
+
+        CORRECTION (2026-09, second pass): the pre-redesign "search a
+        few screen pixels further for a barely-missed point" tolerance
+        (``_search_radius_bins``/``_nearest_populated_bin``, inherited
+        unchanged from the full-resolution design) is NOT used here
+        anymore -- exact-cell lookup only. That tolerance was
+        calibrated for a full-resolution canvas where each bin is one
+        or a few screen pixels and a single-pixel mark could be barely
+        missed; it does not belong on a DELIBERATELY coarse grid, where
+        each cell already covers a wide screen area on its own. Worse,
+        it actively misled: confirmed in practice (a real hover
+        reporting data ~250-300 screen pixels away, from a visually
+        unrelated region of the plot, with no indication of direction
+        or distance meaning to the user) that stacking "search
+        neighbors" on top of an already-coarse grid can span an
+        unbounded, confusing distance rather than a small forgiveness
+        margin. An empty coarse cell now means exactly what it looks
+        like: no data reported for that hover, full stop -- matching
+        what a coarse grid can honestly promise.
+
+        Reported value/identity are still coarse -- see
+        ``ScatterLayerRender.id_grid_*``'s docstring for that
+        (unrelated, intentional) trade-off. ``n_samples`` is not
+        available from the coarse grid (no count reduction computed
+        there) and reports ``None`` here; that's a known, deliberate
+        gap piece 3 fills, not an oversight.
+        """
         x = float(message.get("x", 0.0))
         y = float(message.get("y", 0.0))
 
-        # Range-check against what is actually on screen.  The old code
-        # checked the *full* data extent, so after a zoom a hover well
-        # outside the visible region still passed and then got clamped
-        # by argmin onto an edge bin, reporting that edge bin's data as
-        # though it were under the cursor.
+        # Range-check against what is actually on screen.  See
+        # pre-redesign comment (unchanged): checking the full data
+        # extent instead would let an out-of-view hover clamp onto an
+        # edge bin and report it as though it were under the cursor.
         if self._current_viewport is not None:
             vx0, vx1, vy0, vy1 = self._current_viewport
         else:
@@ -1265,58 +1331,44 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 "out_of_range", "<i>out of range</i>", x=x, y=y, layers=[],
             )
 
-        # Gather a candidate from every layer that is currently drawn.
-        # (distance_in_screen_px, layer_index, px, py)
-        candidates: list[tuple[float, int, int, int]] = []
-        fallback:   Optional[tuple[int, int, int]] = None   # (layer, px, py)
+        # Gather a candidate from every layer that actually has data in
+        # the exact coarse cell under the cursor -- no neighbor search,
+        # see this method's docstring for why.
+        candidates: list[tuple[int, int, int]] = []   # (layer_index, px, py)
         debug_rows: list[str] = []
-        radius = 0
 
-        for i, (agg, df, lyr) in enumerate(
-            zip(self._layer_aggs, self._layer_dfs, self._layers)
-        ):
-            if agg is None or df is None or len(df) == 0:
+        for i, (id_grid, lyr) in enumerate(zip(self._layer_id_grid, self._layers)):
+            if id_grid is None:
                 reason = (self._layer_skip_reason[i]
                           if i < len(self._layer_skip_reason) else None)
-                ext = (self._layer_extents[i]
-                       if i < len(self._layer_extents) else None)
-                extent_s = ""
-                if ext is not None:
-                    _, xmin, xmax, ymin, ymax = ext
-                    extent_s = (f" x=[{xmin:.6g},{xmax:.6g}]"
-                                f" y=[{ymin:.6g},{ymax:.6g}]")
-                debug_rows.append(
-                    f"L{i}[{lyr.label}]:skip({reason or 'no agg/df'})"
-                    f"{extent_s}"
-                )
+                debug_rows.append(f"L{i}[{lyr.label}]:skip({reason or 'no id grid'})")
                 continue
+            h, w = id_grid["value"].shape
+            gx0, gx1 = id_grid["x_range"]
+            gy0, gy1 = id_grid["y_range"]
+            # A lightweight xr.DataArray wrapper -- lets this reuse
+            # _agg_pixel unchanged (it only ever touches
+            # .shape/.values/.coords[.dims[...]]) rather than
+            # duplicating that mapping for a plain-array + explicit-
+            # range representation. Regularly spaced by construction
+            # (the coarse grid is a uniform Canvas.points() binning),
+            # unlike raster's raw_grid coordinates -- linspace is exact
+            # here, not an approximation.
+            agg = xr.DataArray(
+                id_grid["value"], dims=("y", "x"),
+                coords={"x": np.linspace(gx0, gx1, w),
+                        "y": np.linspace(gy0, gy1, h)},
+            )
             idx = self._agg_pixel(agg, x, y)
             if idx is None:
                 debug_rows.append(f"L{i}:skip(no coords)")
                 continue
             px, py = idx
-            if fallback is None:
-                fallback = (i, px, py)
-            bin_w, bin_h = self._bin_screen_size(agg)
-            radius = self._search_radius_bins(agg)
-            hit = self._nearest_populated_bin(
-                agg, px, py, radius, bin_w, bin_h
-            )
-            if hit is None:
-                debug_rows.append(
-                    f"L{i}:miss@({px},{py}) shape={agg.shape} "
-                    f"bin={bin_w:.1f}x{bin_h:.1f}px r={radius}"
-                )
-                continue
-            dist, hpx, hpy = hit
-            candidates.append((dist, i, hpx, hpy))
-            # Log the hovered bin as well as the matched one; when they
-            # differ, that difference is the whole story.
-            debug_rows.append(
-                f"L{i}[{lyr.label}]:hit@({hpx},{hpy}) from({px},{py}) "
-                f"d={dist:.1f}px "
-                f"shape={agg.shape} bin={bin_w:.1f}x{bin_h:.1f}px r={radius}"
-            )
+            if np.isfinite(id_grid["value"][py, px]):
+                candidates.append((i, px, py))
+                debug_rows.append(f"L{i}[{lyr.label}]:hit@({px},{py}) shape={agg.shape}")
+            else:
+                debug_rows.append(f"L{i}[{lyr.label}]:empty@({px},{py}) shape={agg.shape}")
 
         if self._probe_debug:
             log.info(
@@ -1324,62 +1376,68 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 x, y, vx0, vx1, vy0, vy1, "  ".join(debug_rows),
             )
 
-        if not candidates and fallback is None:
+        if not candidates:
             return self._probe_envelope(
                 "no_data", "<i>no data</i>", x=x, y=y, layers=[],
             )
 
-        # Prefer an exact-bin hit; among equals prefer the lowest layer
-        # index so the answer is stable as the cursor moves.
-        if candidates:
-            dist, layer_i, px, py = min(candidates, key=lambda c: (c[0], c[1]))
-            exact = dist == 0.0
-        else:
-            layer_i, px, py = fallback          # type: ignore[misc]
-            dist, exact     = 0.0, True
+        # Prefer the lowest layer index so the answer is stable as the
+        # cursor moves across a region where multiple layers overlap.
+        layer_i, px, py = min(candidates, key=lambda c: c[0])
 
         lyr = self._layers[layer_i]
-        df  = self._layer_dfs[layer_i]
-        agg = self._layer_aggs[layer_i]
-        try:
-            info = self._backend.probe_scatter_pixel(
-                agg, px, py, self._selection, df
-            )
-        except Exception as exc:
-            log.warning(
-                "probe_scatter_pixel layer %d at (%d,%d) failed: %s",
-                layer_i, px, py, exc,
-            )
-            return self._probe_envelope(
-                "error",
-                f"<span style='color:#f38ba8'>probe error: {exc}</span>",
-                x=x, y=y, layers=[], error=str(exc),
-            )
+        id_grid = self._layer_id_grid[layer_i]
 
-        # Report *every* layer, not just the one that answered.
-        #
-        # A status bar showing only the winning layer cannot distinguish
-        # "XX has no data here" from "you weren't told about XX", and
-        # that distinction is the whole question when judging whether an
-        # outlier is single-polarization or common to both.  An explicit
-        # em dash for a layer with nothing at this location carries real
-        # information; silence carries none.
-        #
-        # Values for the non-winning layers are read straight from their
-        # aggs rather than by calling probe_scatter_pixel again: the
-        # backend recounts samples against the full DataFrame, which is
-        # a scan of >1e6 rows per call, and hover fires many times a
-        # second.  The sample count N therefore describes the winning
-        # layer only, which is why it stays adjacent to that layer's
-        # reading in the field order below.
-        # Built as records first, rendered to HTML second.  The two used
-        # to happen in one pass, which meant the only machine-readable
-        # form of "did this layer have data" was the presence of an em
-        # dash in a markup string — see _probe_envelope for why that is a
-        # bad thing for a test to depend on.  One entry per layer
-        # regardless of visibility, so field order is stable for callers;
-        # the HTML pass below is what filters hidden layers out.
-        hits = {i: (d, hx, hy) for d, i, hx, hy in candidates}
+        def _cell_range(lo_key: str, hi_key: str) -> Optional[tuple[float, float]]:
+            if lo_key not in id_grid:
+                return None
+            lo, hi = id_grid[lo_key][py, px], id_grid[hi_key][py, px]
+            if not (np.isfinite(lo) and np.isfinite(hi)):
+                return None
+            return float(lo), float(hi)
+
+        t_range    = _cell_range("t_lo", "t_hi")
+        bl_range   = _cell_range("bl_lo", "bl_hi")
+        freq_range = _cell_range("f_lo", "f_hi")
+
+        identity = self._match_identity(
+            t_range=t_range, bl_range=bl_range, freq_range=freq_range,
+            polarization=None,
+        )
+
+        raw_value = float(id_grid["value"][py, px])
+        value = _json_num(raw_value) if np.isfinite(raw_value) else None
+
+        # Cell-space centre/bounds, for the status bar and _flag_key --
+        # exact (not approximate) since the coarse grid is uniformly
+        # spaced by construction; only the CONTENTS of each cell
+        # (identity, value) are coarse, not its geometry.
+        cell_w, cell_h = (
+            (id_grid["x_range"][1] - id_grid["x_range"][0]) / id_grid["value"].shape[1],
+            (id_grid["y_range"][1] - id_grid["y_range"][0]) / id_grid["value"].shape[0],
+        )
+        cell_x_range = (id_grid["x_range"][0] + px * cell_w,
+                        id_grid["x_range"][0] + (px + 1) * cell_w)
+        cell_y_range = (id_grid["y_range"][0] + py * cell_h,
+                         id_grid["y_range"][0] + (py + 1) * cell_h)
+        x_centre = (cell_x_range[0] + cell_x_range[1]) / 2.0
+        y_centre = (cell_y_range[0] + cell_y_range[1]) / 2.0
+
+        info = {
+            "value": raw_value if np.isfinite(raw_value) else None,
+            "x_range": cell_x_range, "y_range": cell_y_range,
+            **identity,
+        }
+
+        # Report *every* layer, not just the one that answered -- see
+        # the pre-redesign comment (unchanged rationale): a status bar
+        # showing only the winning layer cannot distinguish "XX has no
+        # data here" from "you weren't told about XX". Other layers'
+        # values are read straight from their own id grids at the same
+        # hovered coarse pixel -- all layers share the same grid shape
+        # (same probe_grid_max_cells, same viewport), so (px,py) from
+        # one layer's lookup is a valid index into another's.
+        hits = {i: (hpx, hpy) for i, hpx, hpy in candidates}
         layer_results: list[dict] = []
         for i, other in enumerate(self._layers):
             entry = {
@@ -1387,61 +1445,41 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 "label":       other.label,
                 "visible":     other.alpha > 0.0,
                 "value":       None,
-                "distance_px": None,
                 "skip_reason": (self._layer_skip_reason[i]
                                 if i < len(self._layer_skip_reason) else None),
             }
             hit = hits.get(i)
-            if entry["visible"] and hit is not None:
-                d_i, hx, hy = hit
-                # Routing a non-finite value through _json_num is the one
-                # deliberate label change in this refactor: the old loop
-                # rendered a NaN bin as the literal text "nan", which
-                # reads as a value in the status bar when it means the
-                # opposite.  Unreachable in normal flow — _populated_mask
-                # tests np.isfinite for float aggs, so
-                # _nearest_populated_bin never returns a NaN bin — so
-                # this only fires if mask and agg ever disagree, and an
-                # em dash is the honest answer when they do.  Every other
-                # input produces byte-identical HTML to the old loop.
+            other_grid = self._layer_id_grid[i]
+            if entry["visible"] and hit is not None and other_grid is not None:
+                hx, hy = hit
                 try:
-                    val = _json_num(self._layer_aggs[i].values[hy, hx])
+                    val = _json_num(float(other_grid["value"][hy, hx]))
                 except (IndexError, TypeError, ValueError):
                     val = None
                 if val is not None:
-                    entry["value"]       = val
-                    entry["distance_px"] = float(d_i)
+                    entry["value"] = val
             layer_results.append(entry)
 
         readings = [
             self._layer_reading_html(e) for e in layer_results if e["visible"]
         ]
 
-        # Everything after the winning layer's own value: the axis
-        # coordinates, the sample count, and any backend extras.
         _, _, remainder = self._format_probe(
             info, lyr.label
         ).partition(self._PROBE_SEP)
 
         parts = readings + ([remainder] if remainder else [])
         label = self._PROBE_SEP.join(parts)
-        if not exact:
-            label += f"{self._PROBE_SEP}<i>nearest ({dist:.0f} px away)</i>"
 
-        # Only known-safe scalars are promoted out of `info`; the raw
-        # backend dict also holds tuples, numpy types, and the
-        # field_names/antenna_pairs lists, none of which have ever
-        # crossed the wire.  Widen this deliberately, not by splatting.
         return self._probe_envelope(
             "ok", label,
             x = x, y = y,
             winner      = int(layer_i),
-            exact       = bool(exact),
-            distance_px = float(dist),
             layers      = layer_results,
-            n_samples   = _json_num(info.get("n_scatter_samples")),
-            x_centre    = _json_num(info.get("x_centre")),
-            y_centre    = _json_num(info.get("y_centre")),
+            n_samples   = None,   # see this method's docstring
+            x_centre    = _json_num(x_centre),
+            y_centre    = _json_num(y_centre),
+            flag_key    = self._flag_key(info) if identity else {},
         )
 
     @staticmethod
@@ -1454,13 +1492,18 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         loop for why silence is not an acceptable substitute.  Hidden
         layers are filtered out before this is called: a hidden layer was
         never consulted, so any reading for it would be a lie.
+
+        REMOVED (2026-09, hover-probe redesign piece 2 second pass): the
+        "(~Npx)" distance annotation. That described how far a
+        neighbor-search had to reach on the old full-resolution
+        design -- now that lookups are exact-coarse-cell-only (see
+        _handle_probe's docstring), there is no search distance left to
+        report; every reading here is either present (this exact coarse
+        cell has data) or absent (it doesn't).
         """
         if entry["value"] is None:
             return f"<b>{entry['label']}:</b> <i>&mdash;</i>"
-        cell = f"<b>{entry['label']}:</b> {entry['value']:.6g}"
-        if entry["distance_px"]:   # falsy covers both None and an exact hit
-            cell += f" <i>(~{entry['distance_px']:.0f}px)</i>"
-        return cell
+        return f"<b>{entry['label']}:</b> {entry['value']:.6g}"
 
     def _register_extra_comm_handlers(self) -> None:
         self._comm.register(self._msg_set_alpha,   self._handle_set_alpha)
@@ -1514,6 +1557,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._x_dim, layer_specs, selection,
             x_range=x_range, y_range=y_range, color_mode=self._color_mode,
             width=self._width, height=self._height,
+            probe_grid_max_cells=self._probe_grid_max_cells,
         )
 
         if len(result.layers) != len(self._layers):
@@ -1547,6 +1591,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         self._layer_hist_edges  = []
         self._layer_mapping     = []
         self._layer_skip_reason = []
+        self._layer_id_grid     = []
         for lyr, rendered in zip(self._layers, result.layers):
             self._layer_images.append(rendered.image)
             self._layer_n_in_view.append(rendered.n_in_view)
@@ -1560,6 +1605,29 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 )
             self._layer_mapping.append(mapping)
             self._layer_skip_reason.append(rendered.skip_reason)
+
+            # Hover-probe redesign piece 2: coarse id grid, one dict per
+            # layer, or None for a layer with no data at all (matches
+            # the skip_reason-set case exactly -- there is nothing to
+            # grid). See __init__'s docstring for the dict shape.
+            if rendered.id_grid_value is not None:
+                id_grid: dict = {
+                    "value":   rendered.id_grid_value,
+                    "x_range": rendered.id_grid_x_range,
+                    "y_range": rendered.id_grid_y_range,
+                }
+                if rendered.id_grid_t_lo is not None:
+                    id_grid["t_lo"] = rendered.id_grid_t_lo
+                    id_grid["t_hi"] = rendered.id_grid_t_hi
+                if rendered.id_grid_bl_lo is not None:
+                    id_grid["bl_lo"] = rendered.id_grid_bl_lo
+                    id_grid["bl_hi"] = rendered.id_grid_bl_hi
+                if rendered.id_grid_freq_lo is not None:
+                    id_grid["f_lo"] = rendered.id_grid_freq_lo
+                    id_grid["f_hi"] = rendered.id_grid_freq_hi
+                self._layer_id_grid.append(id_grid)
+            else:
+                self._layer_id_grid.append(None)
 
         # Vestigial -- kept only so _handle_probe's existing guards
         # degrade gracefully. See __init__'s comment on these fields.
@@ -1839,6 +1907,39 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         self._color_mode = mode
         self._rerender()
         self._update_state_source()
+
+    def set_probe_grid_resolution(self, max_cells: int) -> None:
+        """Adjust the coarse hover-identity grid's resolution and re-render.
+
+        Hover-probe redesign piece 2 (2026-09) -- see
+        ``ScatterLayerRender.id_grid_*``'s docstring in ``data/reader.py``
+        for what this grid is and why it exists.  Same shape as
+        ``update_scaling``/``set_color_mode``: this changes something the
+        backend computes as part of the same ``query_columns()`` call
+        that produces everything else, so a resolution change costs a
+        fresh backend round trip regardless -- there is no free,
+        client-side way to change it after the fact.
+
+        A higher ``max_cells`` narrows a hover's reported
+        scan/antenna/SPW range at the cost of a modestly larger
+        response payload (still tens of KB even at fairly high
+        resolution -- six-to-seven scalar reductions per coarse bin,
+        not raw data).  ``probe_scatter_pixel`` (click-to-exact, piece
+        3) remains the way to get an exact reading regardless of this
+        setting.
+
+        Parameters
+        ----------
+        max_cells : int
+            Upper bound on the coarse grid's total cell count
+            (width x height) -- see ``_scatter_render._id_grid_size``.
+            Must be positive.
+        """
+        max_cells = int(max_cells)
+        if max_cells <= 0:
+            raise ValueError(f"max_cells must be positive, got {max_cells}")
+        self._probe_grid_max_cells = max_cells
+        self._rerender()
 
     def _image_response(self, status: str = "ok", **extra) -> dict:
         """Build a j2p response dict containing the current image and viewport.

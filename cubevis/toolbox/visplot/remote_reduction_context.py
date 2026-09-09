@@ -411,6 +411,7 @@ class RemoteReductionContext(ReductionContext):
         color_mode: str = "global",
         width: int = 800,
         height: int = 600,
+        probe_grid_max_cells: int = 3072,
     ):
         # STRAIGHT RELAY -- and correctly so now. MSv2Backend.query_columns
         # (2026-09 redesign) bins and shades server-side and returns a
@@ -419,11 +420,14 @@ class RemoteReductionContext(ReductionContext):
         # rows over the wire the way it did before that redesign -- see
         # ScatterRenderResult's docstring in data/reader.py.
         # MSv4Backend.query_columns matches this contract too (2026-09).
+        # probe_grid_max_cells added (2026-09, hover-probe redesign
+        # piece 2) -- forwarded like every other keyword here.
         return self._call(
             "query_columns",
             xaxis=xaxis, layers=layers, selection=selection,
             x_range=x_range, y_range=y_range, color_mode=color_mode,
             width=width, height=height,
+            probe_grid_max_cells=probe_grid_max_cells,
         )
 
     def probe_raster_pixel(

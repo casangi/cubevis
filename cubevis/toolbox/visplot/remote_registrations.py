@@ -118,14 +118,18 @@ class VisplotRemoteBackend:
 
     def query_columns(self, xaxis, layers, selection, *,
                        x_range=None, y_range=None, color_mode="global",
-                       width: int = 800, height: int = 600):
+                       width: int = 800, height: int = 600,
+                       probe_grid_max_cells: int = 3072):
         # See RemoteReductionContext.query_columns's comment: this now
         # relays a bounded ScatterRenderResult, not raw DataFrames --
         # MSv2Backend.query_columns does the binning+shading (2026-09).
+        # probe_grid_max_cells added (2026-09, hover-probe redesign
+        # piece 2) -- forwarded like every other keyword here.
         return self._reader.query_columns(
             xaxis, layers, selection,
             x_range=x_range, y_range=y_range, color_mode=color_mode,
             width=width, height=height,
+            probe_grid_max_cells=probe_grid_max_cells,
         )
 
     def probe_raster_pixel(self, raw_grid, gx: int, gy: int, selection,

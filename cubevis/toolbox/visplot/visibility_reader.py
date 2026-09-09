@@ -119,6 +119,7 @@ class VisibilityReader(Protocol):
         color_mode: str = "global",
         width: int = 800,
         height: int = 600,
+        probe_grid_max_cells: int = 3072,
     ):
         """Query, bin, and shade scatter layers; return a bounded result.
 
@@ -130,6 +131,9 @@ class VisibilityReader(Protocol):
         ``ScatterRenderResult``'s docstring in ``data/reader.py`` for
         why (in short: that contract shipped up to ~30M raw rows over
         the wire for a remote session).
+
+        ``probe_grid_max_cells`` (2026-09, hover-probe redesign piece 2)
+        -- see ``MSv2Backend.query_columns``'s docstring.
         """
         ...
 

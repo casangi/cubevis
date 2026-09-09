@@ -130,6 +130,46 @@ class ScatterLayerRender:
     mapping_x:   Optional[np.ndarray]
     mapping_u:   Optional[np.ndarray]
 
+    # ---- hover-probe redesign piece 2 (2026-09) -------------------- #
+    # A second, much coarser per-bin grid of native-coordinate ranges,
+    # computed alongside `image` in the same render (see
+    # `_scatter_render.render_layer`'s `probe_grid_max_cells` handling).
+    # Six 2D float arrays, all shaped (id_grid_height, id_grid_width) --
+    # min/max of (time, baseline_id, frequency) for whatever samples
+    # landed in each coarse bin. `None` (all six) when this layer had no
+    # samples at all (skip_reason set) -- there is nothing to grid.
+    #
+    # Deliberately a SEPARATE, coarser canvas from `image`, not a reuse
+    # of the display resolution: the whole point (see
+    # XArrayReader.query_columns' `probe_grid_max_cells` docstring) is
+    # that this only has to narrow a hover to "roughly this range", so a
+    # ~64x48 grid keeps the extra payload to tens of KB even when the
+    # display canvas itself is much larger. `id_grid_x_range`/
+    # `id_grid_y_range` are carried explicitly rather than assumed equal
+    # to the layer's own display range, since a per-layer local
+    # color_mode range can differ from what was actually binned here --
+    # this grid is always binned over the SAME (x0,x1,y0,y1) the display
+    # image used, but recording it explicitly avoids ever having to
+    # assume that alignment holds if this ever changes.
+    id_grid_t_lo:    Optional[np.ndarray] = None
+    id_grid_t_hi:    Optional[np.ndarray] = None
+    id_grid_bl_lo:   Optional[np.ndarray] = None
+    id_grid_bl_hi:   Optional[np.ndarray] = None
+    id_grid_freq_lo: Optional[np.ndarray] = None
+    id_grid_freq_hi: Optional[np.ndarray] = None
+    id_grid_x_range: Optional[tuple[float, float]] = None
+    id_grid_y_range: Optional[tuple[float, float]] = None
+    # Coarse per-bin mean value (same grid, same summary() pass as the
+    # six ranges above) -- added so a local hover can report an
+    # approximate reading alongside coarse identity, matching what the
+    # pre-redesign per-hover backend call used to provide for both at
+    # once. Deliberately the mean of the SAME quantity `image` shades
+    # (lyr's y-axis quantity), not a separate concept -- "coarse but
+    # free" for both value and identity together, with
+    # probe_scatter_pixel (click-to-exact) remaining the source of an
+    # exact reading, exactly as it already is for identity.
+    id_grid_value:   Optional[np.ndarray] = None
+
 
 @dataclass(frozen=True)
 class ScatterRenderResult:
@@ -783,6 +823,7 @@ class XArrayReader(abc.ABC):
         color_mode: str = "global",
         width: int = 800,
         height: int = 600,
+        probe_grid_max_cells: int = 3072,
     ) -> "ScatterRenderResult":
         """Query, bin, and shade scatter layers; return a bounded result.
 
@@ -794,6 +835,18 @@ class XArrayReader(abc.ABC):
         ``VisibilityScatter`` -- see ``ScatterRenderResult``'s docstring
         for why (in short: the old raw-DataFrame contract shipped up to
         ~30M rows over the wire for a remote session).
+
+        ``probe_grid_max_cells`` (2026-09, hover-probe redesign piece 2)
+        controls the resolution of a second, much coarser per-bin
+        native-coordinate-range grid computed alongside the display
+        image -- see ``ScatterLayerRender.id_grid_*``'s docstring for
+        what it carries and why it exists. Default ~3072 (about 64x48)
+        is deliberately far coarser than the display canvas
+        (``width``/``height``): the identity grid only has to narrow a
+        hover to "roughly this range of scans/antennas/SPWs", not
+        pinpoint a single sample -- that precision is what
+        ``probe_scatter_pixel``'s click-to-exact path is for. Adjustable
+        via ``VisibilityScatter.set_probe_grid_resolution()``.
 
         Implemented identically by both ``MSv2Backend`` and
         ``MSv4Backend`` (2026-09).

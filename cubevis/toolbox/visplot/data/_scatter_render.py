@@ -98,6 +98,39 @@ def compute_canvas_size(
     return width, height
 
 
+def _id_grid_size(
+    canvas_w: int, canvas_h: int, max_cells: int,
+) -> tuple[int, int]:
+    """(width, height) for the coarse identity grid, bounded to at most
+    ``max_cells`` total cells while matching the *display canvas's*
+    screen aspect ratio.
+
+    BUG FIX (2026-09): the first version of this function computed
+    aspect ratio from the data's own (x1-x0)/(y1-y0) spans -- which is
+    wrong whenever x and y are different physical quantities (e.g. Time
+    in seconds vs. Amplitude in Jy, ratio in the thousands), since
+    their raw numeric spans have nothing to do with the canvas's actual
+    screen-pixel geometry. Confirmed in practice: a ~5400s Time span
+    against a ~130 Jy Amplitude span produced a ~341x9 grid instead of
+    anything resembling the roughly-square display canvas, making each
+    coarse cell ~2.6 screen-px wide but ~106 screen-px tall -- a hover
+    probe's "search a little further for a barely-missed point"
+    tolerance (see _handle_probe -- REMOVED for the id grid specifically
+    as of this same fix, see that method) then computed its search
+    radius from the *smallest* bin dimension, letting a "miss" search
+    hundreds of screen pixels in the tall direction and report data
+    from a completely different, visually unrelated region as though it
+    were "nearby". Using the canvas's own screen aspect ratio instead
+    keeps id grid cells roughly square in screen space, matching what a
+    user actually sees, regardless of what physical units x and y are
+    in.
+    """
+    aspect = max(canvas_w, 1) / max(canvas_h, 1)
+    h = max(1, int(round(math.sqrt(max_cells / max(aspect, 1e-9)))))
+    w = max(1, int(round(max_cells / h)))
+    return w, h
+
+
 def _empty_render(canvas_h: int, canvas_w: int, reason: str) -> ScatterLayerRender:
     return ScatterLayerRender(
         image=np.zeros((canvas_h, canvas_w), dtype=np.uint32),
@@ -111,6 +144,7 @@ def render_layer(
     x0: float, x1: float, y0: float, y1: float,
     canvas_w: int, canvas_h: int,
     color_mode: str, full_y_range: tuple[float, float],
+    probe_grid_max_cells: int = 3072,
 ) -> ScatterLayerRender:
     """Bin + shade one layer.
 
@@ -131,6 +165,18 @@ def render_layer(
     asymmetry). The widget now derives "hidden" purely from its own
     live ``lyr.alpha`` at composite time -- see
     ``VisibilityScatter._collapse_and_composite``.
+
+    ADDITION (2026-09, hover-probe redesign piece 2): also computes a
+    second, much coarser per-bin native-coordinate-range grid (see
+    ``ScatterLayerRender.id_grid_*``'s docstring) via a SEPARATE
+    ``Canvas.points()`` call at ``_id_grid_size(..., probe_grid_max_cells)``
+    resolution, using Datashader's ``summary()`` to compute all six
+    min/max reductions (time, baseline_id, frequency) in one aggregation
+    pass rather than six separate ones. Requires ``df`` to carry
+    "time"/"baseline_id"/"frequency" columns alongside "x"/"y" --
+    conditional per-column, so a caller that only populates a subset
+    (or none, e.g. during a transition) still gets a valid render, just
+    with the corresponding ``id_grid_*`` fields left ``None``.
     """
     if not HAS_DATASHADER:
         raise ImportError(
@@ -239,8 +285,64 @@ def render_layer(
     if mapping is not None:
         mapping_x, mapping_u = mapping.curve
 
+    # ---- hover-probe redesign piece 2: coarse identity grid -------- #
+    # A second, separate (much coarser) Canvas.points() pass -- see
+    # this function's docstring and _id_grid_size for why it can't just
+    # reuse the display `agg` above. Conditional per native-coordinate
+    # column: a caller (or an older DataFrame construction path mid
+    # transition) that hasn't populated one of "time"/"baseline_id"/
+    # "frequency" simply doesn't get that pair of id_grid_* fields,
+    # rather than failing the whole render.
+    id_grid_t_lo = id_grid_t_hi = None
+    id_grid_bl_lo = id_grid_bl_hi = None
+    id_grid_freq_lo = id_grid_freq_hi = None
+    id_grid_value = None
+    id_cols = [c for c in ("time", "baseline_id", "frequency") if c in df.columns]
+    if id_cols or True:
+        # "or True": id_grid_value (the coarse mean reading) only needs
+        # x/y, which always exist -- so the coarse grid is still worth
+        # computing even when none of the three identity columns made
+        # it into df (e.g. mid-transition), just with only the value
+        # field populated and all six range fields left None.
+        id_w, id_h = _id_grid_size(canvas_w, canvas_h, probe_grid_max_cells)
+        id_cvs = ds.Canvas(
+            plot_width=id_w, plot_height=id_h,
+            x_range=(x0, x1), y_range=(y0, y1),
+        )
+        summary_kwargs = {"val": ds_agg.mean("y")}
+        if "time" in id_cols:
+            summary_kwargs["t_lo"] = ds_agg.min("time")
+            summary_kwargs["t_hi"] = ds_agg.max("time")
+        if "baseline_id" in id_cols:
+            summary_kwargs["bl_lo"] = ds_agg.min("baseline_id")
+            summary_kwargs["bl_hi"] = ds_agg.max("baseline_id")
+        if "frequency" in id_cols:
+            summary_kwargs["f_lo"] = ds_agg.min("frequency")
+            summary_kwargs["f_hi"] = ds_agg.max("frequency")
+        # One aggregation pass computes all requested reductions
+        # together (Datashader's ds.summary()), not one pass per
+        # reduction -- seven reductions here cost the same single
+        # vectorized pass over df as the one-reduction display agg
+        # above, just a bigger (still tiny, ~id_w*id_h*7 float64s) output.
+        id_agg = id_cvs.points(df, "x", "y", ds_agg.summary(**summary_kwargs))
+        id_grid_value = id_agg["val"].values
+        if "time" in id_cols:
+            id_grid_t_lo = id_agg["t_lo"].values
+            id_grid_t_hi = id_agg["t_hi"].values
+        if "baseline_id" in id_cols:
+            id_grid_bl_lo = id_agg["bl_lo"].values
+            id_grid_bl_hi = id_agg["bl_hi"].values
+        if "frequency" in id_cols:
+            id_grid_freq_lo = id_agg["f_lo"].values
+            id_grid_freq_hi = id_agg["f_hi"].values
+
     return ScatterLayerRender(
         image=img_arr, n_in_view=n_in_view, skip_reason=None,
         peak_value=peak_value, hist_counts=hist_counts, hist_edges=hist_edges,
         mapping_x=mapping_x, mapping_u=mapping_u,
+        id_grid_t_lo=id_grid_t_lo, id_grid_t_hi=id_grid_t_hi,
+        id_grid_bl_lo=id_grid_bl_lo, id_grid_bl_hi=id_grid_bl_hi,
+        id_grid_freq_lo=id_grid_freq_lo, id_grid_freq_hi=id_grid_freq_hi,
+        id_grid_x_range=(x0, x1), id_grid_y_range=(y0, y1),
+        id_grid_value=id_grid_value,
     )

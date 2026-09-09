@@ -850,6 +850,7 @@ class MSv2Backend(XArrayReader):
         color_mode: str = "global",
         width: int = 800,
         height: int = 600,
+        probe_grid_max_cells: int = 3072,
     ) -> ScatterRenderResult:
         """Query, bin, and shade scatter layers; return a bounded render result.
 
@@ -897,6 +898,11 @@ class MSv2Backend(XArrayReader):
             Requested canvas size; the actual size used (after the
             sparse-data adaptive shrink) is returned in
             ``ScatterRenderResult.canvas_width/height``.
+        probe_grid_max_cells :
+            Resolution cap for the coarse per-bin identity grid computed
+            alongside each layer's image -- see
+            ``ScatterLayerRender.id_grid_*``'s docstring and
+            ``_scatter_render._id_grid_size``.
 
         Returns
         -------
@@ -931,6 +937,7 @@ class MSv2Backend(XArrayReader):
             _scatter_render.render_layer(
                 dataframes.get((lyr.y_axis, lyr.polarization)), lyr,
                 x0, x1, y0, y1, canvas_w, canvas_h, color_mode, full_y_range,
+                probe_grid_max_cells=probe_grid_max_cells,
             )
             for lyr in layers
         )
@@ -1058,20 +1065,42 @@ class MSv2Backend(XArrayReader):
         template = next(iter(lazy_y.values()))
         lazy_x = self._lazy_x_axis(ds, xaxis, template)
 
+        # Hover-probe redesign piece 2 (2026-09): native-coordinate
+        # columns alongside x/y, broadcast to the same template shape --
+        # same pattern as lazy_x above, just from ds.coords directly
+        # rather than a derived quantity. Conditional per-coordinate: a
+        # partition missing one (unexpected, but not fatal) just omits
+        # that column, which _scatter_render.render_layer already
+        # handles gracefully (see its "id_cols" gate). These feed
+        # ScatterLayerRender.id_grid_* -- see that field's docstring for
+        # why the identity grid needs raw per-sample native coordinates
+        # rather than anything already computed above.
+        lazy_id_cols: dict[str, xr.DataArray] = {}
+        for coord_name in ("time", "baseline_id", "frequency"):
+            if coord_name in ds.coords:
+                lazy_id_cols[coord_name] = (
+                    ds.coords[coord_name].broadcast_like(template)
+                )
+
         if use_fused:
             # Single dask.compute() — VISIBILITY read once
-            all_lazy = list(lazy_y.values()) + [lazy_x]
+            id_col_names = list(lazy_id_cols.keys())
+            all_lazy = (list(lazy_y.values()) + [lazy_x] +
+                        [lazy_id_cols[c] for c in id_col_names])
             computed  = dask.compute(*all_lazy)
-            y_computed = dict(zip(lazy_y.keys(), computed[:-1]))
-            x_computed = computed[-1]
+            n_y = len(lazy_y)
+            y_computed = dict(zip(lazy_y.keys(), computed[:n_y]))
+            x_computed = computed[n_y]
+            id_computed = dict(zip(id_col_names, computed[n_y + 1:]))
 
             def _ravel_df(x_arr, y_arr) -> pd.DataFrame:
                 x_flat = np.asarray(x_arr).ravel()
                 y_flat = np.asarray(y_arr).ravel()
                 ok = np.isfinite(x_flat) & np.isfinite(y_flat)
-                return pd.DataFrame(
-                    {"x": x_flat[ok], "y": y_flat[ok]}, copy=False
-                )
+                cols = {"x": x_flat[ok], "y": y_flat[ok]}
+                for cname, carr in id_computed.items():
+                    cols[cname] = np.asarray(carr).ravel()[ok]
+                return pd.DataFrame(cols, copy=False)
 
             frames = {
                 key: _ravel_df(x_computed, y_arr)
@@ -1080,14 +1109,21 @@ class MSv2Backend(XArrayReader):
         else:
             # Serial fallback — xarray stack → to_dataframe (simpler path)
             x_c = lazy_x.compute()
+            id_c = {c: arr.compute() for c, arr in lazy_id_cols.items()}
+            keep_cols = ["x", "y"] + list(id_c.keys())
             frames = {}
             for key, lazy in lazy_y.items():
                 y_c   = lazy.compute()
                 x_bc  = x_c.broadcast_like(y_c)
-                stacked = xr.Dataset({"x": x_bc, "y": y_c}).stack(
+                data_vars = {"x": x_bc, "y": y_c}
+                for cname, carr in id_c.items():
+                    data_vars[cname] = carr.broadcast_like(y_c)
+                stacked = xr.Dataset(data_vars).stack(
                     sample=list(y_c.dims)
                 )
-                frames[key] = stacked.to_dataframe()[["x", "y"]].dropna()
+                frames[key] = stacked.to_dataframe()[keep_cols].dropna(
+                    subset=["x", "y"]
+                )
 
         return frames
 

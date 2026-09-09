@@ -153,6 +153,7 @@ class LocalVisibilityReader:
         color_mode: str = "global",
         width: int = 800,
         height: int = 600,
+        probe_grid_max_cells: int = 3072,
     ):
         """Delegate to ``backend.query_columns``.
 
@@ -163,6 +164,7 @@ class LocalVisibilityReader:
             xaxis, layers, selection,
             x_range=x_range, y_range=y_range, color_mode=color_mode,
             width=width, height=height,
+            probe_grid_max_cells=probe_grid_max_cells,
         )
 
     def probe_raster_pixel(

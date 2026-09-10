@@ -13,7 +13,7 @@ classes never need to know which one they are talking to.
 Design principles
 -----------------
 * **Four methods only** — ``query_raster``, ``query_columns``,
-  ``probe_raster_pixel``, ``probe_scatter_pixel``.  These are exactly the
+  ``probe_scatter_region``, ``identity_tables``.  These are exactly the
   methods called by ``VisibilityRaster`` and ``VisibilityScatter``; nothing
   more is exposed through this interface.
 * **No lifecycle methods** — ``open`` / ``close`` are the backend's concern,
@@ -44,7 +44,6 @@ from __future__ import annotations
 
 from typing import Optional, Protocol, runtime_checkable, TYPE_CHECKING
 
-import pandas as pd
 import xarray as xr
 
 if TYPE_CHECKING:
@@ -141,30 +140,22 @@ class VisibilityReader(Protocol):
     # Hover probes                                                         #
     # ------------------------------------------------------------------ #
 
-    def probe_raster_pixel(
+    def probe_scatter_region(
         self,
-        raw_grid: xr.DataArray,
-        gx: int,
-        gy: int,
+        x_axis: "Axis",
+        yaxes: list,
         selection: "SelectionSpec",
+        x_range: tuple,
+        y_range: tuple,
+        max_samples: int = 200_000,
     ) -> dict:
-        """Return metadata for a raster pixel at raw grid indices (gx, gy).
+        """Exact per-sample identity spans for a scatter rectangle
+        (hover-probe redesign piece 3, "click-to-exact").
 
-        Signature is identical to ``XArrayReader.probe_raster_pixel``.
-        """
-        ...
-
-    def probe_scatter_pixel(
-        self,
-        canvas_agg: xr.DataArray,
-        px: int,
-        py: int,
-        selection: "SelectionSpec",
-        scatter_df: pd.DataFrame,
-    ) -> dict:
-        """Return metadata for a scatter pixel at canvas indices (px, py).
-
-        Signature is identical to ``XArrayReader.probe_scatter_pixel``.
+        Signature is identical to ``XArrayReader.probe_scatter_region``.
+        Replaces the old ``probe_raster_pixel``/``probe_scatter_pixel``
+        pair, both dead code by the time of this change -- see
+        ``XArrayReader``'s "Pixel hover probe" section for why.
         """
         ...
 

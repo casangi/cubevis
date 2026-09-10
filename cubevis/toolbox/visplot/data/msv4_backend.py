@@ -104,13 +104,8 @@ except ImportError:
 from .reader import (
     channel_axis_is_unambiguous,
     to_channel_index,
-    channel_range_to_freq,
     XArrayReader,
     _compute_axis_values,
-    _agg_value,
-    _bin_membership,
-    _cell_bounds,
-    _widen_if_degenerate,
     ScatterLayerSpec,
     ScatterRenderResult,
     ScanInfo,
@@ -1763,251 +1758,144 @@ class MSv4Backend(XArrayReader):
         return ratio_x, ratio_y
 
     # ------------------------------------------------------------------ #
-    # Pixel hover probe                                                    #
+    # Scatter region probe (hover-probe redesign piece 3, click-to-exact) #
     # ------------------------------------------------------------------ #
 
-    def probe_raster_pixel(
+    def probe_scatter_region(
         self,
-        raw_grid: xr.DataArray,
-        gx: int,
-        gy: int,
+        x_axis: Axis,
+        yaxes: list[tuple[Axis, str]],
         selection: SelectionSpec,
-        polarization: Optional[str] = None,
-    ) -> dict:
-        """Return the value and metadata for raw grid cell (gx, gy).
+        x_range: tuple[float, float],
+        y_range: tuple[float, float],
+        max_samples: int = 200_000,
+    ) -> dict[tuple[Axis, str], dict]:
+        """Exact per-sample identity spans for a scatter rectangle.
 
-        Mirrors ``MSv2Backend.probe_raster_pixel`` exactly, including the
-        ``polarization`` parameter: when given, a partition that doesn't
-        locally carry it is excluded from the identity lookup below,
-        since it contributed nothing to ``raw_grid``'s value at this cell
-        (see ``_raster_2d``).  ``None`` keeps the previous,
-        polarization-blind behavior.  Uses the partition cache (OPT-A)
-        for the coordinate lookup pass.
+        Mirrors ``MSv2Backend.probe_scatter_region`` exactly, except this
+        backend's ``_lazy_quantity`` takes no ``ds`` argument (MSv4 has no
+        Axis.U/Axis.V-as-y-axis path -- see ``_lazy_quantity`` above).
+        See ``XArrayReader.probe_scatter_region`` for the full contract.
+
+        Like ``probe_raster_pixel``/``identity_tables`` above, this does
+        not special-case single-dish mode (``baseline_id`` is assumed) --
+        a partition without that coordinate simply contributes no
+        ``bl_range``/``bl_ids``, matching the pre-existing gap in those
+        two methods rather than introducing a new one.
         """
         self._require_open()
+        if not yaxes:
+            raise ValueError("probe_scatter_region: yaxes must be non-empty")
 
-        if raw_grid.ndim != 2:
-            raise ValueError(f"raw_grid must be 2D; got {raw_grid.ndim}D")
+        x0, x1 = min(x_range), max(x_range)
+        y0, y1 = min(y_range), max(y_range)
 
-        h, w = raw_grid.shape
-        if not (0 <= gx < w and 0 <= gy < h):
-            raise IndexError(
-                f"Pixel ({gx}, {gy}) out of range for grid ({w}×{h})"
-            )
+        counts:      dict = {key: 0 for key in yaxes}
+        too_many:    set  = set()
+        t_lo:  dict = {}; t_hi:  dict = {}
+        bl_lo: dict = {}; bl_hi: dict = {}
+        bl_ids_seen: dict = {key: set() for key in yaxes}
+        f_lo:  dict = {}; f_hi:  dict = {}
 
-        value = _agg_value(raw_grid.values, gy, gx)
-
-        y_dim_name = raw_grid.dims[0]
-        x_dim_name = raw_grid.dims[1]
-
-        x_coords = raw_grid.coords[x_dim_name].values
-        y_coords = raw_grid.coords[y_dim_name].values
-
-        # For numeric coordinates (time, baseline_id, frequency) the centre is
-        # the coordinate value itself, and cell bounds come from *local*
-        # neighbour spacing — MSv4 time and frequency axes are no more
-        # uniform than MSv2's, and a global-average half-width lets the
-        # metadata lookup below reach into neighbouring scans/SPWs.
-        # See MSv2Backend's _cell_bounds for the full rationale.
-        # For string/categorical coordinates (antenna_name in single-dish
-        # mode) the centre is the integer index, matching the index-range
-        # x_range/y_range returned by query_raster.
-        if np.issubdtype(x_coords.dtype, np.number):
-            x_centre = float(x_coords[gx])
-            x_range  = _cell_bounds(x_coords, gx)
-        else:
-            x_centre = float(gx)
-            x_range  = (x_centre - 0.5, x_centre + 0.5)
-
-        if np.issubdtype(y_coords.dtype, np.number):
-            y_centre = float(y_coords[gy])
-            y_range  = _cell_bounds(y_coords, gy)
-        else:
-            y_centre = float(gy)
-            y_range  = (y_centre - 0.5, y_centre + 0.5)
-
-        field_names:    set[str]              = set()
-        scan_names:     set[str]              = set()
-        antenna_pairs:  list[tuple[str, str]] = []
-        freq_range_ghz: Optional[tuple[float, float]] = None
-        # Per-SPW channel spans touched by this cell, for FlagDB.  A
-        # frequency range alone is not enough to write a flag back: CASA
-        # addresses channels as ``spw='0:137~139'``, and with several
-        # SPWs concatenated onto one axis a frequency window can span
-        # more than one.  Recording (spw -> channel span) here is exact,
-        # because it is read from the partition's own frequency
-        # coordinate rather than reconstructed from an average width.
-        chan_spans: dict = {}
-        # Recorded so the affine channel<->frequency assumption can be
-        # checked rather than assumed (see the handoff's CHROME-level
-        # Channel/Frequency switch): an irregular or concatenated window
-        # breaks the affinity silently.
-        chan_width: "Optional[float]" = None
+        def _update_range(lo_map, hi_map, key, lo, hi):
+            if key not in lo_map:
+                lo_map[key], hi_map[key] = lo, hi
+            else:
+                lo_map[key] = min(lo_map[key], lo)
+                hi_map[key] = max(hi_map[key], hi)
 
         for raw_ds in self._iter_visibility_partitions(selection):
+            if len(too_many) == len(yaxes):
+                break
+
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
                 continue
 
-            # See the `polarization` parameter docstring above.
-            if (polarization is not None and "polarization" in ds.coords
-                    and polarization not in
-                        {str(p) for p in ds.coords["polarization"].values}):
+            local_pols = ({str(p) for p in ds.coords["polarization"].values}
+                          if "polarization" in ds.coords else set())
+            local_keys = [k for k in yaxes
+                          if k[1] in local_pols and k not in too_many]
+            if not local_keys:
                 continue
 
-            if x_dim_name == "time" or y_dim_name == "time":
-                t_vals     = ds.coords["time"].values
-                t_lo, t_hi = x_range if x_dim_name == "time" else y_range
-                t_mask     = (t_vals >= t_lo) & (t_vals <= t_hi)
-                if t_mask.any():
-                    for coord, target in (
-                        ("field_name", field_names),
-                        ("scan_name",  scan_names),
-                    ):
-                        if coord in ds.coords:
-                            target.update(
-                                str(v) for v in
-                                ds.coords[coord].values[t_mask] if v
-                            )
+            vis  = self._resolve_vis(ds)
+            flag = self._flag_mask(ds)
 
-            if x_dim_name == "baseline_id" or y_dim_name == "baseline_id":
-                bl_lo, bl_hi = (
-                    x_range if x_dim_name == "baseline_id" else y_range
-                )
-                if "baseline_antenna1_name" in ds.coords:
-                    bl_vals = ds.coords["baseline_id"].values
-                    bl_mask = (bl_vals >= bl_lo) & (bl_vals <= bl_hi)
-                    if bl_mask.any():
-                        ant1 = ds.coords["baseline_antenna1_name"].values
-                        ant2 = ds.coords["baseline_antenna2_name"].values
-                        for a1, a2 in zip(ant1[bl_mask], ant2[bl_mask]):
-                            pair = (str(a1), str(a2))
-                            if pair not in antenna_pairs:
-                                antenna_pairs.append(pair)
+            for (yaxis, pol) in local_keys:
+                key = (yaxis, pol)
+                lazy_y = self._lazy_quantity(vis, flag, yaxis, pol)
+                lazy_x = self._lazy_x_axis(ds, x_axis, lazy_y)
+                mask = ((lazy_x >= x0) & (lazy_x <= x1) &
+                        (lazy_y >= y0) & (lazy_y <= y1))
+                mask_c = mask.compute()
+                n = int(mask_c.values.sum())
+                if n == 0:
+                    continue
 
-            if x_dim_name == "frequency" or y_dim_name == "frequency":
-                f_lo, f_hi = (
-                    x_range if x_dim_name == "frequency" else y_range
-                )
-                # When the axis was relabelled as a channel index, those
-                # bounds are indices, not Hz.  Comparing them to the
-                # partition's frequency coordinate matches nothing, which
-                # looks like an empty cell rather than an error -- so
-                # invert first.  The reference coordinate travels in the
-                # agg's attrs precisely for this.
-                inv = channel_range_to_freq(raw_grid, f_lo, f_hi)
-                if inv is not None:
-                    f_lo, f_hi = inv
-                freq_vals = ds.coords["frequency"].values
-                f_mask    = (freq_vals >= f_lo) & (freq_vals <= f_hi)
-                if not f_mask.any():
-                    f_centre = (f_lo + f_hi) / 2
-                    nearest  = freq_vals[np.argmin(np.abs(freq_vals - f_centre))]
-                    f_mask   = freq_vals == nearest
-                if f_mask.any():
-                    f_sub = freq_vals[f_mask]
-                    lo_g, hi_g = (float(f_sub.min()) / 1e9,
-                                  float(f_sub.max()) / 1e9)
-                    if freq_range_ghz is None:
-                        freq_range_ghz = (lo_g, hi_g)
-                    else:
-                        freq_range_ghz = (min(freq_range_ghz[0], lo_g),
-                                          max(freq_range_ghz[1], hi_g))
-                    # Channel indices are positional within THIS
-                    # partition's frequency coordinate, which is what
-                    # makes them invertible: no global index exists (see
-                    # section 8.3 of the handoff), but frequency ->
-                    # (partition, local index) is an exact lookup.
-                    idx = np.flatnonzero(f_mask)
-                    # Identity may be an int (spw/ddid) or a string
-                    # (spectral_window_name) -- see
-                    # _partition_spw_ident.  Both work as a dict key;
-                    # only "no identity at all" is excluded, because an
-                    # unnameable window cannot appear in a flag command.
-                    key = self._partition_spw_id(raw_ds)
-                    lo_c, hi_c = int(idx.min()), int(idx.max())
-                    if chan_width is None:
-                        chan_width = self._partition_channel_width(raw_ds)
-                    if key in chan_spans:
-                        prev = chan_spans[key]
-                        chan_spans[key] = (min(prev[0], lo_c),
-                                           max(prev[1], hi_c))
-                    else:
-                        chan_spans[key] = (lo_c, hi_c)
+                counts[key] += n
+                if counts[key] > max_samples:
+                    too_many.add(key)
+                    continue
 
-        return {
-            "value":          value,
-            "x_range":        x_range,
-            "y_range":        y_range,
-            "x_centre":       x_centre,
-            "y_centre":       y_centre,
-            "field_names":    sorted(field_names),
-            "scan_names":     sorted(scan_names),
-            "antenna_pairs":  antenna_pairs,
-            "freq_range_ghz": freq_range_ghz,
-            # Flagging identity: what a FlagOperation needs to address
-            # these visibilities in the original MS.  See
-            # XArrayReader.probe_raster_pixel for the contract.
-            "spw_channels":   {k: [int(v[0]), int(v[1])]
-                               for k, v in chan_spans.items()
-                               if k is not None},
-            "spw_ids":        [k for k in chan_spans if k is not None],
-            "channel_width_hz": chan_width,
-        }
+                if "time" in mask_c.dims:
+                    other = [d for d in mask_c.dims if d != "time"]
+                    t_reduced = (mask_c.any(dim=other).values if other
+                                 else mask_c.values)
+                    matched_t = ds.coords["time"].values[t_reduced]
+                    if matched_t.size:
+                        _update_range(t_lo, t_hi, key,
+                                      float(matched_t.min()),
+                                      float(matched_t.max()))
 
-    def probe_scatter_pixel(
-        self,
-        canvas_agg: xr.DataArray,
-        px: int,
-        py: int,
-        selection: SelectionSpec,
-        scatter_df: pd.DataFrame,
-    ) -> dict:
-        """Return the value and scatter sample count for canvas pixel (px, py).
+                if "baseline_id" in mask_c.dims and "baseline_id" in ds.coords:
+                    other = [d for d in mask_c.dims if d != "baseline_id"]
+                    bl_reduced = (mask_c.any(dim=other).values if other
+                                  else mask_c.values)
+                    matched_bl = ds.coords["baseline_id"].values[bl_reduced]
+                    if matched_bl.size:
+                        _update_range(bl_lo, bl_hi, key,
+                                      float(matched_bl.min()),
+                                      float(matched_bl.max()))
+                        bl_ids_seen[key].update(int(b) for b in matched_bl)
 
-        Mirrors ``MSv2Backend.probe_scatter_pixel`` exactly.
-        """
-        self._require_open()
+                if "frequency" in mask_c.dims:
+                    other = [d for d in mask_c.dims if d != "frequency"]
+                    f_reduced = (mask_c.any(dim=other).values if other
+                                 else mask_c.values)
+                    matched_f = ds.coords["frequency"].values[f_reduced]
+                    if matched_f.size:
+                        _update_range(f_lo, f_hi, key,
+                                      float(matched_f.min()),
+                                      float(matched_f.max()))
 
-        if canvas_agg.ndim != 2:
-            raise ValueError(f"canvas_agg must be 2D; got {canvas_agg.ndim}D")
-
-        h, w = canvas_agg.shape
-        if not (0 <= px < w and 0 <= py < h):
-            raise IndexError(
-                f"Pixel ({px}, {py}) out of range for canvas ({w}×{h})"
-            )
-
-        # Dtype-aware empty test: mean/max aggs leave NaN, count leaves 0.
-        value = _agg_value(canvas_agg.values, py, px)
-
-        x_coords = canvas_agg.coords[canvas_agg.dims[1]].values
-        y_coords = canvas_agg.coords[canvas_agg.dims[0]].values
-
-        x_centre = float(x_coords[px])
-        y_centre = float(y_coords[py])
-
-        x_range = _widen_if_degenerate(_cell_bounds(x_coords, px), x_coords)
-        y_range = _widen_if_degenerate(_cell_bounds(y_coords, py), y_coords)
-
-        # Half-open bin membership, matching Datashader's own binning;
-        # see MSv2Backend.probe_scatter_pixel.
-        n_scatter = 0
-        if len(scatter_df) > 0:
-            mask = (
-                _bin_membership(scatter_df["x"], x_range, px, len(x_coords)) &
-                _bin_membership(scatter_df["y"], y_range, py, len(y_coords))
-            )
-            n_scatter = int(mask.sum())
-
-        return {
-            "value":             value,
-            "x_range":           x_range,
-            "y_range":           y_range,
-            "x_centre":          x_centre,
-            "y_centre":          y_centre,
-            "n_scatter_samples": n_scatter,
-        }
+        result: dict = {}
+        for key in yaxes:
+            if key in too_many:
+                result[key] = {
+                    "status":     "too_many_points",
+                    "n_samples":  counts[key],
+                    "t_range":    None, "bl_range": None, "bl_ids": None,
+                    "freq_range": None,
+                }
+            elif counts[key] == 0:
+                result[key] = {
+                    "status":     "no_data",
+                    "n_samples":  0,
+                    "t_range":    None, "bl_range": None, "bl_ids": None,
+                    "freq_range": None,
+                }
+            else:
+                result[key] = {
+                    "status":     "ok",
+                    "n_samples":  counts[key],
+                    "t_range":    (t_lo[key], t_hi[key]) if key in t_lo else None,
+                    "bl_range":   (bl_lo[key], bl_hi[key]) if key in bl_lo else None,
+                    "bl_ids":     (sorted(bl_ids_seen[key])
+                                   if bl_ids_seen[key] else None),
+                    "freq_range": (f_lo[key], f_hi[key]) if key in f_lo else None,
+                }
+        return result
 
     def identity_tables(
         self,

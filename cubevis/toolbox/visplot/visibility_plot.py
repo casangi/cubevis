@@ -1221,6 +1221,7 @@ window._cvRerenderTimer = setTimeout(function() {{
         *,
         t_range: Optional[tuple[float, float]] = None,
         bl_range: Optional[tuple[float, float]] = None,
+        bl_ids: Optional[list] = None,
         freq_range: Optional[tuple[float, float]] = None,
         polarization: Optional[str] = None,
     ) -> dict:
@@ -1247,6 +1248,35 @@ window._cvRerenderTimer = setTimeout(function() {{
         only ever compared the axes actually present on the probed
         grid.
 
+        ``bl_ids`` (hover-probe redesign piece 3, 2026-09): optional
+        exact set of matched ``baseline_id`` values, alongside
+        ``bl_range``. When given, antenna pairs are resolved by direct
+        dict lookup against exactly these ids instead of a ``bl_range``
+        scan -- see the note below for why that distinction matters.
+        ``None`` (the default, and the only option pieces 1 and 2 have)
+        falls back to the ``bl_range`` scan exactly as before.
+
+        Why ``bl_range`` alone is not always enough
+        ---------------------------------------------
+        ``bl_range``'s scan matches every ``baseline_id`` *between* the
+        given min and max against ``tables.baseline_antennas`` -- a
+        contiguous-range test. That's a deliberate, acceptable
+        approximation for pieces 1 (raster hover) and 2 (scatter's
+        coarse grid), which only ever have a min/max to offer and are
+        explicitly coarse by design. It is not acceptable for piece 3
+        (scatter click-to-exact, ``VisibilityScatter._handle_probe_region``):
+        an exact click whose matched baseline_ids happen to be
+        non-contiguous (baseline_id has no structural relationship to
+        the plot's actual x/y axes, unlike time or frequency, so gaps
+        are the common case, not an edge case) would otherwise report
+        antenna pairs that were never in the clicked rectangle -- wrong
+        for a method whose whole purpose is being exact, and a real
+        correctness risk for a future flag command built from that
+        result. Piece 3 already has the discrete matched ids on hand at
+        no extra cost (they come from the same reduced mask ``bl_range``
+        itself is derived from -- see ``XArrayReader.probe_scatter_region``),
+        so it passes them here instead of only the range.
+
         Returns
         -------
         dict with keys ``field_names``, ``scan_names``,
@@ -1267,7 +1297,15 @@ window._cvRerenderTimer = setTimeout(function() {{
                     scan_names.add(s.scan_name)
 
         antenna_pairs: list = []
-        if bl_range is not None:
+        if bl_ids is not None:
+            # Exact path (piece 3): direct lookup, no range scan, no
+            # false positives from a gap between matched ids -- see the
+            # docstring note above.
+            for bid in bl_ids:
+                pair = tables.baseline_antennas.get(int(bid))
+                if pair is not None and pair not in antenna_pairs:
+                    antenna_pairs.append(pair)
+        elif bl_range is not None:
             bl_lo, bl_hi = min(bl_range), max(bl_range)
             for bid, pair in tables.baseline_antennas.items():
                 if bl_lo <= bid <= bl_hi and pair not in antenna_pairs:

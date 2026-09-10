@@ -5,6 +5,7 @@ import {CommMgr,Comm} from "./src/bokeh/transport/comm_mgr"
 import {WcsTicks} from "./src/bokeh/format/wcs_ticks"
 import {DragTool} from "./src/bokeh/tools/drag_tool"
 import {FlagTool} from "./src/bokeh/tools/flag_tool"
+import {InfoTool} from "./src/bokeh/tools/info_tool"
 import {CBResetTool} from "./src/bokeh/tools/cbreset_tool"
 import {serialize, deserialize} from "./src/bokeh/util/conversions"
 import {TipButton} from "./src/bokeh/models/tip_button"
@@ -19,6 +20,6 @@ import {EvPolyAnnotation} from "./src/bokeh/annotations/ev_poly_annotation"
 import *  as find from "./src/bokeh/util/find"
 import {register_models} from "@bokehjs/base"
 
-export { find, ImagePipe, ImageDataSource, SpectraDataSource, CommMgr, Comm, WcsTicks, DragTool, FlagTool, CBResetTool, Tip, TipButton, SharedDict, Showable, BokehAppContext, EditSpan, EvTextInput, VisibilityRaster, EvPolyAnnotation, serialize, deserialize }
+export { find, ImagePipe, ImageDataSource, SpectraDataSource, CommMgr, Comm, WcsTicks, DragTool, FlagTool, InfoTool, CBResetTool, Tip, TipButton, SharedDict, Showable, BokehAppContext, EditSpan, EvTextInput, VisibilityRaster, EvPolyAnnotation, serialize, deserialize }
 
-register_models({ ImagePipe, ImageDataSource, SpectraDataSource, CommMgr, Comm, WcsTicks, DragTool, FlagTool, CBResetTool, Tip, TipButton, SharedDict, Showable, BokehAppContext, EditSpan, EvTextInput, VisibilityRaster, EvPolyAnnotation })
+register_models({ ImagePipe, ImageDataSource, SpectraDataSource, CommMgr, Comm, WcsTicks, DragTool, FlagTool, InfoTool, CBResetTool, Tip, TipButton, SharedDict, Showable, BokehAppContext, EditSpan, EvTextInput, VisibilityRaster, EvPolyAnnotation })

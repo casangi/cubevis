@@ -57,6 +57,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional, TYPE_CHECKING
 from uuid import uuid4
+from html import escape as _html_escape
 
 import numpy as np
 import xarray as xr
@@ -69,6 +70,7 @@ from .visibility_plot import (
 from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
 from .data.reader import ScatterLayerSpec
+from cubevis.bokeh.tools._info_tool import InfoTool
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -226,6 +228,18 @@ class VisibilityScatter(VisibilityPlot):
     probe_debug : bool
         Log one INFO line per hover describing what each layer's agg
         returned.  Also enabled by setting ``VISPLOT_PROBE_DEBUG=1``.
+    enable_info_tool : bool
+        Whether to add the scatter-only "i" InfoTool (hover-probe
+        redesign piece 3, click-to-exact) to the figure toolbar.
+        Independent of ``enable_flagging`` -- a quick-look session with
+        flagging disabled may still want exact metadata lookup. Default
+        ``True``.
+    probe_region_max_samples : int
+        Per-layer budget on exact matches the InfoTool's backend lookup
+        will fully resolve before reporting "too many points, narrow
+        your selection" instead. See
+        ``XArrayReader.probe_scatter_region``'s docstring for why this
+        guard exists. Default ``200_000``.
     """
 
     def __init__(
@@ -244,6 +258,8 @@ class VisibilityScatter(VisibilityPlot):
         probe_search_radius: Optional[int] = None,
         probe_debug: bool = False,
         probe_grid_max_cells: int = 3072,
+        enable_info_tool: bool = True,
+        probe_region_max_samples: int = 200_000,
         **kwargs,
     ) -> None:
         if not layers:
@@ -348,6 +364,21 @@ class VisibilityScatter(VisibilityPlot):
         self._msg_set_alpha    = str(uuid4())
         self._msg_color_mode   = str(uuid4())
         self._msg_update_scaling = str(uuid4())
+
+        # Hover-probe redesign piece 3 (2026-09), "click-to-exact":
+        # scatter-only InfoTool (drag tool, click -> point, drag -> box)
+        # backed by a dedicated Comm -- see _add_info_tool(). Set here
+        # (before super().__init__()) so they exist by the time _build()
+        # runs, matching the _msg_* convention above. _info_comm/
+        # _info_tool themselves can't be created yet -- they need
+        # self._comm_mgr, which super().__init__() sets up -- so those
+        # stay None until _add_info_tool() runs from this class's own
+        # _build() override, after super()._build() returns.
+        self._msg_probe_region        = str(uuid4())
+        self._enable_info_tool        = bool(enable_info_tool)
+        self._probe_region_max_samples = int(probe_region_max_samples)
+        self._info_comm = None
+        self._info_tool = None
 
         super().__init__(
             backend   = backend,
@@ -1024,6 +1055,59 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             x = "x", y = "y", dw = "dw", dh = "dh",
         )
 
+    def _build(self) -> None:
+        """Extend the base build with the scatter-only InfoTool.
+
+        Overridden (rather than adding a hook to ``VisibilityPlot``)
+        specifically to keep this feature isolated to ``VisibilityScatter``
+        -- ``VisibilityRaster``'s ``_build()`` is untouched, and nothing
+        about the shared base class changes. See ``_add_info_tool``.
+        """
+        super()._build()
+        if self._headless or self._fig is None:
+            return
+        self._add_info_tool()
+
+    def _add_info_tool(self) -> None:
+        """Add the "i" InfoTool (hover-probe redesign piece 3,
+        click-to-exact) to this figure only.
+
+        Gated on ``enable_info_tool`` (default ``True``) and on a
+        ``CommMgr`` being available at all -- same guard shape
+        ``VisibilityPlot._add_flag_tools`` uses, but deliberately
+        independent of ``enable_flagging``: a quick-look session with
+        flagging disabled may still want exact metadata lookup, and
+        conversely a flagging session may not want the extra toolbar
+        button -- the two are unrelated concerns that happen to both be
+        drag tools.
+
+        Uses its own dedicated Comm (``squash_queue=False``), the same
+        reasoning as ``VisibilityPlot``'s ``_flag_comm``: this now
+        triggers a real, sometimes-slow backend round trip (unlike the
+        squash-queue-appropriate high-frequency hover traffic on
+        ``self._comm``), and a rapid second click should never silently
+        squash an in-flight first one before Python has answered it.
+        """
+        if not self._enable_info_tool or self._comm_mgr is None:
+            return
+        try:
+            self._info_comm = self._comm_mgr.open(
+                description=f"{self._comm_description()} info probe",
+                squash_queue=False,
+            )
+        except Exception as exc:
+            log.warning("%s: could not open info-probe Comm: %s",
+                        type(self).__name__, exc)
+            self._info_comm = None
+            return
+        self._info_comm.register(self._msg_probe_region,
+                                  self._handle_probe_region)
+        self._info_tool = InfoTool(
+            comm=self._info_comm,
+            msg_id=self._msg_probe_region,
+        )
+        self._fig.add_tools(self._info_tool)
+
     def _render(self, selection: "SelectionSpec", defer: bool = False, **kwargs) -> None:
         """Query+bin+shade all layers via the backend and push the composite.
 
@@ -1481,6 +1565,275 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             y_centre    = _json_num(y_centre),
             flag_key    = self._flag_key(info) if identity else {},
         )
+
+    # ------------------------------------------------------------------
+    # Hover-probe redesign piece 3 (2026-09): click-to-exact
+    # ------------------------------------------------------------------
+
+    def _handle_probe_region(self, message: dict) -> dict:
+        """Handle an InfoTool click or drag: exact identity for a rectangle.
+
+        Unlike ``_handle_probe`` (resolved entirely from the cached
+        coarse ``_layer_id_grid``, no backend call), this always makes a
+        real ``self._backend.probe_scatter_region(...)`` round trip --
+        see that method's docstring for why click-to-exact fundamentally
+        can't be answered locally the way raster's hover can (piece 1):
+        there is no cached per-sample data client-side to consult: that
+        cache is exactly what the "coarse but free" redesign removed.
+
+        Message contract (from ``InfoTool``/``info_tool.ts``)
+        -------------------------------------------------------
+        Click:  ``{"tool": "info_click", "x": float, "y": float}``
+        Drag:   ``{"tool": "info_box", "x0", "x1", "y0", "y1": float}``
+
+        Returns
+        -------
+        dict with a single ``"info_html"`` key -- a complete, standalone
+        HTML document (title, minimal inline styling, one section per
+        visible layer) -- plus ``"status"``. ``info_tool.ts`` writes
+        ``info_html`` verbatim into a brand-new browser tab it opens for
+        every click/drag (see that file for why the tab is opened
+        synchronously at click/drag-release time rather than from this
+        method's (async) response, and for why it's a new tab each time
+        rather than one reused tab -- multiple open tabs are meant to
+        let several selections be compared side by side). Each page's
+        title includes the clicked rectangle so a pile of tabs stays
+        identifiable.
+        """
+        x_range = y_range = None
+        try:
+            tool = message.get("tool")
+            if tool == "info_box":
+                x_range = (float(message["x0"]), float(message["x1"]))
+                y_range = (float(message["y0"]), float(message["y1"]))
+            else:
+                x = float(message.get("x", 0.0))
+                y = float(message.get("y", 0.0))
+                x_range, y_range = self._click_window(x, y)
+                if x_range is None:
+                    return {
+                        "status": "out_of_range",
+                        "info_html": self._probe_region_page(
+                            f"Out of range ({x:.4g}, {y:.4g})",
+                            "<p>That point is outside the current view.</p>",
+                        ),
+                    }
+
+            visible = [lyr for lyr in self._layers if lyr.alpha > 0.0]
+            if not visible:
+                return {
+                    "status": "no_layers",
+                    "info_html": self._probe_region_page(
+                        f"No visible layers "
+                        f"{self._rect_title(x_range, y_range)}",
+                        "<p>Every layer is currently hidden "
+                        "(alpha = 0).</p>",
+                    ),
+                }
+
+            yaxes = [(lyr.y_axis, lyr.polarization) for lyr in visible]
+            results = self._backend.probe_scatter_region(
+                self._x_dim, yaxes, self._selection,
+                x_range, y_range,
+                max_samples=self._probe_region_max_samples,
+            )
+
+            sections = [
+                self._probe_region_layer_html(lyr, results.get(
+                    (lyr.y_axis, lyr.polarization),
+                    {"status": "no_data", "n_samples": 0},
+                ))
+                for lyr in visible
+            ]
+            body = (
+                f"<p class='cv-rect'><b>x:</b> "
+                f"{x_range[0]:.6g}&ndash;{x_range[1]:.6g} &nbsp; "
+                f"<b>y:</b> {y_range[0]:.6g}&ndash;{y_range[1]:.6g}</p>"
+                + "".join(sections)
+            )
+            return {
+                "status": "ok",
+                "info_html": self._probe_region_page(
+                    f"Exact identity {self._rect_title(x_range, y_range)}",
+                    body,
+                ),
+            }
+        except Exception as exc:
+            log.warning("_handle_probe_region failed: %s", exc, exc_info=True)
+            return {
+                "status": "error",
+                "info_html": self._probe_region_page(
+                    f"Error {self._rect_title(x_range, y_range)}",
+                    f"<p>Could not resolve exact identity: "
+                    f"{_html_escape(str(exc))}</p>",
+                ),
+            }
+
+    @staticmethod
+    def _rect_title(
+        x_range: Optional[tuple[float, float]],
+        y_range: Optional[tuple[float, float]],
+    ) -> str:
+        """Short ``"(x0-x1, y0-y1)"`` tag for a tab title.
+
+        Since ``InfoTool`` now opens a brand-new tab per click/drag
+        rather than reusing one (multiple open tabs are meant to be
+        compared side by side), each tab's title needs something to
+        tell it apart from the others in the browser's tab strip --
+        this is that something. Returns ``""`` (nothing appended) if
+        either range is unavailable, e.g. an error raised before the
+        rectangle was computed.
+        """
+        if x_range is None or y_range is None:
+            return ""
+        return (f"({x_range[0]:.4g}\u2013{x_range[1]:.4g}, "
+                f"{y_range[0]:.4g}\u2013{y_range[1]:.4g})")
+
+    def _click_window(
+        self, x: float, y: float,
+    ) -> tuple[Optional[tuple[float, float]], Optional[tuple[float, float]]]:
+        """Collapse a single click point to a small data-space rectangle.
+
+        About one *displayed* canvas pixel wide/tall, derived from the
+        current viewport and the last-rendered canvas size -- the same
+        "what does one screen pixel cover in data units" question
+        ``VisibilityPlot._add_flag_tools``'s 1:1-zoom math answers for a
+        different purpose. Falls back to a tiny fraction of the full
+        data extent if the viewport/canvas size can't produce a sane
+        (finite, positive) pixel size -- e.g. a degenerate single-value
+        axis -- rather than passing a zero-width window through to the
+        backend, which would match nothing by exact float equality.
+
+        Returns ``(None, None)`` if the click landed outside the current
+        viewport.
+        """
+        if self._current_viewport is not None:
+            vx0, vx1, vy0, vy1 = self._current_viewport
+        else:
+            vx0, vx1 = self._x_range
+            vy0, vy1 = self._y_range
+        if not (min(vx0, vx1) <= x <= max(vx0, vx1) and
+                min(vy0, vy1) <= y <= max(vy0, vy1)):
+            return None, None
+
+        cw = max(int(self._canvas_width), 1)
+        ch = max(int(self._canvas_height), 1)
+        dx = abs(vx1 - vx0) / cw
+        dy = abs(vy1 - vy0) / ch
+        if not (math.isfinite(dx) and dx > 0):
+            full_dx = abs(self._x_range[1] - self._x_range[0])
+            dx = full_dx / 1000.0 if full_dx > 0 else 1e-6
+        if not (math.isfinite(dy) and dy > 0):
+            full_dy = abs(self._y_range[1] - self._y_range[0])
+            dy = full_dy / 1000.0 if full_dy > 0 else 1e-6
+
+        return (x - dx / 2.0, x + dx / 2.0), (y - dy / 2.0, y + dy / 2.0)
+
+    def _probe_region_layer_html(self, lyr: "ScatterLayer", r: dict) -> str:
+        """Render one layer's ``probe_scatter_region`` result as an HTML
+        section, resolving identity via ``_match_identity`` when exact
+        matches were found.
+
+        Deliberately scopes ``_match_identity``'s cache lookup to this
+        layer's own polarization (unlike ``_handle_probe``'s hover,
+        which passes ``polarization=None`` since a coarse hover can win
+        on any layer) -- an exact click already knows exactly which
+        layer it's reporting on, so there's no reason to include a
+        partition that doesn't carry this layer's polarization.
+        """
+        status = r.get("status", "no_data")
+        heading = f"<h3>{_html_escape(lyr.label)}</h3>"
+
+        if status == "no_data":
+            return heading + "<p><i>No data in this region.</i></p>"
+        if status == "too_many_points":
+            n = r.get("n_samples", 0)
+            return heading + (
+                f"<p>At least <b>{n:,}</b> points in this region "
+                f"&mdash; narrow your selection (click, or drag a "
+                f"smaller box) to see exact identity.</p>"
+            )
+
+        identity = self._match_identity(
+            t_range=r.get("t_range"),
+            bl_range=r.get("bl_range"),
+            bl_ids=r.get("bl_ids"),
+            freq_range=r.get("freq_range"),
+            polarization=lyr.polarization,
+        )
+
+        rows = [("N samples", f"{r.get('n_samples', 0):,}")]
+
+        fields = identity.get("field_names") or []
+        if fields:
+            rows.append(("Field" + ("s" if len(fields) > 1 else ""),
+                         ", ".join(_html_escape(f) for f in fields)))
+
+        scans = identity.get("scan_names") or []
+        if scans:
+            rows.append(("Scan" + ("s" if len(scans) > 1 else ""),
+                         ", ".join(_html_escape(s) for s in scans)))
+
+        pairs = identity.get("antenna_pairs") or []
+        if pairs:
+            rows.append((
+                f"Antenna pairs ({len(pairs)})",
+                ", ".join(f"{_html_escape(a)}&amp;{_html_escape(b)}"
+                          for a, b in pairs),
+            ))
+
+        fg = identity.get("freq_range_ghz")
+        if fg is not None:
+            lo, hi = float(fg[0]), float(fg[1])
+            rows.append(("Frequency",
+                         f"{lo:.9g} GHz" if lo == hi
+                         else f"{lo:.9g}\u2013{hi:.9g} GHz"))
+
+        spw_channels = identity.get("spw_channels") or {}
+        if spw_channels:
+            cw = identity.get("channel_width_hz")
+            spw_str = "; ".join(
+                f"spw {k}: chan {v[0]}~{v[1]}"
+                for k, v in sorted(spw_channels.items(), key=lambda kv: str(kv[0]))
+            )
+            if cw:
+                spw_str += f" (channel width {cw:.6g} Hz)"
+            rows.append(("SPW/channels", _html_escape(spw_str)))
+
+        table_rows = "".join(
+            f"<tr><td class='cv-k'>{k}</td><td class='cv-v'>{v}</td></tr>"
+            for k, v in rows
+        )
+        return heading + f"<table class='cv-tbl'>{table_rows}</table>"
+
+    @staticmethod
+    def _probe_region_page(title: str, body_html: str) -> str:
+        """Wrap a body fragment as a complete, standalone HTML document.
+
+        Built entirely in Python -- ``info_tool.ts`` only ever writes
+        this string verbatim into the tab it opens, the same "Python
+        formats, JS applies" split ``_format_probe``/the status-bar
+        ``label`` already use elsewhere in this class. Plain enough
+        (a light table, no JS) to select and paste cleanly into an
+        email or ticket, which was the point of using a browser tab
+        for this instead of squeezing it into the status bar.
+        """
+        return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>{_html_escape(title)}</title>
+<style>
+  body {{ background:#1e1e2e; color:#cdd6f4; font-family: -apple-system,
+          Helvetica, Arial, sans-serif; margin: 16px 24px; }}
+  h2 {{ color:#cdd6f4; border-bottom: 1px solid #45475a; padding-bottom: 6px; }}
+  h3 {{ color:#89b4fa; margin-top: 22px; margin-bottom: 6px; }}
+  p  {{ line-height: 1.5; }}
+  .cv-rect {{ color:#a6adc8; font-family: monospace; font-size: 13px; }}
+  table.cv-tbl {{ border-collapse: collapse; margin: 4px 0 12px 0; }}
+  table.cv-tbl td {{ padding: 3px 12px 3px 0; vertical-align: top;
+                      font-size: 13px; }}
+  td.cv-k {{ color:#a6adc8; white-space: nowrap; }}
+  td.cv-v {{ color:#cdd6f4; }}
+</style></head>
+<body><h2>{_html_escape(title)}</h2>{body_html}</body></html>"""
 
     @staticmethod
     def _layer_reading_html(entry: dict) -> str:

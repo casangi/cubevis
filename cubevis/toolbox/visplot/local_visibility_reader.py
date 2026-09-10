@@ -63,7 +63,6 @@ from __future__ import annotations
 import logging
 from typing import Optional, TYPE_CHECKING
 
-import pandas as pd
 import xarray as xr
 
 from .data.reader import XArrayReader
@@ -167,30 +166,19 @@ class LocalVisibilityReader:
             probe_grid_max_cells=probe_grid_max_cells,
         )
 
-    def probe_raster_pixel(
+    def probe_scatter_region(
         self,
-        raw_grid: xr.DataArray,
-        gx: int,
-        gy: int,
+        x_axis: "Axis",
+        yaxes: list,
         selection: "SelectionSpec",
-        polarization: Optional[str] = None,
+        x_range: tuple,
+        y_range: tuple,
+        max_samples: int = 200_000,
     ) -> dict:
-        """Delegate to ``backend.probe_raster_pixel``."""
-        return self._backend.probe_raster_pixel(
-            raw_grid, gx, gy, selection, polarization=polarization
-        )
-
-    def probe_scatter_pixel(
-        self,
-        canvas_agg: xr.DataArray,
-        px: int,
-        py: int,
-        selection: "SelectionSpec",
-        scatter_df: pd.DataFrame,
-    ) -> dict:
-        """Delegate to ``backend.probe_scatter_pixel``."""
-        return self._backend.probe_scatter_pixel(
-            canvas_agg, px, py, selection, scatter_df
+        """Delegate to ``backend.probe_scatter_region``."""
+        return self._backend.probe_scatter_region(
+            x_axis, yaxes, selection, x_range, y_range,
+            max_samples=max_samples,
         )
 
     def identity_tables(

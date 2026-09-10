@@ -132,16 +132,12 @@ class VisplotRemoteBackend:
             probe_grid_max_cells=probe_grid_max_cells,
         )
 
-    def probe_raster_pixel(self, raw_grid, gx: int, gy: int, selection,
-                            polarization=None):
-        # Same pre-existing gap noted in remote_reduction_context.py's
-        # matching relay -- fixed here too for the same reason.
-        return self._reader.probe_raster_pixel(
-            raw_grid, gx, gy, selection, polarization=polarization,
+    def probe_scatter_region(self, x_axis, yaxes, selection, x_range, y_range,
+                              max_samples: int = 200_000):
+        return self._reader.probe_scatter_region(
+            x_axis, yaxes, selection, x_range, y_range,
+            max_samples=max_samples,
         )
-
-    def probe_scatter_pixel(self, canvas_agg, px: int, py: int, selection, scatter_df):
-        return self._reader.probe_scatter_pixel(canvas_agg, px, py, selection, scatter_df)
 
     def identity_tables(self, selection, *, polarization=None):
         return self._reader.identity_tables(selection, polarization=polarization)

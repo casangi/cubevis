@@ -166,7 +166,7 @@ class ScatterLayerRender:
     # once. Deliberately the mean of the SAME quantity `image` shades
     # (lyr's y-axis quantity), not a separate concept -- "coarse but
     # free" for both value and identity together, with
-    # probe_scatter_pixel (click-to-exact) remaining the source of an
+    # probe_scatter_region (click-to-exact) remaining the source of an
     # exact reading, exactly as it already is for identity.
     id_grid_value:   Optional[np.ndarray] = None
 
@@ -845,7 +845,7 @@ class XArrayReader(abc.ABC):
         (``width``/``height``): the identity grid only has to narrow a
         hover to "roughly this range of scans/antennas/SPWs", not
         pinpoint a single sample -- that precision is what
-        ``probe_scatter_pixel``'s click-to-exact path is for. Adjustable
+        ``probe_scatter_region``'s click-to-exact path is for. Adjustable
         via ``VisibilityScatter.set_probe_grid_resolution()``.
 
         Implemented identically by both ``MSv2Backend`` and
@@ -947,170 +947,179 @@ class XArrayReader(abc.ABC):
     # ------------------------------------------------------------------ #
     # Pixel hover probe                                                    #
     # ------------------------------------------------------------------ #
+    #
+    # NOTE (2026-09, hover-probe redesign piece 3 / Chunk 2c): the
+    # remote/backend forms of ``probe_raster_pixel`` and
+    # ``probe_scatter_pixel`` that used to live here were removed.
+    #
+    # ``probe_raster_pixel`` (took a whole ``raw_grid`` DataArray and
+    # shipped it P_local -> worker on every hover) was already dead:
+    # piece 1 replaced raster's hover with a fully local lookup against
+    # the already-cached agg (``VisibilityRaster._probe_raster_pixel_local``).
+    # Nothing has called the backend/remote version since.
+    #
+    # ``probe_scatter_pixel`` (took a Datashader ``canvas_agg`` *and* the
+    # raw per-sample ``scatter_df``) predates the "coarse but free"
+    # scatter redesign and was never updated to match it -- since that
+    # redesign, nothing keeps a ``scatter_df`` around to pass it (see
+    # ``VisibilityScatter._layer_dfs``'s vestigial-list docstring), so
+    # this method could not actually have been called successfully.
+    # Confirmed dead by inspection: nothing outside this relay chain
+    # ever called either method.
+    #
+    # ``probe_scatter_region`` below is piece 3's real replacement for
+    # scatter -- see its docstring. Raster has no equivalent because it
+    # never needed one: piece 1's local lookup already gives raster's
+    # hover exact answers for free, and a click/drag on raster can reuse
+    # the same local path (see ``VisibilityRaster._probe_raster_pixel_local``)
+    # rather than a new backend method.
+    # ------------------------------------------------------------------ #
 
     @abc.abstractmethod
-    def probe_raster_pixel(
+    def probe_scatter_region(
         self,
-        raw_grid: xr.DataArray,
-        gx: int,
-        gy: int,
+        x_axis: Axis,
+        yaxes: list[tuple[Axis, str]],
         selection: SelectionSpec,
-        polarization: Optional[str] = None,
-    ) -> dict:
-        """Return metadata for a raster pixel at raw grid indices (gx, gy).
+        x_range: tuple[float, float],
+        y_range: tuple[float, float],
+        max_samples: int = 200_000,
+    ) -> dict[tuple[Axis, str], dict]:
+        """Exact identity for every sample of each layer inside a data-space
+        rectangle (hover-probe redesign piece 3, "click-to-exact").
 
-        Operates on the **raw backend grid** returned by ``query_raster()``
-        — the 2D float64 DataArray with named MS dimension coordinates
-        (e.g. ``"time"``, ``"baseline_id"``, ``"frequency"``).  It does
-        NOT accept a Datashader canvas agg with generic ``"x"``/``"y"``
-        dims.
+        Complements the coarse per-bin identity grid ``query_columns``
+        already computes alongside each render (see
+        ``ScatterLayerRender.id_grid_*``): that grid is free (piggy-backed
+        on the render pass) but coarse -- a hover reports a *range*, not
+        an exact match. This method is the opposite trade: a real,
+        targeted backend round trip that visits every sample actually
+        inside the rectangle, in exchange for an exact answer. Meant to
+        be called rarely (a user click or a drawn box), never on every
+        mouse-move the way the coarse grid effectively is.
 
-        ``VisibilityRaster`` converts the hover data-space ``{x, y}``
-        coordinates to raw grid indices via ``_data_to_pixel()`` before
-        calling this method.
+        A single clicked point and a drawn box are the same call here --
+        the caller (``VisibilityScatter``) collapses a click to a tiny
+        rectangle (about one canvas pixel wide, in data units) around
+        the click location before calling this. There is no separate
+        "point" contract to keep in sync with the "region" one.
 
-        Index semantics (important for flagging)
-        -----------------------------------------
-        ``(gx, gy)`` are **raw grid indices**, not canvas pixel indices.
-        The raw grid has shape ``(n_y_cells, n_x_cells)`` from the data,
-        which differs from the canvas shape ``(PLOT_H, PLOT_W)``.
-        ``VisibilityRaster._data_to_pixel()`` performs the conversion from
-        hover data-space ``{x, y}`` to ``(gx, gy)`` via argmin on the
-        grid's named coordinate arrays.
+        For each requested ``(y_axis, polarization)`` pair, this method:
 
-        Flagging contract
-        -----------------
-        The returned ``"x_range"`` and ``"y_range"`` tuples contain the
-        data-space extents of the cell in native MS coordinate units
-        (MJD seconds for TIME, integer ID for BASELINE_ID, Hz for
-        FREQUENCY).  These can be used directly to construct a
-        ``SelectionSpec`` for a flag operation without any further
-        coordinate conversion.  Flagging should only be enabled when
-        ``VisibilityRaster._is_decimated`` is ``False`` — when the agg
-        was decimated, each cell covers multiple native data points and
-        the cell range is ambiguous.
+        1. Computes the *exact* lazy x/y arrays for that one layer (the
+           same ``_lazy_x_axis``/``_lazy_quantity`` machinery
+           ``query_columns`` uses for the full render), never the
+           already-binned Datashader agg.
+        2. Builds a per-sample boolean mask: ``x_range[0] <= x <=
+           x_range[1] and y_range[0] <= y <= y_range[1]``.
+        3. Counts matches. If the running count exceeds ``max_samples``
+           (checked per layer, independently -- one dense layer being
+           over budget does not block a sparser overlaid layer from
+           reporting normally), further partitions are skipped for that
+           layer and it reports ``status="too_many_points"`` with a
+           lower-bound count rather than paying to finish an answer
+           nobody asked to see in full.
+        4. Otherwise, reduces the mask along every dimension but one to
+           get native-coordinate spans (``t_range`` over time,
+           ``bl_range`` over baseline_id, ``freq_range`` over frequency
+           -- Hz, not GHz) covering only the *matched* samples -- not
+           the whole partition, and not a coordinate-value range test
+           the way ``probe_raster_pixel`` used to do (scatter's axes are
+           usually derived quantities like amplitude or UV distance, not
+           native coordinates, so there is no shortcut range test to run
+           against the coordinates directly -- the mask has to come from
+           the actual x/y values).
 
-        Layer 1 — value from raw grid
-            ``raw_grid.values[gy, gx]`` gives the pre-computed aggregated
-            quantity.  Named coordinate arrays provide the data-space range
-            for the cell.
+        Deliberately does *not* resolve field/scan/antenna/SPW names
+        itself -- the caller does that afterward via the same
+        ``VisibilityPlot._match_identity`` helper pieces 1 and 2 already
+        use, against ``IdentityTables`` it already has cached. That
+        keeps identity-resolution logic in exactly one place.
 
-        Layer 2 — metadata from partition coordinate lookup
-            Field names, scan names, antenna pairs, and frequency in GHz
-            are retrieved by scanning partition coordinate arrays within the
-            cell's data-space range.  No VISIBILITY read occurs.
+        ``bl_range`` alone would inherit ``_match_identity``'s existing
+        imprecision for pieces 1/2: matching every baseline_id
+        *between* the observed min and max, not just the discrete ids
+        actually present. That's an acceptable trade for a coarse hover,
+        but wrong for a method whose entire purpose is being the exact
+        counterpart to it -- a click whose matched baseline_ids happen
+        to be non-contiguous would otherwise report antenna pairs that
+        were never in the rectangle, and this is also the natural
+        eventual input to a real flag command, where over-reporting
+        means flagging visibilities that were never selected. So this
+        method also returns ``bl_ids`` (see below) -- the literal set of
+        matched baseline_ids, already sitting in the same reduced mask
+        ``bl_range`` comes from, at no extra cost -- and the caller
+        passes both to ``_match_identity``, which resolves antenna pairs
+        by exact dict lookup when ``bl_ids`` is given instead of the
+        range scan. Time -> scan/field and frequency -> SPW/channels are
+        left on the existing range-based path: the same imprecision
+        applies to them in principle, but a scan and an SPW are each
+        already contiguous blocks, so it takes a click landing across a
+        scan or SPW boundary to matter at all -- much lower probability
+        and lower consequence than baseline_id, which has no such
+        structure. Revisit if that assumption ever proves wrong in
+        practice.
 
         Parameters
         ----------
-        raw_grid :
-            The 2D float64 DataArray returned by the most recent
-            ``query_raster()`` call.  Must have named MS coordinate arrays
-            on both dimensions (e.g. ``dims=("time", "baseline_id")``).
-        gx, gy :
-            Zero-based indices into ``raw_grid``.  ``gy`` indexes rows
-            (y-axis, dim 0); ``gx`` indexes columns (x-axis, dim 1).
-            Derived from hover ``{x, y}`` via ``_data_to_pixel()``.
+        x_axis :
+            Axis used for the x column of every layer (a scatter plot's
+            x-axis is shared across all overlaid layers).
+        yaxes :
+            ``(Axis, polarization)`` pairs, one per layer to probe --
+            same shape as ``query_columns``'s internal ``yaxes``. Pass
+            every currently *visible* layer (``alpha > 0``); a hidden
+            layer contributed nothing to what the user clicked on.
         selection :
-            The ``SelectionSpec`` active when ``raw_grid`` was produced.
-        polarization :
-            The polarization actually displayed on the raster this pixel
-            came from (``VisibilityRaster._polarization``).  A raster
-            renders one polarization at a time (see ``query_raster``),
-            and a partition that doesn't locally carry it contributes
-            nothing to a given cell's rendered value.  When
-            ``polarization`` is given, such a partition is excluded from
-            this method's identity lookup too, so the returned
-            field/scan/antenna/SPW identity -- and any flag built from
-            it -- only describes data that was actually on screen at
-            this pixel.  ``None`` (the default) keeps the previous,
-            polarization-blind behavior for callers with no single
-            displayed polarization to pass.
+            Data selection constraints (same selection the current
+            render used).
+        x_range, y_range :
+            The rectangle, in data-space units for this plot's x/y axes.
+            Order-independent (min/max is taken internally).
+        max_samples :
+            Per-layer budget on exact matches before giving up and
+            reporting ``too_many_points`` instead of finishing the scan.
+            Protects both the backend (a huge box can otherwise mean a
+            near-full-selection scan) and the round trip (a "too many"
+            answer is small regardless of how big the true count is).
 
         Returns
         -------
-        dict with keys:
+        dict keyed by ``(y_axis, polarization)``, one entry per
+        requested layer, each a dict with keys:
 
-        ``"value"`` : float or None
-            Aggregated quantity at this cell.  ``None`` if NaN.
-        ``"x_range"`` : tuple[float, float]
-            Data-space (min, max) of the x-axis for this cell.
-            Use directly in ``SelectionSpec`` for flagging.
-        ``"y_range"`` : tuple[float, float]
-            Data-space (min, max) of the y-axis for this cell.
-        ``"x_centre"`` : float
-            Data-space centre on the x-axis.
-        ``"y_centre"`` : float
-            Data-space centre on the y-axis.
-        ``"field_names"`` : list[str]
-        ``"scan_names"`` : list[str]
-        ``"antenna_pairs"`` : list[tuple[str, str]]
-        ``"freq_range_ghz"`` : tuple[float, float] or None
-        """
+        ``"status"`` : ``"ok"`` | ``"no_data"`` | ``"too_many_points"``
+            ``"no_data"`` -- the layer has no partitions matching the
+            selection, or none had a sample inside the rectangle.
+        ``"n_samples"`` : int
+            Exact count when ``status="ok"``; a lower bound (the count
+            at the point iteration stopped) when ``"too_many_points"``;
+            ``0`` for ``"no_data"``.
+        ``"t_range"`` : tuple[float, float] or None
+            MJD-seconds span of matched samples' ``time`` coordinate.
+            ``None`` if the layer's partitions carry no ``time``
+            coordinate, or ``status`` is not ``"ok"``.
+        ``"bl_range"`` : tuple[float, float] or None
+            ``baseline_id`` span of matched samples -- kept alongside
+            ``bl_ids`` as a cheap display summary (e.g. "baselines
+            12-47"). Same ``None`` conditions as ``t_range``.
+        ``"bl_ids"`` : list[int] or None
+            The literal, discrete set of matched ``baseline_id`` values
+            (sorted), for exact antenna-pair resolution -- see the
+            note above. ``None`` under the same conditions as
+            ``bl_range``; empty list is possible only if ``bl_range``
+            is also present but degenerate, which should not occur in
+            practice since both come from the same non-empty mask.
+        ``"freq_range"`` : tuple[float, float] or None
+            Hz span of matched samples' ``frequency`` coordinate --
+            deliberately Hz, not GHz, to match
 
-    @abc.abstractmethod
-    def probe_scatter_pixel(
-        self,
-        canvas_agg: xr.DataArray,
-        px: int,
-        py: int,
-        selection: SelectionSpec,
-        scatter_df: "pd.DataFrame",
-    ) -> dict:
-        """Return metadata for a scatter pixel at canvas indices (px, py).
+            ``IdentityTables.spws.frequencies``'s units and
+            ``VisibilityPlot._match_identity``'s ``freq_range``
+            parameter directly. Same ``None`` conditions as ``t_range``.
 
-        Operates on the **Datashader canvas agg** returned by
-        ``cvs.points()``, which has generic ``"x"``/``"y"`` dimensions
-        and canvas-resolution coordinates.  Canvas pixel indices are valid
-        directly against this array without any coordinate conversion.
-
-        Index semantics (contrast with probe_raster_pixel)
-        ---------------------------------------------------
-        ``(px, py)`` are **canvas pixel indices** in the range
-        ``[0, PLOT_W)`` × ``[0, PLOT_H)``, not raw data grid indices.
-        This is the opposite convention from ``probe_raster_pixel`` which
-        takes raw grid indices ``(gx, gy)``.  The canvas agg from
-        ``cvs.points()`` has shape ``(PLOT_H, PLOT_W)`` so canvas indices
-        are valid directly.
-
-        Flagging note
-        -------------
-        Scatter probe is less directly usable for flagging than raster
-        probe because the ``canvas_agg`` aggregates multiple data points
-        into each pixel bin — ``n_scatter_samples`` tells you how many,
-        but not which specific MS rows they correspond to.  For flagging
-        individual visibility samples, zoom to a resolution where each
-        canvas pixel contains approximately one sample (adaptive canvas
-        is active), then use the ``scatter_df`` boolean index with the
-        returned ``x_range``/``y_range`` to identify the rows.
-
-        Parameters
-        ----------
-        canvas_agg :
-            Float64 Datashader aggregation DataArray from ``cvs.points()``,
-            shape ``(PLOT_H, PLOT_W)`` or smaller (adaptive canvas),
-            dims ``("y", "x")``.
-        px, py :
-            Zero-based canvas pixel indices.  ``py`` indexes rows (y-axis,
-            dim 0); ``px`` indexes columns (x-axis, dim 1).
-        selection :
-            The ``SelectionSpec`` active when ``scatter_df`` was produced.
-        scatter_df :
-            Flat DataFrame from ``query_columns()`` (columns ``"x"``,
-            ``"y"``).  Rows within the pixel bin are found by a boolean
-            index — no MS re-read.
-
-        Returns
-        -------
-        dict with keys:
-
-        ``"value"`` : float or None
-            Aggregated quantity at this pixel.  ``None`` if NaN.
-        ``"x_range"`` : tuple[float, float]
-        ``"y_range"`` : tuple[float, float]
-        ``"x_centre"`` : float
-        ``"y_centre"`` : float
-        ``"n_scatter_samples"`` : int
-            Number of scatter samples in this pixel bin.
+        Implemented identically by both ``MSv2Backend`` and
+        ``MSv4Backend``.
         """
 
     @abc.abstractmethod

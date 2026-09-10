@@ -35,13 +35,20 @@ concrete type — a plain ``Serializer.register(xr.DataArray, ...)`` call
 is the right tool here, not a subclass override.
 
 Must be imported on **both** ends of the wire before any DataArray
-crosses it, since registration is required for both directions:
-``query_raster()``'s result flows worker -> P_local (worker encodes,
-P_local decodes), while ``probe_raster_pixel(raw_grid: xr.DataArray,
-...)`` flows P_local -> worker (P_local encodes, worker decodes). The
-same applies to ``pd.DataFrame`` below: ``query_columns()``'s result
-flows worker -> P_local, while ``probe_scatter_pixel(..., scatter_df:
-pd.DataFrame)`` flows P_local -> worker. In practice: imported by
+crosses it, since registration is required for both directions --
+though as of the hover-probe redesign piece 3 / Chunk 2c cleanup, only
+one direction is actually exercised any more: ``query_raster()``'s
+result flows worker -> P_local (worker encodes, P_local decodes).
+``probe_raster_pixel(raw_grid: xr.DataArray, ...)`` used to be the
+P_local -> worker direction, but that method (along with
+``probe_scatter_pixel(..., scatter_df: pd.DataFrame)`` below) was
+removed as dead code -- see ``XArrayReader``'s "Pixel hover probe"
+section in ``data/reader.py`` for why. Both encoders/decoders stay
+registered regardless (registration is unconditional, not tied to
+which directions happen to be in use today), and ``pd.DataFrame``'s
+registration below is consequently unused at the moment -- left in
+place rather than removed, since it is harmless and a future method
+may reasonably need it again. In practice: imported by
 ``remote_reduction_context.py`` (P_local side) and by
 ``remote_registrations.py`` (worker side) — see each file's own import
 of this module. Also required by ``_supervisor.py``'s generic relay

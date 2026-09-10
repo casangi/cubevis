@@ -111,9 +111,6 @@ import time
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from uuid import uuid4
 
-import pandas as pd
-import xarray as xr
-
 from . import _wire_types  # noqa: F401 -- import for its Serializer/Deserializer
                             # registration side effect (xr.DataArray wire
                             # support), not for any name used directly here.
@@ -430,38 +427,26 @@ class RemoteReductionContext(ReductionContext):
             probe_grid_max_cells=probe_grid_max_cells,
         )
 
-    def probe_raster_pixel(
+    def probe_scatter_region(
         self,
-        raw_grid: xr.DataArray,
-        gx: int,
-        gy: int,
+        x_axis: "Axis",
+        yaxes: list,
         selection: "SelectionSpec",
-        polarization: Optional[str] = None,
+        x_range: tuple,
+        y_range: tuple,
+        max_samples: int = 200_000,
     ) -> dict:
-        # Pre-existing gap, unrelated to this change: this relay never
-        # forwarded `polarization`, even though probe_raster_pixel's
-        # real signature (reader.py/MSv2Backend) has taken it as a
-        # keyword since before this file was touched here. Harmless
-        # today only because VisibilityRaster's hover no longer calls
-        # this method at all (see identity_tables/_match_identity) --
-        # fixed anyway since it's a one-line, directly-adjacent,
-        # correct fix, in case anything else still calls this.
+        # STRAIGHT RELAY. Every argument is a plain tuple/list/str/int,
+        # an Axis (Enum), or a SelectionSpec (plain dataclass) -- the
+        # same wire-safety profile query_raster/query_columns already
+        # rely on (see the module docstring's point 3), and the result
+        # is a plain dict of dicts, no xr.DataArray/pd.DataFrame
+        # involved -- unlike the old probe_scatter_pixel this replaces,
+        # no _wire_types registration is needed for this method.
         return self._call(
-            "probe_raster_pixel", raw_grid=raw_grid, gx=gx, gy=gy,
-            selection=selection, polarization=polarization,
-        )
-
-    def probe_scatter_pixel(
-        self,
-        canvas_agg: xr.DataArray,
-        px: int,
-        py: int,
-        selection: "SelectionSpec",
-        scatter_df: pd.DataFrame,
-    ) -> dict:
-        return self._call(
-            "probe_scatter_pixel", canvas_agg=canvas_agg, px=px, py=py,
-            selection=selection, scatter_df=scatter_df,
+            "probe_scatter_region", x_axis=x_axis, yaxes=yaxes,
+            selection=selection, x_range=x_range, y_range=y_range,
+            max_samples=max_samples,
         )
 
     def identity_tables(

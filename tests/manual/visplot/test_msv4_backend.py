@@ -558,7 +558,7 @@ class TestQueryColumnsStructure:
 
     def test_returns_dict_of_dataframes(self):
         yaxes = [(Axis.AMPLITUDE, self.pols[0])]
-        result = self.backend.query_columns(Axis.TIME, yaxes, self.sel_small)
+        result = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel_small)
         assert isinstance(result, dict)
         key = (Axis.AMPLITUDE, self.pols[0])
         assert key in result
@@ -567,34 +567,34 @@ class TestQueryColumnsStructure:
 
     def test_no_nan_in_output(self):
         yaxes = [(Axis.AMPLITUDE, self.pols[0])]
-        result = self.backend.query_columns(Axis.TIME, yaxes, self.sel_small)
+        result = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel_small)
         df = result[(Axis.AMPLITUDE, self.pols[0])]
         assert not df["x"].isna().any(), "NaN x values in output"
         assert not df["y"].isna().any(), "NaN y values in output"
 
     def test_amplitude_nonnegative(self):
         yaxes = [(Axis.AMPLITUDE, self.pols[0])]
-        result = self.backend.query_columns(Axis.TIME, yaxes, self.sel_small)
+        result = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel_small)
         df = result[(Axis.AMPLITUDE, self.pols[0])]
         assert len(df) > 0
         assert (df["y"] >= 0).all()
 
     def test_phase_in_range(self):
         yaxes = [(Axis.PHASE, self.pols[0])]
-        result = self.backend.query_columns(Axis.TIME, yaxes, self.sel_small)
+        result = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel_small)
         df = result[(Axis.PHASE, self.pols[0])]
         assert len(df) > 0
         assert df["y"].between(-180, 180).all()
 
     def test_time_x_is_mjd_seconds(self):
         yaxes = [(Axis.AMPLITUDE, self.pols[0])]
-        result = self.backend.query_columns(Axis.TIME, yaxes, self.sel_small)
+        result = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel_small)
         df = result[(Axis.AMPLITUDE, self.pols[0])]
         assert df["x"].min() > 1e9
 
     def test_uvdist_x_nonnegative(self):
         yaxes = [(Axis.AMPLITUDE, self.pols[0])]
-        result = self.backend.query_columns(Axis.UVDIST, yaxes, self.sel_small)
+        result = self.backend._query_columns_raw(Axis.UVDIST, yaxes, self.sel_small)
         df = result[(Axis.AMPLITUDE, self.pols[0])]
         assert (df["x"] >= 0).all()
 
@@ -605,7 +605,7 @@ class TestQueryColumnsStructure:
             (Axis.AMPLITUDE, self.pols[0]),
             (Axis.AMPLITUDE, self.pols[1]),
         ]
-        result = self.backend.query_columns(Axis.TIME, yaxes, self.sel_small)
+        result = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel_small)
         assert len(result) == 2
         for key in yaxes:
             assert key in result and len(result[key]) > 0
@@ -613,7 +613,7 @@ class TestQueryColumnsStructure:
     def test_empty_selection_returns_empty_dataframe(self):
         sel = SelectionSpec(time_range=(0.0, 1.0))
         yaxes = [(Axis.AMPLITUDE, self.pols[0])]
-        result = self.backend.query_columns(Axis.TIME, yaxes, sel)
+        result = self.backend._query_columns_raw(Axis.TIME, yaxes, sel)
         df = result[(Axis.AMPLITUDE, self.pols[0])]
         assert len(df) == 0
 
@@ -624,7 +624,7 @@ class TestQueryColumnsStructure:
             (Axis.REAL,       self.pols[0]),
             (Axis.IMAGINARY,  self.pols[0]),
         ]
-        result = self.backend.query_columns(Axis.TIME, yaxes, self.sel_small)
+        result = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel_small)
         for key in yaxes:
             assert key in result
             df = result[key]
@@ -657,7 +657,7 @@ class TestQueryColumnsRendered:
 
     def test_datashader_agg_has_correct_shape(self):
         yaxes  = [(Axis.AMPLITUDE, self.pols[0])]
-        result = self.backend.query_columns(Axis.TIME, yaxes, self.sel)
+        result = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel)
         df     = result[(Axis.AMPLITUDE, self.pols[0])]
         assert len(df) > 0
         cvs = ds_lib.Canvas(plot_width=PLOT_W, plot_height=PLOT_H)
@@ -930,10 +930,91 @@ class TestSamplesPerPixel:
 
 
 # ---------------------------------------------------------------------------
-# 9. probe_pixel  (class-level open)
+# 9. identity_tables / probe_scatter_region  (class-level open)
 # ---------------------------------------------------------------------------
+#
+# Replaces the old "9. probe_pixel" (TestProbePixel) -- see
+# test_msv2_backend.py's identical migration note for the full rationale
+# (probe_raster_pixel/probe_scatter_pixel removed 2026-09; their three
+# capabilities now live in VisibilityRaster._probe_raster_pixel_local
+# (client-side, no backend equivalent), identity_tables() (below), and
+# probe_scatter_region() (below)). Not repeated in full here to avoid the
+# two backends' test files drifting on the explanation while the actual
+# tests below mirror each other exactly, same convention this file
+# already uses elsewhere (see e.g. test_spw_selection.py's shared
+# rationale referenced from both backends' test files).
 
-class TestProbePixel:
+
+class TestIdentityTables:
+    """Tests for identity_tables(). See test_msv2_backend.py's identical
+    class for the full docstring/rationale."""
+
+    @classmethod
+    def setup_class(cls):
+        _suppress_warnings()
+        cls.backend = _open_backend()
+        meta = cls.backend.metadata()
+        cls.pols = meta["correlation_labels"]
+        t0, t1 = meta["time_range"]
+        cls.sel = SelectionSpec(
+            time_range=(t0, t0 + (t1 - t0) * 0.2),
+            channel_range=(0, 48),
+        )
+
+    @classmethod
+    def teardown_class(cls):
+        cls.backend.close()
+
+    def test_returns_identity_tables_with_expected_shape(self):
+        tables = self.backend.identity_tables(self.sel, polarization=self.pols[0])
+        assert hasattr(tables, "scans")
+        assert hasattr(tables, "baseline_antennas")
+        assert hasattr(tables, "spws")
+
+    def test_scans_non_empty_and_plausible(self):
+        tables = self.backend.identity_tables(self.sel, polarization=self.pols[0])
+        assert len(tables.scans) > 0
+        for scan in tables.scans:
+            assert isinstance(scan.scan_name, str) and scan.scan_name
+            assert isinstance(scan.field_name, str) and scan.field_name
+            assert scan.t_start <= scan.t_end
+
+    def test_at_least_one_scan_overlaps_the_selection_time_range(self):
+        tables = self.backend.identity_tables(self.sel, polarization=self.pols[0])
+        t0, t1 = self.sel.time_range
+        assert any(s.t_end >= t0 and s.t_start <= t1 for s in tables.scans)
+
+    def test_baseline_antennas_plausible_when_present(self):
+        """Non-empty with real antenna-name pairs for an interferometer;
+        legitimately empty for single-dish data (see TestSingleDish
+        below) -- hence plausibility-when-present rather than asserting
+        non-emptiness outright."""
+        tables = self.backend.identity_tables(self.sel, polarization=self.pols[0])
+        for bid, pair in tables.baseline_antennas.items():
+            assert isinstance(bid, int)
+            assert len(pair) == 2
+            assert all(isinstance(a, str) and a for a in pair)
+
+    def test_spws_non_empty_and_plausible(self):
+        tables = self.backend.identity_tables(self.sel, polarization=self.pols[0])
+        assert len(tables.spws) > 0
+        for spw in tables.spws:
+            assert spw.spw_id is not None
+            freqs = spw.frequencies
+            assert len(freqs) > 0
+            assert (freqs > 0).all()
+
+    def test_polarization_scoping_is_a_subset_of_unscoped(self):
+        tables_all = self.backend.identity_tables(self.sel, polarization=None)
+        tables_one = self.backend.identity_tables(self.sel, polarization=self.pols[0])
+        names_all = {s.scan_name for s in tables_all.scans}
+        names_one = {s.scan_name for s in tables_one.scans}
+        assert names_one <= names_all
+
+
+class TestProbeScatterRegion:
+    """Tests for probe_scatter_region(). See test_msv2_backend.py's
+    identical class for the full docstring/rationale."""
 
     @classmethod
     def setup_class(cls):
@@ -952,165 +1033,83 @@ class TestProbePixel:
     def teardown_class(cls):
         cls.backend.close()
 
-    # ------------------------------------------------------------------ #
-    # Helpers                                                              #
-    # ------------------------------------------------------------------ #
+    def setup_method(self):
+        self._yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        df = self.backend._query_columns_raw(Axis.TIME, self._yaxes, self.sel)[self._yaxes[0]]
+        if len(df) == 0:
+            pytest.skip("Selection produced no samples to probe")
+        self._df = df
+        self.full_x_range = (float(df["x"].min()), float(df["x"].max()))
+        self.full_y_range = (float(df["y"].min()), float(df["y"].max()))
 
-    def _raster_agg(self):
-        raw_grid, x_range, y_range, _ = self.backend.query_raster(
-            Axis.TIME, Axis.BASELINE, Axis.AMPLITUDE, self.sel,
-            polarization=self.pols[0],
+    def _layer(self):
+        return self._yaxes[0]
+
+    def test_full_extent_matches_independent_raw_pull(self):
+        result = self.backend.probe_scatter_region(
+            Axis.TIME, [self._layer()], self.sel,
+            self.full_x_range, self.full_y_range,
+            max_samples=10_000_000,
+        )[self._layer()]
+        assert result["status"] == "ok"
+        assert result["n_samples"] == len(self._df), (
+            f"probe_scatter_region found {result['n_samples']} samples; "
+            f"independent _query_columns_raw pull found {len(self._df)}"
         )
-        cvs = ds_lib.Canvas(
-            plot_width=PLOT_W, plot_height=PLOT_H,
-            x_range=x_range, y_range=y_range,
-        )
-        canvas_agg = cvs.raster(raw_grid, agg=ds_agg.mean())
-        return canvas_agg, raw_grid, x_range, y_range
 
-    def _scatter_agg_and_df(self):
-        yaxes  = [(Axis.AMPLITUDE, self.pols[0])]
-        result = self.backend.query_columns(Axis.TIME, yaxes, self.sel)
-        df     = result[(Axis.AMPLITUDE, self.pols[0])]
-        cvs    = ds_lib.Canvas(plot_width=PLOT_W, plot_height=PLOT_H)
-        canvas_agg = cvs.points(df, "x", "y", agg=ds_agg.mean("y"))
-        return canvas_agg, df
+    def test_narrower_rectangle_finds_no_more_samples(self):
+        x0, x1 = self.full_x_range
+        y0, y1 = self.full_y_range
+        half_y = (y0, y0 + (y1 - y0) * 0.5)
 
-    def _canvas_to_grid(self, canvas_agg, raw_grid, x_range, y_range, px, py):
-        x_coords_c = canvas_agg.coords[canvas_agg.dims[1]].values
-        y_coords_c = canvas_agg.coords[canvas_agg.dims[0]].values
-        x_val = float(x_coords_c[px])
-        y_val = float(y_coords_c[py])
-        x_name = raw_grid.dims[1]
-        y_name = raw_grid.dims[0]
-        x_coords_g = raw_grid.coords[x_name].values
-        y_coords_g = raw_grid.coords[y_name].values
-        gx = int(np.argmin(np.abs(x_coords_g - x_val)))
-        gy = int(np.argmin(np.abs(y_coords_g - y_val)))
-        h, w = raw_grid.shape
-        return max(0, min(gx, w - 1)), max(0, min(gy, h - 1))
+        full = self.backend.probe_scatter_region(
+            Axis.TIME, [self._layer()], self.sel, (x0, x1), (y0, y1),
+            max_samples=10_000_000,
+        )[self._layer()]
+        half = self.backend.probe_scatter_region(
+            Axis.TIME, [self._layer()], self.sel, (x0, x1), half_y,
+            max_samples=10_000_000,
+        )[self._layer()]
+        assert half["n_samples"] <= full["n_samples"]
 
-    def _first_finite_pixel(self, canvas_agg):
-        ys, xs = np.where(np.isfinite(canvas_agg.values))
-        if len(ys) == 0:
-            pytest.skip("No finite pixels in canvas_agg")
-        return int(xs[0]), int(ys[0])
+    def test_bl_ids_are_a_subset_of_bl_range_and_map_to_real_antennas(self):
+        result = self.backend.probe_scatter_region(
+            Axis.TIME, [self._layer()], self.sel,
+            self.full_x_range, self.full_y_range,
+            max_samples=10_000_000,
+        )[self._layer()]
+        if result["bl_ids"] is None:
+            pytest.skip("Layer has no baseline_id dimension (e.g. single-dish)")
 
-    def _first_nan_pixel(self, canvas_agg):
-        ys, xs = np.where(np.isnan(canvas_agg.values))
-        if len(ys) == 0:
-            return None
-        return int(xs[0]), int(ys[0])
+        bl_lo, bl_hi = result["bl_range"]
+        tables = self.backend.identity_tables(self.sel, polarization=self.pols[0])
+        for bid in result["bl_ids"]:
+            assert bl_lo <= bid <= bl_hi
+            assert bid in tables.baseline_antennas
 
-    # ------------------------------------------------------------------ #
-    # A. Layer 1 — float64 value and coordinate ranges                    #
-    # ------------------------------------------------------------------ #
+    def test_no_data_outside_the_real_extent(self):
+        x0, x1 = self.full_x_range
+        y0, y1 = self.full_y_range
+        span = (y1 - y0) if y1 > y0 else 1.0
+        outside = (y1 + span * 100, y1 + span * 101)
+        result = self.backend.probe_scatter_region(
+            Axis.TIME, [self._layer()], self.sel, (x0, x1), outside,
+            max_samples=10_000_000,
+        )[self._layer()]
+        assert result["status"] == "no_data"
+        assert result["n_samples"] == 0
 
-    def test_raster_value_matches_agg(self):
-        canvas_agg, raw_grid, xr_, yr_ = self._raster_agg()
-        px, py = self._first_finite_pixel(canvas_agg)
-        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, xr_, yr_, px, py)
-        info   = self.backend.probe_raster_pixel(raw_grid, gx, gy, self.sel)
-        expected = float(raw_grid.values[gy, gx])
-        assert info["value"] is not None
-        assert abs(info["value"] - expected) < 1e-6
-
-    def test_raster_value_none_for_nan_pixel(self):
-        canvas_agg, raw_grid, xr_, yr_ = self._raster_agg()
-        nan_pix = self._first_nan_pixel(canvas_agg)
-        if nan_pix is None:
-            pytest.skip("No NaN pixels in raster")
-        px, py = nan_pix
-        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, xr_, yr_, px, py)
-        info = self.backend.probe_raster_pixel(raw_grid, gx, gy, self.sel)
-        assert info["value"] is None
-
-    def test_x_centre_within_x_range(self):
-        canvas_agg, raw_grid, xr_, yr_ = self._raster_agg()
-        px, py = self._first_finite_pixel(canvas_agg)
-        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, xr_, yr_, px, py)
-        info = self.backend.probe_raster_pixel(raw_grid, gx, gy, self.sel)
-        assert info["x_range"][0] <= info["x_centre"] <= info["x_range"][1]
-
-    def test_out_of_range_pixel_raises(self):
-        canvas_agg, raw_grid, xr_, yr_ = self._raster_agg()
-        h_g, w_g = raw_grid.shape
-        with pytest.raises(IndexError):
-            self.backend.probe_raster_pixel(raw_grid, w_g, 0, self.sel)
-        with pytest.raises(IndexError):
-            self.backend.probe_raster_pixel(raw_grid, 0, h_g, self.sel)
-
-    # ------------------------------------------------------------------ #
-    # B. Layer 2 — metadata lookup                                        #
-    # ------------------------------------------------------------------ #
-
-    def test_raster_metadata_keys_present(self):
-        canvas_agg, raw_grid, xr_, yr_ = self._raster_agg()
-        px, py = self._first_finite_pixel(canvas_agg)
-        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, xr_, yr_, px, py)
-        info   = self.backend.probe_raster_pixel(raw_grid, gx, gy, self.sel)
-        required = {
-            "value", "x_range", "y_range", "x_centre", "y_centre",
-            "field_names", "scan_names", "antenna_pairs", "freq_range_ghz",
-        }
-        assert required <= info.keys()
-
-    def test_raster_no_scatter_samples_key(self):
-        canvas_agg, raw_grid, xr_, yr_ = self._raster_agg()
-        px, py = self._first_finite_pixel(canvas_agg)
-        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, xr_, yr_, px, py)
-        info   = self.backend.probe_raster_pixel(raw_grid, gx, gy, self.sel)
-        assert "n_scatter_samples" not in info
-
-    def test_raster_antenna_pairs_for_baseline_axis(self):
-        canvas_agg, raw_grid, xr_, yr_ = self._raster_agg()
-        px, py = self._first_finite_pixel(canvas_agg)
-        gx, gy = self._canvas_to_grid(canvas_agg, raw_grid, xr_, yr_, px, py)
-        info   = self.backend.probe_raster_pixel(raw_grid, gx, gy, self.sel)
-        assert len(info["antenna_pairs"]) > 0
-        for a1, a2 in info["antenna_pairs"]:
-            assert isinstance(a1, str) and isinstance(a2, str)
-
-    # ------------------------------------------------------------------ #
-    # C. Scatter sample counting                                           #
-    # ------------------------------------------------------------------ #
-
-    def test_scatter_probe_value_matches_agg(self):
-        canvas_agg, df = self._scatter_agg_and_df()
-        px, py = self._first_finite_pixel(canvas_agg)
-        info   = self.backend.probe_scatter_pixel(
-            canvas_agg, px, py, self.sel, df
-        )
-        expected = float(canvas_agg.values[py, px])
-        assert info["value"] is not None
-        assert abs(info["value"] - expected) < 1e-6
-
-    def test_scatter_sample_count_matches_manual_index(self):
-        canvas_agg, df = self._scatter_agg_and_df()
-        px, py = self._first_finite_pixel(canvas_agg)
-        info   = self.backend.probe_scatter_pixel(
-            canvas_agg, px, py, self.sel, df
-        )
-        x0, x1 = info["x_range"]
-        y0, y1 = info["y_range"]
-        manual = int(
-            ((df["x"] >= x0) & (df["x"] <= x1) &
-             (df["y"] >= y0) & (df["y"] <= y1)).sum()
-        )
-        assert info["n_scatter_samples"] == manual
-
-    def test_scatter_empty_pixel_has_zero_samples(self):
-        canvas_agg, df = self._scatter_agg_and_df()
-        nan_pix = self._first_nan_pixel(canvas_agg)
-        if nan_pix is None:
-            pytest.skip("No NaN pixels in scatter canvas")
-        px, py = nan_pix
-        info   = self.backend.probe_scatter_pixel(
-            canvas_agg, px, py, self.sel, df
-        )
-        assert info["value"] is None
-        assert info["n_scatter_samples"] == 0
-
+    def test_too_many_points_guard_trips_and_suppresses_ranges(self):
+        result = self.backend.probe_scatter_region(
+            Axis.TIME, [self._layer()], self.sel,
+            self.full_x_range, self.full_y_range,
+            max_samples=1,
+        )[self._layer()]
+        assert result["status"] == "too_many_points"
+        assert result["n_samples"] >= 1
+        assert result["t_range"] is None
+        assert result["bl_range"] is None
+        assert result["bl_ids"] is None
 
 # ---------------------------------------------------------------------------
 # 10. Data group selection  (class-level open, uses synthetic multi-group store)
@@ -1299,7 +1298,7 @@ class TestDataGroup:
         sel = SelectionSpec()
         with self._open(data_group="base") as b:
             pol    = b.metadata()["correlation_labels"][0]
-            result = b.query_columns(Axis.TIME,
+            result = b._query_columns_raw(Axis.TIME,
                                      [(Axis.AMPLITUDE, pol)], sel)
             df = result[(Axis.AMPLITUDE, pol)]
             assert len(df) >= 0   # may be empty if all-zero and flagged
@@ -1312,7 +1311,7 @@ class TestDataGroup:
         sel = SelectionSpec()
         with self._open(data_group="imaging") as b:
             pol    = b.metadata()["correlation_labels"][0]
-            result = b.query_columns(Axis.TIME,
+            result = b._query_columns_raw(Axis.TIME,
                                      [(Axis.AMPLITUDE, pol)], sel)
             df = result[(Axis.AMPLITUDE, pol)]
             if len(df) > 0:
@@ -1481,7 +1480,7 @@ class TestXRadioNativeStructure:
         with MSv4Backend(self.ps_path) as b:
             pol    = b.metadata()["correlation_labels"][0]
             sel    = SelectionSpec()
-            result = b.query_columns(Axis.TIME,
+            result = b._query_columns_raw(Axis.TIME,
                                      [(Axis.AMPLITUDE, pol)], sel)
             df = result[(Axis.AMPLITUDE, pol)]
             assert len(df) > 0
@@ -1690,7 +1689,7 @@ class TestSingleDish:
 
     def test_uvdist_x_raises_not_implemented(self):
         with pytest.raises(NotImplementedError, match="single"):
-            self.backend.query_columns(
+            self.backend._query_columns_raw(
                 Axis.UVDIST,
                 [(Axis.AMPLITUDE, self.pols[0])],
                 self.sel,
@@ -1698,7 +1697,7 @@ class TestSingleDish:
 
     def test_uvdist_lambda_x_raises_not_implemented(self):
         with pytest.raises(NotImplementedError, match="single"):
-            self.backend.query_columns(
+            self.backend._query_columns_raw(
                 Axis.UVDIST_LAMBDA,
                 [(Axis.AMPLITUDE, self.pols[0])],
                 self.sel,
@@ -1706,7 +1705,7 @@ class TestSingleDish:
 
     def test_u_axis_raises_not_implemented(self):
         with pytest.raises(NotImplementedError, match="single"):
-            self.backend.query_columns(
+            self.backend._query_columns_raw(
                 Axis.U,
                 [(Axis.AMPLITUDE, self.pols[0])],
                 self.sel,
@@ -1714,7 +1713,7 @@ class TestSingleDish:
 
     def test_v_axis_raises_not_implemented(self):
         with pytest.raises(NotImplementedError, match="single"):
-            self.backend.query_columns(
+            self.backend._query_columns_raw(
                 Axis.V,
                 [(Axis.AMPLITUDE, self.pols[0])],
                 self.sel,
@@ -1743,7 +1742,7 @@ class TestSingleDish:
     # ------------------------------------------------------------------ #
 
     def test_query_columns_returns_dataframe(self):
-        result = self.backend.query_columns(
+        result = self.backend._query_columns_raw(
             Axis.TIME,
             [(Axis.AMPLITUDE, self.pols[0])],
             self.sel,
@@ -1754,7 +1753,7 @@ class TestSingleDish:
         assert len(df) > 0
 
     def test_query_columns_no_nan(self):
-        result = self.backend.query_columns(
+        result = self.backend._query_columns_raw(
             Axis.TIME,
             [(Axis.AMPLITUDE, self.pols[0])],
             self.sel,
@@ -1764,7 +1763,7 @@ class TestSingleDish:
         assert not df["y"].isna().any()
 
     def test_query_columns_amplitude_nonnegative(self):
-        result = self.backend.query_columns(
+        result = self.backend._query_columns_raw(
             Axis.TIME,
             [(Axis.AMPLITUDE, self.pols[0])],
             self.sel,
@@ -1773,7 +1772,7 @@ class TestSingleDish:
         assert (df["y"] >= 0).all()
 
     def test_query_columns_time_x_is_mjd_seconds(self):
-        result = self.backend.query_columns(
+        result = self.backend._query_columns_raw(
             Axis.TIME,
             [(Axis.AMPLITUDE, self.pols[0])],
             self.sel,
@@ -1782,7 +1781,7 @@ class TestSingleDish:
         assert df["x"].min() > 1e9
 
     def test_query_columns_frequency_x_axis(self):
-        result = self.backend.query_columns(
+        result = self.backend._query_columns_raw(
             Axis.FREQUENCY,
             [(Axis.AMPLITUDE, self.pols[0])],
             self.sel,
@@ -1894,7 +1893,8 @@ if __name__ == "__main__":
         TestQueryRaster,
         TestQueryUVCoverage,
         TestSamplesPerPixel,
-        TestProbePixel,
+        TestIdentityTables,
+        TestProbeScatterRegion,
         TestDataGroup,
         TestXRadioNativeStructure,
         TestSingleDish,

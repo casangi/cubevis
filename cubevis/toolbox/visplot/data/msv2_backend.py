@@ -1102,23 +1102,44 @@ class MSv2Backend(XArrayReader):
                 for key, y_arr in y_computed.items()
             }
         else:
-            # Serial fallback — xarray stack → to_dataframe (simpler path)
+            # Serial fallback -- ravel + manual DataFrame construction,
+            # same approach the fused branch's _ravel_df above already
+            # uses.
+            #
+            # BUGFIX (2026-09, found while migrating
+            # test_msv2_backend.py's TestProbePixel/
+            # TestQueryColumnsStructure off the pre-redesign API): this
+            # used to build the DataFrame via
+            # ``xr.Dataset(data_vars).stack(sample=...).to_dataframe()
+            # [keep_cols]``. ``.stack()`` promotes any *coordinate*
+            # sharing a name with a stacked dimension into the
+            # resulting MultiIndex rather than a regular column -- and
+            # "time"/"baseline_id"/"frequency" always do, by
+            # construction, since they are simultaneously id columns
+            # and dimension names. So ``[keep_cols]`` raised KeyError
+            # the moment any id column was requested, which piece 2's
+            # coarse identity grid does unconditionally. ``use_fused``
+            # only engages above ``_THRESH_FUSED`` samples, so this
+            # fired on every *smaller* scatter query instead --
+            # confirmed on real MSv2 and MSv4 data, likely the common
+            # case for interactive use, not an edge case. The fused
+            # branch above was never affected, since ``_ravel_df``
+            # never goes through ``stack()``/``to_dataframe()`` at all
+            # -- this now doesn't either.
             x_c = lazy_x.compute()
             id_c = {c: arr.compute() for c, arr in lazy_id_cols.items()}
-            keep_cols = ["x", "y"] + list(id_c.keys())
             frames = {}
             for key, lazy in lazy_y.items():
-                y_c   = lazy.compute()
-                x_bc  = x_c.broadcast_like(y_c)
-                data_vars = {"x": x_bc, "y": y_c}
+                y_c    = lazy.compute()
+                x_bc   = x_c.broadcast_like(y_c)
+                x_flat = np.asarray(x_bc).ravel()
+                y_flat = np.asarray(y_c).ravel()
+                ok     = np.isfinite(x_flat) & np.isfinite(y_flat)
+                cols   = {"x": x_flat[ok], "y": y_flat[ok]}
                 for cname, carr in id_c.items():
-                    data_vars[cname] = carr.broadcast_like(y_c)
-                stacked = xr.Dataset(data_vars).stack(
-                    sample=list(y_c.dims)
-                )
-                frames[key] = stacked.to_dataframe()[keep_cols].dropna(
-                    subset=["x", "y"]
-                )
+                    c_bc = carr.broadcast_like(y_c)
+                    cols[cname] = np.asarray(c_bc).ravel()[ok]
+                frames[key] = pd.DataFrame(cols, copy=False)
 
         return frames
 

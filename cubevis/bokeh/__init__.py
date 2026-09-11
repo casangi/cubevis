@@ -55,7 +55,20 @@ class BokehInit:
         if not cls._app_context:
             from .models import BokehAppContext
             logger.warning( "creating a BokehAppContext due to a BokehInit.get_app_context( ) call" )
-            cls._app_context.append(BokehAppContext( ))
+            # BUGFIX: BokehAppContext.__init__ already calls
+            # BokehInit.set_app_context(self) as its last step -- so
+            # simply constructing one here already registers it.
+            # The previous line additionally did
+            # `cls._app_context.append(BokehAppContext())`, appending
+            # that SAME already-registered object a second time. Since
+            # clear_app_context(ctx) is a plain list.remove(ctx) --
+            # removing only the first matching occurrence -- a single
+            # clear call left one stale reference behind every time,
+            # so the context (and anything set on it, e.g. a
+            # WebSocket handshake's frontend_id) never actually left
+            # the registry. Constructing it is enough; no separate
+            # append is needed.
+            BokehAppContext( )
         return cls._app_context[-1]
 
     @classmethod

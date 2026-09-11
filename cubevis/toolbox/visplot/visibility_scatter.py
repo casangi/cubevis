@@ -2191,9 +2191,36 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
 
     def _recomposite(self) -> None:
         """Alpha-only fast path: no backend call, reuses the last
-        render's cached per-layer images. Used by ``set_alpha()``."""
+        render's cached per-layer images. Used by ``set_alpha()``.
+
+        BUGFIX (2026-09, found running this file's real-data test suite
+        for the first time): ``_current_render_range()`` deliberately
+        returns ``(None, None)`` when there's no active pan/zoom
+        viewport -- see its own docstring -- on the assumption that the
+        caller is about to make a fresh backend call and will use
+        *that* call's just-refreshed ``self._x_range``/``self._y_range``
+        instead. ``_rerender()`` satisfies that assumption (it always
+        queries the backend); this method is explicitly the path that
+        does not (that's the whole point of the "alpha-only fast path"),
+        so passing ``(None, None)`` straight through to ``_push_image()``
+        crashed on every call made before any viewport had been set --
+        i.e. right after construction, before any pan/zoom, which is
+        the common case, not an edge case (confirmed: reproduced on a
+        freshly-constructed real ``VisibilityScatter`` before any other
+        interaction). Since this path makes no backend call, nothing
+        has changed since the last real render that would make the
+        cached ``self._x_range``/``self._y_range`` stale -- unlike
+        ``_current_render_range()``'s own docstring concern, which is
+        specifically about staleness *around* a fresh query, not about
+        a no-query call like this one. So falling back to them directly
+        here is correct, not just convenient.
+        """
         img32 = self._collapse_and_composite()
         xr, yr = self._current_render_range()
+        if xr is None:
+            xr = self._x_range
+        if yr is None:
+            yr = self._y_range
         self._push_image(img32, xr, yr)
 
     # ------------------------------------------------------------------

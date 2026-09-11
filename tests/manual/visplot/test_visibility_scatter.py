@@ -407,19 +407,34 @@ class TestSingleLayer:
         y0, _ = self.vs._y_range
         assert y0 >= 0.0
 
-    def test_layer_df_populated(self):
-        df = self.vs._layer_dfs[0]
-        assert df is not None
-        assert len(df) > 0
-        assert "x" in df.columns and "y" in df.columns
+    # test_layer_df_populated / test_layer_df_no_nan (removed 2026-09):
+    # both checked self.vs._layer_dfs[0], a per-layer raw DataFrame that
+    # predates the "coarse but free" scatter redesign -- binning/shading
+    # now happen backend-side (see ScatterRenderResult's docstring in
+    # data/reader.py), so nothing populates _layer_dfs any more; it is
+    # permanently None regardless of whether a layer actually rendered.
+    # Not migrated to a direct equivalent: there is no "did the raw
+    # per-sample data come back clean" check possible any more, since
+    # the widget never receives raw per-sample data at all. The intent
+    # both tests were actually protecting -- that a real render
+    # happened and produced sane, non-degenerate output -- is already
+    # covered by test_non_transparent_pixels_present,
+    # test_xy_consistent_with_ranges, test_x_range_nonnegative_for_uvdist,
+    # test_y_range_nonnegative_for_amplitude, and
+    # test_amplitude_y_range_physically_reasonable, all above, all
+    # against current, still-populated state.
 
-    def test_layer_df_no_nan(self):
-        df = self.vs._layer_dfs[0]
-        assert not df["x"].isna().any(), "x column has NaN"
-        assert not df["y"].isna().any(), "y column has NaN"
-
-    def test_layer_agg_set_after_render(self):
-        assert self.vs._layer_aggs[0] is not None
+    def test_layer_image_set_after_render(self):
+        """Replaces test_layer_agg_set_after_render, which checked
+        self.vs._layer_aggs[0] -- also a raw-data-era cache, also
+        permanently None post-redesign (same reasoning as
+        test_layer_df_populated above). _layer_images is the current
+        equivalent: None until a layer has actually been rendered,
+        populated with the real composited image array afterward --
+        confirmed directly (see chat) by constructing with
+        defer_initial_render=True and observing _layer_images go from
+        [None] to a real array only once a render actually happens."""
+        assert self.vs._layer_images[0] is not None
 
     def test_non_transparent_pixels_present(self):
         img   = self.vs._image_source.data["image"][0]
@@ -455,10 +470,14 @@ class TestMultiLayer:
     def teardown_method(self):
         self.backend.close()
 
-    def test_two_layer_dfs_both_populated(self):
+    def test_two_layer_images_both_populated(self):
+        """Replaces test_two_layer_dfs_both_populated -- see
+        TestSingleLayer.test_layer_image_set_after_render's docstring
+        for why _layer_dfs no longer works as this signal and
+        _layer_images does."""
         vs = _make_two_layer(self.backend, self.sel)
-        assert vs._layer_dfs[0] is not None and len(vs._layer_dfs[0]) > 0
-        assert vs._layer_dfs[1] is not None and len(vs._layer_dfs[1]) > 0
+        assert vs._layer_images[0] is not None
+        assert vs._layer_images[1] is not None
 
     def test_two_layer_composite_has_non_transparent_pixels(self):
         vs  = _make_two_layer(self.backend, self.sel)
@@ -475,16 +494,20 @@ class TestMultiLayer:
             "Single and two-layer composites are identical"
         )
 
-    def test_multi_layer_x_range_is_union(self):
-        """x_range must span both layers' data extents."""
-        vs   = _make_two_layer(self.backend, self.sel)
-        x0_l0 = float(vs._layer_dfs[0]["x"].min())
-        x1_l0 = float(vs._layer_dfs[0]["x"].max())
-        x0_l1 = float(vs._layer_dfs[1]["x"].min())
-        x1_l1 = float(vs._layer_dfs[1]["x"].max())
-        xr0, xr1 = vs._x_range
-        assert np.isclose(xr0, min(x0_l0, x0_l1), rtol=0.01)
-        assert np.isclose(xr1, max(x1_l0, x1_l1), rtol=0.01)
+    # test_multi_layer_x_range_is_union (removed 2026-09): needed each
+    # layer's own raw x min/max via _layer_dfs (see
+    # test_layer_image_set_after_render's docstring for why that's
+    # permanently None post-redesign) to confirm vs._x_range spans
+    # both. Not migrated: the widget only ever caches the *combined*
+    # x_range post-redesign, not a per-layer breakdown -- per-layer
+    # extents live in ScatterLayerRender.id_grid_x_range/y_range
+    # backend-side (see data/reader.py) but nothing on the widget
+    # caches those beyond the single most recent probe call, so there
+    # is no current per-layer signal to check this against here. A
+    # real per-layer-extent test belongs at the backend level (e.g.
+    # alongside TestProbeScatterRegion in test_msv2_backend.py/
+    # test_msv4_backend.py), not this file -- flagged as a genuine
+    # coverage gap, not filled in here.
 
     def test_three_axes_in_one_scatter(self):
         """Multiple y-axes (amplitude + phase) in one VisibilityScatter."""
@@ -502,12 +525,17 @@ class TestMultiLayer:
             width  = PLOT_W,
             height = PLOT_H,
         )
-        assert vs._layer_dfs[0] is not None
-        assert vs._layer_dfs[1] is not None
-        # Phase and amplitude have different y ranges
-        y0_amp = float(vs._layer_dfs[0]["y"].min())
-        y0_pha = float(vs._layer_dfs[1]["y"].min())
-        assert y0_amp != y0_pha or True  # just confirm no crash
+        # _layer_dfs replaced with _layer_images -- see
+        # test_layer_image_set_after_render's docstring. The original
+        # y0_amp/y0_pha comparison below is dropped, not migrated: it
+        # was written as `... or True # just confirm no crash`, which
+        # is unconditionally true regardless of the values on its
+        # left -- it was never actually checking that amplitude and
+        # phase differ, only (redundantly with the two asserts above)
+        # that constructing two layers with different y-axes doesn't
+        # raise.
+        assert vs._layer_images[0] is not None
+        assert vs._layer_images[1] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -549,12 +577,23 @@ class TestAlpha:
         assert ((img >> 24) & 0xff > 0).any()
 
     def test_set_alpha_does_not_re_query_backend(self):
-        """set_alpha must not call query_columns — df is reused."""
+        """set_alpha must not call query_columns — the rendered image is
+        reused, not re-fetched.
+
+        Checks _layer_images (identity, not just equal values) rather
+        than the original _layer_dfs: that attribute is permanently
+        None post-redesign (see test_layer_image_set_after_render's
+        docstring in TestSingleLayer), so the original identity check
+        here (None is None) passed regardless of whether a backend call
+        actually happened — this now checks the thing that would
+        actually change if set_alpha() incorrectly triggered a fresh
+        render.
+        """
         vs   = _make_single_layer(self.backend, self.sel)
-        df_before = vs._layer_dfs[0]
+        img_before = vs._layer_images[0]
         vs.set_alpha(0, 0.5)
-        assert vs._layer_dfs[0] is df_before, (
-            "set_alpha must not replace cached DataFrame"
+        assert vs._layer_images[0] is img_before, (
+            "set_alpha must not replace the cached per-layer image"
         )
 
     def test_set_alpha_updates_layer(self):
@@ -743,10 +782,40 @@ class TestColormapScaling:
             vs.colormap_controls(layer_index=99)
 
     def test_histogram_returns_counts_and_edges(self):
+        """Updated 2026-09: histogram()'s own current docstring is
+        explicit that ``bins`` is honored only in that a mismatch
+        against what the backend actually computed logs a warning --
+        the real per-sample values needed for an exact rebin to a
+        caller-requested bin count aren't available client-side any
+        more (post "coarse but free" redesign), so the backend's own
+        bin count is always what's actually returned. This test
+        previously asserted the old, pre-redesign contract (an exact
+        rebin to the requested ``bins=30``); updated to check the
+        actual, documented, current contract instead: internally
+        consistent counts/edges, and a warning when the request
+        doesn't match what came back -- not a hardcoded bin count,
+        since that's the backend's choice to make, not this test's."""
         vs = _make_single_layer(self.backend, self.sel)
         counts, edges = vs.histogram(0, bins=30)
-        assert counts.shape[0] == 30
-        assert edges.shape[0] == 31
+        assert counts.shape[0] > 0, "expected a non-empty histogram for real data"
+        assert edges.shape[0] == counts.shape[0] + 1
+
+    def test_histogram_warns_when_requested_bins_not_honored(self, caplog):
+        """New 2026-09, alongside the update above: a bins= request that
+        doesn't match what the backend actually computed must warn,
+        per histogram()'s own documented contract -- silently returning
+        a different bin count than asked for should never be silent.
+        Uses caplog, not pytest.warns(): the warning is a plain
+        log.warning() call (module-level logger), not a Python
+        `warnings.warn()`, which pytest.warns() would not see."""
+        vs = _make_single_layer(self.backend, self.sel)
+        counts, _ = vs.histogram(0)  # default bins -- establishes the real count
+        mismatched_bins = counts.shape[0] + 1
+        with caplog.at_level("WARNING"):
+            vs.histogram(0, bins=mismatched_bins)
+        assert any("backend always" in rec.message for rec in caplog.records), (
+            "expected a warning when the requested bin count wasn't honored"
+        )
 
     def test_histogram_out_of_range_raises(self):
         vs = _make_single_layer(self.backend, self.sel)
@@ -789,15 +858,21 @@ class TestViewportRerender:
     def teardown_method(self):
         self.backend.close()
 
-    def test_rerender_viewport_does_not_re_query(self):
-        """pan/zoom rerender must reuse cached DataFrames."""
-        df_before = self.vs._layer_dfs[0]
-        x0, x1 = self.vs._x_range
-        y0, y1 = self.vs._y_range
-        xm = (x0 + x1) / 2
-        ym = (y0 + y1) / 2
-        self.vs.rerender(x_range=(x0, xm), y_range=(y0, ym))
-        assert self.vs._layer_dfs[0] is df_before
+    # test_rerender_viewport_does_not_re_query (removed 2026-09): its
+    # own docstring claimed "pan/zoom rerender must reuse cached
+    # DataFrames" -- true under the pre-redesign architecture, but
+    # _rerender()'s own current docstring is explicit that this is now
+    # backward: "every call here costs a query_columns() round trip --
+    # axis/layer changes, pan/zoom, ... all end up here now, because
+    # binning and shading happen backend-side. Only set_alpha() avoids
+    # this." So this test's stated invariant is actually false under
+    # the current, intentional design -- not just checked via a dead
+    # attribute (_layer_dfs, permanently None, so its own
+    # `is df_before` check passed vacuously regardless). The real,
+    # current invariant -- pan/zoom DOES trigger a fresh render -- is
+    # exactly what test_rerender_viewport_updates_image right below
+    # already verifies; nothing here needed inverting-and-keeping on
+    # top of that.
 
     def test_rerender_viewport_updates_image(self):
         img_before = self.vs._image_source.data["image"][0].copy()
@@ -902,16 +977,40 @@ class TestProbe:
         self.backend.close()
 
     def _finite_data_coords(self):
-        """Return (x, y) data coords that map to a non-empty canvas pixel."""
-        agg = self.vs._layer_aggs[0]
-        if agg is None:
-            pytest.skip("No layer agg")
-        ys, xs = np.where(np.isfinite(agg.values))
+        """Return (x, y) data coords that map to a non-transparent pixel
+        in the current composite image.
+
+        Migrated 2026-09 from the original, which read
+        ``self.vs._layer_aggs[0]`` (a raw Datashader agg, coordinate-
+        labeled per axis) -- permanently None post-redesign (see
+        ``test_layer_image_set_after_render``'s docstring in
+        ``TestSingleLayer``), so this helper's own
+        ``pytest.skip("No layer agg")`` fired unconditionally, silently
+        skipping every test that calls it. Found auditing this file for
+        exactly this kind of vestigial-attribute-driven silent skip,
+        not a failure.
+
+        Rebuilt from the composite image plus its pushed data-space
+        origin/extent (``_image_source``'s own x/y/dw/dh -- the same
+        fields ``test_xy_consistent_with_ranges`` already verifies
+        line up with ``_x_range``/``_y_range``), since a raw per-layer
+        agg with labeled coordinates no longer exists to read directly.
+        Confirmed against real data before this change (see chat): the
+        derived coordinate round-trips correctly through
+        ``_handle_probe``.
+        """
+        src = self.vs._image_source.data
+        img = src["image"][0]
+        alpha = (img >> 24) & 0xff
+        ys, xs = np.where(alpha > 0)
         if len(ys) == 0:
-            pytest.skip("No finite pixels in scatter agg")
+            pytest.skip("No non-transparent pixels in composite image")
         px, py = int(xs[0]), int(ys[0])
-        x_val = float(agg.coords[agg.dims[1]].values[px])
-        y_val = float(agg.coords[agg.dims[0]].values[py])
+        h, w = img.shape
+        x0, dw = src["x"][0], src["dw"][0]
+        y0, dh = src["y"][0], src["dh"][0]
+        x_val = x0 + (px + 0.5) / w * dw
+        y_val = y0 + (py + 0.5) / h * dh
         return x_val, y_val
 
     def test_probe_returns_label(self):
@@ -1008,13 +1107,23 @@ class TestProbe:
     # ------------------------------------------------------------------
 
     def test_probe_envelope_shape(self):
-        """Every probe answer carries a status and leaves label intact."""
+        """Every probe answer carries a status and leaves label intact.
+
+        The ``probe["exact"]`` check this test originally had is
+        removed: not a renamed/vestigial attribute like the _layer_dfs
+        cases elsewhere in this file, but a key that was never part of
+        ``_probe_envelope``'s actual contract (``{"status": status,
+        **extra}``, confirmed directly against the real source) --
+        there's nothing to migrate it to. Unmasked by the
+        _finite_data_coords fix above: this test previously always
+        skipped via that helper's dead pytest.skip() path, so this
+        mismatch had never actually been exercised.
+        """
         x, y = self._finite_data_coords()
         resp = self.vs._handle_probe({"x": x, "y": y})
         assert set(resp.keys()) >= {"label", "probe"}
         probe = resp["probe"]
         assert probe["status"] == "ok"
-        assert isinstance(probe["exact"], bool)
         assert probe["winner"] in range(len(self.vs.layers))
 
     def test_probe_layers_entry_per_layer_including_hidden(self):
@@ -1095,18 +1204,17 @@ class TestUpdateAxes:
     def teardown_method(self):
         self.backend.close()
 
-    def test_update_x_axis_changes_df(self):
-        """Switching x-axis from UVDIST to TIME must re-query and change df."""
-        vs = _make_single_layer(self.backend, self.sel)
-        x_before = vs._layer_dfs[0]["x"].values.copy()
-
-        vs.update_axes(x_dim=Axis.TIME)
-
-        x_after = vs._layer_dfs[0]["x"].values
-        # TIME values are MJD seconds, UVDIST is metres — must differ
-        assert not np.allclose(x_before, x_after), (
-            "x column unchanged after switching x_axis from UVDIST to TIME"
-        )
+    # test_update_x_axis_changes_df (removed 2026-09): needed
+    # vs._layer_dfs[0]["x"] before/after to confirm switching x-axis
+    # actually changed the underlying data (see
+    # test_layer_image_set_after_render's docstring for why that
+    # attribute is permanently None post-redesign). Not migrated as a
+    # separate test: test_update_x_axis_changes_x_range immediately
+    # below and test_update_axes_updates_image further down already
+    # cover this same intent -- "switching x-axis actually produces
+    # different output" -- against current, still-populated state
+    # (_x_range and the rendered image, respectively), and do it more
+    # directly than re-deriving it from raw x values ever did.
 
     def test_update_x_axis_changes_x_range(self):
         vs = _make_single_layer(self.backend, self.sel)
@@ -1123,15 +1231,18 @@ class TestUpdateAxes:
         )
         assert len(vs._layers) == 1
         assert vs._layers[0].y_axis == Axis.PHASE
-        # Phase values can be negative; amplitude can't
-        y_vals = vs._layer_dfs[0]["y"].values
-        assert y_vals.min() < 0 or True  # phase may be negative
+        # The removed line here read vs._layer_dfs[0]["y"].values then
+        # asserted `.min() < 0 or True` -- unconditionally true
+        # regardless of the actual values, so despite the "phase may be
+        # negative" comment it was never actually checking phase's sign
+        # (nor anything else); the two asserts above already cover
+        # everything this test was actually verifying.
 
     def test_update_axes_noop_when_unchanged(self):
         vs      = _make_single_layer(self.backend, self.sel)
-        df_ref  = vs._layer_dfs[0]
+        img_ref = vs._layer_images[0]
         vs.update_axes()   # no args — no-op
-        assert vs._layer_dfs[0] is df_ref
+        assert vs._layer_images[0] is img_ref
 
     def test_update_axes_preserves_original_selection(self):
         vs         = _make_single_layer(self.backend, self.sel)
@@ -1181,18 +1292,31 @@ class TestDeferredConstruction:
     def teardown_method(self):
         self.backend.close()
 
-    def test_defer_leaves_all_layer_dfs_none(self):
+    def test_defer_leaves_all_layer_images_none(self):
         """defer_initial_render=True must not query the backend at all.
 
         Stronger than the empty-selection case (test_empty_selection_
-        layer_df_none_or_empty), which allows None *or* an empty
-        DataFrame depending on what the backend returns for a genuinely
-        empty query — deferred construction never queries at all, so
-        every layer's df must be exactly None.
+        layer_image_blank), which allows a genuinely blank placeholder
+        image depending on what the backend returns for an empty query
+        — deferred construction never queries at all, so every layer's
+        image must be exactly None.
+
+        Checks _layer_images, not the original _layer_dfs: that
+        attribute is permanently None post-redesign regardless of defer
+        state (see test_layer_image_set_after_render's docstring in
+        TestSingleLayer), so the original assertion here passed
+        vacuously whether or not defer actually skipped the backend
+        call. _layer_images does distinguish the two states (confirmed:
+        see test_first_update_axes_with_explicit_x_dim_renders above,
+        which observes it go from [None] to a real array only once a
+        render actually happens) -- though
+        test_defer_makes_no_backend_query_calls below remains the
+        stronger check regardless, per its own docstring: it counts
+        actual calls rather than inferring them from a side effect.
         """
         vs = _make_single_layer(self.backend, self.sel, defer_initial_render=True)
-        assert all(df is None for df in vs._layer_dfs), (
-            "All layer DataFrames must be None — defer_initial_render "
+        assert all(im is None for im in vs._layer_images), (
+            "All layer images must be None — defer_initial_render "
             "appears to have queried the backend"
         )
 
@@ -1285,13 +1409,19 @@ class TestDeferredConstruction:
         more here than for raster: VisibilityScatter.update_axes()
         requires x_dim to *actually differ* to register as changed (unlike
         VisibilityRaster's override, which treats "was a value explicitly
-        passed" as sufficient on its own) — without the self._layer_dfs
-        all-None guard, this call would have silently no-op'd.
+        passed" as sufficient on its own) — without an all-None guard on
+        a per-layer render-state cache, this call would have silently
+        no-op'd. (Originally checked ``self._layer_dfs`` for this; that
+        cache is permanently None post-"coarse but free" redesign -- see
+        ``test_layer_image_set_after_render``'s docstring in
+        ``TestSingleLayer`` above -- so this now checks
+        ``self._layer_images`` instead, which is the current equivalent
+        signal.)
         """
         vs = _make_single_layer(self.backend, self.sel, defer_initial_render=True)
-        assert all(df is None for df in vs._layer_dfs)
+        assert all(im is None for im in vs._layer_images)
         vs.update_axes(x_dim=vs._x_dim)   # same value, explicitly passed
-        assert not all(df is None for df in vs._layer_dfs), (
+        assert not all(im is None for im in vs._layer_images), (
             "update_axes() with an explicit (unchanged) current x_dim "
             "must still materialize a deferred panel"
         )
@@ -1302,9 +1432,9 @@ class TestDeferredConstruction:
         test_update_axes_noop_when_unchanged for the (correct, unchanged)
         no-op behavior this must NOT break for an already-rendered panel."""
         vs = _make_single_layer(self.backend, self.sel, defer_initial_render=True)
-        assert all(df is None for df in vs._layer_dfs)
+        assert all(im is None for im in vs._layer_images)
         vs.update_axes()
-        assert not all(df is None for df in vs._layer_dfs), (
+        assert not all(im is None for im in vs._layer_images), (
             "Bare update_axes() must still render a never-yet-rendered panel"
         )
 
@@ -1313,12 +1443,12 @@ class TestDeferredConstruction:
         no-op guarantee for a normally-constructed (already-rendered)
         panel — see test_update_axes_noop_when_unchanged."""
         vs = _make_single_layer(self.backend, self.sel)   # defer_initial_render=False
-        df_ref = vs._layer_dfs[0]
-        assert df_ref is not None
+        img_ref = vs._layer_images[0]
+        assert img_ref is not None
         vs.update_axes()
-        assert vs._layer_dfs[0] is df_ref, (
+        assert vs._layer_images[0] is img_ref, (
             "No-op update_axes() on an already-rendered panel must not "
-            "replace layer dfs — the defer fix should only affect "
+            "replace layer images — the defer fix should only affect "
             "never-yet-rendered panels"
         )
 
@@ -1421,11 +1551,27 @@ class TestEmptySelection:
             "Empty selection should produce fully transparent image"
         )
 
-    def test_empty_selection_layer_df_none_or_empty(self):
+    def test_empty_selection_layer_image_blank(self):
+        """A genuinely empty selection must still render a valid,
+        fully-transparent placeholder image -- same convention
+        test_defer_produces_valid_blank_image checks for the deferred
+        case.
+
+        Migrated from checking _layer_dfs (permanently None regardless
+        of whether the selection was actually empty -- see
+        test_layer_image_set_after_render's docstring -- so the
+        original ``df is None or len(df) == 0`` passed vacuously no
+        matter what an empty selection actually produced). Confirmed
+        directly (see chat) that an empty selection still produces a
+        real, shaped, fully-transparent _layer_images[0] -- never None
+        -- which is the thing actually worth checking here.
+        """
         sel_empty = SelectionSpec(time_range=(0.0, 1.0))
         vs = _make_single_layer(self.backend, sel_empty)
-        df = vs._layer_dfs[0]
-        assert df is None or len(df) == 0
+        img = vs._layer_images[0]
+        assert img is not None
+        alpha = (img >> 24) & 0xff
+        assert (alpha == 0).all(), "Empty-selection image should be fully transparent"
 
 
 # ---------------------------------------------------------------------------
@@ -1454,8 +1600,15 @@ class TestTiming:
         vs = _make_single_layer(self.backend, sel)
         elapsed = time_mod.perf_counter() - t_start
 
-        n_rows = len(vs._layer_dfs[0]) if vs._layer_dfs[0] is not None else 0
-        print(f"  Single-layer scatter: {n_rows:,} rows, {elapsed:.2f}s")
+        # n_in_view replaces the original row-count print (len(vs._layer_dfs[0])),
+        # which always printed 0 post-redesign (see
+        # test_layer_image_set_after_render's docstring) -- actively
+        # misleading here specifically, since it read as "no data was
+        # processed" for a call that just took real, measurable time
+        # doing exactly that. _layer_n_in_view is the current per-layer
+        # count of samples actually in view, kept from the last render.
+        n_in_view = vs._layer_n_in_view[0] if vs._layer_n_in_view else 0
+        print(f"  Single-layer scatter: {n_in_view:,} samples in view, {elapsed:.2f}s")
         assert elapsed < 10.0, (
             f"Scatter pipeline took {elapsed:.1f}s — exceeds 10s"
         )

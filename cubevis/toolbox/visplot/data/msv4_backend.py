@@ -1331,22 +1331,38 @@ class MSv4Backend(XArrayReader):
                 for key, y_arr in y_computed.items()
             }
         else:
+            # BUGFIX (2026-09) -- see MSv2Backend._query_partition_scatter's
+            # identical fix for the full explanation (stack()/to_dataframe()
+            # promoted id columns into the MultiIndex instead of leaving
+            # them as columns, so [keep_cols] always raised KeyError once
+            # any id column was requested -- confirmed on real MSv2 and
+            # MSv4 data). Mirrors this backend's own fused branch's
+            # shape-check defensiveness, since MSv4's fused _ravel_df has
+            # it and MSv2's doesn't -- an existing, real divergence
+            # between the two backends, not something to homogenize away
+            # as part of this fix.
             x_c = lazy_x.compute()
             id_c = {c: arr.compute() for c, arr in lazy_id_cols.items()}
-            keep_cols = ["x", "y"] + list(id_c.keys())
             frames = {}
             for key, lazy in lazy_y.items():
-                y_c  = lazy.compute()
-                x_bc = x_c.broadcast_like(y_c)
-                data_vars = {"x": x_bc, "y": y_c}
+                y_c    = lazy.compute()
+                y_flat = np.asarray(y_c).ravel()
+
+                x_bc   = x_c.broadcast_like(y_c)
+                x_flat = np.asarray(x_bc).ravel()
+                if x_flat.shape != y_flat.shape:
+                    x_flat = np.broadcast_to(np.asarray(x_bc), np.asarray(y_c).shape).ravel()
+
+                ok   = np.isfinite(x_flat) & np.isfinite(y_flat)
+                cols = {"x": x_flat[ok], "y": y_flat[ok]}
                 for cname, carr in id_c.items():
-                    data_vars[cname] = carr.broadcast_like(y_c)
-                stacked = xr.Dataset(data_vars).stack(
-                    sample=list(y_c.dims)
-                )
-                frames[key] = stacked.to_dataframe()[keep_cols].dropna(
-                    subset=["x", "y"]
-                )
+                    c_bc   = carr.broadcast_like(y_c)
+                    c_np   = np.asarray(c_bc)
+                    c_flat = c_np.ravel()
+                    if c_flat.shape != y_flat.shape:
+                        c_flat = np.broadcast_to(c_np, np.asarray(y_c).shape).ravel()
+                    cols[cname] = c_flat[ok]
+                frames[key] = pd.DataFrame(cols, copy=False)
             return frames
 
     def _lazy_quantity(

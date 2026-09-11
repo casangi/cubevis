@@ -27,7 +27,7 @@ Tests
 2. Render              source geometry, image dtype, range consistency
 3. _data_to_pixel      coordinate→pixel mapping, edge clipping, pre-render
 4. _viewport_selection time, frequency, baseline axis viewport narrowing
-5. probe (static)      _handle_probe via _data_to_pixel→probe_raster_pixel
+5. probe (static)      _handle_probe via _data_to_pixel→_probe_raster_pixel_local
 6. rerender            programmatic re-render updates source in place
 7. Datashader          rendered agg shape, finite pixels, colourmap
 8. Timing              full raster pipeline < 8s end-to-end
@@ -680,7 +680,7 @@ class TestProbeStatic:
         """When baseline is x-axis, probe should include field info (time is y)."""
         x, y = self._finite_data_coords()
         resp = self.vr._handle_probe({"x": x, "y": y})
-        # probe_raster_pixel populates field_names from the time y-axis range
+        # _probe_raster_pixel_local populates field_names via the cached identity tables
         # Just check label is non-empty and doesn't raise
         assert resp["label"]
 

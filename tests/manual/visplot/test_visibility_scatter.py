@@ -1062,41 +1062,46 @@ class TestProbe:
 
         Asserting on resp["probe"] instead means the next status-bar
         wording change does not break this test.
+
+        REBUILT 2026-09 (Chunk 2d): the ``_layer_aggs``/``_agg_pixel``/
+        ``_search_radius_bins``/``_nearest_populated_bin`` machinery this
+        used is doubly stale -- ``_layer_aggs`` is permanently ``None``
+        post-redesign (see ``TestProbe._finite_data_coords``'s
+        docstring), AND ``_handle_probe`` itself dropped the neighbor-
+        search radius entirely in the piece-2 redesign (see its own
+        docstring: "exact-cell lookup only" now, no
+        ``_search_radius_bins`` tolerance) -- so even with real aggs
+        this would have been testing a forgiveness margin
+        ``_handle_probe`` no longer has. Rebuilt against
+        ``self.vs._layer_id_grid`` instead: the coarse identity grid
+        ``_handle_probe`` itself reads (see its docstring), still real,
+        still per-layer post-redesign. Confirmed against real data that
+        every layer's grid shares identical shape/x_range/y_range for a
+        given render (driven by the shared viewport/``probe_grid_max_cells``,
+        not per-layer data extent), so one (px, py) index is valid
+        against every layer's grid without recomputing per layer.
         """
-        aggs = [a for a in self.vs._layer_aggs if a is not None]
-        if not aggs:
-            pytest.skip("No layer aggs")
+        grids = [g for g in self.vs._layer_id_grid if g is not None]
+        if not grids:
+            pytest.skip("No layer id grids")
 
-        def _all_layers_miss(xv, yv):
-            """True when no layer has data within its own search radius.
+        v0 = grids[0]["value"]
+        h, w = v0.shape
+        gx0, gx1 = grids[0]["x_range"]
+        gy0, gy1 = grids[0]["y_range"]
+        xs_coord = np.linspace(gx0, gx1, w)
+        ys_coord = np.linspace(gy0, gy1, h)
 
-            Asks each layer through the same helpers _handle_probe uses,
-            rather than reimplementing the radius geometry here -- which
-            would drift from it exactly as the old assertion did.
-            """
-            for agg in aggs:
-                idx = self.vs._agg_pixel(agg, xv, yv)
-                if idx is None:
-                    continue
-                px, py = idx
-                bw, bh = self.vs._bin_screen_size(agg)
-                r = self.vs._search_radius_bins(agg)
-                if self.vs._nearest_populated_bin(agg, px, py, r, bw, bh):
-                    return False
-            return True
-
-        agg0 = aggs[0]
-        ys, xs = np.where(np.isnan(agg0.values))
+        ys, xs = np.where(~np.isfinite(v0))
         for py, px in zip(ys.tolist(), xs.tolist()):
-            xv = float(agg0.coords[agg0.dims[1]].values[px])
-            yv = float(agg0.coords[agg0.dims[0]].values[py])
-            if _all_layers_miss(xv, yv):
+            if all(not np.isfinite(g["value"][py, px]) for g in grids):
+                xv, yv = float(xs_coord[px]), float(ys_coord[py])
                 break
         else:
-            # On dense data with generous slop there may be no such bin.
-            # Skipping is the honest outcome; contriving one would test
-            # nothing real.
-            pytest.skip("No bin empty in every layer beyond the search radius")
+            # On dense data there may be no coarse cell empty in every
+            # layer at once. Skipping is the honest outcome; contriving
+            # one would test nothing real.
+            pytest.skip("No cell empty in every layer's coarse grid")
 
         probe = self.vs._handle_probe({"x": xv, "y": yv})["probe"]
         assert probe["status"] in ("ok", "no_data")
@@ -1144,7 +1149,12 @@ class TestProbe:
             assert entry["visible"] == (lyr.alpha > 0.0)
 
     def test_probe_hidden_layer_reports_no_value(self):
-        """A hidden layer is never consulted, so it can never carry a value."""
+        """A hidden layer is never consulted, so it can never carry a value.
+
+        ``distance_px`` dropped 2026-09: the exact-cell-lookup redesign
+        (see ``_handle_probe``'s docstring) has no neighbor search left
+        to report a distance for -- a hit is exact or it doesn't exist.
+        """
         if len(self.vs.layers) < 2:
             pytest.skip("Need at least two layers")
         self.vs.set_alpha(1, 0.0)
@@ -1154,7 +1164,6 @@ class TestProbe:
             hidden = probe["layers"][1]
             assert hidden["visible"] is False
             assert hidden["value"] is None
-            assert hidden["distance_px"] is None
         finally:
             self.vs.set_alpha(1, 1.0)
 
@@ -1725,16 +1734,35 @@ class TestProbeMultiLayer:
         self.backend.close()
 
     def _finite_data_coords(self):
-        """A coordinate where at least one layer has data."""
-        for agg in self.vs._layer_aggs:
-            if agg is None:
+        """A coordinate where at least one layer has data.
+
+        REBUILT 2026-09 (Chunk 2d): the original read
+        ``self.vs._layer_aggs``, permanently ``None`` post-redesign --
+        same vestigial-attribute trap as ``TestProbe``'s copy (see that
+        class's docstring). Unlike ``TestProbe``'s fix, which reads back
+        from the *composite* image (fine when there's only one layer to
+        tell apart), this needs genuinely per-layer visibility, which a
+        merged composite can't give. Uses ``self.vs._layer_id_grid``
+        instead -- the coarse identity grid ``_handle_probe`` itself
+        reads (see its docstring), still real and per-layer. Confirmed
+        against real data that every layer's grid shares identical
+        shape/x_range/y_range for a given render, so one (px, py) index
+        is valid against any layer's grid.
+        """
+        for grid in self.vs._layer_id_grid:
+            if grid is None:
                 continue
-            ys, xs = np.where(np.isfinite(agg.values))
+            values = grid["value"]
+            ys, xs = np.where(np.isfinite(values))
             if len(ys) == 0:
                 continue
             py, px = int(ys[len(ys) // 2]), int(xs[len(xs) // 2])
-            return (float(agg.coords[agg.dims[1]].values[px]),
-                    float(agg.coords[agg.dims[0]].values[py]))
+            h, w = values.shape
+            gx0, gx1 = grid["x_range"]
+            gy0, gy1 = grid["y_range"]
+            x = np.linspace(gx0, gx1, w)[px]
+            y = np.linspace(gy0, gy1, h)[py]
+            return float(x), float(y)
         pytest.skip("No populated bins in any layer")
 
     # -- the defect this class exists for -------------------------------
@@ -1762,17 +1790,27 @@ class TestProbeMultiLayer:
         populated identically, which is the common case on well-behaved
         data -- a skip here means the dataset could not exercise the
         defect, not that the behaviour is unverified elsewhere.
+
+        REBUILT 2026-09 (Chunk 2d): ``self.vs._layer_aggs`` is
+        permanently ``None`` post-redesign (see
+        ``TestProbeMultiLayer._finite_data_coords``'s docstring) --
+        rebuilt against ``self.vs._layer_id_grid`` instead, the same
+        structure ``_handle_probe`` itself now consults.
         """
-        a0, a1 = self.vs._layer_aggs[0], self.vs._layer_aggs[1]
-        if a0 is None or a1 is None:
-            pytest.skip("Need both layers aggregated")
-        only1 = ~np.isfinite(a0.values) & np.isfinite(a1.values)
+        g0, g1 = self.vs._layer_id_grid[0], self.vs._layer_id_grid[1]
+        if g0 is None or g1 is None:
+            pytest.skip("Need both layers gridded")
+        v0, v1 = g0["value"], g1["value"]
+        only1 = ~np.isfinite(v0) & np.isfinite(v1)
         ys, xs = np.where(only1)
         if len(ys) == 0:
             pytest.skip("No bin populated in layer 1 but not layer 0")
         py, px = int(ys[0]), int(xs[0])
-        x = float(a1.coords[a1.dims[1]].values[px])
-        y = float(a1.coords[a1.dims[0]].values[py])
+        h, w = v1.shape
+        gx0, gx1 = g1["x_range"]
+        gy0, gy1 = g1["y_range"]
+        x = float(np.linspace(gx0, gx1, w)[px])
+        y = float(np.linspace(gy0, gy1, h)[py])
 
         probe = self.vs._handle_probe({"x": x, "y": y})["probe"]
         assert probe["status"] == "ok"
@@ -1782,16 +1820,25 @@ class TestProbeMultiLayer:
         )
 
     def test_winner_is_the_nearest_layer(self):
-        """``winner`` indexes the layer whose hit was closest."""
+        """``winner`` indexes the lowest-index layer with a hit.
+
+        RENAMED IN SPIRIT, 2026-09 (Chunk 2d): the original asserted a
+        ``distance_px``-based "nearest" tiebreak, inherited from the
+        pre-redesign full-resolution neighbor search. The piece-2
+        redesign does exact-cell lookup only (see ``_handle_probe``'s
+        docstring) and its actual tiebreak is "lowest layer index among
+        candidates" (see ``_handle_probe``: ``min(candidates, key=lambda
+        c: c[0])``) -- there is no distance left to be nearest by. Left
+        the test name alone (renaming it is a bigger diff than the fix
+        needs) but rebuilt the assertion to match what winner selection
+        actually does now.
+        """
         x, y = self._finite_data_coords()
         probe = self.vs._handle_probe({"x": x, "y": y})["probe"]
-        hits = [e for e in probe["layers"] if e["value"] is not None]
+        hits = [e["index"] for e in probe["layers"] if e["value"] is not None]
         if not hits:
             pytest.skip("No layer hit at this coordinate")
-        winner = probe["layers"][probe["winner"]]
-        assert winner["value"] is not None
-        assert winner["distance_px"] == min(
-            e["distance_px"] for e in hits if e["distance_px"] is not None)
+        assert probe["winner"] == min(hits)
 
     # -- hiding a layer --------------------------------------------------
 
@@ -1800,6 +1847,10 @@ class TestProbeMultiLayer:
 
         The single-layer class skipped its equivalent
         ("Need at least two layers"), so this path was untested.
+
+        ``distance_px`` dropped 2026-09 -- see
+        ``TestProbe.test_probe_hidden_layer_reports_no_value``'s
+        docstring.
         """
         self.vs.set_alpha(1, 0.0)
         try:
@@ -1808,7 +1859,6 @@ class TestProbeMultiLayer:
             hidden = probe["layers"][1]
             assert hidden["visible"] is False
             assert hidden["value"] is None
-            assert hidden["distance_px"] is None
             # ...and the visible one still reports normally.
             assert probe["layers"][0]["visible"] is True
         finally:

@@ -1954,7 +1954,7 @@ long-lived caller (`VisibilityPlotter` itself) would have leaked it
 indefinitely. Fixed by moving that fetch inside the existing cleanup
 `try` block; re-verified by the same direct process check, clean.
 
-**`SSHMS`/`SSHPS` — added after the first real-`zuul06` run needed them.**
+**`CUBEVIS_TEST_KERNEL_MS`/`CUBEVIS_TEST_KERNEL_PS` — added after the first real-`zuul06` run needed them.**
 `test_remote_reduction_context.py` opens data at two, potentially
 different, paths: `MS`/`PS` directly, in the test process itself, for the
 `local_reader` fixture every other test file in a full run also uses;
@@ -1965,12 +1965,12 @@ kernel (different mount layout, different home directory) — exactly the
 gap that made the first real-`zuul06` run of this suite fail at
 `create_object()` with a plain remote `FileNotFoundError` (the local
 `MS` value didn't exist on `zuul06`'s own filesystem at that path).
-`SSHMS`/`SSHPS`, read only by this one test file, override the path
+`CUBEVIS_TEST_KERNEL_MS`/`CUBEVIS_TEST_KERNEL_PS`, read only by this one test file, override the path
 handed to `RemoteReductionContext` specifically, falling back to the
 same-kind local variable's own value when unset — so plain `MS=...`/
 `PS=...` keeps working unchanged for local-kernel testing and for every
 other test file. Verified directly (not just by inspection): a
-deliberately wrong `MS` plus a correct `SSHMS` produced exactly the
+deliberately wrong `MS` plus a correct `CUBEVIS_TEST_KERNEL_MS` produced exactly the
 expected split — the four tests touching only `RemoteReductionContext`
 passed, while the two cross-check tests correctly failed on the bad
 local `MS` value.

@@ -66,8 +66,8 @@ Three things worth reading before touching this file
    failed earlier, at ``create_object()`` (a real MS-path-not-
    resolvable-on-the-remote-host problem, unrelated to serialization --
    ``create_object`` only ever sends plain strings, no
-   ``Axis``/``SelectionSpec`` involved -- fixed by the ``SSHMS``/
-   ``SSHPS`` environment variables that test file's own docstring now
+   ``Axis``/``SelectionSpec`` involved -- fixed by the ``CUBEVIS_TEST_KERNEL_MS``/
+   ``CUBEVIS_TEST_KERNEL_PS`` environment variables that test file's own docstring now
    documents). With that fixed, a subsequent real-``zuul06`` run of the
    full suite passed this test along with everything else -- this
    mechanism is now confirmed correct against a genuine remote cluster

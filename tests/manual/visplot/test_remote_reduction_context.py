@@ -25,14 +25,14 @@ directory. Those are trivially the same path for local-kernel testing
 whole suite in one invocation makes picking a single MS/PS value that
 resolves correctly on both hosts hard to arrange.
 
-``SSHMS``/``SSHPS`` -- optional, read only by this file -- override the
+``CUBEVIS_TEST_KERNEL_MS``/``CUBEVIS_TEST_KERNEL_PS`` -- optional, read only by this file -- override the
 path handed to ``RemoteReductionContext`` specifically, without
 touching what MS/PS means for ``local_reader`` or for any other test
-file in the run. Each pairs with its same-kind local variable (``SSHMS``
-with ``MS``, ``SSHPS`` with ``PS``) and falls back to that variable's own
+file in the run. Each pairs with its same-kind local variable (``CUBEVIS_TEST_KERNEL_MS``
+with ``MS``, ``CUBEVIS_TEST_KERNEL_PS`` with ``PS``) and falls back to that variable's own
 value when unset -- so plain ``MS=...``/``PS=...`` (today's usage, and
 every other test file's only option) keeps working unchanged for
-local-kernel testing; only set ``SSHMS``/``SSHPS`` when the
+local-kernel testing; only set ``CUBEVIS_TEST_KERNEL_MS``/``CUBEVIS_TEST_KERNEL_PS`` when the
 remote-resolvable path genuinely differs from the local one. That gap
 is exactly what caused the first real ``zuul06`` run of this suite
 (2026-09) to fail at ``create_object()`` with a plain remote
@@ -57,7 +57,7 @@ on every ``_call``-routed method; see the two timeout-parameter tests
 near the end of this file for direct coverage, in both directions.
 Note that ``test_call_timeout_constructor_default_applies_everywhere``'s
 own tiny timeout only has something to time out once construction gets
-past ``create_object()`` -- with a still-wrong remote path (SSHMS/SSHPS
+past ``create_object()`` -- with a still-wrong remote path (CUBEVIS_TEST_KERNEL_MS/CUBEVIS_TEST_KERNEL_PS
 unset or itself wrong) it never gets that far, and reports the same
 ``RemoteBackendError`` as everything else in this file rather than the
 ``TimeoutError`` it's actually checking for. Not a flaw in the timeout
@@ -108,16 +108,16 @@ def _backend_paths_and_kind():
     process. remote_path is what gets handed to
     ``RemoteReductionContext``, which opens it in a worker subprocess
     on the kernel's own host -- see module docstring for why these can
-    differ, and for SSHMS/SSHPS.
+    differ, and for CUBEVIS_TEST_KERNEL_MS/CUBEVIS_TEST_KERNEL_PS.
     """
     ms = os.environ.get("MS")
     ps = os.environ.get("PS")
     if ms and ps:
         pytest.fail("Both MS and PS are set -- ambiguous, unset one")
     if ms:
-        kind, local_path, remote_env = "msv2", ms, "SSHMS"
+        kind, local_path, remote_env = "msv2", ms, "CUBEVIS_TEST_KERNEL_MS"
     elif ps:
-        kind, local_path, remote_env = "msv4", ps, "SSHPS"
+        kind, local_path, remote_env = "msv4", ps, "CUBEVIS_TEST_KERNEL_PS"
     else:
         pytest.skip("Neither MS nor PS set")
 

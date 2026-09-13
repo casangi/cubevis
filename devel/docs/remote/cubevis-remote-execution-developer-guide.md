@@ -351,8 +351,8 @@ Worth knowing up front rather than discovering mid-project:
   now scoped to local-kernel testing only), and `RemoteReductionContext`
   tests needing the MS/PS data resolvable on the kernel's own host, which
   can differ from the path resolvable on `P_local`'s host — see
-  `test_remote_reduction_context.py`'s own docstring for the `SSHMS`/
-  `SSHPS` environment variables added to handle that. Local-kernel testing
+  `test_remote_reduction_context.py`'s own docstring for the `CUBEVIS_TEST_KERNEL_MS`/
+  `CUBEVIS_TEST_KERNEL_PS` environment variables added to handle that. Local-kernel testing
   remains the fast default and the right first check; a real-cluster run
   is still worth doing deliberately before trusting a change that touches
   this framework, since it's a meaningfully different regime (§5's timing

@@ -226,25 +226,38 @@ comfortable, explicit headroom over the inner one, and say so in a
 comment — don't let them drift into equality by both starting from the
 same "seems reasonable" default.
 
-**What real remote latency actually looks like, from one measured run
-against a live `sshpyk`-provisioned cluster kernel** (full breakdown in
-the implementation doc's timing section) — roughly two and a half
-minutes end to end, broken into: about 50 seconds for the remote host to
-start a fresh Python process at all (conda activation, interpreter
-startup, on a networked home filesystem); about another 50 seconds
-waiting for that freshly-started remote kernel to become responsive
-(during which `sshpyk`'s own SSH-based liveness polling runs, roughly
-every 1.25 seconds); and about 50 more seconds for the actual worker
-subprocess this framework spawns to come up and complete its opening
-`configure` handshake. **None of this is specific to one unlucky run** —
-a fresh interpreter starting on a cold, networked filesystem is a
-structural cost, not a fluke, and any application built on this framework
-should assume something in this range (tens of seconds to a couple of
-minutes) for the *first* connection to a given remote host, with
-everything after that (once channels are open, once a worker exists)
-running at ordinary low-latency RPC speed. Size your own UI's "connecting…"
-states, spinners, and any timeout of your own around this reality, not
-around how fast things go against a local kernel in a test suite.
+**What real remote latency actually looks like — corrected, 2026-09,
+after the actual cause of the original ~150s figure below was found and
+fixed.** An earlier version of this section reported roughly two and a
+half minutes end to end (full original line-by-line log analysis in the
+implementation doc's Chunk 1c section, "Real-world timing observed
+against a live `sshpyk` cluster kernel"; the root-cause fix itself is in
+Chunk 2's raster-completion section) — three roughly-50-second phases:
+starting a fresh Python interpreter on the remote host at all, waiting
+for that freshly-started kernel to become responsive, and the worker
+subprocess's own startup. **That number described a real bug, not a
+structural floor:** with `PYTHONHOME` unset, CPython's own
+interpreter-startup path search walked upward from the executable's
+directory, and on the cluster host in question one candidate path landed
+on a broken/slow `autofs` automount — `strace -T` showed a single
+`stat()` call alone costing 49.27 of a ~49.6 second phase. Fixed in
+`sshpyk` itself (not `cubevis`) by setting `PYTHONHOME` explicitly before
+the kernel-launch `exec` — dropped real connect time from ~154s to ~7s,
+confirmed again later against real `zuul06` logs from a full test-suite
+run: `start_kernel()` ~4.5s, `RemoteAppLink.open()` ~3.2s,
+`create_context()` ~2.9s, roughly 11s total. **Updated guidance:** don't
+assume a first connection to a real remote host costs minutes — a
+healthy `sshpyk` setup (this `PYTHONHOME` fix applied) should cost single-
+digit to low-double-digit seconds, not fundamentally different in kind
+from a local kernel's startup, just slower by a real constant factor
+(actual SSH negotiation, actual process spawn on another machine). That
+said, this was a real, previously-invisible bug on one specific cluster
+host, found only by actually measuring — the underlying lesson (measure
+your own actual target host rather than assuming either number) still
+holds, and a *different* remote host could in principle have its own
+undiscovered slow-path quirk. Per-phase timing logged at INFO (see any of
+this chunk's demo scripts) is what found this one; keep logging it,
+don't assume it's solved everywhere because it was solved here.
 
 **Logging is off by default, on purpose, and that's a lever you have too.**
 `sshpyk`/`jupyter_client` are `traitlets`-based and produce zero visible
@@ -322,14 +335,28 @@ Worth knowing up front rather than discovering mid-project:
   specific pre-existing context, that's a harder problem this framework
   does not yet solve — `list_contexts()` exists for introspection, not as
   a "guess which one was mine" discovery mechanism.
-- **The real `sshpyk`/SSH/cluster path is validated by real use, not by an
-  automated test suite running against one.** Every automated test in
-  this framework runs against a real local kernel (never mocked), which
-  is a meaningfully different regime from a real cross-host SSH tunnel —
-  see §5's timing numbers for exactly how different. Treat "passes the
-  test suite" and "confirmed against a real cluster kernel" as two
-  different, both-worth-having kinds of confidence, not one substituting
-  for the other.
+- **The real `sshpyk`/SSH/cluster path is now covered by the automated
+  test suite too, not only by real use** — updated 2026-09 (Chunk 2d):
+  `test_remote_kernel_link.py`/`test_remote_eval_exec.py`/
+  `test_remote_object_registry.py`/`test_remote_reduction_context.py` all
+  accept a `CUBEVIS_TEST_KERNEL` environment variable, defaulting to a
+  local kernel (`python3`) for fast iteration, but running completely
+  unchanged against a real `sshpyk`-provisioned kernel name when that
+  variable is set. A full run against a real cluster kernel (`zuul06`)
+  passed cleanly (670 passed, 3 skipped, 0 failed, full `visplot` suite)
+  once two real gaps that only a genuine remote run could surface were
+  fixed: a test that asserted a worker's hostname matched `P_local`'s own
+  (true only for a local kernel by construction; the real run correctly
+  returned `"zuul06"` and the assertion was wrong to expect otherwise —
+  now scoped to local-kernel testing only), and `RemoteReductionContext`
+  tests needing the MS/PS data resolvable on the kernel's own host, which
+  can differ from the path resolvable on `P_local`'s host — see
+  `test_remote_reduction_context.py`'s own docstring for the `SSHMS`/
+  `SSHPS` environment variables added to handle that. Local-kernel testing
+  remains the fast default and the right first check; a real-cluster run
+  is still worth doing deliberately before trusting a change that touches
+  this framework, since it's a meaningfully different regime (§5's timing
+  numbers) that the local-kernel suite alone can't fully stand in for.
 
 ---
 
@@ -346,8 +373,12 @@ found real bugs a mocked equivalent would have hidden (the cross-loop
 instantly). If you add a new capability to this framework, hold the same
 line: a test that exercises a real subprocess or a real local kernel is
 worth more than a faster test that exercises a mock standing in for one,
-even though it costs more wall-clock time to run. Where something
-genuinely can't be exercised in a given sandbox (a real SSH/cluster
-connection, so far), say so plainly in the test's own docstring and in
-whatever document tracks status, rather than letting a mocked
-stand-in quietly imply more confidence than actually exists.
+even though it costs more wall-clock time to run. A real SSH/cluster
+connection specifically was, for a while, the one thing that genuinely
+couldn't be exercised this way in this sandbox — as of Chunk 2d that's
+no longer true for `visplot`'s own remote-execution suite (§7), which
+now runs against a real `sshpyk` kernel on request via
+`CUBEVIS_TEST_KERNEL`. Where something genuinely still can't be
+exercised this way in a given sandbox, say so plainly in the test's own
+docstring and in whatever document tracks status, rather than letting a
+mocked stand-in quietly imply more confidence than actually exists.

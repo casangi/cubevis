@@ -19,7 +19,7 @@ Raster and scatter handle pan/zoom completely differently today, and the
 difference isn't cosmetic: raster keeps almost all interaction local and
 free; scatter re-executes its full pipeline, over the wire, on every
 single viewport change. Locally this is a real but bounded cost (roughly
-2–4 seconds per re-render on real data, measured — §4). Remotely, that
+2–4 seconds per re-render on real data, measured — §3a). Remotely, that
 same cost gets network round-trip latency, and potentially real
 storage-network latency, added on top of it, every time — and nothing
 today distinguishes "the user is dragging the plot" from "the user asked
@@ -108,11 +108,21 @@ has no equivalent tier. Its own docstring says so directly:
 
 **A document this comment points to — "the scatter remote-execution
 design notes" — is referenced twice in the actual source
-(`visibility_scatter.py` and `data/msv2_backend.py`) but was not found
-anywhere in project knowledge as part of writing this assessment.** If it
-exists, it likely already contains a more informed version of some of
-this document's §6 — worth finding before treating this document as the
-first word on the subject rather than a second one.
+(`visibility_scatter.py` and `data/msv2_backend.py`).** Not found in
+project knowledge when this assessment was first written; since then,
+searched directly against the actual repository
+(`github.com/casangi/cubevis`, `devel/docs/` and `devel/notes/drs/`
+in full, including the one file whose content plausibly overlapped —
+`visplot-grid-iteration-notes.md`, which turned out to be about grid/
+panel-sync debouncing, a different topic) and genuinely not found
+anywhere in it. Two later documents did surface separately
+(`cubevis-remote-execution-chunk2-handoff.md` and
+`chunk2-completion-scatter-handoff.md`, folded into this assessment and
+the implementation doc below) — neither is the referenced "design
+notes" file specifically, and neither was in the repository search
+either. Best current read: that document either was never committed, or
+never existed under that name — treat this assessment as the first
+real word on the subject, not a second one, until/unless it turns up.
 
 The only viewport-adjacent operation that *is* free today: `set_alpha()`
 (toggling a layer's visibility), via `_recomposite()`, which reuses the
@@ -120,6 +130,25 @@ last render's cached per-layer images (`self._layer_images` — see the
 Chunk 2d test rebuild that relies on exactly this being real and
 per-layer). Pan, zoom, axis changes, `color_mode`/scaling/colormap
 changes — everything else — goes through `_rerender()`, unconditionally.
+
+**The colormap/scaling case specifically was already flagged, before
+this assessment, as its own named concern, not folded into "pan/zoom" by
+this document for the first time.** The handoff that corrected
+`query_columns()` to shade server-side, not just bin server-side (see
+the implementation doc's Chunk 2b correction) named it explicitly at the
+time: before that correction, recoloring a scatter plot was free (local,
+mirroring raster); after it, every colormap or scaling adjustment costs
+a full round trip against the real ~600-800ms floor (§3a below), the
+same underlying cause as pan/zoom's cost but a distinct interaction a
+user triggers separately and often more frequently while exploring
+data — worth keeping as its own line item when deciding what to fix,
+not assuming a pan/zoom fix automatically covers it. None of this
+document's own §5 options distinguish the two triggers, but a debounce
+interval or a render cache tuned for pan/zoom's typical gesture shape
+may not be the
+right tuning for a colormap dropdown's click-and-immediately-see-result
+expectation — worth designing for explicitly rather than assuming
+shared code means shared UX.
 
 ### 2c. Why the difference exists, and why it isn't just an oversight
 
@@ -182,11 +211,21 @@ The relevant point for this document isn't the exact number, it's that
 this cost is **paid on every single pan/zoom under the current design**,
 because nothing caches or reuses it. Locally, that's a real but bounded
 per-interaction cost. Remotely, it compounds with §3b and with plain
-network round-trip time (the "real remote latency" figures in the
-developer guide's §5 — tens of seconds to minutes for a *first* connect,
-but ordinary low-latency RPC speed once a worker exists — the per-call
-cost this document is about is on top of that steady-state RPC latency,
-not the connection-setup cost).
+network round-trip time — **once a worker/session already exists**
+(distinct from first-connect cost, corrected in the developer guide's
+own §5 after a real bug there was found and fixed: single-digit to
+low-double-digit seconds now, not the minutes an earlier version of
+that section reported), steady-state per-call latency has a real,
+separately measured floor: **roughly 600-800ms** (dispatch/round-trip/
+backend-compute), from a real benchmark sweep during raster's own
+remote-completion work, essentially independent of payload size within
+the ranges tested (see the implementation doc's raster-completion
+section). That floor doesn't go away just because scatter's redesigned
+payload is small and bounded — it makes each render *bounded*, not
+*fast*. This document's §3a compute-cost estimate is **on top of** that
+600-800ms floor, not instead of it — a real remote scatter pan/zoom
+under the current zero-caching design should be expected to cost at
+least floor-plus-render, not just render alone.
 
 ### 3b. MSv4 scale and storage location
 
@@ -413,12 +452,16 @@ than this document alone can.
 
 Named plainly rather than assumed:
 
-- **A real render's actual cost against real remote storage** — this
-  project's own measurements (§3a) are all against a small local
-  dataset on ordinary local disk. Nothing here says how much of that
-  cost is I/O versus compute once the I/O is genuinely networked (SAN or
-  otherwise), which directly determines whether overscan's "read more
-  per request" tradeoff is worth it or actively harmful.
+- **A real render's actual cost against real remote storage.** Partially
+  answered since this was first written: a real ~600-800ms per-call
+  floor is now confirmed (§3a) — but that's a floor for ordinary calls,
+  not specifically for a *large* remote render against genuinely
+  networked storage. This project's own compute-cost measurement (§3a)
+  is still against a small local dataset on ordinary local disk. Nothing
+  here says how much of a large real render's cost is I/O versus compute
+  once the I/O is genuinely networked (SAN or otherwise), which directly
+  determines whether overscan's "read more per request" tradeoff is
+  worth it or actively harmful.
 - **Whether a real multi-node cluster actually sits behind the intended
   remote host(s)**, and if so, whether `dask.distributed` is already
   available/configured there or would need its own setup work — changes
@@ -426,8 +469,10 @@ Named plainly rather than assumed:
 - **Real user interaction patterns** — how much backtracking (5e's
   target) versus continuous exploration (5a–5d's target) actually
   happens in practice, which this document has no data on.
-- **Whether "the scatter remote-execution design notes" document
+- ~~Whether "the scatter remote-execution design notes" document
   mentioned in §2b actually exists somewhere outside what this
-  assessment had access to** — if so, it may already contain a more
-  informed treatment of some of this, worth reconciling with rather than
-  duplicating.
+  assessment had access to~~ — resolved: searched the actual repository
+  directly and confirmed it does not exist there under that name or any
+  found equivalent (§2b has the full account). Struck through rather
+  than deleted, per this document set's own convention for resolved
+  open questions.

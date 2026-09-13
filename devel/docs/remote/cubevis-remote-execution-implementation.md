@@ -15,9 +15,11 @@ gets made (Chunk 1b was one; Chunk 1c is another).
 | 1 — shared wire-protocol layer | **Implemented, tested, isolated into `cubevis.remote` subpackage** |
 | 1b — compute worker process infrastructure | **Implemented, tested against real subprocesses/kernels** |
 | 1c — remote execution and object framework | **Implemented, tested against real subprocesses/kernels** |
-| 2a — `visplot` raster | Designed, not yet implemented |
-| 2b — `visplot` scatter | Designed, not yet implemented |
-| 3 — `iclean`/`gclean` | Designed, not yet implemented |
+| 2a — `visplot` raster | **Implemented and tested** |
+| 2b — `visplot` scatter | **Implemented and tested — shipped shape differs from this document's original design; see Chunk 2 section** |
+| 2c — hover-probe/click-to-exact redesign, `InfoTool` | **Implemented and tested, confirmed in a real browser** |
+| 2d — remote-path validation | **Implemented and tested against both a local kernel and a real `zuul06` cluster kernel** |
+| 3 — `iclean`/`gclean` | Designed, not yet implemented; no longer blocked on anything but priority |
 
 ---
 
@@ -1237,7 +1239,19 @@ phases, in order:
    import cost) over `nohup`, on what the log's own paths
    (`/users/dschieb/...`) show is a networked home filesystem. Nothing in
    `cubevis` or `sshpyk`'s own control flow runs during this phase; it is
-   pure remote-host process-startup latency.
+   pure remote-host process-startup latency. **Correction, added after
+   Chunk 2's raster-completion work root-caused this specifically (see
+   that section): this was not an unavoidable structural cost after
+   all.** `strace -T` later showed a single `stat()` call inside this
+   window alone costing 49.27 of this phase's ~49.6 seconds — CPython's
+   own interpreter-startup path search, with `PYTHONHOME` unset, probing
+   a candidate path that hit a broken/slow `autofs` automount on this
+   specific cluster host. Fixed in `sshpyk` itself; this phase should no
+   longer cost anywhere near 49.5s on a host with the fix applied. The
+   analysis above (the *mechanism* — a fresh interpreter starting cold on
+   a networked filesystem) remains accurate as an explanation of what
+   this phase *is*; what changed is realizing a large piece of its
+   *cost* was a fixable bug, not that mechanism's inherent price.
 2. **~1s** — `SSHKernelApp` launches the real `ipykernel` subprocess on
    the remote host (`local-provisioner`), `sshpyk` fetches its connection
    info over one more `ssh ... cat ...` round trip, and opens the five
@@ -1277,7 +1291,12 @@ phases, in order:
    seconds, so roughly 50 seconds of this phase is `create_context()`
    itself — the worker subprocess (a fresh `sys.executable`, importing
    `cubevis`/`numpy`) starting up on the same remote host and networked
-   filesystem as phase 1.
+   filesystem as phase 1. **Same correction as phase 1 applies here too**
+   — a fresh `sys.executable` start on this host hits the same
+   `PYTHONHOME`/interpreter-path-search cost phase 1 does; the later fix
+   should shrink this phase by a similar large fraction, not just phase 1.
+   Consistent with Chunk 2d's own later real-`zuul06` log, post-fix:
+   `create_context()` alone took ~2.9s, not ~50s.
 5. **~1.75s** — clean shutdown: `shutdown_requested(restart=False)`, a
    last round of control-socket/`ps` checks confirming the remote
    processes are actually gone, and `Cleanup done`.
@@ -1387,16 +1406,22 @@ timing?** Two different answers, deliberately kept apart:
 
 ## Chunk 2 — `visplot` remote data path
 
-**Status: designed, not yet implemented.** Committed to building on
-Chunk 1c's object framework from the start (per explicit direction) —
-`RemoteReductionContext`'s methods are `call_method` calls against
-objects living in a dedicated execution context, not hand-rolled proxies
-of their own, even though Chunk 2's own currently-known bottleneck
-(bandwidth/materialization risk, not confirmed GIL-blocking) doesn't by
-itself demand a separate process. Prioritized over Chunk 3: `iclean` is
-already released (lower near-term appetite for change); `visplot` is
-still in active development and remote execution is valuable to its own
-developers now.
+**Status: implemented and tested** — raster (2a) and scatter (2b) both
+shipped, followed by a hover-probe/click-to-exact redesign and `InfoTool`
+on top of them (2c), and the whole remote path exercised end-to-end
+first against a local kernel and then against a real `zuul06` cluster
+kernel (2d). The plan below predates all four of those and is kept as
+the historical design record — same convention this document already
+uses elsewhere for superseded reasoning — with correction notes marking
+where the shipped shape differs from what was planned here. See the
+Chunk 2c and Chunk 2d sections below for what actually shipped.
+Originally committed to building on Chunk 1c's object framework from the
+start (per explicit direction) — confirmed true of what shipped: every
+`RemoteReductionContext` method is a `call_method` call against an
+object living in a dedicated execution context, not a hand-rolled proxy.
+Prioritized over Chunk 3: `iclean` is already released (lower near-term
+appetite for change); `visplot` is still in active development and
+remote execution is valuable to its own developers now.
 
 ### Isolation boundary already exists
 
@@ -1476,7 +1501,186 @@ call — **rejected**: it would turn every currently-free pan/zoom drag
 into a network round trip. The wire boundary is `query_raster()` itself
 (already correct, see above), not the per-viewport render call.
 
+### Raster completion — confirmed against a real cluster kernel, not just designed
+
+**Status at this point: `VisibilityPlotter(ms=..., backend="remote",
+kernel_name=...)` successfully constructs and renders both raster
+panels against a real `sshpyk`-provisioned `zuul06` kernel and a real
+ALMA MS — connect, `metadata()`, `query_raster()`, and the full
+`_build_panels()` construction path all confirmed working, not
+mocked.** This happened before Chunk 2d (below) began — worth being
+precise about, since Chunk 2d's own section originally undersold this:
+it is not true that *no* piece of this framework had ever been run for
+real before Chunk 2d; raster's remote path specifically had already
+been exercised by hand against real `zuul06`. What Chunk 2d actually
+added on top was *permanent pytest regression coverage* for this and
+everything else in `cubevis.remote` — none of which existed yet at this
+point — not the first real run of raster itself.
+
+Getting there needed real fixes beyond what §2a above anticipated,
+none of them raster-specific in the sense of only mattering for
+`query_raster()`:
+
+- **`cubevis.utils._conversion` gained `CubevisSerializer`/
+  `CubevisDeserializer`** — subclasses of Bokeh's own `Serializer`/
+  `Deserializer`, fixing three confirmed gaps in Bokeh's stock wire
+  format: no `Enum` support at all; `Serializer` encodes an arbitrary
+  `@dataclass` natively but stock `Deserializer` never implements the
+  matching reconstruction; and tuples silently degrade to lists with no
+  wire-level marker to reconstruct them. That last one is harmless for
+  ordinary value comparisons (confirmed directly in Chunk 2d's own
+  testing — `x_range`, `id_grid_x_range`, and similar tuple-typed
+  dataclass/dict fields all come back as lists after a real remote round
+  trip, compared with `tuple(...) == tuple(...)` rather than a
+  type-sensitive `==`) but fatal the moment something needs a tuple as a
+  **dict key** — which scatter's `query_columns(xaxis, yaxes, ...)` does
+  (`yaxes` entries are `(Axis, polarization)` tuples, used as
+  `ScatterRenderResult`/`probe_scatter_region` result keys) — the fix
+  specifically targets that case. `_resolve_class()` resolves a dotted
+  class path via `sys.modules` first, falling back to
+  `importlib.import_module()` only if not already loaded, avoiding a
+  confirmed import-lock deadlock risk when decoding happens on a
+  background thread (`SyncBridge`) while something else in the process
+  holds Python's import lock.
+- **A new `cubevis/toolbox/visplot/_wire_types.py`** registers
+  `visplot`-specific wire types (`xr.DataArray`, `pd.DataFrame`) via the
+  plain `Serializer.register(type, encoder)`/`Deserializer.register(tag,
+  decoder)` API, deliberately kept out of the generic `_conversion.py` —
+  these are domain-specific third-party types one application needs
+  today, and the next one actually looked at (`iclean`, via
+  `casatools.image`) doesn't even use xarray. Must be imported on both
+  ends of the wire before either type crosses it, and by the supervisor
+  process in the middle too (it must `deserialize()` every message it
+  relays) — which is why `create_context()`'s `config` carries a
+  `wire_types` list of dotted module paths (read by
+  `_supervisor.py:_handle_create_context`) rather than this module being
+  hardcoded anywhere in shared framework code. Confirmed by direct
+  investigation that skipping this on the supervisor specifically isn't
+  a soft failure: an unregistered type tag makes `deserialize()` raise
+  inside the supervisor's own background read-loop task, which nothing
+  awaits or checks — silently kills the relay for the rest of the
+  session, surfacing only as `P_local`'s request timing out with no
+  other symptom.
+- **A real, previously-unexplained ~150s-per-connect problem, found and
+  fixed via `sshpyk` itself (Darrell's own package, not `cubevis`), not
+  `cubevis.remote`.** Root-caused via `strace -T`: with `PYTHONHOME`
+  unset, CPython's own interpreter-startup path search walks upward from
+  the executable's directory looking for landmark files, and on `zuul06`
+  one candidate path lands on a `/home/lib` that very likely hits a
+  broken/slow `autofs` automount for a key with no real mount target — a
+  single `stat()` call alone measured costing 49.27 of a ~49.6 second
+  total, one of three roughly-50-second phases (interpreter startup,
+  waiting for the freshly-started kernel to become responsive, the
+  worker subprocess's own startup) that summed to the ~150s figure.
+  Fixed by having `sshpyk`'s `launch_remote_kernel()` set `PYTHONHOME`
+  explicitly before its final `exec`. Dropped real connect time from
+  ~154s to ~7s. **This is what the developer guide's §5 "what real
+  remote latency actually looks like" numbers described before this fix
+  — that section has been corrected to match; see it for the current
+  numbers**, which line up with Chunk 2d's own later real-`zuul06` logs
+  (`start_kernel()` ~4.5s, `RemoteAppLink.open()` ~3.2s,
+  `create_context()` ~2.9s — roughly 11s total, not minutes).
+- **A real, measured per-call latency floor: roughly 600-800ms**
+  (dispatch/round-trip/backend-compute), from a real benchmark sweep,
+  essentially independent of transferred payload size within the ranges
+  tested. Doesn't disappear just because a payload is small — relevant
+  to the scatter redesign below, whose whole point is a small, bounded
+  payload; that alone doesn't make a scatter round trip fast, it makes
+  it *bounded*.
+- **A real, non-obvious memory caveat for `query_raster()`'s existing
+  `max_cells` bound, worth carrying forward accurately:** partitions are
+  decimated independently and then concatenated *before* the final
+  global decimation pass, so intermediate remote-worker memory can
+  transiently reach `(partition count) × max_cells` — real for an MS
+  with many scan/intent partitions. This is a local memory-pressure
+  question on the worker process, never a wire-transfer one (the
+  *output* crossing the wire is still exactly bounded at `max_cells`) —
+  worth distinguishing clearly since it's easy to conflate the two kinds
+  of bound.
+
 ### 2b. Scatter — the real gap, and the fix is about correctness, not just bandwidth
+
+**Correction to this whole subsection — the actual history had two
+stages, not one, and neither matches what's written below verbatim.**
+This subsection's original plan (keep the Dask graph lazy through
+`Canvas.points()`, bin server-side, no pre-averaging, **shading still
+applied client-side afterward**, same as local sessions do today) was
+overtaken by events before it was ever built:
+
+1. **What triggered the second look:** a headless `VisibilityPlotter`
+   smoke test's *default*, unrestricted selection made `query_columns()`
+   return **30,913,392 raw visibility rows** — confirmed directly via
+   diagnostic logging, not inferred. At roughly 495MB after base64
+   inflation per column set, and a 2-layer scatter panel requesting
+   every polarization layer in one call (so realistically closer to 1GB
+   for that panel), this wasn't a serialization bug — it's
+   `query_columns()` having no output bound at all, unlike
+   `query_raster()`'s `max_cells`, hit concretely rather than
+   hypothetically.
+2. **The corrected requirement, per direct instruction, going further
+   than this subsection's original plan:** binning **and** the
+   Datashader shading step *both* run on the remote host — the only
+   thing that crosses the wire is the already-shaded image (an RGBA
+   array sized to the canvas, a few MB, fixed regardless of whether the
+   underlying selection is ten rows or ten billion), not a bounded
+   DataFrame of bin counts, and never raw rows. This is what actually
+   shipped: `MSv2Backend.query_columns`/`MSv4Backend.query_columns` bin
+   and shade **server-side** and return a bounded `ScatterRenderResult`
+   — a rendered RGBA image plus a handful of small per-layer arrays
+   (coarse identity-grid data for hover/click-to-exact — see the Chunk
+   2c section below — not raw rows, not bin counts either).
+   `RemoteReductionContext.query_columns()` is consequently a straight
+   relay of this already-rendered result (confirmed a plain
+   `call_method` with no special-casing needed — see its own source
+   comment on why no `_wire_types` registration was required), not the
+   "`Canvas.points()` over the wire, shade client-side" design below.
+
+Both stages solve the same memory-safety problem this subsection
+identifies below (an unbounded row set materializing on a broad
+selection) — the second, shipped stage solves it more completely, by
+also removing the *shading* step (and therefore `cmap`/`scaling`
+parameters) from `P_local`'s side of the boundary entirely. The "no
+`max_cells`-style cap is needed for scatter" reasoning below is subsumed
+by this — the image output is bounded by canvas resolution
+automatically, same conclusion the original plan reached, different (and
+more complete) route to it.
+
+**Two real, named consequences of moving shading server-side too, worth
+carrying forward precisely rather than rediscovering them:**
+
+- **`probe_scatter_pixel()`'s original design broke harder under the
+  corrected plan than it would have under stage 1.** It identified
+  individual MS rows within a hovered pixel by indexing into a
+  client-held `scatter_df` — under the corrected design, `P_local` never
+  holds *any* row-level data, not even a bounded aggregate, so this had
+  to become a genuine remote call rather than a client-side lookup, with
+  a real, then-undesigned question: re-query scoped to just the hovered
+  region, or have the worker cache enough state from the last
+  `query_columns()` call to answer probes without re-querying? **This
+  was resolved, and superseded the whole method rather than patching
+  it**: see the Chunk 2c section below — `probe_raster_pixel`/
+  `probe_scatter_pixel` were removed entirely (confirmed zero live
+  callers before deletion) in favor of a coarse identity grid for hover
+  (no remote call at all, resolved in Chunk 2c) and `probe_scatter_region()`
+  for click-to-exact (a real remote call, but a per-click/drag one, not
+  per-hover, and scoped by construction rather than needing a
+  re-query-vs-cache decision) — a bigger, cleaner answer than either
+  option this document originally posed.
+- **Colormap/scaling changes stop being free.** Before this correction,
+  recoloring a scatter plot was a local operation against cached data,
+  mirroring raster. Once shading moves remote, every colormap or scaling
+  adjustment becomes a network round trip against the real ~600-800ms
+  per-call floor measured for raster (previous section) — a genuine UX
+  regression relative to prior local behavior, named explicitly as
+  needing a deliberate decision (debounce aggressively? cache the last
+  few renders client-side keyed by scaling params? accept the latency?)
+  rather than a decision to discover after the fact — the same category
+  of cost `iclean`'s own pre-notes flagged for `ImagePipe`'s existing
+  server-side quantization, for the same underlying reason. **Not
+  resolved by this document** — see the standalone viewport-
+  responsiveness assessment (2026-09) for a fuller treatment of this and
+  the closely-related pan/zoom-latency question; that assessment folds
+  this exact concern in as one of its named factors, not a new one.
 
 **`query_columns()` has no equivalent bound, and this is a pre-existing
 risk independent of remote execution.** `MSv2Backend.query_columns`'s
@@ -1489,15 +1693,18 @@ terabyte-scale MSv4 could try to materialize the entire matched slice —
 **a memory-safety problem even in today's local, non-remote case**, not
 only a network-bandwidth one.
 
-**The fix already has a documented blueprint, currently unimplemented.**
-`reader.py`'s abstract `query_columns` docstring (lines 651, 669-670,
-predating the concrete implementation's deviation from it) already
-specifies the correct shape: *"Datashader consumes this Dataset directly
+**The fix originally sketched here as a blueprint (superseded — see the
+correction above).** `reader.py`'s abstract `query_columns` docstring
+(lines 651, 669-670, predating the concrete implementation's deviation
+from it, and itself now superseded by the shipped server-side-binning
+contract) had specified: *"Datashader consumes this Dataset directly
 via `Canvas.points()`. No pre-averaging is performed... Call `.compute()`
 only inside Datashader (never materialise the full array in Python)."*
-Datashader's `Canvas.points()` genuinely accepts a Dask-backed input and
-performs the pixel-binning via Dask's own chunked reduction, without ever
-fully materializing the input.
+That specific shape — a Dask-backed dataset consumed lazily by
+`Canvas.points()` on the *client* side of the `call_method` boundary —
+is not what shipped; the binning happens server-side instead, per the
+correction above. This paragraph is kept for the historical record of
+what was originally planned, not as a description of current behavior.
 
 **No `max_cells`-style cap is needed for scatter, unlike raster.** Raster
 needs its stride because it has an intermediate reduction stage (averaging
@@ -1509,21 +1716,28 @@ already-reduced grid. Run directly against the lazy data, its output is
 always exactly `canvas_width × canvas_height` by construction, regardless
 of whether the selection matches ten rows or ten billion — the wire
 payload is bounded automatically, no separate decimation/`is_decimated`
-concept to design.
+concept to design. (As the correction above notes, the binning that
+bounds this now happens server-side rather than via a lazy dataset
+crossing the wire — but the conclusion, that scatter needs no `max_cells`
+analog, held.)
 
 **Important clarification on data fidelity, worth preserving precisely:**
 this fix does not exclude any matching points from the result. Every
 sample that falls within the selection still contributes to whichever
 pixel-bin it lands in — the bin's aggregate is genuine, not a subset.
 What changes is *where* the binning happens (near the data, before the
-network hop) versus *where* it happens today (client-side, in
-`VisibilityScatter._shade_all_layers`, against `self._layer_dfs` cached
-from a `query_columns()` call that already shipped every raw row across
-whatever transport was in use). Explicitly **not** the same kind of
-trade-off as raster's `max_cells` stride, which *is* real, visible
-decimation with a defined recovery path (`is_decimated` + re-query at
-higher resolution on zoom-in) — no analogous recovery path is needed here
-because nothing is being dropped.
+network hop) versus *where* it happened before this redesign (client-side,
+in `VisibilityScatter._shade_all_layers`, against `self._layer_dfs`
+cached from a `query_columns()` call that shipped every raw row across
+whatever transport was in use). **Update, 2026-09:** `self._layer_dfs`
+(and `self._layer_aggs`, referenced in the "Open questions" below) are
+now permanently `None` post-redesign — confirmed directly, including by
+a test suite pass (Chunk 2d) that had to rebuild several tests which
+depended on reading them. Explicitly **not** the same kind of trade-off
+as raster's `max_cells` stride, which *is* real, visible decimation with
+a defined recovery path (`is_decimated` + re-query at higher resolution
+on zoom-in) — no analogous recovery path is needed here because nothing
+is being dropped.
 
 **This fix is also the enabler for genuine distributed cluster execution**
 of the aggregation itself, named as a goal independent of the bandwidth
@@ -1536,31 +1750,301 @@ memory regardless of how many nodes sit behind it — so this fix is
 required for that goal, not merely compatible with it. This is also
 where Chunk 1c's "encode once" note (serialization section) may matter
 most in practice, once a real payload shape exists to measure against.
+**Update, 2026-09:** the shipped server-side binning (see the correction
+above) runs the computation inside one worker process per execution
+context, same as everything else in this framework — whether that
+worker's own reduction is further spread across a `dask.distributed`
+cluster specifically was not part of what this chunk verified either way;
+this paragraph's goal remains aspirational, not confirmed built.
 
 ### Open questions (unverified — resolve during implementation)
 
-- `Canvas.points()` generally wants a Dask **DataFrame**, not an
-  `xr.Dataset` directly — some conversion (e.g. `.to_dask_dataframe()`)
-  is the likely missing glue between what the backend currently produces
-  and what Datashader consumes lazily. Standard, well-supported territory
-  in the Dask/xarray ecosystem in general, but **not verified against
-  this codebase's actual partition/backend code**
-  (`_iter_visibility_partitions`, `_apply_selection`, etc. in
-  `msv2_backend.py`) — may not drop in cleanly.
-- Whether/how this generalizes to `MSv4Backend` (not reviewed — this
-  project's source set includes `msv4_backend.py` but it hasn't been
-  read).
-- Local recompositing for scatter (`_shade_all_layers` currently rebins
-  from cached raw rows on every viewport change) — once the remote path
-  returns a bounded aggregate instead of raw rows, does the *local*
-  path's probe logic (`_agg_pixel`, which currently indexes into
-  `self._layer_aggs`, themselves derived from raw-row rebinning) need any
-  adjustment for consistency between local and remote sessions? Not
-  analyzed.
+**Update, 2026-09 (Chunk 2b/2c/2d): all three of the below are now
+resolved** — kept here, marked, for the historical record of what was
+genuinely unknown at design time, per this document's own convention of
+correcting rather than deleting superseded content.
+
+- ~~`Canvas.points()` generally wants a Dask **DataFrame**...~~ Moot: the
+  shipped design bins server-side rather than shipping a lazy dataset to
+  a client-side `Canvas.points()` call at all — see the correction at
+  the top of this section.
+- ~~Whether/how this generalizes to `MSv4Backend`...~~ Resolved: yes.
+  `MSv4Backend.query_columns` matches `MSv2Backend.query_columns`'s
+  contract, confirmed by a shared test suite
+  (`test_msv2_backend.py`/`test_msv4_backend.py`,
+  `test_visibility_scatter.py`, `test_visibility_raster.py`) that runs
+  unmodified against either backend via the `MS`/`PS` environment
+  variable, and by Chunk 2d's remote-path tests passing against both.
+- ~~Local recompositing for scatter... does the local path's probe logic
+  need any adjustment...~~ Resolved, and the answer changed the design:
+  yes, it needed adjustment, and that adjustment is the hover-probe
+  redesign covered in the Chunk 2c section below — `_agg_pixel`/
+  `self._layer_aggs` are gone from the live probe path entirely (kept
+  only as vestigial attributes some tests had to be rebuilt around),
+  replaced by a coarse identity grid (`self._layer_id_grid`) computed
+  once per render and consulted directly, with no raw per-layer
+  aggregation cached client-side at all — local and remote sessions
+  consult the same shape of data either way.
 - Which execution-context configuration `visplot`'s worker registration
   function should build (what gets `create_object`'d at context-creation
-  time vs. lazily) — not worked through against Chunk 2's specific method
-  set yet.
+  time vs. lazily) — resolved in practice: `remote_registrations.py`
+  registers `VisplotRemoteBackend`, constructed once via `create_object`
+  at `RemoteReductionContext.__init__` time (opening the MS/PS
+  immediately, not lazily). The latency consequence of that choice is
+  real but bounded: it's the `create_object()` phase timed separately in
+  both the raster-completion section above (a real per-call floor, not
+  the old ~50s-per-phase regime) and Chunk 2d's own logs (~2.9s) — a
+  `RemoteReductionContext(...)` call blocks for roughly that long before
+  returning, once a worker/kernel already exists, since opening the
+  MS/PS is exactly what that phase does.
+
+### Chunk 2c — Hover-probe/click-to-exact redesign, `InfoTool`
+
+**Status: implemented and tested, confirmed in a real browser.** This
+subsection is compiled from that chunk's own handoff document plus
+direct source verification during Chunk 2d (probe-region test coverage,
+the `bl_ids` fix below) — not first-hand implementation narrative the way
+Chunk 2d below is; see that handoff for the fuller account if one is
+needed.
+
+**The hover path (piece 2)** replaced per-hover raw-aggregation lookups
+(`self._layer_aggs`/`_agg_pixel`/`_search_radius_bins`/
+`_nearest_populated_bin` — all now vestigial, per the Chunk 2b correction
+above) with a coarse identity grid, `self._layer_id_grid`: built once per
+render, per layer, and consulted by exact-cell lookup with no neighbor
+search — confirmed directly (Chunk 2d) that every layer's grid shares
+identical shape/x_range/y_range for a given render, so a single `(px,
+py)` index is valid against any layer's grid. This is what makes hover
+free of a remote round trip per movement — the whole point of doing it
+this way, for a remote session in particular.
+
+**The click-to-exact path (piece 3), `InfoTool`:** a scatter-only Bokeh
+drag tool — click for a point, drag for a box — that opens a new browser
+tab per use (deliberately not a reused one; several tabs open at once is
+meant to support side-by-side comparison), showing exact field/scan/
+antenna/SPW identity for the clicked or dragged region. Backed by
+`probe_scatter_region()`, implemented in both `MSv2Backend` and
+`MSv4Backend`: masks the real per-sample x/y for one layer against a
+data-space rectangle, reduces to native-coordinate spans, with a
+per-layer `max_samples` budget and independent per-layer
+`too_many_points` reporting — unlike the hover path, this always makes a
+real backend call (see `RemoteReductionContext.probe_scatter_region`'s
+own docstring on why it needs no `_wire_types` registration: every
+argument is a plain tuple/list/str/int, an `Axis`, or a `SelectionSpec`,
+and the result is a plain dict of dicts). `_match_identity`
+(`visibility_plot.py`) gained an optional `bl_ids` parameter for exact,
+discrete `baseline_id` matching — needed because `baseline_id` has no
+structural relationship to a scatter's axes, so a click's matched ids
+are commonly non-contiguous, unlike `bl_range`'s older contiguous-range
+scan. **Confirmed working correctly end-to-end (Chunk 2d):** a new
+`TestProbeRegion` test class was added for `_handle_probe_region` (the
+widget-level message handler `InfoTool`'s frontend actually calls),
+covering the click case, the drag/box case, no-visible-layers, a hidden
+layer excluded from the response, a malformed message, and JSON-safety
+of the response — none of which had any test coverage before Chunk 2d,
+despite `probe_scatter_region()` itself (the backend computation one
+layer down) already being well covered. That new test class caught a
+real, live bug on first use: `_probe_region_layer_html` called
+`_match_identity(..., bl_ids=r.get("bl_ids"), ...)` unconditionally
+whenever a region had real data, but a stale copy of `visibility_plot.py`
+at the time didn't yet have the `bl_ids` parameter this document
+describes above — confirmed to be a stale-file artifact of that specific
+testing session, not a real defect in the actual codebase, once a
+current copy of the file was supplied. Old dead code
+(`probe_raster_pixel`/`probe_scatter_pixel`) was removed across seven
+files as part of this same redesign, confirmed to have zero live
+application callers before deletion.
+
+**Confirmed in a real browser (Chunk 2d):** both the hover path and
+`InfoTool`'s click/drag behavior, including after the `bl_ids` fix
+above, and the `info_tool.ts` TypeScript build step, compiled into
+`cubevisjs.min.js` and tested from Chrome — the one piece of this
+redesign with no real-environment verification as of the handoff that
+started Chunk 2d.
+
+### Chunk 2d — Remote-path validation
+
+**Status: implemented and tested, against both a local kernel and a real
+`zuul06` cluster kernel.** Everything in this subsection is first-hand:
+directly implemented, run, and verified during this chunk, not relayed
+from an earlier handoff — except the one correction below, made after
+later documents from earlier in Chunk 2 came to light.
+
+**Correction: this chunk's own opening claim was an overclaim, later
+found to contradict the raster-completion record above (added to this
+document after this section was originally written).** It is not true
+that `RemoteReductionContext` "had never actually been run" before this
+chunk — raster's remote path specifically had already been exercised by
+hand against a real `zuul06` kernel and a real MS, per the raster-
+completion section above, before this chunk began. What this chunk
+actually added, more precisely: **permanent pytest regression
+coverage** for `cubevis.remote`'s kernel bootstrap, `CommMgr` mirror
+link, generalized eval/exec, object registry, and
+`RemoteReductionContext` — none of which had any test-suite membership
+before this chunk, whether or not each had been separately exercised by
+hand — plus the first such coverage of scatter's own remote path
+(`query_columns`/`probe_scatter_region`, added after this chunk's own
+initial pass — see the note at the end of this section) and of the
+comm-layer bug found from a live field report, below.
+
+**New pytest regression coverage, one file per layer, promoted from four
+hand-run demo scripts (`try_local_or_remote_kernel.py`, `try_remote_eval.py`,
+`try_remote_object.py`, `try_remote_reduction_context.py`) into permanent
+suite membership:**
+
+- `test_remote_kernel_link.py` (3 tests) — kernel bootstrap, `CommMgr`
+  mirror role/transport type, a `ping`/`add` round trip proving the
+  command genuinely executes in the kernel's own process (distinct pid).
+- `test_remote_eval_exec.py` (5 tests) — `eval_code`/`exec_code`, the
+  `_result` convention, persistent worker-side namespace across calls,
+  and `_registry` reachability from an eval/exec snippet.
+- `test_remote_object_registry.py` (4 tests) — `create_object`/
+  `call_method`/`dispose_object` with real mutating state, a numpy array
+  round-tripped through `cubevis.utils.serialize`/`deserialize` (Bokeh's
+  real Serializer/Deserializer) over the actual wire, a disposed handle
+  erroring cleanly rather than crashing, and `close()` confirming the
+  worker subprocess actually exits.
+- `test_remote_reduction_context.py` (6 tests) — real MSv2/MSv4 backend
+  over the remote path: `metadata()` matching the equivalent local call
+  exactly, `list_fields()`/`list_spws()` non-empty, an unknown method
+  correctly raising `RemoteBackendError` with a real remote traceback
+  attached (confirming the developer guide's §3 concern was actually
+  addressed, not just designed around), `query_raster()` remote output
+  matching local exactly (the wire-serialization confirmation the Chunk
+  2 section above marks resolved), and the two `call_timeout` tests
+  below.
+
+All four accept a `CUBEVIS_TEST_KERNEL` environment variable (default
+`"python3"`, a local kernel) — the exact same test files, unmodified,
+run against a real `sshpyk`-provisioned kernel name.
+
+**`RemoteReductionContext.call_timeout` — a real gap found and fixed.**
+`dispatch_fast`'s 30-second default (`_link.py`'s `_DEFAULT_CALL_TIMEOUT`)
+had no override anywhere in `RemoteReductionContext`'s public API. An
+unrestricted `query_raster()` call was observed to occasionally exceed it
+on a cold worker (first MS open in a fresh subprocess) even though the
+equivalent local call took roughly 2 seconds — retried warm, the remote
+call passed in roughly 2.2 seconds, matching local, so this reads as the
+same cold-start sensitivity noted elsewhere for the local scatter
+pipeline (mechanism still not pinned down there either), not a
+serialization defect. Fixed by adding a `call_timeout` constructor
+parameter (default unchanged, `DEFAULT_CALL_TIMEOUT = 30.0`, matching
+`dispatch_fast`'s own default so nothing changes unless a caller opts
+in) plus a per-call `timeout=` on every `_call`-routed method
+(`query_raster`, `query_columns`, `probe_scatter_region`,
+`identity_tables`, `metadata`, `axis_info`, `available_axes`). Both
+directions confirmed by test: a deliberately tiny constructor-level
+`call_timeout` reliably fails (proving the default applies everywhere,
+including the constructor's own final `metadata()` fetch), and a
+deliberately tiny per-call `timeout=` reliably fails while the
+instance's own default still works normally on the next call (proving
+the override is scoped to one call, not sticky).
+
+**A real resource leak, found by building the test above, not by
+inspection.** That constructor-level test surfaced that
+`RemoteReductionContext.__init__`'s final `metadata()` fetch sat *outside*
+the constructor's own cleanup `try`/`except` — so any failure there,
+including now a too-tight `call_timeout`, skipped the same cleanup every
+earlier failure in the constructor already got, leaking the kernel and
+worker subprocess. Confirmed as a real leak, not theoretical, by
+triggering it directly against a real local kernel and checking for the
+kernel process afterward with `pgrep`: it was still alive, and exited
+only because it happened to notice its own parent process exit — a real
+long-lived caller (`VisibilityPlotter` itself) would have leaked it
+indefinitely. Fixed by moving that fetch inside the existing cleanup
+`try` block; re-verified by the same direct process check, clean.
+
+**`SSHMS`/`SSHPS` — added after the first real-`zuul06` run needed them.**
+`test_remote_reduction_context.py` opens data at two, potentially
+different, paths: `MS`/`PS` directly, in the test process itself, for the
+`local_reader` fixture every other test file in a full run also uses;
+and whatever `RemoteReductionContext` is given, opened inside a worker
+subprocess on the *kernel's* host. Those are the same path for
+local-kernel testing (same host) but frequently aren't for a real remote
+kernel (different mount layout, different home directory) — exactly the
+gap that made the first real-`zuul06` run of this suite fail at
+`create_object()` with a plain remote `FileNotFoundError` (the local
+`MS` value didn't exist on `zuul06`'s own filesystem at that path).
+`SSHMS`/`SSHPS`, read only by this one test file, override the path
+handed to `RemoteReductionContext` specifically, falling back to the
+same-kind local variable's own value when unset — so plain `MS=...`/
+`PS=...` keeps working unchanged for local-kernel testing and for every
+other test file. Verified directly (not just by inspection): a
+deliberately wrong `MS` plus a correct `SSHMS` produced exactly the
+expected split — the four tests touching only `RemoteReductionContext`
+passed, while the two cross-check tests correctly failed on the bad
+local `MS` value.
+
+**A second real bug the first `zuul06` run surfaced, this one in the
+test suite itself, not the framework:** `test_remote_kernel_link.py`
+asserted a worker's returned hostname equaled `P_local`'s own —
+correctly true for local-kernel testing (same host by construction), and
+wrong in general, exactly as its own docstring already warned before the
+real run ever happened. The real `zuul06` run returned `"zuul06"`, as it
+should have — proof the command genuinely executed remotely, and proof
+the assertion, not the framework, was wrong. Fixed by scoping the strict
+equality check to local-kernel testing only, keeping the pid-difference
+check (always true, local or remote) and a non-empty-hostname check
+(the weaker, always-true half) as the general-case assertions.
+
+**A separate bug, unrelated to any of the above, found from a genuine
+field report during this chunk (not from testing):** `CommMgr._handle_request`
+(`_comm_mgr.py`) conflated two different failure modes under one
+`except Exception` — a handler raising a real bug, versus the reply-send
+itself failing because the peer (a browser tab) had already gone away
+mid-reply. The second case, on a successful handler whose reply-send lost
+that race, was logged at `error` severity with a full traceback via
+`report_error(e, fatal=False)`, and then unconditionally retried sending
+an *error* reply over the same now-confirmed-dead connection — which
+failed again, this time uncaught, surfacing a second time as a generic
+"Error processing message" log in `_low_level_transport.py`'s outer
+message loop. `_send_request` (the request-*sending* side, 550 lines
+earlier in the same file) already had the correct pattern for this exact
+situation — a dedicated `except (ConnectionClosedError, ConnectionClosedOK)`
+clause, logged quietly, no retry — `_handle_request` (the reply-*sending*
+side) simply never got the same treatment. Fixed by mirroring that
+pattern in both places it was missing: around the initial reply-send, and
+around the retried error-reply-send inside the genuine-bug branch (so a
+real handler bug is still recorded exactly once, without a second,
+unrelated `ConnectionClosed` failure piling onto it). Two deterministic
+regression scenarios added to `test_close_kinds.py` (a handler closes the
+client connection itself before returning/raising, so the race happens
+every run rather than depending on timing luck) — one reproducing the
+field report exactly, one covering the adjacent "genuine bug plus the
+client is also already gone" case — each checked against both symptoms
+directly (no spurious entry in `CommMgr`'s own recorded errors, and no
+uncaught exception reaching `_low_level_transport`'s logger). Both
+scenarios confirmed to fail against the pre-fix code and pass against the
+fix, not merely asserted to be correct by inspection.
+
+**Result:** a full run of the entire `visplot` test suite (673 collected)
+against a real `zuul06` cluster kernel, after the two fixes above, passed
+completely clean — 670 passed, 3 skipped (data-dependent), 0 failed, 0
+errors, roughly 10 minutes. The one item explicitly flagged as
+unverified throughout Chunks 1/1b/1c/2 — "the real `sshpyk`/SSH/cluster
+path is validated by real use, not an automated test suite" (see the
+developer guide §7, also updated) — no longer holds as a limitation for
+`visplot`'s own remote-execution suite specifically.
+
+**Addendum, same chunk, added after a review of what Chunk 2 as a whole
+still lacked:** the clean run above still only exercised
+`RemoteReductionContext.query_raster()` — `query_columns()` and
+`probe_scatter_region()` (scatter's own remote wire path, §2b/2c above)
+had no test coverage through `RemoteReductionContext` at all, local
+kernel or real. Two tests added to close this —
+`test_query_columns_matches_local`/`test_probe_scatter_region_matches_local`
+— comparing remote output to the equivalent local call field-by-field,
+confirmed passing on both MSv2 and MSv4 against a local kernel (not yet
+re-run against real `zuul06` specifically). One representation-only
+wrinkle found and handled, not a defect: tuple-typed fields nested in a
+dataclass or plain dict (`x_range`, `id_grid_x_range`, `t_range`, etc.)
+come back as lists after a real wire round trip and are compared
+element-wise — exactly the documented, deliberate tradeoff the raster-
+completion section above describes for `CubevisSerializer`/
+`CubevisDeserializer`'s tuple handling (fixed for dict *keys*
+specifically, since that case is fatal rather than merely
+inconvenient; ordinary tuple *values* were left as an accepted,
+harmless gap) — not something this addendum discovered fresh.
 
 ---
 
@@ -1568,7 +2052,10 @@ most in practice, once a real payload shape exists to measure against.
 
 **Status: designed, not yet implemented.** Lower near-term priority than
 Chunk 2 per explicit direction; revisit once Chunk 2's pattern is proven
-out. Committed to building on Chunk 1c's object framework from the start
+out — Chunk 2 (including its remote path, Chunk 2d above) is now fully
+implemented and tested, against a real cluster kernel, so this chunk is
+no longer blocked on anything but priority. Committed to building on
+Chunk 1c's object framework from the start
 — this chunk's `gclean` major/minor cycles are, in fact, the original
 motivating case for Chunk 1b existing at all.
 

@@ -1880,3 +1880,131 @@ class TestProbeMultiLayer:
         text = json.dumps(self.vs._handle_probe({"x": x, "y": y}))
         assert "NaN" not in text and "Infinity" not in text
         json.loads(text)
+
+
+class TestProbeRegion:
+    """``_handle_probe_region`` -- the ``InfoTool`` click/drag backend.
+
+    NEW 2026-09 (Chunk 2d): this method had zero test coverage before
+    this class -- not even the "pure-logic pieces" (``_click_window``,
+    ``_rect_title``, ``_probe_region_page``) the Chunk 2c handoff
+    described as separately verified; no test file in this delivery
+    exercises any of the four (those three plus
+    ``_probe_region_layer_html``). Confirmed by grepping every test
+    file for these names before writing this class.
+
+    Unlike ``_handle_probe`` (hover, answered entirely from the cached
+    coarse ``_layer_id_grid``, no backend call), ``_handle_probe_region``
+    always makes a real ``self._backend.probe_scatter_region(...)``
+    round trip -- see that method's own docstring for why. These tests
+    exercise the real backend against real data, not a mock, matching
+    this file's house style throughout. Scope here is the widget-level
+    glue this method actually owns -- message parsing (click vs. drag),
+    dispatch, HTML assembly, and edge/error handling.
+    ``probe_scatter_region``'s own numeric correctness (exact sample
+    counts, antenna-pair resolution, too-many-points guard) is already
+    covered by ``TestProbeScatterRegion`` in
+    ``test_msv2_backend.py``/``test_msv4_backend.py`` and by the
+    synthetic ``test_probe_scatter_region.py`` -- not re-verified here.
+    """
+
+    def setup_method(self):
+        _require_datashader()
+        _suppress_warnings()
+        self.backend = _open_backend()
+        meta = self.backend.metadata()
+        t0, t1 = meta["time_range"]
+        self.sel = SelectionSpec(
+            time_range=(t0, t0 + (t1 - t0) * 0.15),
+            channel_range=(0, 48),
+        )
+        self.vs = _make_two_layer(self.backend, self.sel)
+
+    def teardown_method(self):
+        self.backend.close()
+
+    def _viewport_centre(self):
+        x0, x1 = self.vs._x_range
+        y0, y1 = self.vs._y_range
+        return (x0 + x1) / 2.0, (y0 + y1) / 2.0
+
+    def test_click_returns_ok_with_one_section_per_visible_layer(self):
+        """A click inside the viewport resolves via a real backend call
+        and reports every visible layer, not just the first."""
+        x, y = self._viewport_centre()
+        resp = self.vs._handle_probe_region({"tool": "info_click", "x": x, "y": y})
+        assert resp["status"] == "ok"
+        assert "<html" in resp["info_html"].lower()
+        assert resp["info_html"].count("<h3>") == len(self.vs.layers)
+        for lyr in self.vs.layers:
+            assert lyr.label in resp["info_html"]
+
+    def test_click_out_of_viewport_short_circuits(self):
+        """A click outside the current viewport is rejected by
+        ``_click_window`` before any backend call, with a distinct
+        top-level status from the in-range case."""
+        x1 = self.vs._x_range[1]
+        y0 = self.vs._y_range[0]
+        resp = self.vs._handle_probe_region(
+            {"tool": "info_click", "x": x1 + 1e6, "y": y0})
+        assert resp["status"] == "out_of_range"
+        assert "<html" in resp["info_html"].lower()
+
+    def test_drag_uses_the_given_rectangle_not_click_window(self):
+        """``info_box`` uses the caller's exact rectangle -- unlike a
+        click, it must not be collapsed through ``_click_window``."""
+        x0, x1 = self.vs._x_range
+        y0, y1 = self.vs._y_range
+        rx0, rx1 = x0 + (x1 - x0) * 0.2, x0 + (x1 - x0) * 0.8
+        ry0, ry1 = y0 + (y1 - y0) * 0.2, y0 + (y1 - y0) * 0.8
+        resp = self.vs._handle_probe_region(
+            {"tool": "info_box", "x0": rx0, "x1": rx1, "y0": ry0, "y1": ry1})
+        assert resp["status"] == "ok"
+        # _rect_title's "(x0-x1, y0-y1)" tag, not the full data extent
+        assert self.vs._rect_title((rx0, rx1), (ry0, ry1)) in resp["info_html"]
+
+    def test_no_visible_layers_reported_without_backend_call(self):
+        """Every layer hidden (alpha=0) is reported distinctly, and
+        without needing real data to still be a valid region."""
+        for i in range(len(self.vs.layers)):
+            self.vs.set_alpha(i, 0.0)
+        try:
+            x, y = self._viewport_centre()
+            resp = self.vs._handle_probe_region({"tool": "info_click", "x": x, "y": y})
+            assert resp["status"] == "no_layers"
+            assert "<html" in resp["info_html"].lower()
+        finally:
+            for i in range(len(self.vs.layers)):
+                self.vs.set_alpha(i, 1.0)
+
+    def test_hidden_layer_excluded_from_sections(self):
+        """A hidden layer gets no section; the visible one still does."""
+        self.vs.set_alpha(1, 0.0)
+        try:
+            x, y = self._viewport_centre()
+            resp = self.vs._handle_probe_region({"tool": "info_click", "x": x, "y": y})
+            assert resp["status"] == "ok"
+            assert resp["info_html"].count("<h3>") == 1
+            assert self.vs.layers[0].label in resp["info_html"]
+            assert self.vs.layers[1].label not in resp["info_html"]
+        finally:
+            self.vs.set_alpha(1, 1.0)
+
+    def test_malformed_message_reports_error_status(self):
+        """A message missing required keys is caught, not raised --
+        ``_handle_probe_region`` must degrade to an error envelope the
+        same way ``info_tool.ts`` can still render, not crash the
+        widget's message loop."""
+        resp = self.vs._handle_probe_region({"tool": "info_box"})  # no x0/x1/y0/y1
+        assert resp["status"] == "error"
+        assert "<html" in resp["info_html"].lower()
+
+    def test_response_is_json_safe(self):
+        """The envelope must survive the Comm transport's json.dumps,
+        same requirement as ``_handle_probe``'s hover envelope."""
+        import json
+        x, y = self._viewport_centre()
+        resp = self.vs._handle_probe_region({"tool": "info_click", "x": x, "y": y})
+        text = json.dumps(resp)
+        assert "NaN" not in text and "Infinity" not in text
+        json.loads(text)

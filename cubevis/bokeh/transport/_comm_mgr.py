@@ -1253,22 +1253,51 @@ class CommMgr( Model, BokehInit ):
 
                 await self._transport.send_message(reply)
 
+        except (ConnectionClosedError, ConnectionClosedOK) as e:
+            # The handler itself succeeded -- this is the reply-send
+            # racing the peer already going away (browser tab closed,
+            # laptop slept, etc.), not a handler bug. Same benign
+            # category _send_request already special-cases (see its own
+            # except (ConnectionClosedError, ConnectionClosedOK) clause
+            # above) -- there is no peer left to send an error reply to,
+            # so unlike the except Exception branch below, this
+            # deliberately does NOT call report_error() or retry the
+            # send: doing so would just fail again the same way, noisily,
+            # for a condition that was never actually an error.
+            logger.debug(
+                f"Connection closed while replying to {comm_id}.{message_id}: {e}"
+            )
+
         except Exception as e:
             logger.error(f"Error in handler {comm_id}.{message_id}: {e}")
             traceback.print_exc()
             self.report_error(e, fatal=False)
 
             if request_id and self._transport:
-                await self._transport.send_message({
-                    'comm_id': comm_id,
-                    'message_id': message_id,
-                    'request_id': request_id,
-                    'message': {
-                        'error': str(e),
-                        'traceback': traceback.format_exc()
-                    },
-                    'direction': self._peer_direction
-                })
+                try:
+                    await self._transport.send_message({
+                        'comm_id': comm_id,
+                        'message_id': message_id,
+                        'request_id': request_id,
+                        'message': {
+                            'error': str(e),
+                            'traceback': traceback.format_exc()
+                        },
+                        'direction': self._peer_direction
+                    })
+                except (ConnectionClosedError, ConnectionClosedOK) as send_exc:
+                    # The handler had a genuine bug (already recorded
+                    # above via report_error) AND the peer is also
+                    # already gone -- nothing left to deliver the error
+                    # reply to. Log quietly and stop; deliberately does
+                    # NOT report_error() this too, or a single real
+                    # handler bug would show up twice in self._errors
+                    # (once for the real cause, once for the unrelated
+                    # fact that telling the client about it also failed).
+                    logger.debug(
+                        f"Connection closed while sending error reply for "
+                        f"{comm_id}.{message_id}: {send_exc}"
+                    )
 
         # Fire any shutdown that was requested during handler execution,
         # now that the response (if any) has been sent.

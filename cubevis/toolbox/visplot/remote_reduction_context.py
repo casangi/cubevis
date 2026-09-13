@@ -174,6 +174,17 @@ DEFAULT_REMOTE_MAX_CELLS = 500_000
 DEFAULT_OPEN_TIMEOUT = 60.0
 DEFAULT_CREATE_CONTEXT_TIMEOUT = 180.0
 
+# Matches _link.py's own _DEFAULT_CALL_TIMEOUT -- dispatch_fast's
+# built-in default -- so leaving this alone changes nothing about
+# today's behavior. Exposed here (Chunk 2d) after an unrestricted
+# query_raster() was observed to occasionally exceed it on a cold
+# worker (first MS open in a fresh subprocess) even though the
+# equivalent local call was fast -- see test_remote_reduction_context.py's
+# module docstring for the investigation. Before this, RemoteReductionContext
+# had no way to raise this budget from its public API at all: dispatch_fast's
+# timeout was hardwired past _acall/_call with no override.
+DEFAULT_CALL_TIMEOUT = 30.0
+
 
 class RemoteBackendError(RuntimeError):
     """Raised when the remote ``VisplotRemoteBackend`` method call
@@ -217,11 +228,15 @@ class RemoteReductionContext(ReductionContext):
         ``"msv2"`` or ``"msv4"`` — which backend
         ``VisplotRemoteBackend`` should construct on the worker side.
     worker_target_name, register_function, open_timeout,
-    create_context_timeout, max_cells :
+    create_context_timeout, call_timeout, max_cells :
         See the corresponding constants above / ``cubevis.remote``
         defaults.  Exposed as constructor arguments so a caller with an
         unusually slow host, or a customized registration function, can
-        override them without subclassing.
+        override them without subclassing.  ``call_timeout`` sets the
+        default budget for every ``VisibilityReader``/``ReductionContext``
+        method below (``query_raster``, ``metadata``, etc.) -- each of
+        those also accepts its own ``timeout=`` to override just that
+        one call without changing the instance-wide default.
     """
 
     def __init__(
@@ -235,6 +250,7 @@ class RemoteReductionContext(ReductionContext):
         max_cells: int = DEFAULT_REMOTE_MAX_CELLS,
         open_timeout: float = DEFAULT_OPEN_TIMEOUT,
         create_context_timeout: float = DEFAULT_CREATE_CONTEXT_TIMEOUT,
+        call_timeout: float = DEFAULT_CALL_TIMEOUT,
     ) -> None:
         if backend_kind not in ("msv2", "msv4"):
             raise ValueError(
@@ -257,6 +273,7 @@ class RemoteReductionContext(ReductionContext):
         self._kernel_name = kernel_name
         self._backend_kind = backend_kind
         self._max_cells = max_cells
+        self._call_timeout = call_timeout
         self._closed = False
 
         # See module docstring, point 1: this bridge is the ONE loop
@@ -325,6 +342,30 @@ class RemoteReductionContext(ReductionContext):
             t4 = time.perf_counter()
             log.info("RemoteReductionContext: create_object() took %.1fs "
                       "(includes opening the MS/PS on the remote host)", t4 - t3)
+
+            # Fetched once, up front -- open_ms/open_ps need an
+            # ObservationMetadata immediately, and every ReductionContext
+            # list_*() method below is served from this same cached copy
+            # rather than a fresh remote round trip per call. If metadata
+            # can change server-side during a session (e.g. after a future
+            # split()), this will need an explicit refresh() -- not needed
+            # for Chunk 2's read-only scope.
+            #
+            # INSIDE the try block deliberately (moved here 2026-09,
+            # Chunk 2d): this call was previously issued after the
+            # try/except below, so a failure here -- including, now, a
+            # too-tight call_timeout= -- skipped the same-shaped cleanup
+            # every earlier failure in this constructor already gets,
+            # leaking the kernel and worker subprocess. Confirmed as a
+            # real leak (not just theoretical) by triggering it directly
+            # against a local kernel: the kernel process was still alive
+            # after the exception propagated, and only exited because it
+            # happened to notice its parent process exit -- a real
+            # long-lived caller (VisibilityPlotter itself) would have
+            # leaked it indefinitely.
+            self._meta = ObservationMetadata.from_backend_metadata(
+                self._call("metadata"), source_path=path
+            )
         except BaseException:
             # Don't leak a half-connected kernel if any step above
             # fails -- best-effort, and deliberately swallows its own
@@ -338,17 +379,6 @@ class RemoteReductionContext(ReductionContext):
                 )
             self._bridge.stop()
             raise
-
-        # Fetched once, up front -- open_ms/open_ps need an
-        # ObservationMetadata immediately, and every ReductionContext
-        # list_*() method below is served from this same cached copy
-        # rather than a fresh remote round trip per call. If metadata
-        # can change server-side during a session (e.g. after a future
-        # split()), this will need an explicit refresh() -- not needed
-        # for Chunk 2's read-only scope.
-        self._meta = ObservationMetadata.from_backend_metadata(
-            self._call("metadata"), source_path=path
-        )
 
     # ------------------------------------------------------------------ #
     # Internal call plumbing -- see module docstring, point 2            #
@@ -364,19 +394,32 @@ class RemoteReductionContext(ReductionContext):
             raise RemoteBackendError(f"create_object({class_name!r})", reply)
         return reply["handle"]
 
-    async def _acall(self, method: str, **kwargs: Any) -> Any:
+    async def _acall(self, method: str, *, timeout: Optional[float] = None,
+                      **kwargs: Any) -> Any:
         reply = await self._ctx.dispatch_fast(
             "call_method",
             {"handle": self._handle, "method": method, "args": [], "kwargs": kwargs},
+            timeout=timeout,
         )
         if isinstance(reply, dict) and "error" in reply:
             raise RemoteBackendError(method, reply)
         return reply
 
-    def _call(self, method: str, **kwargs: Any) -> Any:
+    def _call(self, method: str, *, timeout: Optional[float] = None,
+              **kwargs: Any) -> Any:
         """Synchronous entry point every VisibilityReader/ReductionContext
-        method below uses -- see module docstring, point 1."""
-        return self._bridge.run(self._acall(method, **kwargs))
+        method below uses -- see module docstring, point 1.
+
+        ``timeout=None`` (the default every call site below uses unless
+        its own ``timeout=`` was given) resolves to this instance's
+        ``_call_timeout`` (``call_timeout=`` at construction, itself
+        defaulting to ``DEFAULT_CALL_TIMEOUT``) -- so leaving both alone
+        changes nothing about today's behavior. A caller that knows one
+        particular call needs longer (or shorter) can pass ``timeout=``
+        on that call alone without touching the instance-wide default.
+        """
+        effective_timeout = self._call_timeout if timeout is None else timeout
+        return self._bridge.run(self._acall(method, timeout=effective_timeout, **kwargs))
 
     # ------------------------------------------------------------------ #
     # VisibilityReader protocol                                           #
@@ -390,11 +433,13 @@ class RemoteReductionContext(ReductionContext):
         selection: "SelectionSpec",
         polarization: Optional[str] = None,
         max_cells: int = 2_000_000,
+        timeout: Optional[float] = None,
     ) -> tuple:
         return self._call(
             "query_raster",
             y_dim=y_dim, x_dim=x_dim, quantity=quantity, selection=selection,
             polarization=polarization, max_cells=max_cells,
+            timeout=timeout,
         )
 
     def query_columns(
@@ -409,6 +454,7 @@ class RemoteReductionContext(ReductionContext):
         width: int = 800,
         height: int = 600,
         probe_grid_max_cells: int = 3072,
+        timeout: Optional[float] = None,
     ):
         # STRAIGHT RELAY -- and correctly so now. MSv2Backend.query_columns
         # (2026-09 redesign) bins and shades server-side and returns a
@@ -425,6 +471,7 @@ class RemoteReductionContext(ReductionContext):
             x_range=x_range, y_range=y_range, color_mode=color_mode,
             width=width, height=height,
             probe_grid_max_cells=probe_grid_max_cells,
+            timeout=timeout,
         )
 
     def probe_scatter_region(
@@ -435,6 +482,7 @@ class RemoteReductionContext(ReductionContext):
         x_range: tuple,
         y_range: tuple,
         max_samples: int = 200_000,
+        timeout: Optional[float] = None,
     ) -> dict:
         # STRAIGHT RELAY. Every argument is a plain tuple/list/str/int,
         # an Axis (Enum), or a SelectionSpec (plain dataclass) -- the
@@ -446,7 +494,7 @@ class RemoteReductionContext(ReductionContext):
         return self._call(
             "probe_scatter_region", x_axis=x_axis, yaxes=yaxes,
             selection=selection, x_range=x_range, y_range=y_range,
-            max_samples=max_samples,
+            max_samples=max_samples, timeout=timeout,
         )
 
     def identity_tables(
@@ -454,9 +502,11 @@ class RemoteReductionContext(ReductionContext):
         selection: "SelectionSpec",
         *,
         polarization: Optional[str] = None,
+        timeout: Optional[float] = None,
     ):
         return self._call(
             "identity_tables", selection=selection, polarization=polarization,
+            timeout=timeout,
         )
 
     # ------------------------------------------------------------------ #
@@ -465,15 +515,16 @@ class RemoteReductionContext(ReductionContext):
     # §2: "Two more methods are needed beyond the formal protocol").     #
     # ------------------------------------------------------------------ #
 
-    def metadata(self) -> dict:
-        return self._call("metadata")
+    def metadata(self, timeout: Optional[float] = None) -> dict:
+        return self._call("metadata", timeout=timeout)
 
     def axis_info(self, axis: "Axis", selection: Optional["SelectionSpec"] = None,
-                  query: str = "columns"):
-        return self._call("axis_info", axis=axis, selection=selection, query=query)
+                  query: str = "columns", timeout: Optional[float] = None):
+        return self._call("axis_info", axis=axis, selection=selection, query=query,
+                           timeout=timeout)
 
-    def available_axes(self):
-        return self._call("available_axes")
+    def available_axes(self, timeout: Optional[float] = None):
+        return self._call("available_axes", timeout=timeout)
 
     def metadata_dto(self) -> ObservationMetadata:
         """Cached ObservationMetadata built at construction time -- avoids

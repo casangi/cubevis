@@ -63,8 +63,24 @@ unset or itself wrong) it never gets that far, and reports the same
 ``TimeoutError`` it's actually checking for. Not a flaw in the timeout
 mechanism -- see the paragraph above.
 
-Example: ulimit -n 8096 && CUBEVIS_TEST_KERNEL=zuul06_python312 MS=sis14_twhya_calibrated_flagged.ms SSHMS=/home/zuul06-2/dschieb/casa/visplot/sis14_twhya_calibrated_flagged.ms pytest test_*.py
-
+``test_query_columns_matches_local``/``test_probe_scatter_region_matches_local``
+(added after a Chunk 2 status review found the gap): every other test
+in this file exercises ``query_raster`` only -- scatter's remote wire
+path (``query_columns``'s bounded, server-side-rendered
+``ScatterRenderResult``, and ``probe_scatter_region``'s click-to-exact
+identity computation) had never been called through
+``RemoteReductionContext`` at all before these two, against either a
+local kernel or real ``zuul06``. Both compare remote output to the
+equivalent local call field-by-field. One representation wrinkle,
+not a correctness issue: tuple-typed fields nested inside a dataclass
+or a plain dict (``x_range``, ``id_grid_x_range``, ``t_range``, etc.)
+come back as lists after a real wire round trip -- generic
+dataclass/dict wire serialization has no separate tuple type -- so
+those fields are compared element-wise (``tuple(...) ==
+tuple(...)``) rather than with a type-sensitive ``==``. Dict *keys*
+that are themselves tuples (``(Axis, polarization)`` in
+``probe_scatter_region``'s return) were checked and do NOT have this
+problem -- confirmed by running the test, not assumed.
 """
 from __future__ import annotations
 
@@ -80,6 +96,7 @@ from cubevis.toolbox.visplot.remote_reduction_context import (
 from cubevis.toolbox.visplot.axes import Axis
 from cubevis.toolbox.visplot.selection import SelectionSpec
 from cubevis.toolbox.visplot.local_visibility_reader import LocalVisibilityReader
+from cubevis.toolbox.visplot.data.reader import ScatterLayerSpec
 
 KERNEL_NAME = os.environ.get("CUBEVIS_TEST_KERNEL", "python3")
 
@@ -179,6 +196,124 @@ def test_query_raster_matches_local(remote_ctx, local_reader):
     assert remote_xr == local_xr
     assert remote_yr == local_yr
     assert remote_dec == local_dec
+
+
+def test_query_columns_matches_local(remote_ctx, local_reader):
+    """Scatter's remote wire path: ``ScatterLayerSpec`` out,
+    ``ScatterRenderResult`` back -- an RGBA image plus the coarse
+    per-layer identity-grid arrays ``InfoTool``'s hover path relies on
+    (see the Chunk 2c section of the implementation doc). Nothing in
+    this file exercised this before -- every other test here only calls
+    ``query_raster``, and scatter's aggregation shape (server-side
+    binning into a bounded, already-rendered result -- see that same
+    doc section for how this differs from raster) had never been
+    confirmed over the actual remote wire at all.
+    """
+    meta = local_reader.metadata()
+    t0, t1 = meta["time_range"]
+    selection = SelectionSpec(
+        time_range=(t0, t0 + (t1 - t0) * 0.15), channel_range=(0, 48),
+    )
+    layers = [
+        ScatterLayerSpec(y_axis=Axis.AMPLITUDE, polarization="XX", cmap=("black", "white")),
+        ScatterLayerSpec(y_axis=Axis.AMPLITUDE, polarization="YY", cmap=("black", "white")),
+    ]
+    remote_result = remote_ctx.query_columns(
+        xaxis=Axis.TIME, layers=layers, selection=selection, width=200, height=150,
+    )
+    local_result = local_reader.query_columns(
+        xaxis=Axis.TIME, layers=layers, selection=selection, width=200, height=150,
+    )
+
+    # x_range/y_range are tuple fields on a dataclass; after a real wire
+    # round trip they come back as lists (generic dataclass/JSON-shaped
+    # serialization has no separate tuple type) -- a representation
+    # difference, not a computational one, so compare element-wise
+    # rather than with a type-sensitive ==.
+    assert tuple(remote_result.x_range) == tuple(local_result.x_range)
+    assert tuple(remote_result.y_range) == tuple(local_result.y_range)
+    assert remote_result.canvas_width == local_result.canvas_width
+    assert remote_result.canvas_height == local_result.canvas_height
+    assert len(remote_result.layers) == len(local_result.layers)
+
+    array_fields = (
+        "hist_counts", "hist_edges", "mapping_x", "mapping_u",
+        "id_grid_t_lo", "id_grid_t_hi", "id_grid_bl_lo", "id_grid_bl_hi",
+        "id_grid_freq_lo", "id_grid_freq_hi", "id_grid_value",
+    )
+    for r_lyr, l_lyr in zip(remote_result.layers, local_result.layers):
+        assert np.array_equal(r_lyr.image, l_lyr.image)
+        assert r_lyr.n_in_view == l_lyr.n_in_view
+        assert r_lyr.skip_reason == l_lyr.skip_reason
+        if l_lyr.peak_value is None:
+            assert r_lyr.peak_value is None
+        else:
+            assert r_lyr.peak_value == pytest.approx(l_lyr.peak_value)
+        for field in array_fields:
+            r_val, l_val = getattr(r_lyr, field), getattr(l_lyr, field)
+            if l_val is None:
+                assert r_val is None
+            else:
+                assert np.allclose(r_val, l_val, equal_nan=True)
+        assert tuple(r_lyr.id_grid_x_range) == tuple(l_lyr.id_grid_x_range)
+        assert tuple(r_lyr.id_grid_y_range) == tuple(l_lyr.id_grid_y_range)
+
+
+def test_probe_scatter_region_matches_local(remote_ctx, local_reader):
+    """``InfoTool``'s backend computation (click-to-exact identity) over
+    the remote wire -- the other real gap alongside ``query_columns``
+    above: this always makes a real backend round trip (see
+    ``RemoteReductionContext.probe_scatter_region``'s own docstring on
+    why it needs no ``_wire_types`` registration), so it's exactly the
+    kind of call a remote session actually issues per click/drag, not
+    just per pan/zoom.
+
+    Uses a deliberately large rectangle (60% of the full extent), same
+    reasoning as ``TestProbeRegion`` in ``test_visibility_scatter.py``:
+    a click-sized window too often lands on an empty cell to reliably
+    exercise the "found data" path.
+    """
+    meta = local_reader.metadata()
+    t0, t1 = meta["time_range"]
+    selection = SelectionSpec(
+        time_range=(t0, t0 + (t1 - t0) * 0.5), channel_range=(0, 48),
+    )
+    extent = local_reader.query_columns(
+        xaxis=Axis.TIME,
+        layers=[ScatterLayerSpec(y_axis=Axis.AMPLITUDE, polarization="XX",
+                                  cmap=("black", "white"))],
+        selection=selection, width=64, height=48,
+    )
+    x0, x1 = extent.x_range
+    y0, y1 = extent.y_range
+    rx0, rx1 = x0 + (x1 - x0) * 0.2, x0 + (x1 - x0) * 0.8
+    ry0, ry1 = y0 + (y1 - y0) * 0.2, y0 + (y1 - y0) * 0.8
+
+    yaxes = [(Axis.AMPLITUDE, "XX"), (Axis.AMPLITUDE, "YY")]
+    remote_results = remote_ctx.probe_scatter_region(
+        x_axis=Axis.TIME, yaxes=yaxes, selection=selection,
+        x_range=(rx0, rx1), y_range=(ry0, ry1), max_samples=200_000,
+    )
+    local_results = local_reader.probe_scatter_region(
+        x_axis=Axis.TIME, yaxes=yaxes, selection=selection,
+        x_range=(rx0, rx1), y_range=(ry0, ry1), max_samples=200_000,
+    )
+
+    assert set(remote_results.keys()) == set(local_results.keys())
+    for key in local_results:
+        r, l = remote_results[key], local_results[key]
+        assert r["status"] == l["status"]
+        assert r["n_samples"] == l["n_samples"]
+        # tuple fields inside a plain dict survive the wire round trip
+        # as lists, same reasoning as x_range/y_range above -- compare
+        # element-wise, None-safe.
+        for field in ("t_range", "bl_range", "freq_range"):
+            r_val, l_val = r[field], l[field]
+            assert (tuple(r_val) if r_val is not None else None) == (
+                tuple(l_val) if l_val is not None else None)
+        assert (sorted(r["bl_ids"]) if r["bl_ids"] else r["bl_ids"]) == (
+            sorted(l["bl_ids"]) if l["bl_ids"] else l["bl_ids"]
+        )
 
 
 def test_call_timeout_constructor_default_applies_everywhere(backend_paths_and_kind):

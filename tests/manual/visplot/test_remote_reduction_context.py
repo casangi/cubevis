@@ -81,6 +81,10 @@ tuple(...)``) rather than with a type-sensitive ``==``. Dict *keys*
 that are themselves tuples (``(Axis, polarization)`` in
 ``probe_scatter_region``'s return) were checked and do NOT have this
 problem -- confirmed by running the test, not assumed.
+
+Example Execution:
+
+ulimit -n 8096 && MS=sis14_twhya_calibrated_flagged.ms CUBEVIS_TEST_KERNEL=cvpost106_python312 CUBEVIS_TEST_KERNEL_MS=/home/zuul06-2/dschieb/casa/visplot/sis14_twhya_calibrated_flagged.ms pytest test_remote_reduction_context.py
 """
 from __future__ import annotations
 

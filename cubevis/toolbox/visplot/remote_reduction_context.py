@@ -54,21 +54,24 @@ Three things worth reading before touching this file
    convenience wrappers) and checks for ``"error"`` itself, raising
    ``RemoteBackendError`` with the remote traceback attached.
 
-3. **Wire serialization of ``Axis``/``SelectionSpec`` is UNVERIFIED.**
-   ``cubevis.utils.serialize``/``deserialize`` is confirmed (by
-   ``test_object_registry_e2e.py``) to round-trip a real numpy array.
-   Whether it also round-trips a plain ``Axis`` (an ``Enum``, not a
-   ``str`` subclass) and a ``SelectionSpec`` (a plain ``@dataclass``,
-   not a numpy/pandas/JSON-primitive type) has **not** been checked
-   against the actual serializer implementation as part of this pass —
-   that file wasn't in scope here.  Run a `query_raster` round trip
-   against a local kernel early (per the handoff's own "suggested first
-   milestone") to confirm this before assuming the rest of this file is
-   correct; if it turns out ``Axis``/``SelectionSpec`` don't round-trip
-   as-is, the fix belongs in ``cubevis.utils.serialize`` (register a
-   custom encoder) or in a thin encode/decode shim in this file and in
-   ``remote_registrations.py`` — not by changing the ``VisibilityReader``
-   protocol's signatures.
+3. **Wire serialization of ``Axis``/``SelectionSpec``, confirmed correct
+   (2026-09, Chunk 2d).** ``test_remote_reduction_context.py::test_
+   query_raster_matches_local`` round-trips both through the real
+   ``cubevis.utils.serialize``/``deserialize`` path and asserts the
+   remote result is numerically identical to the equivalent local call
+   -- confirmed on both MSv2 and MSv4. First confirmed against a local
+   kernel standing in for a real one (see ``ways-of-working.md``: an
+   acceptable proxy, modulo the latency a real remote connection would
+   add); a first real-``zuul06`` run of this suite that same week
+   failed earlier, at ``create_object()`` (a real MS-path-not-
+   resolvable-on-the-remote-host problem, unrelated to serialization --
+   ``create_object`` only ever sends plain strings, no
+   ``Axis``/``SelectionSpec`` involved -- fixed by the ``SSHMS``/
+   ``SSHPS`` environment variables that test file's own docstring now
+   documents). With that fixed, a subsequent real-``zuul06`` run of the
+   full suite passed this test along with everything else -- this
+   mechanism is now confirmed correct against a genuine remote cluster
+   kernel, not just the local-kernel proxy.
 
 Construction blocks
 --------------------

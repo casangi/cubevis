@@ -115,16 +115,26 @@ async def test_ping_executes_on_the_kernel_process_not_here(bootstrapped_link):
     """The whole point of this path: the command must genuinely run in
     the kernel's own process, not be silently short-circuited locally.
 
-    ``hostname`` is asserted equal here because a *local* kernel shares
-    this process's host by construction -- that part of the assertion
-    is specific to local-kernel testing, not a general contract.
+    Confirmed for real (2026-09) against a real sshpyk-provisioned
+    zuul06 kernel -- and that same run is exactly why the strict
+    ``hostname == our own hostname`` assertion this test used to make
+    was wrong in general: it came back ``"zuul06"``, correctly distinct
+    from the laptop running pytest, which is precisely the point of
+    this test and precisely why that assertion failed. It only ever
+    held for local-kernel testing (same host by construction) -- kept
+    below, but scoped to that case specifically. ``pid`` differing
+    from our own is the universal proof of "ran elsewhere," local or
+    real; a non-empty ``hostname`` coming back at all is the weaker,
+    always-true half of that same check.
     """
     mgr, _ = bootstrapped_link
     comm = mgr.open("demo")
     reply = await request(comm, "ping", {})
     assert reply["pong"] is True
     assert reply["pid"] != os.getpid()
-    assert reply["hostname"] == socket.gethostname()
+    assert reply["hostname"]
+    if KERNEL_NAME == "python3":
+        assert reply["hostname"] == socket.gethostname()
 
 
 @pytest.mark.asyncio

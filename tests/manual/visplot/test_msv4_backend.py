@@ -34,6 +34,9 @@ Tests
 7.  query_uv_coverage   conjugate symmetry, rendered through Datashader
 8.  samples_per_pixel   geometric ratio correctness
 9.  probe_pixel         raster value/metadata, scatter sample counting
+10. colorize-by-axis    Part 2 columns (scan/antenna/spw/polarization),
+                        including the OPT-B cross-partition path this
+                        suite otherwise never exercises directly
 
 Performance note — setup_class vs setup_method
 -----------------------------------------------
@@ -1878,6 +1881,139 @@ class TestSingleDish:
 
 
 # ---------------------------------------------------------------------------
+# 10. colorize-by-axis Part 2 — scan/antenna/spw/polarization columns
+# ---------------------------------------------------------------------------
+
+class TestColorizeByAxisColumns:
+    """Regression coverage for the colorize-by-axis Part 2 columns on
+    MSv4Backend -- mirrors test_msv2_backend.py's class of the same
+    name. See ``visplot-colorize-by-axis-handoff-part3.md`` for the
+    full design rationale.
+
+    Also the only place in this suite that exercises
+    ``_query_all_partitions_scatter_fused`` (OPT-B) directly rather
+    than only ``_query_partition_scatter``'s own fused/serial branches
+    (see ``TestQueryColumnsRendered.test_serial_and_fused_pipelines_agree``
+    above). OPT-B is an independent code path, not a caller of
+    ``_query_partition_scatter`` -- before Part 2 it carried none of the
+    id columns at all, not even the pre-existing hover-probe
+    ``time``/``baseline_id``/``frequency`` ones. Folded in from
+    ``verify_colorize_axis_part2.py``, the standalone script used
+    during Part 2 development, which also did a one-time cross-backend
+    (MSv2 vs MSv4) comparison -- not repeated here since each backend's
+    own test file already checks its own correctness against
+    independent ground truth (raw MS tables via ``arcae`` for MSv2;
+    OPT-B-vs-per-partition agreement here for MSv4).
+    """
+
+    IN_SCOPE_COLUMNS = {
+        "scan_name", "baseline_antenna1_name", "baseline_antenna2_name",
+        "polarization", "spw",
+    }
+
+    @classmethod
+    def setup_class(cls):
+        _suppress_warnings()
+        cls.backend = _open_backend()
+        meta = cls.backend.metadata()
+        cls.pols = meta["correlation_labels"]
+        t0, t1 = meta["time_range"]
+        cls.sel = SelectionSpec(
+            time_range=(t0, t0 + (t1 - t0) * 0.15),
+            channel_range=(0, 16),
+        )
+
+    @classmethod
+    def teardown_class(cls):
+        cls.backend.close()
+
+    def test_all_in_scope_columns_present(self):
+        yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        df = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel)[
+            (Axis.AMPLITUDE, self.pols[0])
+        ]
+        assert len(df) > 0
+        assert self.IN_SCOPE_COLUMNS <= set(df.columns), (
+            f"missing: {self.IN_SCOPE_COLUMNS - set(df.columns)}"
+        )
+
+    def test_no_internal_bookkeeping_column_leaks(self):
+        """"__scan_time_idx" is internal bookkeeping (see
+        XArrayReader._scan_time_index's docstring), popped before the
+        DataFrame is returned -- checked on both code paths, since
+        OPT-B and the per-partition path each build/pop it separately."""
+        yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        df = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel)[
+            (Axis.AMPLITUDE, self.pols[0])
+        ]
+        assert "__scan_time_idx" not in df.columns
+
+    def test_scan_and_antenna_columns_avoid_expensive_string_dtype(self):
+        """Real, measured regression guard -- mirrors
+        test_msv2_backend.py's identical test; see
+        XArrayReader._as_object_column's docstring for the ~5x cost
+        difference this guards against."""
+        yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        df = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel)[
+            (Axis.AMPLITUDE, self.pols[0])
+        ]
+        for col in ("scan_name", "baseline_antenna1_name",
+                    "baseline_antenna2_name"):
+            assert df[col].dtype == object, (
+                f"{col} has dtype {df[col].dtype!r}, expected object -- "
+                "see _as_object_column's docstring"
+            )
+
+    def test_polarization_column_matches_the_requested_key(self):
+        """Each (axis, pol) key's own DataFrame carries that pol as a
+        constant column -- confirms the degenerate-Correlation finding
+        in the design doc (§7.1/§4.1): always exactly one category for
+        a single layer, by construction."""
+        yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        df = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel)[
+            (Axis.AMPLITUDE, self.pols[0])
+        ]
+        assert (df["polarization"] == self.pols[0]).all()
+        assert df["polarization"].nunique() == 1
+
+    def test_opt_b_cross_partition_path_carries_the_same_columns(self):
+        """``_query_all_partitions_scatter_fused`` (OPT-B) must carry
+        every Part 2 column identically to the ordinary per-partition
+        path. Forces each path deterministically via ``_THRESH_FUSED``
+        (same technique ``test_serial_and_fused_pipelines_agree`` above
+        uses for the per-partition fused/serial split), on a
+        channel-only selection spanning all partitions so OPT-B's
+        ``len(selected) > 1`` gate is actually exercised."""
+        import cubevis.toolbox.visplot.data.msv4_backend as _be
+
+        sel = SelectionSpec(channel_range=(0, 12))
+        yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        orig_thresh = _be._THRESH_FUSED
+        try:
+            _be._THRESH_FUSED = 0
+            df_optb = self.backend._query_columns_raw(
+                Axis.TIME, yaxes, sel
+            )[(Axis.AMPLITUDE, self.pols[0])]
+
+            _be._THRESH_FUSED = 10 ** 12
+            df_perpart = self.backend._query_columns_raw(
+                Axis.TIME, yaxes, sel
+            )[(Axis.AMPLITUDE, self.pols[0])]
+        finally:
+            _be._THRESH_FUSED = orig_thresh
+
+        assert len(df_optb) > 0
+        assert self.IN_SCOPE_COLUMNS <= set(df_optb.columns), (
+            "OPT-B path is missing colorize-by-axis columns -- see "
+            "visplot-colorize-by-axis-handoff-part3.md"
+        )
+        cols = sorted(self.IN_SCOPE_COLUMNS | {"x", "y"})
+        a = df_optb[cols].sort_values(cols).reset_index(drop=True)
+        b = df_perpart[cols].sort_values(cols).reset_index(drop=True)
+        pd.testing.assert_frame_equal(a, b, check_dtype=False)
+
+
+# ---------------------------------------------------------------------------
 # Standalone runner (no pytest required)
 # ---------------------------------------------------------------------------
 
@@ -1898,6 +2034,7 @@ if __name__ == "__main__":
         TestDataGroup,
         TestXRadioNativeStructure,
         TestSingleDish,
+        TestColorizeByAxisColumns,
     ]
 
     total_passed = total_failed = total_skipped = 0

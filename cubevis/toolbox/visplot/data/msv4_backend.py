@@ -111,6 +111,8 @@ from .reader import (
     ScanInfo,
     SpwInfo,
     IdentityTables,
+    _PartitionIdentity,
+    _PartitionScanLookup,
 )
 from . import _scatter_render
 from ..axes import Axis, AxisInfo, AxisType
@@ -272,6 +274,9 @@ class MSv4Backend(XArrayReader):
                     self._datatree    = None
                     self._partitions  = []
                     self._resolved_mode = None
+        # See XArrayReader._clear_lookup_caches's docstring -- hygiene,
+        # not a correctness necessity (these hold no VISIBILITY data).
+        self._clear_lookup_caches()
 
     def __enter__(self) -> "MSv4Backend":
         self.open()
@@ -1096,14 +1101,19 @@ class MSv4Backend(XArrayReader):
         """
         self._require_open()
 
-        # Collect selected partitions and estimate total sample count
-        selected: list[xr.Dataset] = []
+        # Collect selected partitions and estimate total sample count.
+        # Each entry also carries that partition's scan lookup (2026-09
+        # follow-up), computed here while the raw partition is still in
+        # scope -- see _PartitionIdentity's docstring for why it must
+        # be computed from the raw partition, not the selected `ds`.
+        selected: list[tuple[xr.Dataset, Optional[_PartitionScanLookup]]] = []
         total_samples = 0
         for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
                 continue
-            selected.append(ds)
+            scan_lookup = self._scan_lookup_for_partition(raw_ds)
+            selected.append((ds, scan_lookup))
             total_samples += self._estimate_samples(ds, selection, len(yaxes))
 
         if not selected:
@@ -1122,13 +1132,14 @@ class MSv4Backend(XArrayReader):
             partition_frames: dict[tuple[Axis, str], list[pd.DataFrame]] = {
                 key: [] for key in yaxes
             }
-            for ds in selected:
+            for ds, scan_lookup in selected:
                 n_samp = self._estimate_samples(ds, selection, len(yaxes))
                 fused_part = HAS_DASK and n_samp >= _THRESH_FUSED
                 frames = self._query_partition_scatter(
                     ds, xaxis, yaxes,
                     use_fused=fused_part,
                     use_parallel=use_parallel,
+                    scan_lookup=scan_lookup,
                 )
                 for key, df in frames.items():
                     if df is not None and len(df) > 0:
@@ -1143,7 +1154,7 @@ class MSv4Backend(XArrayReader):
 
     def _query_all_partitions_scatter_fused(
         self,
-        selected: list[xr.Dataset],
+        selected: list[tuple[xr.Dataset, Optional[_PartitionScanLookup]]],
         xaxis: Axis,
         yaxes: list[tuple[Axis, str]],
     ) -> dict[tuple[Axis, str], pd.DataFrame]:
@@ -1165,14 +1176,47 @@ class MSv4Backend(XArrayReader):
         previously always used ``yaxes[0]``'s polarization even for a
         partition that didn't carry it -- the template now comes from
         that partition's own first *locally-present* key instead.
-        """
-        # Build flat list: [y00, y01, ..., y0K, x0, y10, ..., y1K, x1, ...]
-        # where index encodes (partition_idx, yaxis_idx | x_sentinel)
-        all_lazy: list[xr.DataArray] = []
-        # Track (partition_idx, key) for each lazy y, and partition_idx for x
-        layout: list[tuple[int, tuple | None]] = []  # None = x axis
 
-        for p_idx, ds in enumerate(selected):
+        colorize-by-axis Part 2 (2026-09): this path is independent of
+        ``_query_partition_scatter`` (see above), so it never picked up
+        that method's hover-probe id-cols addition (2026-09 piece 2) --
+        confirmed on real data: any selection wide enough to span
+        multiple partitions and cross ``_THRESH_FUSED`` (routing here
+        instead of the per-partition path) silently dropped
+        ``time``/``baseline_id``/``frequency`` entirely, not just the
+        new categorical columns Part 2 adds. Fixed here alongside the
+        new columns rather than left half-working: both sets are
+        per-row/per-partition data that this method was already reading
+        selection/partition metadata for, so there is no separate "just
+        the old bug" fix that wouldn't also touch this same code.
+        ``layout`` entries now carry a tag (``"y"``/``"x"``/``"id"``) so
+        the reconstruction below can tell all three apart in the single
+        flat ``computed`` tuple, mirroring ``_query_partition_scatter``'s
+        conditional-per-coordinate gate for which id columns exist.
+
+        2026-09 follow-up: ``scan_name``/``baseline_antenna1_name``/
+        ``baseline_antenna2_name`` no longer ride the broadcast above --
+        see ``_query_partition_scatter``'s equivalent comment for why
+        (a measured ~1.45s of near-identical fixed overhead in both
+        pipelines on a modest test MS). Each ``selected`` entry now
+        carries its partition's pre-built scan lookup alongside the
+        dataset, computed by the caller while the raw partition was
+        still in scope; antenna names come from the same MS-wide cached
+        table ``_query_partition_scatter`` uses.
+        """
+        # Build flat list: [y00, y01, ..., y0K, x0, id0a, id0b, ..., y10, ...]
+        # where each entry is tagged by its (partition_idx, tag, extra) in
+        # `layout`, at the same position -- extra is the (axis, pol) key
+        # for "y", None for "x", or the coordinate name for "id".
+        all_lazy: list[xr.DataArray] = []
+        layout: list[tuple[int, str, object]] = []
+        # SPW identity, constant per partition -- no dask array needed,
+        # same rationale as _query_partition_scatter's identical
+        # addition (see that method's docstring).
+        spw_by_partition: dict[int, object] = {}
+        scan_lookup_by_partition: dict[int, Optional[_PartitionScanLookup]] = {}
+
+        for p_idx, (ds, scan_lookup) in enumerate(selected):
             vis  = self._resolve_vis(ds)
             flag = self._flag_mask(ds)
 
@@ -1186,7 +1230,7 @@ class MSv4Backend(XArrayReader):
                 axis, pol = key
                 lazy_y = self._lazy_quantity(vis, flag, axis, pol)
                 all_lazy.append(lazy_y)
-                layout.append((p_idx, key))
+                layout.append((p_idx, "y", key))
             # x — use a representative *locally-present* y to get the
             # right shape for broadcast (yaxes_local[0], guaranteed
             # present on this partition -- yaxes[0] is not).
@@ -1194,7 +1238,33 @@ class MSv4Backend(XArrayReader):
                 vis, flag, yaxes_local[0][0], yaxes_local[0][1]
             )
             all_lazy.append(self._lazy_x_axis(ds, xaxis, template))
-            layout.append((p_idx, None))   # None marks the x entry
+            layout.append((p_idx, "x", None))
+
+            # id columns, one shared entry per partition (reused for
+            # every key in that partition below), exactly like x above
+            # -- see _query_partition_scatter's docstring for the full
+            # per-column rationale, including why scan_name/antenna
+            # names are deliberately *not* here anymore.
+            for coord_name in ("time", "baseline_id", "frequency"):
+                if coord_name in ds.coords:
+                    all_lazy.append(
+                        ds.coords[coord_name].broadcast_like(template)
+                    )
+                    layout.append((p_idx, "id", coord_name))
+            # Small (~n_time-sized) integer array -- see
+            # XArrayReader._scan_time_index's docstring. Rides the same
+            # broadcast/compute/ravel/filter machinery as the id
+            # columns above via all_lazy/layout, under a name no real
+            # MS coordinate uses.
+            scan_time_idx = self._scan_time_index(scan_lookup, ds)
+            if scan_time_idx is not None:
+                all_lazy.append(scan_time_idx.broadcast_like(template))
+                layout.append((p_idx, "id", "__scan_time_idx"))
+
+            spw_ident, _spw_kind = self._partition_spw_ident(ds)
+            if spw_ident is not None:
+                spw_by_partition[p_idx] = spw_ident
+            scan_lookup_by_partition[p_idx] = scan_lookup
 
         if not all_lazy:
             return {key: pd.DataFrame({"x": [], "y": []}) for key in yaxes}
@@ -1202,24 +1272,34 @@ class MSv4Backend(XArrayReader):
         # Single fused compute across all partitions
         computed = dask.compute(*all_lazy)
 
-        # Reconstruct: group (x, y) pairs by partition then by key
-        # First extract x arrays per partition
+        # Reconstruct: group x / y / id arrays by partition (and, for y,
+        # by key too), dispatching on each layout entry's tag.
         x_by_partition: dict[int, np.ndarray] = {}
         y_by_partition_key: dict[tuple[int, tuple], np.ndarray] = {}
-        for i, (p_idx, key) in enumerate(layout):
-            if key is None:
-                x_by_partition[p_idx] = np.asarray(computed[i])
-            else:
-                y_by_partition_key[(p_idx, key)] = np.asarray(computed[i])
+        id_by_partition: dict[int, dict[str, np.ndarray]] = {}
+        for (p_idx, tag, extra), value in zip(layout, computed):
+            if tag == "x":
+                x_by_partition[p_idx] = np.asarray(value)
+            elif tag == "y":
+                y_by_partition_key[(p_idx, extra)] = np.asarray(value)
+            else:  # tag == "id"
+                id_by_partition.setdefault(p_idx, {})[extra] = np.asarray(value)
 
         # Ravel, mask NaN, build DataFrames per key
         accumulator: dict[tuple, list[pd.DataFrame]] = {k: [] for k in yaxes}
+        # MS-wide, memoized after the first call regardless of which
+        # partition/selection triggered it -- see
+        # XArrayReader._antenna_lookup_table's docstring.
+        antenna_lookup = self._antenna_lookup_table()
         for p_idx in range(len(selected)):
             # A partition that carried none of the requested polarizations
             # has no x entry either (see the ``continue`` above).
             if p_idx not in x_by_partition:
                 continue
             x_arr = x_by_partition[p_idx]
+            id_arrs = id_by_partition.get(p_idx, {})
+            spw_ident = spw_by_partition.get(p_idx)
+            scan_lookup = scan_lookup_by_partition.get(p_idx)
             for key in yaxes:
                 if (p_idx, key) not in y_by_partition_key:
                     continue
@@ -1231,11 +1311,52 @@ class MSv4Backend(XArrayReader):
                     x_flat = np.broadcast_to(x_arr, y_arr.shape).ravel()
                 ok = np.isfinite(x_flat) & np.isfinite(y_flat)
                 if ok.any():
-                    accumulator[key].append(
-                        pd.DataFrame(
-                            {"x": x_flat[ok], "y": y_flat[ok]},
-                            copy=False,
+                    cols = {"x": x_flat[ok], "y": y_flat[ok]}
+                    for cname, carr in id_arrs.items():
+                        # Same broadcast-shape defensiveness as x above --
+                        # an id column is a coordinate array, same shape
+                        # concerns as x, not a derived quantity like y.
+                        c_flat = carr.ravel()
+                        if c_flat.shape != y_flat.shape:
+                            c_flat = np.broadcast_to(carr, y_arr.shape).ravel()
+                        cols[cname] = c_flat[ok]
+                    # "polarization" always applies (this key's own pol);
+                    # "spw" only when this partition declared an identity.
+                    # See _query_partition_scatter's docstring for the
+                    # degenerate-Correlation finding this carries forward.
+                    cols["polarization"] = key[1]
+                    if spw_ident is not None:
+                        cols["spw"] = spw_ident
+                    # 2026-09 follow-up: derived via a fast fancy-index
+                    # lookup against columns already computed/filtered
+                    # above ("__scan_time_idx", "baseline_id"), not
+                    # broadcast across the full grid themselves, and
+                    # explicitly wrapped to avoid pandas 3.0's expensive
+                    # default string-dtype conversion -- see this
+                    # method's docstring and
+                    # XArrayReader._scan_time_index/_as_object_column's
+                    # docstrings for the mechanism and the measured
+                    # cost each step replaced. "__scan_time_idx" is
+                    # bookkeeping only, popped here rather than left in
+                    # the DataFrame.
+                    scan_time_idx_col = cols.pop("__scan_time_idx", None)
+                    if scan_time_idx_col is not None and scan_lookup is not None:
+                        cols["scan_name"] = self._as_object_column(
+                            scan_lookup.scan_names[scan_time_idx_col],
+                            index=None,
                         )
+                    if antenna_lookup is not None and "baseline_id" in cols:
+                        ant1, ant2 = self._apply_antenna_lookup(
+                            antenna_lookup, cols["baseline_id"]
+                        )
+                        cols["baseline_antenna1_name"] = self._as_object_column(
+                            ant1, index=None
+                        )
+                        cols["baseline_antenna2_name"] = self._as_object_column(
+                            ant2, index=None
+                        )
+                    accumulator[key].append(
+                        pd.DataFrame(cols, copy=False)
                     )
 
         return {
@@ -1254,6 +1375,7 @@ class MSv4Backend(XArrayReader):
         *,
         use_fused: bool,
         use_parallel: bool,
+        scan_lookup: Optional[_PartitionScanLookup] = None,
     ) -> dict[tuple[Axis, str], pd.DataFrame]:
         """Build scatter DataFrames for a single partition.
 
@@ -1291,12 +1413,37 @@ class MSv4Backend(XArrayReader):
         # addition exactly (same rationale, same conditional-per-
         # coordinate gate); see that method's comment for the full
         # explanation.
+        #
+        # colorize-by-axis Part 2 (2026-09) originally put "scan_name"/
+        # "baseline_antenna1_name"/"baseline_antenna2_name" in this same
+        # broadcast tuple too, mirroring MSv2Backend -- superseded by a
+        # cached-lookup approach (2026-09 follow-up) for the same
+        # performance reason; see MSv2Backend._query_partition_scatter's
+        # equivalent comment for the measured overhead and the
+        # replacement mechanism (shared in ``XArrayReader``, used
+        # identically by both backends).
         lazy_id_cols: dict[str, xr.DataArray] = {}
         for coord_name in ("time", "baseline_id", "frequency"):
             if coord_name in ds.coords:
                 lazy_id_cols[coord_name] = (
                     ds.coords[coord_name].broadcast_like(template)
                 )
+
+        # colorize-by-axis Part 2: SPW identity, constant across this
+        # partition -- see MSv2Backend._query_partition_scatter's
+        # identical addition for the full rationale (same method, same
+        # docstring, mirrored on this backend per the class's existing
+        # symmetry contract).
+        spw_ident, _spw_kind = self._partition_spw_ident(ds)
+        # MS-wide, memoized after the first call regardless of which
+        # partition/selection triggered it -- see
+        # XArrayReader._antenna_lookup_table's docstring.
+        antenna_lookup = self._antenna_lookup_table()
+        # Small (~n_time-sized, not full-grid-sized) integer array --
+        # see XArrayReader._scan_time_index's docstring.
+        scan_time_idx = self._scan_time_index(scan_lookup, ds)
+        if scan_time_idx is not None:
+            lazy_id_cols["__scan_time_idx"] = scan_time_idx.broadcast_like(template)
 
         if use_fused:
             id_col_names = list(lazy_id_cols.keys())
@@ -1326,7 +1473,7 @@ class MSv4Backend(XArrayReader):
                     cols[cname] = c_flat[ok]
                 return pd.DataFrame(cols, copy=False)
 
-            return {
+            frames = {
                 key: _ravel_df(x_computed, y_arr)
                 for key, y_arr in y_computed.items()
             }
@@ -1363,7 +1510,41 @@ class MSv4Backend(XArrayReader):
                         c_flat = np.broadcast_to(c_np, np.asarray(y_c).shape).ravel()
                     cols[cname] = c_flat[ok]
                 frames[key] = pd.DataFrame(cols, copy=False)
-            return frames
+
+        # colorize-by-axis Part 2: attach the constant-per-partition
+        # columns to every key's frame, whichever branch above built it
+        # -- mirrors MSv2Backend._query_partition_scatter's identical
+        # addition exactly; see that method's comment for the full
+        # rationale (including the degenerate-Correlation finding for
+        # Part 3/4). scan_name/antenna names (2026-09 follow-up): via a
+        # fast fancy-index lookup against columns already computed/
+        # filtered above ("__scan_time_idx", "baseline_id"), not a
+        # full-grid broadcast, and explicitly wrapped to avoid pandas
+        # 3.0's expensive default string-dtype conversion -- see
+        # MSv2Backend's identical comment and
+        # XArrayReader._scan_time_index/_as_object_column's docstrings.
+        for (_axis, _pol), _df in frames.items():
+            _df["polarization"] = _pol
+            if spw_ident is not None:
+                _df["spw"] = spw_ident
+            if "__scan_time_idx" in _df.columns:
+                idx = _df.pop("__scan_time_idx").to_numpy()
+                if scan_lookup is not None:
+                    _df["scan_name"] = self._as_object_column(
+                        scan_lookup.scan_names[idx], _df.index
+                    )
+            if antenna_lookup is not None and "baseline_id" in _df.columns:
+                ant1, ant2 = self._apply_antenna_lookup(
+                    antenna_lookup, _df["baseline_id"].to_numpy()
+                )
+                _df["baseline_antenna1_name"] = self._as_object_column(
+                    ant1, _df.index
+                )
+                _df["baseline_antenna2_name"] = self._as_object_column(
+                    ant2, _df.index
+                )
+
+        return frames
 
     def _lazy_quantity(
         self,

@@ -233,6 +233,63 @@ class IdentityTables:
     spws:              tuple[SpwInfo, ...]
 
 
+@dataclass(frozen=True)
+class _PartitionIdentity:
+    """Stable, hashable identity for one raw (pre-selection) partition.
+
+    ``_iter_visibility_partitions()`` yields a fresh ``Dataset`` wrapper
+    object on every call even though the underlying data doesn't change
+    -- ``id(ds)`` differs call to call, confirmed directly on real data
+    -- so this exists to give repeated calls something to agree on for
+    caching purposes (see ``XArrayReader._scan_lookup_for_partition``).
+    Built from the partition's own SPW identity plus its raw time
+    coordinate's span and length; verified stable across repeated
+    ``_iter_visibility_partitions()`` calls and unique across every
+    partition of a real multi-partition MS (including one where every
+    partition shares the same single SPW, so SPW identity alone would
+    not have been sufficient).
+
+    Must be computed from the *raw* partition, before
+    ``_apply_selection`` — a ``time_range`` selection narrows
+    ``t_min``/``t_max``, so computing this from an already-selected
+    ``Dataset`` would silently produce a different key for the same
+    underlying partition queried under two different selections
+    (missing the cache every time) or, worse, collide with a genuinely
+    different partition's key.
+    """
+    spw_ident: object   # int | str | None -- see _partition_spw_ident
+    t_min:     float
+    t_max:     float
+    t_size:    int
+
+
+@dataclass(frozen=True)
+class _PartitionScanLookup:
+    """One partition's ``scan_name`` lookup, built once and cached for
+    the life of the open backend.
+
+    Added 2026-09 (colorize-by-axis Part 2 follow-up) to replace
+    broadcasting ``scan_name`` across the full per-partition sample
+    grid (measured at ~1.45s of near-identical fixed overhead in both
+    the fused and serial ``_query_partition_scatter`` paths, on a
+    modest test MS -- see ``visplot-colorize-by-axis-design.md``'s
+    performance-regression note). ``time_values``/``scan_names`` are
+    this partition's own raw ``time``/``scan_name`` coordinate values,
+    stored **pre-sorted by time value** (sorted once here rather than
+    on every ``_scan_time_index`` call, since this object is built once
+    and reused for the life of the open backend).
+
+    Applied via ``_scan_time_index`` + a fancy-index lookup at the
+    caller, not a per-row value comparison -- see that method's
+    docstring for why a first attempt at this (looking scan names up by
+    the ``time`` *value* directly, at full output-row scale) turned out
+    to still be expensive, and what replaced it.
+    """
+    identity:    _PartitionIdentity
+    time_values: np.ndarray   # sorted ascending
+    scan_names:  np.ndarray   # parallel to time_values
+
+
 # ======================================================================
 # Probe geometry helpers
 # ======================================================================
@@ -762,6 +819,220 @@ class XArrayReader(abc.ABC):
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+    # ------------------------------------------------------------------ #
+    # Cached per-MS scan/antenna lookups (colorize-by-axis Part 2         #
+    # follow-up, 2026-09)                                                 #
+    # ------------------------------------------------------------------ #
+    #
+    # Shared here (concrete methods on the ABC, not abstract) rather than
+    # duplicated per-backend, unlike e.g. _partition_spw_ident -- both
+    # only ever need coordinates Part 2 already made uniform across both
+    # backends (scan_name, baseline_id, baseline_antenna1_name/2), so
+    # there's no backend-specific logic that would force a split. This
+    # is also, deliberately, the same specific bug class this project
+    # already hit once (OPT-B carrying its own copy of the id-cols logic
+    # and quietly missing an update the other copy got) -- putting this
+    # here instead means it structurally cannot recur for this piece.
+    #
+    # Cache storage is lazily attached to instances via getattr/setattr
+    # rather than requiring an __init__ on this ABC (it doesn't have
+    # one, and neither concrete backend's own __init__ needs to know
+    # this exists). Each backend's close() clears both caches for
+    # hygiene, but note neither holds anything but small coordinate
+    # arrays/strings -- never VISIBILITY data -- so the memory cost of
+    # not clearing them would be negligible even if a call site forgot.
+
+    def _partition_identity(self, raw_ds: "xr.Dataset") -> _PartitionIdentity:
+        """Stable identity for *raw_ds* -- see ``_PartitionIdentity``.
+
+        Must be called with the raw (pre-``_apply_selection``) partition,
+        never an already-selected one.
+        """
+        spw_ident, _kind = self._partition_spw_ident(raw_ds)
+        t = raw_ds.coords["time"].values
+        return _PartitionIdentity(
+            spw_ident=spw_ident,
+            t_min=float(t.min()) if t.size else 0.0,
+            t_max=float(t.max()) if t.size else 0.0,
+            t_size=int(t.size),
+        )
+
+    def _scan_lookup_for_partition(
+        self, raw_ds: "xr.Dataset"
+    ) -> Optional[_PartitionScanLookup]:
+        """Return *raw_ds*'s scan lookup, building and caching it on
+        first use; ``None`` if this partition has no ``scan_name``
+        coordinate at all.
+
+        Must be called with the raw partition (see
+        ``_partition_identity``'s docstring) -- the returned lookup is
+        applied afterward via ``_scan_time_index`` against the
+        *selected* dataset's own (small) ``time`` coordinate, which is
+        what makes correctness independent of which subset of the
+        partition that particular query selected.
+        """
+        if "scan_name" not in raw_ds.coords or "time" not in raw_ds.coords:
+            return None
+        cache = getattr(self, "_scan_lookup_cache", None)
+        if cache is None:
+            cache = {}
+            self._scan_lookup_cache = cache
+        key = self._partition_identity(raw_ds)
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+        t = np.asarray(raw_ds.coords["time"].values)
+        s = raw_ds.coords["scan_name"].values.astype(str)
+        order = np.argsort(t)
+        lookup = _PartitionScanLookup(
+            identity=key, time_values=t[order], scan_names=s[order],
+        )
+        cache[key] = lookup
+        return lookup
+
+    def _scan_time_index(
+        self,
+        lookup: Optional[_PartitionScanLookup],
+        ds: "xr.Dataset",
+    ) -> Optional["xr.DataArray"]:
+        """Small integer-position array mapping *ds*'s own ``time``
+        coordinate values to their index in *lookup*'s sorted
+        ``time_values`` -- e.g. shape ``(n_time,)`` for this partition,
+        never the full sample grid.
+
+        This exists because of a real, measured lesson from the first
+        version of this fix: looking scan names up by *value* (via
+        ``np.searchsorted`` against the millions of already-broadcast/
+        raveled/filtered ``time`` values a query produces) still cost
+        ~250ms per ~4M output rows in practice -- ``searchsorted``'s
+        cost scales with the *query* array size, and the query array
+        here is the full per-row output, not the small per-partition
+        table. Antenna names never had this problem because
+        ``baseline_id`` is already a small integer, cheap to fancy-index
+        directly (~20ms for the same ~4M rows, confirmed by direct
+        microbenchmark) -- this function gives scan_name the same
+        property by doing the one *value*-based comparison exactly once,
+        here, against ``ds``'s own small ``time`` coordinate (a few
+        hundred elements, not millions), and returning a small integer
+        array to broadcast/ravel/filter exactly like ``baseline_id``
+        already is. The caller fancy-indexes ``lookup.scan_names`` with
+        this (already broadcast, raveled, and filtered) index array at
+        the end, rather than calling any per-row value-lookup at all.
+        """
+        if lookup is None or "time" not in ds.coords:
+            return None
+        t = np.asarray(ds.coords["time"].values)
+        idx = np.searchsorted(lookup.time_values, t)
+        idx = np.clip(idx, 0, len(lookup.time_values) - 1)
+        return xr.DataArray(idx, dims=("time",), coords={"time": ds.coords["time"]})
+
+    def _antenna_lookup_table(
+        self,
+    ) -> Optional[tuple[np.ndarray, np.ndarray]]:
+        """MS-wide antenna-name lookup arrays, indexed directly by
+        ``baseline_id`` (``ant1_names[bid]``, ``ant2_names[bid]``),
+        built once and cached for the life of the open backend.
+        ``None`` if no partition carries the needed coordinates at all.
+
+        Matches ``identity_tables()``'s own existing assumption that
+        this mapping is consistent across every partition of an open MS
+        (first partition to report a given ``baseline_id`` wins) --
+        unlike scan_name, this is not partition-scoped, so one MS-wide
+        table suffices rather than a per-partition cache.
+        """
+        _unset = "_unset"
+        cached = getattr(self, "_antenna_lookup", _unset)
+        if cached is not _unset:
+            return cached
+        table: dict[int, tuple[str, str]] = {}
+        for raw_ds in self._iter_visibility_partitions():
+            if not ("baseline_antenna1_name" in raw_ds.coords
+                    and "baseline_id" in raw_ds.coords):
+                continue
+            bl_ids = raw_ds.coords["baseline_id"].values.astype(np.int64)
+            ant1 = raw_ds.coords["baseline_antenna1_name"].values.astype(str)
+            ant2 = raw_ds.coords["baseline_antenna2_name"].values.astype(str)
+            uniq_ids, first_idx = np.unique(bl_ids, return_index=True)
+            for bid, idx in zip(uniq_ids, first_idx):
+                bid_i = int(bid)
+                if bid_i not in table:
+                    table[bid_i] = (str(ant1[idx]), str(ant2[idx]))
+        if not table:
+            self._antenna_lookup = None
+            return None
+        max_bid = max(table)
+        ant1_arr = np.full(max_bid + 1, "", dtype=object)
+        ant2_arr = np.full(max_bid + 1, "", dtype=object)
+        for bid, (a1, a2) in table.items():
+            ant1_arr[bid] = a1
+            ant2_arr[bid] = a2
+        result = (ant1_arr, ant2_arr)
+        self._antenna_lookup = result
+        return result
+
+    @staticmethod
+    def _apply_antenna_lookup(
+        lookup: Optional[tuple[np.ndarray, np.ndarray]],
+        baseline_id_column: np.ndarray,
+    ) -> Optional[tuple[np.ndarray, np.ndarray]]:
+        """Vectorized map of *baseline_id_column* to (ant1, ant2) name
+        arrays via *lookup* (from ``_antenna_lookup_table``)."""
+        if lookup is None:
+            return None
+        ant1_arr, ant2_arr = lookup
+        bid = baseline_id_column.astype(np.int64)
+        # Out-of-range ids shouldn't occur, but this is a rendering hot
+        # path -- fail soft (empty string) rather than raise.
+        oob = (bid < 0) | (bid >= len(ant1_arr))
+        safe = np.clip(bid, 0, len(ant1_arr) - 1)
+        ant1 = np.where(oob, "", ant1_arr[safe])
+        ant2 = np.where(oob, "", ant2_arr[safe])
+        return ant1, ant2
+
+    @staticmethod
+    def _as_object_column(values: np.ndarray, index) -> pd.Series:
+        """Wrap *values* (a numpy object-dtype array of many distinct
+        strings) as a plain-``object``-dtype pandas Series, explicitly
+        bypassing pandas 3.0's default string-dtype inference
+        (``future.infer_string``, on by default).
+
+        Real, measured finding, not a defensive guess: a bare
+        ``df[col] = values`` assignment of an array of many distinct
+        string values gets silently upgraded by pandas to its newer
+        ``str`` dtype, and that conversion cost ~5x what constructing
+        this Series explicitly does (~245ms vs. ~49ms, confirmed by
+        direct benchmark at 4M rows) -- this turned out to be the
+        single largest remaining cost in the scan/antenna lookup path,
+        well past the lookup computation itself (a plain fancy-index,
+        ~20ms at the same scale). Works identically whether the result
+        is assigned onto an existing DataFrame (``_query_partition_scatter``)
+        or passed as a dict value before a single ``pd.DataFrame(...)``
+        call (OPT-B) -- both measured and confirmed.
+
+        Deliberately local to these specific columns, not a global
+        ``pd.set_option("future.infer_string", False)`` -- that would
+        change pandas string-column behavior for the entire process,
+        well beyond this one lookup, which is a call for the
+        application to make deliberately, not something to reach for
+        inside a data-reading method.
+
+        NOT used for a *scalar* fill (``polarization``/``spw``): a
+        direct ``df[col] = scalar`` assignment already uses a fast
+        broadcast path despite also picking up the ``str`` dtype, and
+        measured *more* expensive when wrapped this way instead --
+        this helper is for the output of a fancy-index lookup (many
+        distinct values), not a constant one.
+        """
+        return pd.Series(values, dtype=object, index=index)
+
+    def _clear_lookup_caches(self) -> None:
+        """Reset the scan/antenna lookup caches -- call from each
+        backend's ``close()`` for hygiene (see this section's docstring
+        for why this is a hygiene measure, not a correctness necessity)."""
+        self._scan_lookup_cache = {}
+        self._antenna_lookup = None
+
 
     # ------------------------------------------------------------------ #
     # Metadata                                                             #

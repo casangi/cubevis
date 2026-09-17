@@ -78,6 +78,8 @@ from .reader import (
     ScanInfo,
     SpwInfo,
     IdentityTables,
+    _PartitionIdentity,
+    _PartitionScanLookup,
 )
 from . import _scatter_render
 from ..axes import Axis, AxisInfo, AxisType
@@ -208,6 +210,9 @@ class MSv2Backend(XArrayReader):
                     pass
                 finally:
                     self._datatree = None
+        # See XArrayReader._clear_lookup_caches's docstring -- hygiene,
+        # not a correctness necessity (these hold no VISIBILITY data).
+        self._clear_lookup_caches()
 
     def __enter__(self) -> "MSv2Backend":
         self.open()
@@ -998,8 +1003,16 @@ class MSv2Backend(XArrayReader):
             use_fused    = HAS_DASK and n_samples >= _THRESH_FUSED
             use_parallel = HAS_DASK and n_samples >= _THRESH_PAR
 
+            # colorize-by-axis Part 2 follow-up (2026-09): raw_ds is
+            # only in scope here, before _apply_selection -- see
+            # _PartitionIdentity's docstring for why this must be
+            # computed from the raw partition, not the selected `ds`
+            # passed to _query_partition_scatter below.
+            scan_lookup = self._scan_lookup_for_partition(raw_ds)
+
             frames = self._query_partition_scatter(
-                ds, xaxis, yaxes, use_fused=use_fused, use_parallel=use_parallel
+                ds, xaxis, yaxes, use_fused=use_fused, use_parallel=use_parallel,
+                scan_lookup=scan_lookup,
             )
             for key, df in frames.items():
                 if df is not None and len(df) > 0:
@@ -1022,6 +1035,7 @@ class MSv2Backend(XArrayReader):
         *,
         use_fused: bool,
         use_parallel: bool,
+        scan_lookup: Optional[_PartitionScanLookup] = None,
     ) -> dict[tuple[Axis, str], pd.DataFrame]:
         """Build scatter DataFrames for a single partition.
 
@@ -1070,12 +1084,62 @@ class MSv2Backend(XArrayReader):
         # ScatterLayerRender.id_grid_* -- see that field's docstring for
         # why the identity grid needs raw per-sample native coordinates
         # rather than anything already computed above.
+        #
+        # colorize-by-axis Part 2 (2026-09, see
+        # visplot-colorize-by-axis-handoff-part2.md) originally put
+        # "scan_name"/"baseline_antenna1_name"/"baseline_antenna2_name"
+        # in this same broadcast tuple too -- correct, but measured at
+        # ~1.45s of near-identical fixed overhead in both the fused and
+        # serial paths on a modest test MS (string/object dtype
+        # broadcasts across the full sample grid are expensive relative
+        # to the numeric ones here). Replaced by a cached-lookup
+        # approach instead (see the scalar-column augmentation at the
+        # end of this method): only cheap numeric arrays are ever
+        # broadcast across the full grid; scan/antenna names are
+        # attached afterward via a vectorized fancy-index lookup
+        # against small per-MS tables cached in the shared
+        # `XArrayReader` base class, touching only the already-filtered
+        # output rows rather than the full grid. `"__scan_time_idx"`
+        # (below) is one such cheap numeric stand-in -- see
+        # `XArrayReader._scan_time_index`'s docstring for why an
+        # integer position, not the `scan_name` string itself, is what
+        # gets broadcast (a first version of this fix broadcast nothing
+        # and instead looked scan names up by *value* at the end, which
+        # measurably still cost ~250ms per ~4M output rows -- this
+        # avoids that too).
         lazy_id_cols: dict[str, xr.DataArray] = {}
         for coord_name in ("time", "baseline_id", "frequency"):
             if coord_name in ds.coords:
                 lazy_id_cols[coord_name] = (
                     ds.coords[coord_name].broadcast_like(template)
                 )
+
+        # colorize-by-axis Part 2: SPW and Correlation, as constant
+        # per-partition/per-key scalars -- see the docstring note above
+        # for why these don't belong in lazy_id_cols. `spw_ident` may be
+        # an int (a real SPW id or, failing that, a DATA_DESC_ID -- see
+        # _partition_spw_ident's docstring for the distinction) or a str
+        # (a spectral window name, the common case on real xarray-ms
+        # 0.5.6 output); Part 3 should str()-normalize before building a
+        # single-dtype categorical column if it wants one. `None` means
+        # this partition declared no SPW identity at all (rare but
+        # tolerated elsewhere in this class), in which case the column
+        # is omitted for this partition's rows entirely, following the
+        # same conditional/tolerant precedent as every column above.
+        spw_ident, _spw_kind = self._partition_spw_ident(ds)
+        # MS-wide, memoized after the first call regardless of which
+        # partition/selection triggered it -- see
+        # XArrayReader._antenna_lookup_table's docstring.
+        antenna_lookup = self._antenna_lookup_table()
+        # Small (~n_time-sized, not full-grid-sized) integer array --
+        # see XArrayReader._scan_time_index's docstring. Rides the same
+        # broadcast/compute/ravel/filter machinery as time/baseline_id/
+        # frequency above via lazy_id_cols, under a name no real MS
+        # coordinate uses.
+        scan_time_idx = self._scan_time_index(scan_lookup, ds)
+        if scan_time_idx is not None:
+            lazy_id_cols["__scan_time_idx"] = scan_time_idx.broadcast_like(template)
+
 
         if use_fused:
             # Single dask.compute() — VISIBILITY read once
@@ -1140,6 +1204,57 @@ class MSv2Backend(XArrayReader):
                     c_bc = carr.broadcast_like(y_c)
                     cols[cname] = np.asarray(c_bc).ravel()[ok]
                 frames[key] = pd.DataFrame(cols, copy=False)
+
+        # colorize-by-axis Part 2: attach the constant-per-partition
+        # columns to every key's frame, whichever branch built it above.
+        # Assigning a scalar to a DataFrame column broadcasts it across
+        # every row (and is a harmless no-op on a zero-row frame), so
+        # this needs no shape bookkeeping of its own -- unlike
+        # lazy_id_cols above, nothing here was ever a per-row array.
+        # "polarization" always applies (every (axis, pol) key already
+        # carries its own fixed pol); "spw" only when this partition
+        # declared an identity. NOTE (design doc finding): a single
+        # scatter layer already fixes one polarization
+        # (ScatterLayerSpec.polarization is a scalar, not a set), so
+        # this "polarization" column is degenerate as a colorize axis
+        # for any one layer -- always exactly one category. Kept anyway
+        # for uniformity with the other in-scope axes; see the design
+        # doc's §4.1 finding for Part 3/4 to weigh before exposing
+        # Correlation as a selectable colorize axis.
+        #
+        # scan_name/baseline_antenna1_name/baseline_antenna2_name (2026-09
+        # follow-up): derived here via a vectorized fancy-index lookup
+        # against columns already computed/filtered above
+        # ("__scan_time_idx", "baseline_id"), rather than being
+        # broadcast across the full grid themselves -- see this
+        # method's earlier comment and XArrayReader._scan_time_index/
+        # _antenna_lookup_table's docstrings for the mechanism and why
+        # it's correct regardless of which subset of the partition this
+        # call selected. "__scan_time_idx" is bookkeeping only, popped
+        # here rather than left in the returned DataFrame.
+        for (_axis, _pol), _df in frames.items():
+            _df["polarization"] = _pol
+            if spw_ident is not None:
+                _df["spw"] = spw_ident
+            if "__scan_time_idx" in _df.columns:
+                idx = _df.pop("__scan_time_idx").to_numpy()
+                if scan_lookup is not None:
+                    # See _as_object_column's docstring: a plain
+                    # assignment here measured ~5x more expensive due
+                    # to pandas 3.0's default string-dtype conversion.
+                    _df["scan_name"] = self._as_object_column(
+                        scan_lookup.scan_names[idx], _df.index
+                    )
+            if antenna_lookup is not None and "baseline_id" in _df.columns:
+                ant1, ant2 = self._apply_antenna_lookup(
+                    antenna_lookup, _df["baseline_id"].to_numpy()
+                )
+                _df["baseline_antenna1_name"] = self._as_object_column(
+                    ant1, _df.index
+                )
+                _df["baseline_antenna2_name"] = self._as_object_column(
+                    ant2, _df.index
+                )
 
         return frames
 

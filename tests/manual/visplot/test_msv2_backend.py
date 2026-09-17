@@ -33,6 +33,9 @@ Tests
 6. query_raster        2D DataArray shape, all (y,x) combinations
 7. query_uv_coverage   conjugate symmetry, rendered through Datashader
 8. samples_per_pixel   geometric ratio correctness
+9. colorize-by-axis    Part 2 columns (scan/antenna/spw/polarization):
+                        presence, correctness against raw MS ground
+                        truth (arcae), fused/serial parity
 
 The RENDERED tests (marked # RENDERED) exercise the full pipeline that
 produced the 45s time in test_10 and verify:
@@ -707,11 +710,32 @@ class TestQueryColumnsRendered:
 
     def test_fused_faster_than_serial(self):  # RENDERED + TIMING
         """
-        Fused pipeline must be ≥2× faster than serial for multiple yaxes.
+        Fused pipeline must be meaningfully faster than serial for
+        multiple yaxes.
 
-        The fused path reads VISIBILITY once; serial reads it once per axis.
-        With 3 yaxes the minimum expected speedup is ~2× (not 3×, because
-        DataFrame construction and Datashader also take time).
+        The fused path reads VISIBILITY once; serial reads it once per
+        axis. With 3 yaxes the theoretical speedup is ~3x minus
+        DataFrame-construction/Datashader overhead -- originally
+        calibrated at >=2.0x.
+
+        2026-09 (colorize-by-axis Part 2 + follow-up): both pipelines
+        picked up real, near-identical extra cost from the scan_name/
+        baseline_antenna1_name/baseline_antenna2_name columns (see
+        visplot-colorize-by-axis-design.md's performance-regression
+        note) -- and because that added cost lands almost equally in
+        both, it's a bigger bite out of the *ratio* between them than
+        out of either absolute time on its own. Two optimization passes
+        recovered most, not all, of it (an index-based lookup
+        replacing a full-grid string broadcast, then a fix for a
+        pandas 3.0 string-dtype conversion that turned out to be the
+        larger of the two costs). Measured on real data, back-to-back
+        against a pre-Part-2 baseline of ~2.5x, on two different
+        machines: ~2.0x and ~1.5x. Lowered to 1.2x here -- comfortably
+        below both, so this still catches a genuine regression (e.g.
+        the fused path silently losing its single-VISIBILITY-read
+        advantage entirely) without being tuned so tight that ordinary
+        machine-to-machine variance in an already-narrower margin
+        flakes it.
         """
         if len(self.pols) < 2:
             pytest.skip("Need ≥2 polarizations")
@@ -738,8 +762,9 @@ class TestQueryColumnsRendered:
         speedup = t_serial / t_fused if t_fused > 0 else float("inf")
         print(f"  Serial: {t_serial:.2f}s, Fused: {t_fused:.2f}s, "
               f"Speedup: {speedup:.1f}×")
-        assert speedup >= 2.0, (
-            f"Expected ≥2× speedup; got {speedup:.1f}× "
+        assert speedup >= 1.2, (
+            f"Expected >=1.2x speedup (lowered from the original 2.0x "
+            f"-- see this test's docstring for why); got {speedup:.1f}x "
             f"(serial={t_serial:.2f}s, fused={t_fused:.2f}s)"
         )
 
@@ -1322,6 +1347,202 @@ class TestProbeScatterRegion:
         assert result["bl_ids"] is None
 
 # ---------------------------------------------------------------------------
+# 9. colorize-by-axis Part 2 — scan/antenna/spw/polarization columns
+# ---------------------------------------------------------------------------
+
+class TestColorizeByAxisColumns:
+    """Regression coverage for the colorize-by-axis Part 2 columns added
+    to ``_query_partition_scatter`` -- ``scan_name``,
+    ``baseline_antenna1_name``, ``baseline_antenna2_name``,
+    ``polarization``, ``spw``. See
+    ``visplot-colorize-by-axis-handoff-part3.md`` for the full design
+    rationale and the column-to-axis naming convention.
+
+    Folded in from ``verify_colorize_axis_part2.py``, the standalone
+    script used during Part 2 development -- this is its permanent home
+    in the regression suite; the standalone script itself covered the
+    same ground plus a one-time cross-backend (MSv2 vs MSv4) comparison,
+    which lives with the MSv4-side OPT-B test in test_msv4_backend.py's
+    own ``TestColorizeByAxisColumns`` instead of being duplicated here.
+    """
+
+    IN_SCOPE_COLUMNS = {
+        "scan_name", "baseline_antenna1_name", "baseline_antenna2_name",
+        "polarization", "spw",
+    }
+
+    def setup_method(self):
+        _suppress_warnings()
+        self.backend = _open_backend()
+        meta = self.backend.metadata()
+        self.pols = meta["correlation_labels"]
+        t0, t1 = meta["time_range"]
+        self.sel = SelectionSpec(
+            time_range=(t0, t0 + (t1 - t0) * 0.15),
+            channel_range=(0, 16),
+        )
+
+    def teardown_method(self):
+        self.backend.close()
+
+    def test_all_in_scope_columns_present(self):
+        yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        df = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel)[
+            (Axis.AMPLITUDE, self.pols[0])
+        ]
+        assert len(df) > 0
+        assert self.IN_SCOPE_COLUMNS <= set(df.columns), (
+            f"missing: {self.IN_SCOPE_COLUMNS - set(df.columns)}"
+        )
+
+    def test_no_internal_bookkeeping_column_leaks(self):
+        """"__scan_time_idx" (the cheap integer position array
+        _scan_time_index broadcasts in place of the scan_name string
+        itself) is internal bookkeeping, popped before the DataFrame is
+        returned -- see XArrayReader._scan_time_index's docstring."""
+        yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        df = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel)[
+            (Axis.AMPLITUDE, self.pols[0])
+        ]
+        assert "__scan_time_idx" not in df.columns
+
+    def test_scan_and_antenna_columns_avoid_expensive_string_dtype(self):
+        """Real, measured regression guard: assigning a numpy
+        object-dtype array of many distinct strings straight onto a
+        DataFrame column gets silently upgraded by pandas 3.0's default
+        ``future.infer_string`` to its newer ``str`` dtype, and that
+        conversion measured ~5x more expensive than constructing the
+        column as an explicit ``dtype=object`` Series first (~245ms vs.
+        ~49ms at 4M rows) -- see
+        ``XArrayReader._as_object_column``'s docstring. This doesn't
+        re-measure the timing (too environment-sensitive for a
+        regression test), just confirms the dtype these columns
+        actually end up with stays ``object``, so a future edit that
+        drops the explicit wrapping doesn't silently reintroduce the
+        cost.
+        """
+        yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        df = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel)[
+            (Axis.AMPLITUDE, self.pols[0])
+        ]
+        for col in ("scan_name", "baseline_antenna1_name",
+                    "baseline_antenna2_name"):
+            assert df[col].dtype == object, (
+                f"{col} has dtype {df[col].dtype!r}, expected object -- "
+                "see _as_object_column's docstring"
+            )
+
+    def test_polarization_column_matches_the_requested_key(self):
+        """Each (axis, pol) key's own DataFrame carries that pol as a
+        constant column -- confirms the degenerate-Correlation finding
+        in the design doc (§7.1/§4.1): always exactly one category for
+        a single layer, by construction."""
+        yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        df = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel)[
+            (Axis.AMPLITUDE, self.pols[0])
+        ]
+        assert (df["polarization"] == self.pols[0]).all()
+        assert df["polarization"].nunique() == 1
+
+    def test_spw_column_present_and_non_null_when_partition_declares_one(self):
+        yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        df = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel)[
+            (Axis.AMPLITUDE, self.pols[0])
+        ]
+        assert df["spw"].notna().all()
+
+    def test_scan_and_antenna_columns_match_raw_ms_ground_truth(self):
+        """Cross-checks a random sample of rows against the raw MAIN/
+        ANTENNA tables, read independently via ``arcae`` (not
+        ``python-casacore`` -- ``arcae`` is what visplot itself actually
+        depends on). This is a genuine oracle: it bypasses every layer
+        of xarray-ms/dask broadcasting under test here entirely. Same
+        technique Part 2 used to validate this plumbing originally."""
+        try:
+            import arcae
+        except ImportError:
+            pytest.skip("arcae not installed")
+
+        yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        df = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel)[
+            (Axis.AMPLITUDE, self.pols[0])
+        ]
+        assert len(df) > 0
+
+        ms_path = _get_ms()
+        t = arcae.table(ms_path)
+        time_col = t.getcol("TIME")
+        ant1_col = t.getcol("ANTENNA1")
+        ant2_col = t.getcol("ANTENNA2")
+        scan_col = t.getcol("SCAN_NUMBER")
+        t.close()
+        ant_tab = arcae.table(f"{ms_path}/ANTENNA")
+        ant_names = ant_tab.getcol("NAME")
+        ant_tab.close()
+        # casacore TIME is MJD seconds; xarray-ms's "time" coord is unix
+        # seconds -- 40587 days is the MJD epoch (1858-11-17) -> Unix
+        # epoch (1970-01-01) offset.
+        unix_time = time_col - 40587 * 86400
+
+        rng = np.random.default_rng(0)
+        n_check = min(15, len(df))
+        sample = df.iloc[rng.choice(len(df), size=n_check, replace=False)]
+        n_ok = 0
+        for _, row in sample.iterrows():
+            cand = np.where(np.isclose(unix_time, row["x"], atol=1e-3, rtol=0))[0]
+            cand = [j for j in cand
+                    if ant_names[ant1_col[j]] == row["baseline_antenna1_name"]
+                    and ant_names[ant2_col[j]] == row["baseline_antenna2_name"]]
+            if cand and str(scan_col[cand[0]]) == str(row["scan_name"]):
+                n_ok += 1
+        assert n_ok == n_check, (
+            f"only {n_ok}/{n_check} sampled rows matched raw MAIN/ANTENNA "
+            f"ground truth via arcae"
+        )
+
+    def test_fused_and_serial_paths_carry_the_same_new_columns(self):
+        """The fused and serial branches of ``_query_partition_scatter``
+        must attach the new columns identically -- extends the existing
+        serial/fused parity coverage above (which only checked x/y) to
+        Part 2's columns specifically.
+
+        Uses a channel-only selection (no time_range) here deliberately:
+        ``self.sel``'s time_range is derived from the *global*
+        metadata time range, which isn't guaranteed to overlap whichever
+        single partition ``_largest_partition`` happens to pick -- a
+        channel restriction applies uniformly to every partition, so it
+        can't produce that mismatch.
+
+        2026-09 follow-up: ``_query_partition_scatter`` now takes an
+        explicit ``scan_lookup`` (see ``XArrayReader._scan_lookup_for_partition``)
+        -- built here from the *raw* partition (``ds_part``, before
+        ``_apply_selection``), matching what ``_query_columns_raw``
+        itself does, and matching ``_PartitionIdentity``'s docstring on
+        why this can't be built from the already-selected dataset.
+        """
+        yaxes = [(Axis.AMPLITUDE, self.pols[0])]
+        sel = SelectionSpec(channel_range=(0, 16))
+        ds_part = _largest_partition(self.backend)
+        ds_sel  = self.backend._apply_selection(ds_part, sel)
+        scan_lookup = self.backend._scan_lookup_for_partition(ds_part)
+
+        frames_serial = self.backend._query_partition_scatter(
+            ds_sel, Axis.TIME, yaxes, use_fused=False, use_parallel=False,
+            scan_lookup=scan_lookup,
+        )
+        frames_fused = self.backend._query_partition_scatter(
+            ds_sel, Axis.TIME, yaxes, use_fused=True, use_parallel=False,
+            scan_lookup=scan_lookup,
+        )
+        key = (Axis.AMPLITUDE, self.pols[0])
+        assert len(frames_serial[key]) > 0
+        cols = sorted(self.IN_SCOPE_COLUMNS | {"x", "y"})
+        df_s = frames_serial[key][cols].sort_values(cols).reset_index(drop=True)
+        df_f = frames_fused[key][cols].sort_values(cols).reset_index(drop=True)
+        pd.testing.assert_frame_equal(df_s, df_f, check_dtype=False)
+
+
+# ---------------------------------------------------------------------------
 # Standalone runner (no pytest required)
 # ---------------------------------------------------------------------------
 
@@ -1339,6 +1560,7 @@ if __name__ == "__main__":
         TestSamplesPerPixel,
         TestIdentityTables,
         TestProbeScatterRegion,
+        TestColorizeByAxisColumns,
     ]
 
     total_passed = total_failed = total_skipped = 0

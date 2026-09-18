@@ -3542,7 +3542,7 @@ document.documentElement.style.background = '#181825';
         would silently clobber the padding rule instead of actually
         updating the theme.
         """
-        from bokeh.models import Select, TextInput, Div, Button, Plot
+        from bokeh.models import Select, TextInput, Div, Button, Plot, RadioButtonGroup
 
         styled = []
         styled_figs = []
@@ -3550,6 +3550,14 @@ document.documentElement.style.background = '#181825';
 
         def _walk(node):
             if isinstance(node, (Select, TextInput)):
+                node.stylesheets = [dark_stylesheet]
+                styled.append(node)
+            elif isinstance(node, RadioButtonGroup):
+                # Part 4: colorize_controls()'s Continuous/Categorical
+                # switch -- same treatment as Select/TextInput above (a
+                # shared, toggle-managed stylesheet at index 0), so the
+                # dark/light toggle JS's existing `widgets` loop picks
+                # it up with no separate wiring.
                 node.stylesheets = [dark_stylesheet]
                 styled.append(node)
             elif isinstance(node, Button):
@@ -3564,8 +3572,17 @@ document.documentElement.style.background = '#181825';
                 # own recoloring via the `figs` arg below.
                 styled_figs.append(node)
             elif isinstance(node, Div):
-                # Style equation label Div text color
-                if node.text and not node.text.startswith("<span"):
+                # Style equation label Div text color. Guarded against
+                # any markup that already carries its own styling --
+                # originally just colormap_controls()' plain-text
+                # equation label ("<span" from a previous pass through
+                # this same method); extended for colorize_controls()'s
+                # section header and legend ("<div"/"<i" -- see
+                # VisibilityScatter._legend_html), which must not be
+                # re-wrapped in an outer span each time this method
+                # runs (styling is reapplied on every dark/light toggle
+                # and every rebuild, not just once at construction).
+                if node.text and not node.text.startswith(("<span", "<div", "<i")):
                     node.text = (
                         f"<span style='color:#a6adc8;font-size:11px'>"
                         f"{node.text}</span>"
@@ -3691,7 +3708,7 @@ conflict_div.text = conflict ? msg : '';
         return panel, widgets
 
     def _build_scatter_config_panel(self, slot: "_PanelSlot", dark) -> tuple:
-        """Build one slot's scatter config panel: X/Y + colormap.
+        """Build one slot's scatter config panel: X/Y + per-layer controls.
 
         Same reasoning as ``_build_raster_config_panel`` above — see that
         docstring. No Y/X conflict check here: scatter's X and Y axes
@@ -3699,12 +3716,40 @@ conflict_div.text = conflict ? msg : '';
         so the same-value conflict this class checks for raster doesn't
         apply.
 
+        Part 4 (colorize-by-axis UI wiring): every layer's scaling AND
+        colorize controls are built up front — ``build for N, ship for
+        2`` applied one level down, same precedent already established
+        for the two per-slot config panels themselves (see this
+        method's own history). A ``layer_select`` picks which single
+        layer's combined column is visible; switching it is purely
+        client-side (a ``CustomJS`` toggling ``.visible`` on each
+        pre-built column, mirroring the Raster/Scatter ``kind_switch``
+        pattern below), never a comm round trip — the controls
+        themselves already send their own backend messages the moment
+        the user touches them, independent of which one happens to be
+        on screen.
+
+        Mutual exclusivity (design doc Sec 4.3) between a layer's
+        scaling controls and its colorize controls is wired here, not
+        inside ``colorize_controls()``: that method already manages its
+        own axis-picker/legend visibility, but has no reference to the
+        sibling ``colormap_controls()`` column it needs to hide. Found
+        by class (``RadioButtonGroup``) among ``_style_cmap_column``'s
+        already-flattened widget list rather than by threading a new
+        return value through ``colorize_controls()`` — a
+        ``RadioButtonGroup`` only ever appears in this tree as that
+        method's own mode switch.
+
         Returns
         -------
         panel : Bokeh column
         widgets : dict
-            ``x_sel``, ``y_sel``, ``cmap_widgets``, ``cmap_figs``,
-            ``cmap_icons`` — stored by the caller in
+            ``x_sel``, ``y_sel``, ``layer_select`` (``None`` for a
+            single-layer scatter), ``layer_columns``, ``cmap_widgets``,
+            ``cmap_figs``, ``cmap_icons`` — the last three flattened
+            across every layer, not just the visible one, so the dark/
+            light toggle recolors all of them regardless of which is
+            currently shown. Stored by the caller in
             ``self._panel_axis_widgets[slot.id]["scatter"]``.
         """
         sx_sel = Select(
@@ -3717,17 +3762,61 @@ conflict_div.text = conflict ? msg : '';
             options=[(k, v) for k, v in _SCATTER_Y_OPTIONS],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
-        scatter_cmap = slot.scatter.colormap_controls(layer_index=0)
-        cmap_widgets, cmap_figs, cmap_icons = self._style_cmap_column(scatter_cmap, dark)
+
+        layers = slot.scatter.layers
+        cmap_widgets: list = []
+        cmap_figs:    list = []
+        cmap_icons:   list = []
+        layer_columns: list = []
+        for i, lyr in enumerate(layers):
+            scatter_cmap = slot.scatter.colormap_controls(layer_index=i)
+            colorize_col = slot.scatter.colorize_controls(layer_index=i)
+            combined = column(scatter_cmap, colorize_col, width=_SIDEBAR_WIDTH)
+            widgets_i, figs_i, icons_i = self._style_cmap_column(combined, dark)
+            cmap_widgets += widgets_i
+            cmap_figs    += figs_i
+            cmap_icons   += icons_i
+
+            mode_groups = [w for w in widgets_i if isinstance(w, RadioButtonGroup)]
+            if mode_groups:
+                mode_groups[0].js_on_change("active", CustomJS(
+                    args={"scatter_cmap": scatter_cmap},
+                    code="scatter_cmap.visible = (cb_obj.active === 0);",
+                ))
+            scatter_cmap.visible = (lyr.coloring != "categorical")
+
+            combined.visible = (i == 0)
+            layer_columns.append(combined)
+
+        layer_select = None
+        extra_children: list = list(layer_columns)
+        if len(layers) > 1:
+            layer_select = Select(
+                title="Layer", value="0",
+                options=[(str(i), lyr.label) for i, lyr in enumerate(layers)],
+                width=_SIDEBAR_WIDTH, stylesheets=[dark],
+            )
+            layer_select.js_on_change("value", CustomJS(
+                args={"cols": layer_columns},
+                code="""
+const idx = parseInt(cb_obj.value, 10);
+for (let i = 0; i < cols.length; i++) {
+    cols[i].visible = (i === idx);
+}
+""",
+            ))
+            extra_children = [layer_select] + layer_columns
 
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Scatter ──</span>", width=_SIDEBAR_WIDTH),
             sx_sel, sy_sel,
-            scatter_cmap,
+            *extra_children,
         )
         widgets = {
-            "x_sel": sx_sel, "y_sel": sy_sel, "cmap_widgets": cmap_widgets,
+            "x_sel": sx_sel, "y_sel": sy_sel,
+            "layer_select": layer_select, "layer_columns": layer_columns,
+            "cmap_widgets": cmap_widgets,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
         }
         return panel, widgets

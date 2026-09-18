@@ -79,25 +79,53 @@ class ColorBand:
         scalar mapping, not from here.
     alpha : float
         Layer opacity in [0, 1].  Always 1.0 for a raster.
-    kind : {"value", "density"}
+    kind : {"value", "density", "categorical"}
         What the ramp encodes.  ``"value"`` for a raster, whose ramp is
-        the quantity; ``"density"`` for a scatter layer, whose ramp is
-        points per pixel.  Drives ``bar_label()`` — see there.
+        the quantity; ``"density"`` for a continuous scatter layer,
+        whose ramp is points per pixel; ``"categorical"`` (Part 4,
+        2026-09) for a scatter layer colorized by axis, which has no
+        ramp at all — a discrete category → color mapping instead (see
+        ``categories``/``category_colors``/``category_members`` below).
+        Drives ``bar_label()`` — see there — and tells the export
+        compositor to draw a category legend instead of a colorbar for
+        this band (``png_export.py``).
     mapping : ScalarMapping | None
         The value-to-colour-position curve, from
         ``colormap_scaling.ScalarMapping``.  ``None`` on a spec built for
         ``_state_data()``, which never needs it; populated by
         ``render_result()``, where a colorbar might.  Building it costs a
         histogram and 512 interpolation samples, which is nothing beside
-        a shade but too much to pay on every state push.
+        a shade but too much to pay on every state push.  Always
+        ``None`` for a ``"categorical"`` band — no ramp, no mapping.
     peak_density : float | None
         Highest per-pixel count in a scatter layer's aggregation, for the
-        legend annotation.  ``None`` for a raster.
+        legend annotation.  ``None`` for a raster or a categorical band.
     visible : bool
         ``False`` when the user has hidden this band (``alpha == 0``).
         Kept in the list rather than filtered out so band indices stay
         stable — the same reason the probe envelope keeps an entry for
         every layer.
+    categories : tuple[str, ...] | None
+        Display categories for a ``"categorical"`` band, in the same
+        order ``category_colors``/``category_members`` use — copied
+        straight from ``ScatterLayerRender.categories``
+        (``data/reader.py``; see that dataclass's docstring for the
+        post-binning display-vs-real distinction). ``None`` for any
+        other ``kind``, or for a categorical band that hasn't rendered
+        (yet) or rendered with none.
+    category_colors : dict[str, str] | None
+        Display category → hex color, from
+        ``ScatterLayerRender.category_colors``.  This is the seam
+        ``png_export.py``'s categorical legend path reads — see that
+        module's ``_categorical_legend_handles()``.
+    category_members : dict[str, tuple[str, ...]] | None
+        Display category → the real underlying value(s) it represents,
+        from ``ScatterLayerRender.category_members``.  A length-1 tuple
+        for an ordinary (unbucketed) category; longer for a binned one
+        (e.g. an antenna range).  Carried here — not just in
+        ``VisibilityScatter``'s own per-layer cache — for the same
+        reason ``mapping``/``peak_density`` are: the export path reads
+        ``PanelSpec``/``ColorBand``, never the widget's private state.
     """
 
     label:         str
@@ -110,6 +138,9 @@ class ColorBand:
     alpha:         float = 1.0
     visible:       bool  = True
     kind:          str   = "value"
+    categories:        Optional[tuple[str, ...]] = None
+    category_colors:   Optional[dict] = None
+    category_members:  Optional[dict] = None
     mapping:       Optional[object] = None
     peak_density:  Optional[float]  = None
 

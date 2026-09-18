@@ -307,24 +307,128 @@ def _style_axes(ax, theme: Theme, spec: Optional[PanelSpec],
     ax.set_axisbelow(True)
 
 
-def _legend_handles(bands, theme: Theme):
-    """Swatch handles for the visible bands, or ``[]`` if fewer than two.
+def _categorical_bands(bands):
+    """Visible bands with a real category legend to draw (Part 4)."""
+    return [b for b in bands if b.visible and b.kind == "categorical" and b.categories]
 
-    Hidden bands are omitted: an entry for a layer the user turned off
-    would claim something is on the plot that is not.  A single band
-    needs no legend — the title already names the quantity.
+
+def _wants_legend(spec: "PanelSpec") -> bool:
+    """True if *spec* justifies reserving legend space.
+
+    Either >=2 visible bands (the pre-Part-4 "identify which layer is
+    which" case) or any visible categorical band (Part 4: a category
+    legend is new information the title cannot carry, needed even for
+    a single band) -- see ``_legend_handles()`` for the same two cases
+    applied to the actual handles.
+    """
+    visible = [b for b in spec.bands if b.visible]
+    if len(visible) > 1:
+        return True
+    return bool(_categorical_bands(spec.bands))
+
+
+def _legend_ncol(bands, cap: int = 6) -> int:
+    """Column count for a legend of *bands*' combined handles.
+
+    A plain per-layer legend is one row (``ncol`` = its handle count,
+    as before Part 4) -- there are rarely more than 2-3 layers. A
+    categorical legend can have up to ``CATEGORY_CAP`` (20) entries for
+    a single band, which as one row would run off the figure -- capped
+    here so matplotlib wraps it into multiple rows instead.
+
+    Counts *handles*, not bands: one categorical band alone still needs
+    up to ``cap`` columns (its category count), not 1 (its band count).
+    """
+    n = _legend_handle_count(bands)
+    if not n:
+        return 1
+    if _categorical_bands(bands):
+        return min(n, cap)
+    return n
+
+
+def _legend_handle_count(bands) -> int:
+    """How many entries ``_legend_handles(bands, ...)`` would produce.
+
+    A count-only mirror of that function's own two cases (see its
+    docstring), used for reserving layout space before any matplotlib
+    ``Legend`` exists to measure — cheaper than building real handles
+    just to count them, and needs no ``Theme``.
+    """
+    visible     = [b for b in bands if b.visible]
+    categorical = _categorical_bands(bands)
+    plain       = [b for b in visible
+                   if not (b.kind == "categorical" and b.categories)]
+    n = len(plain) if (len(visible) > 1 and plain) else 0
+    n += sum(len(b.categories) for b in categorical)
+    return n
+
+
+def _legend_rows(bands, cap: int = 6) -> int:
+    """Row count a legend of *bands* will wrap to, at ``_legend_ncol``'s
+    column count -- used to scale the reserved legend space up for a
+    categorical band's potentially many entries (a plain per-layer
+    legend is always 1 row, same as before Part 4)."""
+    n = _legend_handle_count(bands)
+    if n <= 0:
+        return 1
+    ncol = _legend_ncol(bands, cap)
+    return -(-n // ncol)  # ceil division, no import needed
+
+
+def _legend_handles(bands, theme: Theme):
+    """Swatch handles for the visible bands.
+
+    Two different things can contribute a handle here, and a legend can
+    contain either or both:
+
+    - A *plain* (non-categorical) band contributes one handle
+      identifying which layer is which — only drawn when there are
+      >=2 visible bands **in total** (plain or categorical), since a
+      single band's identity is already in the title (unchanged from
+      before Part 4, when every band was "plain" and this was
+      equivalent to counting plain bands alone). A plain band overlaid
+      with even one categorical band still needs identifying — the
+      categorical band's own per-category swatches say nothing about
+      which layer the *other* band is.
+    - A *categorical* band (Part 4) contributes one handle PER
+      CATEGORY, from ``category_colors`` — this is new information the
+      title cannot carry (which color means which antenna/scan/SPW/
+      ...), so it is drawn even for a single visible band. Category
+      labels are prefixed with the band's own layer label only when
+      more than one band is visible in total, to disambiguate which
+      layer a category belongs to — with a single band the layer is
+      already unambiguous from the title.
+
+    Hidden bands are omitted throughout: an entry for a layer the user
+    turned off would claim something is on the plot that is not.
     """
     from matplotlib.lines import Line2D
 
-    visible = [b for b in bands if b.visible]
-    if len(visible) < 2:
-        return []
-    return [
-        Line2D([], [], marker="s", linestyle="none", markersize=6,
-               markerfacecolor=_band_swatch(b), markeredgecolor="none",
-               label=b.legend_label())
-        for b in visible
-    ]
+    visible     = [b for b in bands if b.visible]
+    categorical = _categorical_bands(bands)
+    plain       = [b for b in visible
+                   if not (b.kind == "categorical" and b.categories)]
+    multi_band  = len(visible) > 1
+
+    handles = []
+    if multi_band and plain:
+        handles += [
+            Line2D([], [], marker="s", linestyle="none", markersize=6,
+                   markerfacecolor=_band_swatch(b), markeredgecolor="none",
+                   label=b.legend_label())
+            for b in plain
+        ]
+    for b in categorical:
+        colors = b.category_colors or {}
+        for cat in b.categories:
+            label = f"{b.label}: {cat}" if multi_band else str(cat)
+            handles.append(
+                Line2D([], [], marker="s", linestyle="none", markersize=6,
+                       markerfacecolor=colors.get(cat, "#888888"),
+                       markeredgecolor="none", label=label)
+            )
+    return handles
 
 
 def _style_legend(leg, theme: Theme) -> None:
@@ -346,7 +450,8 @@ def _draw_panel_legend(ax, spec: PanelSpec, theme: Theme) -> None:
     if not handles:
         return
     leg = ax.legend(handles=handles, loc="lower right",
-                    bbox_to_anchor=(0.0, 1.0, 1.0, 0.0), ncol=len(handles),
+                    bbox_to_anchor=(0.0, 1.0, 1.0, 0.0),
+                    ncol=_legend_ncol(spec.bands),
                     frameon=False, fontsize=7.5, handletextpad=0.4,
                     columnspacing=1.2, borderaxespad=0.15)
     _style_legend(leg, theme)
@@ -363,17 +468,26 @@ def _draw_figure_legend(fig, bands, theme: Theme, y: float) -> None:
     if not handles:
         return
     leg = fig.legend(handles=handles, loc="upper center",
-                     bbox_to_anchor=(0.5, y), ncol=len(handles),
+                     bbox_to_anchor=(0.5, y), ncol=_legend_ncol(bands),
                      frameon=False, fontsize=8.5, handletextpad=0.4,
                      columnspacing=1.6)
     _style_legend(leg, theme)
 
 
 def _band_key(spec: Optional[PanelSpec]):
-    """Identity of a panel's visible band set, for sameness testing."""
+    """Identity of a panel's visible band set, for sameness testing.
+
+    Includes ``categories`` (Part 4): two categorical bands with the
+    same label/cmap can still show genuinely different real categories
+    in different cells -- e.g. grid/iteration mode colorizing by Scan,
+    where each cell covers a different scan subset. Without this, two
+    such cells would be judged "the same" and share one figure legend
+    that is only correct for one of them. ``None`` for a non-
+    categorical band, so this is a no-op for every pre-Part-4 case.
+    """
     if spec is None:
         return None
-    return tuple((b.label, b.cmap) for b in spec.bands if b.visible)
+    return tuple((b.label, b.cmap, b.categories) for b in spec.bands if b.visible)
 
 
 def _resolve_legend(mode: str, cells) -> str:
@@ -557,9 +671,13 @@ def _draw_cell(ax, panel: Optional[RenderedPanel], theme: Theme,
         # the title has to clear it -- at the default pad the two were
         # drawn on top of each other.
         pad = 6.0
-        if legend_mode == "panel" and len(_legend_handles(
-                spec.bands if spec else (), theme)) > 1:
-            pad += _LEGEND_PT
+        if legend_mode == "panel" and spec is not None and _wants_legend(spec):
+            # Part 4: scaled by row count, not just a flat add -- a
+            # categorical legend that wrapped to several rows (see
+            # _legend_rows) needs more clearance above the axes than
+            # the single-row per-layer legend this padding was
+            # originally sized for.
+            pad += _LEGEND_PT * _legend_rows(spec.bands)
         ax.set_title(spec.title, color=theme.text, fontsize=9.5, pad=pad)
 
     if panel is None:
@@ -725,12 +843,11 @@ def export_png(
 
     px = dpi / 72.0                       # points -> device pixels
     legend_mode = _resolve_legend(legend, cells)
-    multi_band  = any(
-        p is not None and p.spec is not None
-        and sum(1 for b in p.spec.bands if b.visible) > 1
+    wants_legend = any(
+        p is not None and p.spec is not None and _wants_legend(p.spec)
         for p in cells
     )
-    if not multi_band:
+    if not wants_legend:
         legend_mode = "none"
     m_l   = _MARGIN_L_PT * px
     m_r   = _MARGIN_R_PT * px
@@ -742,8 +859,24 @@ def export_png(
     # Legend space is *reserved*, not overlaid: a band above each axes for
     # per-panel legends, or one band below the top margin for a shared
     # figure legend.  Either way the data area stays cw x ch.
-    lg_panel = (_LEGEND_PT * px * 1.6) if legend_mode == "panel" else 0.0
-    lg_fig   = (_LEGEND_PT * px * 1.4) if legend_mode == "figure" else 0.0
+    #
+    # legend_rows > 1 (Part 4): a categorical band's per-category legend
+    # can run to CATEGORY_CAP (20) entries, which _legend_ncol wraps into
+    # several rows rather than one absurdly wide row -- reserved space
+    # must grow with it or a multi-row legend gets clipped. A plain
+    # per-layer legend is always exactly 1 row (unchanged), so this is a
+    # no-op multiplier for every pre-Part-4 case.
+    legend_rows = 1
+    if legend_mode in ("panel", "figure"):
+        legend_rows = max(
+            (_legend_rows(p.spec.bands) for p in cells
+             if p is not None and p.spec is not None and _wants_legend(p.spec)),
+            default=1,
+        )
+    lg_panel = (_LEGEND_PT * px * (1.6 + 0.9 * (legend_rows - 1))
+                if legend_mode == "panel" else 0.0)
+    lg_fig   = (_LEGEND_PT * px * (1.4 + 0.9 * (legend_rows - 1))
+                if legend_mode == "figure" else 0.0)
 
     # Colorbar space is reserved the same way legend space is.  Using
     # make_axes_locatable instead would take the width out of the parent

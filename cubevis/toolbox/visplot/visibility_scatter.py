@@ -171,6 +171,21 @@ class ScatterLayer:
         ``color_mode``-based range once both are set. ``None`` (default)
         means automatic. Clips the input (rather than setting a
         Datashader ``span=``) for ``"eq_hist"`` scaling.
+    coloring : str
+        ``"continuous"`` (default) or ``"categorical"`` — mirrors
+        ``data.reader.ScatterLayerSpec.coloring`` (Part 3); see that
+        dataclass's docstring for the full rationale (a string, not a
+        bool, so a future third mode doesn't need a rework). Widget-side
+        state only — ``_render_all_layers`` copies it into the
+        ``ScatterLayerSpec`` sent to the backend on every render.
+    colorize_axis : Axis | None
+        Which axis to colorize by when ``coloring == "categorical"``.
+        Must be one of ``data.reader.colorizable_axes()``; ``None`` is
+        only valid when ``coloring == "continuous"`` — validated eagerly
+        in ``__post_init__``, mirroring ``ScatterLayerSpec``'s own
+        validation exactly (this class is the widget-side twin of that
+        one, so the two must never accept a combination the other
+        rejects).
     """
     y_axis:      "Axis"
     polarization: str        = "XX"
@@ -182,10 +197,28 @@ class ScatterLayer:
     scaling_gamma:  float = 1.0
     scaling_vmin:   Optional[float] = None  # manual override; None = auto
     scaling_vmax:   Optional[float] = None  # (see update_scaling, _shade_all_layers)
+    coloring:       str = "continuous"
+    colorize_axis:  Optional["Axis"] = None
 
     def __post_init__(self):
         if not self.label:
             self.label = f"{self.y_axis.label} {self.polarization}"
+        if self.coloring not in ("continuous", "categorical"):
+            raise ValueError(
+                "ScatterLayer.coloring must be 'continuous' or "
+                f"'categorical', got {self.coloring!r}"
+            )
+        if self.coloring == "categorical":
+            if self.colorize_axis is None:
+                raise ValueError(
+                    "ScatterLayer.coloring='categorical' requires "
+                    "colorize_axis to be set"
+                )
+        elif self.colorize_axis is not None:
+            raise ValueError(
+                "ScatterLayer.colorize_axis is only valid when "
+                "coloring='categorical'"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +320,23 @@ class VisibilityScatter(VisibilityPlot):
         self._layer_hist_edges:  list[Optional[np.ndarray]] = [None] * n
         self._layer_mapping:     list[Optional["_cms.ScalarMapping"]] = [None] * n
         self._layer_skip_reason: list[Optional[str]]        = [None] * n
+        # Colorize-by-axis (Part 4, 2026-09): populated together on a
+        # successful categorical render, all None for a continuous or
+        # skipped/empty categorical one -- mirrors
+        # ScatterLayerRender.categories/category_colors/category_members
+        # in data/reader.py exactly (these ARE that data, just cached
+        # client-side the same way peak/hist/mapping already are).
+        # Read by colorize_controls()'s legend Div and by _panel_spec()
+        # (which copies them onto ColorBand for png_export.py).
+        self._layer_categories:        list[Optional[tuple]] = [None] * n
+        self._layer_category_colors:   list[Optional[dict]]  = [None] * n
+        self._layer_category_members:  list[Optional[dict]]  = [None] * n
+        # Cache of each layer's continuous cmap, keyed by layer index,
+        # populated only once a layer actually switches to categorical
+        # (see update_colorize) -- lets switching back restore the
+        # original ramp instead of leaving the categorical palette
+        # assigned to a continuous render.
+        self._layer_continuous_cmap_backup: dict[int, tuple] = {}
         self._canvas_width, self._canvas_height           = width, height
         self._full_canvas_width, self._full_canvas_height = width, height
 
@@ -364,6 +414,7 @@ class VisibilityScatter(VisibilityPlot):
         self._msg_set_alpha    = str(uuid4())
         self._msg_color_mode   = str(uuid4())
         self._msg_update_scaling = str(uuid4())
+        self._msg_colorize       = str(uuid4())
 
         # Hover-probe redesign piece 3 (2026-09), "click-to-exact":
         # scatter-only InfoTool (drag tool, click -> point, drag -> box)
@@ -427,6 +478,8 @@ class VisibilityScatter(VisibilityPlot):
             scaling_gamma = lyr.scaling_gamma,
             scaling_vmin  = lyr.scaling_vmin,
             scaling_vmax  = lyr.scaling_vmax,
+            coloring      = lyr.coloring,
+            colorize_axis = lyr.colorize_axis,
         )
         self._recomposite()
         self._update_state_source()
@@ -497,6 +550,130 @@ class VisibilityScatter(VisibilityPlot):
             scaling_gamma = gamma if gamma is not None else lyr.scaling_gamma,
             scaling_vmin  = vmin if vmin is not None else new_vmin,
             scaling_vmax  = vmax if vmax is not None else new_vmax,
+            coloring      = lyr.coloring,
+            colorize_axis = lyr.colorize_axis,
+        )
+        self._rerender()
+        self._update_state_source()
+
+    def update_colorize(
+        self,
+        layer_index: int,
+        coloring: Optional[str] = None,
+        colorize_axis=None,
+    ) -> None:
+        """Change one layer's colorize-by-axis mode and re-render.
+
+        Part 4 (UI wiring) counterpart to ``update_scaling`` — same
+        "backend round trip via ``_rerender``" shape, since colorize
+        mode/axis are ``ScatterLayerSpec`` fields the backend needs for
+        its categorical-aggregation branch (see
+        ``data._scatter_render.render_layer``), not something this
+        class can resolve locally.
+
+        Parameters
+        ----------
+        layer_index : int
+            Zero-based index into ``self.layers``.
+        coloring : str | None
+            ``"continuous"`` or ``"categorical"``.  ``None`` keeps the
+            layer's current value.
+        colorize_axis : Axis | str | None
+            The axis to colorize by.  Accepts an ``Axis`` member or its
+            ``.name`` string (j2p messages carry the string form —
+            mirrors ``_parse_axis``'s convention elsewhere in this
+            file).  ``None`` keeps the layer's current axis *unless*
+            the effective mode is ``"categorical"`` and the layer has
+            never had one, in which case the first non-degenerate
+            colorizable axis is chosen — the same default
+            ``colorize_controls()``'s picker itself opens on, so a
+            layer switched straight to categorical (no explicit axis
+            picked yet) renders something instead of raising.
+
+        Raises
+        ------
+        IndexError
+            *layer_index* out of range.
+        ValueError
+            An unresolvable mode/axis combination, or *colorize_axis*
+            names an axis outside ``data.reader.colorizable_axes()``.
+        """
+        from .axes import Axis
+        from .data.reader import colorizable_axes, DEGENERATE_COLORIZE_AXES
+
+        if not (0 <= layer_index < len(self._layers)):
+            raise IndexError(f"layer_index {layer_index} out of range")
+        lyr = self._layers[layer_index]
+
+        new_coloring = coloring if coloring is not None else lyr.coloring
+        if new_coloring not in ("continuous", "categorical"):
+            raise ValueError(
+                f"coloring must be 'continuous' or 'categorical', "
+                f"got {new_coloring!r}"
+            )
+
+        if isinstance(colorize_axis, str):
+            try:
+                colorize_axis = Axis[colorize_axis]
+            except KeyError:
+                raise ValueError(f"unknown axis {colorize_axis!r}") from None
+
+        if new_coloring == "continuous":
+            # Mirrors ScatterLayerSpec.__post_init__: an axis is only
+            # ever valid alongside categorical mode -- silently dropped
+            # here rather than left dangling from a previous categorical
+            # selection, exactly as switching back to continuous should
+            # behave from the user's point of view (the axis picker
+            # itself is hidden in this mode -- see colorize_controls()).
+            new_axis = None
+        else:
+            new_axis = colorize_axis if colorize_axis is not None else lyr.colorize_axis
+            if new_axis is None:
+                candidates = [
+                    a for a in colorizable_axes()
+                    if a not in DEGENERATE_COLORIZE_AXES
+                ]
+                if not candidates:
+                    raise ValueError("no colorizable axes available")
+                new_axis = candidates[0]
+            elif new_axis not in colorizable_axes():
+                raise ValueError(
+                    f"Axis.{new_axis.name} is not a colorizable axis -- "
+                    "see data.reader.COLORIZE_AXIS_COLUMNS"
+                )
+
+        # cmap is REUSED for categorical mode (Part 3 convention -- see
+        # ScatterLayerSpec's docstring): swap in a categorical palette
+        # when entering it, and restore whatever continuous cmap the
+        # layer had before when leaving it, rather than leaving a
+        # discrete category palette assigned to a continuous ramp (would
+        # render, just not with the intended gradient). The pre-
+        # categorical cmap is cached per layer index the first time a
+        # layer goes categorical -- __init__ doesn't need to populate
+        # this, only entries that have actually made the switch exist.
+        new_cmap = lyr.cmap
+        if new_coloring == "categorical" and lyr.coloring != "categorical":
+            self._layer_continuous_cmap_backup[layer_index] = lyr.cmap
+            from . import palettes
+            new_cmap = tuple(palettes.categorical_cmap(theme=self._theme_hint()))
+        elif new_coloring == "continuous" and lyr.coloring == "categorical":
+            new_cmap = self._layer_continuous_cmap_backup.pop(
+                layer_index, self._layer_cmaps[layer_index % len(self._layer_cmaps)],
+            )
+
+        self._layers[layer_index] = ScatterLayer(
+            y_axis        = lyr.y_axis,
+            polarization  = lyr.polarization,
+            cmap          = new_cmap,
+            alpha         = lyr.alpha,
+            label         = lyr.label,
+            scaling       = lyr.scaling,
+            scaling_alpha = lyr.scaling_alpha,
+            scaling_gamma = lyr.scaling_gamma,
+            scaling_vmin  = lyr.scaling_vmin,
+            scaling_vmax  = lyr.scaling_vmax,
+            coloring      = new_coloring,
+            colorize_axis = new_axis,
         )
         self._rerender()
         self._update_state_source()
@@ -854,9 +1031,17 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._layer_mapping     = [None] * n
             self._layer_skip_reason = [None] * n
             self._layer_id_grid     = [None] * n
+            self._layer_categories       = [None] * n
+            self._layer_category_colors  = [None] * n
+            self._layer_category_members = [None] * n
             self._layer_dfs         = [None] * n   # vestigial -- see __init__
             self._layer_aggs        = [None] * n   # vestigial -- see __init__
             self._layer_extents     = [None] * n   # vestigial -- see __init__
+            # Layer list replaced wholesale -- any cached continuous-cmap
+            # backup is keyed by an index that may now name a different
+            # layer entirely (or not exist), so drop it rather than let
+            # a future update_colorize() restore the wrong ramp.
+            self._layer_continuous_cmap_backup = {}
             changed = True
         if title is not None:
             self._title = title;  changed = True
@@ -921,8 +1106,27 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 vmax          = lyr.scaling_vmax,
                 alpha         = lyr.alpha,
                 visible       = lyr.alpha > 0.0,
+                # Part 4: categories/colors/members are cheap cached
+                # reads (unlike mapping/peak_density below, which cost a
+                # histogram + interpolation and are only attached late,
+                # at export time, by _bands_with_mappings) -- set here
+                # directly rather than waiting for that step. kind is
+                # set here too, not just for export: it is what
+                # colorize_controls()/_legend_html() would need to
+                # branch on if they read ColorBand instead of the raw
+                # per-layer caches (they don't today, but PanelSpec is
+                # meant to be the one seam both paths agree on -- see
+                # this module's own docstring).
+                kind = ("categorical" if lyr.coloring == "categorical"
+                        else "value"),
+                categories       = self._layer_categories[i]
+                    if i < len(self._layer_categories) else None,
+                category_colors  = self._layer_category_colors[i]
+                    if i < len(self._layer_category_colors) else None,
+                category_members = self._layer_category_members[i]
+                    if i < len(self._layer_category_members) else None,
             )
-            for lyr in self._layers
+            for i, lyr in enumerate(self._layers)
         )
 
         # agg_n_x/agg_n_y: canvas resolution at the *full* data extent --
@@ -998,11 +1202,22 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         layer with no cached mapping (never rendered, or currently
         skipped) keeps ``mapping=None``, which the compositor reads as
         "no bar for this band" -- unchanged.
+
+        Part 4: a ``kind="categorical"`` band is passed through
+        untouched -- it never has a ``mapping``/``peak_density`` (no
+        ramp, no colorbar; see ``ColorBand``'s docstring), and forcing
+        ``kind="density"`` on it the way every other band gets here
+        would make ``png_export.py`` draw it as a (nonexistent) density
+        ramp instead of the category legend its ``categories``/
+        ``category_colors`` already carry.
         """
         from dataclasses import replace
 
         out = []
         for i, band in enumerate(spec.bands):
+            if band.kind == "categorical":
+                out.append(band)
+                continue
             mapping = (self._layer_mapping[i]
                        if i < len(self._layer_mapping) else None)
             if mapping is None or not band.visible:
@@ -1032,6 +1247,14 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._layer_hist_counts, self._layer_hist_edges,
             self._layer_mapping, self._layer_skip_reason,
             self._canvas_width, self._canvas_height,
+            # Part 4: these three must ride along with everything else
+            # here -- an export at a different viewport still calls
+            # _render_all_layers(), which reassigns them same as the
+            # live-state fields above. Omitting them would leave the
+            # live widget's legend/category state silently overwritten
+            # by whatever the export viewport happened to render.
+            self._layer_categories, self._layer_category_colors,
+            self._layer_category_members,
         )
         try:
             if viewport is None:
@@ -1045,7 +1268,9 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             (self._layer_images, self._layer_n_in_view, self._layer_peak,
              self._layer_hist_counts, self._layer_hist_edges,
              self._layer_mapping, self._layer_skip_reason,
-             self._canvas_width, self._canvas_height) = saved
+             self._canvas_width, self._canvas_height,
+             self._layer_categories, self._layer_category_colors,
+             self._layer_category_members) = saved
 
     def _build_glyphs(self) -> None:
         """Add the single composite image_rgba glyph."""
@@ -1139,6 +1364,9 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._layer_mapping     = [None] * n
             self._layer_skip_reason = ["deferred (never rendered)"] * n
             self._layer_id_grid     = [None] * n
+            self._layer_categories       = [None] * n
+            self._layer_category_colors  = [None] * n
+            self._layer_category_members = [None] * n
             self._layer_dfs         = [None] * n   # vestigial -- see __init__
             self._layer_aggs        = [None] * n   # vestigial -- see __init__
             self._layer_extents     = [None] * n   # vestigial -- see __init__
@@ -1863,6 +2091,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         self._comm.register(self._msg_color_mode,  self._handle_set_color_mode)
         self._comm.register(self._msg_update_axes, self._handle_update_axes_scatter)
         self._comm.register(self._msg_update_scaling, self._handle_update_scaling)
+        self._comm.register(self._msg_colorize, self._handle_colorize)
 
     # ------------------------------------------------------------------
     # Scatter-specific internals
@@ -1902,6 +2131,8 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 scaling_gamma = lyr.scaling_gamma,
                 scaling_vmin  = lyr.scaling_vmin,
                 scaling_vmax  = lyr.scaling_vmax,
+                coloring      = lyr.coloring,
+                colorize_axis = lyr.colorize_axis,
             )
             for lyr in self._layers
         ]
@@ -1945,6 +2176,9 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         self._layer_mapping     = []
         self._layer_skip_reason = []
         self._layer_id_grid     = []
+        self._layer_categories       = []
+        self._layer_category_colors  = []
+        self._layer_category_members = []
         for lyr, rendered in zip(self._layers, result.layers):
             self._layer_images.append(rendered.image)
             self._layer_n_in_view.append(rendered.n_in_view)
@@ -1958,6 +2192,13 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 )
             self._layer_mapping.append(mapping)
             self._layer_skip_reason.append(rendered.skip_reason)
+            # Colorize-by-axis (Part 4): all three None together for a
+            # continuous layer or a skipped/empty categorical one --
+            # ScatterLayerRender's own contract (data/reader.py), passed
+            # straight through with no reinterpretation needed here.
+            self._layer_categories.append(rendered.categories)
+            self._layer_category_colors.append(rendered.category_colors)
+            self._layer_category_members.append(rendered.category_members)
 
             # Hover-probe redesign piece 2: coarse id grid, one dict per
             # layer, or None for a layer with no data at all (matches
@@ -2394,6 +2635,239 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             scaling_vmax  = lyr.scaling_vmax,
         )
 
+    def _handle_colorize(self, message: dict) -> dict:
+        """Handle j2p 'vs_colorize': {layer_index, coloring, colorize_axis}.
+
+        Mirrors ``_handle_update_scaling`` exactly (same
+        ``_image_response`` reuse, same status/error shape), plus one
+        extra field the scaling handler has no equivalent of:
+        ``legend_html``, a fully-rendered swatch list for
+        ``colorize_controls()``'s legend ``Div`` -- built here rather
+        than in JS because the category labels, colors, and bucket
+        membership are all Python-side state (``_layer_categories`` et
+        al.), and duplicating that formatting logic in JS would be a
+        second place for it to drift out of sync with
+        ``_legend_html()``.
+        """
+        idx = int(message.get("layer_index", 0))
+        try:
+            self.update_colorize(
+                idx,
+                coloring      = message.get("coloring"),
+                colorize_axis = message.get("colorize_axis"),
+            )
+        except (IndexError, ValueError) as exc:
+            return {"status": "error", "message": str(exc)}
+        lyr = self._layers[idx]
+        resp = self._image_response(
+            "ok",
+            layer_index   = idx,
+            coloring      = lyr.coloring,
+            colorize_axis = (lyr.colorize_axis.name
+                              if lyr.colorize_axis is not None else None),
+        )
+        resp["legend_html"] = self._legend_html(idx)
+        return resp
+
+    def _legend_html(self, layer_index: int) -> str:
+        """Render one layer's categorical legend as an HTML swatch list.
+
+        Empty (well, a small italic placeholder) when the layer isn't
+        categorical yet, hasn't been rendered yet, or rendered with no
+        categories -- ``colorize_controls()``'s legend ``Div`` stays
+        unpopulated in all of those cases, matching how
+        ``colormap_controls()``'s histogram shows nothing for a
+        never-rendered layer.
+
+        Built from ``category_members``, not just ``categories`` --
+        per visplot-colorize-by-axis-handoff-part4.md's "What this
+        means for Part 4's legend widget": a bucketed category
+        (``len(category_members[cat]) > 1``, e.g. an antenna range
+        binned past ``CATEGORY_CAP``) gets every real value it covers
+        listed in a native HTML ``title`` attribute, so hovering the
+        swatch shows the full membership at essentially no extra
+        cost -- no separate Bokeh tooltip model, just an attribute on
+        the ``Div``'s own HTML.  An unbucketed category has
+        ``category_members[cat] == (cat,)`` (see
+        ``ScatterLayerRender.category_members``'s docstring), so it
+        gets no ``title`` at all -- nothing more to say than the label
+        already shows.
+        """
+        if not (0 <= layer_index < len(self._layers)):
+            return ""
+        lyr = self._layers[layer_index]
+        if lyr.coloring != "categorical":
+            return ""
+        categories = (self._layer_categories[layer_index]
+                      if layer_index < len(self._layer_categories) else None)
+        colors = (self._layer_category_colors[layer_index]
+                  if layer_index < len(self._layer_category_colors) else None)
+        if not categories or not colors:
+            return ("<i style='color:#a6adc8;font-size:11px'>"
+                     "no categories in current selection</i>")
+        members = (self._layer_category_members[layer_index]
+                   if layer_index < len(self._layer_category_members) else None) or {}
+
+        rows = []
+        for cat in categories:
+            color = colors.get(cat, "#888888")
+            cat_members = members.get(cat, (cat,))
+            title_attr = ""
+            if len(cat_members) > 1:
+                joined = ", ".join(str(m) for m in cat_members)
+                title_attr = f' title="{_html_escape(joined)}"'
+            rows.append(
+                f"<div{title_attr} style='display:flex;align-items:center;"
+                f"gap:6px;margin:2px 0;cursor:default'>"
+                f"<span style='display:inline-block;width:10px;"
+                f"height:10px;border-radius:2px;flex-shrink:0;"
+                f"background:{_html_escape(str(color))}'></span>"
+                f"<span style='color:#cdd6f4;font-size:11px;"
+                f"overflow:hidden;text-overflow:ellipsis;"
+                f"white-space:nowrap'>{_html_escape(str(cat))}</span>"
+                f"</div>"
+            )
+        return ("<div style='max-height:160px;overflow-y:auto;"
+                 "margin-top:4px'>" + "".join(rows) + "</div>")
+
+    def colorize_controls(self, layer_index: int = 0):
+        """Return a Bokeh widget column for one layer's colorize-by-axis controls.
+
+        Part 4 (UI wiring) counterpart to ``colormap_controls()`` --
+        same ``CustomJS``/``comm.send()`` round-trip pattern (see that
+        method's docstring for the full rationale on why this is a
+        backend round trip rather than a local recompute). Meant to sit
+        *alongside* ``colormap_controls()`` in the sidebar, not replace
+        it: ``VisibilityPlotter`` is responsible for the mutual-
+        exclusivity behaviour (design doc Sec 4.3) of hiding the
+        scaling column's parent container while this one's categorical
+        mode is active -- this method only manages visibility of its
+        own axis picker and legend, since those two are self-contained
+        to this control.
+
+        The axis picker excludes ``DEGENERATE_COLORIZE_AXES``
+        (currently just ``Axis.CORRELATION``) entirely, rather than
+        including it disabled or annotated -- Bokeh's ``Select`` has no
+        way to disable one option, and an axis that can never produce
+        more than a single-entry legend for a single-polarization layer
+        is not a meaningful choice to offer. Filtered by frozenset
+        membership, not a hardcoded axis name, so this stays correct if
+        that frozenset's membership ever changes (see its docstring in
+        ``data/reader.py``).
+
+        Parameters
+        ----------
+        layer_index : int
+            Which layer's controls to build. Defaults to the first
+            layer.
+        """
+        from bokeh.layouts import column
+        from bokeh.models import Select, RadioButtonGroup, Div, CustomJS
+        from .data.reader import colorizable_axes, DEGENERATE_COLORIZE_AXES
+
+        if not (0 <= layer_index < len(self._layers)):
+            raise IndexError(f"layer_index {layer_index} out of range")
+        lyr = self._layers[layer_index]
+
+        axis_options = [
+            (axis.name, axis.label) for axis in colorizable_axes()
+            if axis not in DEGENERATE_COLORIZE_AXES
+        ]
+        if not axis_options:
+            # Defensive only -- today's single-entry DEGENERATE_COLORIZE_AXES
+            # can never exhaust colorizable_axes() on its own. Falling
+            # back to the unfiltered list rather than shipping an empty
+            # (and therefore broken) Select if that ever changes.
+            axis_options = [(axis.name, axis.label) for axis in colorizable_axes()]
+
+        is_categorical = lyr.coloring == "categorical"
+        current_axis_name = (
+            lyr.colorize_axis.name if lyr.colorize_axis is not None
+            else axis_options[0][0]
+        )
+
+        section = Div(
+            text=f"<span style='color:#a6adc8;font-size:11px'>"
+                 f"Colorize \u2014 {_html_escape(lyr.label)}</span>",
+        )
+        mode_group = RadioButtonGroup(
+            labels=["Continuous", "Categorical"],
+            active=(1 if is_categorical else 0),
+        )
+        axis_select = Select(
+            value=current_axis_name,
+            options=axis_options,
+            visible=is_categorical,
+        )
+        legend_div = Div(
+            text=self._legend_html(layer_index),
+            visible=is_categorical,
+            width=240,
+        )
+
+        controls = column(section, mode_group, axis_select, legend_div)
+
+        if self._comm is None:
+            # No comm channel -- controls render but are inert, matching
+            # colormap_controls()'s identical convention.
+            return controls
+
+        comm         = self._comm
+        image_source = self._image_source
+        msg_colorize = self._msg_colorize
+
+        _apply_colorize_js = """
+console.log('[visplot colorize] response:', resp);
+if (!resp || resp.status !== 'ok') {
+    console.warn('[visplot colorize] failed or no response:', resp);
+    return;
+}
+if (resp.image != null) {
+    image_source.data['image'] = [resp.image];
+    image_source.data['x']     = [resp.x0];
+    image_source.data['y']     = [resp.y0];
+    image_source.data['dw']    = [resp.x1 - resp.x0];
+    image_source.data['dh']    = [resp.y1 - resp.y0];
+    image_source.change.emit();
+}
+if (resp.colorize_axis != null) {
+    axis_select.value = resp.colorize_axis;
+}
+legend_div.text = resp.legend_html || '';
+"""
+
+        mode_js = CustomJS(
+            args={"comm": comm, "image_source": image_source,
+                  "axis_select": axis_select, "legend_div": legend_div,
+                  "layer_index": layer_index},
+            code=f"""
+const categorical = (cb_obj.active === 1);
+axis_select.visible = categorical;
+legend_div.visible  = categorical;
+const coloring = categorical ? 'categorical' : 'continuous';
+console.log('[visplot colorize] sending:', {{layer_index: layer_index, coloring: coloring, colorize_axis: axis_select.value}});
+comm.send('{msg_colorize}', {{layer_index: layer_index, coloring: coloring, colorize_axis: axis_select.value}}, function(resp) {{
+{_apply_colorize_js}
+}});
+""",
+        )
+        mode_group.js_on_change("active", mode_js)
+
+        axis_js = CustomJS(
+            args={"comm": comm, "image_source": image_source,
+                  "axis_select": axis_select, "legend_div": legend_div,
+                  "layer_index": layer_index},
+            code=f"""
+console.log('[visplot colorize] sending:', {{layer_index: layer_index, coloring: 'categorical', colorize_axis: cb_obj.value}});
+comm.send('{msg_colorize}', {{layer_index: layer_index, coloring: 'categorical', colorize_axis: cb_obj.value}}, function(resp) {{
+{_apply_colorize_js}
+}});
+""",
+        )
+        axis_select.js_on_change("value", axis_js)
+
+        return controls
+
     def _with_default_cmaps(self, layers) -> list:
         """Return *layers* with any missing ``cmap`` filled in by index.
 
@@ -2406,14 +2880,28 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         subsequent ``tf.shade(cmap=None)`` failed with "Expected `cmap`
         of ...; got: <class 'NoneType'>", blanking the panel after any
         sidebar axis or layer change.
+
+        Part 4: a categorical layer with no cmap gets a categorical
+        palette here, not the continuous ``_layer_cmaps`` cycle -- the
+        same cmap-is-reused-for-categorical convention
+        ``update_colorize`` follows (see ``ScatterLayerSpec``'s
+        docstring in ``data/reader.py``). Filling it with a continuous
+        gradient would still satisfy the "non-empty cmap" validation but
+        render nonsense (a 10-stop sequential ramp cycled as if it were
+        20 discrete category colors).
         """
         out = []
         for i, lyr in enumerate(layers):
             if lyr.cmap is None:
+                if lyr.coloring == "categorical":
+                    from . import palettes
+                    cmap = tuple(palettes.categorical_cmap(theme=self._theme_hint()))
+                else:
+                    cmap = self._layer_cmaps[i % len(self._layer_cmaps)]
                 lyr = ScatterLayer(
                     y_axis        = lyr.y_axis,
                     polarization  = lyr.polarization,
-                    cmap          = self._layer_cmaps[i % len(self._layer_cmaps)],
+                    cmap          = cmap,
                     alpha         = lyr.alpha,
                     label         = lyr.label,
                     scaling       = lyr.scaling,
@@ -2421,6 +2909,8 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                     scaling_gamma = lyr.scaling_gamma,
                     scaling_vmin  = lyr.scaling_vmin,
                     scaling_vmax  = lyr.scaling_vmax,
+                    coloring      = lyr.coloring,
+                    colorize_axis = lyr.colorize_axis,
                 )
             out.append(lyr)
         return out
@@ -2440,6 +2930,17 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                         scaling       = entry.get("scaling", _DEFAULT_SCALING),
                         scaling_alpha = float(entry.get("scaling_alpha", 10.0)),
                         scaling_gamma = float(entry.get("scaling_gamma", 1.0)),
+                        # Part 4: parsed defensively like every other
+                        # field here even though nothing currently sends
+                        # them on an axis-change message -- an axis
+                        # change is a fresh ScatterLayer either way (this
+                        # branch already drops scaling_vmin/vmax the same
+                        # way), so a layer switched to categorical simply
+                        # starts over in continuous mode unless a future
+                        # caller starts including these.
+                        coloring      = entry.get("coloring", "continuous"),
+                        colorize_axis = (Axis[entry["colorize_axis"]]
+                                         if entry.get("colorize_axis") else None),
                     )
                     for entry in message["layers"]
                 ]

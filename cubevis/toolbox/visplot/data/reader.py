@@ -63,6 +63,54 @@ log = logging.getLogger(__name__)
 # session -- so only a small, bounded per-layer result crosses a
 # process or wire boundary either way.
 
+# ----------------------------------------------------------------------
+# Colorize-by-axis (Part 3, 2026-09): axis -> per-row column name
+# ----------------------------------------------------------------------
+# Source of truth requested by visplot-colorize-by-axis-handoff-part3.md
+# ("Build the Axis -> column name lookup table ... it doesn't exist yet
+# -- the [What landed] table is the source of truth for what to put in
+# it"). Mirrors that table exactly; do not hand-derive column names from
+# an Axis elsewhere -- go through this dict (or ``colorizable_axes()``
+# below) so a future column rename only has to happen here.
+COLORIZE_AXIS_COLUMNS: dict[Axis, str] = {
+    Axis.SCAN:        "scan_name",
+    Axis.ANTENNA1:    "baseline_antenna1_name",
+    Axis.ANTENNA2:    "baseline_antenna2_name",
+    Axis.CORRELATION: "polarization",
+    Axis.SPW:         "spw",
+}
+
+DEGENERATE_COLORIZE_AXES: frozenset = frozenset({Axis.CORRELATION})
+"""Colorizable axes that can never show more than one category on a
+single layer.
+
+``ScatterLayerSpec.polarization`` is a scalar -- a layer already plots
+exactly one polarization -- so a per-row ``polarization`` column is
+always exactly one category for that layer (see the design doc's §4.1
+finding). The column is real and correctly populated (kept for
+uniformity with the other axes, and it costs nothing), so rendering it
+works fine; it just never shows more than one legend entry. Left as a
+flag rather than removed from ``COLORIZE_AXIS_COLUMNS`` -- Part 4's
+call whether a degenerate axis is worth excluding from the axis-picker
+UI (a `ScatterLayerSpec` field is not the right place to hide it, since
+"never useful for one layer" is a UI-plumbing statement, not a data
+statement -- see visplot-colorize-by-axis-handoff-part3.md's "Axes
+dropped or deferred" section).
+"""
+
+
+def colorizable_axes() -> tuple[Axis, ...]:
+    """``Axis`` members with a real per-row column to colorize by.
+
+    Convenience for Part 4's axis-picker UI -- built from
+    ``COLORIZE_AXIS_COLUMNS`` so the picker's options and the render
+    path's column lookup can never drift apart. Does not exclude
+    ``DEGENERATE_COLORIZE_AXES``; a UI can consult that set separately
+    if it wants to warn about or omit a degenerate choice.
+    """
+    return tuple(COLORIZE_AXIS_COLUMNS)
+
+
 @dataclass(frozen=True)
 class ScatterLayerSpec:
     """One layer's rendering parameters, as ``query_columns`` needs them.
@@ -86,6 +134,36 @@ class ScatterLayerSpec:
     ``_scatter_render.render_layer``'s 2026-09 correction note) --
     that would leave nothing cached for
     ``VisibilityScatter.set_alpha()`` to un-hide without a backend call.
+
+    ``coloring``/``colorize_axis`` (Part 3, 2026-09): select
+    colorize-by-axis. ``coloring`` is a string, not a bool, on purpose
+    -- see the design doc's §7.7 touchpoint: Part 5's color-source-
+    column capability will want a third value (``"computed"`` or
+    similar) alongside ``"continuous"``/``"categorical"``, and a two-
+    state boolean would need a real rework to grow a third state later.
+    ``scaling``/``scaling_*``/``cmap`` keep their existing continuous-
+    coloring meaning when ``coloring="continuous"`` (the default, so
+    every pre-Part-3 caller is unaffected); the design doc's §4.3 keeps
+    the two modes mutually exclusive per layer, not combinable, so
+    nothing here reads ``scaling``/``scaling_*`` when
+    ``coloring="categorical"``.
+
+    ``cmap`` is reused, not duplicated, for the categorical case: an
+    ordered, already-theme-conditioned set of discrete colors (e.g.
+    ``palettes.categorical_cmap(...)``) rather than a gradient --
+    assigned to categories in sorted order, cycling modulo its length
+    exactly the way ``palettes.scatter_cmaps()`` already documents for
+    per-layer ramp assignment. This mirrors the existing division of
+    labour (the widget resolves a palette *name* to concrete hex
+    colors and hands the backend/render path already-concrete colors;
+    ``_scatter_render.py`` never imports ``palettes.py``) rather than
+    adding a second, mode-specific palette field.
+
+    ``colorize_axis`` must be one of ``COLORIZE_AXIS_COLUMNS`` and must
+    (only) be set when ``coloring="categorical"`` -- validated eagerly
+    in ``__post_init__`` so a Part 4 wiring bug surfaces at
+    ``ScatterLayerSpec`` construction, not three calls later inside
+    ``_scatter_render.render_layer``.
     """
     y_axis:        Axis
     polarization:  str
@@ -96,6 +174,36 @@ class ScatterLayerSpec:
     scaling_gamma: float = 1.0
     scaling_vmin:  Optional[float] = None
     scaling_vmax:  Optional[float] = None
+    coloring:      str = "continuous"
+    colorize_axis: Optional[Axis] = None
+
+    def __post_init__(self) -> None:
+        if self.coloring not in ("continuous", "categorical"):
+            raise ValueError(
+                "ScatterLayerSpec.coloring must be 'continuous' or "
+                f"'categorical', got {self.coloring!r}"
+            )
+        if self.coloring == "categorical":
+            if self.colorize_axis is None:
+                raise ValueError(
+                    "ScatterLayerSpec.coloring='categorical' requires "
+                    "colorize_axis to be set"
+                )
+            if self.colorize_axis not in COLORIZE_AXIS_COLUMNS:
+                raise ValueError(
+                    f"Axis.{self.colorize_axis.name} is not a "
+                    "colorizable axis -- see COLORIZE_AXIS_COLUMNS"
+                )
+            if not self.cmap:
+                raise ValueError(
+                    "ScatterLayerSpec.coloring='categorical' requires "
+                    "a non-empty cmap (the per-category color set)"
+                )
+        elif self.colorize_axis is not None:
+            raise ValueError(
+                "ScatterLayerSpec.colorize_axis is only valid when "
+                "coloring='categorical'"
+            )
 
 
 @dataclass(frozen=True)
@@ -169,6 +277,62 @@ class ScatterLayerRender:
     # probe_scatter_region (click-to-exact) remaining the source of an
     # exact reading, exactly as it already is for identity.
     id_grid_value:   Optional[np.ndarray] = None
+
+    # ---- colorize-by-axis (Part 3, 2026-09) ------------------------- #
+    # Populated only when this layer rendered with
+    # ``ScatterLayerSpec.coloring == "categorical"`` (``None``, all
+    # three, for a continuous layer or a skipped/empty categorical one
+    # -- see ``_scatter_render.render_layer``'s no-data-available skip
+    # path, which reports through the existing ``skip_reason``
+    # mechanism rather than adding a second one here; there is no
+    # longer a cardinality-cap skip reason -- see ``category_members``
+    # below and ``_scatter_render.CATEGORY_CAP``'s docstring).
+    #
+    # ``categories`` is the full, sorted, DISPLAY set for this layer's
+    # ``colorize_axis`` in the CURRENT SELECTION -- not narrowed to the
+    # current viewport, and not necessarily the raw distinct values
+    # themselves (see ``category_members``). Category-to-color
+    # assignment (``category_colors``) is keyed off this same list, in
+    # this same order, precisely so a pan/zoom re-render (a new
+    # viewport, same selection) cannot reassign an already-shown
+    # category to a different color -- see
+    # ``_scatter_render._resolve_categories``'s docstring for why
+    # viewport-scoping this would be a real (if subtle) correctness
+    # bug, not a cosmetic one.
+    #
+    # ``category_colors`` maps each entry of ``categories`` to the hex
+    # color ``image`` actually used for it -- Part 4's legend widget
+    # and PNG-export swatches are the intended readers; this is the
+    # "categorical palette" artifact the design doc's Part 3 scope
+    # calls for, carried on the render result rather than recomputed
+    # by the caller (which has no access to ``lyr.cmap``'s modulo-
+    # cycling once a layer's category count exceeds its color count).
+    #
+    # ``category_members`` maps each entry of ``categories`` to the
+    # tuple of RAW underlying values it represents -- always a 1-tuple
+    # containing just that value when the real distinct-value count was
+    # within ``CATEGORY_CAP`` (the common case), or several real values
+    # grouped into one contiguous bucket (see
+    # ``_scatter_render._bin_categories``) when it wasn't -- e.g. an
+    # ngVLA-scale antenna axis with 263 real antennas renders at most
+    # ``CATEGORY_CAP`` buckets like ``"DA05\u2013DA19"``, each mapping
+    # to the ~13 real antenna names it covers. Always populated
+    # alongside ``categories`` on a successful render -- deliberately
+    # NOT ``None`` in the unbucketed case, so a consumer never needs to
+    # branch on "was this binned?" before using it; checking
+    # ``len(category_members[cat]) > 1`` per entry answers that already
+    # where it matters (e.g. a legend tooltip listing real members).
+    # Bucketing a bird's-eye view like this does not cost any real
+    # per-point diagnostic power: identifying the actual antenna/scan/
+    # SPW under the cursor for any given rendered point already goes
+    # through the exact per-row identity mechanism (``IdentityTables``/
+    # the hover-probe id grid above/``probe_scatter_region``), never
+    # through decoding a pixel's color back into a category -- so a
+    # bucketed color only limits how many colors are shown side by
+    # side in one glance, not what can be found out about any one point.
+    categories:       Optional[tuple[str, ...]] = None
+    category_colors:  Optional[dict[str, str]] = None
+    category_members: Optional[dict[str, tuple[str, ...]]] = None
 
 
 @dataclass(frozen=True)

@@ -121,6 +121,39 @@ _SCATTER: dict[str, tuple[tuple[str, ...], ...]] = {
     ),
 }
 
+# ---------------------------------------------------------------------------
+# Categorical palette — colorize-by-axis (Part 3, 2026-09)
+# ---------------------------------------------------------------------------
+#
+# One ordered, distinguishable-color SET (not a ramp): colorize-by-axis
+# assigns one flat color per category, cycling modulo this tuple's
+# length exactly the way ``scatter_cmaps()`` already documents for
+# per-layer ramp assignment -- see ``reader.ScatterLayerSpec``'s
+# ``coloring``/``cmap`` docstring for the call site.
+#
+# Values below are a plain copy of Bokeh's ``Category20`` palette (20
+# hex strings, the same well-known Vega/D3 categorical scheme the
+# design doc's §4.2 names as the reference point for the ~20-category
+# cardinality cap) -- copied as data, not imported from ``bokeh``, so
+# this module keeps its existing zero-dependency footprint. Bokeh IS a
+# hard dependency of cubevis as a whole, so importing it here would not
+# have been a NEW risk exactly, but ``_scatter_render.py`` (which runs
+# in the remote-execution worker subprocess, see that module's
+# docstring) is the eventual consumer of a resolved color set via
+# ``ScatterLayerSpec.cmap`` -- keeping ``palettes.py`` itself
+# dependency-free is what lets it stay safely importable from either
+# side without dragging bokeh into the worker's import graph if some
+# future refactor ever has the worker resolve a palette by name
+# directly instead of receiving already-resolved colors.
+_CATEGORICAL: dict[str, tuple[str, ...]] = {
+    "category20": (
+        "#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c",
+        "#98df8a", "#d62728", "#ff9896", "#9467bd", "#c5b0d5",
+        "#8c564b", "#c49c94", "#e377c2", "#f7b6d2", "#7f7f7f",
+        "#c7c7c7", "#bcbd22", "#dbdb8d", "#17becf", "#9edae5",
+    ),
+}
+
 # Theme defaults.  ``theme`` selects these; an explicit ``raster_cmap`` or
 # ``scatter_cmap`` overrides, and once overridden the theme stops driving
 # that role for the session (see VisibilityPlotter's sticky-override
@@ -134,8 +167,10 @@ _DEFAULTS = {
     # alpha-blended scatter, where the *sparse* end must be the one that
     # fades into the background, and it made light-mode rasters read
     # inside-out for no benefit.
-    "dark":  {"raster": "plasma", "scatter": "polar"},
-    "light": {"raster": "plasma", "scatter": "polar_light"},
+    "dark":  {"raster": "plasma", "scatter": "polar",
+              "categorical": "category20"},
+    "light": {"raster": "plasma", "scatter": "polar_light",
+              "categorical": "category20"},
 }
 
 
@@ -291,6 +326,61 @@ def condition(cmap, theme: str, n: Optional[int] = None,
 
 
 # ---------------------------------------------------------------------------
+# Categorical contrast — colorize-by-axis (Part 3, 2026-09)
+# ---------------------------------------------------------------------------
+
+CATEGORICAL_MIN_DIST = SCATTER_MIN_DIST
+"""Minimum RGB distance for a categorical swatch from the background.
+
+Reuses ``SCATTER_MIN_DIST`` rather than defining a third magic number:
+a categorical layer's pixels are alpha-blended by occupancy exactly the
+way a continuous scatter layer's are (see ``_scatter_render.py``'s
+``_MIN_ALPHA``, shared by both coloring modes), so the same "how much
+does alpha-blending eat into perceived contrast" reasoning that sized
+``SCATTER_MIN_DIST`` applies unchanged here.
+"""
+
+
+def _nudge_for_contrast(
+    hex_color: str, theme: str, min_dist: float = CATEGORICAL_MIN_DIST,
+    max_steps: int = 12,
+) -> str:
+    """Push *hex_color* away from the theme background until it clears
+    *min_dist*, or give up gracefully.
+
+    Category20 is a general-purpose scheme with no particular
+    background in mind -- unlike the raster/scatter ramps above, it is
+    a flat SET of colors, not a continuous ramp, so ``condition()``'s
+    "resample the longest surviving stretch" approach does not apply
+    (there is no stretch to resample; a swatch that's too close to the
+    background needs to move, not be replaced by a *different* swatch
+    that was never it). Instead, a swatch too close to the background
+    is mixed toward whichever extreme (white or black) contrasts with
+    that background, in small steps, stopping as soon as it clears the
+    threshold -- keeping it as close to its original hue as the
+    contrast requirement allows rather than jumping straight to a pure
+    extreme. Mirrors this module's light-vs-dark ramp-direction
+    convention: push toward white against a dark ground, toward black
+    against a light one.
+
+    Falls back to the extreme itself if *max_steps* isn't enough --
+    matches ``condition()``'s own "never crash, degrade gracefully"
+    philosophy for a swatch pathologically close to the background.
+    """
+    bg = _rgb(BACKGROUNDS.get(theme, BACKGROUNDS["dark"]))
+    rgb = _rgb(hex_color)
+    if _dist(rgb, bg) >= min_dist:
+        return hex_color
+    target = (1.0, 1.0, 1.0) if _lum_rgb(bg) < 0.5 else (0.0, 0.0, 0.0)
+    for step in range(1, max_steps + 1):
+        t = step / max_steps
+        mixed = tuple(rgb[i] * (1 - t) + target[i] * t for i in range(3))
+        if _dist(mixed, bg) >= min_dist:
+            return _hex(mixed)
+    return _hex(target)
+
+
+# ---------------------------------------------------------------------------
 # Lookup
 # ---------------------------------------------------------------------------
 
@@ -305,7 +395,8 @@ def scatter_names() -> list[str]:
 
 
 def default_for(role: str, theme: str) -> str:
-    """Default palette name for *role* (``"raster"``/``"scatter"``)."""
+    """Default palette name for *role*
+    (``"raster"``/``"scatter"``/``"categorical"``)."""
     return _DEFAULTS.get(theme, _DEFAULTS["dark"])[role]
 
 
@@ -336,6 +427,52 @@ def scatter_cmaps(name: Optional[str] = None, theme: str = "dark"
     fam = _SCATTER.get(name) or _SCATTER[default_for("scatter", theme)]
     return tuple(condition(cm, theme, min_gap=SCATTER_MIN_DIST)
                  for cm in fam)
+
+
+def categorical_names() -> list[str]:
+    """Selectable categorical (colorize-by-axis) palette names.
+
+    Only ``"category20"`` exists today -- this mirrors
+    ``raster_names()``/``scatter_names()`` so Part 4's axis-picker UI
+    has the same "list available names" entry point to reach for if it
+    ever wants one, rather than hard-coding the single name it happens
+    to know about right now.
+    """
+    return sorted(_CATEGORICAL)
+
+
+def categorical_cmap(name: Optional[str] = None, theme: str = "dark",
+                      n: Optional[int] = None) -> tuple[str, ...]:
+    """Ordered, mutually- and background-distinguishable color set for
+    colorize-by-axis.  ``None`` name takes the theme default.
+
+    Each swatch is independently contrast-checked against *theme*'s
+    background via ``_nudge_for_contrast`` -- unlike ``raster_cmap``/
+    ``scatter_cmaps``, there is no ramp to resample here, just a set of
+    flat colors, so each one is individually pushed clear of the
+    background rather than the whole set being re-derived.
+
+    *n*, if given, returns exactly *n* colors, cycling modulo the base
+    palette's length -- the same "index modulo" contract
+    ``scatter_cmaps()`` already documents for a scatter with more
+    layers than its family has ramps, applied here to categories
+    instead of layers.  ``None`` (the default) returns the full
+    (contrast-adjusted) base palette.
+
+    Unknown *name* falls back to the theme default rather than
+    raising, matching ``raster_cmap``'s precedent: a palette name is
+    cosmetic, and failing a whole colorize-by-axis render over one
+    would be a worse outcome than drawing it in the default colors.
+    """
+    if name is None:
+        name = default_for("categorical", theme)
+    base = _CATEGORICAL.get(name) or _CATEGORICAL[default_for("categorical", theme)]
+    adjusted = tuple(_nudge_for_contrast(c, theme) for c in base)
+    if n is None:
+        return adjusted
+    if n <= 0:
+        return ()
+    return tuple(adjusted[i % len(adjusted)] for i in range(n))
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +533,18 @@ def check_background_contrast() -> list[str]:
     for name, cmap in _RASTER.items():
         for theme in ("dark", "light"):
             audit(f"raster {name!r}", cmap, theme, RASTER_MIN_DIST)
+    for name, swatches in _CATEGORICAL.items():
+        for theme in ("dark", "light"):
+            for i, swatch in enumerate(swatches):
+                nudged = _nudge_for_contrast(swatch, theme)
+                bg = _rgb(BACKGROUNDS[theme])
+                d = _dist(_rgb(nudged), bg)
+                if d < CATEGORICAL_MIN_DIST - 1.5:
+                    bad.append(
+                        f"categorical {name!r}[{i}] ({theme}): closest "
+                        f"colour is {d:.1f} RGB units from the {theme} "
+                        f"background, want >= {CATEGORICAL_MIN_DIST:.0f}"
+                    )
     for fam, cmaps in _SCATTER.items():
         theme = "light" if fam.endswith("_light") else "dark"
         for i, cmap in enumerate(cmaps):

@@ -1,8 +1,9 @@
 # visplot Scatter "Colorize by Axis" — Design Document
 
-**Status:** v4 — Parts 1–2 complete (design + backend plumbing, plus a
-performance follow-up); Part 5 (statistical/rflag-style colorization)
-scoped at the design level; Parts 3–4 not started.
+**Status:** v5 — Parts 1–3 complete (design, backend plumbing, and
+rendering pipeline — the latter revised once already, see §4.2/§9's v5
+entry); Part 5 (statistical/rflag-style colorization) scoped at the
+design level; Part 4 not started.
 **This is a living document.** Update it as later parts surface new
 information or force a decision to change; don't create a competing copy.
 See the changelog at the bottom for revision history.
@@ -206,32 +207,85 @@ distinguishable, and this matches a known usability limitation of PlotMS's
 own baseline colorization. Worth confirming against your own typical dataset
 sizes before treating this as final.
 
-### 4.2 Cardinality cap — *proposed default, now with real data behind it*
-Cap at **~20 categories** (comparable to a standard categorical palette like
-Bokeh's Category20). If the current selection resolves to more distinct
-values than the cap for the chosen axis, refuse with a message asking the
-user to narrow the selection, rather than silently bucketing extras into an
-"other" category. Auto-bucketing is a reasonable future enhancement, but
-adds complexity (legend semantics for "other") not needed for a first version.
+### 4.2 Cardinality cap — *firm, revised in Part 3 (see v5 changelog)*
+**Superseded design, kept for history:** the original plan below was to cap
+at ~20 categories and *refuse* a selection that resolves to more, asking the
+user to narrow it. Part 3 replaced the refusal with automatic binning before
+writing any rendering code, once real measurement showed refusal would make
+the feature routinely unusable on large modern arrays (ngVLA: up to 263
+antennas) — see immediately below for what replaced it and why, and
+`visplot-colorize-by-axis-handoff-part4.md` for the full numeric evidence.
 
-**Part 2 finding — real cardinality, `sis14_twhya_calibrated_flagged` (a
+**What actually landed:** the cap is still ~20 (`_scatter_render.
+CATEGORY_CAP`), but exceeding it now means *auto-binning* into at most 20
+contiguous, near-equal groups (`_scatter_render._bin_categories`) — e.g. an
+ngVLA-scale Antenna1 selection with 263 real antennas renders as 20 buckets
+of ~13 antennas each, labelled by range (`"DA05–DA19"`), never a refusal.
+Real per-point identity is unaffected by bucketing: it's resolved through the
+existing exact hover-probe/click-to-region mechanism (`IdentityTables`,
+`probe_scatter_region`), which was never derived from a rendered pixel's
+color in the first place — bucketing only limits how many colors are shown
+side by side in one glance.
+
+**Why the cap is ~20 at all, now that refusal is gone:** two independent
+constraints that happen to land near the same number, not one:
+
+1. **Legibility.** More than ~20 simultaneous legend swatches is hard for a
+   person to actually use, independent of how many real categories exist
+   underneath. This doesn't move as antenna counts grow — it's a human-
+   perception ceiling, not a data-size one. (`palettes.categorical_cmap()`
+   supplies exactly 20 colors, matching Bokeh's Category20, for the same
+   reason.)
+2. **Rendering cost.** Measured directly (400×300 canvas, 1M rows,
+   JIT-warmed, best-of-3): the categorical aggregation itself
+   (`ds_agg.by`) is cheap (~0.14ms/category), but shading it dominates and
+   scales linearly in category count. The original implementation used
+   Datashader's own `tf.shade(agg, color_key=...)`, measured at
+   ~1.5ms/category — extrapolated to a 1920×1080 canvas at K=263 (ngVLA's
+   real antenna count), that's **~6.8 seconds**, and the backing
+   aggregation array alone (`4 bytes × pixels × K`, confirmed exact) is
+   **~2.2 GB, transient, per layer**. Both costs are driven by
+   `canvas_pixels × K`, confirmed independent of how much data is actually
+   plotted (50K vs. 8M rows changed shading time under 5%), so a sparse
+   selection gets no discount. Binning down to a constant cap makes cost
+   independent of true antenna count instead: a 26-antenna MS and an
+   ngVLA 263-antenna one now cost the same to render.
+
+This was never really a wire/message-overhead limit, despite an earlier
+framing of it that way in discussion — the returned `image` is a flat H×W
+array regardless of category count, and `categories`/`category_colors`/
+`category_members` stay tiny (a few hundred bytes even at K=263) since none
+of what crosses a process or wire boundary scales with this number. See
+`_scatter_render.CATEGORY_CAP`'s docstring for the full numbers this section
+summarizes.
+
+**Also landed alongside binning, for the same cost reason:** categorical
+shading itself switched from Datashader's `tf.shade(color_key=...)` (a
+per-pixel color *blend* across whichever categories land there) to a
+hand-rolled winner-take-all (`_scatter_render._argmax_shade`) — measured
+4–9× faster at this cardinality range (the speedup *grows* with category
+count), and, independently of speed, the only approach where a legend
+actually means something: a blended pixel's color generally matches no
+single swatch exactly, which is a real defect once Part 4 puts a legend on
+screen to compare against. Every pixel `_argmax_shade` produces is exactly
+one of the assigned colors, verified by direct test, never a blend.
+
+**Part 2/3 finding — real cardinality, `sis14_twhya_calibrated_flagged` (a
 modest 26-antenna, single-SPW, single-observation ALMA test MS):**
 
 | Axis | Distinct values | vs. ~20 cap |
 |---|---|---|
 | Scan | 17 | under, but not by much |
-| Antenna1 | 20 | **at the cap** |
-| Antenna2 | 20 | **at the cap** |
+| Antenna1 | 20 | **at the cap** (unbinned — exactly 20 real antennas) |
+| Antenna2 | 20 | **at the cap** (unbinned) |
 | Correlation | 2 | well under (but degenerate per layer, see §4.1) |
 | SPW | 1 | untested — this MS has only one SPW |
 
-Antenna1/Antenna2 sitting exactly at the proposed cap on a fairly small
-26-antenna array is a real signal, not a hypothetical: full ALMA
-configurations run 43–50+ antennas, and VLA runs 27. Antenna colorization
-will hit the "refuse and ask to narrow" path routinely in normal use, not
-as an edge case — worth deciding now whether that's acceptable UX or
-whether Antenna1/Antenna2 need a higher or axis-specific cap (open question
-carried to §8).
+Antenna1/Antenna2 sitting exactly at the cap on this modest 26-antenna array
+no longer risks the "refuse and ask to narrow" experience the original plan
+would have hit routinely — it renders 20 real (unbucketed) antenna colors
+today, and would transparently bucket a larger array (full ALMA at 43–50+
+antennas, ngVLA at up to 263) rather than degrade to a refusal.
 
 ### 4.3 Interaction with existing scaling controls — *firm*
 Enabling colorize-by-axis on a layer disables/hides that layer's continuous
@@ -267,8 +321,8 @@ mapping Part 3 needs.
 |---|---|---|---|
 | 1 | Design + this document + Part 2 handoff | — | **This session** |
 | 2 | Backend metadata plumbing | `msv2_backend.py`, `msv4_backend.py`, `reader.py` | **Done**, including a 2026-09 performance follow-up — see Part 3 handoff and §3 |
-| 3 | Rendering pipeline: categorical aggregation, new dataclass fields, categorical palette | `_scatter_render.py`, `reader.py`, `palettes.py` | Not started — see §7.7 for a Part 5 touchpoint worth building in now |
-| 4 | UI wiring: axis picker, mutual-exclusivity logic, category legend widget, export swatches | `visibility_plotter.py`, `panel_spec.py`, `png_export.py` | Not started — see §7.7 for a Part 5 touchpoint worth building in now |
+| 3 | Rendering pipeline: categorical aggregation, new dataclass fields, categorical palette | `_scatter_render.py`, `reader.py`, `palettes.py` | **Done**, including a same-session revision replacing the cardinality-cap refusal with auto-binning and switching categorical shading to winner-take-all — see §4.2 and the Part 4 handoff |
+| 4 | UI wiring: axis picker, mutual-exclusivity logic, category legend widget, export swatches | `visibility_plotter.py`, `panel_spec.py`, `png_export.py` | Not started — see §7.7 for a Part 5 touchpoint worth building in now, and the Part 4 handoff for what `category_members`-aware bucketing means for the legend widget specifically |
 | 5 | Statistical/rflag-style colorization (raster + scatter) — see §7 | `msv2_backend.py`, `msv4_backend.py`, `_scatter_render.py`, `reader.py`, `axes.py`, `visibility_plotter.py` | **Scoped (design only), this session** — likely needs its own backend/render/UI sub-passes once started, the same way Parts 2–4 broke up the original feature |
 
 Each part produces a handoff document for the next (scoped work order +
@@ -507,21 +561,25 @@ with the decision recorded; add new ones as they surface.
 - [ ] Is Baseline really out of scope, or is there a workflow where it's
       still wanted despite high cardinality (§4.1)?
 - [x] ~~Is 20 categories the right cap, or should it vary by axis (§4.2)?~~
-      Not resolved, but now backed by real numbers: Antenna1/Antenna2 sit
-      *at* 20 on a modest 26-antenna array (§4.2) — Part 3/4 should decide
-      whether antenna axes get a higher/separate cap before this becomes a
-      routine "selection refused" experience.
+      Resolved in Part 3: the cap stays ~20 (a legibility ceiling, not an
+      antenna-count-dependent one), but exceeding it now auto-bins rather
+      than refuses (§4.2) — so no axis needs a higher or separate cap; a
+      263-antenna ngVLA selection costs the same to render as a 26-antenna
+      one.
 - [ ] Per-layer colorization confirmed as the desired UX, not plot-wide (§4.4)?
 - [x] ~~Any axis in §4.1 that Part 2 finds materially harder to plumb than
       the others — should it be dropped or deferred to a v2?~~ Yes:
       Observation and Intent, both dropped (§4.1). Correlation plumbed but
       found degenerate for a single-polarization layer (§4.1) — worth a
       decision on whether it's worth exposing in the Part 4 UI at all.
-- [ ] New: is a single-dtype (all-`str` or all-`int`) `spw` column worth
+- [x] ~~New: is a single-dtype (all-`str` or all-`int`) `spw` column worth
       normalizing to at the Part 3 boundary, given `_partition_spw_ident`
-      can return either depending on what the store provides? Part 2 left
-      the native type as-is (mixed dtype possible across partitions) rather
-      than force a cast nothing downstream needed yet.
+      can return either depending on what the store provides?~~ Resolved
+      in Part 3: `_scatter_render._resolve_categories` string-normalizes
+      before comparison, so the same real SPW merges into one category
+      regardless of which type a given partition reported it as. No
+      backend-side change needed — the normalization lives entirely at the
+      rendering boundary.
 
 ---
 
@@ -552,6 +610,24 @@ with the decision recorded; add new ones as they surface.
   feasibility) and `visplot-statistics-dataflow-notes.md` (background
   rationale on which statistics can ride "for free" on the existing data
   load and which can't — explicitly not an active goal of any current part).
+- **v5** — Part 3 complete: categorical aggregation, new `ScatterLayerSpec`/
+  `ScatterLayerRender` fields, and a categorical palette (`_scatter_render.py`,
+  `reader.py`, `palettes.py`), verified against real MSv2 and MSv4 data
+  (including the MSv4-only OPT-B cross-partition path). Revised once in the
+  same session, before any of it reached Part 4: the original §4.2
+  "refuse over cap" plan was replaced with automatic contiguous binning
+  (`_bin_categories`), and categorical shading switched from Datashader's
+  blend to a hand-rolled winner-take-all (`_argmax_shade`), after direct
+  measurement showed the original plan would make the feature nearly
+  unusable at ngVLA's real antenna count (263) — both on cost grounds (a
+  263-category blend at 1920×1080 measured out to ~6.8s and ~2.2GB
+  transient, per layer) and, independently, on correctness grounds (a
+  blended pixel color generally matches no single legend swatch, which
+  defeats the point of a legend). See §4.2 for the full numbers and
+  `visplot-colorize-by-axis-handoff-part4.md` for what this means for
+  Part 4's legend widget. The `spw` mixed-dtype open question from §8 was
+  also resolved in Part 3 (string-normalize at the rendering boundary, no
+  backend change needed).
 - **v4** — Part 2 performance follow-up (§3): the original scan/antenna
   broadcast measurably regressed a pre-existing timing test; root-caused
   and fixed in two stages (a cached per-MS/per-partition lookup mechanism,

@@ -1046,6 +1046,17 @@ class CommMgr( Model, BokehInit ):
                 ### its own (already-closed, local) transport above.
                 if self._transport is transport:
                     self._reset_for_reconnect(clean_close=clean_close)
+                    if clean_close is False and self._reconnect_timeout is None:
+                        code_fn = getattr(transport, 'close_code', None)
+                        code = code_fn() if callable(code_fn) else None
+                        logger.warning(
+                            f"The browser connection ended without a close message "
+                            f"(WebSocket close code {code}). That is what a suspended computer "
+                            f"or a dropped network looks like, so the session is waiting "
+                            f"indefinitely for the browser to reconnect. If you closed the tab, "
+                            f"press Ctrl-C to stop. To have this case end the session on its "
+                            f"own, set reconnect_timeout (seconds) on the CommMgr.")
+
                 if self._on_connection_closed:
                     try:
                         self._on_connection_closed(shutdown_reason, shutdown_description)

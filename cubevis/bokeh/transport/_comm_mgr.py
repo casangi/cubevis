@@ -256,6 +256,21 @@ class CommMgr( Model, BokehInit ):
         self._pending_requests: Dict[str, Tuple[str, str, Dict[str, Any], Callable]] = {}
         self._send_queue: Dict[str, List[Tuple[str, Dict[str, Any], Optional[Callable]]]] = {}  # comm_id => [(message_id, message, callback)]
         self._lock = asyncio.Lock()
+        # comm_id => asyncio.Lock, held around incoming-request handler
+        # execution + reply send (see CommMgr.open()'s `lock` parameter).
+        # Distinct from self._lock above, which only protects this
+        # object's own bookkeeping dicts. This one enforces the
+        # ordered-processing half of the original design intent ("Comms
+        # opened for non-blocking work; multiple message types can
+        # share one Comm and stay synchronous in send order") for
+        # incoming (usually j2p) requests, once a handler is async and
+        # no longer serialized simply by blocking the event loop the
+        # way every handler does today. Two (or more) comm_ids can be
+        # made to share one Lock by passing the same instance to
+        # multiple open() calls -- see that method's docstring -- for
+        # the case a single Comm's own ordering can't cover: different
+        # comms whose handlers touch the same underlying object.
+        self._comm_locks: Dict[str, asyncio.Lock] = {}
 
         # State management
         self._state = AppState.CONSTRUCTED
@@ -442,13 +457,45 @@ class CommMgr( Model, BokehInit ):
         self._reconnect_grace_period = None if value is None else float(value)
         logger.debug(f"reconnect_grace_period set to {self._reconnect_grace_period}")
 
-    def open(self, comm_id: Optional[str] = None, squash_queue: bool = False, description: Optional[str] = '' ) -> Comm:
+    def open(self, comm_id: Optional[str] = None, squash_queue: bool = False,
+              description: Optional[str] = '',
+              lock: Optional[asyncio.Lock] = None ) -> Comm:
         """
         Open a new Comm (communication category).
 
         Args:
             comm_id: Unique identifier for this comm
             squash_queue: If True, only keep most recent queued message per message_id
+            lock: Serializes incoming-request handler execution (handler
+                call through reply send) for this comm. Defaults to a
+                fresh, comm-private Lock -- the common case, where a
+                Comm's own state is not shared with any other Comm, and
+                where the per-comm_id send-side throttle (CommMgr.send's
+                own `if comm_id in self._pending: queue it` check,
+                mirrored in comm_mgr.ts) already keeps everything on
+                that one comm strictly ordered regardless of message
+                type, making this default lock mostly a no-op layered
+                on an already-ordered stream.
+
+                Pass an existing Lock, shared with one or more OTHER
+                open() calls, when those Comms' handlers are known to
+                touch the same underlying Python object -- e.g. iclean's
+                Cube ('cube mask control') and the ImagePipe it owns
+                ('image cube updates'), or a VisibilityPlot's own
+                `self._comm` and `self._flag_comm`. The per-comm_id
+                send-side throttle does NOT cover this case (each comm's
+                pending-request tracking is independent), so without an
+                explicitly shared lock, two different comms' handlers
+                CAN run concurrently against the same object once either
+                is made async (see _handle_request) -- something that
+                cannot happen today only because every handler is fully
+                synchronous and therefore already serializes everything,
+                by accident, by blocking the one shared event loop.
+                CommMgr has no way to discover this sharing on its own
+                (there is nothing in a Comm's own state that reveals
+                what Python object its handlers close over) -- only the
+                caller opening related comms knows, so this is an
+                explicit opt-in rather than something inferred here.
 
         Returns:
             Comm object for this category
@@ -459,6 +506,11 @@ class CommMgr( Model, BokehInit ):
 
             # For critical data (no squashing)
             data_comm = mgr.open('data_transfer', squash_queue=False)
+
+            # Two comms whose handlers share one Python object's state
+            shared_lock = asyncio.Lock()
+            control_comm = mgr.open('cube_control', lock=shared_lock)
+            image_comm   = mgr.open('image_updates', lock=shared_lock)
         """
         if comm_id is None:
             comm_id = str(uuid4( ))
@@ -472,6 +524,7 @@ class CommMgr( Model, BokehInit ):
         self._comms[comm_id] = comm
         self._handlers[comm_id] = {}
         self._send_queue[comm_id] = []
+        self._comm_locks[comm_id] = lock if lock is not None else asyncio.Lock()
 
         #logger.debug(f"Opened comm: {comm_id} (squash_queue={squash_queue})")
         return comm
@@ -482,6 +535,15 @@ class CommMgr( Model, BokehInit ):
             self._comms[comm.comm_id] = comm
             self._handlers[comm.comm_id] = {}
             self._send_queue[comm.comm_id] = []
+            # This path (a Comm constructed directly rather than via
+            # open()) has no way to receive a caller-supplied shared
+            # lock -- Comm.__init__ takes no such argument. A
+            # comm-private lock here is the same safe default open()
+            # uses when no lock is passed; a caller that needs this
+            # comm to share state-serialization with another one
+            # should go through open() instead, or set
+            # comm.mgr._comm_locks[comm.comm_id] explicitly afterward.
+            self._comm_locks[comm.comm_id] = asyncio.Lock()
 
     def close(self, comm: Comm):
         """Close a comm and clean up its resources."""
@@ -506,6 +568,12 @@ class CommMgr( Model, BokehInit ):
             del self._send_queue[comm_id]
         if comm_id in self._comms:
             del self._comms[comm_id]
+        # Only removes this comm_id's reference to the lock -- if it was
+        # shared with another comm_id (see open()'s `lock` parameter),
+        # that other comm_id's own entry keeps the same Lock object
+        # alive and usable.
+        if comm_id in self._comm_locks:
+            del self._comm_locks[comm_id]
 
         logger.debug(f"Closed comm: {comm_id}")
 
@@ -616,6 +684,7 @@ class CommMgr( Model, BokehInit ):
     async def _send_immediate(self, comm_id: str, message_id: str, message: Dict[str, Any],
                               request_id: str, callback: Optional[Callable]):
         """Send a message immediately (assumes lock is held or not needed)."""
+        from ._low_level_transport import TransportNotConnectedError
         msg = {
             'comm_id': comm_id,
             'message_id': message_id,
@@ -644,8 +713,12 @@ class CommMgr( Model, BokehInit ):
         try:
             await self._transport.send_message(msg)
             logger.debug(f"Sent message: {comm_id}.{message_id} (request_id={request_id})")
-        except (ConnectionClosedError, ConnectionClosedOK) as e:
-            ### The socket died between is_connected( ) and the write. Undo the
+        except (ConnectionClosedError, ConnectionClosedOK, TransportNotConnectedError) as e:
+            ### The socket died between is_connected( ) and the write (the
+            ### websockets-library exceptions), or send_message() itself
+            ### found self._connected already False (TransportNotConnectedError,
+            ### the same "peer is gone, not a bug" signal from a slightly
+            ### earlier point in the same race) -- undo the
             ### pending marker and re-queue so the reconnect path replays it.
             logger.debug(f"Connection closed while sending {comm_id}.{message_id}: {e}")
             self._pending.pop(comm_id, None)
@@ -742,6 +815,30 @@ class CommMgr( Model, BokehInit ):
         shutdown_description = ""
         should_shutdown = False
 
+        # Local reference to THIS invocation's own transport, captured
+        # once it exists and used for everything below instead of
+        # re-reading self._transport. self._transport itself is left
+        # alone and keeps meaning "the current transport" for everyone
+        # else (_handle_request's send_message calls, in particular,
+        # genuinely want the most-recently-established one) -- this is
+        # only about making THIS invocation's own setup/run/cleanup
+        # sequence immune to that shared attribute changing under it.
+        #
+        # Why this matters: a new connection can arrive (and run its
+        # own process_messages() call) while this one is still inside
+        # an `await` further down -- common when the frontend's own
+        # heartbeat declares a connection dead and starts reconnecting
+        # aggressively (see low_level_transport.ts's declareDead()),
+        # which can fire several overlapping connection attempts in
+        # quick succession. That other invocation's own "retire the old
+        # transport" branch below calls _reset_for_reconnect(), which
+        # sets self._transport = None. If THIS invocation then reads
+        # self._transport again (rather than its own local reference)
+        # to create its run() task, it finds None instead of the
+        # transport it just built and connected --
+        # AttributeError: 'NoneType' object has no attribute 'run'.
+        transport = None
+
         try:
             if self.transport_type == 'websocket':
                 if not websocket:
@@ -783,12 +880,16 @@ class CommMgr( Model, BokehInit ):
                     websocket,
                     abort=transport_abort
                 )
+                # Captured immediately -- see this method's own comment
+                # above for why everything below uses `transport`, not
+                # `self._transport`, from here on.
+                transport = self._transport
 
                 # Set callback
-                self._transport.set_message_callback(self._route_message)
+                transport.set_message_callback(self._route_message)
 
                 # Connect (performs handshake)
-                await self._transport.connect()
+                await transport.connect()
 
                 self._initialized = True
                 self.state = AppState.RUNNING
@@ -803,12 +904,18 @@ class CommMgr( Model, BokehInit ):
                 # Already initialized
                 if self.state == AppState.CONSTRUCTED:
                     await self.initialize( )
+                # initialize() (or an earlier call to it) is what sets
+                # self._transport for these transport types -- captured
+                # here the same way as the websocket branch above, once
+                # it's actually available, so the rest of this method
+                # is equally immune to a concurrent reset.
+                transport = self._transport
 
             # Flush any queued messages
             await self._flush_all_queues()
 
             # Run transport event loop alongside shutdown monitor
-            transport_task = asyncio.create_task(self._transport.run())
+            transport_task = asyncio.create_task(transport.run())
             shutdown_task = asyncio.create_task(self._shutdown_event.wait())
 
             # Wait for either transport to complete or shutdown
@@ -876,9 +983,19 @@ class CommMgr( Model, BokehInit ):
             ### it. A close frame means the browser deliberately went away (tab
             ### closed or reloaded); its absence means the peer vanished (sleep,
             ### network loss). The two want very different reconnect policies.
+            ###
+            ### Uses the local `transport` reference (see this method's own
+            ### top-of-function comment), not self._transport -- by the time
+            ### this finally block runs, self._transport may already belong
+            ### to a completely different, later connection attempt if one
+            ### raced in while this invocation was running. Querying and
+            ### closing THAT one here would be wrong twice over: it reports
+            ### the wrong connection's close reason, and closing a transport
+            ### some other, still-active process_messages() call owns out
+            ### from under it.
             clean_close = None
-            if self._transport is not None:
-                probe = getattr(self._transport, 'close_was_clean', None)
+            if transport is not None:
+                probe = getattr(transport, 'close_was_clean', None)
                 if callable(probe):
                     try:
                         clean_close = probe()
@@ -886,9 +1003,9 @@ class CommMgr( Model, BokehInit ):
                         logger.exception("Error querying transport close status")
 
             # Clean up transport (make sure it's async)
-            if self._transport:
+            if transport:
                 try:
-                    await self._transport.close()
+                    await transport.close()
                 except Exception as e:
                     logger.error(f"Error closing transport: {e}")
 
@@ -912,7 +1029,23 @@ class CommMgr( Model, BokehInit ):
                 ### how reconnection was lost. Only shutdown( ) -- reached via
                 ### the should_shutdown branch above -- may call it.
                 ###
-                self._reset_for_reconnect(clean_close=clean_close)
+                ### Guarded on self._transport is transport (not called
+                ### unconditionally) for the same reason the top of this
+                ### method now captures `transport` locally in the first
+                ### place: a newer connection can have already replaced
+                ### self._transport with its own, live transport while
+                ### THIS invocation was still finishing up (e.g. still
+                ### inside the earlier `await asyncio.wait(...)`) --
+                ### unconditionally resetting here would null out that
+                ### other, still-active connection's transport and
+                ### bump self._connection_generation out from under it,
+                ### even though nothing is actually wrong with it. If
+                ### self._transport has already moved on, whichever
+                ### invocation owns it now is responsible for its own
+                ### eventual reset -- this invocation's job ends with
+                ### its own (already-closed, local) transport above.
+                if self._transport is transport:
+                    self._reset_for_reconnect(clean_close=clean_close)
                 if self._on_connection_closed:
                     try:
                         self._on_connection_closed(shutdown_reason, shutdown_description)
@@ -1193,6 +1326,7 @@ class CommMgr( Model, BokehInit ):
 
     async def _handle_request(self, msg: Dict[str, Any]):
         """Handle request from frontend."""
+        from ._low_level_transport import TransportNotConnectedError
         comm_id = msg.get('comm_id')
         message_id = msg.get('message_id')
         request_id = msg.get('request_id')
@@ -1219,85 +1353,109 @@ class CommMgr( Model, BokehInit ):
         # Call handler
         handler = self._handlers[comm_id][message_id]
 
-        try:
-            # Check if handler expects context parameter
-            sig = inspect.signature(handler)
-            if len(sig.parameters) >= 2:
-                try:
-                    # Handler accepts (message, context)
-                    result = handler(msg['message'], context=self._context)
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Handler {handler.__name__!r} failed with {type(e).__name__}: {e}"
-                    ) from None
-            else:
-                # Handler only accepts message
-                result = handler(msg['message'])
+        ### Held from just before calling the handler through the reply
+        ### (or error reply) actually being sent -- this comm_id's own
+        ### full request/response cycle is the critical section, not
+        ### just the handler call. Defaults to a comm-private Lock (see
+        ### open()'s `lock` parameter) unless this comm was explicitly
+        ### opened sharing one with another comm known to touch the same
+        ### underlying object. setdefault as a defensive fallback only --
+        ### both open() and _register_comm() already populate this for
+        ### every comm_id that exists, so the dict should never actually
+        ### be missing one; this just avoids a KeyError over sharing
+        ### self._lock (the bookkeeping lock above, unrelated to this)
+        ### if that invariant is ever violated.
+        lock = self._comm_locks.setdefault(comm_id, asyncio.Lock())
 
-            if inspect.isawaitable(result):
-                result = await result
+        async with lock:
+            try:
+                # Check if handler expects context parameter
+                sig = inspect.signature(handler)
+                if len(sig.parameters) >= 2:
+                    try:
+                        # Handler accepts (message, context)
+                        result = handler(msg['message'], context=self._context)
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Handler {handler.__name__!r} failed with {type(e).__name__}: {e}"
+                        ) from None
+                else:
+                    # Handler only accepts message
+                    result = handler(msg['message'])
 
-            # Send response if there's a request_id
-            if request_id and self._transport:
-                reply = {
-                    'comm_id': comm_id,
-                    'message_id': message_id,
-                    'request_id': request_id,
-                    'message': result,
-                    'direction': self._peer_direction
-                }
+                if inspect.isawaitable(result):
+                    result = await result
 
-                if getattr(self, '_pending_user_shutdown', False):
-                    ### transport_control is used to manage transport
-                    reply['transport_control'] = 'SHUTDOWN-NOW'
-
-                await self._transport.send_message(reply)
-
-        except (ConnectionClosedError, ConnectionClosedOK) as e:
-            # The handler itself succeeded -- this is the reply-send
-            # racing the peer already going away (browser tab closed,
-            # laptop slept, etc.), not a handler bug. Same benign
-            # category _send_request already special-cases (see its own
-            # except (ConnectionClosedError, ConnectionClosedOK) clause
-            # above) -- there is no peer left to send an error reply to,
-            # so unlike the except Exception branch below, this
-            # deliberately does NOT call report_error() or retry the
-            # send: doing so would just fail again the same way, noisily,
-            # for a condition that was never actually an error.
-            logger.debug(
-                f"Connection closed while replying to {comm_id}.{message_id}: {e}"
-            )
-
-        except Exception as e:
-            logger.error(f"Error in handler {comm_id}.{message_id}: {e}")
-            traceback.print_exc()
-            self.report_error(e, fatal=False)
-
-            if request_id and self._transport:
-                try:
-                    await self._transport.send_message({
+                # Send response if there's a request_id
+                if request_id and self._transport:
+                    reply = {
                         'comm_id': comm_id,
                         'message_id': message_id,
                         'request_id': request_id,
-                        'message': {
-                            'error': str(e),
-                            'traceback': traceback.format_exc()
-                        },
+                        'message': result,
                         'direction': self._peer_direction
-                    })
-                except (ConnectionClosedError, ConnectionClosedOK) as send_exc:
-                    # The handler had a genuine bug (already recorded
-                    # above via report_error) AND the peer is also
-                    # already gone -- nothing left to deliver the error
-                    # reply to. Log quietly and stop; deliberately does
-                    # NOT report_error() this too, or a single real
-                    # handler bug would show up twice in self._errors
-                    # (once for the real cause, once for the unrelated
-                    # fact that telling the client about it also failed).
-                    logger.debug(
-                        f"Connection closed while sending error reply for "
-                        f"{comm_id}.{message_id}: {send_exc}"
-                    )
+                    }
+
+                    if getattr(self, '_pending_user_shutdown', False):
+                        ### transport_control is used to manage transport
+                        reply['transport_control'] = 'SHUTDOWN-NOW'
+
+                    await self._transport.send_message(reply)
+
+            except (ConnectionClosedError, ConnectionClosedOK, TransportNotConnectedError) as e:
+                # The handler itself succeeded -- this is the reply-send
+                # racing the peer already going away (browser tab closed,
+                # laptop slept, etc.), not a handler bug. Same benign
+                # category _send_request already special-cases (see its own
+                # except (..., TransportNotConnectedError) clause above) --
+                # there is no peer left to send an error reply to, so unlike
+                # the except Exception branch below, this deliberately does
+                # NOT call report_error() or retry the send: doing so would
+                # just fail again the same way, noisily, for a condition
+                # that was never actually an error.
+                #
+                # TransportNotConnectedError (2026-09) added alongside the
+                # websockets-library exceptions after a real trace showed
+                # this exact reply-send racing a stale-connection teardown
+                # get reported as "Error reported (non-fatal)" here instead
+                # of being recognized as this same benign case -- send_message()
+                # raises this (not ConnectionClosedError/OK) when it finds
+                # self._connected already False, a half-step earlier in the
+                # same kind of race.
+                logger.debug(
+                    f"Connection closed while replying to {comm_id}.{message_id}: {e}"
+                )
+
+            except Exception as e:
+                logger.error(f"Error in handler {comm_id}.{message_id}: {e}")
+                traceback.print_exc()
+                self.report_error(e, fatal=False)
+
+                if request_id and self._transport:
+                    try:
+                        await self._transport.send_message({
+                            'comm_id': comm_id,
+                            'message_id': message_id,
+                            'request_id': request_id,
+                            'message': {
+                                'error': str(e),
+                                'traceback': traceback.format_exc()
+                            },
+                            'direction': self._peer_direction
+                        })
+                    except (ConnectionClosedError, ConnectionClosedOK, TransportNotConnectedError) as send_exc:
+                        # The handler had a genuine bug (already recorded
+                        # above via report_error) AND the peer is also
+                        # already gone -- nothing left to deliver the error
+                        # reply to. Log quietly and stop; deliberately does
+                        # NOT report_error() this too, or a single real
+                        # handler bug would show up twice in self._errors
+                        # (once for the real cause, once for the unrelated
+                        # fact that telling the client about it also failed).
+                        logger.debug(
+                            f"Connection closed while sending error reply for "
+                            f"{comm_id}.{message_id}: {send_exc}"
+                        )
 
         # Fire any shutdown that was requested during handler execution,
         # now that the response (if any) has been sent.

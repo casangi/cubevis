@@ -5,6 +5,59 @@ modified files in this delivery plus one new test file. Written so a
 future session (or a colleague) can pick this up without re-deriving the
 reasoning from a diff.
 
+## Post-delivery bug: RadioButtonGroup orphaned-twin crash (fixed)
+
+**Symptom:** `Uncaught TypeError: Cannot read properties of undefined
+(reading 'forEach')`, thrown from Bokeh's own (minified)
+`RadioButtonGroupView._update_active()`, reproduced by: select
+Categorical in `colorize_controls()`'s mode switch, press Plot ▶.
+
+**Root cause:** the exact same "orphaned twin view" issue this
+codebase already diagnosed and fixed for `Select` (see
+`__cvInstallSelectViewGuard`'s own extensive comments,
+2026-09 tabs-orphan investigation) — a widget gets a second,
+never-rendered view the first time its containing tab is dynamically
+added to the sidebar's `Tabs`. Bokeh's `RadioButtonGroupView`
+(`ToggleButtonGroupView` base, confirmed against the actual Bokeh 3.10
+`.d.ts`: `protected _buttons: HTMLElement[]`, populated in `render()`)
+calls `_update_active()` from a signal listener on `model.active`,
+unconditionally doing `this._buttons.forEach(...)` — same shape as
+`SelectView._update_value()`'s unconditional `this.input_el` use that
+the existing guard already patches. `colorize_controls()` is the
+**first** thing to put a `RadioButtonGroup` inside one of these
+dynamically-added gear tabs, so the pre-existing guard (Select-only)
+never had reason to cover it before.
+
+**Fix:** generalized `__cvInstallSelectViewGuard` (defined identically
+in `gear_click_js` and `_do_plot_js` — both updated identically, same
+as the original) to also find-and-patch
+`RadioButtonGroupView.prototype._update_active`, guarding on
+`this._buttons` the same way the existing code guards on
+`this.input_el`. Two independent flags
+(`__cvSelectViewGuarded`/`__cvRadioButtonGroupViewGuarded`) rather than
+one, so whichever widget type has a live instance available on a given
+call gets patched immediately, and the other still gets a chance on a
+later call.
+
+**Separate, unrelated issue reported alongside this one:** changing
+the scatter X axis (no colorize involved at all) and pressing Plot
+sometimes produces a "lost connection" failure — matches a stale-
+connection race in `_comm_mgr.py`/the low-level transport
+(`'NoneType' object has no attribute 'run'`, from `process_messages()`
+calling `self._transport.run()` after `self._transport` had already
+been torn down). This is **not** part of this delivery — the files
+involved (`_comm_mgr.py`, the low-level transport module) were never
+part of Part 4's scope and weren't provided for this work. Worth its
+own investigation if it needs fixing.
+
+**Verification status of this fix:** confirmed root-cause match
+against Bokeh 3.10's actual shipped type declarations and the
+reported stack trace/screenshot; not independently re-verified in a
+live browser after patching (no browser available in this session —
+see the verification-status section below for how much of the rest of
+Part 4 *was* executed for real). Worth confirming the exact repro
+(Categorical → Plot ▶) is clean after this patch lands.
+
 ## Decisions made this session
 
 1. **Correlation excluded from the axis picker entirely**, filtered by

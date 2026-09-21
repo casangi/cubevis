@@ -54,6 +54,7 @@ import logging
 import math
 import os
 import time
+import asyncio
 from dataclasses import dataclass, field
 from typing import Optional, TYPE_CHECKING
 from uuid import uuid4
@@ -199,6 +200,7 @@ class ScatterLayer:
     scaling_vmax:   Optional[float] = None  # (see update_scaling, _shade_all_layers)
     coloring:       str = "continuous"
     colorize_axis:  Optional["Axis"] = None
+    excluded_categories: tuple[str, ...] = ()
 
     def __post_init__(self):
         if not self.label:
@@ -214,11 +216,17 @@ class ScatterLayer:
                     "ScatterLayer.coloring='categorical' requires "
                     "colorize_axis to be set"
                 )
-        elif self.colorize_axis is not None:
-            raise ValueError(
-                "ScatterLayer.colorize_axis is only valid when "
-                "coloring='categorical'"
-            )
+        else:
+            if self.colorize_axis is not None:
+                raise ValueError(
+                    "ScatterLayer.colorize_axis is only valid when "
+                    "coloring='categorical'"
+                )
+            if self.excluded_categories:
+                raise ValueError(
+                    "ScatterLayer.excluded_categories is only valid when "
+                    "coloring='categorical'"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +422,11 @@ class VisibilityScatter(VisibilityPlot):
         self._msg_set_alpha    = str(uuid4())
         self._msg_color_mode   = str(uuid4())
         self._msg_update_scaling = str(uuid4())
-        self._msg_colorize       = str(uuid4())
+        # No self._msg_colorize (Part 5, 2026-09): colorize is staged,
+        # not live -- see colorize_controls()'s docstring. Removed
+        # rather than left allocated-but-unregistered, since an unused
+        # message id with no handler is exactly the kind of thing that
+        # looks like a bug on the next read-through.
 
         # Hover-probe redesign piece 3 (2026-09), "click-to-exact":
         # scatter-only InfoTool (drag tool, click -> point, drag -> box)
@@ -480,6 +492,7 @@ class VisibilityScatter(VisibilityPlot):
             scaling_vmax  = lyr.scaling_vmax,
             coloring      = lyr.coloring,
             colorize_axis = lyr.colorize_axis,
+            excluded_categories = lyr.excluded_categories,
         )
         self._recomposite()
         self._update_state_source()
@@ -552,6 +565,7 @@ class VisibilityScatter(VisibilityPlot):
             scaling_vmax  = vmax if vmax is not None else new_vmax,
             coloring      = lyr.coloring,
             colorize_axis = lyr.colorize_axis,
+            excluded_categories = lyr.excluded_categories,
         )
         self._rerender()
         self._update_state_source()
@@ -561,15 +575,16 @@ class VisibilityScatter(VisibilityPlot):
         layer_index: int,
         coloring: Optional[str] = None,
         colorize_axis=None,
+        excluded_categories=None,
     ) -> None:
         """Change one layer's colorize-by-axis mode and re-render.
 
-        Part 4 (UI wiring) counterpart to ``update_scaling`` — same
-        "backend round trip via ``_rerender``" shape, since colorize
-        mode/axis are ``ScatterLayerSpec`` fields the backend needs for
-        its categorical-aggregation branch (see
-        ``data._scatter_render.render_layer``), not something this
-        class can resolve locally.
+        Part 5 (2026-09): retained as the underlying state-mutation
+        method (still the one place cmap swap-in/out and axis
+        validation happen), but no longer reachable live from the
+        browser -- see ``colorize_controls()``'s docstring for why the
+        UI moved to a staged model. Still directly callable
+        programmatically.
 
         Parameters
         ----------
@@ -589,6 +604,13 @@ class VisibilityScatter(VisibilityPlot):
             ``colorize_controls()``'s picker itself opens on, so a
             layer switched straight to categorical (no explicit axis
             picked yet) renders something instead of raising.
+        excluded_categories : tuple[str, ...] | None
+            Raw category values (see ``ScatterLayerSpec.excluded_categories``'s
+            docstring) to leave out of the render. ``None`` keeps the
+            layer's current value when staying categorical; always
+            reset to ``()`` when switching to (or staying) continuous,
+            mirroring how *colorize_axis* itself is dropped in that
+            case.
 
         Raises
         ------
@@ -626,6 +648,7 @@ class VisibilityScatter(VisibilityPlot):
             # behave from the user's point of view (the axis picker
             # itself is hidden in this mode -- see colorize_controls()).
             new_axis = None
+            new_excluded = ()
         else:
             new_axis = colorize_axis if colorize_axis is not None else lyr.colorize_axis
             if new_axis is None:
@@ -641,6 +664,8 @@ class VisibilityScatter(VisibilityPlot):
                     f"Axis.{new_axis.name} is not a colorizable axis -- "
                     "see data.reader.COLORIZE_AXIS_COLUMNS"
                 )
+            new_excluded = (tuple(excluded_categories) if excluded_categories is not None
+                            else lyr.excluded_categories)
 
         # cmap is REUSED for categorical mode (Part 3 convention -- see
         # ScatterLayerSpec's docstring): swap in a categorical palette
@@ -674,6 +699,7 @@ class VisibilityScatter(VisibilityPlot):
             scaling_vmax  = lyr.scaling_vmax,
             coloring      = new_coloring,
             colorize_axis = new_axis,
+            excluded_categories = new_excluded,
         )
         self._rerender()
         self._update_state_source()
@@ -1798,7 +1824,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
     # Hover-probe redesign piece 3 (2026-09): click-to-exact
     # ------------------------------------------------------------------
 
-    def _handle_probe_region(self, message: dict) -> dict:
+    async def _handle_probe_region(self, message: dict) -> dict:
         """Handle an InfoTool click or drag: exact identity for a rectangle.
 
         Unlike ``_handle_probe`` (resolved entirely from the cached
@@ -1860,11 +1886,23 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 }
 
             yaxes = [(lyr.y_axis, lyr.polarization) for lyr in visible]
-            results = self._backend.probe_scatter_region(
-                self._x_dim, yaxes, self._selection,
-                x_range, y_range,
-                max_samples=self._probe_region_max_samples,
-            )
+            # Async + to_thread + this instance's own _render_lock
+            # (2026-09, same treatment as the render handlers below):
+            # probe_scatter_region() is a real backend round trip (see
+            # this method's own docstring), long enough to starve this
+            # connection's ping/pong if run inline. The lock matters
+            # here for a second reason too, not just liveness: this
+            # reads self._x_dim/self._selection/self._layers, the same
+            # instance state a concurrent colorize/scaling/axis-change
+            # handler mutates -- without it, a probe could see a
+            # torn mix of pre- and post-change state.
+            async with self._render_lock:
+                results = await asyncio.to_thread(
+                    self._backend.probe_scatter_region,
+                    self._x_dim, yaxes, self._selection,
+                    x_range, y_range,
+                    max_samples=self._probe_region_max_samples,
+                )
 
             sections = [
                 self._probe_region_layer_html(lyr, results.get(
@@ -2091,7 +2129,14 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         self._comm.register(self._msg_color_mode,  self._handle_set_color_mode)
         self._comm.register(self._msg_update_axes, self._handle_update_axes_scatter)
         self._comm.register(self._msg_update_scaling, self._handle_update_scaling)
-        self._comm.register(self._msg_colorize, self._handle_colorize)
+        # No _msg_colorize registration (Part 5, 2026-09): colorize is
+        # staged now, not live -- see colorize_controls()'s docstring.
+        # Nothing sends this message anymore; update_colorize() itself
+        # (the underlying state mutation) is unaffected and still
+        # directly callable, and its actual trigger point is now
+        # _handle_update_axes_scatter's own update_axes() call, via
+        # whatever coloring/colorize_axis/excluded_categories a fresh
+        # ScatterLayer carries in from doPlot's payload.
 
     # ------------------------------------------------------------------
     # Scatter-specific internals
@@ -2133,6 +2178,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 scaling_vmax  = lyr.scaling_vmax,
                 coloring      = lyr.coloring,
                 colorize_axis = lyr.colorize_axis,
+                excluded_categories = lyr.excluded_categories,
             )
             for lyr in self._layers
         ]
@@ -2418,6 +2464,16 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         if x_range is None and y_range is None:
             x_range, y_range = self._current_render_range()
         self._render_all_layers(self._selection, x_range=x_range, y_range=y_range)
+        # Permanent per-panel legend (Part 5): kept in sync with every
+        # LIVE render this way, not from inside _render_all_layers()
+        # itself -- that method is also called by _shade_for_export(),
+        # whose whole point is to render at a different viewport
+        # WITHOUT disturbing live state, and the legend widget is a
+        # live Bokeh UI object, not part of that method's own
+        # save/restore tuple. Calling this here instead means an export
+        # never touches it, by construction, rather than needing yet
+        # another field added to that restore list.
+        self._update_legend()
         img32 = self._collapse_and_composite()
         # _render_all_layers() just refreshed self._x_range/self._y_range
         # from the backend's real answer when x_range/y_range were None
@@ -2580,40 +2636,56 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             **extra,
         }
 
-    def _handle_set_color_mode(self, message: dict) -> dict:
+    async def _handle_set_color_mode(self, message: dict) -> dict:
         """Handle j2p message to toggle color mode: {mode: "global"|"local"}.
 
         Returns the new composite image so the JS callback can update
         image_source.data directly — Python-side model property changes
         don't propagate to the browser in static HTML mode.
+
+        Async + to_thread (2026-09): set_color_mode() re-renders every
+        layer (_rerender() -> _render_all_layers() -> a real backend
+        query), which can take long enough to starve this connection's
+        own ping/pong keepalive if run inline on the event loop -- see
+        CommMgr._handle_request's per-comm Lock (this instance's
+        self._render_lock, shared with self._flag_comm) for what keeps
+        this safe now that it can interleave with other handlers.
         """
         mode = message.get("mode", "global")
         try:
-            self.set_color_mode(mode)
+            await asyncio.to_thread(self.set_color_mode, mode)
         except ValueError as exc:
             return {"status": "error", "message": str(exc)}
         return self._image_response("ok", color_mode=self._color_mode)
 
-    def _handle_set_alpha(self, message: dict) -> dict:
-        """Handle j2p 'vs_set_alpha': {layer_index: int, alpha: float}."""
+    async def _handle_set_alpha(self, message: dict) -> dict:
+        """Handle j2p 'vs_set_alpha': {layer_index: int, alpha: float}.
+
+        Async + to_thread -- see _handle_set_color_mode's docstring;
+        set_alpha() also ends in a real re-render.
+        """
         idx   = int(message.get("layer_index", 0))
         alpha = float(message.get("alpha", 1.0))
         try:
-            self.set_alpha(idx, alpha)
+            await asyncio.to_thread(self.set_alpha, idx, alpha)
         except (IndexError, ValueError) as exc:
             return {"status": "error", "message": str(exc)}
         return self._image_response("ok")
 
-    def _handle_update_scaling(self, message: dict) -> dict:
+    async def _handle_update_scaling(self, message: dict) -> dict:
         """Handle j2p 'vs_update_scaling': {layer_index, scaling, alpha, gamma, vmin, vmax, reset_range}.
 
         All fields except layer_index are optional; omitted fields keep
         their current per-layer value. Uses _image_response so JS can
         update image_source directly, mirroring _handle_set_alpha.
+
+        Async + to_thread -- see _handle_set_color_mode's docstring;
+        update_scaling() also ends in a real re-render.
         """
         idx = int(message.get("layer_index", 0))
         try:
-            self.update_scaling(
+            await asyncio.to_thread(
+                self.update_scaling,
                 idx,
                 scaling     = message.get("scaling"),
                 alpha       = message.get("alpha"),
@@ -2634,40 +2706,6 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             scaling_vmin  = lyr.scaling_vmin,
             scaling_vmax  = lyr.scaling_vmax,
         )
-
-    def _handle_colorize(self, message: dict) -> dict:
-        """Handle j2p 'vs_colorize': {layer_index, coloring, colorize_axis}.
-
-        Mirrors ``_handle_update_scaling`` exactly (same
-        ``_image_response`` reuse, same status/error shape), plus one
-        extra field the scaling handler has no equivalent of:
-        ``legend_html``, a fully-rendered swatch list for
-        ``colorize_controls()``'s legend ``Div`` -- built here rather
-        than in JS because the category labels, colors, and bucket
-        membership are all Python-side state (``_layer_categories`` et
-        al.), and duplicating that formatting logic in JS would be a
-        second place for it to drift out of sync with
-        ``_legend_html()``.
-        """
-        idx = int(message.get("layer_index", 0))
-        try:
-            self.update_colorize(
-                idx,
-                coloring      = message.get("coloring"),
-                colorize_axis = message.get("colorize_axis"),
-            )
-        except (IndexError, ValueError) as exc:
-            return {"status": "error", "message": str(exc)}
-        lyr = self._layers[idx]
-        resp = self._image_response(
-            "ok",
-            layer_index   = idx,
-            coloring      = lyr.coloring,
-            colorize_axis = (lyr.colorize_axis.name
-                              if lyr.colorize_axis is not None else None),
-        )
-        resp["legend_html"] = self._legend_html(idx)
-        return resp
 
     def _legend_html(self, layer_index: int) -> str:
         """Render one layer's categorical legend as an HTML swatch list.
@@ -2718,7 +2756,8 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 title_attr = f' title="{_html_escape(joined)}"'
             rows.append(
                 f"<div{title_attr} style='display:flex;align-items:center;"
-                f"gap:6px;margin:2px 0;cursor:default'>"
+                f"gap:6px;margin:2px 0;cursor:default;break-inside:avoid;"
+                f"-webkit-column-break-inside:avoid'>"
                 f"<span style='display:inline-block;width:10px;"
                 f"height:10px;border-radius:2px;flex-shrink:0;"
                 f"background:{_html_escape(str(color))}'></span>"
@@ -2727,23 +2766,210 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 f"white-space:nowrap'>{_html_escape(str(cat))}</span>"
                 f"</div>"
             )
-        return ("<div style='max-height:160px;overflow-y:auto;"
+        # Multi-column (2026-09, reported: a long category list -- e.g.
+        # every scan number -- pushed the cursor-tracking status bar
+        # below off screen in a single vertical list). column-width
+        # (not a fixed column-count) lets the browser pick however many
+        # ~110px columns actually fit this Div's own width, rather than
+        # a number tuned for one sidebar width that would either
+        # overflow a narrower one or waste space in a wider one. No
+        # inner max-height/overflow-y here -- the OUTER legend_content
+        # Div (see VisibilityPlot._build()) already provides that
+        # boundary; nesting a second independent scroll region inside
+        # it would be one scrollbar too many.
+        return ("<div style='column-width:110px;column-gap:14px;"
                  "margin-top:4px'>" + "".join(rows) + "</div>")
 
-    def colorize_controls(self, layer_index: int = 0):
-        """Return a Bokeh widget column for one layer's colorize-by-axis controls.
+    def _full_legend_html(self) -> str:
+        """Combine every categorical layer's legend into one HTML block
+        for the permanent per-panel legend (see ``_update_legend()``).
+        Empty string if no layer is currently categorical (or none
+        have rendered categories yet) -- the caller uses that to hide
+        the whole legend wrapper, not leave an empty box visible.
 
-        Part 4 (UI wiring) counterpart to ``colormap_controls()`` --
-        same ``CustomJS``/``comm.send()`` round-trip pattern (see that
-        method's docstring for the full rationale on why this is a
-        backend round trip rather than a local recompute). Meant to sit
-        *alongside* ``colormap_controls()`` in the sidebar, not replace
-        it: ``VisibilityPlotter`` is responsible for the mutual-
-        exclusivity behaviour (design doc Sec 4.3) of hiding the
-        scaling column's parent container while this one's categorical
-        mode is active -- this method only manages visibility of its
-        own axis picker and legend, since those two are self-contained
-        to this control.
+        Layer labels prefix each layer's own swatch block only when
+        more than one layer is categorical at once -- the same "don't
+        clutter the single-layer case, disambiguate the multi-layer
+        one" rule already used for ``png_export.py``'s own categorical
+        legend (``_legend_handles``), applied here to the live browser
+        legend instead of the static export.
+        """
+        categorical_indices = [
+            i for i, lyr in enumerate(self._layers) if lyr.coloring == "categorical"
+        ]
+        if not categorical_indices:
+            return ""
+        multi = len(categorical_indices) > 1
+        blocks = []
+        for i in categorical_indices:
+            html = self._legend_html(i)
+            if not html:
+                continue
+            if multi:
+                lyr = self._layers[i]
+                blocks.append(
+                    f"<div style='color:#a6adc8;font-size:11px;"
+                    f"font-weight:bold;margin-top:6px'>"
+                    f"{_html_escape(lyr.label)}</div>" + html
+                )
+            else:
+                blocks.append(html)
+        return "".join(blocks)
+
+    def _update_legend(self) -> None:
+        """Push the current combined categorical legend to the
+        permanent per-panel info strip (``VisibilityPlot._build()``'s
+        ``_legend_content``/``_legend_toggle``/``_cursor_toggle``/
+        ``_info_div``).
+
+        Deliberately independent of ``colorize_controls()``'s own
+        widgets -- called after every real render (from
+        ``_render_all_layers``, so every code path that ends in one --
+        ``update_colorize``, ``update_scaling``, ``update_axes``, a
+        ``doPlot`` press -- keeps this in sync automatically, with no
+        caller needing to remember to call it separately. This is
+        exactly what Part 4's live, gear-tab-scoped legend did NOT do:
+        it only ever reflected the last live round trip, going stale
+        (or blank) the moment the tab was closed and reopened even
+        though the actual plot was still genuinely categorical. This
+        one only ever reflects the ACTUAL rendered state, because it is
+        rebuilt from that state every single time it changes.
+
+        Toggle visibility only, never the active view (Part 5 addendum,
+        2026-09): becoming categorical makes the "Legend" button appear
+        so the user notices it's there, but does NOT switch away from
+        whichever of cursor-tracking/legend they're currently looking
+        at -- cursor-tracking is more likely to be what's actively in
+        use (it updates on every hover), so auto-switching to the
+        legend the moment new content exists would fight against that.
+        Losing the content (switched back to continuous) DOES force the
+        view back to cursor-tracking, though -- there's nothing left to
+        show, so leaving the legend both selected and invisible would
+        strand the user looking at nothing with no visible way back
+        (the "Cursor" button is still there, but there's no reason to
+        make them find it).
+
+        No-op in headless mode, and during the very first render inside
+        ``_build()`` (called before ``_legend_content`` even exists as
+        an attribute -- ``_build()``'s figure/glyphs/legend-widget
+        construction all happen AFTER its own initial ``_render()``
+        call) -- ``getattr`` rather than a plain attribute check, so
+        this degrades safely in both cases rather than raising.
+        """
+        if getattr(self, "_legend_content", None) is None:
+            return
+        html = self._full_legend_html()
+        self._legend_content.text = html
+        self._legend_toggle.visible = bool(html)
+        if not html and self._legend_content.visible:
+            # The legend was the active view and just lost its content
+            # (switched back to continuous) -- force back to
+            # cursor-tracking rather than leaving the user looking at a
+            # blank pane with no legend button left to click back from.
+            self._legend_content.visible = False
+            self._info_div.visible = True
+            self._cursor_toggle.button_type = "primary"
+            self._legend_toggle.button_type = "default"
+
+    def _colorize_category_values(self, axis, polarization: str) -> list[str]:
+        """All possible raw category values for *axis*, from cheap,
+        already-cached ``IdentityTables`` metadata -- no backend round
+        trip. The widget layer's own "similar to SPW" enumeration (see
+        ``VisibilityPlotter``'s permanent SPW ``DataTable``, populated
+        from ``meta.spws``): the same "cheap static metadata, not a
+        live query" pattern, one level down, per colorizable axis
+        instead of per-MS.
+
+        Returns raw values (individual antenna names, scan names, ...),
+        not post-binning display labels -- matching
+        ``ScatterLayerSpec.excluded_categories``'s own contract (see
+        that field's docstring for why the checklist this feeds must
+        deal in raw values, never buckets a render hasn't computed
+        yet).
+        """
+        from .axes import Axis
+        tables = self._ensure_identity_tables(polarization)
+        if axis is Axis.SCAN:
+            values = {s.scan_name for s in tables.scans}
+        elif axis is Axis.ANTENNA1:
+            values = {a1 for a1, _a2 in tables.baseline_antennas.values()}
+        elif axis is Axis.ANTENNA2:
+            values = {a2 for _a1, a2 in tables.baseline_antennas.values()}
+        elif axis is Axis.SPW:
+            values = {str(s.spw_id) for s in tables.spws}
+        else:
+            values = set()
+
+        def _sort_key(v):
+            # Numeric-looking values (scan numbers) sort numerically;
+            # everything else (antenna/SPW names) falls back to plain
+            # string order. Cosmetic only -- exclusion itself doesn't
+            # depend on this order, just the checklist's own display.
+            try:
+                return (0, int(v))
+            except ValueError:
+                return (1, v)
+
+        return sorted(values, key=_sort_key)
+
+    def colorize_controls(self, layer_index: int = 0):
+        """Return a Bokeh widget column for one layer's colorize-by-axis
+        controls, plus the widget handles ``doPlot()``'s own
+        payload-building JS needs to read their staged values from.
+
+        Part 5 (2026-09) REDESIGN: staged, not live. Every OTHER control
+        in the gear tab (axis pickers, Field, SPW, Correlation, ...)
+        only takes effect when the user presses Plot -- ``doPlot()``
+        reads their current values at that moment and sends them
+        together. Part 4's original version of this method broke that
+        pattern: it sent a live ``comm.send()`` on every change,
+        immediately re-rendering. That produced a real, user-visible
+        inconsistency: the categorical legend was live and correct
+        while this tab stayed open, but empty again on reopening it
+        later even though the plot itself was still genuinely
+        categorical -- nothing about reopening this tab replayed that
+        one-off response.
+
+        This version holds no ``Comm`` reference and sends nothing.
+        Every widget here only tracks its own current value;
+        ``doPlot()``'s payload-building JS reads them the same way it
+        already reads ``sx_sel.value``/``sy_sel.value``. The actual
+        categorical render happens exactly once, when Plot is pressed,
+        inside ``_handle_update_axes_scatter``'s ``update_axes()`` call
+        -- not here. ``update_colorize()`` (the underlying state
+        mutation) is unaffected and still directly callable; only the
+        live comm trigger (``_handle_colorize``/``_msg_colorize``) was
+        removed, since nothing sends it anymore.
+
+        Category checklist (Part 5): one ``DataTable`` per colorizable
+        axis, pre-built here from ``_colorize_category_values()`` --
+        "build for N, ship visible 1", the same precedent already used
+        for the per-layer columns in ``_build_scatter_config_panel``,
+        applied one level down (per-axis instead of per-layer). Only
+        the checklist matching ``axis_select``'s current value is
+        visible; switching axes is a pure client-side visibility swap,
+        same as switching layers -- no round trip needed, since every
+        axis's possible values are already known up front.
+
+        State preservation (2026-09, explicit design decision, not an
+        oversight): the axis currently in effect for this layer
+        (``lyr.colorize_axis``) starts with ``lyr.excluded_categories``
+        unchecked and everything else checked, so reopening this tab
+        shows what is actually plotted right now -- letting the user
+        judge whether a replot is even needed before touching anything.
+        Any OTHER axis -- one the user hasn't switched to since opening
+        this tab, with no rendered state of its own to reflect -- always
+        starts fully checked.
+
+        Styling gap (known, deliberate for this pass): each checklist's
+        ``DataTable`` uses Bokeh's own defaults rather than the
+        sidebar's bespoke dark/light table CSS (``visibility_plotter.py``'s
+        ``_DARK_TABLE_CSS``/``_LIGHT_TABLE_CSS``, used by the permanent
+        SPW table) -- pulling those in here would need either a new
+        constructor parameter threaded from ``_build_scatter_config_panel``
+        or an upward import from this (widget) layer into the app layer,
+        and matching that theme exactly is a smaller gap than everything
+        else landed in this pass. Worth a follow-up, not a blocker.
 
         The axis picker excludes ``DEGENERATE_COLORIZE_AXES``
         (currently just ``Axis.CORRELATION``) entirely, rather than
@@ -2760,10 +2986,23 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         layer_index : int
             Which layer's controls to build. Defaults to the first
             layer.
+
+        Returns
+        -------
+        controls : Bokeh column
+            The widget tree for the sidebar.
+        handles : dict
+            ``{"mode_group": RadioButtonGroup, "axis_select": Select,
+            "checklists": {axis_name_str: (DataTable, ColumnDataSource)}}`` --
+            for ``doPlot()``'s payload-building JS to read current
+            values from directly, the same way it already holds
+            ``sx_sel``/``sy_sel``.
         """
         from bokeh.layouts import column
-        from bokeh.models import Select, RadioButtonGroup, Div, CustomJS
+        from bokeh.models import (Select, RadioButtonGroup, Div, CustomJS,
+                                   DataTable, TableColumn, ColumnDataSource)
         from .data.reader import colorizable_axes, DEGENERATE_COLORIZE_AXES
+        from .axes import Axis
 
         if not (0 <= layer_index < len(self._layers)):
             raise IndexError(f"layer_index {layer_index} out of range")
@@ -2779,12 +3018,11 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             # back to the unfiltered list rather than shipping an empty
             # (and therefore broken) Select if that ever changes.
             axis_options = [(axis.name, axis.label) for axis in colorizable_axes()]
+        colorizable = [Axis[name] for name, _ in axis_options]
 
         is_categorical = lyr.coloring == "categorical"
-        current_axis_name = (
-            lyr.colorize_axis.name if lyr.colorize_axis is not None
-            else axis_options[0][0]
-        )
+        current_axis = (lyr.colorize_axis if lyr.colorize_axis is not None
+                         else colorizable[0])
 
         section = Div(
             text=f"<span style='color:#a6adc8;font-size:11px'>"
@@ -2795,78 +3033,88 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             active=(1 if is_categorical else 0),
         )
         axis_select = Select(
-            value=current_axis_name,
+            value=current_axis.name,
             options=axis_options,
             visible=is_categorical,
         )
-        legend_div = Div(
-            text=self._legend_html(layer_index),
-            visible=is_categorical,
-            width=240,
-        )
 
-        controls = column(section, mode_group, axis_select, legend_div)
+        checklists: dict = {}
+        checklist_tables = []
+        for axis in colorizable:
+            try:
+                values = self._colorize_category_values(axis, lyr.polarization)
+            except Exception as exc:
+                log.warning("colorize_controls: could not enumerate %s: %s",
+                            axis.name, exc)
+                values = []
+            source = ColumnDataSource(data=dict(value=values))
+            if axis is current_axis and is_categorical:
+                excluded = set(lyr.excluded_categories)
+                source.selected.indices = [
+                    i for i, v in enumerate(values) if v not in excluded
+                ]
+            else:
+                source.selected.indices = list(range(len(values)))
+            table = DataTable(
+                source=source,
+                columns=[TableColumn(field="value", title=axis.label)],
+                selectable="checkbox",
+                index_position=None,
+                width=240,
+                height=min(max(len(values), 1) * 26 + 30, 170),
+                visible=(is_categorical and axis is current_axis),
+            )
+            checklists[axis.name] = (table, source)
+            checklist_tables.append(table)
 
-        if self._comm is None:
-            # No comm channel -- controls render but are inert, matching
-            # colormap_controls()'s identical convention.
-            return controls
+        controls = column(section, mode_group, axis_select, *checklist_tables)
 
-        comm         = self._comm
-        image_source = self._image_source
-        msg_colorize = self._msg_colorize
-
-        _apply_colorize_js = """
-console.log('[visplot colorize] response:', resp);
-if (!resp || resp.status !== 'ok') {
-    console.warn('[visplot colorize] failed or no response:', resp);
-    return;
-}
-if (resp.image != null) {
-    image_source.data['image'] = [resp.image];
-    image_source.data['x']     = [resp.x0];
-    image_source.data['y']     = [resp.y0];
-    image_source.data['dw']    = [resp.x1 - resp.x0];
-    image_source.data['dh']    = [resp.y1 - resp.y0];
-    image_source.change.emit();
-}
-if (resp.colorize_axis != null) {
-    axis_select.value = resp.colorize_axis;
-}
-legend_div.text = resp.legend_html || '';
-"""
-
+        # Staged, not live (see this method's own docstring): both
+        # callbacks below only manage visibility, locally, of this
+        # method's own widgets -- neither touches self._comm, and
+        # neither exists if self._comm is None, matching
+        # colormap_controls()'s own "no comm -> inert" convention (the
+        # difference here is that inert is now this method's ONLY mode
+        # regardless of comm state, so the two are unconditional).
+        checklist_by_axis_name = {name: t for name, (t, _s) in checklists.items()}
         mode_js = CustomJS(
-            args={"comm": comm, "image_source": image_source,
-                  "axis_select": axis_select, "legend_div": legend_div,
-                  "layer_index": layer_index},
-            code=f"""
+            args={"axis_select": axis_select,
+                  "checklist_by_axis": checklist_by_axis_name},
+            code="""
 const categorical = (cb_obj.active === 1);
 axis_select.visible = categorical;
-legend_div.visible  = categorical;
-const coloring = categorical ? 'categorical' : 'continuous';
-console.log('[visplot colorize] sending:', {{layer_index: layer_index, coloring: coloring, colorize_axis: axis_select.value}});
-comm.send('{msg_colorize}', {{layer_index: layer_index, coloring: coloring, colorize_axis: axis_select.value}}, function(resp) {{
-{_apply_colorize_js}
-}});
+for (const name in checklist_by_axis) {
+    checklist_by_axis[name].visible = categorical && (name === axis_select.value);
+}
 """,
         )
         mode_group.js_on_change("active", mode_js)
 
         axis_js = CustomJS(
-            args={"comm": comm, "image_source": image_source,
-                  "axis_select": axis_select, "legend_div": legend_div,
-                  "layer_index": layer_index},
-            code=f"""
-console.log('[visplot colorize] sending:', {{layer_index: layer_index, coloring: 'categorical', colorize_axis: cb_obj.value}});
-comm.send('{msg_colorize}', {{layer_index: layer_index, coloring: 'categorical', colorize_axis: cb_obj.value}}, function(resp) {{
-{_apply_colorize_js}
-}});
+            args={"checklist_by_axis": checklist_by_axis_name},
+            code="""
+for (const name in checklist_by_axis) {
+    checklist_by_axis[name].visible = (name === cb_obj.value);
+}
 """,
         )
         axis_select.js_on_change("value", axis_js)
 
-        return controls
+        return controls, {
+            "mode_group": mode_group,
+            "axis_select": axis_select,
+            # Keyed by axis .name string (e.g. "ANTENNA1"), NOT the Axis
+            # enum member itself -- these handles end up inside a
+            # CustomJS args dict once doPlot()'s own args are built (see
+            # _build_sidebar), which needs JSON-compatible dict keys/
+            # values throughout; an Enum member is neither a Bokeh Model
+            # (which CustomJS args does know how to reference) nor a
+            # JSON primitive, so it would fail to serialize at that
+            # point. String keys also match axis_select.value's own
+            # type directly, which is what doPlot()'s JS actually reads
+            # to know which checklist is the active one.
+            "checklists": checklists,
+        }
 
     def _with_default_cmaps(self, layers) -> list:
         """Return *layers* with any missing ``cmap`` filled in by index.
@@ -2911,12 +3159,19 @@ comm.send('{msg_colorize}', {{layer_index: layer_index, coloring: 'categorical',
                     scaling_vmax  = lyr.scaling_vmax,
                     coloring      = lyr.coloring,
                     colorize_axis = lyr.colorize_axis,
+                    excluded_categories = lyr.excluded_categories,
                 )
             out.append(lyr)
         return out
 
-    def _handle_update_axes_scatter(self, message: dict) -> dict:
-        """Handle j2p 'vs_update_axes' with scatter-specific fields."""
+    async def _handle_update_axes_scatter(self, message: dict) -> dict:
+        """Handle j2p 'vs_update_axes' with scatter-specific fields.
+
+        Async + to_thread for the actual update_axes() call -- see
+        _handle_set_color_mode's docstring; this is the handler behind
+        "change the X axis and replot", which ends in a real re-render
+        exactly like the others here.
+        """
         from .axes import Axis
         new_layers = None
         if "layers" in message:
@@ -2941,13 +3196,20 @@ comm.send('{msg_colorize}', {{layer_index: layer_index, coloring: 'categorical',
                         coloring      = entry.get("coloring", "continuous"),
                         colorize_axis = (Axis[entry["colorize_axis"]]
                                          if entry.get("colorize_axis") else None),
+                        # Part 5: doPlot's own payload-building JS is
+                        # what will actually populate this (see
+                        # colorize_controls()'s per-axis checklists) --
+                        # parsed defensively here regardless, matching
+                        # every other field on this line.
+                        excluded_categories = tuple(entry.get("excluded_categories", ())),
                     )
                     for entry in message["layers"]
                 ]
             except Exception as exc:
                 log.warning("_handle_update_axes_scatter: bad layers: %s", exc)
 
-        self.update_axes(
+        await asyncio.to_thread(
+            self.update_axes,
             x_dim  = self._parse_axis(message, "x_dim"),
             layers = new_layers,
             title  = message.get("title"),

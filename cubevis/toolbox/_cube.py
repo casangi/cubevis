@@ -99,6 +99,22 @@ class CubeMask:
             Script to run upon initialization of Cube
         '''
         self._comm_mgr = BokehInit.get_app_context( ).comm_mgr
+        # Shared with the ImagePipe this Cube owns (self._pipe['image'],
+        # constructed below) via that class's own `lock=` constructor
+        # argument, and with self._pipe['control'] (opened below via
+        # comm_mgr.open()'s own `lock=` parameter). Both comms' handlers
+        # ultimately read/write the same underlying image/mask data --
+        # the mask-editing "cube mask control" comm and ImagePipe's own
+        # "image cube updates" comm are two different comm_ids, so the
+        # per-comm_id send-side throttle that already keeps each one
+        # internally ordered does nothing to stop the two of them
+        # running concurrently against each other once a handler on
+        # either becomes async (see CommMgr.open()'s `lock` parameter
+        # docstring for the full rationale -- this mirrors visplot's
+        # identical self._comm/self._flag_comm sharing in
+        # visibility_plot.py). No handler here is async yet, so this
+        # costs nothing today; it's the mechanism for whenever one is.
+        self._render_lock = asyncio.Lock()
         self.init_script = init_script
 
         ##self._is_notebook = is_interactive_jupyter()
@@ -255,7 +271,8 @@ class CubeMask:
             ### init_script code sets up Ctrl key handling for switching the add/subtract plot tool actions from single channel ###
             ### operation to all channel operation                                                                              ###
             #######################################################################################################################
-            self._pipe['image'] = ImagePipe( image=self._image_path, mask=self._mask_path, stats=True )
+            self._pipe['image'] = ImagePipe( image=self._image_path, mask=self._mask_path, stats=True,
+                                             lock=self._render_lock )
             if self._mask_path:
                 self._pipe['image'].add_init_script( args=self._mask_add_sub,
                                                      code=self._js['cube-init'],
@@ -267,7 +284,8 @@ class CubeMask:
             ### was undefined which resulted in failure to update pixel tracking... so it is now
             ### initialized upon construction in JavaScript...
 
-            self._pipe['control'] = self._comm_mgr.open( squash_queue=True, description='cube mask control' )
+            self._pipe['control'] = self._comm_mgr.open( squash_queue=True, description='cube mask control',
+                                                          lock=self._render_lock )
             self._pipe['control'].add_init_script( code='''cb_obj._freeze_cursor_update = false''',
                                                    description="cube mask control pipe"
                                                  )

@@ -60,6 +60,7 @@ Package location
 from __future__ import annotations
 
 import abc
+import asyncio
 import logging
 import math
 import time
@@ -72,10 +73,10 @@ from bokeh.model import Model
 from bokeh.core.properties import String, Int, Bool
 from bokeh.models import (
     ColumnDataSource, CustomJS, CustomJSTickFormatter,
-    Div, HoverTool,
+    Div, HoverTool, Button,
 )
 from bokeh.plotting import figure, show as bk_show
-from bokeh.layouts import column
+from bokeh.layouts import column, row
 
 from cubevis.bokeh.tools._flag_tool import FlagTool
 
@@ -346,11 +347,29 @@ class VisibilityPlot(Model):
                 comm_mgr = None
         self._comm_mgr = comm_mgr
         self._comm = None
+        # Shared by self._comm and self._flag_comm below (see the two
+        # open() calls' `lock=` argument): CommMgr._handle_request holds
+        # this for the full handler-call-through-reply-send critical
+        # section, so a scaling/colorize/probe request on self._comm and
+        # a flag/unflag request on self._flag_comm -- two different
+        # comm_ids, each independently throttled on the send side, so
+        # NEITHER comm's own per-comm_id "one pending at a time" check
+        # stops them from being in flight simultaneously -- can't run
+        # concurrently against this same instance's shared render/
+        # selection state once any of their handlers become async and
+        # yield via asyncio.to_thread (see visibility_scatter.py's
+        # colorize/scaling handlers). Today, with every handler still
+        # fully synchronous, this lock is never actually contended --
+        # nothing else can run while a synchronous handler has the one
+        # shared event loop anyway -- so it costs nothing now and is
+        # exactly what's needed the moment that stops being true.
+        self._render_lock = asyncio.Lock()
         if self._comm_mgr is not None:
             try:
                 self._comm = self._comm_mgr.open(
                     description=self._comm_description(),
                     squash_queue=True,
+                    lock=self._render_lock,
                 )
             except Exception as exc:
                 log.warning("%s: could not open Comm: %s",
@@ -364,12 +383,19 @@ class VisibilityPlot(Model):
         # still waiting in the queue before Python ever sees it. Each
         # comm is queued independently, so this also means flag/unflag
         # round-trips never wait behind probe/rerender traffic either.
+        #
+        # It still shares self._render_lock with self._comm, though —
+        # that's about serializing actual handler EXECUTION against this
+        # instance's own state, an entirely separate concern from the
+        # send-side queuing/squashing above, which only ever governs
+        # when a message goes out, not what runs once it's received.
         self._flag_comm = None
         if enable_flagging and self._comm_mgr is not None:
             try:
                 self._flag_comm = self._comm_mgr.open(
                     description=f"{self._comm_description()} flagging",
                     squash_queue=False,
+                    lock=self._render_lock,
                 )
             except Exception as exc:
                 log.warning("%s: could not open flagging Comm: %s",
@@ -944,6 +970,7 @@ class VisibilityPlot(Model):
         self._info_div = Div(
             text        = "<i>Hover over the plot to inspect a pixel</i>",
             width       = self._width,
+            visible     = True,
             sizing_mode = "stretch_width",
             styles      = {
                 "font-size":   "12px",
@@ -951,12 +978,89 @@ class VisibilityPlot(Model):
                 "padding":     "4px 8px",
                 "background":  "#1e1e2e",
                 "color":       "#cdd6f4",
-                "border-top":  "1px solid #45475a",
             },
         )
 
+        # Permanent per-panel legend (Part 5, 2026-09), and its shared,
+        # fixed-height "info strip" with cursor-tracking (Part 5
+        # addendum, 2026-09): distinct from colorize_controls()'s own
+        # transient legend inside the gear tab. Built here, in the
+        # shared base class, so both raster and scatter panels get the
+        # widgets -- raster has no colorize-by-axis at all, so its own
+        # copy simply never receives content and its toggle stays
+        # hidden; the cost of the extra, empty widgets is negligible
+        # and this avoids a raster/scatter split in _build() itself.
+        #
+        # First version of this (still collapsible, but stacked BELOW
+        # cursor-tracking, adding height when expanded) was reported
+        # back as pushing the status line off a laptop screen -- this
+        # app has otherwise avoided needing a page-level scrollbar, and
+        # a plot + an always-visible cursor strip + an also-always-
+        # visible, independently-growing legend can together exceed
+        # available height even with EACH piece innocuous on its own.
+        # Tabs were considered and rejected for the reason explained at
+        # the call site building _legend_toggle/_cursor_toggle below;
+        # what's built here instead keeps cursor-tracking and the
+        # legend mutually exclusive within ONE fixed-height slot, sized
+        # once, never growing regardless of which is showing or how
+        # much legend content there is (that content scrolls inside
+        # its own fixed height instead).
+        #
+        # Only VisibilityScatter ever calls _update_legend() (see that
+        # method) -- with real content, after a render that has at
+        # least one categorical layer. Reopening colorize_controls()'s
+        # gear tab does not touch this at all; the two are deliberately
+        # independent (see colorize_controls()'s own docstring for why
+        # the LIVE, tab-scoped legend it had in Part 4 was the actual
+        # bug this whole redesign fixes).
+        _STRIP_HEIGHT = 90
+        self._cursor_toggle = Button(
+            label="Cursor", button_type="primary",
+            width=70, height=20, styles={"font-size": "10px"},
+        )
+        self._legend_toggle = Button(
+            label="Legend", button_type="default", visible=False,
+            width=70, height=20, styles={"font-size": "10px"},
+        )
+        self._info_div.height = _STRIP_HEIGHT
+        self._info_div.styles = {**self._info_div.styles,
+                                   "overflow-y": "auto", "height": f"{_STRIP_HEIGHT}px"}
+        self._legend_content = Div(
+            text="", visible=False, width=self._width, height=_STRIP_HEIGHT,
+            sizing_mode="stretch_width",
+            styles={
+                "font-size":  "11px",
+                "padding":    "6px 8px",
+                "background": "#1e1e2e",
+                "overflow-y": "auto",
+                "height":     f"{_STRIP_HEIGHT}px",
+            },
+        )
+        _strip_toggle_row = row(
+            self._cursor_toggle, self._legend_toggle,
+            styles={"gap": "4px", "background": "#1e1e2e",
+                     "padding": "3px 8px 0px 8px", "border-top": "1px solid #45475a"},
+        )
+        # Only the legend's own toggle needs custom JS -- switching TO
+        # cursor-tracking is the same code with the two widgets
+        # swapped, so one CustomJS handles both buttons via cb_obj,
+        # rather than writing the swap out twice.
+        _strip_switch_js = CustomJS(
+            args={"cursor_btn": self._cursor_toggle, "legend_btn": self._legend_toggle,
+                  "info_div": self._info_div, "legend_div": self._legend_content},
+            code="""
+const show_legend = (cb_obj === legend_btn);
+info_div.visible   = !show_legend;
+legend_div.visible = show_legend;
+cursor_btn.button_type = show_legend ? 'default' : 'primary';
+legend_btn.button_type = show_legend ? 'primary' : 'default';
+""",
+        )
+        self._cursor_toggle.js_on_click(_strip_switch_js)
+        self._legend_toggle.js_on_click(_strip_switch_js)
+
         self._layout = column(
-            self._fig, self._info_div,
+            self._fig, _strip_toggle_row, self._info_div, self._legend_content,
             sizing_mode="stretch_width",
         )
 

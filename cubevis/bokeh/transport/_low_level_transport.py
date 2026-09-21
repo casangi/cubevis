@@ -80,6 +80,23 @@ def _get_comm_class():
 # ============================================================================
 # Transport Base Class
 # ============================================================================
+class TransportNotConnectedError(RuntimeError):
+    """Raised by send_message() when the transport already knows it has
+    no live connection to send over (self._connected is False) -- a
+    distinct, deliberate signal from the underlying websockets
+    library's own ConnectionClosedError/ConnectionClosedOK (which fire
+    when a send is actively attempted against a socket that fails or
+    was already closing). CommMgr._handle_request treats the two the
+    same way -- "the peer is gone, not a handler bug, don't report it
+    as one" -- but needs a single, precise type to catch rather than
+    matching on this exception's message text (which differs between
+    WebSocketTransport's "WebSocket not connected" and CommsTransport's
+    "CommsTransport: not connected") or catching bare RuntimeError,
+    which would also swallow genuinely unrelated bugs.
+    """
+    pass
+
+
 class TransportBase(ABC):
     """Abstract base class for communication transports."""
 
@@ -151,6 +168,13 @@ class WebSocketTransport(TransportBase):
         self._initialized = False
         self._should_run = False
         self._closed = False
+        # Holds a strong reference to every in-flight fire-and-forget
+        # message-processing task (see run()'s dispatch below), purely
+        # so asyncio never garbage-collects one while it's still
+        # pending -- a bare asyncio.create_task() result with no other
+        # referent is eligible for GC, which would silently cancel it
+        # mid-flight. Entries remove themselves via add_done_callback.
+        self._pending_message_tasks: set = set()
 
         ### How the connection ended, set by run( ):
         ###   True  -- a close frame was exchanged. The browser said goodbye:
@@ -302,7 +326,7 @@ class WebSocketTransport(TransportBase):
     async def send_message(self, message: Dict[str, Any]) -> None:
         """Send a message through the WebSocket."""
         if not self._connected:
-            raise RuntimeError("WebSocket not connected")
+            raise TransportNotConnectedError("WebSocket not connected")
 
         from ...utils import serialize
         await self.websocket.send(serialize(message))
@@ -357,7 +381,87 @@ class WebSocketTransport(TransportBase):
                         }))
                         continue
 
-                    await self._message_callback(msg)
+                    ### Dispatch fire-and-forget rather than `await`ing
+                    ### inline (was: `await self._message_callback(msg)`).
+                    ###
+                    ### Awaiting here made this message's full processing
+                    ### (handler call through reply send, however long
+                    ### that takes) a prerequisite for this loop even
+                    ### looking at the NEXT incoming frame -- including a
+                    ### `__ping__` above, which needs the `async for` to
+                    ### reach its next iteration to be seen at all. A slow
+                    ### handler (a real backend render, say) starves this
+                    ### connection's own liveness check for its entire
+                    ### duration, indistinguishable from a truly dead
+                    ### socket to the client's heartbeat watchdog (see
+                    ### low_level_transport.ts's declareDead()) -- this
+                    ### was the actual mechanism behind a "WebSocket
+                    ### declared dead" false positive during a legitimate
+                    ### slow-but-alive render.
+                    ###
+                    ### create_task() lets this loop advance immediately
+                    ### regardless of how long the dispatched processing
+                    ### takes. By itself this only helps once a handler
+                    ### that needs it is ALSO made async and internally
+                    ### does `await asyncio.to_thread(...)` for its actual
+                    ### work -- a fully-synchronous handler still
+                    ### occupies the one event loop for its whole
+                    ### duration the moment its task actually runs; this
+                    ### change alone doesn't fix that. See
+                    ### CommMgr._handle_request's per-comm Lock (comm_id
+                    ### => asyncio.Lock, CommMgr.open()'s `lock`
+                    ### parameter) for what keeps concurrent dispatch
+                    ### correct once handlers do start yielding here --
+                    ### without it, two different comms' handlers newly
+                    ### able to interleave could race on whatever Python
+                    ### object they both happen to touch.
+                    ###
+                    ### add_done_callback mirrors this codebase's own
+                    ### existing pattern for a fire-and-forget task
+                    ### (Task._run_coroutine_sync's Jupyter branch,
+                    ### cubevis/exe/_task.py) -- an unawaited task's
+                    ### exception is otherwise only ever reported (if at
+                    ### all) at GC time, silently dropping exactly the
+                    ### errors this method's own try/except used to catch
+                    ### when this call was awaited inline.
+                    task = asyncio.create_task(self._message_callback(msg))
+                    self._pending_message_tasks.add(task)
+
+                    def _on_message_task_done(t, _msg=msg):
+                        self._pending_message_tasks.discard(t)
+                        if t.cancelled():
+                            return
+                        exc = t.exception()
+                        if exc is not None:
+                            logger.error(f"Error processing message {_msg}: {exc}")
+
+                    task.add_done_callback(_on_message_task_done)
+                except (ConnectionClosedError, ConnectionClosedOK):
+                    # Re-raise rather than falling into the generic
+                    # `except Exception` below (2026-09 fix): this inner,
+                    # per-message try/except sits BETWEEN a connection-
+                    # closed exception and the outer one that already
+                    # exists specifically to handle it correctly (see
+                    # this method's own docstring and its
+                    # "except (ConnectionClosedError, ConnectionClosedOK)"
+                    # clause further down -- "Normal close - don't treat
+                    # as error"). Without this, the exception never
+                    # reached that outer handler at all: it was caught
+                    # HERE first (a bare Exception subclass check doesn't
+                    # distinguish them), logged at ERROR as if it were a
+                    # real bug, and the loop kept running -- repeating
+                    # for every frame still in flight around the closing
+                    # handshake, which is exactly the "received 4000
+                    # (private use) stale connection" spam reported
+                    # during laptop sleep/wake. The connection closing
+                    # (deliberately, from the client's own heartbeat
+                    # watchdog -- see low_level_transport.ts's
+                    # declareDead(), which closes with that code/reason)
+                    # is not a per-message processing error; it ends the
+                    # whole loop, which is exactly what re-raising here
+                    # (instead of "continue processing other messages")
+                    # lets the outer handler do.
+                    raise
                 except Exception as e:
                     logger.error(f"Error processing message: {e}")
                     # Continue processing other messages
@@ -1247,7 +1351,7 @@ class CommsTransport(TransportBase):
         if not self._connected:
             # Note: Log the error before raising if you want it in the persistent log,
             # otherwise the raised exception will be the only record.
-            raise RuntimeError("CommsTransport: not connected")
+            raise TransportNotConnectedError("CommsTransport: not connected")
 
         envelope = {
             "type": "cubevis_message",

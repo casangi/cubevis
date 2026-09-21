@@ -193,6 +193,7 @@ def _bin_categories(distinct: list[str], cap: int) -> dict[str, tuple[str, ...]]
 
 def _resolve_categories(
     df: pd.DataFrame, column: str, axis_label: str, cap: int = CATEGORY_CAP,
+    excluded: Optional[frozenset] = None,
 ) -> tuple[Optional[np.ndarray], Optional[list[str]],
            Optional[dict[str, tuple[str, ...]]], Optional[str]]:
     """Boolean row-mask + display categories + raw-value membership for
@@ -251,6 +252,24 @@ def _resolve_categories(
     means the same real SPW merges into one category regardless of
     which type a given partition happened to report it as, rather than
     spuriously splitting into two.
+
+    *excluded* (Part 5, 2026-09, category checklist): a set of RAW
+    per-sample values (e.g. individual antenna names, not a binned
+    range) to leave out of both the returned categories and the
+    rendered rows. Raw values, not post-binning display labels, because
+    the checklist this feeds is built from ``IdentityTables`` -- cheap,
+    static, already-cached metadata (the widget layer's own "similar to
+    SPW" enumeration, no backend round trip) -- which only ever knows
+    individual real values, never how many buckets a given render will
+    eventually group them into (that depends on ``cap`` and how many
+    distinct values actually turn up in a particular selection, neither
+    of which the checklist has any reason to duplicate). Applied BEFORE
+    ``_bin_categories`` below, so an excluded value simply never
+    contributes to a bucket rather than needing one removed from it
+    after the fact -- correct even when the exclusion changes which
+    values land in the same bucket as each other. ``None``/empty means
+    "everything checked", the pre-Part-5 behavior exactly -- this
+    parameter changes nothing when omitted.
     """
     if column not in df.columns:
         return None, None, None, f"no {axis_label} data for this selection"
@@ -258,9 +277,18 @@ def _resolve_categories(
     mask = raw.notna().to_numpy()
     if not mask.any():
         return None, None, None, f"no {axis_label} data for this selection"
-    distinct = sorted(
-        {str(v) for v in raw.to_numpy()[mask]}, key=_category_sort_key,
-    )
+    str_values = np.array([str(v) for v in raw.to_numpy()[mask]])
+
+    if excluded:
+        keep = ~np.isin(str_values, list(excluded))
+        if not keep.any():
+            return None, None, None, f"all {axis_label} categories excluded"
+        full_keep = np.zeros(len(mask), dtype=bool)
+        full_keep[mask] = keep
+        mask = full_keep
+        str_values = str_values[keep]
+
+    distinct = sorted(set(str_values.tolist()), key=_category_sort_key)
     member_map = _bin_categories(distinct, cap)
     return mask, list(member_map), member_map, None
 
@@ -557,6 +585,7 @@ def render_layer(
         column = COLORIZE_AXIS_COLUMNS[lyr.colorize_axis]
         mask, categories, category_members, cat_skip_reason = _resolve_categories(
             df, column, lyr.colorize_axis.label,
+            excluded=frozenset(lyr.excluded_categories) or None,
         )
         if cat_skip_reason is not None:
             return _empty_render(canvas_h, canvas_w, cat_skip_reason)

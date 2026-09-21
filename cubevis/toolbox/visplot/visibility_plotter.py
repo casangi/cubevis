@@ -810,6 +810,7 @@ def _make_scatter_layers(
     polarizations: list[str],
     scaling_alpha: float = 50.0,
     cmaps: Optional[list] = None,
+    colorize_overrides: Optional[list] = None,
 ) -> list[ScatterLayer]:
     """Build one ``ScatterLayer`` per polarisation with assigned cmaps.
 
@@ -823,17 +824,54 @@ def _make_scatter_layers(
     the current theme.  ``None`` falls back to the module constant, which
     is the dark-theme family -- correct for the default theme and merely
     suboptimal otherwise, rather than a failure.
+
+    *colorize_overrides* (Part 5, 2026-09): optional list, same length
+    and order as *polarizations* -- entry ``i`` is either ``None``
+    ("this polarization stays continuous", the pre-Part-5 default) or a
+    dict ``{"coloring": "categorical", "colorize_axis": <Axis.name
+    string>, "excluded_categories": [...]}`` -- exactly what
+    ``colorize_controls()``'s staged widgets carry and
+    ``doPlot()``'s payload-building JS reads from them (see
+    ``VisibilityPlotter._handle_plot``'s scatter branch, which builds
+    this list from the panel's ``colorize`` payload field before
+    calling here). A categorical override gets a fresh categorical cmap
+    (``palettes.categorical_cmap()``, its own default theme -- the same
+    known, deliberate styling gap ``colorize_controls()``'s checklist
+    ``DataTable`` already has for this pass, not one this function
+    introduces) in place of the continuous *cmaps* cycle, matching
+    ``VisibilityScatter.update_colorize()``'s own cmap-swap convention.
+    Shorter than *polarizations*, or entirely omitted, is fine -- missing
+    entries are treated as ``None`` (continuous, the original default
+    behavior when no caller passes this at all).
     """
+    from .axes import Axis
+
     cmaps = list(cmaps or _LAYER_CMAPS)
-    return [
-        ScatterLayer(
+    overrides = colorize_overrides or []
+    layers = []
+    for i, pol in enumerate(polarizations):
+        override = overrides[i] if i < len(overrides) else None
+        if override and override.get("coloring") == "categorical":
+            coloring = "categorical"
+            colorize_axis_name = override.get("colorize_axis")
+            colorize_axis = Axis[colorize_axis_name] if colorize_axis_name else None
+            excluded_categories = tuple(override.get("excluded_categories") or ())
+            cmap = tuple(_palettes.categorical_cmap())
+        else:
+            coloring = "continuous"
+            colorize_axis = None
+            excluded_categories = ()
+            cmap = cmaps[i % len(cmaps)]
+        layers.append(ScatterLayer(
             y_axis        = y_axis,
             polarization  = pol,
-            cmap          = cmaps[i % len(cmaps)],
+            cmap          = cmap,
             scaling_alpha = scaling_alpha,
-        )
-        for i, pol in enumerate(polarizations)
-    ]
+            coloring      = coloring,
+            colorize_axis = colorize_axis,
+            excluded_categories = excluded_categories,
+        ))
+    return layers
 
 
 # ---------------------------------------------------------------------------
@@ -1163,6 +1201,17 @@ _step('spw table', () => {
     if (typeof spw_table === 'undefined' || !spw_table) return;
     spw_table.stylesheets = [sidebar_css,
                              light ? table_css_light : table_css_dark];
+});
+
+// Part 5, 2026-09: colorize_controls()'s per-axis checklist tables --
+// same treatment and same reasoning as the SPW table above, just over a
+// list (one per layer times one per colorizable axis) instead of a
+// single instance.
+_step('colorize tables', () => {
+    if (typeof colorize_tables === 'undefined' || !colorize_tables) return;
+    for (const t of colorize_tables) {
+        t.stylesheets = [sidebar_css, light ? table_css_light : table_css_dark];
+    }
 });
 
 const bg_fig    = light ? 'white'   : 'black';
@@ -2420,7 +2469,7 @@ for (const dt of other.tools) {
                 return slot.scatter
         return self._slots[-1].scatter
 
-    def _activate_slot_kind(self, slot: str, kind: str) -> None:
+    async def _activate_slot_kind(self, slot: str, kind: str) -> None:
         """Switch which kind (raster/scatter) is active for a slot.
 
         Real, testable Python-level infrastructure — not yet wired to any
@@ -2452,6 +2501,13 @@ for (const dt of other.tools) {
         (via ``self._slot_by_id()``) instead of ``setattr`` on a
         ``f"_slot_{slot.lower()}_kind"`` attribute name — same effect,
         sourced from the new record instead of a named attribute.
+
+        Async (2026-09): its only caller, ``_handle_plot()``, is itself
+        async and already needs ``await`` here for the same reason it
+        wraps its own direct ``update_axes()`` calls in
+        ``asyncio.to_thread`` — this method's own first-render call
+        below is exactly that same kind of potentially-slow, real-backend
+        call, made through a different path.
         """
         panel_slot = self._slot_by_id(slot)  # raises ValueError on bad id
         if kind not in ("raster", "scatter"):
@@ -2478,14 +2534,18 @@ for (const dt of other.tools) {
         if never_rendered:
             # Force-activate via the same mechanism update_axes() already
             # uses for real axis changes (decision 11's self._agg-is-None /
-            # all-layer-dfs-None guard).
-            if kind == "raster":
-                panel.update_axes(
-                    y_dim=panel._y_dim, x_dim=panel._x_dim,
-                    quantity=panel._quantity, polarization=panel._polarization,
-                )
-            else:
-                panel.update_axes(x_dim=panel._x_dim)
+            # all-layer-dfs-None guard). async + to_thread + this panel's
+            # own _render_lock -- same reasoning as _handle_plot's own
+            # update_axes() calls just above in this file.
+            async with panel._render_lock:
+                if kind == "raster":
+                    await asyncio.to_thread(
+                        panel.update_axes,
+                        y_dim=panel._y_dim, x_dim=panel._x_dim,
+                        quantity=panel._quantity, polarization=panel._polarization,
+                    )
+                else:
+                    await asyncio.to_thread(panel.update_axes, x_dim=panel._x_dim)
 
     # ====================================================================== #
     # Public entry point                                                       #
@@ -2958,7 +3018,7 @@ for (const dt of other.tools) {
                     return {"status": "error", "status_text": text,
                             "notify_text": text, "notify_color": "#f38ba8",
                             "failed_slot": slot.id}
-                self._activate_slot_kind(slot.id, requested_kind)
+                await self._activate_slot_kind(slot.id, requested_kind)
                 switched_kind_this_round.add(slot.id)
 
         # ---- Per-slot raster Y/X conflict, server-side backstop -------
@@ -3062,12 +3122,25 @@ for (const dt of other.tools) {
                         panel._y_dim    = None
                         panel._x_dim    = None
                         panel._quantity = None
-                        panel.update_axes(
-                            y_dim        = y,
-                            x_dim        = x,
-                            quantity     = qty,
-                            polarization = first_pol,
-                        )
+                        # Async + to_thread + this panel's own
+                        # _render_lock (2026-09, same treatment as
+                        # visibility_raster.py's own handlers): doPlot's
+                        # comm is a DIFFERENT comm_id from this panel's
+                        # own self._comm/self._flag_comm, so the
+                        # per-comm_id send-side throttle doesn't stop
+                        # this from running concurrently with, say, a
+                        # scaling change on the same panel arriving via
+                        # its own comm -- the lock is what keeps that
+                        # safe now that both can yield here instead of
+                        # each fully blocking the one shared event loop.
+                        async with panel._render_lock:
+                            await asyncio.to_thread(
+                                panel.update_axes,
+                                y_dim        = y,
+                                x_dim        = x,
+                                quantity     = qty,
+                                polarization = first_pol,
+                            )
                         self._last_raster_selection_by_slot[slot.id] = self._selection
                 except Exception as exc:
                     log.error("_handle_plot: panel %s raster update_axes "
@@ -3115,6 +3188,19 @@ for (const dt of other.tools) {
                                 exc, slot.id)
                     continue
 
+                # Part 5 (2026-09): staged colorize-by-axis state, one
+                # entry per polarization in `pols`' own order -- see
+                # colorize_controls()'s docstring for why this is staged
+                # (read here, at Plot-press time) rather than live.
+                # Missing/absent means "every polarization stays
+                # continuous", matching _make_scatter_layers()'s own
+                # default when colorize_overrides is omitted entirely --
+                # this key not existing at all (e.g. a Reload call that
+                # predates Part 5's payload, or a caller with nothing to
+                # say about colorize) behaves identically to explicitly
+                # sending all-None entries.
+                colorize_overrides = panel_msg.get("colorize")
+
                 # Recompute-cost fix (added 2026-08-02): scatter used to
                 # re-render unconditionally every call — see the note by
                 # self._last_scatter_selection_by_slot's declaration in
@@ -3142,6 +3228,44 @@ for (const dt of other.tools) {
                 # actually reflects render state now.
                 current_y_axis = panel._layers[0].y_axis if panel._layers else None
                 current_pols   = [lyr.polarization for lyr in panel._layers]
+
+                # Part 5 (2026-09): colorize-by-axis is staged too, so a
+                # Plot press where ONLY colorize/exclusion changed (x/y/
+                # pols/selection all identical) must still count as a
+                # real change -- otherwise this whole branch would be
+                # skipped below and the newly staged colorize state
+                # would silently never take effect. Only meaningful (and
+                # only compared) when the layer count itself hasn't
+                # changed -- pols != current_pols already forces
+                # axes_changed True on its own, via a fresh
+                # _make_scatter_layers() call below that reads
+                # colorize_overrides directly, so no separate comparison
+                # is needed in that case.
+                def _normalize_colorize(override):
+                    if not override or override.get("coloring") != "categorical":
+                        return ("continuous", None, ())
+                    return (
+                        "categorical",
+                        override.get("colorize_axis"),
+                        tuple(override.get("excluded_categories") or ()),
+                    )
+                current_colorize = [
+                    (lyr.coloring,
+                     lyr.colorize_axis.name if lyr.colorize_axis else None,
+                     tuple(lyr.excluded_categories))
+                    for lyr in panel._layers
+                ]
+                requested_colorize = [
+                    _normalize_colorize(
+                        colorize_overrides[i]
+                        if colorize_overrides and i < len(colorize_overrides) else None
+                    )
+                    for i in range(len(pols))
+                ]
+                colorize_changed = (
+                    current_pols == pols and requested_colorize != current_colorize
+                )
+
                 never_rendered = (not panel._layers or
                                   all(img is None for img in panel._layer_images))
                 axes_changed = (
@@ -3150,6 +3274,7 @@ for (const dt of other.tools) {
                     x    != panel._x_dim or
                     y    != current_y_axis or
                     pols != current_pols or
+                    colorize_changed or
                     self._selection.field_names  != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'field_names', None)  or
                     self._selection.spw          != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'spw', None)           or
                     self._selection.correlation  != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'correlation', None)   or
@@ -3158,12 +3283,18 @@ for (const dt of other.tools) {
                 try:
                     if axes_changed:
                         layers = _make_scatter_layers(
-                            y, pols, cmaps=self._scatter_ramps)
+                            y, pols, cmaps=self._scatter_ramps,
+                            colorize_overrides=colorize_overrides)
                         log.debug("_handle_plot: panel %s scatter update_axes "
                                   "x=%s layers=%s", slot.id, x,
                                   [(l.y_axis, l.polarization) for l in layers])
                         panel._x_dim = None
-                        panel.update_axes(x_dim=x, layers=layers)
+                        # Async + to_thread + this panel's own
+                        # _render_lock -- same reasoning as the raster
+                        # branch above.
+                        async with panel._render_lock:
+                            await asyncio.to_thread(
+                                panel.update_axes, x_dim=x, layers=layers)
                         # POST-2026-09: _layer_aggs is permanently
                         # [None] * n now (vestigial -- see
                         # ScatterRenderResult's docstring in
@@ -3206,6 +3337,35 @@ for (const dt of other.tools) {
                                if axes_changed else None,
                     "title":   panel._effective_title()    if axes_changed else None,
                     "state":   panel._state_data()         if axes_changed else None,
+                    # Permanent per-panel legend (Part 5, 2026-09).
+                    # Always sent, same reasoning as `image` above: this
+                    # app has no live Bokeh server, so Python setting
+                    # panel._legend_content.text/panel._legend_toggle.visible
+                    # (done automatically inside update_axes() -> ...
+                    # -> _update_legend(), whenever axes_changed is True)
+                    # does nothing in the browser on its own -- it has to
+                    # be read back out here and applied client-side by
+                    # doPlot()'s own response handler, exactly like
+                    # `image` already is. Sent even when axes_changed is
+                    # False so the legend stays correct/present if the
+                    # panel was already categorical from an earlier
+                    # press (raster's title/state/labels use `None` in
+                    # that case because THEY only matter when axes
+                    # actually moved; the legend's own content doesn't
+                    # depend on x/y ranges the way those do).
+                    #
+                    # legend_visible (Part 5 addendum, 2026-09): now
+                    # sourced from _legend_toggle.visible ("does the
+                    # Legend button exist at all") rather than the old
+                    # _legend_wrapper.visible ("is legend content
+                    # currently expanded") -- the info strip redesign
+                    # replaced the collapsible-below-cursor-tracking
+                    # legend (which could push the status line off
+                    # screen) with a fixed-height slot shared between
+                    # cursor-tracking and the legend; see
+                    # VisibilityPlot._build()'s own comment for why.
+                    "legend_html":    panel._legend_content.text,
+                    "legend_visible": panel._legend_toggle.visible,
                 }
 
         self._notify("")   # clear any previous warning
@@ -3526,6 +3686,18 @@ document.documentElement.style.background = '#181825';
         - ``styled_icons`` — the reset button's ``BuiltinIcon``, whose
           ``color`` doesn't live on the ``Button`` itself and so isn't
           reachable via `stylesheets` at all.
+        - ``styled_tables`` (Part 5, 2026-09) — ``colorize_controls()``'s
+          per-axis checklist ``DataTable``s. Kept separate from
+          ``styled``, not folded into that generic list, for the exact
+          reason the SPW table's own theming already isn't generic:
+          "DataTable renders through SlickGrid inside a shadow root, so
+          the generic widget CSS above never reaches it: it needs its
+          own sheet" (see the JS toggle's own '--- SPW DataTable ---'
+          comment). The caller applies the same
+          ``[sidebar_css, table_css_dark/light]`` swap to these that the
+          SPW table already gets — see ``_theme_restyle_args``'s
+          ``colorize_tables`` and the toggle JS's own
+          ``_step('colorize tables', ...)`` block.
 
         Button was previously not handled here at all (a real gap,
         found via live light-mode testing) — its dark colors were
@@ -3542,16 +3714,32 @@ document.documentElement.style.background = '#181825';
         would silently clobber the padding rule instead of actually
         updating the theme.
         """
-        from bokeh.models import Select, TextInput, Div, Button, Plot, RadioButtonGroup
+        from bokeh.models import (Select, TextInput, Div, Button, Plot,
+                                    RadioButtonGroup, DataTable)
 
         styled = []
         styled_figs = []
         styled_icons = []
+        styled_tables = []
 
         def _walk(node):
             if isinstance(node, (Select, TextInput)):
                 node.stylesheets = [dark_stylesheet]
                 styled.append(node)
+            elif isinstance(node, DataTable):
+                # Part 5: colorize_controls()'s per-axis checklists.
+                # Initial styling only -- self._table_css_dark is
+                # already an attribute by the time this runs (set
+                # earlier in _build_sidebar, well before the per-slot
+                # loop that reaches this method); the dark/light TOGGLE
+                # later swaps this same pairing via styled_tables, not
+                # by mutating this stylesheet's .css the way the widget
+                # loop does for Select/TextInput/RadioButtonGroup/
+                # Button -- DataTable needs a whole different sheet
+                # swapped in, matching the SPW table's own convention
+                # exactly (see this method's docstring).
+                node.stylesheets = [dark_stylesheet, self._table_css_dark]
+                styled_tables.append(node)
             elif isinstance(node, RadioButtonGroup):
                 # Part 4: colorize_controls()'s Continuous/Categorical
                 # switch -- same treatment as Select/TextInput above (a
@@ -3594,7 +3782,7 @@ document.documentElement.style.background = '#181825';
                     _walk(child)
 
         _walk(cmap_col)
-        return styled, styled_figs, styled_icons
+        return styled, styled_figs, styled_icons, styled_tables
 
     # ---------------------------------------------------------------------- #
     # Sidebar                                                                  #
@@ -3691,7 +3879,7 @@ conflict_div.text = conflict ? msg : '';
         rx_sel.js_on_change("value", conflict_js)
 
         raster_cmap  = slot.raster.colormap_controls()
-        cmap_widgets, cmap_figs, cmap_icons = self._style_cmap_column(raster_cmap, dark)
+        cmap_widgets, cmap_figs, cmap_icons, _no_tables = self._style_cmap_column(raster_cmap, dark)
 
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
@@ -3704,6 +3892,11 @@ conflict_div.text = conflict ? msg : '';
             "y_sel": ry_sel, "x_sel": rx_sel, "q_sel": rq_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
+            # Always empty for raster -- no colorize-by-axis checklist
+            # exists here -- but present so the generic "flatten
+            # cmap_tables across both kinds" loop below never needs a
+            # kind-specific branch for this key.
+            "cmap_tables": [],
         }
         return panel, widgets
 
@@ -3731,14 +3924,19 @@ conflict_div.text = conflict ? msg : '';
 
         Mutual exclusivity (design doc Sec 4.3) between a layer's
         scaling controls and its colorize controls is wired here, not
-        inside ``colorize_controls()``: that method already manages its
-        own axis-picker/legend visibility, but has no reference to the
+        inside ``colorize_controls()``: that method manages its own
+        axis-picker/checklist visibility, but has no reference to the
         sibling ``colormap_controls()`` column it needs to hide. Found
         by class (``RadioButtonGroup``) among ``_style_cmap_column``'s
-        already-flattened widget list rather than by threading a new
-        return value through ``colorize_controls()`` — a
-        ``RadioButtonGroup`` only ever appears in this tree as that
-        method's own mode switch.
+        already-flattened widget list — ``colorize_controls()`` does
+        return a handles dict now (Part 5, 2026-09: ``doPlot()`` needs
+        direct references to its ``mode_group``/``axis_select``/
+        ``checklists`` to read their staged values from), but this
+        mutual-exclusivity lookup predates that and stays as it was —
+        a ``RadioButtonGroup`` only ever appears in this tree as that
+        method's own mode switch, so the by-class lookup is no less
+        precise than threading the same reference through a second
+        path would be.
 
         Returns
         -------
@@ -3749,8 +3947,11 @@ conflict_div.text = conflict ? msg : '';
             ``cmap_figs``, ``cmap_icons`` — the last three flattened
             across every layer, not just the visible one, so the dark/
             light toggle recolors all of them regardless of which is
-            currently shown. Stored by the caller in
-            ``self._panel_axis_widgets[slot.id]["scatter"]``.
+            currently shown. Also ``colorize_handles`` (Part 5, 2026-09)
+            — one entry per layer, each ``colorize_controls()``'s own
+            returned handles dict, for ``doPlot()``'s payload-building
+            JS to read staged colorize state from. Stored by the caller
+            in ``self._panel_axis_widgets[slot.id]["scatter"]``.
         """
         sx_sel = Select(
             title="Scatter X axis", value=self._scatter_x.name,
@@ -3767,15 +3968,19 @@ conflict_div.text = conflict ? msg : '';
         cmap_widgets: list = []
         cmap_figs:    list = []
         cmap_icons:   list = []
+        cmap_tables:  list = []
         layer_columns: list = []
+        colorize_handles: list = []
         for i, lyr in enumerate(layers):
             scatter_cmap = slot.scatter.colormap_controls(layer_index=i)
-            colorize_col = slot.scatter.colorize_controls(layer_index=i)
+            colorize_col, colorize_handles_i = slot.scatter.colorize_controls(layer_index=i)
+            colorize_handles.append(colorize_handles_i)
             combined = column(scatter_cmap, colorize_col, width=_SIDEBAR_WIDTH)
-            widgets_i, figs_i, icons_i = self._style_cmap_column(combined, dark)
+            widgets_i, figs_i, icons_i, tables_i = self._style_cmap_column(combined, dark)
             cmap_widgets += widgets_i
             cmap_figs    += figs_i
             cmap_icons   += icons_i
+            cmap_tables  += tables_i
 
             mode_groups = [w for w in widgets_i if isinstance(w, RadioButtonGroup)]
             if mode_groups:
@@ -3818,6 +4023,20 @@ for (let i = 0; i < cols.length; i++) {
             "layer_select": layer_select, "layer_columns": layer_columns,
             "cmap_widgets": cmap_widgets,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
+            # Part 5, 2026-09: colorize_controls()'s per-axis checklist
+            # DataTables, flattened across every layer -- kept separate
+            # from cmap_widgets (see _style_cmap_column's docstring for
+            # why DataTable can't use the same generic stylesheet-swap
+            # the rest of that list gets).
+            "cmap_tables": cmap_tables,
+            # One entry per layer, same order as `layers`/`layer_columns`
+            # -- each is colorize_controls()'s own returned handles dict
+            # ({"mode_group", "axis_select", "checklists"}). doPlot()'s
+            # payload-building JS (Part 5) reads these to stage each
+            # layer's colorize state into the same per-panel payload it
+            # already builds from x_sel/y_sel -- see colorize_controls()'s
+            # own docstring for why this is staged, not live.
+            "colorize_handles": colorize_handles,
         }
         return panel, widgets
 
@@ -4331,7 +4550,30 @@ btn.label        = collapsing ? '⟩' : '⟨';
 // why this is the right fix rather than another timing workaround.
 if (!window.__cvInstallSelectViewGuard) {
     window.__cvInstallSelectViewGuard = function() {
-        if (window.__cvSelectViewGuarded) return;
+        // Part 4 (2026-09), found via a real forEach crash: the same
+        // orphaned-twin problem this guard exists for also hits
+        // RadioButtonGroup, not just Select -- colorize_controls()
+        // puts one inside a dynamically-added gear tab for the first
+        // time, and Bokeh's RadioButtonGroupView._update_active() does
+        // `this._buttons.forEach(...)` with no existence check, same
+        // shape as the pre-guard Select crash on a missing input_el.
+        //
+        // Part 5 (2026-09), found via real SlickGrid crashes when
+        // checking a category checklist box: the SAME orphaned-twin
+        // problem hits DataTable too, in TWO distinct ways -- see the
+        // two DataTable-specific blocks below for each one's own
+        // rationale. colorize_controls()'s per-axis checklist tables
+        // are this app's first DataTables living inside a dynamically-
+        // added gear tab (the permanent sidebar's own SPW table is
+        // never inside one, which is why it never hit this).
+        //
+        // Independent flags (not one) so whichever widget type has an
+        // instance available on a given call gets patched now, and the
+        // others still get a chance on a later call -- a fresh scatter
+        // panel can add a RadioButtonGroup/DataTable before any Select
+        // has rendered, or vice versa on a raster-only panel.
+        if (window.__cvSelectViewGuarded && window.__cvRadioButtonGroupViewGuarded &&
+            window.__cvDataTableViewGuarded && window.__cvSlickGridStyleGuarded) return;
         // Deferred: the just-added tab's views build asynchronously
         // (Bokeh's own lazy_initialize()/build_views() are awaited
         // internally), so none may exist yet at the point this is
@@ -4340,12 +4582,12 @@ if (!window.__cvInstallSelectViewGuard) {
         // by which point at least the one view that WILL render must
         // already exist for the user to have anything to click.
         setTimeout(function() {
-            if (window.__cvSelectViewGuarded) return;
-            function findSelectView(v) {
-                if (v.model && v.model.type === 'Select') return v;
+            function findView(v, want_type, predicate) {
+                if (v.model && v.model.type === want_type &&
+                    (!predicate || predicate(v))) return v;
                 if (v._child_views) {
                     for (const c of v._child_views.values()) {
-                        const found = findSelectView(c);
+                        const found = findView(c, want_type, predicate);
                         if (found) return found;
                     }
                 }
@@ -4354,29 +4596,152 @@ if (!window.__cvInstallSelectViewGuard) {
             const roots = (window.Bokeh && Bokeh.index)
                 ? Object.values(Bokeh.index).map(function(e) { return e.model_view || e; })
                 : [];
-            let found = null;
-            for (let i = 0; i < roots.length; i++) {
-                found = findSelectView(roots[i]);
-                if (found) break;
+            if (!window.__cvSelectViewGuarded) {
+                let found = null;
+                for (let i = 0; i < roots.length; i++) {
+                    found = findView(roots[i], 'Select');
+                    if (found) break;
+                }
+                if (found) {
+                    const proto = found.constructor.prototype;
+                    const orig  = proto._update_value;
+                    proto._update_value = function() {
+                        // The orphaned twin every Select-containing tab
+                        // gets the first time it's added to a Tabs widget
+                        // (unavoidable in this no-Bokeh-server app -- see
+                        // the full explanation at the call site below)
+                        // never attaches to the DOM, so it has no
+                        // input_el. It's otherwise harmless -- the view
+                        // that DOES render always re-syncs via its own
+                        // render() -- this guard just stops Bokeh's
+                        // default _update_value() from assuming input_el
+                        // exists unconditionally.
+                        if (!this.input_el) return;
+                        return orig.apply(this, arguments);
+                    };
+                    window.__cvSelectViewGuarded = true;
+                }
             }
-            if (found) {
-                const proto = found.constructor.prototype;
-                const orig  = proto._update_value;
-                proto._update_value = function() {
-                    // The orphaned twin every Select-containing tab
-                    // gets the first time it's added to a Tabs widget
-                    // (unavoidable in this no-Bokeh-server app -- see
-                    // the full explanation at the call site below)
-                    // never attaches to the DOM, so it has no
-                    // input_el. It's otherwise harmless -- the view
-                    // that DOES render always re-syncs via its own
-                    // render() -- this guard just stops Bokeh's
-                    // default _update_value() from assuming input_el
-                    // exists unconditionally.
-                    if (!this.input_el) return;
-                    return orig.apply(this, arguments);
-                };
-                window.__cvSelectViewGuarded = true;
+            if (!window.__cvRadioButtonGroupViewGuarded) {
+                let found = null;
+                for (let i = 0; i < roots.length; i++) {
+                    found = findView(roots[i], 'RadioButtonGroup');
+                    if (found) break;
+                }
+                if (found) {
+                    const proto = found.constructor.prototype;
+                    const orig  = proto._update_active;
+                    proto._update_active = function() {
+                        // Same rationale as the Select guard above --
+                        // the orphaned twin's render() never ran, so
+                        // _buttons (populated there) is still
+                        // undefined when a property change tries to
+                        // sync it.
+                        if (!this._buttons) return;
+                        return orig.apply(this, arguments);
+                    };
+                    window.__cvRadioButtonGroupViewGuarded = true;
+                }
+            }
+            if (!window.__cvDataTableViewGuarded) {
+                // Any DataTableView instance at all works here -- this
+                // patches the shared constructor prototype, not the
+                // specific instance found, so it doesn't matter whether
+                // THIS one is itself an orphaned twin (unlike the
+                // SlickGrid block below, which needs a instance whose
+                // own .grid is real).
+                let found = null;
+                for (let i = 0; i < roots.length; i++) {
+                    found = findView(roots[i], 'DataTable');
+                    if (found) break;
+                }
+                if (found) {
+                    const proto = found.constructor.prototype;
+                    const orig  = proto.updateSelection;
+                    proto.updateSelection = function() {
+                        // Confirmed via Bokeh 3.10's actual shipped
+                        // bokeh-tables.js: updateSelection() ends with
+                        // `this.grid.setSelectedRows([...])`, with no
+                        // existence check on this.grid -- the orphaned
+                        // twin's render() (where `this.grid = new
+                        // SlickGrid(...)` happens) never ran, so a
+                        // ColumnDataSource.selected change (checking a
+                        // checklist box) tries to sync a grid that was
+                        // never built: "Cannot read properties of
+                        // undefined (reading 'setSelectedRows')" --
+                        // exactly the reported crash. The real, rendered
+                        // twin always has its own working .grid and
+                        // re-syncs correctly; this guard only silences
+                        // the orphan's attempt.
+                        if (!this.grid) return;
+                        return orig.apply(this, arguments);
+                    };
+                    // Second, independent crash on the same class of
+                    // bug, found one round later (Part 5 addendum):
+                    // "SlickGrid requires a valid container, undefined
+                    // does not exist in the DOM." Confirmed via the
+                    // same bokeh-tables.js: render() sets
+                    // this.wrapper_el unconditionally, but
+                    // _after_render() (a separate Bokeh lifecycle hook)
+                    // calls _render_table(), which constructs
+                    // `new SlickGrid(this.wrapper_el, ...)` --
+                    // this.wrapper_el is undefined on the orphaned twin,
+                    // so this throws INSIDE the SlickGrid constructor
+                    // itself, before there is even a `this.grid` for
+                    // the updateSelection guard above to check. Same
+                    // fix shape: skip building the grid entirely for
+                    // an instance that was never given a real wrapper
+                    // element; the real, rendered twin is unaffected.
+                    const orig_render_table = proto._render_table;
+                    proto._render_table = function() {
+                        if (!this.wrapper_el) return;
+                        return orig_render_table.apply(this, arguments);
+                    };
+                    window.__cvDataTableViewGuarded = true;
+                }
+            }
+            if (!window.__cvSlickGridStyleGuarded) {
+                // Needs an instance whose OWN .grid is real (not an
+                // orphaned twin) -- this reaches into SlickGrid's own
+                // prototype (a third-party library bundled inside
+                // Bokeh, accessed via view.grid, not a Bokeh model/view
+                // itself), which only exists on an instance that
+                // actually finished constructing one.
+                let found = null;
+                for (let i = 0; i < roots.length; i++) {
+                    found = findView(roots[i], 'DataTable', function(v) { return !!v.grid; });
+                    if (found) break;
+                }
+                if (found) {
+                    const proto = Object.getPrototypeOf(found.grid);
+                    const orig  = proto.getColumnCssRules;
+                    proto.getColumnCssRules = function(idx) {
+                        // Confirmed via Bokeh 3.10's actual shipped
+                        // bokeh-tables.js: SlickGrid caches a <style>
+                        // element it created and injected into
+                        // (this._options.shadowRoot || document.head) at
+                        // grid-construction time, then later looks it up
+                        // again via (this._options.shadowRoot ||
+                        // document).styleSheets -- throwing "SlickGrid
+                        // Cannot find stylesheet." if it's missing. An
+                        // orphaned twin's shadow root gets discarded
+                        // once the real view takes over, but something
+                        // (a resize/layout pass) still runs this lookup
+                        // against the orphan's now-stale shadowRoot
+                        // reference, which no longer resolves to
+                        // anything in the current document. Column CSS
+                        // rules are only used for frozen-column border
+                        // positioning, which this app's checklist tables
+                        // never use -- a harmless empty fallback lets
+                        // the layout pass finish instead of throwing.
+                        try {
+                            return orig.call(this, idx);
+                        } catch (e) {
+                            return {left: {style: {}}, right: {style: {}}};
+                        }
+                    };
+                    window.__cvSlickGridStyleGuarded = true;
+                }
             }
         }, 0);
     };
@@ -4855,14 +5220,19 @@ if (sidebarEl && prevScrollTop !== null) {
 // the other's identical definition here is a no-op.
 if (!window.__cvInstallSelectViewGuard) {
     window.__cvInstallSelectViewGuard = function() {
-        if (window.__cvSelectViewGuarded) return;
+        // Part 4/5 (2026-09): generalized to also guard RadioButtonGroup
+        // and DataTable -- see gear_click_js's identical definition
+        // (kept here too for the idempotent-either-script-first reason
+        // above) for the full rationale on each.
+        if (window.__cvSelectViewGuarded && window.__cvRadioButtonGroupViewGuarded &&
+            window.__cvDataTableViewGuarded && window.__cvSlickGridStyleGuarded) return;
         setTimeout(function() {
-            if (window.__cvSelectViewGuarded) return;
-            function findSelectView(v) {
-                if (v.model && v.model.type === 'Select') return v;
+            function findView(v, want_type, predicate) {
+                if (v.model && v.model.type === want_type &&
+                    (!predicate || predicate(v))) return v;
                 if (v._child_views) {
                     for (const c of v._child_views.values()) {
-                        const found = findSelectView(c);
+                        const found = findView(c, want_type, predicate);
                         if (found) return found;
                     }
                 }
@@ -4871,19 +5241,77 @@ if (!window.__cvInstallSelectViewGuard) {
             const roots = (window.Bokeh && Bokeh.index)
                 ? Object.values(Bokeh.index).map(function(e) { return e.model_view || e; })
                 : [];
-            let found = null;
-            for (let i = 0; i < roots.length; i++) {
-                found = findSelectView(roots[i]);
-                if (found) break;
+            if (!window.__cvSelectViewGuarded) {
+                let found = null;
+                for (let i = 0; i < roots.length; i++) {
+                    found = findView(roots[i], 'Select');
+                    if (found) break;
+                }
+                if (found) {
+                    const proto = found.constructor.prototype;
+                    const orig  = proto._update_value;
+                    proto._update_value = function() {
+                        if (!this.input_el) return;
+                        return orig.apply(this, arguments);
+                    };
+                    window.__cvSelectViewGuarded = true;
+                }
             }
-            if (found) {
-                const proto = found.constructor.prototype;
-                const orig  = proto._update_value;
-                proto._update_value = function() {
-                    if (!this.input_el) return;
-                    return orig.apply(this, arguments);
-                };
-                window.__cvSelectViewGuarded = true;
+            if (!window.__cvRadioButtonGroupViewGuarded) {
+                let found = null;
+                for (let i = 0; i < roots.length; i++) {
+                    found = findView(roots[i], 'RadioButtonGroup');
+                    if (found) break;
+                }
+                if (found) {
+                    const proto = found.constructor.prototype;
+                    const orig  = proto._update_active;
+                    proto._update_active = function() {
+                        if (!this._buttons) return;
+                        return orig.apply(this, arguments);
+                    };
+                    window.__cvRadioButtonGroupViewGuarded = true;
+                }
+            }
+            if (!window.__cvDataTableViewGuarded) {
+                let found = null;
+                for (let i = 0; i < roots.length; i++) {
+                    found = findView(roots[i], 'DataTable');
+                    if (found) break;
+                }
+                if (found) {
+                    const proto = found.constructor.prototype;
+                    const orig  = proto.updateSelection;
+                    proto.updateSelection = function() {
+                        if (!this.grid) return;
+                        return orig.apply(this, arguments);
+                    };
+                    const orig_render_table = proto._render_table;
+                    proto._render_table = function() {
+                        if (!this.wrapper_el) return;
+                        return orig_render_table.apply(this, arguments);
+                    };
+                    window.__cvDataTableViewGuarded = true;
+                }
+            }
+            if (!window.__cvSlickGridStyleGuarded) {
+                let found = null;
+                for (let i = 0; i < roots.length; i++) {
+                    found = findView(roots[i], 'DataTable', function(v) { return !!v.grid; });
+                    if (found) break;
+                }
+                if (found) {
+                    const proto = Object.getPrototypeOf(found.grid);
+                    const orig  = proto.getColumnCssRules;
+                    proto.getColumnCssRules = function(idx) {
+                        try {
+                            return orig.call(this, idx);
+                        } catch (e) {
+                            return {left: {style: {}}, right: {style: {}}};
+                        }
+                    };
+                    window.__cvSlickGridStyleGuarded = true;
+                }
             }
         }, 0);
     };
@@ -4931,11 +5359,50 @@ function doPlot(reload) {
     // always scatter) — kind is still read from each slot's own switch
     // and sent honestly, but _handle_plot() rejects an actual mismatch
     // rather than this chunk attempting to render one (that's Chunk 2).
-    function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel) {
+    function buildColorizeArray(colorize_handles) {
+        // Part 5 (2026-09): one entry per scatter layer -- either null
+        // ("stays continuous", the default) or
+        // {coloring: 'categorical', colorize_axis: <name>,
+        //  excluded_categories: [...]} -- read from colorize_controls()'s
+        // own staged widgets (mode_group/axis_select/checklists), the
+        // same way sx_sel.value/sy_sel.value are read below. Nothing is
+        // sent live when these widgets change (see
+        // VisibilityScatter.colorize_controls()'s docstring for why) --
+        // this is the ONE place their current values actually leave the
+        // browser, exactly like every other staged control here.
+        return colorize_handles.map(function(h) {
+            if (h.mode_group.active !== 1) {
+                return null;  // continuous -- explicit null, not omitted,
+                               // so a layer switched back from categorical
+                               // is unambiguous rather than "unspecified".
+            }
+            const axis_name = h.axis_select.value;
+            const entry = h.checklists[axis_name];
+            if (!entry) {
+                return null;  // defensive only -- axis_select.value should
+                               // always be one of h.checklists' own keys.
+            }
+            const source = entry[1];
+            const values = source.data['value'];
+            const selected = new Set(source.selected.indices);
+            const excluded = [];
+            for (let i = 0; i < values.length; i++) {
+                if (!selected.has(i)) {
+                    excluded.push(values[i]);
+                }
+            }
+            return {coloring: 'categorical', colorize_axis: axis_name,
+                    excluded_categories: excluded};
+        });
+    }
+
+    function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel,
+                                colorize_handles) {
         if (kind_switch.active === 0) {
             return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value};
         } else {
-            return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value};
+            return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value,
+                     colorize: buildColorizeArray(colorize_handles)};
         }
     }
     function rasterConflict(kind_switch, ry_sel, rx_sel) {
@@ -4970,10 +5437,10 @@ function doPlot(reload) {
     const panels = {};
     panels[panel0_id] = buildPanelPayload(
         panel0_kind_switch, panel0_ry_sel, panel0_rx_sel, panel0_rq_sel,
-        panel0_sx_sel, panel0_sy_sel);
+        panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles);
     panels[panel1_id] = buildPanelPayload(
         panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
-        panel1_sx_sel, panel1_sy_sel);
+        panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles);
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
 
@@ -4994,6 +5461,30 @@ function doPlot(reload) {
         return;
     }
 
+    // Busy feedback (2026-09): a categorical render in particular can
+    // take long enough that, with no indication anything is happening,
+    // the user has reasonable cause to wonder whether the click
+    // registered at all. Set right before the actual send -- not
+    // earlier, so a validation failure above (an empty SPW selection)
+    // never leaves the UI stuck "busy" for a request that was never
+    // sent -- and cleared unconditionally at the very start of the
+    // response callback below, before even checking whether resp
+    // itself is present, since a malformed/null response still means
+    // the request finished and control should come back to the user.
+    plot_btn.disabled   = true;
+    reload_btn.disabled = true;
+    document.body.style.cursor = 'progress';
+    // Safety net: if the response never arrives at all (a dropped
+    // connection mid-request, say -- exactly the kind of thing this
+    // session's own transport fixes were about), this would otherwise
+    // leave the UI permanently stuck "busy". Harmless if the real
+    // response also arrives and runs the same reset a second time.
+    setTimeout(function() {
+        plot_btn.disabled   = false;
+        reload_btn.disabled = false;
+        document.body.style.cursor = '';
+    }, 30000);
+
     ctrl.send(ids['plot'], {
         field:       field_sel.value,
         spw_ids:     spw_ids,
@@ -5002,6 +5493,9 @@ function doPlot(reload) {
         panels:      panels,
         reload:      !!reload,
     }, function(resp) {
+        plot_btn.disabled   = false;
+        reload_btn.disabled = false;
+        document.body.style.cursor = '';
         if (!resp) return;
         console.log('[visplot doPlot] received status:', resp.status,
                      'panels:', resp.panels ? JSON.parse(JSON.stringify(resp.panels)) : resp.panels);
@@ -5092,6 +5586,32 @@ function doPlot(reload) {
                 panel0_raster_layout.visible  = (p0_kind === 'raster');
                 panel0_scatter_layout.visible = (p0_kind === 'scatter');
             }
+            // Permanent per-panel legend (Part 5 addendum, 2026-09):
+            // applied exactly like image/state above -- Python setting
+            // panel._legend_content.text/panel._legend_toggle.visible
+            // does nothing in the browser on its own (no live Bokeh
+            // server here), so the response has to be read back out
+            // and applied client-side. Only for a panel that actually
+            // rendered scatter this round (p0_kind === 'scatter') --
+            // panel0_scatter_legend_* refers to slot 0's OWN scatter
+            // object regardless of which layout is currently visible,
+            // but a raster response has no legend fields to apply at
+            // all (they're simply absent from p0 in that case).
+            if (p0 && p0_kind === 'scatter' && p0.legend_html != null) {
+                panel0_scatter_legend_content.text = p0.legend_html;
+                panel0_scatter_legend_toggle.visible = !!p0.legend_visible;
+                if (!p0.legend_visible && panel0_scatter_legend_content.visible) {
+                    // The legend was the active view and just lost its
+                    // content (switched back to continuous) -- mirrors
+                    // VisibilityScatter._update_legend()'s own
+                    // server-side logic, which by itself has no effect
+                    // in the browser without this.
+                    panel0_scatter_legend_content.visible = false;
+                    panel0_scatter_info_div.visible = true;
+                    panel0_scatter_cursor_toggle.button_type = 'primary';
+                    panel0_scatter_legend_toggle.button_type = 'default';
+                }
+            }
         } catch(e) { console.warn('panel 0 update failed:', e); }
 
         // Update panel 1's figure + axes — same pattern as panel 0 above.
@@ -5142,6 +5662,17 @@ function doPlot(reload) {
             if (p1) {
                 panel1_raster_layout.visible  = (p1_kind === 'raster');
                 panel1_scatter_layout.visible = (p1_kind === 'scatter');
+            }
+            // Same reasoning as panel 0's legend block above.
+            if (p1 && p1_kind === 'scatter' && p1.legend_html != null) {
+                panel1_scatter_legend_content.text = p1.legend_html;
+                panel1_scatter_legend_toggle.visible = !!p1.legend_visible;
+                if (!p1.legend_visible && panel1_scatter_legend_content.visible) {
+                    panel1_scatter_legend_content.visible = false;
+                    panel1_scatter_info_div.visible = true;
+                    panel1_scatter_cursor_toggle.button_type = 'primary';
+                    panel1_scatter_legend_toggle.button_type = 'default';
+                }
             }
         } catch(e) { console.warn('panel 1 update failed:', e); }
 
@@ -5276,6 +5807,15 @@ function doPlot(reload) {
             "status_div": self._status_div,
             "notify_div": self._notify_div,
             "gear_tabs":  self._gear_tabs,
+            # Busy feedback (2026-09, reported: a categorical render can
+            # take long enough that the user has no indication anything
+            # is happening between pressing Plot and the panels
+            # updating). Both buttons -- not just whichever was
+            # clicked -- since doPlot() is shared between them and a
+            # request from either should block a second one starting
+            # from the other while the first is still in flight.
+            "plot_btn":   plot_btn,
+            "reload_btn": reload_btn,
             # Needed for validation-error auto-switch-to-tab (added
             # 2026-08-03): if the sidebar was collapsed when a failure
             # happens, gear_tabs.visible=true alone wouldn't be enough to
@@ -5307,6 +5847,13 @@ function doPlot(reload) {
             "panel0_rq_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["q_sel"],
             "panel0_sx_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["x_sel"],
             "panel0_sy_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["y_sel"],
+            # Part 5 (2026-09): one entry per scatter layer, in the
+            # same order as _make_scatter_layers()/pols -- see
+            # colorize_controls()'s own returned handles dict. doPlot()
+            # reads these to stage each layer's colorize-by-axis state
+            # into the panel payload, the same way it already reads
+            # sx_sel/sy_sel.
+            "panel0_colorize_handles": self._panel_axis_widgets[self._slots[0].id]["scatter"]["colorize_handles"],
             "panel1_id":          self._slots[1].id,
             "panel1_kind_switch": self._panel_kind_switch[self._slots[1].id],
             "panel1_ry_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["y_sel"],
@@ -5314,6 +5861,7 @@ function doPlot(reload) {
             "panel1_rq_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["q_sel"],
             "panel1_sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
             "panel1_sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
+            "panel1_colorize_handles": self._panel_axis_widgets[self._slots[1].id]["scatter"]["colorize_handles"],
             # Group 3 piece 3, Chunk 2 (added 2026-07-31): both kinds'
             # figure/image-source/state-source/layout per slot, replacing
             # the fixed r_fig/s_fig/r_img_src/s_img_src/r_state/s_state
@@ -5330,6 +5878,17 @@ function doPlot(reload) {
             "panel0_scatter_img_src": self._slots[0].scatter._image_source,
             "panel0_scatter_state":   self._slots[0].scatter._state_source,
             "panel0_scatter_layout":  self._slots[0].scatter.layout,
+            # Part 5 addendum (2026-09): the shared info-strip widgets
+            # -- see VisibilityPlot._build() for how these relate
+            # (cursor_toggle/legend_toggle switch which of
+            # info_div/legend_content is visible, within one
+            # fixed-height slot). None of these get a comm.send of
+            # their own; doPlot()'s response applies to them here, same
+            # pattern as image_source above.
+            "panel0_scatter_info_div":       self._slots[0].scatter._info_div,
+            "panel0_scatter_cursor_toggle":  self._slots[0].scatter._cursor_toggle,
+            "panel0_scatter_legend_content": self._slots[0].scatter._legend_content,
+            "panel0_scatter_legend_toggle":  self._slots[0].scatter._legend_toggle,
             "panel1_raster_fig":      self._slots[1].raster.figure,
             "panel1_raster_img_src":  self._slots[1].raster._image_source,
             "panel1_raster_state":    self._slots[1].raster._state_source,
@@ -5338,6 +5897,10 @@ function doPlot(reload) {
             "panel1_scatter_img_src": self._slots[1].scatter._image_source,
             "panel1_scatter_state":   self._slots[1].scatter._state_source,
             "panel1_scatter_layout":  self._slots[1].scatter.layout,
+            "panel1_scatter_info_div":       self._slots[1].scatter._info_div,
+            "panel1_scatter_cursor_toggle":  self._slots[1].scatter._cursor_toggle,
+            "panel1_scatter_legend_content": self._slots[1].scatter._legend_content,
+            "panel1_scatter_legend_toggle":  self._slots[1].scatter._legend_toggle,
         }
 
         plot_js = CustomJS(
@@ -5847,6 +6410,7 @@ doPlot();
         _all_axis_widgets = []
         _all_cmap_figs = []
         _all_cmap_icons = []
+        _all_cmap_tables = []
         for slot in self._slots:
             for kind in ("raster", "scatter"):
                 w = self._panel_axis_widgets[slot.id][kind]
@@ -5857,6 +6421,7 @@ doPlot();
                 _all_axis_widgets += w["cmap_widgets"]
                 _all_cmap_figs     += w["cmap_figs"]
                 _all_cmap_icons    += w["cmap_icons"]
+                _all_cmap_tables   += w["cmap_tables"]
 
         # Panels that have an image source, and the sources themselves.
         # Both the toolbar args and _panel_image_payloads() iterate this
@@ -5947,6 +6512,13 @@ doPlot();
                 "sidebar_css":     self._sidebar_css,
                 "table_css_dark":  self._table_css_dark,
                 "table_css_light": self._table_css_light,
+                # Part 5, 2026-09: colorize_controls()'s per-axis
+                # checklist DataTables, flattened across every panel and
+                # layer -- same [sidebar_css, table_css_dark/light] swap
+                # as spw_table above, applied to each in its own
+                # _step('colorize tables', ...) block (a list, unlike
+                # spw_table's single instance).
+                "colorize_tables": _all_cmap_tables,
                 "light_tabs_css": _LIGHT_TABS_CSS,
                 # For the p2j theme message appended to the restyle body.
                 "ctrl":           ctrl,

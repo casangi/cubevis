@@ -465,11 +465,24 @@ class ImagePipe( Model ):
                 self.__cached_chan = None
             return { 'result': 'OK', 'id': cmd['id'] }
 
-    def __init__( self, image, *args, mask=None, stats=False, **kwargs ):
+    def __init__( self, image, *args, mask=None, stats=False, lock=None, **kwargs ):
 
         self._comm_mgr = BokehInit.get_app_context( ).comm_mgr
         kwargs['dataid'] = str(uuid4( ))
-        kwargs['comm'] = self._comm_mgr.open( description="image cube updates" )
+        # `lock` (2026-09): shares handler-execution serialization with
+        # another Comm known to touch the same underlying data -- e.g.
+        # a Cube that owns this ImagePipe also opens its own "cube mask
+        # control" comm, and both ultimately read/write the same image/
+        # mask arrays. The per-comm_id send-side throttle (CommMgr.send)
+        # only ever protects one comm_id against itself, not two comms
+        # against each other, so without this two different comms'
+        # handlers could run concurrently against this same ImagePipe's
+        # state once either is made async (see CommMgr.open()'s `lock`
+        # parameter docstring for the full rationale). None (the
+        # default, e.g. for an ImagePipe used standalone, not through a
+        # Cube) falls back to CommMgr.open()'s own default of a fresh,
+        # private-to-this-comm Lock.
+        kwargs['comm'] = self._comm_mgr.open( description="image cube updates", lock=lock )
 
         super( ).__init__( *args, **kwargs, )
 

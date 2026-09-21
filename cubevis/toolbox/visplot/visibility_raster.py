@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import asyncio
 from typing import Optional, TYPE_CHECKING
 from uuid import uuid4
 
@@ -1517,11 +1518,20 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         self._comm.register(self._msg_color_mode,  self._handle_set_color_mode_raster)
         self._comm.register(self._msg_update_scaling, self._handle_update_scaling_raster)
 
-    def _handle_set_color_mode_raster(self, message: dict) -> dict:
-        """Handle j2p message to toggle color mode: {mode: "global"|"local"}."""
+    async def _handle_set_color_mode_raster(self, message: dict) -> dict:
+        """Handle j2p message to toggle color mode: {mode: "global"|"local"}.
+
+        Async + to_thread (2026-09, matching visibility_scatter.py's
+        identical treatment): set_color_mode() ends in a real re-render
+        (a backend query), which can run long enough to starve this
+        connection's own ping/pong keepalive if run inline on the event
+        loop. Safe now via CommMgr._handle_request's per-comm Lock
+        (this instance's self._render_lock, shared with
+        self._flag_comm -- see visibility_plot.py).
+        """
         mode = message.get("mode", "global")
         try:
-            self.set_color_mode(mode)
+            await asyncio.to_thread(self.set_color_mode, mode)
         except ValueError as exc:
             return {"status": "error", "message": str(exc)}
         # Return the new image so JS can update image_source directly
@@ -1536,15 +1546,19 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             "y1":         src["y"][0] + src["dh"][0],
         }
 
-    def _handle_update_scaling_raster(self, message: dict) -> dict:
+    async def _handle_update_scaling_raster(self, message: dict) -> dict:
         """Handle j2p 'vr_update_scaling': {scaling, alpha, gamma, vmin, vmax, reset_range}.
 
         All fields optional; omitted fields keep their current value.
         Returns the re-shaded image so JS can update image_source
         directly, mirroring _handle_set_color_mode_raster.
+
+        Async + to_thread -- see that method's docstring; update_scaling()
+        also ends in a real re-render.
         """
         try:
-            self.update_scaling(
+            await asyncio.to_thread(
+                self.update_scaling,
                 scaling     = message.get("scaling"),
                 alpha       = message.get("alpha"),
                 gamma       = message.get("gamma"),
@@ -1571,9 +1585,16 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             "y1":            src["y"][0] + src["dh"][0],
         }
 
-    def _handle_update_axes_raster(self, message: dict) -> dict:
-        """Handle j2p 'vr_update_axes' with raster-specific fields."""
-        self.update_axes(
+    async def _handle_update_axes_raster(self, message: dict) -> dict:
+        """Handle j2p 'vr_update_axes' with raster-specific fields.
+
+        Async + to_thread -- see _handle_set_color_mode_raster's
+        docstring; update_axes() (this is the handler behind "change
+        the raster's axis/quantity and replot") also ends in a real
+        re-render.
+        """
+        await asyncio.to_thread(
+            self.update_axes,
             y_dim        = self._parse_axis(message, "y_dim"),
             x_dim        = self._parse_axis(message, "x_dim"),
             quantity     = self._parse_axis(message, "quantity"),

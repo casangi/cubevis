@@ -164,6 +164,26 @@ class ScatterLayerSpec:
     in ``__post_init__`` so a Part 4 wiring bug surfaces at
     ``ScatterLayerSpec`` construction, not three calls later inside
     ``_scatter_render.render_layer``.
+
+    ``excluded_categories`` (Part 5, 2026-09): raw per-sample values
+    (e.g. individual antenna names -- not a post-binning display label
+    like a bucketed range) to leave out of both the render and the
+    returned ``categories``/``category_colors``/``category_members``.
+    Raw, not display, values because the checklist that populates this
+    is built from cheap, already-cached ``IdentityTables`` metadata
+    (the widget layer's own "similar to SPW" enumeration -- see
+    ``VisibilityScatter.colorize_controls()``), which only ever
+    enumerates individual real values, never how a particular render
+    will eventually bucket them (see ``_resolve_categories``'s
+    docstring for the full reasoning). Only meaningful when
+    ``coloring="categorical"`` -- validated the same way
+    ``colorize_axis`` is, and for the same reason: a continuous layer
+    has no categories to exclude, so a non-empty value here on one
+    would silently do nothing rather than surface the caller's mistake.
+    A tuple, not a ``frozenset``, so this round-trips over the same
+    JSON-primitive wire support as every other field here; converted to
+    a set only where membership testing actually happens
+    (``_resolve_categories``).
     """
     y_axis:        Axis
     polarization:  str
@@ -176,6 +196,7 @@ class ScatterLayerSpec:
     scaling_vmax:  Optional[float] = None
     coloring:      str = "continuous"
     colorize_axis: Optional[Axis] = None
+    excluded_categories: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.coloring not in ("continuous", "categorical"):
@@ -199,11 +220,17 @@ class ScatterLayerSpec:
                     "ScatterLayerSpec.coloring='categorical' requires "
                     "a non-empty cmap (the per-category color set)"
                 )
-        elif self.colorize_axis is not None:
-            raise ValueError(
-                "ScatterLayerSpec.colorize_axis is only valid when "
-                "coloring='categorical'"
-            )
+        else:
+            if self.colorize_axis is not None:
+                raise ValueError(
+                    "ScatterLayerSpec.colorize_axis is only valid when "
+                    "coloring='categorical'"
+                )
+            if self.excluded_categories:
+                raise ValueError(
+                    "ScatterLayerSpec.excluded_categories is only valid "
+                    "when coloring='categorical'"
+                )
 
 
 @dataclass(frozen=True)

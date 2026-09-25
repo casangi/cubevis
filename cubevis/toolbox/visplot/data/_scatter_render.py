@@ -58,8 +58,15 @@ try:
 except ImportError:
     HAS_DATASHADER = False
 
+try:
+    from scipy.ndimage import minimum_filter, maximum_filter
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+
 from .. import colormap_scaling as _cms
-from .reader import (ScatterLayerSpec, ScatterLayerRender, COLORIZE_AXIS_COLUMNS,
+from .reader import (ScatterLayerSpec, ScatterLayerRender, ScatterLayerReference,
+                     COLORIZE_AXIS_COLUMNS,
                      OTHER_CATEGORY_LABEL, OTHER_CATEGORY_COLOR, OTHER_CATEGORY_ALPHA)
 
 # Mirrors VisibilityScatter._MIN_ALPHA -- see that module's docstring
@@ -460,6 +467,42 @@ def _priority_shade(
     return img, color_key
 
 
+def _categorical_count_agg(
+    df: pd.DataFrame, cat: _Categorization, cvs: "ds.Canvas",
+):
+    """Bin *df* into a per-category count cube at *cvs*'s resolution.
+
+    Factored out of ``_shade_categorical`` (2026-09, two-level rendering)
+    so ``build_layer_reference`` can run the identical binning step at a
+    DIFFERENT (typically higher) resolution to build a cached reference
+    cube, without duplicating the categorical-DataFrame construction.
+    Pure aggregation, no shading -- see ``_priority_shade`` for that half.
+
+    Only rows with ``bucket >= 0`` reach ``cvs.points()`` -- see
+    ``_categorize`` for why a NaN-category row must never get to
+    ``ds_agg.by()``.  The categorical column is built straight from the
+    integer codes (``Categorical.from_codes``), never from strings.
+
+    Returned dims are ``("y", "x", "__category__")`` -- Datashader's own
+    ``ds_agg.by()`` output order.  This is NOT the dim order
+    ``Canvas.raster()`` expects for a 3D array (band dimension first,
+    per its own docstring) -- callers resampling this cube (see
+    ``resample_layer_reference``) must transpose before and after, not
+    assume it can be passed straight through.
+    """
+    x = df["x"].to_numpy()
+    y = df["y"].to_numpy()
+    bucket = cat.bucket
+    keep = bucket >= 0
+    if not keep.all():                        # skip three full-length copies when unneeded
+        x, y, bucket = x[keep], y[keep], bucket[keep]
+    df_cat = pd.DataFrame({
+        "x": x, "y": y,
+        "__category__": pd.Categorical.from_codes(bucket, categories=cat.categories),
+    })
+    return cvs.points(df_cat, "x", "y", ds_agg.by("__category__", ds_agg.count()))
+
+
 def _shade_categorical(
     df: pd.DataFrame, cat: _Categorization, cmap: tuple[str, ...],
     cvs: "ds.Canvas", priority: str,
@@ -474,23 +517,8 @@ def _shade_categorical(
     raising (in practice it never triggers: ``_bin_categories`` caps the
     count at ``CATEGORY_CAP`` and ``palettes.categorical_cmap()`` provides
     that many colors; kept as a safety net).
-
-    Only rows with ``bucket >= 0`` reach ``cvs.points()`` -- see
-    ``_categorize`` for why a NaN-category row must never get to
-    ``ds_agg.by()``.  The categorical column is built straight from the
-    integer codes (``Categorical.from_codes``), never from strings.
     """
-    x = df["x"].to_numpy()
-    y = df["y"].to_numpy()
-    bucket = cat.bucket
-    keep = bucket >= 0
-    if not keep.all():                        # skip three full-length copies when unneeded
-        x, y, bucket = x[keep], y[keep], bucket[keep]
-    df_cat = pd.DataFrame({
-        "x": x, "y": y,
-        "__category__": pd.Categorical.from_codes(bucket, categories=cat.categories),
-    })
-    agg = cvs.points(df_cat, "x", "y", ds_agg.by("__category__", ds_agg.count()))
+    agg = _categorical_count_agg(df, cat, cvs)
     return _priority_shade(agg, cat.categories, cmap, priority, cat.population,
                            cat.other_index)
 
@@ -566,6 +594,67 @@ def _empty_render(canvas_h: int, canvas_w: int, reason: str) -> ScatterLayerRend
         n_in_view=0, skip_reason=reason, peak_value=None,
         hist_counts=None, hist_edges=None, mapping_x=None, mapping_u=None,
     )
+
+
+def _compute_id_grid(
+    df: pd.DataFrame, x0: float, x1: float, y0: float, y1: float,
+    canvas_w: int, canvas_h: int, probe_grid_max_cells: int,
+) -> dict:
+    """The coarse per-bin native-coordinate-range grid (hover-probe
+    redesign piece 2) -- see ``render_layer``'s docstring for the full
+    rationale for why it's a separate, coarser pass from the display
+    agg. Factored out of ``render_layer`` (2026-09, two-level rendering)
+    so ``build_layer_reference`` can compute the SAME grid, at the SAME
+    resolution, over a reference call's own extent, and additionally
+    dilate it (``_dilate_bounds``) -- see that function's docstring for
+    why the raw (undilated) grid is unsafe to resample later.
+
+    Conditional per native-coordinate column, exactly as before this
+    refactor: a caller (or an older DataFrame construction path mid
+    transition) that hasn't populated one of "time"/"baseline_id"/
+    "frequency" simply doesn't get that pair of keys in the returned
+    dict, rather than failing the whole computation. The coarse mean
+    reading (``"value"``) only needs x/y, which always exist, so it is
+    always present.
+
+    Returns a dict keyed ``"value"``, and any of ``"t_lo"``/``"t_hi"``,
+    ``"bl_lo"``/``"bl_hi"``, ``"freq_lo"``/``"freq_hi"`` that applied --
+    values are the raw ``id_agg["..."]`` ``xr.DataArray``s (NOT
+    ``.values``), so a caller can either pull ``.values`` directly
+    (``render_layer``'s own usage) or dilate-then-cache them as
+    ``xr.DataArray``s (``build_layer_reference``'s usage, which needs
+    the coordinate wrapper to resample via ``Canvas.raster()`` later).
+    """
+    id_cols = [c for c in ("time", "baseline_id", "frequency") if c in df.columns]
+    id_w, id_h = _id_grid_size(canvas_w, canvas_h, probe_grid_max_cells)
+    id_cvs = ds.Canvas(
+        plot_width=id_w, plot_height=id_h,
+        x_range=(x0, x1), y_range=(y0, y1),
+    )
+    summary_kwargs = {"val": ds_agg.mean("y")}
+    if "time" in id_cols:
+        summary_kwargs["t_lo"] = ds_agg.min("time")
+        summary_kwargs["t_hi"] = ds_agg.max("time")
+    if "baseline_id" in id_cols:
+        summary_kwargs["bl_lo"] = ds_agg.min("baseline_id")
+        summary_kwargs["bl_hi"] = ds_agg.max("baseline_id")
+    if "frequency" in id_cols:
+        summary_kwargs["f_lo"] = ds_agg.min("frequency")
+        summary_kwargs["f_hi"] = ds_agg.max("frequency")
+    # One aggregation pass computes all requested reductions together
+    # (Datashader's ds.summary()), not one pass per reduction -- seven
+    # reductions here cost the same single vectorized pass over df as a
+    # one-reduction agg, just a bigger (still tiny, ~id_w*id_h*7
+    # float64s) output.
+    id_agg = id_cvs.points(df, "x", "y", ds_agg.summary(**summary_kwargs))
+    out: dict = {"value": id_agg["val"]}
+    if "time" in id_cols:
+        out["t_lo"], out["t_hi"] = id_agg["t_lo"], id_agg["t_hi"]
+    if "baseline_id" in id_cols:
+        out["bl_lo"], out["bl_hi"] = id_agg["bl_lo"], id_agg["bl_hi"]
+    if "frequency" in id_cols:
+        out["freq_lo"], out["freq_hi"] = id_agg["f_lo"], id_agg["f_hi"]
+    return out
 
 
 def render_layer(
@@ -762,55 +851,20 @@ def render_layer(
         category_members_out = None
 
     # ---- hover-probe redesign piece 2: coarse identity grid -------- #
-    # A second, separate (much coarser) Canvas.points() pass -- see
-    # this function's docstring and _id_grid_size for why it can't just
-    # reuse the display `agg` above. Conditional per native-coordinate
-    # column: a caller (or an older DataFrame construction path mid
-    # transition) that hasn't populated one of "time"/"baseline_id"/
-    # "frequency" simply doesn't get that pair of id_grid_* fields,
-    # rather than failing the whole render.
-    id_grid_t_lo = id_grid_t_hi = None
-    id_grid_bl_lo = id_grid_bl_hi = None
-    id_grid_freq_lo = id_grid_freq_hi = None
-    id_grid_value = None
-    id_cols = [c for c in ("time", "baseline_id", "frequency") if c in df.columns]
-    if id_cols or True:
-        # "or True": id_grid_value (the coarse mean reading) only needs
-        # x/y, which always exist -- so the coarse grid is still worth
-        # computing even when none of the three identity columns made
-        # it into df (e.g. mid-transition), just with only the value
-        # field populated and all six range fields left None.
-        id_w, id_h = _id_grid_size(canvas_w, canvas_h, probe_grid_max_cells)
-        id_cvs = ds.Canvas(
-            plot_width=id_w, plot_height=id_h,
-            x_range=(x0, x1), y_range=(y0, y1),
-        )
-        summary_kwargs = {"val": ds_agg.mean("y")}
-        if "time" in id_cols:
-            summary_kwargs["t_lo"] = ds_agg.min("time")
-            summary_kwargs["t_hi"] = ds_agg.max("time")
-        if "baseline_id" in id_cols:
-            summary_kwargs["bl_lo"] = ds_agg.min("baseline_id")
-            summary_kwargs["bl_hi"] = ds_agg.max("baseline_id")
-        if "frequency" in id_cols:
-            summary_kwargs["f_lo"] = ds_agg.min("frequency")
-            summary_kwargs["f_hi"] = ds_agg.max("frequency")
-        # One aggregation pass computes all requested reductions
-        # together (Datashader's ds.summary()), not one pass per
-        # reduction -- seven reductions here cost the same single
-        # vectorized pass over df as the one-reduction display agg
-        # above, just a bigger (still tiny, ~id_w*id_h*7 float64s) output.
-        id_agg = id_cvs.points(df, "x", "y", ds_agg.summary(**summary_kwargs))
-        id_grid_value = id_agg["val"].values
-        if "time" in id_cols:
-            id_grid_t_lo = id_agg["t_lo"].values
-            id_grid_t_hi = id_agg["t_hi"].values
-        if "baseline_id" in id_cols:
-            id_grid_bl_lo = id_agg["bl_lo"].values
-            id_grid_bl_hi = id_agg["bl_hi"].values
-        if "frequency" in id_cols:
-            id_grid_freq_lo = id_agg["f_lo"].values
-            id_grid_freq_hi = id_agg["f_hi"].values
+    # See _compute_id_grid's docstring (factored out 2026-09, two-level
+    # rendering, so build_layer_reference can compute the identical grid,
+    # at the identical resolution, and dilate it -- see that function and
+    # ScatterLayerReference.ref_id_t_lo's docstring).
+    id_grid = _compute_id_grid(
+        df, x0, x1, y0, y1, canvas_w, canvas_h, probe_grid_max_cells,
+    )
+    id_grid_value = id_grid["value"].values
+    id_grid_t_lo    = id_grid["t_lo"].values    if "t_lo"    in id_grid else None
+    id_grid_t_hi    = id_grid["t_hi"].values    if "t_hi"    in id_grid else None
+    id_grid_bl_lo   = id_grid["bl_lo"].values   if "bl_lo"   in id_grid else None
+    id_grid_bl_hi   = id_grid["bl_hi"].values   if "bl_hi"   in id_grid else None
+    id_grid_freq_lo = id_grid["freq_lo"].values if "freq_lo" in id_grid else None
+    id_grid_freq_hi = id_grid["freq_hi"].values if "freq_hi" in id_grid else None
 
     return ScatterLayerRender(
         image=img_arr, n_in_view=n_in_view, skip_reason=None,
@@ -824,3 +878,540 @@ def render_layer(
         categories=categories_out, category_colors=category_colors,
         category_members=category_members_out,
     )
+
+
+# ---------------------------------------------------------------------------
+# Two-level (Level-1/Level-2) scatter rendering (2026-09)
+# ---------------------------------------------------------------------------
+#
+# Brings VisibilityRaster's existing two-level pan/zoom scheme
+# (_do_viewport_rerender: a cheap local Datashader resample of an
+# already-computed aggregation when the new viewport doesn't need finer
+# resolution than what's cached, a real backend re-query only when it
+# does) to VisibilityScatter, which until now paid a full query_columns()
+# round trip on every single pan/zoom. See the scatter two-level
+# rendering handoff notes (2026-09) for the full design, the measured
+# numbers behind every decision below, and the correctness invariants
+# this section exists to preserve.
+#
+# Split, deliberately, from render_layer() above rather than folded into
+# it:
+#   * build_layer_reference() runs alongside render_layer() on a full
+#     render or a Level-2 re-query (never on the Level-1 hot path this
+#     feature exists to avoid) -- see its own docstring for why a small
+#     amount of duplicated aggregation cost there is the right trade
+#     against ever touching render_layer()'s existing, tested behavior.
+#   * resample_layer_reference()/resample_id_grid() run ONLY client-side
+#     (VisibilityScatter, in whatever process it's running -- see the
+#     handoff notes §1/§7 for why this must be client-side, not
+#     backend-side, to actually remove the network hop in a remote
+#     session) -- MSv2Backend/MSv4Backend never call these.
+#   * needs_level2_requery() is the shared, pure gate both the widget
+#     (deciding Level-1 vs. Level-2) and tests call.
+
+def _dilate_bounds(
+    lo: np.ndarray, hi: np.ndarray, radius: int = 1,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Widen a (lo, hi) pair of per-cell extrema fields by *radius* cells
+    on every side, so resampling them later can never report a tighter
+    range than the true one.
+
+    See the two-level rendering handoff notes §2.1 for the full
+    derivation: a direct real-data test found 3 conservativeness
+    violations out of 2919 valid cells without this (linearly
+    interpolating -- or nearest-sampling across -- a cell boundary can
+    silently pick the "wrong", tighter neighbor); zero violations with
+    it, verified here again on a synthetic 300k-row/64x48-grid case
+    (30 violations without the fix, 0 with it, matching the handoff
+    notes' own order of magnitude) before this was wired into
+    production.
+
+    ``lo`` gets ``scipy.ndimage.minimum_filter``, ``hi`` gets
+    ``maximum_filter`` -- each output cell becomes the min/max of its
+    ``(2*radius+1)``-square neighborhood, giving a boundary cell a
+    safety margin from its immediate neighbors instead of only ever
+    point-sampling its single nearest reference cell (see
+    ``Canvas.raster(interpolate="nearest")``).
+
+    NaN-safe: a cell with no samples is NaN in both *lo* and *hi* (the
+    same underlying "any rows landed in this bin" condition produces
+    both), so ``empty = isnan(lo) | isnan(hi)`` identifies it once for
+    both fields. An empty cell contributes no bound (filled with
+    +/-inf, so a real neighbor's value always wins over it, never the
+    reverse) but a neighborhood that is ENTIRELY empty stays NaN in the
+    output -- there is nothing to dilate from. A dilated bound
+    deliberately CAN spread into a cell adjacent to an empty one: that
+    is the safety margin working as intended, not a claim that the
+    empty cell itself has data.
+    """
+    if not HAS_SCIPY:
+        raise ImportError(
+            "scipy is required for the two-level scatter rendering "
+            "hover-probe dilation fix.\nInstall: pip install scipy"
+        )
+    size = 2 * radius + 1
+    lo_arr = np.asarray(lo, dtype=np.float64)
+    hi_arr = np.asarray(hi, dtype=np.float64)
+    empty = np.isnan(lo_arr) | np.isnan(hi_arr)
+    lo_filled = np.where(empty, np.inf, lo_arr)
+    hi_filled = np.where(empty, -np.inf, hi_arr)
+    # mode="nearest" (edge-replicate): an edge cell's neighborhood should
+    # widen using its own edge value for the missing side, never a
+    # mirrored interior value that could tighten the margin instead of
+    # widening it.
+    lo_out = minimum_filter(lo_filled, size=size, mode="nearest")
+    hi_out = maximum_filter(hi_filled, size=size, mode="nearest")
+    all_empty_window = maximum_filter(
+        (~empty).astype(np.uint8), size=size, mode="nearest",
+    ) == 0
+    lo_out = np.where(all_empty_window, np.nan, lo_out)
+    hi_out = np.where(all_empty_window, np.nan, hi_out)
+    return lo_out, hi_out
+
+
+def build_layer_reference(
+    df: Optional[pd.DataFrame], lyr: ScatterLayerSpec,
+    x0: float, x1: float, y0: float, y1: float,
+    ref_w: int, ref_h: int, canvas_w: int, canvas_h: int,
+    color_mode: str, probe_grid_max_cells: int = 3072,
+) -> ScatterLayerReference:
+    """Build one layer's cached reference for later Level-1 resampling.
+
+    Runs ALONGSIDE render_layer() on the same call (same *df*, same
+    resolved viewport (x0,x1,y0,y1)) whenever ``query_columns(ref_scale=
+    ...)`` was given a non-None ``ref_scale`` -- see that parameter's
+    docstring. Independent of render_layer() rather than folded into it
+    on purpose: this only ever runs once per backend call (a full render
+    or a Level-2 re-query), never on the Level-1 hot path this whole
+    feature exists to avoid, so its own bounded, small duplicated cost
+    (one extra ``_categorize`` pass for a categorical layer, one extra
+    id-grid pass -- both already proven cheap/bounded elsewhere in this
+    module) is the right trade against ever touching or risking
+    render_layer()'s existing, tested behavior.
+
+    *ref_w*/*ref_h* -- the reference's own aggregation resolution
+    (``REF_SCALE`` x the ADAPTIVE display canvas size -- i.e. *canvas_w*/
+    *canvas_h*, the same adaptive shrink ``compute_canvas_size`` already
+    applies for sparse data, kept proportional here too).
+
+    *canvas_w*/*canvas_h* are ALSO needed on their own, separately from
+    *ref_w*/*ref_h*: the hover-probe id grid's own resolution is
+    deliberately independent of ``REF_SCALE`` (see
+    ``ScatterLayerReference``'s docstring) and uses the exact same
+    ``_id_grid_size(canvas_w, canvas_h, probe_grid_max_cells)`` formula
+    render_layer() already does, via the shared ``_compute_id_grid``
+    helper.
+
+    See ``ScatterLayerReference`` for the full field-by-field contract
+    of what this returns, and the scatter two-level rendering handoff
+    notes for the design this implements.
+    """
+    if not HAS_DATASHADER:
+        raise ImportError(
+            "datashader is required for VisibilityScatter's rendering "
+            "path.\nInstall: pip install datashader"
+        )
+    if df is None:
+        return ScatterLayerReference(
+            ref_x_range=(x0, x1), ref_y_range=(y0, y1),
+            skip_reason="not queried",
+        )
+    if len(df) == 0:
+        return ScatterLayerReference(
+            ref_x_range=(x0, x1), ref_y_range=(y0, y1),
+            skip_reason="query returned 0 rows",
+        )
+
+    in_view = (
+        (df["x"] >= x0) & (df["x"] <= x1) &
+        (df["y"] >= y0) & (df["y"] <= y1)
+    )
+    if int(in_view.sum()) == 0:
+        return ScatterLayerReference(
+            ref_x_range=(x0, x1), ref_y_range=(y0, y1),
+            skip_reason=f"0 of {len(df)} samples in viewport",
+        )
+
+    # ---- hover-probe id grid: same call render_layer() makes, plus the
+    # dilation safety fix (§2.1) on top of the three (lo, hi) pairs. Not
+    # an extremum, so id_grid "value" (the coarse mean reading) is
+    # carried through undilated.
+    id_grid = _compute_id_grid(
+        df, x0, x1, y0, y1, canvas_w, canvas_h, probe_grid_max_cells,
+    )
+    ref_id_t_lo = ref_id_t_hi = None
+    ref_id_bl_lo = ref_id_bl_hi = None
+    ref_id_freq_lo = ref_id_freq_hi = None
+    if "t_lo" in id_grid:
+        lo_v, hi_v = _dilate_bounds(id_grid["t_lo"].values, id_grid["t_hi"].values)
+        ref_id_t_lo = id_grid["t_lo"].copy(data=lo_v)
+        ref_id_t_hi = id_grid["t_hi"].copy(data=hi_v)
+    if "bl_lo" in id_grid:
+        lo_v, hi_v = _dilate_bounds(id_grid["bl_lo"].values, id_grid["bl_hi"].values)
+        ref_id_bl_lo = id_grid["bl_lo"].copy(data=lo_v)
+        ref_id_bl_hi = id_grid["bl_hi"].copy(data=hi_v)
+    if "freq_lo" in id_grid:
+        lo_v, hi_v = _dilate_bounds(id_grid["freq_lo"].values, id_grid["freq_hi"].values)
+        ref_id_freq_lo = id_grid["freq_lo"].copy(data=lo_v)
+        ref_id_freq_hi = id_grid["freq_hi"].copy(data=hi_v)
+    ref_id_value = id_grid["value"]   # mean reading, not an extremum -- no dilation
+
+    id_grid_kwargs = dict(
+        ref_id_t_lo=ref_id_t_lo, ref_id_t_hi=ref_id_t_hi,
+        ref_id_bl_lo=ref_id_bl_lo, ref_id_bl_hi=ref_id_bl_hi,
+        ref_id_freq_lo=ref_id_freq_lo, ref_id_freq_hi=ref_id_freq_hi,
+        ref_id_value=ref_id_value,
+    )
+
+    ref_cvs = ds.Canvas(
+        plot_width=ref_w, plot_height=ref_h, x_range=(x0, x1), y_range=(y0, y1),
+    )
+
+    if lyr.coloring == "categorical":
+        column = COLORIZE_AXIS_COLUMNS[lyr.colorize_axis]
+        cat = _categorize(
+            df, column, lyr.colorize_axis.label, cap=CATEGORY_CAP,
+            excluded=frozenset(lyr.excluded_categories) or None,
+            show_excluded=(lyr.excluded_display == "gray"),
+        )
+        if cat.skip_reason is not None:
+            return ScatterLayerReference(
+                ref_x_range=(x0, x1), ref_y_range=(y0, y1),
+                skip_reason=cat.skip_reason, **id_grid_kwargs,
+            )
+        ref_cube = _categorical_count_agg(df, cat, ref_cvs)
+        # float32, not the native ds_agg.count() uint32 -- see
+        # resample_layer_reference's docstring for why: Canvas.raster()'s
+        # default downsample reduction ("mean") floor-truncates a
+        # fractional mean of small integer counts to 0 the instant it
+        # lands back in an integer dtype, which silently erases sparse
+        # category presence on any Level-1 view coarser than the
+        # reference itself (confirmed directly: 82% of true presence
+        # lost on a synthetic case). float32 exactly represents every
+        # integer count this cube ever holds (categorical counts are
+        # nowhere near float32's 2**24 exact-integer ceiling) while
+        # letting a fractional mean survive the resample -- confirmed
+        # directly to restore 100% presence AND 100% "majority" argmax
+        # agreement simultaneously, with the default "mean" reduction,
+        # no priority-dependent special-casing needed.
+        ref_cube = ref_cube.astype(np.float32)
+        return ScatterLayerReference(
+            ref_x_range=(x0, x1), ref_y_range=(y0, y1),
+            ref_cube=ref_cube,
+            population=cat.population, other_index=cat.other_index,
+            **id_grid_kwargs,
+        )
+
+    # continuous
+    summary = ref_cvs.points(
+        df, "x", "y", ds_agg.summary(mean=ds_agg.mean("y"), count=ds_agg.count()),
+    )
+    ref_agg = summary["mean"]
+    ref_count = summary["count"]
+
+    eq_curve = None
+    if lyr.scaling == "eq_hist" and color_mode == "global":
+        # Mirrors render_layer()'s own vmin/vmax-band-limited reference
+        # population exactly (see that function's continuous/eq_hist
+        # branch) -- a manual clip changes what the eq_hist curve is
+        # built from, and that curve is exactly what gets cached here.
+        eq_ref = df["y"].to_numpy()
+        if lyr.scaling_vmin is not None or lyr.scaling_vmax is not None:
+            pool_finite = eq_ref[np.isfinite(eq_ref)]
+            lo = lyr.scaling_vmin if lyr.scaling_vmin is not None else (
+                float(pool_finite.min()) if pool_finite.size else None)
+            hi = lyr.scaling_vmax if lyr.scaling_vmax is not None else (
+                float(pool_finite.max()) if pool_finite.size else None)
+            if lo is not None and hi is not None and hi > lo:
+                in_band = pool_finite[(pool_finite >= lo) & (pool_finite <= hi)]
+                if in_band.size > 0:
+                    eq_ref = in_band
+        eq_curve = _cms.build_equalize_curve(eq_ref)
+
+    return ScatterLayerReference(
+        ref_x_range=(x0, x1), ref_y_range=(y0, y1),
+        ref_agg=ref_agg, ref_count=ref_count, eq_curve=eq_curve,
+        **id_grid_kwargs,
+    )
+
+
+def needs_level2_requery(
+    ref: Optional[ScatterLayerReference],
+    x0: float, x1: float, y0: float, y1: float,
+    canvas_w: int, canvas_h: int,
+) -> bool:
+    """``True`` when viewport (x0,x1,y0,y1) needs finer resolution than
+    *ref* can safely serve at Level-1 -- i.e. Level-2 (a real backend
+    re-query) is required.
+
+    Implements the two-level rendering handoff notes §2.3's OR-gate::
+
+        needs_requery = (x1-x0)/canvas_w < ref_cell_w  OR  (y1-y0)/canvas_h < ref_cell_h
+
+    OR, not AND, deliberately: ``VisibilityRaster``'s own gate uses AND,
+    which under-resolves whichever single axis was zoomed further when
+    only one axis needs finer resolution than what's cached -- a
+    considered improvement for this new implementation, not a claim
+    that the existing raster gate is wrong (see the handoff notes for
+    the full reasoning).
+
+    Also ``True`` whenever *ref* is ``None``, is a skip_reason'd/empty
+    reference, or the requested viewport reaches outside
+    ``ref.ref_x_range``/``ref.ref_y_range`` -- in every one of these
+    cases there is no aggregated data to resample from at all,
+    regardless of cell size.
+    """
+    if ref is None or ref.skip_reason is not None:
+        return True
+    if x1 <= x0 or y1 <= y0 or canvas_w <= 0 or canvas_h <= 0:
+        return True
+    rx0, rx1 = ref.ref_x_range
+    ry0, ry1 = ref.ref_y_range
+    if x0 < rx0 or x1 > rx1 or y0 < ry0 or y1 > ry1:
+        return True
+    agg = ref.ref_agg if ref.ref_agg is not None else ref.ref_cube
+    if agg is None:
+        return True
+    h, w = agg.shape[0], agg.shape[1]
+    if h < 1 or w < 1:
+        return True
+    ref_cell_w = (rx1 - rx0) / w
+    ref_cell_h = (ry1 - ry0) / h
+    return (
+        (x1 - x0) / canvas_w < ref_cell_w or
+        (y1 - y0) / canvas_h < ref_cell_h
+    )
+
+
+def _resample_interpolate(
+    ref_agg, ref_x_range: tuple[float, float], ref_y_range: tuple[float, float],
+    x_range: tuple[float, float], y_range: tuple[float, float],
+    canvas_w: int, canvas_h: int,
+) -> str:
+    """"nearest" when either axis is upsampling past *ref_agg*'s own
+    per-cell resolution, else "linear" -- mirrors
+    ``VisibilityRaster._resample_method`` exactly (see that method's
+    docstring for the "why nearest" rationale: an interpolated image
+    shows fabricated intermediate values a probe cannot back up, while a
+    smoothed gradient's displayed colour varies even though every probe
+    returns the same underlying number).
+    """
+    x0, x1 = x_range
+    y0, y1 = y_range
+    h, w = ref_agg.shape[0], ref_agg.shape[1]
+    ref_cell_w = (ref_x_range[1] - ref_x_range[0]) / max(w, 1)
+    ref_cell_h = (ref_y_range[1] - ref_y_range[0]) / max(h, 1)
+    upsampling = (
+        (x1 - x0) / max(canvas_w, 1) < ref_cell_w or
+        (y1 - y0) / max(canvas_h, 1) < ref_cell_h
+    )
+    return "nearest" if upsampling else "linear"
+
+
+def _estimate_count_in_view(
+    agg, x0: float, x1: float, y0: float, y1: float,
+) -> int:
+    """Approximate sample count within (x0,x1,y0,y1): crop *agg* (a
+    count or count-cube reference, via coordinate slicing -- NOT a
+    canvas-resolution resample, which would double-count under nearest
+    upsampling) to the viewport and sum it.
+
+    An ESTIMATE, not an exact raw-row count: cropping by the reference's
+    own (coarser) cell boundaries can include a partial cell's full
+    count when the true viewport edge cuts through it. Acceptable here
+    specifically because this only feeds
+    ``ScatterLayerRender.n_in_view``, which in turn only feeds the
+    client's density-based ``auto_alpha`` (how vibrant a sparse layer
+    looks) -- not a correctness invariant the way the id-grid extrema
+    are (see ``ScatterLayerReference.ref_count``'s docstring).
+    """
+    if agg is None:
+        return 0
+    try:
+        dims = agg.dims
+        y_dim, x_dim = dims[0], dims[1]
+        crop = agg.sel({
+            x_dim: slice(min(x0, x1), max(x0, x1)),
+            y_dim: slice(min(y0, y1), max(y0, y1)),
+        })
+        total = np.nansum(np.asarray(crop.values, dtype=np.float64))
+        return int(total) if np.isfinite(total) else 0
+    except Exception:
+        log.debug("_estimate_count_in_view: crop failed, returning 0", exc_info=True)
+        return 0
+
+
+def resample_layer_reference(
+    ref: ScatterLayerReference, lyr: ScatterLayerSpec,
+    categories: Optional[tuple], x0: float, x1: float, y0: float, y1: float,
+    canvas_w: int, canvas_h: int,
+) -> tuple[np.ndarray, int]:
+    """Level-1: shade one layer's cached reference at a new viewport --
+    no raw rows touched, no backend call.
+
+    Mirrors render_layer()'s own shading branch (continuous vs.
+    categorical) but resamples an already-aggregated cube via
+    ``Canvas.raster()`` instead of binning raw points via
+    ``Canvas.points()``. See the two-level rendering handoff notes §1/§2
+    for the full design.
+
+    *categories* comes from the paired ``ScatterLayerRender.categories``
+    the widget already cached from the same call that built *ref* (see
+    ``ScatterLayerReference``'s docstring for why categories/colors
+    aren't duplicated onto the reference itself); unused for a
+    continuous layer. *lyr* supplies the live, current cmap/scaling/
+    category_priority -- these can only change via a call that rebuilds
+    the reference anyway (``update_scaling``, ``set_layer_cmaps``), so
+    reading them live here rather than caching a copy on *ref* cannot
+    go stale between Level-1 calls.
+
+    Returns ``(image, n_in_view)`` -- see ``_estimate_count_in_view``
+    for why the count is an estimate, not exact.
+    """
+    if ref.skip_reason is not None:
+        return _empty_render(canvas_h, canvas_w, ref.skip_reason).image, 0
+
+    cvs = ds.Canvas(
+        plot_width=canvas_w, plot_height=canvas_h, x_range=(x0, x1), y_range=(y0, y1),
+    )
+    cmap = list(lyr.cmap or ())
+
+    if ref.ref_cube is not None:
+        # Canvas.raster() assumes a 3D array's LAST two dims are (y, x)
+        # and resamples the FIRST dim's layers independently -- the
+        # OPPOSITE of ds_agg.by()'s own (y, x, category) output order
+        # (confirmed directly: passed straight through, plot_width/
+        # plot_height silently resample the wrong two axes -- category
+        # and x -- while leaving y untouched). Transpose to
+        # (category, y, x) for the call and back to (y, x, category)
+        # afterward so _priority_shade keeps receiving the same (H, W,
+        # K) shape it always has. The category coordinate is reassigned
+        # to a plain integer range for the call -- _priority_shade never
+        # reads it, only positional order, which transpose/back
+        # preserves exactly.
+        cat_dim = ref.ref_cube.dims[-1]
+        y_dim, x_dim = ref.ref_cube.dims[0], ref.ref_cube.dims[1]
+        n_cat = ref.ref_cube.sizes[cat_dim]
+        cube_t = ref.ref_cube.transpose(cat_dim, y_dim, x_dim).assign_coords(
+            {cat_dim: np.arange(n_cat)},
+        )
+        # Default downsample reduction ("mean") is correct here for BOTH
+        # priorities, and deliberately not overridden: "rarest" needs
+        # PRESENCE (`> 0`) preserved for a possibly very sparse category,
+        # and "majority" needs relative RANKING across categories
+        # (`argmax`) preserved -- "mean" gives both, because every band
+        # in a given output pixel is divided by the SAME merge-window
+        # size, a monotonic per-pixel rescaling that cannot change which
+        # band is largest (argmax(mean) == argmax(sum) exactly), and
+        # because ref_cube is now float32 (see build_layer_reference),
+        # a fractional mean survives instead of floor-truncating to 0
+        # the way it did as a uint cube. Confirmed directly: 100%
+        # presence agreement AND 100% "majority" argmax agreement
+        # simultaneously on the same synthetic case that previously
+        # forced a choice between the two (82% presence loss under
+        # "mean"+uint, or a degraded 80% argmax match under "max"+uint).
+        resampled_t = cvs.raster(cube_t, interpolate="nearest")
+        ds_agg_cube = resampled_t.transpose(y_dim, x_dim, cat_dim)
+        img_arr, _colors = _priority_shade(
+            ds_agg_cube, list(categories or ()), tuple(cmap),
+            lyr.category_priority, ref.population, ref.other_index,
+        )
+        n_in_view = _estimate_count_in_view(ref.ref_cube, x0, x1, y0, y1)
+        return img_arr, n_in_view
+
+    if ref.ref_agg is None:
+        return _empty_render(canvas_h, canvas_w, "reference not built").image, 0
+
+    interpolate = _resample_interpolate(
+        ref.ref_agg, ref.ref_x_range, ref.ref_y_range, (x0, x1), (y0, y1),
+        canvas_w, canvas_h,
+    )
+    ds_agg_resampled = cvs.raster(ref.ref_agg, interpolate=interpolate)
+    values = ds_agg_resampled.values
+
+    span = None
+    if lyr.scaling_vmin is not None and lyr.scaling_vmax is not None:
+        span = [lyr.scaling_vmin, lyr.scaling_vmax]
+
+    if lyr.scaling in _cms.DATASHADER_HOW:
+        shade_kwargs = dict(
+            cmap=cmap, how=_cms.DATASHADER_HOW[lyr.scaling], min_alpha=_MIN_ALPHA,
+        )
+        if span is not None:
+            shade_kwargs["span"] = span
+        img = tf.shade(ds_agg_resampled, **shade_kwargs)
+    elif lyr.scaling == "eq_hist":
+        transformed = _cms.apply_equalize_curve(values, ref.eq_curve)
+        scaled_agg = ds_agg_resampled.copy(data=transformed)
+        img = tf.shade(
+            scaled_agg, cmap=cmap, how="linear", span=[0.0, 1.0], min_alpha=_MIN_ALPHA,
+        )
+    else:
+        transformed = _cms.apply_explicit_scaling(
+            values, lyr.scaling, alpha=lyr.scaling_alpha, gamma=lyr.scaling_gamma,
+            vmin=span[0] if span is not None else None,
+            vmax=span[1] if span is not None else None,
+        )
+        scaled_agg = ds_agg_resampled.copy(data=transformed)
+        img = tf.shade(
+            scaled_agg, cmap=cmap, how="linear", span=[0.0, 1.0], min_alpha=_MIN_ALPHA,
+        )
+
+    img_arr = np.array(img, dtype=np.uint32)
+    n_in_view = _estimate_count_in_view(ref.ref_count, x0, x1, y0, y1)
+    return img_arr, n_in_view
+
+
+def resample_id_grid(
+    ref: ScatterLayerReference, x0: float, x1: float, y0: float, y1: float,
+    canvas_w: int, canvas_h: int, probe_grid_max_cells: int,
+) -> Optional[dict]:
+    """Level-1: resample the cached, already-dilated id-grid reference to
+    the current viewport's own id-grid resolution.
+
+    Returns the same dict SHAPE ``VisibilityScatter._render_all_layers``
+    already builds from a live ``ScatterLayerRender`` (keys ``"value"``,
+    ``"x_range"``, ``"y_range"``, and any of ``"t_lo"``/``"t_hi"``,
+    ``"bl_lo"``/``"bl_hi"``, ``"f_lo"``/``"f_hi"`` the reference has), or
+    ``None`` when the reference has no id-grid at all (a skip_reason'd
+    layer -- nothing to hover).
+
+    Always ``interpolate="nearest"`` for every field, range and
+    value alike: this reference and the current viewport's own id-grid
+    resolution are BOTH sized independently of ``REF_SCALE`` (see
+    ``ScatterLayerReference``'s docstring) via the same
+    ``_id_grid_size(canvas_w, canvas_h, probe_grid_max_cells)`` formula
+    -- and ``needs_level2_requery`` (gated on the separate, always-finer
+    data reference) already guarantees the requested viewport sits
+    within ``ref``'s own extent whenever Level-1 is chosen. In practice
+    this makes an id-grid Level-1 resample always an upsample (a smaller
+    region drawn at the same ~probe_grid_max_cells budget); "nearest" is
+    also the ONLY safe choice for the dilated lo/hi fields regardless
+    (see ``_dilate_bounds``) -- the coarse mean "value" field could use
+    "linear" like the display image does, but there is no correctness
+    reason to special-case it, and using the one rule everywhere keeps
+    this function simple.
+    """
+    if ref.ref_id_value is None:
+        return None
+    id_w, id_h = _id_grid_size(canvas_w, canvas_h, probe_grid_max_cells)
+    cvs = ds.Canvas(
+        plot_width=id_w, plot_height=id_h, x_range=(x0, x1), y_range=(y0, y1),
+    )
+
+    out: dict = {"x_range": (x0, x1), "y_range": (y0, y1)}
+    out["value"] = cvs.raster(ref.ref_id_value, interpolate="nearest").values
+
+    def _pair(lo_ref, hi_ref):
+        return (
+            cvs.raster(lo_ref, interpolate="nearest").values,
+            cvs.raster(hi_ref, interpolate="nearest").values,
+        )
+
+    if ref.ref_id_t_lo is not None:
+        out["t_lo"], out["t_hi"] = _pair(ref.ref_id_t_lo, ref.ref_id_t_hi)
+    if ref.ref_id_bl_lo is not None:
+        out["bl_lo"], out["bl_hi"] = _pair(ref.ref_id_bl_lo, ref.ref_id_bl_hi)
+    if ref.ref_id_freq_lo is not None:
+        out["f_lo"], out["f_hi"] = _pair(ref.ref_id_freq_lo, ref.ref_id_freq_hi)
+    return out

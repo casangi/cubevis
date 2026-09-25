@@ -88,6 +88,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+from dataclasses import replace as _dc_replace
 from typing import Optional, Iterator
 
 import numpy as np
@@ -1023,6 +1024,7 @@ class MSv4Backend(XArrayReader):
         width: int = 800,
         height: int = 600,
         probe_grid_max_cells: int = 3072,
+        ref_scale: Optional[float] = None,
     ) -> ScatterRenderResult:
         """Query, bin, and shade scatter layers; return a bounded render result.
 
@@ -1032,7 +1034,8 @@ class MSv4Backend(XArrayReader):
         See ``ScatterRenderResult``'s docstring in ``reader.py`` for the
         full rationale for this contract, and ``MSv2Backend.query_columns``
         for the parameter docs (identical here, including
-        ``probe_grid_max_cells`` -- 2026-09 hover-probe redesign piece 2).
+        ``probe_grid_max_cells`` -- 2026-09 hover-probe redesign piece 2 --
+        and ``ref_scale`` -- 2026-09 two-level rendering).
         """
         self._require_open()
         if not layers:
@@ -1070,10 +1073,28 @@ class MSv4Backend(XArrayReader):
             for lyr in layers
         )
 
+        ref_canvas_width = ref_canvas_height = None
+        if ref_scale is not None:
+            ref_canvas_width  = max(1, int(round(canvas_w * ref_scale)))
+            ref_canvas_height = max(1, int(round(canvas_h * ref_scale)))
+            rendered = tuple(
+                _dc_replace(
+                    render,
+                    reference=_scatter_render.build_layer_reference(
+                        dataframes.get((lyr.y_axis, lyr.polarization)), lyr,
+                        x0, x1, y0, y1,
+                        ref_canvas_width, ref_canvas_height, canvas_w, canvas_h,
+                        color_mode, probe_grid_max_cells=probe_grid_max_cells,
+                    ),
+                )
+                for lyr, render in zip(layers, rendered)
+            )
+
         return ScatterRenderResult(
             x_range=full_x_range, y_range=full_y_range,
             canvas_width=canvas_w, canvas_height=canvas_h,
             layers=rendered,
+            ref_canvas_width=ref_canvas_width, ref_canvas_height=ref_canvas_height,
         )
 
     def _query_columns_raw(

@@ -55,6 +55,7 @@ from __future__ import annotations
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace as _dc_replace
 from typing import Optional
 
 import numpy as np
@@ -851,6 +852,7 @@ class MSv2Backend(XArrayReader):
         width: int = 800,
         height: int = 600,
         probe_grid_max_cells: int = 3072,
+        ref_scale: Optional[float] = None,
     ) -> ScatterRenderResult:
         """Query, bin, and shade scatter layers; return a bounded render result.
 
@@ -903,6 +905,22 @@ class MSv2Backend(XArrayReader):
             alongside each layer's image -- see
             ``ScatterLayerRender.id_grid_*``'s docstring and
             ``_scatter_render._id_grid_size``.
+        ref_scale :
+            Two-level rendering (2026-09). ``None`` (default) -- no
+            change from before this feature existed. Otherwise, each
+            returned layer's ``ScatterLayerRender.reference`` is also
+            populated (see ``_scatter_render.build_layer_reference`` and
+            ``ScatterRenderResult.ref_canvas_width/height``), at
+            ``ref_scale`` times the adaptive canvas size actually used,
+            over THIS call's own resolved ``(x0, x1, y0, y1)`` -- the
+            full extent on a fresh axis/selection change, or the
+            requested viewport on a Level-2 re-query (see
+            ``VisibilityScatter._do_viewport_rerender``). Building this
+            costs one extra categorical-binning pass per categorical
+            layer and one extra (still small) aggregation per
+            continuous layer -- see ``build_layer_reference``'s
+            docstring for why that cost only lands on a full/Level-2
+            call, never on a Level-1 resample.
 
         Returns
         -------
@@ -944,10 +962,28 @@ class MSv2Backend(XArrayReader):
             for lyr in layers
         )
 
+        ref_canvas_width = ref_canvas_height = None
+        if ref_scale is not None:
+            ref_canvas_width  = max(1, int(round(canvas_w * ref_scale)))
+            ref_canvas_height = max(1, int(round(canvas_h * ref_scale)))
+            rendered = tuple(
+                _dc_replace(
+                    render,
+                    reference=_scatter_render.build_layer_reference(
+                        dataframes.get((lyr.y_axis, lyr.polarization)), lyr,
+                        x0, x1, y0, y1,
+                        ref_canvas_width, ref_canvas_height, canvas_w, canvas_h,
+                        color_mode, probe_grid_max_cells=probe_grid_max_cells,
+                    ),
+                )
+                for lyr, render in zip(layers, rendered)
+            )
+
         return ScatterRenderResult(
             x_range=full_x_range, y_range=full_y_range,
             canvas_width=canvas_w, canvas_height=canvas_h,
             layers=rendered,
+            ref_canvas_width=ref_canvas_width, ref_canvas_height=ref_canvas_height,
         )
 
     def _query_columns_raw(

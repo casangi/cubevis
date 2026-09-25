@@ -471,6 +471,141 @@ class ScatterLayerRender:
     category_colors:  Optional[dict[str, str]] = None
     category_members: Optional[dict[str, tuple[str, ...]]] = None
 
+    # ---- two-level (Level-1/Level-2) scatter rendering (2026-09) ---- #
+    # Populated only when ``query_columns(ref_scale=...)`` was given a
+    # non-None ``ref_scale`` -- see that parameter's docstring. ``None``
+    # on every call before this feature existed, and on any call that
+    # doesn't request it (a plain re-render with no interest in caching
+    # a reference, e.g. a one-off PNG export at an already-known
+    # viewport). See ``ScatterLayerReference`` below for what it holds
+    # and the scatter two-level rendering handoff notes (2026-09) for
+    # the full design.
+    reference: Optional["ScatterLayerReference"] = None
+
+
+@dataclass(frozen=True)
+class ScatterLayerReference:
+    """One layer's cached reference structures for LOCAL (Level-1)
+    pan/zoom resampling -- everything ``VisibilityScatter`` needs to
+    redraw a new viewport with no backend call, provided the viewport
+    doesn't need finer resolution than this reference has (see
+    ``needs_level2_requery``).
+
+    Built once per backend call that requests it (an axis/selection
+    change, or a Level-2 re-query -- never a Level-1 resample itself,
+    which by construction makes no backend call) -- see the scatter
+    two-level rendering handoff notes §1 for why this must live and be
+    resampled client-side (``VisibilityRaster``'s own ``self._agg``
+    precedent), not backend-side.
+
+    Exactly one of ``ref_agg``/``ref_cube`` is set for a layer with
+    data (continuous vs. categorical, mirroring ``ScatterLayerRender``'s
+    own image-producing branch in ``_scatter_render.render_layer``);
+    both are ``None``, and ``skip_reason`` is set, for a layer with none
+    (mirrors ``ScatterLayerRender.skip_reason``'s own convention exactly
+    -- a caller can check this one field the same way).
+
+    ``ref_x_range``/``ref_y_range`` -- the extent this reference was
+    built over. This is the OUTER bound for Level-1: a requested
+    viewport reaching outside it has no aggregated data to resample from
+    at all (not merely "coarser than needed") and must fall back to
+    Level-2 regardless of cell size -- see ``needs_level2_requery``.
+
+    ``ref_agg`` -- mean(y) aggregation, an ``xr.DataArray`` shaped
+    (ref_h, ref_w), at ``REF_SCALE`` × the display canvas's resolution.
+    Datashader's own ``Canvas.raster()`` resamples this directly for any
+    viewport within ``ref_x_range``/``ref_y_range`` -- the same
+    operation ``VisibilityRaster._shade_viewport`` already performs on
+    its own ``self._agg``.
+
+    ``ref_count`` -- sample count over the SAME (ref_h, ref_w) grid and
+    extent as ``ref_agg`` (one extra reduction in the same
+    ``ds_agg.summary()`` pass that built the mean -- see
+    ``_scatter_render.build_layer_reference``). Exists ONLY to let a
+    Level-1 resample estimate ``ScatterLayerRender.n_in_view`` (which
+    feeds the client's density-based ``auto_alpha``) without touching
+    raw rows; deliberately not held to the same correctness bar as the
+    id-grid's dilated extrema below -- an approximate density estimate
+    changes how vibrant a sparse layer looks, not what data is shown.
+
+    ``eq_curve`` -- a ``colormap_scaling.EqualizeCurve``, or ``None``.
+    Built only when the layer's ``scaling == "eq_hist"`` AND the panel's
+    ``color_mode == "global"`` -- the one case (see the handoff notes
+    §2.2) where the eq_hist reference population (the whole selection's
+    raw y-values) is viewport-independent and therefore safe to cache
+    once and reuse across every Level-1 resample via
+    ``colormap_scaling.apply_equalize_curve``. ``color_mode == "local"``
+    never reaches Level-1 at all (see
+    ``VisibilityScatter._can_resample_locally``), so this is always
+    ``None`` in that mode -- not built, not just unused.
+
+    ``ref_cube`` -- the per-category count cube, an ``xr.DataArray``
+    shaped (ref_h, ref_w, K [+1 gray]), ``float32`` (NOT the native
+    ``ds_agg.count()`` ``uint32`` -- see
+    ``_scatter_render.build_layer_reference``'s docstring: a fractional
+    mean, from Datashader's own downsample reduction when a Level-1
+    viewport zooms OUT toward this reference's full extent, floor-
+    truncates to 0 the instant it lands back in an integer dtype,
+    silently erasing sparse category presence; float32 exactly
+    represents every integer count this cube ever holds while letting
+    that fractional mean survive), at the same ``REF_SCALE`` resolution,
+    dims ``(y, x, category)`` -- Datashader's own ``ds_agg.by()`` output
+    order. NOTE: this is NOT the dim order ``Canvas.raster()`` expects
+    for a 3D array (band dimension first, per its own docstring,
+    confirmed directly against a real call);
+    ``_scatter_render.resample_layer_reference`` transposes before and
+    after resampling it -- never resample this cube without doing the
+    same.
+
+    ``population``/``other_index`` are the two categorical fields
+    ``ScatterLayerRender`` does NOT already expose (they are internal to
+    ``_scatter_render._Categorization``, needed only for shading) --
+    everything else a Level-1 categorical resample needs
+    (``categories``, ``category_colors``) is already sitting in the
+    paired ``ScatterLayerRender`` from the same call that built this
+    reference, cached client-side already, and viewport-independent
+    over the whole selection -- so it is deliberately NOT duplicated
+    here.
+
+    ``ref_id_*`` -- the six coarse per-bin native-coordinate-range
+    fields (mirrors ``ScatterLayerRender.id_grid_t_lo`` etc.) plus
+    ``ref_id_value`` (mirrors ``id_grid_value``), all ``xr.DataArray``s
+    at the id-grid's own resolution (``_id_grid_size``, independent of
+    ``REF_SCALE`` -- see ``build_layer_reference``'s docstring for why).
+    The three ``*_lo`` fields have already been passed through
+    ``scipy.ndimage.minimum_filter`` and the three ``*_hi`` fields
+    through ``maximum_filter`` (radius 1) at build time -- see
+    ``_scatter_render._dilate_bounds`` -- which is what makes resampling
+    them at Level-1 provably conservative (handoff notes §2.1: zero
+    boundary violations across every zoom depth × bound-pair
+    combination tested, versus 3-in-2919 without the dilation). Callers
+    must never resample the RAW (non-dilated) grid this way; there is no
+    raw copy kept precisely to make that mistake impossible.
+    """
+    ref_x_range: tuple[float, float]
+    ref_y_range: tuple[float, float]
+    skip_reason: Optional[str] = None
+
+    # continuous
+    ref_agg:   Optional[xr.DataArray] = None
+    ref_count: Optional[xr.DataArray] = None
+    eq_curve:  Optional[object] = None   # colormap_scaling.EqualizeCurve
+
+    # categorical
+    ref_cube:    Optional[xr.DataArray] = None
+    population:  Optional[np.ndarray] = None
+    other_index: Optional[int] = None
+
+    # hover-probe id grid (both layer types) -- see docstring above for
+    # the dilation guarantee these fields carry
+    ref_id_t_lo:    Optional[xr.DataArray] = None
+    ref_id_t_hi:    Optional[xr.DataArray] = None
+    ref_id_bl_lo:   Optional[xr.DataArray] = None
+    ref_id_bl_hi:   Optional[xr.DataArray] = None
+    ref_id_freq_lo: Optional[xr.DataArray] = None
+    ref_id_freq_hi: Optional[xr.DataArray] = None
+    ref_id_value:   Optional[xr.DataArray] = None
+
 
 @dataclass(frozen=True)
 class ScatterRenderResult:
@@ -480,6 +615,15 @@ class ScatterRenderResult:
     canvas_width:  int                   # adaptive size actually used
     canvas_height: int
     layers:        tuple[ScatterLayerRender, ...]
+    # Two-level rendering (2026-09): the resolution each layer's
+    # ``ScatterLayerRender.reference`` was built at, when one was
+    # requested (``ref_scale`` given) -- ``None`` otherwise. Reported
+    # once here rather than per-layer since every layer's reference
+    # shares the same resolution (derived from this same
+    # canvas_width/canvas_height × ref_scale) -- see
+    # ``VisibilityScatter._can_resample_locally``.
+    ref_canvas_width:  Optional[int] = None
+    ref_canvas_height: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -2030,6 +2174,7 @@ class XArrayReader(abc.ABC):
         width: int = 800,
         height: int = 600,
         probe_grid_max_cells: int = 3072,
+        ref_scale: Optional[float] = None,
     ) -> "ScatterRenderResult":
         """Query, bin, and shade scatter layers; return a bounded result.
 
@@ -2053,6 +2198,22 @@ class XArrayReader(abc.ABC):
         pinpoint a single sample -- that precision is what
         ``probe_scatter_region``'s click-to-exact path is for. Adjustable
         via ``VisibilityScatter.set_probe_grid_resolution()``.
+
+        ``ref_scale`` (two-level rendering, 2026-09): when not ``None``,
+        each returned ``ScatterLayerRender.reference`` additionally
+        carries a ``ScatterLayerReference`` -- the aggregated structures
+        ``VisibilityScatter`` needs to resample later pan/zooms locally,
+        at ``ref_scale`` times this call's own (adaptive) canvas
+        resolution, over this call's own resolved ``(x0, x1, y0, y1)``
+        (the full data extent when ``x_range``/``y_range`` are ``None``,
+        or the requested viewport otherwise -- a Level-2 re-query passes
+        its own tightened viewport here to rebuild the reference at that
+        new, presumably higher-resolution, extent, exactly like
+        ``VisibilityRaster``'s own ``self._agg`` on a Level-2 re-query).
+        ``None`` (the default) never builds one, matching every call
+        site that existed before this feature -- see the scatter
+        two-level rendering handoff notes (2026-09) for the full design
+        and ``ScatterLayerReference`` for what it holds.
 
         Implemented identically by both ``MSv2Backend`` and
         ``MSv4Backend`` (2026-09).

@@ -153,17 +153,21 @@ class LocalVisibilityReader:
         width: int = 800,
         height: int = 600,
         probe_grid_max_cells: int = 3072,
+        ref_scale: Optional[float] = None,
     ):
         """Delegate to ``backend.query_columns``.
 
         ``layers`` is a ``list[ScatterLayerSpec]``; returns a
-        ``ScatterRenderResult`` -- see ``data/reader.py``.
+        ``ScatterRenderResult`` -- see ``data/reader.py``. ``ref_scale``
+        (2026-09 two-level rendering) forwarded like every other keyword
+        here.
         """
         return self._backend.query_columns(
             xaxis, layers, selection,
             x_range=x_range, y_range=y_range, color_mode=color_mode,
             width=width, height=height,
             probe_grid_max_cells=probe_grid_max_cells,
+            ref_scale=ref_scale,
         )
 
     def probe_scatter_region(

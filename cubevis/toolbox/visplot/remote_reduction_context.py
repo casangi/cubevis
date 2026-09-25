@@ -457,6 +457,7 @@ class RemoteReductionContext(ReductionContext):
         width: int = 800,
         height: int = 600,
         probe_grid_max_cells: int = 3072,
+        ref_scale: Optional[float] = None,
         timeout: Optional[float] = None,
     ):
         # STRAIGHT RELAY -- and correctly so now. MSv2Backend.query_columns
@@ -468,12 +469,26 @@ class RemoteReductionContext(ReductionContext):
         # MSv4Backend.query_columns matches this contract too (2026-09).
         # probe_grid_max_cells added (2026-09, hover-probe redesign
         # piece 2) -- forwarded like every other keyword here.
+        # ref_scale added (2026-09, two-level rendering): when set, each
+        # returned layer's ScatterLayerRender.reference carries
+        # xr.DataArray fields (the cached aggregations
+        # VisibilityScatter resamples LOCALLY for every subsequent
+        # pan/zoom -- see the scatter two-level rendering handoff notes
+        # §1/§7 for why this must cross the wire ONCE here rather than
+        # being rebuilt backend-side on every viewport change). No new
+        # wire-type work needed: xr.DataArray already has an encoder/
+        # decoder registered by _wire_types.py (imported on both ends --
+        # see that module's own docstring), and ScatterLayerReference is
+        # a plain dataclass, which composes with it via the existing
+        # generic dataclass wire support the same way ScatterLayerSpec
+        # already does.
         return self._call(
             "query_columns",
             xaxis=xaxis, layers=layers, selection=selection,
             x_range=x_range, y_range=y_range, color_mode=color_mode,
             width=width, height=height,
             probe_grid_max_cells=probe_grid_max_cells,
+            ref_scale=ref_scale,
             timeout=timeout,
         )
 

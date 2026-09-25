@@ -112,6 +112,7 @@ _CV_SET_BUSY_JS = """
 window.__cvSetBusy = window.__cvSetBusy || function(on) {
     const OVERLAY_ID = '__cv_busy_overlay';
     const GIVE_UP_MS = 30000;
+    if (window.__cvReleaseStuckDrag) window.__cvReleaseStuckDrag('setBusy(' + on + ')');
     if (window.__cvBusyTimer != null) {
         clearTimeout(window.__cvBusyTimer);
         window.__cvBusyTimer = null;
@@ -150,6 +151,59 @@ window.__cvSetBusy = window.__cvSetBusy || function(on) {
                      + 'background:transparent;cursor:progress;' + where;
     window.__cvBusyTimer = setTimeout(function() { window.__cvSetBusy(false); }, GIVE_UP_MS);
 };
+
+// Stuck-drag safety net (2026-09, reported bug: pan tool re-activates on
+// its own after a busy round trip, as soon as the cursor comes back near
+// the plot -- no new click involved). Root cause: a drag/pan gesture's
+// "am I still dragging" state is set by the mousedown that started it and
+// is only cleared by a matching mouseup/pointerup -- and libraries that
+// support dragging past the original element's edges (which Bokeh's own
+// pan tool needs, to keep panning while the cursor is outside the plot)
+// do this by listening for that mouseup globally, on `document`, for the
+// duration of the gesture. If the button is actually released OUTSIDE the
+// browser window (very plausible for "I exited the window" mid-drag, or
+// mid-busy-overlay, since the overlay's whole footprint is what the user
+// would have been dragging across), the page never receives ANY event for
+// that release -- the gesture's global listener simply never fires -- so
+// the tool's internal state stays "dragging" indefinitely. The next
+// mousemove that lands back over the plot, even with no new mousedown, is
+// then read as a continuation of that stale drag.
+//
+// Fix: dispatch a synthetic pointerup/mouseup on `document` -- reaching
+// the same global listener a real release would have -- at every point
+// where a real release could plausibly have gone unobserved (the pointer
+// leaving the viewport, the window losing focus, the tab going hidden),
+// plus on every busy-overlay transition as a fallback for the overlay's
+// own click-absorbing footprint. A tool that is NOT mid-drag simply
+// ignores this; it changes nothing when nothing was actually stuck.
+// Installed once, guarded, since this whole script is re-embedded and
+// re-run on every pan/zoom and every Plot press.
+if (!window.__cvBusyGuardInstalled) {
+    window.__cvBusyGuardInstalled = true;
+    window.__cvLastPointerX = 0;
+    window.__cvLastPointerY = 0;
+    document.addEventListener('mousemove', function(e) {
+        window.__cvLastPointerX = e.clientX;
+        window.__cvLastPointerY = e.clientY;
+    }, true);
+    window.__cvReleaseStuckDrag = function(reason) {
+        const opts = {
+            bubbles: true, cancelable: true,
+            clientX: window.__cvLastPointerX, clientY: window.__cvLastPointerY,
+        };
+        try { document.dispatchEvent(new PointerEvent('pointerup', opts)); } catch (e) {}
+        try { document.dispatchEvent(new MouseEvent('mouseup', opts)); } catch (e) {}
+    };
+    document.documentElement.addEventListener('mouseleave', function() {
+        window.__cvReleaseStuckDrag('mouseleave');
+    });
+    window.addEventListener('blur', function() {
+        window.__cvReleaseStuckDrag('blur');
+    });
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) window.__cvReleaseStuckDrag('visibilitychange');
+    });
+}
 """
 
 if TYPE_CHECKING:

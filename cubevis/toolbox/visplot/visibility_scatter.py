@@ -70,10 +70,17 @@ from .visibility_plot import (
 )
 from .panel_spec import ColorBand, PanelSpec, CATEGORY_PRIORITY_CAPTIONS
 from . import colormap_scaling as _cms
-from .data.reader import (ScatterLayerSpec, CATEGORY_PRIORITIES,
+from .data.reader import (ScatterLayerSpec, ScatterLayerReference, CATEGORY_PRIORITIES,
                           DEFAULT_CATEGORY_PRIORITY, EXCLUDED_DISPLAYS,
                           DEFAULT_EXCLUDED_DISPLAY,
                           HIGH_CARDINALITY_THRESHOLD)
+# Two-level rendering (2026-09): pure numpy/pandas/Datashader/scipy
+# functions, no backend-specific code -- safe to import and run
+# client-side (VisibilityScatter, in whatever process it's running),
+# exactly as the scatter two-level rendering handoff notes §1/§7
+# require. See _do_viewport_rerender/_can_resample_locally/
+# _resample_and_composite below for how these are used.
+from .data import _scatter_render as _sr
 from cubevis.bokeh.tools._info_tool import InfoTool
 
 if TYPE_CHECKING:
@@ -93,6 +100,21 @@ except ImportError:
     HAS_DATASHADER = False
 
 _DEFAULT_SCALING = "eq_hist"
+
+# Two-level (Level-1/Level-2) rendering (2026-09): default REF_SCALE per
+# session type -- see VisibilityScatter.__init__'s ref_scale parameter and
+# the scatter two-level rendering handoff notes §3/§7 for the full
+# reasoning. Deliberately different: a remote session's Level-2 fallback
+# pays a real multi-hop network round trip that a local session's does
+# not (the Part 6 frame cache already made a local Level-2 cheap), so a
+# remote session should accept a bigger, still one-time, reference
+# payload to make that fallback fire less often. Neither number is from
+# the handoff notes themselves (explicitly flagged there as "the primary
+# open parameter", no single value recommended) -- these are starting
+# defaults, overridable per instance via the ref_scale constructor
+# parameter, not a settled tuning result.
+_REF_SCALE_LOCAL_DEFAULT  = 2.0
+_REF_SCALE_REMOTE_DEFAULT = 4.0
 
 # Default color maps for successive layers
 _MIN_ALPHA = 90
@@ -336,6 +358,20 @@ class VisibilityScatter(VisibilityPlot):
         your selection" instead. See
         ``XArrayReader.probe_scatter_region``'s docstring for why this
         guard exists. Default ``200_000``.
+    ref_scale : float | None
+        Two-level rendering (2026-09): resolution of the cached
+        reference structures ``_do_viewport_rerender`` resamples locally
+        for a pan/zoom that doesn't need finer resolution than they
+        have, as a multiple of the (adaptive) display canvas size -- see
+        ``_can_resample_locally``/``_resample_and_composite`` and the
+        scatter two-level rendering handoff notes for the full design.
+        ``None`` (default) picks a session-type-aware default --
+        ``_REF_SCALE_REMOTE_DEFAULT`` for a ``RemoteReductionContext``
+        backend, ``_REF_SCALE_LOCAL_DEFAULT`` otherwise (see those
+        constants' docstring for why they differ). A larger value
+        resolves deeper zooms at Level-1 before falling back to a real
+        backend re-query, at the cost of a larger one-time reference
+        payload each time one is (re)built.
     """
 
     def __init__(
@@ -356,10 +392,20 @@ class VisibilityScatter(VisibilityPlot):
         probe_grid_max_cells: int = 3072,
         enable_info_tool: bool = True,
         probe_region_max_samples: int = 200_000,
+        ref_scale: Optional[float] = None,
         **kwargs,
     ) -> None:
         if not layers:
             raise ValueError("VisibilityScatter: layers must be non-empty")
+
+        # Two-level rendering (2026-09): resolved from the RAW backend
+        # argument, before super().__init__() wraps a bare XArrayReader
+        # in LocalVisibilityReader -- see _is_remote_backend's docstring
+        # for why checking here, on this argument, is equivalent and
+        # simpler than checking self._backend later. Set early (before
+        # anything that renders) since _render_all_layers reads it on
+        # every backend call, including the very first one.
+        self._ref_scale: float = self._resolve_ref_scale(ref_scale, backend)
 
         # Assign default color maps by layer index.  The family is an
         # instance attribute, not the module constant, because it is
@@ -419,6 +465,18 @@ class VisibilityScatter(VisibilityPlot):
         # remains the source of an exact reading on demand.
         self._layer_id_grid: list[Optional[dict]] = [None] * n
         self._probe_grid_max_cells: int = int(probe_grid_max_cells)
+
+        # Two-level rendering (2026-09): one ScatterLayerReference per
+        # layer (or None -- no reference built yet, or this layer had no
+        # data), cached from the same query_columns(ref_scale=...) call
+        # that populates everything above. _do_viewport_rerender resamples
+        # THIS locally for a pan/zoom that doesn't need finer resolution
+        # than it has (_can_resample_locally); a Level-2 re-query (or a
+        # fresh axis/selection render) replaces the whole list, exactly
+        # like every other _layer_* cache here. See
+        # ScatterLayerReference's docstring (data/reader.py) and the
+        # scatter two-level rendering handoff notes for the full design.
+        self._layer_reference: list[Optional["ScatterLayerReference"]] = [None] * n
 
         # Vestigial -- kept ONLY so any remaining code path that still
         # checks these guards degrades gracefully instead of an
@@ -509,6 +567,56 @@ class VisibilityScatter(VisibilityPlot):
             comm_mgr  = comm_mgr,
             **kwargs,
         )
+
+    # ------------------------------------------------------------------
+    # Two-level rendering: REF_SCALE resolution (2026-09)
+    # ------------------------------------------------------------------
+
+    def _is_remote_backend(self, backend) -> bool:
+        """Whether *backend* is a remote Jupyter-kernel session.
+
+        See ``_REF_SCALE_LOCAL_DEFAULT``/``_REF_SCALE_REMOTE_DEFAULT``'s
+        docstring for why this decides ``ref_scale``'s default. Checks
+        the RAW *backend* argument, not ``self._backend``: this can run
+        before ``super().__init__()`` has wrapped a bare ``XArrayReader``
+        in ``LocalVisibilityReader`` -- ``RemoteReductionContext`` is
+        never wrapped either way (it already satisfies the
+        ``VisibilityReader`` protocol directly), so checking the
+        original argument is equivalent and available earlier. Inline
+        import to avoid a module-level circular-import risk, matching
+        ``VisibilityPlot.__init__``'s own established pattern for
+        exactly this kind of backend-type check.
+        """
+        from .remote_reduction_context import RemoteReductionContext
+        return isinstance(backend, RemoteReductionContext)
+
+    def _resolve_ref_scale(
+        self, ref_scale: Optional[float], backend,
+    ) -> float:
+        """``ref_scale`` if given, else a session-type-aware default --
+        see ``__init__``'s ``ref_scale`` parameter docstring."""
+        if ref_scale is not None:
+            return float(ref_scale)
+        return (
+            _REF_SCALE_REMOTE_DEFAULT if self._is_remote_backend(backend)
+            else _REF_SCALE_LOCAL_DEFAULT
+        )
+
+    def set_ref_scale(self, ref_scale: float) -> None:
+        """Change the two-level rendering reference resolution and
+        rebuild it at the new size.
+
+        A ``SHADE``-level-and-up change: the cached reference itself
+        depends on ``ref_scale``, so this re-renders from the backend
+        (like ``update_scaling``/``set_layer_cmaps``) rather than only
+        recompositing. No-ops if the panel has never been rendered.
+        """
+        value = float(ref_scale)
+        if value <= 0:
+            raise ValueError(f"ref_scale must be positive, got {value!r}")
+        self._ref_scale = value
+        if any(img is not None for img in self._layer_images):
+            self._rerender()
 
     # ------------------------------------------------------------------
     # Public API extensions
@@ -1163,6 +1271,12 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._layer_dfs         = [None] * n   # vestigial -- see __init__
             self._layer_aggs        = [None] * n   # vestigial -- see __init__
             self._layer_extents     = [None] * n   # vestigial -- see __init__
+            # Two-level rendering (2026-09): a wholesale layer-list
+            # replacement invalidates any cached reference the same way
+            # it invalidates every other per-layer render-state cache
+            # above -- a stale index would otherwise pair a rebuilt
+            # layer with another layer's old reference.
+            self._layer_reference   = [None] * n
             # Layer list replaced wholesale -- any cached continuous-cmap
             # backup is keyed by an index that may now name a different
             # layer entirely (or not exist), so drop it rather than let
@@ -1501,6 +1615,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._layer_dfs         = [None] * n   # vestigial -- see __init__
             self._layer_aggs        = [None] * n   # vestigial -- see __init__
             self._layer_extents     = [None] * n   # vestigial -- see __init__
+            self._layer_reference   = [None] * n   # two-level rendering (2026-09)
             self._x_range    = (0.0, 1.0)
             self._y_range    = (0.0, 1.0)
             self._canvas_width, self._canvas_height = self._width, self._height
@@ -1516,24 +1631,43 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
     def _do_viewport_rerender(
         self, x0: float, x1: float, y0: float, y1: float
     ) -> dict:
-        """Re-render at the new viewport via a fresh backend call.
+        """Two-level pan/zoom (2026-09): a local Datashader resample of
+        the cached per-layer reference (Level-1) when it doesn't need
+        finer resolution than what's cached, else a real backend
+        re-query (Level-2) -- exactly the scheme ``VisibilityRaster``
+        already uses for its own single cached aggregation, extended
+        here for scatter's multiple layers plus the categorical/
+        continuous split. See ``_can_resample_locally``/
+        ``_resample_and_composite`` and the scatter two-level rendering
+        handoff notes for the full design and the correctness
+        invariants this preserves.
 
-        POST-2026-09: no longer a local recomposite of a cached
-        DataFrame -- binning and shading both happen backend-side now
-        (see ``ScatterRenderResult``'s docstring in ``data/reader.py``),
-        so every pan/zoom now costs a full ``query_columns()`` round
-        trip. This applies to LOCAL sessions too, not just remote ones:
-        the backend re-reads the selected data from disk on every call:
-        nothing is cached between calls the way the widget-side
-        DataFrame used to be. A known, deliberate cost for this pass —
-        see the scatter remote-execution design notes' discussion of
-        debouncing / a stale-while-revalidate placeholder / an
-        overscan margin as possible later mitigations, none implemented
-        yet.
+        Before this feature, EVERY pan/zoom paid a full
+        ``query_columns()`` round trip here, in local sessions too, not
+        only remote ones (binning and shading happen backend-side --
+        see ``ScatterRenderResult``'s docstring in ``data/reader.py`` --
+        so the backend re-read the selected data, from its own Part 6
+        frame cache at best, on every single call). Level-1 now serves
+        the common case -- a pan or zoom that doesn't need finer
+        resolution than the last real render already captured -- with
+        no backend call at all.
         """
         # Normalise — Bokeh box-zoom can produce start > end
         x0, x1 = min(x0, x1), max(x0, x1)
         y0, y1 = min(y0, y1), max(y0, y1)
+
+        if self._can_resample_locally(x0, x1, y0, y1):
+            log.debug("_do_viewport_rerender: Level-1 local resample")
+            self._current_viewport = (x0, x1, y0, y1)
+            img32 = self._resample_and_composite(x0, x1, y0, y1)
+            self._push_image(img32, (x0, x1), (y0, y1))
+            return {
+                "image": img32,
+                "x0": x0, "x1": x1,
+                "y0": y0, "y1": y1,
+            }
+
+        log.debug("_do_viewport_rerender: Level-2 backend re-query")
         self._current_viewport = (x0, x1, y0, y1)
         img32 = self._rerender(x_range=(x0, x1), y_range=(y0, y1))
         return {
@@ -1541,6 +1675,104 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             "x0": x0, "x1": x1,
             "y0": y0, "y1": y1,
         }
+
+    def _can_resample_locally(
+        self, x0: float, x1: float, y0: float, y1: float,
+    ) -> bool:
+        """Whether Level-1 (a local resample of the cached per-layer
+        reference) can serve viewport (x0,x1,y0,y1), or a real Level-2
+        backend re-query is required.
+
+        ``color_mode == "local"`` always requires Level-2. The cached
+        eq_hist curve (``ScatterLayerReference.eq_curve``) is only ever
+        built for ``color_mode == "global"`` (see
+        ``_scatter_render.build_layer_reference``'s docstring) --
+        the ``local``-mode reference-population approximation the
+        scatter two-level rendering handoff notes flag in §2.4 as "not
+        yet fully validated" (checked only against isolated numeric
+        curves, never a real rendered image, and only a design sketch,
+        not something this pass implements) is deliberately not shipped
+        here. Every ``local``-mode pan/zoom re-queries the backend
+        exactly as it always has -- the lower-risk choice, and also the
+        cheaper one for what matters most today: a LOCAL session's own
+        Level-2 is already cheap post-Part-6-cache, and remote-kernel
+        sessions (where Level-2 is the expensive multi-hop path this
+        whole feature exists to reduce) are the less common case for
+        now. Revisit once the ``local`` approximation has been checked
+        against real rendered images, per the handoff notes' own
+        recommendation.
+
+        For ``global`` mode: every layer shares one x/y coordinate space
+        (all layers overlay on the same Axes), so one reference
+        resolution serves every layer -- this checks the gate (see
+        ``_scatter_render.needs_level2_requery``) against the FIRST
+        layer that actually has a usable reference, not layer 0
+        specifically (a layer can be ``skip_reason``'d -- no data -- for
+        this selection while another isn't). ``False`` (force Level-2)
+        when no layer has one at all -- nothing cached yet, or every
+        layer is empty.
+        """
+        if self._color_mode == "local":
+            return False
+        ref = next((r for r in self._layer_reference if r is not None), None)
+        if ref is None:
+            return False
+        return not _sr.needs_level2_requery(
+            ref, x0, x1, y0, y1, self._canvas_width, self._canvas_height,
+        )
+
+    def _resample_and_composite(
+        self, x0: float, x1: float, y0: float, y1: float,
+    ) -> np.ndarray:
+        """Level-1: resample every layer's cached reference at the new
+        viewport, then alpha-collapse + Porter-Duff composite exactly as
+        a real render would -- no backend call.
+
+        Mirrors ``VisibilityRaster._shade_viewport`` (a single cached
+        agg) extended for scatter's multiple layers plus the
+        categorical/continuous split -- see
+        ``_scatter_render.resample_layer_reference``/
+        ``resample_id_grid`` for the per-layer resampling itself, and
+        the scatter two-level rendering handoff notes §1/§2 for the
+        full design.
+
+        EVERY layer with a reference is resampled here, including a
+        hidden one (``lyr.alpha == 0``) -- mirrors
+        ``_scatter_render.render_layer``'s own 2026-09 correction (see
+        that function's docstring): ``set_alpha()``'s free fast path can
+        only un-hide whatever image is already cached for the CURRENT
+        viewport, so a hidden layer's cached image must stay current
+        across every pan/zoom, not just the ones where it happens to be
+        visible. A layer with no reference (not yet rendered, or
+        ``skip_reason``'d -- no data for this selection) keeps whatever
+        ``_layer_images``/``_layer_n_in_view`` it already had; there is
+        nothing new to resample for it.
+
+        ``peak_value``/``hist_counts``/``hist_edges``/``mapping``/
+        ``categories``/``category_colors``/``category_members`` are all
+        viewport-independent in ``color_mode="global"`` (the only mode
+        that reaches here -- see ``_can_resample_locally``) and are left
+        exactly as the last real render cached them; nothing to refresh.
+        """
+        for i, lyr in enumerate(self._layers):
+            ref = self._layer_reference[i] if i < len(self._layer_reference) else None
+            if ref is None:
+                continue
+            categories = (
+                self._layer_categories[i] if i < len(self._layer_categories) else None
+            )
+            img32, n_in_view = _sr.resample_layer_reference(
+                ref, lyr, categories, x0, x1, y0, y1,
+                self._canvas_width, self._canvas_height,
+            )
+            self._layer_images[i]      = img32
+            self._layer_n_in_view[i]   = n_in_view
+            self._layer_skip_reason[i] = ref.skip_reason
+            self._layer_id_grid[i] = _sr.resample_id_grid(
+                ref, x0, x1, y0, y1,
+                self._canvas_width, self._canvas_height, self._probe_grid_max_cells,
+            )
+        return self._collapse_and_composite()
 
     # ------------------------------------------------------------------
     # Hover probe
@@ -2295,6 +2527,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             x_range=x_range, y_range=y_range, color_mode=self._color_mode,
             width=self._width, height=self._height,
             probe_grid_max_cells=self._probe_grid_max_cells,
+            ref_scale=self._ref_scale,
         )
 
         if len(result.layers) != len(self._layers):
@@ -2332,6 +2565,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         self._layer_categories       = []
         self._layer_category_colors  = []
         self._layer_category_members = []
+        self._layer_reference   = []
         for lyr, rendered in zip(self._layers, result.layers):
             self._layer_images.append(rendered.image)
             self._layer_n_in_view.append(rendered.n_in_view)
@@ -2352,6 +2586,15 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._layer_categories.append(rendered.categories)
             self._layer_category_colors.append(rendered.category_colors)
             self._layer_category_members.append(rendered.category_members)
+
+            # Two-level rendering (2026-09): None whenever ref_scale
+            # wasn't honored for some reason (shouldn't happen given we
+            # always pass self._ref_scale above, but a defensive None
+            # here -- rather than an AttributeError -- just means the
+            # next pan/zoom takes the Level-2 path, exactly as it always
+            # did before this feature existed). See
+            # ScatterLayerReference's docstring for what this holds.
+            self._layer_reference.append(rendered.reference)
 
             # Hover-probe redesign piece 2: coarse id grid, one dict per
             # layer, or None for a layer with no data at all (matches

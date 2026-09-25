@@ -48,6 +48,7 @@ Package location
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
@@ -196,6 +197,113 @@ def equalize_histogram(
             values[finite_mask], bin_centers, cdf,
             left=cdf[0], right=cdf[-1],
         )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# eq_hist curve/LUT split (scatter two-level rendering, 2026-09)
+# ---------------------------------------------------------------------------
+#
+# ``equalize_histogram`` above does two things in one call: (a) build a CDF
+# from *reference* (expensive -- a np.histogram over the whole selection's
+# raw y-values), then (b) map *values* through that CDF via np.interp
+# (cheaper, but not free, and re-run on every call). The two-level
+# rendering handoff notes' §2.2 measured (a) as viewport-independent in
+# color_mode="global" -- the reference population never changes across a
+# pan/zoom -- so it can be built ONCE, at reference-build time, and reused
+# for every subsequent Level-1 resample. (b) still runs every call (its
+# input, the resampled agg, is genuinely viewport-dependent) but was cut
+# from a 27.5ms np.interp binary search to a 6.4ms direct lookup by
+# swapping the search for a uniform-bin integer index -- safe specifically
+# because ``build_equalize_curve`` bins over a fixed [vmin, vmax] (unlike
+# ``equalize_histogram``'s ``np.histogram(ref_finite, bins=nbins)``, whose
+# implicit range is ref_finite's own min/max -- the same thing, just made
+# explicit here so the apply side can recover a bin index arithmetically
+# instead of searching for it).
+#
+# Deliberately NOT wired into ``equalize_histogram`` itself: that function
+# is the existing Level-2 exact path (a fresh call per render, ``nbins=
+# 256*256`` by default) and this split exists for a different call pattern
+# (build once, apply many times, ``nbins=4096`` -- verified in the handoff
+# notes to cost the same 41-52ms to build regardless of nbins in this
+# range, while shrinking the LUT itself and keeping per-apply cost low).
+# Changing ``equalize_histogram``'s own behavior was never part of this
+# work and risks regressing the Level-2 path's existing, tested output.
+
+@dataclass(frozen=True)
+class EqualizeCurve:
+    """A precomputed CDF lookup table for repeated eq_hist mapping against
+    one fixed *reference* population.
+
+    ``cdf_lut[i]`` is the equalized value for inputs falling in the i-th of
+    ``len(cdf_lut)`` equal-width bins spanning ``[vmin, vmax]`` -- see
+    ``apply_equalize_curve`` for the index arithmetic this implies.
+    """
+    vmin:    float
+    vmax:    float
+    cdf_lut: np.ndarray   # shape (nbins,), float64, in [0, 1], nondecreasing
+
+
+def build_equalize_curve(
+    reference: np.ndarray, *, nbins: int = 4096,
+) -> "EqualizeCurve | None":
+    """Build an :class:`EqualizeCurve` from *reference*'s distribution.
+
+    ``None`` when *reference* has no finite values (nothing to equalize
+    against) or is a single repeated value (``vmax <= vmin`` -- a curve
+    would divide by zero on apply) -- callers should treat this the same
+    way ``equalize_histogram`` treats an all-NaN/degenerate reference:
+    pass the input through unchanged (see ``apply_equalize_curve``).
+    """
+    ref_finite = reference[np.isfinite(reference)]
+    if ref_finite.size == 0:
+        return None
+    vmin = float(ref_finite.min())
+    vmax = float(ref_finite.max())
+    if not (vmax > vmin):
+        return None
+    hist, _ = np.histogram(ref_finite, bins=nbins, range=(vmin, vmax))
+    cdf = hist.cumsum().astype(np.float64)
+    total = cdf[-1]
+    if total <= 0:
+        return None
+    cdf /= total
+    return EqualizeCurve(vmin=vmin, vmax=vmax, cdf_lut=cdf)
+
+
+def apply_equalize_curve(
+    values: np.ndarray, curve: "EqualizeCurve | None",
+) -> np.ndarray:
+    """Map *values* through *curve* via a direct integer-indexed lookup.
+
+    Same output convention as ``equalize_histogram``: same shape as
+    *values*, in ``[0, 1]``, NaN passed through unchanged, suitable for
+    ``tf.shade(..., how="linear", span=[0, 1])``. ``curve=None`` (a
+    degenerate reference -- see ``build_equalize_curve``) returns an
+    all-NaN array of *values*' shape rather than raising, matching how a
+    fully-empty layer renders elsewhere in this pipeline (nothing to draw,
+    not an error).
+
+    Values outside ``[curve.vmin, curve.vmax]`` clip to the nearest end
+    bin, mirroring ``np.interp``'s ``left=``/``right=`` clamping in
+    ``equalize_histogram`` -- a resampled Level-1 value can legitimately
+    fall slightly outside the reference's own observed range (e.g. a
+    "nearest" upsample duplicating an edge cell), and clamping is the same
+    conservative choice already made there.
+    """
+    out = np.full(values.shape, np.nan, dtype=np.float64)
+    if curve is None:
+        return out
+    finite = np.isfinite(values)
+    if not np.any(finite):
+        return out
+    nbins = curve.cdf_lut.shape[0]
+    span = curve.vmax - curve.vmin
+    idx = np.clip(
+        ((values[finite] - curve.vmin) / span * nbins).astype(np.int64),
+        0, nbins - 1,
+    )
+    out[finite] = curve.cdf_lut[idx]
     return out
 
 

@@ -41,6 +41,26 @@ import numpy as np
 
 
 # ---------------------------------------------------------------------------
+# Categorical draw-priority captions (Part 5a, 2026-09)
+# ---------------------------------------------------------------------------
+
+CATEGORY_PRIORITY_CAPTIONS: dict = {
+    "rarest":   "Rarest category drawn on top",
+    "majority": "Most frequent category shown per pixel",
+}
+"""One line, per ``data.reader.CATEGORY_PRIORITIES`` value, saying what a
+pixel's color means when several categories share it.
+
+Lives here -- not in ``data.reader``, which this module does not import --
+because two consumers that share only this module need the same words: the
+live legend (``VisibilityScatter._full_legend_html``) and the exported
+figure's legend (``png_export._legend_handles``).  In ``"rarest"`` mode a
+color says "this category is present in this pixel", not "this is the most
+common one", and that difference is invisible without the caption.
+"""
+
+
+# ---------------------------------------------------------------------------
 # ColorBand
 # ---------------------------------------------------------------------------
 
@@ -126,6 +146,14 @@ class ColorBand:
         ``VisibilityScatter``'s own per-layer cache — for the same
         reason ``mapping``/``peak_density`` are: the export path reads
         ``PanelSpec``/``ColorBand``, never the widget's private state.
+    category_priority : str | None
+        ``"rarest"`` or ``"majority"`` for a ``"categorical"`` band (how a
+        pixel shared by several categories was resolved -- see
+        ``data.reader.CATEGORY_PRIORITIES``); ``None`` for every other
+        kind, and for a band built without it.  The legend captions itself
+        from this (``priority_caption()``), so a figure carries its own
+        explanation of what a color means.  Added last in the field order
+        so no existing positional construction changes meaning.
     """
 
     label:         str
@@ -143,10 +171,22 @@ class ColorBand:
     category_members:  Optional[dict] = None
     mapping:       Optional[object] = None
     peak_density:  Optional[float]  = None
+    category_priority: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Labelling
     # ------------------------------------------------------------------
+
+    def priority_caption(self) -> str:
+        """Legend caption for a categorical band's draw priority, or ``""``.
+
+        Empty for any band that is not categorical, has no priority set,
+        or carries a value this module has no words for -- a missing
+        caption is a harmless omission; a wrong one would be a lie.
+        """
+        if self.kind != "categorical" or not self.category_priority:
+            return ""
+        return CATEGORY_PRIORITY_CAPTIONS.get(self.category_priority, "")
 
     def bar_label(self) -> str:
         """Axis label for this band's colorbar.

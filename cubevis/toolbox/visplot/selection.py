@@ -119,6 +119,20 @@ class SelectionSpec:
     data_column: str = "DATA"
     """Visibility column: ``'DATA'``, ``'CORRECTED'``, or ``'MODEL'``."""
 
+    cache_generation: int = 0
+    """Data-freshness token -- NOT a constraint on which rows are selected.
+
+    The backend keeps the per-row frames it reads (see
+    ``data.reader.XArrayReader._query_columns_cached``) so a pan, zoom or
+    recolor does not re-read the data.  A cached frame is only valid for the
+    generation it was read under; the plotter bumps this when the user presses
+    Reload, so the next query re-reads from disk.  It rides on the selection
+    because that object already travels to the backend on every call, locally
+    or in a remote worker, so no new call is needed.  Deliberately excluded
+    from ``is_empty()`` and from the cache's selection fingerprint (it is
+    compared separately), but preserved by ``copy()``.
+    """
+
     # ------------------------------------------------------------------ #
 
     def is_empty(self) -> bool:
@@ -148,6 +162,7 @@ class SelectionSpec:
             channel_range=self.channel_range,
             correlation=list(self.correlation) if self.correlation is not None else None,
             data_column=self.data_column,
+            cache_generation=self.cache_generation,
         )
 
     # ------------------------------------------------------------------ #

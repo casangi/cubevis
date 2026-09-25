@@ -17,6 +17,7 @@
 ########################################################################
 
 import asyncio
+import logging
 import sys
 
 import pytest
@@ -24,6 +25,7 @@ import websockets
 
 from cubevis.bokeh import BokehInit
 from cubevis.bokeh.transport import CommMgr
+from cubevis.bokeh.transport import _comm_mgr as _comm_mgr_module
 from cubevis.bokeh.transport._comm_mgr import AppState, ShutdownReason
 from cubevis.utils._conversion import serialize, deserialize
 
@@ -425,6 +427,77 @@ async def test_requested_shutdown_still_invokes_on_shutdown():
     finally:
         server.close()
         await server.wait_closed()
+
+
+# ======================================================================
+# Waiting forever must not be silent
+# ======================================================================
+#
+# A browser tab that goes away without either a close frame or a
+# __goodbye__ is indistinguishable from a suspended laptop, so with
+# reconnect_timeout=None (what VisibilityPlotter sets) the session
+# waits indefinitely -- by design.  What was wrong was that it did so
+# silently: from the terminal, "tab closed, nothing happened" looked
+# like a hang.  These pin the warning that now says why.
+
+class _WarnCapture(logging.Handler):
+    """Collects WARNING+ messages from CommMgr's own logger.  A plain
+    handler rather than pytest's caplog so the standalone runner below
+    (which has no fixtures) exercises these too."""
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+        self.messages = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+
+async def _drop_and_watch(kind, **mgr_kw):
+    """Connect a frontend, end the connection as `kind`, and return every
+    warning CommMgr logged while that played out."""
+    port = _port()
+    mgr = _new_mgr(port, **mgr_kw)
+    mgr.open("data")
+    cap = _WarnCapture()
+    _comm_mgr_module.logger.addHandler(cap)
+    server = await websockets.serve(mgr.process_messages, HOST, port, ping_interval=None)
+    try:
+        fe = await Frontend(mgr, port).connect()
+        await asyncio.sleep(0.2)
+        if kind == "abrupt":
+            await fe.suspend()                 # RST, no close frame, no goodbye
+        else:
+            await fe.close()                   # proper close frame
+        await asyncio.sleep(1.0)
+    finally:
+        _comm_mgr_module.logger.removeHandler(cap)
+        server.close()
+        await server.wait_closed()
+    return cap.messages
+
+
+@pytest.mark.asyncio
+async def test_abrupt_disconnect_with_no_timeout_says_it_is_waiting():
+    msgs = await _drop_and_watch("abrupt")          # reconnect_timeout defaults to None
+    hits = [m for m in msgs if "without a close message" in m]
+    assert len(hits) == 1, f"expected exactly one warning, got {msgs!r}"
+    assert "Ctrl-C" in hits[0] and "reconnect_timeout" in hits[0]
+
+
+@pytest.mark.asyncio
+async def test_abrupt_disconnect_with_a_timeout_does_not_warn():
+    # A timeout means the session WILL end on its own; "waiting
+    # indefinitely" would be untrue.
+    msgs = await _drop_and_watch("abrupt", reconnect_timeout=30.0)
+    assert not [m for m in msgs if "without a close message" in m], msgs
+
+
+@pytest.mark.asyncio
+async def test_clean_close_does_not_warn():
+    # A close frame means the tab was deliberately closed; the grace
+    # period ends the session shortly, so there is nothing to explain.
+    msgs = await _drop_and_watch("clean", reconnect_grace_period=30.0)
+    assert not [m for m in msgs if "without a close message" in m], msgs
 
 
 # ----------------------------------------------------------------------

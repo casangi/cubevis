@@ -31,7 +31,9 @@ What stays client-side (``VisibilityScatter``), and why
   lyr.alpha``) -- needs only ``ScatterLayerRender.n_in_view`` and the
   canvas pixel count, both tiny. Keeping this client-side is what
   keeps ``VisibilityScatter.set_alpha()`` a free, no-requery operation,
-  exactly as it is today.
+  exactly as it is today.  (Part 5a: a *categorical* layer is exempt from
+  the density-based ``auto_alpha`` -- its occupied pixels are opaque and
+  only the user's ``lyr.alpha`` applies.  See ``_priority_shade``.)
 * **Porter-Duff compositing across layers** -- pure image-space math
   over the returned RGBA arrays; needs no raw data.
 
@@ -43,7 +45,7 @@ Package location
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -57,12 +59,15 @@ except ImportError:
     HAS_DATASHADER = False
 
 from .. import colormap_scaling as _cms
-from .reader import ScatterLayerSpec, ScatterLayerRender, COLORIZE_AXIS_COLUMNS
+from .reader import (ScatterLayerSpec, ScatterLayerRender, COLORIZE_AXIS_COLUMNS,
+                     OTHER_CATEGORY_LABEL, OTHER_CATEGORY_COLOR, OTHER_CATEGORY_ALPHA)
 
 # Mirrors VisibilityScatter._MIN_ALPHA -- see that module's docstring
 # for the measured rationale (Datashader's min_alpha=40 default makes a
 # single-point pixel nearly invisible; 90 roughly doubles sparse
-# visibility without flattening dense-region contrast).
+# visibility without flattening dense-region contrast).  CONTINUOUS layers
+# only since Part 5a: categorical layers are fully opaque (see
+# ``_priority_shade``) and no longer use a density alpha floor.
 _MIN_ALPHA = 90
 
 # ---------------------------------------------------------------------------
@@ -113,10 +118,10 @@ actually keeps cost bounded now -- not a refusal. Since cost is driven
 by K, not by which K values happen to be present, capping K at a
 constant makes cost independent of true antenna count: a 26-antenna MS
 and an ngVLA 263-antenna one cost the same to render, once binned. See
-``_argmax_shade`` for the other half of the cost fix (replacing
-Datashader's per-category blend with a single-pass winner-take-all,
-measured 4-9x faster at this same cardinality range, independently of
-the binning decision).
+``_priority_shade`` for the other half of the cost fix (replacing
+Datashader's per-category blend with a single-pass one-color-per-pixel
+pick, measured 4-9x faster at this same cardinality range,
+independently of the binning decision).
 """
 
 
@@ -191,106 +196,172 @@ def _bin_categories(distinct: list[str], cap: int) -> dict[str, tuple[str, ...]]
     return members
 
 
+class _Categorization(NamedTuple):
+    """Everything ``render_layer`` needs to know about one layer's categories.
+
+    ``bucket`` is the per-row display-category index (an ``int32`` array,
+    ``len(df)`` long); ``-1`` marks a row that is not drawn -- either its
+    value is missing (NaN/None) or the user excluded it.  Carrying integer
+    codes instead of the per-row strings is the whole point of this type:
+    every later step (shading, the legend, the rarity ordering) then works
+    on small integer arrays, and the only place a string is ever touched
+    is the handful of *distinct* values.
+
+    ``population`` is the number of drawn rows per category over the WHOLE
+    current selection -- deliberately not the viewport, so anything derived
+    from it (the ``"rarest"`` draw order) cannot change when the user pans
+    or zooms.  Exactly one of ``categories``/``skip_reason`` is ``None``.
+
+    ``other_index`` (Part 5b): index into ``categories`` of the gray
+    "Other (not selected)" group, or ``None`` when there isn't one.  When
+    present it is always the LAST category, and ``members``/``population``
+    have an entry for it like any other -- see ``EXCLUDED_DISPLAYS``.
+    """
+    bucket:      Optional[np.ndarray]
+    categories:  Optional[list]
+    members:     Optional[dict]
+    population:  Optional[np.ndarray]
+    skip_reason: Optional[str]
+    other_index: Optional[int] = None
+
+
+def _no_categories(reason: str) -> _Categorization:
+    return _Categorization(None, None, None, None, reason)
+
+
+def _categorize(
+    df: pd.DataFrame, column: str, axis_label: str, cap: int = CATEGORY_CAP,
+    excluded: Optional[frozenset] = None, show_excluded: bool = False,
+) -> _Categorization:
+    """Resolve *column* into display categories, per-row codes and populations.
+
+    Replaces the pre-Part-5a implementation, which ran ``str(v)``,
+    ``astype(str)``, ``Series.map`` and ``pd.Categorical(strings)`` over
+    every row of the DataFrame -- four Python-level passes measured at
+    ~2.6 s per 4M rows (11-13x the whole continuous render), none of it
+    Datashader.  Here ``pd.factorize`` hashes each row exactly once, in C,
+    and every step after it (``str()``, exclusion, sorting, binning, the
+    label lookup) runs over the *K distinct values*, not the N rows.  The
+    result is identical -- same categories, same order, same colors, same
+    pixels (checked image-for-image on real data, with and without
+    exclusions) -- only cheaper.
+
+    Behavior preserved deliberately:
+
+    * A missing *column*, or one with no non-null value, yields a skip
+      reason (same wording as before) rather than raising.
+    * Rows whose value is missing are never drawn.  This is a correctness
+      requirement, not tidiness: **Datashader's ``ds_agg.by()`` silently
+      folds a NaN-coded category into the LAST real category's count**
+      (confirmed directly on a 20-row synthetic column: counts came out
+      ``[5, 15]`` instead of ``[5, 5]``), inflating that category's weight.
+      Such rows get bucket ``-1`` and are filtered out before ``by()`` ever
+      sees the column.
+    * Values are string-normalized (``str(v)``) before comparison, which is
+      also how a mixed ``int``/``str`` ``spw`` identity (an int DDID on one
+      partition, a name on another) merges into one category instead of
+      splitting: two distinct raw values with the same ``str()`` map to the
+      same bucket here.
+    * *excluded* (raw values, not post-binning labels) is applied BEFORE
+      binning, so an excluded value never contributes to a bucket -- correct
+      even when the exclusion changes which values share one.
+    * Categories, members and colors come from the FULL per-layer *df* (the
+      whole selection), never the viewport, so a category keeps its color
+      while the user pans and zooms.
+    * *show_excluded* (Part 5b, ``excluded_display == "gray"``): instead of
+      dropping the excluded rows, gather them into one extra LAST category,
+      ``OTHER_CATEGORY_LABEL``.  It exists only if some excluded value is
+      actually present, is never binned into the real categories (exclusion
+      still happens before binning), and does not count toward *cap*.  With
+      nothing left highlighted the real categories are simply empty and the
+      layer is all gray -- a valid, useful render, not the "all excluded"
+      skip that hiding everything is.
+    """
+    if column not in df.columns:
+        return _no_categories(f"no {axis_label} data for this selection")
+
+    col = df[column]
+    if isinstance(col.dtype, pd.CategoricalDtype):
+        # Part 5b: Field and Baseline arrive as pandas Categoricals (small
+        # integer codes + a shared category list; see
+        # ``XArrayReader._identity_categoricals``).  Read the codes directly
+        # -- no hashing, no strings -- and keep only the categories this
+        # selection actually contains: a category that is in the shared list
+        # but has no rows must not show up in the legend.
+        cat_codes = col.cat.codes.to_numpy()                 # -1 == missing
+        cats = col.cat.categories
+        counts = np.bincount(cat_codes[cat_codes >= 0], minlength=len(cats))
+        present = np.flatnonzero(counts)
+        remap = np.full(len(cats) + 1, -1, dtype=np.int64)   # last slot <- code -1
+        remap[present] = np.arange(len(present))
+        codes = remap[cat_codes]
+        uniques = cats.take(present)
+    else:
+        codes, uniques = pd.factorize(col.to_numpy(), use_na_sentinel=True)
+    if len(uniques) == 0:
+        return _no_categories(f"no {axis_label} data for this selection")
+
+    u_str = [str(u) for u in uniques]                      # K values, not N rows
+    keep = np.ones(len(u_str), dtype=bool)
+    if excluded:
+        excl = set(excluded)
+        keep = np.array([s not in excl for s in u_str], dtype=bool)
+        if not keep.any() and not show_excluded:
+            return _no_categories(f"all {axis_label} categories excluded")
+
+    distinct = sorted({s for s, k in zip(u_str, keep) if k},
+                      key=_category_sort_key)
+    members = _bin_categories(distinct, cap)
+    categories = list(members)
+    label_index = {label: i for i, label in enumerate(categories)}
+    value_index = {v: label_index[label]
+                   for label, group in members.items() for v in group}
+
+    other_index = None
+    if show_excluded and not keep.all():
+        other_index = len(categories)
+        categories.append(OTHER_CATEGORY_LABEL)
+        members[OTHER_CATEGORY_LABEL] = tuple(sorted(
+            (s for s, k in zip(u_str, keep) if not k), key=_category_sort_key))
+
+    # Lookup table from factorize()'s code -> display-category index.  One
+    # extra trailing slot so factorize's -1 (missing) indexes it too (Python
+    # negative indexing lands on the last element) and comes out as -1.
+    lut = np.full(len(u_str) + 1, -1, dtype=np.int32)
+    for k, s in enumerate(u_str):
+        if keep[k]:
+            lut[k] = value_index[s]
+        elif other_index is not None:
+            lut[k] = other_index
+    bucket = lut[codes]
+
+    population = np.bincount(bucket[bucket >= 0], minlength=len(categories))
+    return _Categorization(bucket, categories, members, population, None, other_index)
+
+
 def _resolve_categories(
     df: pd.DataFrame, column: str, axis_label: str, cap: int = CATEGORY_CAP,
     excluded: Optional[frozenset] = None,
 ) -> tuple[Optional[np.ndarray], Optional[list[str]],
            Optional[dict[str, tuple[str, ...]]], Optional[str]]:
     """Boolean row-mask + display categories + raw-value membership for
-    colorize-by-axis, or a skip reason if the data can't support it at
-    all.
+    colorize-by-axis, or a skip reason if the data can't support it at all.
 
-    Returns ``(mask, categories, category_members, skip_reason)``:
-    exactly one of ``categories``/``skip_reason`` is not ``None``, and
-    ``mask``/``category_members`` are ``None`` iff ``skip_reason`` is
-    not. ``categories`` is ``list(category_members)`` -- kept as a
-    separate return value only because most callers want the plain
-    ordered label list and re-deriving it from the dict at every call
-    site would be noise.
+    Thin wrapper over ``_categorize`` (which carries the full reasoning and
+    is what ``render_layer`` calls), kept because its return shape is the
+    stable, tested contract: ``(mask, categories, category_members,
+    skip_reason)`` -- exactly one of ``categories``/``skip_reason`` is not
+    ``None``, and ``mask``/``category_members`` are ``None`` iff
+    ``skip_reason`` is not.  ``categories`` is ``list(category_members)``;
+    ``mask`` selects the drawn rows (present and not excluded).
 
-    Two real-data conditions are handled here, not left for the caller
-    to trip over -- both produce a skip reason; neither is the
-    cardinality cap anymore (see ``_bin_categories``, called
-    unconditionally below, and ``CATEGORY_CAP``'s docstring for why
-    exceeding it no longer means refusing):
-
-    * *column* may be entirely absent from *df*. Part 2 attaches the
-      scan/antenna/SPW columns conditionally per partition (see
-      ``visplot-colorize-by-axis-handoff-part3.md``'s "What landed"
-      table) -- on all real data seen this is always true, but a
-      selection landing entirely on a partition that genuinely lacks
-      the identity is a real, if rare, possibility this must not crash
-      on.
-    * Even when *column* is present, concatenating per-partition
-      DataFrames that only SOME of them populated (``pd.concat`` in
-      ``_query_columns_raw``) leaves NaN in the rows contributed by the
-      partitions that didn't. Those rows are dropped here, not merely
-      "categorized as NaN" -- **Datashader's ``ds_agg.by()`` silently
-      folds a NaN-coded category into the LAST real category's count
-      rather than excluding it.** Confirmed directly: a 20-row
-      synthetic categorical column (10 real values across 2 categories
-      + 10 ``None``, ``categories=["1","2"]``) produced per-category
-      counts of ``[5, 15]``, not ``[5, 5]`` -- every ``None`` landed in
-      category "2" (whichever category sorts last), silently inflating
-      its count and, worse, its rendered color weight. Pre-filtering to
-      non-null rows before ``ds_agg.by()`` ever sees the column is a
-      correctness requirement, not a cleanup nicety.
-
-    *categories* (bucket labels, post-binning) and *category_members*
-    are computed from the FULL per-layer *df* -- i.e. the whole current
-    selection -- never from a viewport-filtered subset: category-to-
-    color assignment must stay stable while the user pans/zooms, and
-    basing the bucketing on whatever happens to be in the current
-    viewport would let the same raw value silently land in a
-    differently-colored bucket between two renders of the same
-    selection.
-
-    Values are string-normalized (``str(v)``) before comparison, which
-    is also how this resolves the design doc's open question about
-    ``spw``'s mixed possible dtype (an ``int`` DDID on one partition, a
-    ``str`` spectral-window name on another): normalizing to string
-    means the same real SPW merges into one category regardless of
-    which type a given partition happened to report it as, rather than
-    spuriously splitting into two.
-
-    *excluded* (Part 5, 2026-09, category checklist): a set of RAW
-    per-sample values (e.g. individual antenna names, not a binned
-    range) to leave out of both the returned categories and the
-    rendered rows. Raw values, not post-binning display labels, because
-    the checklist this feeds is built from ``IdentityTables`` -- cheap,
-    static, already-cached metadata (the widget layer's own "similar to
-    SPW" enumeration, no backend round trip) -- which only ever knows
-    individual real values, never how many buckets a given render will
-    eventually group them into (that depends on ``cap`` and how many
-    distinct values actually turn up in a particular selection, neither
-    of which the checklist has any reason to duplicate). Applied BEFORE
-    ``_bin_categories`` below, so an excluded value simply never
-    contributes to a bucket rather than needing one removed from it
-    after the fact -- correct even when the exclusion changes which
-    values land in the same bucket as each other. ``None``/empty means
-    "everything checked", the pre-Part-5 behavior exactly -- this
-    parameter changes nothing when omitted.
+    Exceeding *cap* is not a failure: the distinct values are grouped into
+    at most *cap* contiguous buckets (see ``_bin_categories``).
     """
-    if column not in df.columns:
-        return None, None, None, f"no {axis_label} data for this selection"
-    raw = df[column]
-    mask = raw.notna().to_numpy()
-    if not mask.any():
-        return None, None, None, f"no {axis_label} data for this selection"
-    str_values = np.array([str(v) for v in raw.to_numpy()[mask]])
-
-    if excluded:
-        keep = ~np.isin(str_values, list(excluded))
-        if not keep.any():
-            return None, None, None, f"all {axis_label} categories excluded"
-        full_keep = np.zeros(len(mask), dtype=bool)
-        full_keep[mask] = keep
-        mask = full_keep
-        str_values = str_values[keep]
-
-    distinct = sorted(set(str_values.tolist()), key=_category_sort_key)
-    member_map = _bin_categories(distinct, cap)
-    return mask, list(member_map), member_map, None
+    cat = _categorize(df, column, axis_label, cap=cap, excluded=excluded)
+    if cat.skip_reason is not None:
+        return None, None, None, cat.skip_reason
+    return cat.bucket >= 0, cat.categories, cat.members, None
 
 
 def _hex_to_rgb_uint8(hex_color: str) -> tuple[int, int, int]:
@@ -298,126 +369,130 @@ def _hex_to_rgb_uint8(hex_color: str) -> tuple[int, int, int]:
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
-def _argmax_shade(
-    agg, categories: list[str], cmap: tuple[str, ...],
-    min_alpha: int = _MIN_ALPHA,
+def _priority_shade(
+    agg, categories: list[str], cmap: tuple[str, ...], priority: str,
+    population: Optional[np.ndarray], other_index: Optional[int] = None,
 ) -> tuple[np.ndarray, dict[str, str]]:
-    """Winner-take-all categorical shading: color each pixel by
-    whichever category has the most samples there. Never a blend.
+    """Shade a per-pixel category-count aggregation: one color per pixel,
+    chosen by *priority*, fully opaque.
 
-    Deliberately NOT ``tf.shade(agg, color_key=...)`` (Datashader's own
-    categorical idiom, and this function's first implementation) --
-    replaced for two independent reasons, either alone would have been
-    enough:
+    Never a blend.  Every occupied pixel is exactly one of *cmap*'s colors
+    (and every empty pixel is the all-zero, fully transparent value), which
+    is what lets a legend say "this color means that category" and be right.
+    Datashader's own categorical shading (``tf.shade(color_key=...)``) blends
+    a mixed pixel proportionally, giving a color that matches no swatch, and
+    is also 4-9x slower at real cardinalities -- see this module's history.
 
-    1. **Correctness for a legend-based UI.** Datashader's categorical
-       shading blends a pixel's color proportionally across whichever
-       categories land there, so a mixed pixel's rendered hex color
-       generally matches NO single legend swatch exactly -- a real
-       defect once there's an actual legend on screen to compare
-       against (Part 4): "which legend entry is this pixel" needs a
-       real answer, and a blend doesn't have one. Every pixel this
-       function produces is exactly one of *cmap*'s colors (or fully
-       transparent) -- confirmed by construction, not just typically.
-    2. **Measured performance.** Datashader's per-category blend scales
-       roughly linearly in category count and dominates total render
-       time at real cardinalities -- benchmarked directly (400x300
-       canvas, 1M rows, JIT-warmed): ~1.5ms/category for the blend vs.
-       ~0.2ms/category here, a 4-9x speedup that GROWS with category
-       count (9.3x at K=263, the ngVLA regime) because this function's
-       cost is one vectorized argmax/sum pass over the aggregation
-       rather than a per-category compositing step. See
-       ``CATEGORY_CAP``'s docstring for the full extrapolated numbers.
+    *priority* -- ``"rarest"`` or ``"majority"``, see
+    ``data.reader.CATEGORY_PRIORITIES``:
 
-    Alpha channel: histogram-equalized total per-pixel sample count
-    (``colormap_scaling.equalize_histogram`` -- the SAME mechanism
-    continuous eq_hist coloring already uses, reused rather than
-    reinvented) rescaled into ``[min_alpha, 255]``. Gives sparse bins
-    real visibility and dense ones full opacity, matching continuous
-    mode's visual language, rather than a flat per-category alpha that
-    would make every non-empty pixel equally opaque regardless of how
-    much data actually landed there.
+    * ``"majority"``: the category with the most samples in the pixel
+      (``argmax`` of the counts; ties go to the lower-sorted category).
+    * ``"rarest"``: the category with the smallest *population* -- rows over
+      the whole selection, from ``_categorize`` -- among those present in the
+      pixel.  Implemented as a first-hit over the category axis reordered
+      rarest-first, so it is one boolean pass (about the cost of the argmax
+      above; measured within a few percent either way).  Ties in population
+      go to the lower-sorted category, so the result is deterministic.
 
-    *categories* must be in the SAME order used to build *agg*'s
-    categorical dimension (i.e. the ``categories=`` list passed to the
-    ``pandas.CategoricalDtype`` that produced the column ``ds_agg.by``
-    aggregated over) -- ``argmax``'s integer result indexes directly
-    into it with no further lookup.
+    Opacity (Part 5a, 2026-09): occupied pixels are alpha 255, not the
+    histogram-equalized density alpha this function used to compute.  That
+    alpha came from the pixel's TOTAL count, so a lone sample of a rare
+    category -- the very thing ``"rarest"`` exists to show -- was drawn
+    faintest.  Density is the continuous mode's job ("how much"); a
+    categorical layer answers "which".  The client applies the user's own
+    layer alpha on top (``VisibilityScatter._collapse_and_composite``) and
+    deliberately skips the density-based ``auto_alpha`` for these layers.
+
+    *categories* must be in the same order used to build *agg*'s categorical
+    dimension, and *population* (rows per category) in that same order.
+
+    *other_index* (Part 5b): index of the gray "Other (not selected)"
+    category, always last.  It is context, not a competitor: a pixel that
+    holds ANY real category shows that category, however many gray samples
+    share it, in BOTH priorities (the reason it cannot simply be one more
+    channel of the argmax / rarity order).  A pixel with only gray samples
+    is drawn in ``OTHER_CATEGORY_COLOR`` at ``OTHER_CATEGORY_ALPHA``, so the
+    context recedes behind the opaque highlighted colors.
     """
-    counts = agg.values  # (H, W, K), Datashader's count() dtype (uint32)
-    total = counts.sum(axis=-1, dtype=np.int64)
-    nonempty = total > 0
+    counts = agg.values                       # (H, W, K [+1 gray]), count dtype
+    n_real = other_index if other_index is not None else counts.shape[-1]
+    real = counts[..., :n_real]
+    present = real > 0
+    h, w = counts.shape[:2]
+    nonempty = present.any(axis=-1) if n_real else np.zeros((h, w), dtype=bool)
+    other_only = (
+        (counts[..., other_index] > 0) & ~nonempty
+        if other_index is not None else np.zeros((h, w), dtype=bool)
+    )
 
-    h, w = total.shape
     img = np.zeros((h, w), dtype=np.uint32)
     color_key = {cat: cmap[i % len(cmap)] for i, cat in enumerate(categories)}
-    if not np.any(nonempty):
-        return img, color_key
+    if other_index is not None:
+        color_key[categories[other_index]] = OTHER_CATEGORY_COLOR
 
-    total_f = total.astype(np.float64)
-    total_f[~nonempty] = np.nan
-    eq = _cms.equalize_histogram(total_f)  # [0, 1]; NaN passes through
+    if nonempty.any():
+        if priority == "majority":
+            pick = real.argmax(axis=-1)
+        else:
+            if population is None:            # defensive; _categorize always sets it
+                population = real.reshape(-1, n_real).sum(axis=0)
+            order = np.argsort(population[:n_real], kind="stable")   # rarest first
+            pick = order[present[..., order].argmax(axis=-1)]        # first present
 
-    winner = counts.argmax(axis=-1)
-    palette_rgb = np.array(
-        [_hex_to_rgb_uint8(cmap[i % len(cmap)]) for i in range(len(categories))],
-        dtype=np.uint32,
-    )
-    rgb = palette_rgb[winner]  # (H, W, 3)
-
-    alpha = np.zeros((h, w), dtype=np.uint32)
-    alpha[nonempty] = np.round(
-        min_alpha + (255 - min_alpha) * eq[nonempty]
-    ).astype(np.uint32)
-
-    packed = (
-        (alpha << 24) | (rgb[..., 2].astype(np.uint32) << 16) |
-        (rgb[..., 1].astype(np.uint32) << 8) | rgb[..., 0].astype(np.uint32)
-    )
-    img[nonempty] = packed[nonempty]
+        palette_rgb = np.array(
+            [_hex_to_rgb_uint8(cmap[i % len(cmap)]) for i in range(n_real)],
+            dtype=np.uint32,
+        )
+        rgb = palette_rgb[pick[nonempty]]                    # occupied pixels only
+        opaque = np.uint32(255) << np.uint32(24)
+        img[nonempty] = (
+            opaque | (rgb[:, 2] << np.uint32(16)) |
+            (rgb[:, 1] << np.uint32(8)) | rgb[:, 0]
+        )
+    if other_only.any():
+        r, g, b = _hex_to_rgb_uint8(OTHER_CATEGORY_COLOR)
+        img[other_only] = (
+            (np.uint32(OTHER_CATEGORY_ALPHA) << np.uint32(24))
+            | (np.uint32(b) << np.uint32(16)) | (np.uint32(g) << np.uint32(8))
+            | np.uint32(r)
+        )
     return img, color_key
 
 
 def _shade_categorical(
-    df: pd.DataFrame, column: str, mask: np.ndarray, categories: list[str],
-    category_members: dict[str, tuple[str, ...]],
-    cmap: tuple[str, ...], cvs: "ds.Canvas",
+    df: pd.DataFrame, cat: _Categorization, cmap: tuple[str, ...],
+    cvs: "ds.Canvas", priority: str,
 ) -> tuple[np.ndarray, dict[str, str]]:
-    """Bin (by bucket, if any) + shade one layer's colorize-by-axis image.
+    """Bin + shade one layer's colorize-by-axis image from its ``_Categorization``.
 
-    Assigns colors by cycling *cmap* modulo its length across
-    *categories* in their given (already-sorted, already-bucketed)
-    order -- the same "index modulo" convention
-    ``palettes.scatter_cmaps()`` documents for per-layer ramp
-    assignment, applied here to categories instead of layers, so a
-    category count exceeding the color set's length degrades to
-    repeated colors rather than raising (in practice this never
-    triggers now that ``_bin_categories`` already caps *categories* at
-    ``CATEGORY_CAP`` and ``palettes.categorical_cmap()`` provides
-    exactly that many colors -- kept as a safety net, not load-bearing).
+    Colors are assigned by cycling *cmap* modulo its length across
+    ``cat.categories`` in their given (already-sorted, already-bucketed)
+    order -- the same "index modulo" convention ``palettes.scatter_cmaps()``
+    documents for per-layer ramp assignment, applied to categories, so a
+    count exceeding the color set degrades to repeated colors rather than
+    raising (in practice it never triggers: ``_bin_categories`` caps the
+    count at ``CATEGORY_CAP`` and ``palettes.categorical_cmap()`` provides
+    that many colors; kept as a safety net).
 
-    *mask* selects the rows *categories*/*category_members* were
-    computed from (see ``_resolve_categories`` for why NaN-category
-    rows must never reach ``ds_agg.by()``); only those rows are passed
-    to ``cvs.points()`` for this call. Each raw value is mapped to its
-    bucket's display label (a no-op mapping when unbucketed, i.e. every
-    bucket is a singleton) before building the ``pandas.Categorical``
-    -- this is the one place *category_members* is consumed as an
-    inverse (raw value -> label) lookup rather than a forward one.
+    Only rows with ``bucket >= 0`` reach ``cvs.points()`` -- see
+    ``_categorize`` for why a NaN-category row must never get to
+    ``ds_agg.by()``.  The categorical column is built straight from the
+    integer codes (``Categorical.from_codes``), never from strings.
     """
-    value_to_label = {
-        v: label for label, members in category_members.items() for v in members
-    }
-    cat_dtype = pd.CategoricalDtype(categories=categories)
-    raw_vals = df[column].to_numpy()[mask].astype(str)
-    labels = pd.Series(raw_vals).map(value_to_label).to_numpy()
+    x = df["x"].to_numpy()
+    y = df["y"].to_numpy()
+    bucket = cat.bucket
+    keep = bucket >= 0
+    if not keep.all():                        # skip three full-length copies when unneeded
+        x, y, bucket = x[keep], y[keep], bucket[keep]
     df_cat = pd.DataFrame({
-        "x": df["x"].to_numpy()[mask],
-        "y": df["y"].to_numpy()[mask],
-        "__category__": pd.Categorical(labels, dtype=cat_dtype),
+        "x": x, "y": y,
+        "__category__": pd.Categorical.from_codes(bucket, categories=cat.categories),
     })
     agg = cvs.points(df_cat, "x", "y", ds_agg.by("__category__", ds_agg.count()))
-    return _argmax_shade(agg, categories, cmap)
+    return _priority_shade(agg, cat.categories, cmap, priority, cat.population,
+                           cat.other_index)
 
 
 def compute_canvas_size(
@@ -536,7 +611,7 @@ def render_layer(
     ``lyr.coloring == "categorical"``, replaces the continuous
     mean(y)/eq_hist/colorbar pipeline above with categorical
     aggregation over ``lyr.colorize_axis``'s per-row column (see
-    ``_resolve_categories``/``_shade_categorical``/``_argmax_shade``)
+    ``_categorize``/``_shade_categorical``/``_priority_shade``)
     and populates ``categories``/``category_colors``/
     ``category_members`` instead of ``peak_value``/``hist_counts``/
     ``hist_edges``/``mapping_x``/``mapping_u`` (left ``None``) -- the
@@ -583,17 +658,18 @@ def render_layer(
     # them).
     if lyr.coloring == "categorical":
         column = COLORIZE_AXIS_COLUMNS[lyr.colorize_axis]
-        mask, categories, category_members, cat_skip_reason = _resolve_categories(
+        cat = _categorize(
             df, column, lyr.colorize_axis.label,
             excluded=frozenset(lyr.excluded_categories) or None,
+            show_excluded=(lyr.excluded_display == "gray"),
         )
-        if cat_skip_reason is not None:
-            return _empty_render(canvas_h, canvas_w, cat_skip_reason)
+        if cat.skip_reason is not None:
+            return _empty_render(canvas_h, canvas_w, cat.skip_reason)
         img_arr, category_colors = _shade_categorical(
-            df, column, mask, categories, category_members, lyr.cmap, cvs,
+            df, cat, lyr.cmap, cvs, lyr.category_priority,
         )
-        categories_out = tuple(categories)
-        category_members_out = category_members
+        categories_out = tuple(cat.categories)
+        category_members_out = cat.members
         peak_value = hist_counts = hist_edges = None
         mapping_x = mapping_u = None
     else:

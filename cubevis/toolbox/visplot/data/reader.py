@@ -37,6 +37,12 @@ from __future__ import annotations
 import abc
 import logging
 from dataclasses import dataclass
+import collections
+import dataclasses
+import os
+import threading
+import uuid
+import weakref
 from typing import Optional, Union
 
 import numpy as np
@@ -74,8 +80,15 @@ log = logging.getLogger(__name__)
 # below) so a future column rename only has to happen here.
 COLORIZE_AXIS_COLUMNS: dict[Axis, str] = {
     Axis.SCAN:        "scan_name",
+    # Part 5b (2026-09): Field and Baseline.  Both are per-row
+    # ``pandas.Categorical`` columns (small integer codes into a small
+    # category list), NOT per-row strings -- see
+    # ``XArrayReader._identity_categoricals`` for why, and for what it
+    # costs.  The dict's order is the axis picker's order.
+    Axis.FIELD:       "field_name",
     Axis.ANTENNA1:    "baseline_antenna1_name",
     Axis.ANTENNA2:    "baseline_antenna2_name",
+    Axis.BASELINE:    "baseline_name",
     Axis.CORRELATION: "polarization",
     Axis.SPW:         "spw",
 }
@@ -97,6 +110,76 @@ UI (a `ScatterLayerSpec` field is not the right place to hide it, since
 statement -- see visplot-colorize-by-axis-handoff-part3.md's "Axes
 dropped or deferred" section).
 """
+
+
+CATEGORY_PRIORITIES: tuple[str, ...] = ("rarest", "majority")
+"""How a categorical layer resolves a pixel that several categories share.
+
+A pixel of the display canvas routinely holds samples from more than one
+category (every scan of a baseline lands in the same UV column; every
+antenna's amplitudes overlap at a given time).  The image can show only
+one color there, so *something* has to decide which -- and the two
+sensible answers serve different questions, which is why this is a
+choice rather than a fixed rule:
+
+``"rarest"`` (default)
+    The category with the **smallest population over the whole current
+    selection** wins, whatever the per-pixel counts are.  Guarantees a
+    small group -- the one deviant antenna, the one odd scan -- is never
+    buried under a large one, at any density.  The order is a property of
+    the selection, not of the viewport, so it does not flip as the user
+    pans and zooms.  Answers "what is present here?".
+``"majority"``
+    The category with the **most samples in that pixel** wins.  Answers
+    "what dominates here?", and is what this module did before the
+    setting existed.
+
+Both are derived from the same per-pixel count aggregation, so the choice
+costs nothing extra to compute (measured; see the Part 5a notes).  Neither
+ever blends: every pixel is exactly one legend color.
+"""
+
+DEFAULT_CATEGORY_PRIORITY = "rarest"
+
+EXCLUDED_DISPLAYS: tuple[str, ...] = ("hide", "gray")
+"""What a categorical layer does with the values the user left unchecked.
+
+``"hide"`` (default; what excluded values always did)
+    Not drawn at all.
+``"gray"`` (Part 5b, "highlight mode")
+    Drawn in one neutral gray under every colored category, as the
+    context the highlighted values sit in.  Strictly opt-in (Part 5c).  It
+    earns its place when a categorical layer stands alone or every layer is
+    categorical: with 210 baselines you cannot color them all usefully, but
+    you can color the two or three you care about and still see where every
+    other sample lies (PlotMS cannot do this -- it can only re-select).  In a
+    panel that also has a continuous layer the context is redundant -- that
+    layer already draws all the data -- and gray over it only muddies it.
+
+The gray group is an ordinary last entry in ``categories`` /
+``category_colors`` / ``category_members`` (label ``OTHER_CATEGORY_LABEL``,
+its members being the unchecked values present in the data), so the
+legend, hover titles and PNG export show it with no special handling.  Only
+the shading knows it must always lose to a real category.
+"""
+
+DEFAULT_EXCLUDED_DISPLAY = "hide"
+
+HIGH_CARDINALITY_THRESHOLD = 20
+"""An axis with more distinct values than this cannot be colored value-by-value
+(the render bins them -- see ``_scatter_render.CATEGORY_CAP``, which this MUST
+equal; a test pins that).  The GUI uses it to choose sensible defaults for
+such an axis: a hint that the values share the palette and how to narrow them
+(Part 5c: every axis, including these, starts with all values checked)."""
+
+OTHER_CATEGORY_LABEL = "Other (not selected)"
+OTHER_CATEGORY_COLOR = "#8c8fa1"
+OTHER_CATEGORY_ALPHA = 120
+"""Neutral gray, at ~47% opacity so the context recedes behind the opaque
+highlighted colors.  Not a palette gray (``#7f7f7f``/``#c7c7c7`` are in the
+categorical palette), so it cannot be mistaken for a real category's color.
+The client scales it by the user's layer alpha (see
+``VisibilityScatter._collapse_and_composite``)."""
 
 
 def colorizable_axes() -> tuple[Axis, ...]:
@@ -184,6 +267,18 @@ class ScatterLayerSpec:
     JSON-primitive wire support as every other field here; converted to
     a set only where membership testing actually happens
     (``_resolve_categories``).
+
+    ``category_priority`` (Part 5a, 2026-09): which category a pixel
+    shows when several share it -- one of ``CATEGORY_PRIORITIES``; see
+    that constant's docstring for what each means.  Unlike
+    ``excluded_categories`` it is *not* rejected on a continuous layer:
+    it carries a default in both modes, so "non-default on a continuous
+    layer" is not a distinguishable mistake, and it is simply unused
+    there.  Validated by value only.
+
+    ``excluded_display`` (Part 5b): ``"hide"`` or ``"gray"`` -- what to do
+    with ``excluded_categories``; see ``EXCLUDED_DISPLAYS``.  Same
+    validation-by-value-only rule as ``category_priority``.
     """
     y_axis:        Axis
     polarization:  str
@@ -197,12 +292,24 @@ class ScatterLayerSpec:
     coloring:      str = "continuous"
     colorize_axis: Optional[Axis] = None
     excluded_categories: tuple[str, ...] = ()
+    category_priority: str = DEFAULT_CATEGORY_PRIORITY
+    excluded_display: str = DEFAULT_EXCLUDED_DISPLAY
 
     def __post_init__(self) -> None:
         if self.coloring not in ("continuous", "categorical"):
             raise ValueError(
                 "ScatterLayerSpec.coloring must be 'continuous' or "
                 f"'categorical', got {self.coloring!r}"
+            )
+        if self.excluded_display not in EXCLUDED_DISPLAYS:
+            raise ValueError(
+                "ScatterLayerSpec.excluded_display must be one of "
+                f"{EXCLUDED_DISPLAYS!r}, got {self.excluded_display!r}"
+            )
+        if self.category_priority not in CATEGORY_PRIORITIES:
+            raise ValueError(
+                "ScatterLayerSpec.category_priority must be one of "
+                f"{CATEGORY_PRIORITIES!r}, got {self.category_priority!r}"
             )
         if self.coloring == "categorical":
             if self.colorize_axis is None:
@@ -239,7 +346,10 @@ class ScatterLayerRender:
 
     ``image`` carries Datashader's own per-pixel occupancy alpha (via
     ``tf.shade(..., min_alpha=...)``), deliberately NOT yet collapsed
-    to a single density-derived opacity value. That collapse
+    to a single density-derived opacity value.  (Categorical layers,
+    Part 5a: every occupied pixel is fully opaque -- alpha 255 -- and the
+    client's density-based collapse deliberately skips them; only the
+    user's own layer alpha applies.  See ``_scatter_render._priority_shade``.) That collapse
     (``layer_alpha = auto_alpha * lyr.alpha``, where ``auto_alpha``
     derives from ``n_in_view`` and the canvas pixel count) is cheap
     and stays client-side -- it's what keeps
@@ -422,6 +532,23 @@ class IdentityTables:
     scans:             tuple[ScanInfo, ...]
     baseline_antennas: dict   # baseline_id (int) -> (ant1_name, ant2_name)
     spws:              tuple[SpwInfo, ...]
+    # Part 5b follow-up (2026-09): the baseline ids that have at least one
+    # row in the selection, sorted; ``None`` when that could not be
+    # determined (then nothing is filtered, i.e. the old behavior).
+    #
+    # Why it exists: ``baseline_antennas`` comes from the partitions'
+    # ``baseline_id`` COORDINATE, which xarray-ms lays out as the FULL
+    # antenna-pair grid -- 325 pairs for 26 antennas -- whether or not a
+    # baseline was ever observed.  This MS has data on 210 of those 325, and
+    # five antennas (DA41, DV01, DV04, DV07, DV21) have no rows at all.  A
+    # checklist built from ``baseline_antennas`` therefore offered values
+    # that could never color anything (a user ticked three DA41 baselines and
+    # got an all-gray plot with no hint why).  Deliberately a SEPARATE field:
+    # ``baseline_antennas`` also feeds the hover probe, and changing what
+    # that dict contains would change hover behavior this fix has no business
+    # touching.  A tuple (not a set) so it survives the same generic wire
+    # serialization as ``scans``.
+    baselines_with_data: Optional[tuple] = None
 
 
 @dataclass(frozen=True)
@@ -479,6 +606,21 @@ class _PartitionScanLookup:
     identity:    _PartitionIdentity
     time_values: np.ndarray   # sorted ascending
     scan_names:  np.ndarray   # parallel to time_values
+    # Part 5b (2026-09): the same partition's per-time FIELD, as int32
+    # codes into ``XArrayReader._field_categories()`` (MS-wide, so every
+    # partition's codes index one shared category list and frames from
+    # different partitions concatenate without leaving the categorical
+    # dtype).  ``None`` when the partition has no ``field_name``
+    # coordinate.  Rides on this object -- rather than a lookup of its
+    # own -- because field, like scan, is a per-``time`` coordinate: the
+    # SAME ``_scan_time_index`` array indexes both, so no new lazy column,
+    # argument or tuple element has to be threaded through either backend.
+    field_codes: Optional[np.ndarray] = None   # parallel to time_values
+    # Part 6b (2026-09): the per-time SCAN as int16 codes into
+    # ``XArrayReader._scan_categories()`` -- the scan analogue of
+    # ``field_codes``, so ``scan_name`` too can be a small-integer Categorical
+    # instead of a per-row object column.  ``scan_names`` above is kept.
+    scan_codes: Optional[np.ndarray] = None    # parallel to time_values
 
 
 # ======================================================================
@@ -972,6 +1114,246 @@ def channel_range_to_freq(agg, lo: float, hi: float):
 
 
 
+# ======================================================================
+# Frame cache (Part 6, 2026-09)
+# ======================================================================
+#
+# Why this exists.  Since binning and shading moved backend-side (so a
+# remote cluster can render and only images cross the wire), EVERY
+# ``query_columns`` call re-read the selected data from disk: a pan, a zoom, a
+# colorize change or a PNG export each paid the full read again.  Measured on a
+# 4M-sample slice, one layer: the read is ~1.8 s and the render ~0.26 s, so a
+# pan/zoom cost ~2.0 s where the render alone is ~0.26 s.  The reads are
+# viewport-independent, so they can be kept.
+#
+# It lives here, on the backend, deliberately.  The per-row frames never leave
+# this process (only the small ``ScatterRenderResult`` does), so a cache on
+# the backend object -- which ``VisplotRemoteBackend`` constructs once per
+# session and calls repeatedly -- keeps the remote model intact: local display,
+# remote rendering, images and coarse grids on the wire, no rows.
+
+FRAME_CACHE_ENV = "CUBEVIS_VISPLOT_FRAME_CACHE_MB"
+"""Environment override for the cache budget, in MiB.  ``0`` disables the
+cache entirely (every call re-reads, exactly as before this feature)."""
+
+# Default budget = a tenth of physical memory, clamped.  Deliberately small:
+# a read's transient memory peaks at ~4x the final frame (measured: 1.7 GB RSS
+# for a 0.44 GB frame), and the cache keeps OTHER frames alive during it.  A
+# first draft used a quarter of RAM and, on a 4 GB machine, made a combined
+# test run swap and fail a 10 s timing test that passes alone in 4.2 s; capping
+# the budget at 256 MiB made the same run pass in half the time.
+_FRAME_CACHE_FRACTION = 0.10
+_FRAME_CACHE_MIN_BYTES = 256 << 20
+_FRAME_CACHE_MAX_DEFAULT = 4 << 30
+_FRAME_CACHE_FALLBACK = 512 << 20
+
+
+def _physical_memory_bytes() -> Optional[int]:
+    """Total physical memory, or ``None`` if it cannot be determined.
+
+    ``os.sysconf`` covers Linux; macOS often lacks ``SC_PHYS_PAGES``, so fall
+    back to psutil and then ``sysctl hw.memsize``.
+    """
+    try:
+        return int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:
+        import psutil
+        return int(psutil.virtual_memory().total)
+    except Exception:
+        pass
+    try:
+        import subprocess
+        return int(subprocess.check_output(["sysctl", "-n", "hw.memsize"], timeout=2))
+    except Exception:
+        return None
+
+
+def _default_frame_cache_bytes() -> int:
+    """The cache budget: ``$CUBEVIS_VISPLOT_FRAME_CACHE_MB`` if set, else a
+    tenth of physical memory clamped to [256 MiB, 4 GiB] (512 MiB when the
+    memory size is unknown)."""
+    env = os.environ.get(FRAME_CACHE_ENV)
+    if env is not None and env.strip():
+        try:
+            return max(0, int(float(env) * (1 << 20)))
+        except ValueError:
+            log.warning("%s=%r is not a number; using the default budget",
+                        FRAME_CACHE_ENV, env)
+    phys = _physical_memory_bytes()
+    if not phys:
+        return _FRAME_CACHE_FALLBACK
+    return int(min(_FRAME_CACHE_MAX_DEFAULT,
+                   max(_FRAME_CACHE_MIN_BYTES, _FRAME_CACHE_FRACTION * phys)))
+
+
+def _freeze(v):
+    """A hashable stand-in for *v* (lists/tuples/sets/dicts/arrays -> tuples
+    and frozensets), for building cache keys from a ``SelectionSpec``."""
+    if isinstance(v, (list, tuple)):
+        return tuple(_freeze(x) for x in v)
+    if isinstance(v, (set, frozenset)):
+        return frozenset(_freeze(x) for x in v)
+    if isinstance(v, dict):
+        return tuple(sorted(((k, _freeze(x)) for k, x in v.items()), key=lambda kv: repr(kv[0])))
+    if isinstance(v, np.ndarray):
+        return tuple(v.tolist())
+    return v
+
+
+def _selection_fingerprint(selection) -> Optional[tuple]:
+    """Hashable identity of everything in *selection* that decides which rows
+    are read -- every field EXCEPT ``cache_generation``, which is a freshness
+    token compared separately (see ``_FrameCache.get``).  ``None`` if it
+    cannot be made hashable (the caller then simply does not cache)."""
+    try:
+        if dataclasses.is_dataclass(selection):
+            fp = tuple((f.name, _freeze(getattr(selection, f.name)))
+                       for f in dataclasses.fields(selection)
+                       if f.name != "cache_generation")
+        else:
+            fp = _freeze(selection)
+        hash(fp)
+        return fp
+    except TypeError:
+        return None
+
+
+def _frame_nbytes(df: pd.DataFrame) -> int:
+    """Approximate in-memory size of *df*.  Shallow on purpose: ``deep=True``
+    walks every element of an ``object`` column (seconds at 4M rows), and
+    those columns hold pointers to a few shared strings, so the shallow
+    figure is the honest one."""
+    return int(df.memory_usage(index=False, deep=False).sum())
+
+
+def _frame_extent(df: Optional[pd.DataFrame]) -> Optional[tuple]:
+    """``(x_min, x_max, y_min, y_max)`` of *df*, or ``None`` if it is empty or
+    missing.  Uses the value memoized in ``df.attrs["extent"]`` when the frame
+    came from the cache (saving four O(N) passes per call)."""
+    if df is None or len(df) == 0:
+        return None
+    ext = df.attrs.get("extent")
+    if ext is not None:
+        return ext
+    return (float(df["x"].min()), float(df["x"].max()),
+            float(df["y"].min()), float(df["y"].max()))
+
+
+class _FrameCache:
+    """Byte-budgeted LRU of per-layer frames.
+
+    One entry per ``(backend token, x axis, y axis, polarization, selection
+    fingerprint)``,
+    so adding or dropping a layer reuses the others.  Each entry remembers the
+    ``cache_generation`` it was built under: a lookup under a different
+    generation is a miss and the stale entry is dropped on the spot, which is
+    how "Reload" forces a fresh read with no extra call to the backend.  A
+    frame larger than the whole budget is never stored.  Thread-safe: the
+    lock is re-entrant so ``XArrayReader._query_columns_cached`` can hold it
+    across a get-or-build.
+    """
+
+    def __init__(self, max_bytes: int) -> None:
+        self.max_bytes = int(max_bytes)
+        self.lock = threading.RLock()
+        self._d: "collections.OrderedDict" = collections.OrderedDict()
+        self.bytes = 0
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+
+    def get(self, key, generation: int) -> Optional[pd.DataFrame]:
+        with self.lock:
+            entry = self._d.get(key)
+            if entry is None:
+                self.misses += 1
+                return None
+            gen, nbytes, frame = entry
+            if gen != generation:
+                self._drop(key)
+                self.misses += 1
+                return None
+            self._d.move_to_end(key)
+            self.hits += 1
+            return frame
+
+    def put(self, key, generation: int, frame: pd.DataFrame) -> bool:
+        with self.lock:
+            self._drop(key)
+            nbytes = _frame_nbytes(frame)
+            if self.max_bytes <= 0 or nbytes > self.max_bytes:
+                return False
+            self._d[key] = (generation, nbytes, frame)
+            self.bytes += nbytes
+            while self.bytes > self.max_bytes and self._d:
+                old_key, (_g, old_bytes, _f) = self._d.popitem(last=False)
+                self.bytes -= old_bytes
+                self.evictions += 1
+            return key in self._d
+
+    def _drop(self, key) -> None:
+        entry = self._d.pop(key, None)
+        if entry is not None:
+            self.bytes -= entry[1]
+
+    def drop_token(self, token) -> int:
+        """Drop every entry belonging to backend *token* (the first element of
+        each key); returns how many.  Called when a backend closes or is
+        garbage-collected."""
+        with self.lock:
+            keys = [k for k in self._d if k[0] == token]
+            for k in keys:
+                self._drop(k)
+            return len(keys)
+
+    def count_token(self, token) -> int:
+        with self.lock:
+            return sum(1 for k in self._d if k[0] == token)
+
+    def clear(self) -> None:
+        with self.lock:
+            self._d.clear()
+            self.bytes = 0
+
+    def stats(self) -> dict:
+        with self.lock:
+            return {"entries": len(self._d), "bytes": self.bytes,
+                    "max_bytes": self.max_bytes, "hits": self.hits,
+                    "misses": self.misses, "evictions": self.evictions}
+
+
+_GLOBAL_FRAME_CACHE: Optional[_FrameCache] = None
+_GLOBAL_FRAME_CACHE_LOCK = threading.Lock()
+
+
+def _global_frame_cache() -> _FrameCache:
+    """The ONE frame cache of this process, created on first use.
+
+    Process-wide on purpose (Part 6): a per-backend budget of "a quarter of
+    memory" multiplies by the number of backends -- three plotters in one
+    Jupyter kernel would claim three quarters of RAM, and a backend that was
+    never closed would hold its frames until garbage collection.  One shared
+    budget bounds the total whatever the number of backends; each backend's
+    entries carry its own token (the first element of every key), so a
+    backend can never be served another's frames, and closing or collecting a
+    backend drops exactly its entries.
+    """
+    global _GLOBAL_FRAME_CACHE
+    with _GLOBAL_FRAME_CACHE_LOCK:
+        if _GLOBAL_FRAME_CACHE is None:
+            _GLOBAL_FRAME_CACHE = _FrameCache(_default_frame_cache_bytes())
+        return _GLOBAL_FRAME_CACHE
+
+
+def _drop_backend_frames(token) -> None:
+    """``weakref.finalize`` callback: a backend was collected without close()."""
+    cache = _GLOBAL_FRAME_CACHE
+    if cache is not None:
+        cache.drop_token(token)
+
+
 class XArrayReader(abc.ABC):
     """Abstract base class for MSv2 and MSv4 data readers.
 
@@ -1076,8 +1458,20 @@ class XArrayReader(abc.ABC):
         t = np.asarray(raw_ds.coords["time"].values)
         s = raw_ds.coords["scan_name"].values.astype(str)
         order = np.argsort(t)
+        field_codes = None
+        field_names = self._field_categories()
+        if field_names is not None and "field_name" in raw_ds.coords:
+            f = raw_ds.coords["field_name"].values.astype(str)
+            # ``field_names`` is sorted and contains every partition's
+            # names, so searchsorted is an exact lookup here.
+            field_codes = np.searchsorted(field_names, f[order]).astype(np.int32)
+        scan_codes = None
+        scan_cats = self._scan_categories()
+        if scan_cats is not None:
+            scan_codes = np.searchsorted(scan_cats, s[order]).astype(np.int16)
         lookup = _PartitionScanLookup(
             identity=key, time_values=t[order], scan_names=s[order],
+            field_codes=field_codes, scan_codes=scan_codes,
         )
         cache[key] = lookup
         return lookup
@@ -1182,6 +1576,254 @@ class XArrayReader(abc.ABC):
         return ant1, ant2
 
     @staticmethod
+    def _baseline_ids_with_data(ds: "xr.Dataset") -> Optional[np.ndarray]:
+        """Baseline ids in *ds* that have at least one row, or ``None`` if
+        that cannot be told from a cheap, non-visibility variable.
+
+        ``TIME_CENTROID`` (dims ``time`` x ``baseline_id``) is NaN exactly
+        where the regular ``(time, baseline_id)`` grid has no row, so
+        ``isfinite(...).any('time')`` is the presence mask.  It is a small
+        float array -- read in ~ms for a partition, against the GBs of
+        VISIBILITY it stands in for (measured on the test MS: 210 of 325
+        baselines, agreeing with the ANTENNA1/ANTENNA2 columns read via
+        casacore).  Returns ``None`` (never raises) if the variable is
+        absent or shaped unexpectedly, so a backend without it simply gets
+        no filtering.
+        """
+        try:
+            if "TIME_CENTROID" not in ds.data_vars or "baseline_id" not in ds.coords:
+                return None
+            tc = ds["TIME_CENTROID"]
+            if set(tc.dims) != {"time", "baseline_id"}:
+                return None
+            ok = np.isfinite(tc.transpose("time", "baseline_id").values).any(axis=0)
+            return ds.coords["baseline_id"].values.astype(np.int64)[ok]
+        except Exception:
+            return None
+
+    def _scan_categories(self) -> Optional[np.ndarray]:
+        """MS-wide, sorted, unique scan names (the shared category list every
+        partition's scan codes index into); ``None`` if no partition has a
+        ``scan_name`` coordinate.  Built once from coordinate arrays only."""
+        _unset = "_unset"
+        cached = getattr(self, "_scan_cats", _unset)
+        if cached is not _unset:
+            return cached
+        names: set[str] = set()
+        for raw_ds in self._iter_visibility_partitions():
+            if "scan_name" in raw_ds.coords:
+                names.update(str(v) for v in np.unique(raw_ds.coords["scan_name"].values.astype(str)))
+        result = np.array(sorted(names), dtype=object) if names else None
+        self._scan_cats = result
+        return result
+
+    def _spw_categories(self) -> Optional[np.ndarray]:
+        """MS-wide, sorted, unique ``str(spw identity)`` over every partition
+        (an identity may be an int id or a name string -- see
+        ``_partition_spw_ident`` -- so both are compared as strings, which is
+        also how ``_categorize`` compares them)."""
+        _unset = "_unset"
+        cached = getattr(self, "_spw_cats", _unset)
+        if cached is not _unset:
+            return cached
+        idents: set[str] = set()
+        for raw_ds in self._iter_visibility_partitions():
+            ident, _kind = self._partition_spw_ident(raw_ds)
+            if ident is not None:
+                idents.add(str(ident))
+        result = np.array(sorted(idents), dtype=object) if idents else None
+        self._spw_cats = result
+        return result
+
+    def _antenna_code_tables(self):
+        """``(names, code1_by_bid, code2_by_bid)`` for the two antenna
+        columns, or ``None``: MS-wide sorted antenna names plus, for each
+        baseline id, the int16 code of its first / second antenna (``-1`` for
+        an id no partition reported).  Derived once from
+        ``_antenna_lookup_table`` and cached."""
+        _unset = "_unset"
+        cached = getattr(self, "_ant_code_tab", _unset)
+        if cached is not _unset:
+            return cached
+        lookup = self._antenna_lookup_table()
+        if lookup is None:
+            self._ant_code_tab = None
+            return None
+        ant1, ant2 = lookup
+        p1, p2 = np.asarray(ant1 != ""), np.asarray(ant2 != "")
+        names = sorted({str(a) for a in ant1[p1]} | {str(a) for a in ant2[p2]})
+        if not names:
+            self._ant_code_tab = None
+            return None
+        cats = np.array(names, dtype=object)
+
+        def codes(arr, present):
+            out = np.full(len(arr), -1, dtype=np.int16)
+            out[present] = np.searchsorted(cats, arr[present].astype(str))
+            return out
+
+        result = (cats, codes(ant1, p1), codes(ant2, p2))
+        self._ant_code_tab = result
+        return result
+
+    def _field_categories(self) -> Optional[np.ndarray]:
+        """MS-wide, sorted, unique field names -- the shared category list
+        every partition's field codes index into.  ``None`` if no partition
+        carries a ``field_name`` coordinate.
+
+        Built once (coordinate arrays only -- no VISIBILITY read) and cached
+        for the life of the open backend, like ``_antenna_lookup_table``.
+        Names, not ids: that is what the hover line shows ("Field: 3c279")
+        and what a user recognizes.  Two distinct fields sharing one name
+        (a mosaic whose pointings are all called the same) therefore share
+        a category, which for colorizing is the right reading of "color by
+        field".
+        """
+        _unset = "_unset"
+        cached = getattr(self, "_field_cats", _unset)
+        if cached is not _unset:
+            return cached
+        names: set[str] = set()
+        for raw_ds in self._iter_visibility_partitions():
+            if "field_name" in raw_ds.coords:
+                names.update(str(v) for v in
+                             np.unique(raw_ds.coords["field_name"].values.astype(str)))
+        result = np.array(sorted(names), dtype=object) if names else None
+        self._field_cats = result
+        return result
+
+    def _baseline_table(self) -> Optional[tuple[np.ndarray, np.ndarray]]:
+        """``(code_of_bid, labels)`` for the Baseline colorize axis, built
+        once from ``_antenna_lookup_table`` and cached.
+
+        ``labels[c]`` is ``"ant1&ant2"`` -- the same spelling the hover line
+        uses ("BL: DA42&DA48") -- unique across the MS; ``code_of_bid[bid]``
+        is that baseline's index into ``labels`` (``-1`` for a baseline id
+        no partition reported).  Unique labels are required by
+        ``Categorical.from_codes``; two baseline ids that resolve to the
+        same antenna pair (possible across sub-arrays) share a label and
+        therefore a category.
+        """
+        _unset = "_unset"
+        cached = getattr(self, "_baseline_tab", _unset)
+        if cached is not _unset:
+            return cached
+        lookup = self._antenna_lookup_table()
+        if lookup is None:
+            self._baseline_tab = None
+            return None
+        ant1, ant2 = lookup
+        used = np.flatnonzero(np.asarray(ant1 != "") | np.asarray(ant2 != ""))
+        if used.size == 0:
+            self._baseline_tab = None
+            return None
+        raw = [f"{ant1[b]}&{ant2[b]}" for b in used]
+        label_codes, labels = pd.factorize(np.array(raw, dtype=object))
+        code_of_bid = np.full(len(ant1), -1, dtype=np.int32)
+        code_of_bid[used] = label_codes.astype(np.int32)
+        result = (code_of_bid, np.asarray(labels, dtype=object))
+        self._baseline_tab = result
+        return result
+
+    def _identity_categoricals(
+        self,
+        scan_lookup: Optional[_PartitionScanLookup],
+        scan_time_idx: Optional[np.ndarray],
+        baseline_id: Optional[np.ndarray],
+        *,
+        spw_ident: object = None,
+        pol: Optional[str] = None,
+        n: Optional[int] = None,
+    ) -> dict[str, "pd.Categorical"]:
+        """Every per-row IDENTITY column for one partition's already-filtered
+        output rows, as ``pandas.Categorical``: ``scan_name``, ``field_name``,
+        ``baseline_name``, ``baseline_antenna1_name``,
+        ``baseline_antenna2_name``, ``spw`` and ``polarization`` (the last two
+        need *n*, the row count, and *spw_ident* / *pol*).
+
+        Part 6b (2026-09) extended this from Field and Baseline to ALL of
+        them.  Before, scan and the two antennas were per-row ``object``
+        columns (~0.17 s each per 4M rows to build, 8 B/row of pointers) and
+        ``spw`` / ``polarization`` were per-row pandas ``str`` columns (38 and
+        10 B/row): ~80 of a frame's 111 B/row and ~0.65 s of a 1.7 s read,
+        paid on every read whether or not any layer colored by them -- and now
+        also held by every cached frame.  As Categoricals they are 1-2 B/row
+        each and a fancy-index of a small int array to build.
+
+        Why categorical and not strings.  ``scan_name`` and the two antenna
+        columns are per-row ``object`` strings, and measured at ~0.17 s per
+        4M rows *per column* (see ``_as_object_column``) -- paid on every
+        render whether or not any layer colors by them.  Adding two more of
+        those would grow that always-on cost.  A ``Categorical`` is a small
+        integer code per row plus one shared category list: building it is a
+        fancy-index of an int array and ``from_codes`` (a range check), a few
+        tens of ms at 4M rows, and it is 1-4 bytes per row instead of a
+        pointer to a Python string.  ``_scatter_render._categorize`` reads
+        the codes directly, so it is also cheaper to *consume*.
+
+        Every partition shares the same category list (``_field_categories``
+        / ``_baseline_table`` are MS-wide), so ``pd.concat`` of the
+        per-partition frames keeps the categorical dtype instead of falling
+        back to ``object`` -- the reason the lists are MS-wide rather than
+        per-partition.
+
+        *scan_time_idx* is the same integer array the caller already used
+        to look up ``scan_name`` (see ``_scan_time_index``).  Returns only
+        the columns that could be built (possibly ``{}``).
+        """
+        out: dict[str, pd.Categorical] = {}
+        scan_cats = self._scan_categories()
+        if (scan_cats is not None and scan_lookup is not None
+                and scan_lookup.scan_codes is not None
+                and scan_time_idx is not None):
+            out["scan_name"] = pd.Categorical.from_codes(
+                scan_lookup.scan_codes[scan_time_idx], categories=scan_cats)
+        cats = self._field_categories()
+        if (cats is not None and scan_lookup is not None
+                and scan_lookup.field_codes is not None
+                and scan_time_idx is not None):
+            out["field_name"] = pd.Categorical.from_codes(
+                scan_lookup.field_codes[scan_time_idx], categories=cats)
+        if baseline_id is not None:
+            bid = np.asarray(baseline_id).astype(np.int64)
+
+            def by_bid(table):
+                """*table* indexed by baseline id; ``-1`` for an id outside it."""
+                oob = (bid < 0) | (bid >= len(table))
+                codes = table[np.clip(bid, 0, len(table) - 1)]
+                return np.where(oob, -1, codes) if oob.any() else codes
+
+            tab = self._baseline_table()
+            if tab is not None:
+                code_of_bid, labels = tab
+                out["baseline_name"] = pd.Categorical.from_codes(
+                    by_bid(code_of_bid), categories=labels)
+            ants = self._antenna_code_tables()
+            if ants is not None:
+                names, code1, code2 = ants
+                out["baseline_antenna1_name"] = pd.Categorical.from_codes(
+                    by_bid(code1), categories=names)
+                out["baseline_antenna2_name"] = pd.Categorical.from_codes(
+                    by_bid(code2), categories=names)
+        if spw_ident is not None and n is not None:
+            spw_cats = self._spw_categories()
+            if spw_cats is not None:
+                code = int(np.searchsorted(spw_cats, str(spw_ident)))
+                # searchsorted returns an INSERTION point for a value that is
+                # not in the list -- which would silently label every row with
+                # a neighbouring SPW.  The list is built from these same
+                # partitions so it cannot happen, but a wrong label is the
+                # worst failure here, so verify instead of trusting.
+                if code < len(spw_cats) and spw_cats[code] == str(spw_ident):
+                    out["spw"] = pd.Categorical.from_codes(
+                        np.full(n, code, dtype=np.int16), categories=spw_cats)
+        if pol is not None and n is not None:
+            out["polarization"] = pd.Categorical.from_codes(
+                np.zeros(n, dtype=np.int8),
+                categories=np.array([str(pol)], dtype=object))
+        return out
+
+    @staticmethod
     def _as_object_column(values: np.ndarray, index) -> pd.Series:
         """Wrap *values* (a numpy object-dtype array of many distinct
         strings) as a plain-``object``-dtype pandas Series, explicitly
@@ -1220,9 +1862,111 @@ class XArrayReader(abc.ABC):
     def _clear_lookup_caches(self) -> None:
         """Reset the scan/antenna lookup caches -- call from each
         backend's ``close()`` for hygiene (see this section's docstring
-        for why this is a hygiene measure, not a correctness necessity)."""
+        for why this is a hygiene measure, not a correctness necessity).
+
+        Also drops the frame cache: unlike the lookup tables that one holds
+        real data (up to GBs), so releasing it on ``close()`` is a
+        correctness-of-resources matter, not hygiene."""
         self._scan_lookup_cache = {}
         self._antenna_lookup = None
+        self._clear_frame_cache()
+
+    # ------------------------------------------------------------------ #
+    # Frame cache (Part 6)                                                 #
+    # ------------------------------------------------------------------ #
+
+    _frame_extent = staticmethod(_frame_extent)
+
+    def _frame_cache_obj(self) -> "_FrameCache":
+        """The process-wide cache (see ``_global_frame_cache``)."""
+        return _global_frame_cache()
+
+    def _frame_token(self) -> str:
+        """This backend's identity in the shared cache: the first element of
+        every key it stores.  Created on first use; entries are dropped when
+        the backend is collected, whether or not it was closed."""
+        token = getattr(self, "_frame_cache_token", None)
+        if token is None:
+            token = uuid.uuid4().hex
+            self._frame_cache_token = token
+            weakref.finalize(self, _drop_backend_frames, token)
+        return token
+
+    def set_frame_cache_limit_mb(self, mb: float) -> None:
+        """Set the (process-wide) frame cache budget in MiB.  ``0`` disables
+        it (and frees what it holds); lowering it evicts down to the new
+        limit.  Applies to every backend in this process."""
+        cache = self._frame_cache_obj()
+        with cache.lock:
+            cache.max_bytes = max(0, int(float(mb) * (1 << 20)))
+            if cache.max_bytes == 0:
+                cache.clear()
+            while cache.bytes > cache.max_bytes and cache._d:
+                _k, (_g, nb, _f) = cache._d.popitem(last=False)
+                cache.bytes -= nb
+                cache.evictions += 1
+
+    def frame_cache_stats(self) -> dict:
+        """Entries / bytes / budget / hits / misses / evictions of the shared
+        cache, plus ``backend_entries`` (how many of them are this backend's),
+        for tests and diagnostics."""
+        cache = self._frame_cache_obj()
+        stats = cache.stats()
+        stats["backend_entries"] = cache.count_token(self._frame_token())
+        return stats
+
+    def _clear_frame_cache(self) -> None:
+        """Drop THIS backend's frames (not other backends')."""
+        cache = _GLOBAL_FRAME_CACHE
+        token = getattr(self, "_frame_cache_token", None)
+        if cache is not None and token is not None:
+            cache.drop_token(token)
+
+    def _query_columns_cached(
+        self, xaxis: "Axis", yaxes: list, selection: "SelectionSpec",
+    ) -> dict:
+        """``_query_columns_raw`` with a per-layer, byte-budgeted cache.
+
+        Same return contract as ``_query_columns_raw``.  Layers already cached
+        under the current ``selection.cache_generation`` are reused; only the
+        missing ones are read (together, so the fused read is still shared).
+        The frames handed back are shallow copies, so a caller adding or
+        replacing a column cannot alter what the cache holds -- and rendering
+        never writes into a frame (a test pins that).  Any inability to cache
+        (disabled, unhashable selection, frame over budget) degrades to the
+        uncached behavior, never to an error.
+        """
+        cache = self._frame_cache_obj()
+        sel_fp = _selection_fingerprint(selection)
+        if cache.max_bytes <= 0 or sel_fp is None:
+            return self._query_columns_raw(xaxis, yaxes, selection)
+        gen = int(getattr(selection, "cache_generation", 0) or 0)
+
+        token = self._frame_token()
+
+        def key_of(k):
+            return (token, xaxis, k[0], k[1], sel_fp)
+
+        out: dict = {}
+        with cache.lock:
+            missing = []
+            for k in yaxes:
+                if k in out:
+                    continue
+                frame = cache.get(key_of(k), gen)
+                if frame is None:
+                    missing.append(k)
+                else:
+                    out[k] = frame
+            if missing:
+                built = self._query_columns_raw(xaxis, missing, selection)
+                for k, df in built.items():
+                    ext = _frame_extent(df)
+                    if ext is not None:
+                        df.attrs["extent"] = ext
+                    cache.put(key_of(k), gen, df)
+                    out[k] = df
+        return {k: out[k].copy(deep=False) for k in yaxes if k in out}
 
 
     # ------------------------------------------------------------------ #

@@ -1046,17 +1046,38 @@ class CommMgr( Model, BokehInit ):
                 ### its own (already-closed, local) transport above.
                 if self._transport is transport:
                     self._reset_for_reconnect(clean_close=clean_close)
+
+                    ### Say so when the session is now going to wait
+                    ### forever. This is the one disconnect that never
+                    ### ends by itself (see reconnect_timeout): a closed
+                    ### browser tab that failed to send either a close
+                    ### frame or __goodbye__ is indistinguishable from a
+                    ### suspended laptop, and until now the only sign of
+                    ### it was a terminal that silently never came back.
+                    ###
+                    ### Deliberately `clean_close is False`, not `not
+                    ### clean_close`: None means this transport cannot
+                    ### tell (the Jupyter/Colab comm transports have no
+                    ### close status at all) and a "no close frame"
+                    ### message would be wrong for them.
+                    ###
+                    ### Inside the `self._transport is transport`
+                    ### guard so a superseded connection unwinding after
+                    ### a newer one has taken over stays quiet -- the
+                    ### session is not waiting for anything then.
                     if clean_close is False and self._reconnect_timeout is None:
                         code_fn = getattr(transport, 'close_code', None)
                         code = code_fn() if callable(code_fn) else None
                         logger.warning(
-                            f"The browser connection ended without a close message "
-                            f"(WebSocket close code {code}). That is what a suspended computer "
-                            f"or a dropped network looks like, so the session is waiting "
-                            f"indefinitely for the browser to reconnect. If you closed the tab, "
-                            f"press Ctrl-C to stop. To have this case end the session on its "
-                            f"own, set reconnect_timeout (seconds) on the CommMgr.")
-
+                            f"The browser connection ended without a close "
+                            f"message (WebSocket close code {code}). That is "
+                            f"what a suspended computer or a dropped network "
+                            f"looks like, so the session is waiting "
+                            f"indefinitely for the browser to reconnect. If "
+                            f"you closed the tab, press Ctrl-C to stop. To "
+                            f"have this case end the session on its own, set "
+                            f"reconnect_timeout (seconds) on the CommMgr."
+                        )
                 if self._on_connection_closed:
                     try:
                         self._on_connection_closed(shutdown_reason, shutdown_description)

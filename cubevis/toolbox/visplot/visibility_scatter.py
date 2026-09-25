@@ -68,9 +68,12 @@ from bokeh.models import ColumnDataSource
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num,
 )
-from .panel_spec import ColorBand, PanelSpec
+from .panel_spec import ColorBand, PanelSpec, CATEGORY_PRIORITY_CAPTIONS
 from . import colormap_scaling as _cms
-from .data.reader import ScatterLayerSpec
+from .data.reader import (ScatterLayerSpec, CATEGORY_PRIORITIES,
+                          DEFAULT_CATEGORY_PRIORITY, EXCLUDED_DISPLAYS,
+                          DEFAULT_EXCLUDED_DISPLAY,
+                          HIGH_CARDINALITY_THRESHOLD)
 from cubevis.bokeh.tools._info_tool import InfoTool
 
 if TYPE_CHECKING:
@@ -117,6 +120,31 @@ low quarter of the range distinguishable.
 
 Applies to scatter only.  A raster cell is opaque and has no sparse end.
 """
+
+# Legend column sizing (Part 5d).  The live legend lays its swatches out with
+# CSS ``column-width``, which lets the browser pick however many columns fit.
+# That width used to be a fixed 110 px, so a long label -- above all the range
+# labels a binned axis produces, e.g. "DA42&DA44\u2013DA42&DV13" -- was clipped to
+# "DA42&DA44\u2013DA\u2026" in every column.  Now the width follows the longest label
+# (fewer, wider columns for long labels; unchanged 110 px for short ones).
+# Measured from a real screenshot: an uppercase-heavy label clipped at 110 px
+# showed ~13 characters in the ~94 px left after the swatch and gap, i.e.
+# ~7.2 px per character at the legend's 11 px font.
+_LEGEND_MIN_COL_PX  = 110
+_LEGEND_MAX_COL_PX  = 320
+_LEGEND_PX_PER_CHAR = 7.4
+_LEGEND_CHROME_PX   = 24     # swatch (10) + gap (6) + slack
+
+
+def _legend_column_width(labels) -> int:
+    """CSS ``column-width`` in px for a legend whose entries are *labels*:
+    wide enough for the longest one, never below ``_LEGEND_MIN_COL_PX`` and
+    capped at ``_LEGEND_MAX_COL_PX`` (beyond which a label is ellipsized and
+    carries its full text in a ``title``)."""
+    longest = max((len(str(lab)) for lab in labels), default=0)
+    need = longest * _LEGEND_PX_PER_CHAR + _LEGEND_CHROME_PX
+    return int(max(_LEGEND_MIN_COL_PX, min(_LEGEND_MAX_COL_PX, need)))
+
 
 _LAYER_CMAPS = [
     # Plasma
@@ -187,6 +215,21 @@ class ScatterLayer:
         validation exactly (this class is the widget-side twin of that
         one, so the two must never accept a combination the other
         rejects).
+    excluded_categories : tuple[str, ...]
+        Raw category values to leave out of a categorical render; see
+        ``ScatterLayerSpec.excluded_categories``.
+    category_priority : str
+        Which category a pixel shows when several share it -- ``"rarest"``
+        (default: the smallest group over the whole selection wins, so a
+        deviant antenna or scan is never buried) or ``"majority"`` (the
+        category with the most samples in that pixel).  See
+        ``data.reader.CATEGORY_PRIORITIES``.  Only meaningful when
+        ``coloring == "categorical"``; carried, unused, otherwise.
+    excluded_display : str
+        ``"hide"`` (default: unchecked values are not drawn) or ``"gray"``
+        (Part 5b "highlight mode": they are drawn as neutral gray context
+        under the colored values).  See ``data.reader.EXCLUDED_DISPLAYS``.
+        Same carried-but-unused rule as *category_priority* off categorical.
     """
     y_axis:      "Axis"
     polarization: str        = "XX"
@@ -201,6 +244,8 @@ class ScatterLayer:
     coloring:       str = "continuous"
     colorize_axis:  Optional["Axis"] = None
     excluded_categories: tuple[str, ...] = ()
+    category_priority: str = DEFAULT_CATEGORY_PRIORITY
+    excluded_display: str = DEFAULT_EXCLUDED_DISPLAY
 
     def __post_init__(self):
         if not self.label:
@@ -209,6 +254,16 @@ class ScatterLayer:
             raise ValueError(
                 "ScatterLayer.coloring must be 'continuous' or "
                 f"'categorical', got {self.coloring!r}"
+            )
+        if self.category_priority not in CATEGORY_PRIORITIES:
+            raise ValueError(
+                "ScatterLayer.category_priority must be one of "
+                f"{CATEGORY_PRIORITIES!r}, got {self.category_priority!r}"
+            )
+        if self.excluded_display not in EXCLUDED_DISPLAYS:
+            raise ValueError(
+                "ScatterLayer.excluded_display must be one of "
+                f"{EXCLUDED_DISPLAYS!r}, got {self.excluded_display!r}"
             )
         if self.coloring == "categorical":
             if self.colorize_axis is None:
@@ -493,6 +548,8 @@ class VisibilityScatter(VisibilityPlot):
             coloring      = lyr.coloring,
             colorize_axis = lyr.colorize_axis,
             excluded_categories = lyr.excluded_categories,
+            category_priority = lyr.category_priority,
+            excluded_display = lyr.excluded_display,
         )
         self._recomposite()
         self._update_state_source()
@@ -566,6 +623,8 @@ class VisibilityScatter(VisibilityPlot):
             coloring      = lyr.coloring,
             colorize_axis = lyr.colorize_axis,
             excluded_categories = lyr.excluded_categories,
+            category_priority = lyr.category_priority,
+            excluded_display = lyr.excluded_display,
         )
         self._rerender()
         self._update_state_source()
@@ -576,6 +635,8 @@ class VisibilityScatter(VisibilityPlot):
         coloring: Optional[str] = None,
         colorize_axis=None,
         excluded_categories=None,
+        category_priority: Optional[str] = None,
+        excluded_display: Optional[str] = None,
     ) -> None:
         """Change one layer's colorize-by-axis mode and re-render.
 
@@ -611,14 +672,29 @@ class VisibilityScatter(VisibilityPlot):
             reset to ``()`` when switching to (or staying) continuous,
             mirroring how *colorize_axis* itself is dropped in that
             case.
+        category_priority : str | None
+            ``"rarest"`` or ``"majority"`` (see
+            ``data.reader.CATEGORY_PRIORITIES``): which category a pixel
+            shows when several share it.  ``None`` keeps the layer's
+            current value.  Unlike *excluded_categories* it is NOT reset
+            on a switch to continuous -- it is unused there, and keeping
+            it means a layer toggled back to categorical still has the
+            draw order the user last chose.
+        excluded_display : str | None
+            ``"hide"`` or ``"gray"`` (see ``data.reader.EXCLUDED_DISPLAYS``):
+            what to do with *excluded_categories*.  ``None`` keeps the
+            layer's current value; kept (not reset) on a switch to
+            continuous, like *category_priority*.
 
         Raises
         ------
         IndexError
             *layer_index* out of range.
         ValueError
-            An unresolvable mode/axis combination, or *colorize_axis*
-            names an axis outside ``data.reader.colorizable_axes()``.
+            An unresolvable mode/axis combination, *colorize_axis*
+            names an axis outside ``data.reader.colorizable_axes()``, or
+            *category_priority* is not one of ``CATEGORY_PRIORITIES``, or
+            *excluded_display* is not one of ``EXCLUDED_DISPLAYS``.
         """
         from .axes import Axis
         from .data.reader import colorizable_axes, DEGENERATE_COLORIZE_AXES
@@ -639,6 +715,22 @@ class VisibilityScatter(VisibilityPlot):
                 colorize_axis = Axis[colorize_axis]
             except KeyError:
                 raise ValueError(f"unknown axis {colorize_axis!r}") from None
+
+        new_priority = (category_priority if category_priority is not None
+                        else lyr.category_priority)
+        if new_priority not in CATEGORY_PRIORITIES:
+            raise ValueError(
+                f"category_priority must be one of {CATEGORY_PRIORITIES!r}, "
+                f"got {new_priority!r}"
+            )
+
+        new_display = (excluded_display if excluded_display is not None
+                       else lyr.excluded_display)
+        if new_display not in EXCLUDED_DISPLAYS:
+            raise ValueError(
+                f"excluded_display must be one of {EXCLUDED_DISPLAYS!r}, "
+                f"got {new_display!r}"
+            )
 
         if new_coloring == "continuous":
             # Mirrors ScatterLayerSpec.__post_init__: an axis is only
@@ -700,6 +792,8 @@ class VisibilityScatter(VisibilityPlot):
             coloring      = new_coloring,
             colorize_axis = new_axis,
             excluded_categories = new_excluded,
+            category_priority = new_priority,
+            excluded_display = new_display,
         )
         self._rerender()
         self._update_state_source()
@@ -888,6 +982,7 @@ class VisibilityScatter(VisibilityPlot):
 
         comm               = self._comm
         image_source       = self._image_source
+        colorbar_div       = self._colorbar_content
         msg_update_scaling = self._msg_update_scaling
         equations          = {s: _cms.scaling_equation_label(s) for s in _cms.ALL_SCALINGS}
 
@@ -904,6 +999,11 @@ class VisibilityScatter(VisibilityPlot):
         image_source.data['dw']    = [resp.x1 - resp.x0];
         image_source.data['dh']    = [resp.y1 - resp.y0];
         image_source.change.emit();
+        // Permanent info block's colorbar (info_panel.py): assigning
+        // .text is what makes the block re-derive its visibility.
+        if (resp.colorbar_html != null && colorbar_div) {
+            colorbar_div.text = resp.colorbar_html;
+        }
     } else {
         console.warn('[visplot colormap] response had no image:', resp);
     }
@@ -911,7 +1011,7 @@ class VisibilityScatter(VisibilityPlot):
 
         scaling_js = CustomJS(
             args={
-                "comm": comm, "image_source": image_source,
+                "comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                 "equation": equation, "alpha_input": alpha_input,
                 "gamma_input": gamma_input, "equations": equations,
                 "layer_index": layer_index,
@@ -931,7 +1031,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, scaling: s}}, func
 
         def _numeric_submit_js(field_key: str) -> "CustomJS":
             return CustomJS(
-                args={"comm": comm, "image_source": image_source,
+                args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                       "layer_index": layer_index},
                 code=f"""
 const v = parseFloat(cb_obj.value);
@@ -965,7 +1065,7 @@ paired_input.value = cb_obj.location.toFixed(6);
             LODEnd PlotEvent approach, which never dispatched at all
             from a non-Plot origin)."""
             return CustomJS(
-                args={"comm": comm, "image_source": image_source,
+                args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                       "layer_index": layer_index, "paired_input": paired_input},
                 code=f"""
 if (cb_obj.dragging) return;  // only act when the drag just ENDED
@@ -986,7 +1086,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, {field_key}: v}}, 
 
         def _range_submit_js(field_key: str, paired_span) -> "CustomJS":
             return CustomJS(
-                args={"comm": comm, "image_source": image_source,
+                args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                       "layer_index": layer_index, "paired_span": paired_span},
                 code=f"""
 const v = parseFloat(cb_obj.value);
@@ -1003,7 +1103,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, {field_key}: v}}, 
         max_input.js_on_event(ValueSubmit, _range_submit_js("vmax", max_span))
 
         reset_js = CustomJS(
-            args={"comm": comm, "image_source": image_source,
+            args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                   "layer_index": layer_index,
                   "min_span": min_span, "max_span": max_span,
                   "min_input": min_input, "max_input": max_input,
@@ -1151,6 +1251,11 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                     if i < len(self._layer_category_colors) else None,
                 category_members = self._layer_category_members[i]
                     if i < len(self._layer_category_members) else None,
+                # Part 5a: so png_export can caption the legend with how
+                # overlapping categories were resolved -- a shared figure
+                # cannot rely on the reader having seen the GUI's caption.
+                category_priority = (lyr.category_priority
+                                     if lyr.coloring == "categorical" else None),
             )
             for i, lyr in enumerate(self._layers)
         )
@@ -2179,6 +2284,8 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 coloring      = lyr.coloring,
                 colorize_axis = lyr.colorize_axis,
                 excluded_categories = lyr.excluded_categories,
+                category_priority = lyr.category_priority,
+                excluded_display = lyr.excluded_display,
             )
             for lyr in self._layers
         ]
@@ -2339,14 +2446,37 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             return self._layer_skip_reason[i]
         return None
 
+    def _stack_order(self) -> list[int]:
+        """Layer indices in drawing order, bottom to top: continuous layers
+        first, then categorical ones, each group in layer order.
+
+        Part 5c (2026-09).  Categorical layers are drawn ABOVE continuous
+        ones whatever their index.  Before this, drawing followed layer index,
+        so a panel with a categorical ``XX`` layer and a continuous ``YY``
+        layer buried the colors under ``YY``'s density wash (the original
+        "where are the other colors?" report), and highlighting a few values
+        left them muddied by whatever was stacked above.  A categorical layer
+        is opaque and answers "which"; when the user colors one, its colors
+        should not be underneath something else.  Within each group the
+        order is still the layer order, so several categorical layers
+        stack as before.  A fixed rule, not a control.
+        """
+        cont = [i for i, lyr in enumerate(self._layers) if lyr.coloring != "categorical"]
+        cat  = [i for i, lyr in enumerate(self._layers) if lyr.coloring == "categorical"]
+        return cont + cat
+
     def _collapse_and_composite(self) -> np.ndarray:
         """Alpha-collapse + Porter-Duff composite the last rendered images.
 
         POST-2026-09: binning and shading themselves now happen
         backend-side (see ``ScatterRenderResult``'s docstring in
         ``data/reader.py``); this is the only rendering math still done
-        here -- applying each layer's density-derived opacity
-        (``auto_alpha * lyr.alpha``) to its cached image, then stacking.
+        here -- applying each layer's opacity to its cached image, then
+        stacking.  A continuous layer's opacity is density-derived
+        (``auto_alpha * lyr.alpha``); a categorical layer's (Part 5a) is
+        the user's ``lyr.alpha`` alone -- see the branch below.  Layers
+        are stacked in ``_stack_order()`` (categorical above continuous),
+        not raw layer order.
         Ported from the second half of the pre-redesign
         ``_shade_all_layers`` (the part after ``tf.shade()``), unchanged
         in the actual math.
@@ -2361,23 +2491,52 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         """
         canvas_pixels = max(1, self._canvas_width * self._canvas_height)
         shaded = []
-        for i, lyr in enumerate(self._layers):
+        for i in self._stack_order():
+            lyr = self._layers[i]
             img = self._layer_images[i] if i < len(self._layer_images) else None
             if img is None or self._effective_skip_reason(i) is not None:
                 continue
             n_in_view = self._layer_n_in_view[i]
 
             img_arr = img.copy()
-            ratio       = max(1.0, n_in_view / canvas_pixels)
-            auto_alpha  = int(255.0 / math.log1p(ratio))
-            auto_alpha  = max(80, min(255, auto_alpha))
-            layer_alpha = max(0, min(255, int(auto_alpha * lyr.alpha)))
+            if lyr.coloring == "categorical":
+                # Part 5a (2026-09): a categorical layer is opaque and
+                # only the user's own alpha applies.  ``auto_alpha``
+                # below dims a layer as points-per-pixel rises (it is
+                # what keeps a dense CONTINUOUS layer from saturating),
+                # but applied to a categorical layer it flattened the
+                # whole image to a fraction of full strength -- 92/255 at
+                # 8M points, floored at 80/255 by ~30M -- so the scan or
+                # antenna colors were a dim wash that "did not look much
+                # different from the continuous plot".  Density is the
+                # continuous mode's job; this layer answers "which".
+                # ``lyr.alpha`` is still honored, so ``set_alpha()``
+                # stays a free, no-requery operation.
+                layer_alpha = max(0, min(255, int(255 * lyr.alpha)))
+            else:
+                ratio       = max(1.0, n_in_view / canvas_pixels)
+                auto_alpha  = int(255.0 / math.log1p(ratio))
+                auto_alpha  = max(80, min(255, auto_alpha))
+                layer_alpha = max(0, min(255, int(auto_alpha * lyr.alpha)))
             if layer_alpha > 0:
                 nonempty = (img_arr >> 24) > 0
-                img_arr[nonempty] = (
-                    (img_arr[nonempty] & 0x00FFFFFF)
-                    | (np.uint32(layer_alpha) << np.uint32(24))
-                )
+                if lyr.coloring == "categorical":
+                    # Part 5b: SCALE the pixel's own alpha by the layer alpha
+                    # instead of overwriting it.  Every real category is 255
+                    # (so this equals ``layer_alpha``, exactly as before);
+                    # the gray "Other (not selected)" context is
+                    # ``OTHER_CATEGORY_ALPHA`` and so stays dimmer than the
+                    # highlighted colors at any layer alpha.
+                    px_alpha = ((img_arr[nonempty] >> 24) & 0xFF).astype(np.uint32)
+                    new_alpha = (px_alpha * np.uint32(layer_alpha)) // np.uint32(255)
+                    img_arr[nonempty] = (
+                        (img_arr[nonempty] & 0x00FFFFFF) | (new_alpha << np.uint32(24))
+                    )
+                else:
+                    img_arr[nonempty] = (
+                        (img_arr[nonempty] & 0x00FFFFFF)
+                        | (np.uint32(layer_alpha) << np.uint32(24))
+                    )
             shaded.append(img_arr)
 
         if not shaded:
@@ -2633,6 +2792,11 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             "x1":     src["x"][0] + src["dw"][0],
             "y0":     src["y"][0],
             "y1":     src["y"][0] + src["dh"][0],
+            # Colorbar for the permanent info block: rebuilt from the
+            # layers' cached mappings (cheap -- no aggregation touched),
+            # so a live scaling/alpha/color-mode change updates the bar
+            # in the same round trip that updates the image.
+            "colorbar_html": self._update_colorbar(),
             **extra,
         }
 
@@ -2741,6 +2905,15 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         colors = (self._layer_category_colors[layer_index]
                   if layer_index < len(self._layer_category_colors) else None)
         if not categories or not colors:
+            # Part 5c: say WHY when the user unchecked every value (the
+            # backend's own skip reason, "all <axis> categories excluded"),
+            # instead of the generic wording that reads like a data problem.
+            reason = (self._layer_skip_reason[layer_index]
+                      if layer_index < len(self._layer_skip_reason) else None)
+            if reason and reason.startswith("all ") and reason.endswith(" categories excluded"):
+                return ("<i style='color:#a6adc8;font-size:11px'>"
+                        f"All {_html_escape(lyr.colorize_axis.label)} values are "
+                        "unchecked \u2014 check some to plot</i>")
             return ("<i style='color:#a6adc8;font-size:11px'>"
                      "no categories in current selection</i>")
         members = (self._layer_category_members[layer_index]
@@ -2754,6 +2927,11 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             if len(cat_members) > 1:
                 joined = ", ".join(str(m) for m in cat_members)
                 title_attr = f' title="{_html_escape(joined)}"'
+            elif len(str(cat)) * _LEGEND_PX_PER_CHAR + _LEGEND_CHROME_PX > _LEGEND_MAX_COL_PX:
+                # too long even for the widest column, so it is ellipsized:
+                # give the full label on hover (a bucketed label already
+                # lists its members above)
+                title_attr = f' title="{_html_escape(str(cat))}"'
             rows.append(
                 f"<div{title_attr} style='display:flex;align-items:center;"
                 f"gap:6px;margin:2px 0;cursor:default;break-inside:avoid;"
@@ -2777,8 +2955,84 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         # Div (see VisibilityPlot._build()) already provides that
         # boundary; nesting a second independent scroll region inside
         # it would be one scrollbar too many.
-        return ("<div style='column-width:110px;column-gap:14px;"
-                 "margin-top:4px'>" + "".join(rows) + "</div>")
+        return (f"<div style='column-width:{_legend_column_width(categories)}px;"
+                 "column-gap:14px;margin-top:4px'>" + "".join(rows) + "</div>")
+
+    def empty_categorical_warnings(self) -> list[str]:
+        """Plain-language warnings for categorical layers that have nothing
+        to draw because the user unchecked EVERY value, one per such layer.
+
+        Part 5d.  ``VisibilityPlotter`` shows these in its red notification
+        line under the panels after a Plot press: an empty canvas is
+        otherwise indistinguishable from a broken plot, and the legend's own
+        placeholder is easy to miss.  Keyed on the backend's skip reason
+        ("all <axis> categories excluded"), so it is exactly the hide-mode
+        all-unchecked case: in gray mode the same state is a valid all-gray
+        render (no skip) and correctly produces no warning; a layer with no
+        data at all has a different skip reason and is not this message.
+        Returns ``[]`` when there is nothing to say.
+        """
+        out: list[str] = []
+        for i, lyr in enumerate(self._layers):
+            if lyr.coloring != "categorical":
+                continue
+            reason = (self._layer_skip_reason[i]
+                      if i < len(self._layer_skip_reason) else None)
+            if reason and reason.startswith("all ") and reason.endswith(" categories excluded"):
+                out.append(
+                    f"{_html_escape(lyr.label)}: every "
+                    f"{_html_escape(lyr.colorize_axis.label)} value is "
+                    "unchecked, so there is nothing to plot. Check some "
+                    "values in the gear tab, then press Plot."
+                )
+        return out
+
+    def _no_data_note(self, layer_index: int) -> str:
+        """One italic legend line naming CHECKED values that drew nothing, or
+        ``""``.
+
+        Part 5b follow-up.  Before this, ticking a value with no data (the
+        reported case: three baselines of an antenna that has no rows) left
+        a legend that simply omitted them -- indistinguishable from "did my
+        selection not apply?".  Checked = the axis's enumerated values minus
+        ``excluded_categories``; drawn = every raw value covered by a real
+        (non-gray) category's members, which stays right when values were
+        binned.  Everything needed is already client-side (the identity
+        tables and the render's ``category_members``), so this costs no
+        backend round trip.
+
+        Silent when nothing is missing, when the layer has no rendered
+        categories, and for axes with no enumeration (Correlation) -- and it
+        never raises: a legend note must not be able to break a render.
+        """
+        try:
+            lyr = self._layers[layer_index]
+            categories = self._layer_categories[layer_index]
+            if lyr.coloring != "categorical" or not categories:
+                return ""
+            members = self._layer_category_members[layer_index] or {}
+            # Every raw value any rendered category covers.  The gray
+            # "Other (not selected)" group is included on purpose: its
+            # members are the UNCHECKED values, which are excluded from the
+            # comparison below anyway, so it can never mask a checked one.
+            drawn: set = set()
+            for cat in categories:
+                drawn.update(members.get(cat, (cat,)))
+            excluded = set(lyr.excluded_categories)
+            absent = [v for v in self._colorize_category_values(
+                          lyr.colorize_axis, lyr.polarization)
+                      if v not in excluded and v not in drawn]
+            if not absent:
+                return ""
+            shown = ", ".join(absent[:4])
+            if len(absent) > 4:
+                shown += f" (+{len(absent) - 4} more)"
+            return (
+                f"<div style='color:#a6adc8;font-size:10px;font-style:italic;"
+                f"margin-top:4px'>No data for: {_html_escape(shown)}</div>"
+            )
+        except Exception:
+            return ""
 
     def _full_legend_html(self) -> str:
         """Combine every categorical layer's legend into one HTML block
@@ -2787,40 +3041,54 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         have rendered categories yet) -- the caller uses that to hide
         the whole legend wrapper, not leave an empty box visible.
 
-        Layer labels prefix each layer's own swatch block only when
-        more than one layer is categorical at once -- the same "don't
-        clutter the single-layer case, disambiguate the multi-layer
-        one" rule already used for ``png_export.py``'s own categorical
-        legend (``_legend_handles``), applied here to the live browser
-        legend instead of the static export.
+        Layer labels prefix each layer's own swatch block whenever the
+        *panel* has more than one layer -- not only when more than one
+        is categorical.  Part 5a fix: this used to test "more than one
+        categorical layer", so a panel with one categorical and one
+        continuous layer showed an unlabelled legend beside a labelled
+        colorbar ("Amplitude YY: Density"), leaving the reader to guess
+        which layer the swatches belonged to.  The colorbar's own rule
+        (``info_panel.colorbar_html``) and ``png_export``'s legend both
+        already decide this from the whole panel; this now matches them.
+
+        Each categorical block ends with a one-line caption saying how
+        overlapping categories were resolved ("Rarest category drawn on
+        top" / "Most frequent category shown per pixel").  In ``"rarest"``
+        mode a pixel's color means "this category is present here", not
+        "this is the commonest one" -- the legend is the only place a
+        reader of the plot (or of a shared PNG) can learn which.
         """
         categorical_indices = [
             i for i, lyr in enumerate(self._layers) if lyr.coloring == "categorical"
         ]
         if not categorical_indices:
             return ""
-        multi = len(categorical_indices) > 1
+        labelled = len(self._layers) > 1
         blocks = []
         for i in categorical_indices:
             html = self._legend_html(i)
             if not html:
                 continue
-            if multi:
-                lyr = self._layers[i]
-                blocks.append(
+            lyr = self._layers[i]
+            head = ""
+            if labelled:
+                head = (
                     f"<div style='color:#a6adc8;font-size:11px;"
                     f"font-weight:bold;margin-top:6px'>"
-                    f"{_html_escape(lyr.label)}</div>" + html
+                    f"{_html_escape(lyr.label)}</div>"
                 )
-            else:
-                blocks.append(html)
+            caption = CATEGORY_PRIORITY_CAPTIONS.get(lyr.category_priority, "")
+            tail = (
+                f"<div style='color:#a6adc8;font-size:10px;font-style:italic;"
+                f"margin-top:4px'>{_html_escape(caption)}</div>"
+            ) if caption else ""
+            blocks.append(head + html + self._no_data_note(i) + tail)
         return "".join(blocks)
 
     def _update_legend(self) -> None:
-        """Push the current combined categorical legend to the
-        permanent per-panel info strip (``VisibilityPlot._build()``'s
-        ``_legend_content``/``_legend_toggle``/``_cursor_toggle``/
-        ``_info_div``).
+        """Push the current combined categorical legend into
+        ``_legend_content`` (the permanent per-panel info block's legend
+        Div -- see ``info_panel.py``).
 
         Deliberately independent of ``colorize_controls()``'s own
         widgets -- called after every real render (from
@@ -2835,19 +3103,15 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         one only ever reflects the ACTUAL rendered state, because it is
         rebuilt from that state every single time it changes.
 
-        Toggle visibility only, never the active view (Part 5 addendum,
-        2026-09): becoming categorical makes the "Legend" button appear
-        so the user notices it's there, but does NOT switch away from
-        whichever of cursor-tracking/legend they're currently looking
-        at -- cursor-tracking is more likely to be what's actively in
-        use (it updates on every hover), so auto-switching to the
-        legend the moment new content exists would fight against that.
-        Losing the content (switched back to continuous) DOES force the
-        view back to cursor-tracking, though -- there's nothing left to
-        show, so leaving the legend both selected and invisible would
-        strand the user looking at nothing with no visible way back
-        (the "Cursor" button is still there, but there's no reason to
-        make them find it).
+        Text only.  Which of cursor/legend/colorbar is *showing* -- and
+        in what order -- is decided by the info block's own selectors
+        and re-derived client-side from "does this Div have text"
+        (``info_panel.INFO_APPLY_JS``), so this method no longer manages
+        toggle buttons or forces a view back to the cursor readout when
+        the content disappears: an empty legend simply is not shown.
+        ``.visible`` is still set here for the standalone case (no
+        plotter, no selectors: the legend sits under the figure and
+        shows whenever it has content).
 
         No-op in headless mode, and during the very first render inside
         ``_build()`` (called before ``_legend_content`` even exists as
@@ -2860,16 +3124,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             return
         html = self._full_legend_html()
         self._legend_content.text = html
-        self._legend_toggle.visible = bool(html)
-        if not html and self._legend_content.visible:
-            # The legend was the active view and just lost its content
-            # (switched back to continuous) -- force back to
-            # cursor-tracking rather than leaving the user looking at a
-            # blank pane with no legend button left to click back from.
-            self._legend_content.visible = False
-            self._info_div.visible = True
-            self._cursor_toggle.button_type = "primary"
-            self._legend_toggle.button_type = "default"
+        self._legend_content.visible = bool(html)
 
     def _colorize_category_values(self, axis, polarization: str) -> list[str]:
         """All possible raw category values for *axis*, from cheap,
@@ -2889,14 +3144,33 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         """
         from .axes import Axis
         tables = self._ensure_identity_tables(polarization)
+        # Part 5b follow-up: only baselines that have rows.  The identity
+        # tables list every antenna PAIR the MS could hold (325 for 26
+        # antennas), not the ones observed (210 here), so without this the
+        # baseline and antenna checklists -- and the antenna picker -- offer
+        # values that can never color anything.  ``None`` (unknown) filters
+        # nothing.
+        with_data = getattr(tables, "baselines_with_data", None)
+        with_data = None if with_data is None else set(with_data)
+        real_baselines = [
+            pair for bid, pair in tables.baseline_antennas.items()
+            if with_data is None or bid in with_data
+        ]
         if axis is Axis.SCAN:
             values = {s.scan_name for s in tables.scans}
         elif axis is Axis.ANTENNA1:
-            values = {a1 for a1, _a2 in tables.baseline_antennas.values()}
+            values = {a1 for a1, _a2 in real_baselines}
         elif axis is Axis.ANTENNA2:
-            values = {a2 for _a1, a2 in tables.baseline_antennas.values()}
+            values = {a2 for _a1, a2 in real_baselines}
         elif axis is Axis.SPW:
             values = {str(s.spw_id) for s in tables.spws}
+        elif axis is Axis.FIELD:
+            # Part 5b: names, as the hover line shows them.
+            values = {s.field_name for s in tables.scans}
+        elif axis is Axis.BASELINE:
+            # Part 5b: "ant1&ant2", the hover line's spelling, and exactly
+            # the labels the backend's ``baseline_name`` column carries.
+            values = {f"{a1}&{a2}" for a1, a2 in real_baselines}
         else:
             values = set()
 
@@ -2941,8 +3215,9 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         live comm trigger (``_handle_colorize``/``_msg_colorize``) was
         removed, since nothing sends it anymore.
 
-        Category checklist (Part 5): one ``DataTable`` per colorizable
-        axis, pre-built here from ``_colorize_category_values()`` --
+        Category checklist (Part 5; ``CheckboxGroup`` since the 2026-09
+        follow-up): one checklist per colorizable axis, pre-built here
+        from ``_colorize_category_values()`` --
         "build for N, ship visible 1", the same precedent already used
         for the per-layer columns in ``_build_scatter_config_panel``,
         applied one level down (per-axis instead of per-layer). Only
@@ -2961,15 +3236,20 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         this tab, with no rendered state of its own to reflect -- always
         starts fully checked.
 
-        Styling gap (known, deliberate for this pass): each checklist's
-        ``DataTable`` uses Bokeh's own defaults rather than the
-        sidebar's bespoke dark/light table CSS (``visibility_plotter.py``'s
-        ``_DARK_TABLE_CSS``/``_LIGHT_TABLE_CSS``, used by the permanent
-        SPW table) -- pulling those in here would need either a new
-        constructor parameter threaded from ``_build_scatter_config_panel``
-        or an upward import from this (widget) layer into the app layer,
-        and matching that theme exactly is a smaller gap than everything
-        else landed in this pass. Worth a follow-up, not a blocker.
+        Why ``CheckboxGroup`` and not ``DataTable`` (2026-09): three
+        separate SlickGrid crashes were found, one per round of live
+        usage, all the same orphaned-twin-view problem (see
+        ``visibility_plotter.py``'s ``__cvInstallSelectViewGuard``).  A
+        ``DataTable`` in a dynamically-shown gear tab is what kept
+        triggering them; a ``CheckboxGroup`` has none of SlickGrid's
+        shadow-root machinery.  What ``DataTable`` gave for free is
+        rebuilt explicitly: scrolling (a fixed-height, scrollable
+        wrapper column) and select-all/none (two buttons).  The raw
+        category values ride along in the group's ``tags`` --
+        ``labels`` are for display only, and ``doPlot()`` must send raw
+        values (``ScatterLayerSpec.excluded_categories``'s contract).
+        Styling is now the ordinary widget stylesheet swap, so the
+        old "known styling gap" is closed: no bespoke table CSS.
 
         The axis picker excludes ``DEGENERATE_COLORIZE_AXES``
         (currently just ``Axis.CORRELATION``) entirely, rather than
@@ -2993,14 +3273,17 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             The widget tree for the sidebar.
         handles : dict
             ``{"mode_group": RadioButtonGroup, "axis_select": Select,
-            "checklists": {axis_name_str: (DataTable, ColumnDataSource)}}`` --
+            "priority_select": Select (Part 5a: "rarest" / "majority"),
+            "checklists": {axis_name_str: (CheckboxGroup, Column)}}`` --
+            the group (``active`` = checked indices, ``tags`` = raw
+            values) and the wrapper whose ``visible`` is toggled --
             for ``doPlot()``'s payload-building JS to read current
             values from directly, the same way it already holds
             ``sx_sel``/``sy_sel``.
         """
-        from bokeh.layouts import column
+        from bokeh.layouts import column, row
         from bokeh.models import (Select, RadioButtonGroup, Div, CustomJS,
-                                   DataTable, TableColumn, ColumnDataSource)
+                                   CheckboxGroup, Button)
         from .data.reader import colorizable_axes, DEGENERATE_COLORIZE_AXES
         from .axes import Axis
 
@@ -3037,9 +3320,47 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             options=axis_options,
             visible=is_categorical,
         )
+        # Part 5a (2026-09): how a pixel shared by several categories is
+        # resolved.  Staged like every other control here -- it only
+        # takes effect when Plot is pressed (doPlot()'s payload builder
+        # reads ``priority_select.value``).  Labels say what the user
+        # sees, not the internal names: "rarest" draws the smallest
+        # group over the whole selection on top so it cannot be buried;
+        # "majority" shows whichever category has the most samples in
+        # that pixel.  See data.reader.CATEGORY_PRIORITIES.
+        priority_select = Select(
+            title="Draw priority",
+            value=lyr.category_priority,
+            options=[("rarest", "Rarest on top"),
+                     ("majority", "Most samples per pixel")],
+            visible=is_categorical,
+        )
+        # Part 5b (2026-09): "highlight mode".  Checked values get colors;
+        # what happens to the UNchecked ones is this choice -- hidden (what
+        # unchecking always did) or drawn in neutral gray as context.  Staged
+        # like everything here; doPlot() reads ``display_select.value``.
+        display_select = Select(
+            title="Unselected values",
+            value=lyr.excluded_display,
+            options=[("hide", "Hide"), ("gray", "Show in gray")],
+            visible=is_categorical,
+        )
+
+        # Writing `active` from a button click can hit an orphaned twin
+        # view whose change handler throws (see
+        # __cvInstallSelectViewGuard) AFTER the model value is already
+        # set; try/catch keeps that from aborting the click handler.
+        _set_all_js = """
+try {
+    group.active = Array.from({length: group.labels.length}, function(_, i) { return i; });
+} catch (e) { console.warn('[visplot checklist] select all:', e); }
+"""
+        _set_none_js = """
+try { group.active = []; } catch (e) { console.warn('[visplot checklist] select none:', e); }
+"""
 
         checklists: dict = {}
-        checklist_tables = []
+        checklist_cols = []
         for axis in colorizable:
             try:
                 values = self._colorize_category_values(axis, lyr.polarization)
@@ -3047,27 +3368,86 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 log.warning("colorize_controls: could not enumerate %s: %s",
                             axis.name, exc)
                 values = []
-            source = ColumnDataSource(data=dict(value=values))
+            high_card = len(values) > HIGH_CARDINALITY_THRESHOLD
             if axis is current_axis and is_categorical:
                 excluded = set(lyr.excluded_categories)
-                source.selected.indices = [
-                    i for i, v in enumerate(values) if v not in excluded
-                ]
+                active = [i for i, v in enumerate(values) if v not in excluded]
             else:
-                source.selected.indices = list(range(len(values)))
-            table = DataTable(
-                source=source,
-                columns=[TableColumn(field="value", title=axis.label)],
-                selectable="checkbox",
-                index_position=None,
+                # Every axis starts with every value checked -- including a
+                # high-cardinality one, whose first view is then the render's
+                # binned groups (Part 5c: an earlier draft started such axes
+                # empty and switched unselected values to gray, which left a
+                # blank canvas on a single layer; all-checked always draws
+                # something and matches how every other axis starts).
+                active = list(range(len(values)))
+            group = CheckboxGroup(
+                labels=[str(v) for v in values],
+                active=active,
+                tags=[str(v) for v in values],   # raw values, for doPlot()
+            )
+            all_btn  = Button(label="All",  width=48, height=24,
+                              button_type="default")
+            none_btn = Button(label="None", width=48, height=24,
+                              button_type="default")
+            all_btn.js_on_click(CustomJS(args={"group": group}, code=_set_all_js))
+            none_btn.js_on_click(CustomJS(args={"group": group}, code=_set_none_js))
+            scroller = column(
+                group,
                 width=240,
-                height=min(max(len(values), 1) * 26 + 30, 170),
+                styles={"max-height": "170px", "overflow-y": "auto",
+                        "border": "1px solid #45475a", "padding": "2px 6px"},
+            )
+            extras = []
+            if high_card:
+                extras.append(Div(
+                    text="<span style='color:#a6adc8;font-size:11px'>More "
+                         f"than {HIGH_CARDINALITY_THRESHOLD} values share "
+                         f"{HIGH_CARDINALITY_THRESHOLD} colors. Click None, "
+                         "then check a few (or pick an antenna) to see them "
+                         "one by one.</span>"))
+            if axis is Axis.BASELINE:
+                # Part 5b: pick baselines by antenna.  A baseline label is
+                # "ant1&ant2", so "every baseline involving antenna X" (at
+                # either end -- an MS stores ANTENNA1 < ANTENNA2, so coloring
+                # by Antenna 1 alone can never show the last antenna and
+                # shows about half of a middle one's data) is a pure
+                # client-side filter of the checklist's own labels.
+                antennas = sorted({p for v in values for p in str(v).split("&") if p})
+                ant_select = Select(
+                    title="Baselines with antenna",
+                    value="",
+                    options=[("", "(choose an antenna)")] + [(a, a) for a in antennas],
+                    width=200,
+                )
+                ant_select.js_on_change("value", CustomJS(
+                    args={"group": group},
+                    code="""
+const ant = cb_obj.value;
+if (!ant) { return; }
+const act = [];
+for (let i = 0; i < group.labels.length; i++) {
+    if (group.labels[i].split('&').indexOf(ant) >= 0) { act.push(i); }
+}
+try { group.active = act; } catch (e) { console.warn('[visplot checklist] antenna pick:', e); }
+""",
+                ))
+                extras.append(ant_select)
+            wrapper = column(
+                row(all_btn, none_btn,
+                    Div(text=f"<span style='color:#a6adc8;font-size:11px'>"
+                             f"{_html_escape(axis.label)} "
+                             f"({len(values)})</span>"),
+                    styles={"gap": "4px", "align-items": "center"}),
+                *extras,
+                scroller,
+                width=240,
                 visible=(is_categorical and axis is current_axis),
             )
-            checklists[axis.name] = (table, source)
-            checklist_tables.append(table)
+            checklists[axis.name] = (group, wrapper)
+            checklist_cols.append(wrapper)
 
-        controls = column(section, mode_group, axis_select, *checklist_tables)
+        controls = column(section, mode_group, axis_select, priority_select,
+                          display_select, *checklist_cols)
 
         # Staged, not live (see this method's own docstring): both
         # callbacks below only manage visibility, locally, of this
@@ -3076,13 +3456,17 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         # colormap_controls()'s own "no comm -> inert" convention (the
         # difference here is that inert is now this method's ONLY mode
         # regardless of comm state, so the two are unconditional).
-        checklist_by_axis_name = {name: t for name, (t, _s) in checklists.items()}
+        checklist_by_axis_name = {name: w for name, (_g, w) in checklists.items()}
         mode_js = CustomJS(
             args={"axis_select": axis_select,
+                  "priority_select": priority_select,
+                  "display_select": display_select,
                   "checklist_by_axis": checklist_by_axis_name},
             code="""
 const categorical = (cb_obj.active === 1);
 axis_select.visible = categorical;
+priority_select.visible = categorical;
+display_select.visible = categorical;
 for (const name in checklist_by_axis) {
     checklist_by_axis[name].visible = categorical && (name === axis_select.value);
 }
@@ -3090,6 +3474,10 @@ for (const name in checklist_by_axis) {
         )
         mode_group.js_on_change("active", mode_js)
 
+        # Part 5c: switching axis only swaps which checklist is visible.  An
+        # earlier draft also forced "Unselected values" to gray on a
+        # high-cardinality axis; removed -- hiding is the default everywhere
+        # and gray is strictly opt-in.
         axis_js = CustomJS(
             args={"checklist_by_axis": checklist_by_axis_name},
             code="""
@@ -3103,6 +3491,12 @@ for (const name in checklist_by_axis) {
         return controls, {
             "mode_group": mode_group,
             "axis_select": axis_select,
+            # Part 5a: read by doPlot()'s buildColorizeArray() into each
+            # layer's ``category_priority`` payload field.
+            "priority_select": priority_select,
+            # Part 5b: read by doPlot()'s buildColorizeArray() into each
+            # layer's ``excluded_display`` payload field.
+            "display_select": display_select,
             # Keyed by axis .name string (e.g. "ANTENNA1"), NOT the Axis
             # enum member itself -- these handles end up inside a
             # CustomJS args dict once doPlot()'s own args are built (see
@@ -3160,6 +3554,8 @@ for (const name in checklist_by_axis) {
                     coloring      = lyr.coloring,
                     colorize_axis = lyr.colorize_axis,
                     excluded_categories = lyr.excluded_categories,
+                    category_priority = lyr.category_priority,
+                    excluded_display = lyr.excluded_display,
                 )
             out.append(lyr)
         return out
@@ -3202,6 +3598,12 @@ for (const name in checklist_by_axis) {
                         # parsed defensively here regardless, matching
                         # every other field on this line.
                         excluded_categories = tuple(entry.get("excluded_categories", ())),
+                        # Part 5a: same defensive parse; the default is
+                        # what a sender that predates this field gets.
+                        category_priority = entry.get(
+                            "category_priority", DEFAULT_CATEGORY_PRIORITY),
+                        excluded_display = entry.get(
+                            "excluded_display", DEFAULT_EXCLUDED_DISPLAY),
                     )
                     for entry in message["layers"]
                 ]

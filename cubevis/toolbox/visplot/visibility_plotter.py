@@ -43,8 +43,10 @@ Preview scope
 * Dark-mode sidebar widget styling via InlineStyleSheet
 * Shared toolbar: pan, zoom, reset applied to both figures simultaneously;
   individual figure toolbars hidden (toolbar_location=None)
-* Cursor tracking: raster._info_div and scatter._info_div surfaced via
-  raster.layout / scatter.layout
+* Cursor tracking, categorical legend and colorbar: each panel keeps its
+  own (under its figure, per ``VisibilityPlot._build()``); which of them
+  shows, and in what order, is chosen from that panel's own gear tab
+  (see ``info_panel.py``).
 * Session-scoped layout preference memory (ColumnDataSource JSON store)
 * Sidebar: data selection (field, SPW, correlation, data column),
   raster axis controls, scatter axis controls, colormap controls
@@ -103,10 +105,16 @@ from .axes import Axis
 from .selection import SelectionSpec
 from .visibility_raster import VisibilityRaster
 from .visibility_scatter import VisibilityScatter, ScatterLayer, _LAYER_CMAPS
+from .data.reader import DEFAULT_CATEGORY_PRIORITY as _DEFAULT_CATEGORY_PRIORITY
+from .data.reader import DEFAULT_EXCLUDED_DISPLAY as _DEFAULT_EXCLUDED_DISPLAY
+from .visibility_plot import _CV_SET_BUSY_JS
 from . import palettes as _palettes
 from .refresh import RefreshLevel as _RefreshLevel
 from .flag_db import FlagDB
 from .iteration_step import STEP_INDEX_JS
+from .info_panel import (
+    build_info_selectors, wire_info_display, apply_info_defaults,
+)
 from .reduction_context import (
     FlagDelta,
     NullReductionContext,
@@ -126,6 +134,7 @@ _PANEL_WIDTH_SIDE  = 500    # each panel in side-by-side mode
 _PANEL_WIDTH_FULL  = 1020   # single-panel or over/under mode
 _PANEL_HEIGHT      = 550
 _PANEL_HEIGHT_OVER = 280    # each panel height in over/under mode
+
 _SECTION_DARK      = "#cdd6f4"
 _SECTION_LIGHT     = "#1e293b"
 """Sidebar section-heading colours.
@@ -829,7 +838,9 @@ def _make_scatter_layers(
     and order as *polarizations* -- entry ``i`` is either ``None``
     ("this polarization stays continuous", the pre-Part-5 default) or a
     dict ``{"coloring": "categorical", "colorize_axis": <Axis.name
-    string>, "excluded_categories": [...]}`` -- exactly what
+    string>, "excluded_categories": [...], "category_priority":
+    "rarest" | "majority", "excluded_display": "hide" | "gray"}`` (the last
+    two optional, Parts 5a/5b) -- exactly what
     ``colorize_controls()``'s staged widgets carry and
     ``doPlot()``'s payload-building JS reads from them (see
     ``VisibilityPlotter._handle_plot``'s scatter branch, which builds
@@ -856,11 +867,17 @@ def _make_scatter_layers(
             colorize_axis_name = override.get("colorize_axis")
             colorize_axis = Axis[colorize_axis_name] if colorize_axis_name else None
             excluded_categories = tuple(override.get("excluded_categories") or ())
+            category_priority = (override.get("category_priority")
+                                 or _DEFAULT_CATEGORY_PRIORITY)
+            excluded_display = (override.get("excluded_display")
+                                or _DEFAULT_EXCLUDED_DISPLAY)
             cmap = tuple(_palettes.categorical_cmap())
         else:
             coloring = "continuous"
             colorize_axis = None
             excluded_categories = ()
+            category_priority = _DEFAULT_CATEGORY_PRIORITY
+            excluded_display = _DEFAULT_EXCLUDED_DISPLAY
             cmap = cmaps[i % len(cmaps)]
         layers.append(ScatterLayer(
             y_axis        = y_axis,
@@ -870,8 +887,78 @@ def _make_scatter_layers(
             coloring      = coloring,
             colorize_axis = colorize_axis,
             excluded_categories = excluded_categories,
+            category_priority = category_priority,
+            excluded_display = excluded_display,
         ))
     return layers
+
+
+# The red this file already uses for its notification-line warnings (the
+# zoom-to-flag warning, the raster axis-conflict warning, ...); one name so the
+# newer warnings below cannot drift from it.
+_NOTIFY_WARN_COLOR = "#f38ba8"
+
+
+def _colorize_warning_text(slots) -> str:
+    """HTML for the notification line when a categorical layer in any ACTIVE
+    scatter panel has nothing to plot because every value is unchecked, or
+    ``""`` (part 5d).  One line per affected layer, prefixed with its panel.
+
+    Only a slot whose current kind is ``"scatter"`` is consulted: the slot's
+    idle scatter object may hold stale state from an earlier session and
+    must not raise a warning about a panel the user is not looking at.
+    """
+    lines: list[str] = []
+    for slot in slots:
+        if getattr(slot, "kind", None) != "scatter":
+            continue
+        for msg in slot.scatter.empty_categorical_warnings():
+            lines.append(f"\u26a0 Panel {slot.id} \u2014 {msg}")
+    return "<br>".join(lines)
+
+
+def _colorize_key_from_override(override) -> tuple:
+    """Comparable identity of one layer's *requested* colorize state.
+
+    ``override`` is one entry of the ``colorize`` list a Plot press sends
+    (see ``_make_scatter_layers``): ``None``/anything not categorical means
+    "continuous".  Returns ``(coloring, colorize_axis_name, excluded,
+    category_priority, excluded_display)`` -- the last two are ``None`` for
+    a continuous layer (they have nothing to compare; toggling those
+    dropdowns while a layer is continuous must be a non-event) and default
+    to the layer defaults when a categorical override omits them (a sender
+    that predates Parts 5a/5b).
+    Extracted from ``_handle_plot``'s change detection (Part 5a) so it can be
+    tested directly; must stay in lock-step with
+    ``_colorize_key_from_layer`` -- see there.
+    """
+    if not override or override.get("coloring") != "categorical":
+        return ("continuous", None, (), None, None)
+    return (
+        "categorical",
+        override.get("colorize_axis"),
+        tuple(override.get("excluded_categories") or ()),
+        override.get("category_priority") or _DEFAULT_CATEGORY_PRIORITY,
+        override.get("excluded_display") or _DEFAULT_EXCLUDED_DISPLAY,
+    )
+
+
+def _colorize_key_from_layer(lyr) -> tuple:
+    """The same identity, read from a live ``ScatterLayer``.
+
+    Invariant (tested): for any override ``o``,
+    ``_colorize_key_from_layer(_make_scatter_layers(..., [o])[0]) ==
+    _colorize_key_from_override(o)``.  If it ever breaks, a Plot press
+    that changed nothing would compare unequal to the current layers and
+    trigger a full re-render every time.
+    """
+    return (
+        lyr.coloring,
+        lyr.colorize_axis.name if lyr.colorize_axis else None,
+        tuple(lyr.excluded_categories),
+        lyr.category_priority if lyr.coloring == "categorical" else None,
+        lyr.excluded_display if lyr.coloring == "categorical" else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1551,6 +1638,9 @@ class VisibilityPlotter:
         # FlagDB + hotkey scope                                                #
         # ------------------------------------------------------------------ #
         self._flag_db         = FlagDB()
+        # Part 6: bumped by Reload; carried to the backend in the
+        # SelectionSpec so its frame cache re-reads instead of reusing.
+        self._cache_generation = 0
         self._hotkey_scope_id = str(uuid4())
 
         if self._headless:
@@ -2164,7 +2254,7 @@ class VisibilityPlotter:
         """
         # Use stretch_width so figures expand to fill available space when
         # the sidebar is collapsed or layout changes. Both .figure and
-        # .layout (the wrapper column: figure + info div) need this — the
+        # .layout (the wrapper column around the figure) need this — the
         # latter is applied here too (2026-07-31) rather than only in
         # _build_plot_area(), so it's already correct on all four panels,
         # not just whichever two are positioned on screen at any moment.
@@ -2964,7 +3054,17 @@ for (const dt of other.tools) {
         did_reload = bool(msg.get("reload", False))
         if did_reload:
             self._flag_db = FlagDB()
-            log.debug("_handle_plot: reload requested — FlagDB cleared")
+            # Part 6: Reload means "read the data again".  The backend now
+            # keeps what it reads (so pan/zoom/recolor are fast), which makes
+            # this the one explicit way to get fresh data -- PlotMS's own
+            # Reload has the same meaning.  Bumping the generation makes every
+            # cached frame stale (see SelectionSpec.cache_generation), and
+            # ``did_reload`` is folded into ``axes_changed`` below so the
+            # panels really re-render (before this, Reload only cleared the
+            # pending flags and never re-rendered anything by itself).
+            self._cache_generation += 1
+            log.debug("_handle_plot: reload requested — FlagDB cleared, "
+                      "cache generation -> %d", self._cache_generation)
 
         if "field"       in msg: self._field_str   = msg["field"]
         if "spw_ids" in msg:
@@ -3108,6 +3208,7 @@ for (const dt of other.tools) {
                 # selection comparison correctly inferring "this is
                 # actually a first render" on its own.
                 axes_changed = (
+                    did_reload or
                     slot.id in switched_kind_this_round or
                     y   != panel._y_dim    or
                     x   != panel._x_dim    or
@@ -3154,8 +3255,15 @@ for (const dt of other.tools) {
                 img_data = panel._image_source.data
                 x0, x1 = panel._x_range
                 y0, y1 = panel._y_range
+                # Colorbar for the permanent info block.  Off the event
+                # loop: a raster's mapping is a histogram of the whole
+                # aggregation.  Always sent (like `image`), so the bar
+                # is right even on a press where the axes did not change
+                # but the data column or scaling did.
+                raster_colorbar_html = await asyncio.to_thread(panel._update_colorbar)
                 panels_response[slot.id] = {
                     "kind":  "raster",
+                    "colorbar_html": raster_colorbar_html,
                     # Always sent (even when axes unchanged) to keep the
                     # hover tool renderer active — same reasoning as the
                     # original raster_image field.
@@ -3241,22 +3349,20 @@ for (const dt of other.tools) {
                 # _make_scatter_layers() call below that reads
                 # colorize_overrides directly, so no separate comparison
                 # is needed in that case.
-                def _normalize_colorize(override):
-                    if not override or override.get("coloring") != "categorical":
-                        return ("continuous", None, ())
-                    return (
-                        "categorical",
-                        override.get("colorize_axis"),
-                        tuple(override.get("excluded_categories") or ()),
-                    )
+                # Part 5a: draw priority is part of the staged colorize
+                # state, so a Plot press where ONLY the priority changed
+                # must count as a real change too -- otherwise it would
+                # be silently dropped exactly like an unnoticed
+                # exclusion would have been.  A continuous layer carries
+                # no priority (None), so toggling the dropdown while a
+                # layer is continuous is correctly a non-event.
+                # (The two key helpers are module-level, above, so this
+                # comparison is directly testable.)
                 current_colorize = [
-                    (lyr.coloring,
-                     lyr.colorize_axis.name if lyr.colorize_axis else None,
-                     tuple(lyr.excluded_categories))
-                    for lyr in panel._layers
+                    _colorize_key_from_layer(lyr) for lyr in panel._layers
                 ]
                 requested_colorize = [
-                    _normalize_colorize(
+                    _colorize_key_from_override(
                         colorize_overrides[i]
                         if colorize_overrides and i < len(colorize_overrides) else None
                     )
@@ -3269,6 +3375,7 @@ for (const dt of other.tools) {
                 never_rendered = (not panel._layers or
                                   all(img is None for img in panel._layer_images))
                 axes_changed = (
+                    did_reload or
                     slot.id in switched_kind_this_round or
                     never_rendered or
                     x    != panel._x_dim or
@@ -3337,37 +3444,38 @@ for (const dt of other.tools) {
                                if axes_changed else None,
                     "title":   panel._effective_title()    if axes_changed else None,
                     "state":   panel._state_data()         if axes_changed else None,
-                    # Permanent per-panel legend (Part 5, 2026-09).
-                    # Always sent, same reasoning as `image` above: this
-                    # app has no live Bokeh server, so Python setting
-                    # panel._legend_content.text/panel._legend_toggle.visible
-                    # (done automatically inside update_axes() -> ...
-                    # -> _update_legend(), whenever axes_changed is True)
-                    # does nothing in the browser on its own -- it has to
-                    # be read back out here and applied client-side by
-                    # doPlot()'s own response handler, exactly like
-                    # `image` already is. Sent even when axes_changed is
-                    # False so the legend stays correct/present if the
-                    # panel was already categorical from an earlier
-                    # press (raster's title/state/labels use `None` in
-                    # that case because THEY only matter when axes
-                    # actually moved; the legend's own content doesn't
-                    # depend on x/y ranges the way those do).
+                    # Permanent per-panel legend and colorbar (Part 5,
+                    # 2026-09; info block redesign, 2026-09).  Always
+                    # sent, same reasoning as `image` above: this app
+                    # has no live Bokeh server, so Python setting
+                    # panel._legend_content.text does nothing in the
+                    # browser on its own -- it has to be read back out
+                    # here and applied client-side by doPlot()'s own
+                    # response handler.  Sent even when axes_changed is
+                    # False so the key stays correct if the panel was
+                    # already categorical from an earlier press.
                     #
-                    # legend_visible (Part 5 addendum, 2026-09): now
-                    # sourced from _legend_toggle.visible ("does the
-                    # Legend button exist at all") rather than the old
-                    # _legend_wrapper.visible ("is legend content
-                    # currently expanded") -- the info strip redesign
-                    # replaced the collapsible-below-cursor-tracking
-                    # legend (which could push the status line off
-                    # screen) with a fixed-height slot shared between
-                    # cursor-tracking and the legend; see
-                    # VisibilityPlot._build()'s own comment for why.
-                    "legend_html":    panel._legend_content.text,
-                    "legend_visible": panel._legend_toggle.visible,
+                    # No legend_visible any more: visibility is derived
+                    # client-side from "does the Div have text" plus
+                    # the gear tab's selectors (info_panel.py).
+                    "legend_html":   panel._legend_content.text,
+                    "colorbar_html": panel._update_colorbar(),
                 }
 
+        # Part 5d: a categorical layer whose every value is unchecked draws
+        # nothing; say so in the red notification line (applied client-side
+        # from this response -- see doPlot()'s handler -- exactly like the
+        # other warnings) instead of leaving an unexplained empty canvas.
+        warn_text = _colorize_warning_text(self._slots)
+        if warn_text:
+            self._notify(warn_text, color=_NOTIFY_WARN_COLOR)
+            return {
+                "status":       "ok",
+                "status_text":  self._status_text(),
+                "notify_text":  warn_text,
+                "notify_color": _NOTIFY_WARN_COLOR,
+                "panels":       panels_response,
+            }
         self._notify("")   # clear any previous warning
         return {
             "status":      "ok",
@@ -3507,6 +3615,7 @@ for (const dt of other.tools) {
             data_column = self._datacolumn,
             time_range  = self._time_range,
             freq_range  = self._freq_range,
+            cache_generation = getattr(self, "_cache_generation", 0),
         )
 
     def _notify(self, text: str, color: str = "#f38ba8") -> None:
@@ -3607,8 +3716,17 @@ document.documentElement.style.background = '#181825';
 
         # CSS injection for light-mode sidebar widget overrides.
         # When document.body gets class "cv-light", these rules activate.
+        #
+        # html/body height:100% (2026-09): needed for the root column's
+        # own sizing_mode="stretch_both" (see _build_layout()'s return
+        # statement) to have a definite ancestor height to stretch
+        # against in the first place -- verified present in the exact
+        # combination confirmed working in a real headless-browser test
+        # (see that comment for the full story of what was tried before
+        # this and why it was a real regression, not just imperfect).
         _css_div = Div(
             text="""<style>
+html, body { height: 100%; margin: 0; }
 .cv-light .cv-sidebar { background: #f8f8f0 !important; border-right: 1px solid #ccc !important; }
 .cv-light .cv-sidebar .bk-input { background: #ffffff !important; color: #222222 !important; border-color: #aaa !important; }
 .cv-light .cv-sidebar select.bk-input option { background: #fff; color: #222; }
@@ -3650,18 +3768,53 @@ document.documentElement.style.background = '#181825';
         side_container.visible = (self._layout in ("one", "side"))
         over_container.visible = (self._layout == "over")
 
-        # stretch_width lets containers fill the browser window as it resizes
-        # and correctly reclaims space when the sidebar is collapsed.
+        # sizing_mode="stretch_both" (2026-09, third attempt at this,
+        # this time verified in an actual headless browser before
+        # shipping -- see below): plot_area and the root/body structure
+        # around it fill the browser window and reclaim space correctly
+        # on resize, using Bokeh's OWN native layout mechanism rather
+        # than fighting it.
+        #
+        # The previous attempt (an add_init_script block finding these
+        # elements by CSS class and setting their height/flex directly)
+        # was a real, reported regression, not just an imperfect fix:
+        # a single page-level scrollbar, the status bar invisible at
+        # startup, and a gear tab's content pushing the status bar
+        # further down. Built a headless-browser test harness (Playwright
+        # driving a cached Chrome-for-Testing binary, Bokeh rendered with
+        # INLINE resources) specifically to find out why, rather than
+        # guess a third time blind. Confirmed directly: Bokeh's own
+        # layout engine recomputes and REASSERTS its own inline
+        # `style.height` on these elements continuously (on load, on
+        # resize, on any DOM change such as a tab's content becoming
+        # visible) -- so a one-time external override, however it's
+        # applied, is silently overwritten the next time Bokeh's own
+        # layout pass runs. That happens on both of the two triggers
+        # reported (window resize, gear tab opening), which is why the
+        # regression showed up on exactly those two actions.
+        #
+        # sizing_mode="stretch_both" instead asks BOKEH ITSELF to
+        # compute and maintain the right value, continuously, as part of
+        # its own reactive layout system -- there is nothing external
+        # left for it to silently undo. Verified in the same harness
+        # across three window sizes (900px, resized to 1400px, resized
+        # to 500px) and a simulated gear-tab-content-growth (20 extra
+        # rows appearing in a sidebar column): the status bar tracked the
+        # true bottom of the window every time, with zero page-level
+        # scroll and no effect on the status bar's position from the
+        # content change. sidebar_col (see _build_sidebar()) matches with
+        # its own sizing_mode="stretch_height" for the same reason.
         plot_area = column(
             side_container, over_container,
-            sizing_mode="stretch_width",
+            sizing_mode="stretch_both",
+            styles={"overflow-y": "auto"},
         )
         body = row(
             sidebar_col, plot_area,
-            sizing_mode="stretch_width",
+            sizing_mode="stretch_both",
         )
         return column(_css_div, toolbar, body, status_bar,
-                      sizing_mode="stretch_width")
+                      sizing_mode="stretch_both")
 
     def _style_cmap_column(self, cmap_col, dark_stylesheet) -> tuple:
         """Apply dark styling to every themeable element in a colormap column.
@@ -3715,7 +3868,7 @@ document.documentElement.style.background = '#181825';
         updating the theme.
         """
         from bokeh.models import (Select, TextInput, Div, Button, Plot,
-                                    RadioButtonGroup, DataTable)
+                                    RadioButtonGroup, CheckboxGroup, DataTable)
 
         styled = []
         styled_figs = []
@@ -3740,7 +3893,7 @@ document.documentElement.style.background = '#181825';
                 # exactly (see this method's docstring).
                 node.stylesheets = [dark_stylesheet, self._table_css_dark]
                 styled_tables.append(node)
-            elif isinstance(node, RadioButtonGroup):
+            elif isinstance(node, (RadioButtonGroup, CheckboxGroup)):
                 # Part 4: colorize_controls()'s Continuous/Categorical
                 # switch -- same treatment as Select/TextInput above (a
                 # shared, toggle-managed stylesheet at index 0), so the
@@ -3881,15 +4034,27 @@ conflict_div.text = conflict ? msg : '';
         raster_cmap  = slot.raster.colormap_controls()
         cmap_widgets, cmap_figs, cmap_icons, _no_tables = self._style_cmap_column(raster_cmap, dark)
 
+        # What the permanent info block (left panel) shows for this
+        # slot's raster: chosen here, applied client-side.  Built with
+        # everything else at construction -- there is no second chance
+        # without a Bokeh server.  Its widgets join cmap_widgets so the
+        # dark/light toggle reaches them like every other tab widget.
+        info_sel = build_info_selectors("raster", width=_SIDEBAR_WIDTH,
+                                        stylesheets=[dark],
+                                        icon_stylesheets=[dark, self._icon_btn_css])
+        cmap_widgets = list(cmap_widgets) + info_sel.widgets()
+
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Raster ──</span>", width=_SIDEBAR_WIDTH),
             ry_sel, rx_sel, rq_sel,
             conflict_div,
             raster_cmap,
+            info_sel.column,
         )
         widgets = {
             "y_sel": ry_sel, "x_sel": rx_sel, "q_sel": rq_sel,
+            "info_selectors": info_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
             # Always empty for raster -- no colorize-by-axis checklist
@@ -4012,14 +4177,22 @@ for (let i = 0; i < cols.length; i++) {
             ))
             extra_children = [layer_select] + layer_columns
 
+        # See the raster panel's identical block.
+        info_sel = build_info_selectors("scatter", width=_SIDEBAR_WIDTH,
+                                        stylesheets=[dark],
+                                        icon_stylesheets=[dark, self._icon_btn_css])
+        cmap_widgets += info_sel.widgets()
+
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Scatter ──</span>", width=_SIDEBAR_WIDTH),
             sx_sel, sy_sel,
             *extra_children,
+            info_sel.column,
         )
         widgets = {
             "x_sel": sx_sel, "y_sel": sy_sel,
+            "info_selectors": info_sel,
             "layer_select": layer_select, "layer_columns": layer_columns,
             "cmap_widgets": cmap_widgets,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
@@ -4031,7 +4204,8 @@ for (let i = 0; i < cols.length; i++) {
             "cmap_tables": cmap_tables,
             # One entry per layer, same order as `layers`/`layer_columns`
             # -- each is colorize_controls()'s own returned handles dict
-            # ({"mode_group", "axis_select", "checklists"}). doPlot()'s
+            # ({"mode_group", "axis_select", "priority_select",
+            # "checklists"}). doPlot()'s
             # payload-building JS (Part 5) reads these to stage each
             # layer's colorize state into the same per-panel payload it
             # already builds from x_sel/y_sel -- see colorize_controls()'s
@@ -4429,6 +4603,10 @@ for (let i = 0; i < cols.length; i++) {
         # ---- Assemble sidebar column --------------------------------------- #
         # css_classes enables light-mode switching via a CSS class toggle
         # in the dark/light JS callback.
+        #
+        # No cursor/legend/colorbar here (see info_panel.py's module
+        # docstring for why that was tried and reverted): each panel
+        # keeps its own, under its own figure.
         self._sidebar_col = column(
             path_div,
             _section("Data"),
@@ -4445,15 +4623,30 @@ for (let i = 0; i < cols.length; i++) {
             self._gear_tabs,
             width       = _SIDEBAR_WIDTH_COL,
             visible     = True,
+            sizing_mode = "stretch_height",
             css_classes = ["cv-sidebar"],
             styles      = {
                 "background":    "#1e1e2e",
                 "padding":       "8px",
                 "border-right":  "1px solid #45475a",
                 "overflow-y":    "auto",
-                "max-height":    f"{_PANEL_HEIGHT + 60}px",
+                # sizing_mode="stretch_height" above (2026-09, third
+                # attempt at this, verified in an actual headless
+                # browser this time -- see _build_layout()'s matching
+                # comment on plot_area/body/root for the full story,
+                # including why the previous attempt -- forcing height
+                # via an add_init_script setting inline styles directly
+                # -- was a real, reported regression: Bokeh's own layout
+                # engine continuously reasserts its own computed inline
+                # styles on any layout pass, silently undoing a one-time
+                # external override on the very next resize or DOM
+                # change). Matches plot_area's own sizing_mode="stretch_
+                # both" so both fill body's real height and their
+                # bottoms align, each still scrolling independently via
+                # its own overflow-y here.
             },
         )
+
 
         # ---- Collapse toggle button --------------------------------------- #
         toggle_btn = Button(
@@ -4572,8 +4765,56 @@ if (!window.__cvInstallSelectViewGuard) {
         // others still get a chance on a later call -- a fresh scatter
         // panel can add a RadioButtonGroup/DataTable before any Select
         // has rendered, or vice versa on a raster-only panel.
+        // CheckboxGroup (2026-09): the per-axis colorize checklists and
+        // the info-display "Cursor readout" checkbox are CheckboxGroups
+        // inside dynamically-added gear tabs, so they get the same
+        // orphaned twin.  Unlike the guards below, this one CANNOT patch
+        // a prototype method that runs later: CheckboxGroupView's
+        // `active` handler is an arrow function created inside
+        // connect_signals() (Bokeh 3.10), and it iterates
+        // `enumerate(this._inputs)` -- _inputs is only assigned in
+        // render(), which the orphan never runs, so a click throws
+        // "undefined is not iterable".  What CAN be patched is
+        // connect_signals() itself: give every view a harmless empty
+        // _inputs BEFORE that handler exists (render() replaces it on
+        // the real view).  That has to happen before the tab is added,
+        // so this block is synchronous, not deferred like the ones
+        // below -- possible because the permanent sidebar's
+        // correlation CheckboxGroup is always rendered, so an instance
+        // to reach the shared prototype through always exists.
+        if (!window.__cvCheckboxGroupViewGuarded) {
+            try {
+                const findCbg = function(v) {
+                    if (v.model && v.model.type === 'CheckboxGroup') return v;
+                    if (v._child_views) {
+                        for (const c of v._child_views.values()) {
+                            const f = findCbg(c);
+                            if (f) return f;
+                        }
+                    }
+                    return null;
+                };
+                const roots0 = (window.Bokeh && Bokeh.index)
+                    ? Object.values(Bokeh.index).map(function(e) { return e.model_view || e; })
+                    : [];
+                let cbg = null;
+                for (let i = 0; i < roots0.length && !cbg; i++) cbg = findCbg(roots0[i]);
+                if (cbg) {
+                    const cproto = cbg.constructor.prototype;
+                    const orig_connect = cproto.connect_signals;
+                    cproto.connect_signals = function() {
+                        if (this._inputs == null) this._inputs = [];
+                        return orig_connect.apply(this, arguments);
+                    };
+                    window.__cvCheckboxGroupViewGuarded = true;
+                }
+            } catch (e) {
+                console.warn('[visplot] CheckboxGroup view guard not installed:', e);
+            }
+        }
         if (window.__cvSelectViewGuarded && window.__cvRadioButtonGroupViewGuarded &&
-            window.__cvDataTableViewGuarded && window.__cvSlickGridStyleGuarded) return;
+            window.__cvDataTableViewGuarded && window.__cvSlickGridStyleGuarded &&
+            window.__cvCheckboxGroupViewGuarded) return;
         // Deferred: the just-added tab's views build asynchronously
         // (Bokeh's own lazy_initialize()/build_views() are awaited
         // internally), so none may exist yet at the point this is
@@ -4935,11 +5176,21 @@ over_container.children = new_children;
             orig_source = ColumnDataSource(data={"text": [""], "color": [None], "kind": [None]})
             self._panel_title_state[slot.id] = orig_source
 
+            # Labelled with the same "\u2715" a window's own close button
+            # uses (2026-09, on request) rather than "Cancel" -- the tab
+            # doesn't discard any staged value (see the tooltip below and
+            # cancel_click_js's own comment), so "close" was always the
+            # more honest word for what this does; the icon now matches.
+            # self._icon_btn_css (the same compact stylesheet the
+            # iteration prev/next buttons already use) trims Bokeh's
+            # default button padding, which otherwise left a visibly
+            # oversized border around a single glyph (reported).
             cancel_btn = Button(
-                label       = "Cancel",
+                label       = "\u2715",
                 button_type = "default",
-                width       = 80,
-                stylesheets = [dark],
+                margin      = (0, 0, 0, 0),
+                stylesheets = [dark, self._icon_btn_css],
+                **_IterButtons.BTN_DIMS,
             )
 
             # Group 3 piece 1: per-slot Raster/Scatter switch + both
@@ -4964,6 +5215,30 @@ over_container.children = new_children;
             self._panel_axis_widgets[slot.id] = {
                 "raster": raster_widgets, "scatter": scatter_widgets,
             }
+            for _kind, _w in (("raster", raster_widgets),
+                              ("scatter", scatter_widgets)):
+                # Wired directly to this panel's own three widgets -- no
+                # separate sidebar copy exists to keep in sync (see
+                # info_panel.py's module docstring).  divs is keyed by
+                # ITEM_KEYS[_kind] -- a raster's dict simply has no
+                # "legend" entry, so its checklist (built with a
+                # shorter ITEM_LABELS[_kind]) never looks one up.
+                _panel = getattr(slot, _kind)
+                _divs = {"cursor": _panel._info_div,
+                        "colorbar": _panel._colorbar_content}
+                if _kind == "scatter":
+                    _divs["legend"] = _panel._legend_content
+                wire_info_display(_divs, _w["info_selectors"])
+                # Populates the colorbar Div for the initial paint.  Cheap
+                # even for the two initially-inactive/deferred panels:
+                # _panel_spec().status is "empty" until a real render has
+                # happened, and colorbar_html() returns "" on that check
+                # before touching anything that would cost a histogram.
+                # The legend needs no equivalent call -- _rerender()
+                # already updates it after every render, construction's
+                # included.
+                _panel._update_colorbar()
+                apply_info_defaults(_divs, _w["info_selectors"])
 
             kind_switch = RadioButtonGroup(
                 labels=["Raster", "Scatter"],
@@ -5077,19 +5352,31 @@ if (sidebarEl && prevScrollTop !== null) {
 
             tab_panel = TabPanel(
                 child=column(
-                    # Split into two rows (added 2026-08-03, reported
-                    # overflowing the sidebar as one row —
-                    # 120+80+60=260px, exactly _SIDEBAR_WIDTH with no
-                    # margin left for borders/padding). Grouped by
-                    # function: mode selection on its own row, the two
-                    # action buttons together below.
-                    row(Tip(kind_switch,
+                    # Row 1: mode selection with the close button at the
+                    # far right (2026-09, on request — previously grouped
+                    # with Swap on the row below; moved up to sit level
+                    # with Raster/Scatter, mirroring where a window's own
+                    # close control sits relative to its other chrome).
+                    # justify-content:space-between needs only these two
+                    # children to push them to opposite ends — no Spacer
+                    # model needed. Fits comfortably on one row now that
+                    # the close button is icon-sized (24px, was 80px as
+                    # "Cancel") — the two-row split below was originally
+                    # forced by 120+80+60=260px (added 2026-08-03,
+                    # overflowing _SIDEBAR_WIDTH as one row); Swap alone
+                    # still gets its own row rather than crowding back in.
+                    row(
+                        Tip(kind_switch,
                             tooltip=self._tt("Switch this panel between "
-                                              "raster and scatter"))),
-                    row(Tip(cancel_btn,
-                            tooltip=self._tt("Discard changes to this "
-                                              "panel and close its tab")),
-                        Tip(swap_btn,
+                                              "raster and scatter")),
+                        Tip(cancel_btn,
+                            tooltip=self._tt("Close this panel's "
+                                              "configuration tab")),
+                        styles={"justify-content": "space-between",
+                               "align-items": "center"},
+                        width=_SIDEBAR_WIDTH,
+                    ),
+                    row(Tip(swap_btn,
                             tooltip=self._tt("Swap this panel's screen "
                                               "position with the other "
                                               "panel — instant, no "
@@ -5209,7 +5496,7 @@ if (sidebarEl && prevScrollTop !== null) {
         reload_btn = Button(label="Reload ↺", button_type="default", width=80)
 
         # Shared plot-send logic used by Plot ▶, Reload ↺, and all presets.
-        _do_plot_js = """
+        _do_plot_js = _CV_SET_BUSY_JS + """
 // Shared with gear_click_js (a separate, non-concatenated CustomJS
 // string, hence a global rather than a local function) -- defining it
 // here too, identically, since switchToTab() below can be the very
@@ -5224,8 +5511,56 @@ if (!window.__cvInstallSelectViewGuard) {
         // and DataTable -- see gear_click_js's identical definition
         // (kept here too for the idempotent-either-script-first reason
         // above) for the full rationale on each.
+        // CheckboxGroup (2026-09): the per-axis colorize checklists and
+        // the info-display "Cursor readout" checkbox are CheckboxGroups
+        // inside dynamically-added gear tabs, so they get the same
+        // orphaned twin.  Unlike the guards below, this one CANNOT patch
+        // a prototype method that runs later: CheckboxGroupView's
+        // `active` handler is an arrow function created inside
+        // connect_signals() (Bokeh 3.10), and it iterates
+        // `enumerate(this._inputs)` -- _inputs is only assigned in
+        // render(), which the orphan never runs, so a click throws
+        // "undefined is not iterable".  What CAN be patched is
+        // connect_signals() itself: give every view a harmless empty
+        // _inputs BEFORE that handler exists (render() replaces it on
+        // the real view).  That has to happen before the tab is added,
+        // so this block is synchronous, not deferred like the ones
+        // below -- possible because the permanent sidebar's
+        // correlation CheckboxGroup is always rendered, so an instance
+        // to reach the shared prototype through always exists.
+        if (!window.__cvCheckboxGroupViewGuarded) {
+            try {
+                const findCbg = function(v) {
+                    if (v.model && v.model.type === 'CheckboxGroup') return v;
+                    if (v._child_views) {
+                        for (const c of v._child_views.values()) {
+                            const f = findCbg(c);
+                            if (f) return f;
+                        }
+                    }
+                    return null;
+                };
+                const roots0 = (window.Bokeh && Bokeh.index)
+                    ? Object.values(Bokeh.index).map(function(e) { return e.model_view || e; })
+                    : [];
+                let cbg = null;
+                for (let i = 0; i < roots0.length && !cbg; i++) cbg = findCbg(roots0[i]);
+                if (cbg) {
+                    const cproto = cbg.constructor.prototype;
+                    const orig_connect = cproto.connect_signals;
+                    cproto.connect_signals = function() {
+                        if (this._inputs == null) this._inputs = [];
+                        return orig_connect.apply(this, arguments);
+                    };
+                    window.__cvCheckboxGroupViewGuarded = true;
+                }
+            } catch (e) {
+                console.warn('[visplot] CheckboxGroup view guard not installed:', e);
+            }
+        }
         if (window.__cvSelectViewGuarded && window.__cvRadioButtonGroupViewGuarded &&
-            window.__cvDataTableViewGuarded && window.__cvSlickGridStyleGuarded) return;
+            window.__cvDataTableViewGuarded && window.__cvSlickGridStyleGuarded &&
+            window.__cvCheckboxGroupViewGuarded) return;
         setTimeout(function() {
             function findView(v, want_type, predicate) {
                 if (v.model && v.model.type === want_type &&
@@ -5349,6 +5684,58 @@ function switchToTab(target_tab, gear_tabs, sidebar, toggle_btn) {
     }
 }
 
+// Busy state (2026-09, revised).  Everything that has to change together
+// while a Plot request is outstanding lives in this one function, so the
+// send, the response callback and the safety timeout below cannot drift
+// apart the way three hand-copied blocks did.
+//
+// WHY AN OVERLAY, not `document.body.style.cursor = 'progress'` (what
+// this replaced).  `cursor` is inherited, but almost everything
+// interactive here declares its own: Bokeh's buttons, selects and tabs
+// (pointer), the Tip buttons, and above all the plot canvas, whose
+// crosshair/pan cursor Bokeh sets itself.  A declared cursor beats an
+// inherited one, so the busy cursor only ever showed over the bare
+// patches of panel between controls.  A document-level
+// `* { cursor: progress !important }` rule does not fix that either:
+// Bokeh 3 renders every widget inside its own shadow root, which
+// document stylesheets do not reach (and per-root stylesheets would
+// have to out-specify rules such as `.bk-btn:disabled { cursor:
+// not-allowed !important }`).  The cursor the browser shows is the one
+// belonging to the topmost element under the pointer, so an element that
+// is topmost everywhere is the only thing that guarantees it.
+//
+// SIDE EFFECT, deliberate: while the overlay is up the mouse cannot
+// reach anything beneath it.  Plot/Reload are disabled anyway, and the
+// plot under the pointer is about to be replaced.  Tip tooltips close
+// by themselves (their mouseleave fires when the overlay appears).
+//
+// It covers the Bokeh roots' own bounding box rather than the whole
+// viewport, so in a notebook -- where document.body is the JupyterLab
+// shell, not this app -- the rest of the page stays usable.  If no root
+// can be measured it falls back to the viewport.
+//
+// The safety timer is stored globally and cancelled by every call, so a
+// timer left over from an earlier press can never cut a later press's
+// busy state short (the previous, unstored setTimeout could).  30 s is
+// only the give-up point for a response that never arrives (connection
+// lost for good); a long render that overruns it merely gets the UI back
+// early, exactly as before.
+function cvSetBusy(on) {
+    // The overlay/cursor logic itself now lives in the shared,
+    // idempotent window.__cvSetBusy (see visibility_plot.py's
+    // _CV_SET_BUSY_JS, prepended to this whole script -- search this
+    // file for that name), so _add_rerender_trigger()'s OWN independent
+    // pan/zoom CustomJS can show the identical busy indicator during a
+    // re-render round trip, not just a Plot press. This wrapper keeps
+    // doPlot()'s own extra step -- disabling Plot/Reload specifically --
+    // since only THIS press needs that (a pan/zoom re-render leaves them
+    // enabled; the overlay alone already blocks clicking through to them
+    // while it's up).
+    plot_btn.disabled   = !!on;
+    reload_btn.disabled = !!on;
+    window.__cvSetBusy(on);
+}
+
 function doPlot(reload) {
     // Group 3 piece 3 / Chunk 1 (added 2026-07-31): request/response are
     // now per-slot (panels: {id: {...}}) instead of flat raster_y/
@@ -5363,8 +5750,9 @@ function doPlot(reload) {
         // Part 5 (2026-09): one entry per scatter layer -- either null
         // ("stays continuous", the default) or
         // {coloring: 'categorical', colorize_axis: <name>,
-        //  excluded_categories: [...]} -- read from colorize_controls()'s
-        // own staged widgets (mode_group/axis_select/checklists), the
+        //  excluded_categories: [...], category_priority: <name>} -- read
+        // from colorize_controls()'s own staged widgets
+        // (mode_group/axis_select/priority_select/checklists), the
         // same way sx_sel.value/sy_sel.value are read below. Nothing is
         // sent live when these widgets change (see
         // VisibilityScatter.colorize_controls()'s docstring for why) --
@@ -5382,17 +5770,26 @@ function doPlot(reload) {
                 return null;  // defensive only -- axis_select.value should
                                // always be one of h.checklists' own keys.
             }
-            const source = entry[1];
-            const values = source.data['value'];
-            const selected = new Set(source.selected.indices);
+            // entry = [CheckboxGroup, wrapper Column] (see
+            // VisibilityScatter.colorize_controls): `tags` holds the RAW
+            // category values (labels are display-only), `active` the
+            // checked indices.  Unchecked = excluded.
+            const group = entry[0];
+            const values = group.tags;
+            const selected = new Set(group.active);
             const excluded = [];
             for (let i = 0; i < values.length; i++) {
                 if (!selected.has(i)) {
                     excluded.push(values[i]);
                 }
             }
+            // Part 5a: how a pixel shared by several categories is
+            // resolved ("rarest" | "majority") -- staged like the rest.
             return {coloring: 'categorical', colorize_axis: axis_name,
-                    excluded_categories: excluded};
+                    excluded_categories: excluded,
+                    category_priority: h.priority_select.value,
+                    // Part 5b: what unchecked values do -- "hide" | "gray".
+                    excluded_display: h.display_select.value};
         });
     }
 
@@ -5471,19 +5868,9 @@ function doPlot(reload) {
     // response callback below, before even checking whether resp
     // itself is present, since a malformed/null response still means
     // the request finished and control should come back to the user.
-    plot_btn.disabled   = true;
-    reload_btn.disabled = true;
-    document.body.style.cursor = 'progress';
-    // Safety net: if the response never arrives at all (a dropped
-    // connection mid-request, say -- exactly the kind of thing this
-    // session's own transport fixes were about), this would otherwise
-    // leave the UI permanently stuck "busy". Harmless if the real
-    // response also arrives and runs the same reset a second time.
-    setTimeout(function() {
-        plot_btn.disabled   = false;
-        reload_btn.disabled = false;
-        document.body.style.cursor = '';
-    }, 30000);
+    // cvSetBusy() (defined above) also owns the give-up timer for a
+    // response that never arrives.
+    cvSetBusy(true);
 
     ctrl.send(ids['plot'], {
         field:       field_sel.value,
@@ -5493,9 +5880,7 @@ function doPlot(reload) {
         panels:      panels,
         reload:      !!reload,
     }, function(resp) {
-        plot_btn.disabled   = false;
-        reload_btn.disabled = false;
-        document.body.style.cursor = '';
+        cvSetBusy(false);
         if (!resp) return;
         console.log('[visplot doPlot] received status:', resp.status,
                      'panels:', resp.panels ? JSON.parse(JSON.stringify(resp.panels)) : resp.panels);
@@ -5586,30 +5971,21 @@ function doPlot(reload) {
                 panel0_raster_layout.visible  = (p0_kind === 'raster');
                 panel0_scatter_layout.visible = (p0_kind === 'scatter');
             }
-            // Permanent per-panel legend (Part 5 addendum, 2026-09):
-            // applied exactly like image/state above -- Python setting
-            // panel._legend_content.text/panel._legend_toggle.visible
-            // does nothing in the browser on its own (no live Bokeh
-            // server here), so the response has to be read back out
-            // and applied client-side. Only for a panel that actually
-            // rendered scatter this round (p0_kind === 'scatter') --
-            // panel0_scatter_legend_* refers to slot 0's OWN scatter
-            // object regardless of which layout is currently visible,
-            // but a raster response has no legend fields to apply at
-            // all (they're simply absent from p0 in that case).
-            if (p0 && p0_kind === 'scatter' && p0.legend_html != null) {
-                panel0_scatter_legend_content.text = p0.legend_html;
-                panel0_scatter_legend_toggle.visible = !!p0.legend_visible;
-                if (!p0.legend_visible && panel0_scatter_legend_content.visible) {
-                    // The legend was the active view and just lost its
-                    // content (switched back to continuous) -- mirrors
-                    // VisibilityScatter._update_legend()'s own
-                    // server-side logic, which by itself has no effect
-                    // in the browser without this.
-                    panel0_scatter_legend_content.visible = false;
-                    panel0_scatter_info_div.visible = true;
-                    panel0_scatter_cursor_toggle.button_type = 'primary';
-                    panel0_scatter_legend_toggle.button_type = 'default';
+            // Legend / colorbar, applied exactly like image/state above:
+            // Python setting a Div's text does nothing in the browser (no
+            // live Bokeh server), so the response is read back out here.
+            // Only .text is written -- each Div carries a
+            // js_on_change("text") hook (info_panel.wire_info_display)
+            // that re-derives which of cursor/legend/colorbar is showing.
+            // A raster has a colorbar only; a scatter has both.
+            if (p0) {
+                if (p0_kind === 'scatter') {
+                    if (p0.legend_html != null)
+                        panel0_scatter_legend_content.text = p0.legend_html;
+                    if (p0.colorbar_html != null)
+                        panel0_scatter_colorbar_content.text = p0.colorbar_html;
+                } else if (p0.colorbar_html != null) {
+                    panel0_raster_colorbar_content.text = p0.colorbar_html;
                 }
             }
         } catch(e) { console.warn('panel 0 update failed:', e); }
@@ -5663,15 +6039,15 @@ function doPlot(reload) {
                 panel1_raster_layout.visible  = (p1_kind === 'raster');
                 panel1_scatter_layout.visible = (p1_kind === 'scatter');
             }
-            // Same reasoning as panel 0's legend block above.
-            if (p1 && p1_kind === 'scatter' && p1.legend_html != null) {
-                panel1_scatter_legend_content.text = p1.legend_html;
-                panel1_scatter_legend_toggle.visible = !!p1.legend_visible;
-                if (!p1.legend_visible && panel1_scatter_legend_content.visible) {
-                    panel1_scatter_legend_content.visible = false;
-                    panel1_scatter_info_div.visible = true;
-                    panel1_scatter_cursor_toggle.button_type = 'primary';
-                    panel1_scatter_legend_toggle.button_type = 'default';
+            // Same as panel 0's info block above.
+            if (p1) {
+                if (p1_kind === 'scatter') {
+                    if (p1.legend_html != null)
+                        panel1_scatter_legend_content.text = p1.legend_html;
+                    if (p1.colorbar_html != null)
+                        panel1_scatter_colorbar_content.text = p1.colorbar_html;
+                } else if (p1.colorbar_html != null) {
+                    panel1_raster_colorbar_content.text = p1.colorbar_html;
                 }
             }
         } catch(e) { console.warn('panel 1 update failed:', e); }
@@ -5878,17 +6254,19 @@ function doPlot(reload) {
             "panel0_scatter_img_src": self._slots[0].scatter._image_source,
             "panel0_scatter_state":   self._slots[0].scatter._state_source,
             "panel0_scatter_layout":  self._slots[0].scatter.layout,
-            # Part 5 addendum (2026-09): the shared info-strip widgets
-            # -- see VisibilityPlot._build() for how these relate
-            # (cursor_toggle/legend_toggle switch which of
-            # info_div/legend_content is visible, within one
-            # fixed-height slot). None of these get a comm.send of
-            # their own; doPlot()'s response applies to them here, same
-            # pattern as image_source above.
-            "panel0_scatter_info_div":       self._slots[0].scatter._info_div,
-            "panel0_scatter_cursor_toggle":  self._slots[0].scatter._cursor_toggle,
-            "panel0_scatter_legend_content": self._slots[0].scatter._legend_content,
-            "panel0_scatter_legend_toggle":  self._slots[0].scatter._legend_toggle,
+            # Info block Divs (info_panel.py) that doPlot()'s response
+            # writes text into.  None of these get a comm.send of their
+            # own; the response applies to them here, same pattern as
+            # image_source above.  Only the legend/colorbar Divs are
+            # needed: the cursor readout is written by the hover
+            # callback, and visibility is derived by each block's own
+            # js_on_change hooks.
+            "panel0_scatter_legend_content":   self._slots[0].scatter._legend_content,
+            "panel0_scatter_colorbar_content": self._slots[0].scatter._colorbar_content,
+            "panel0_raster_colorbar_content":  self._slots[0].raster._colorbar_content,
+            "panel1_scatter_legend_content":   self._slots[1].scatter._legend_content,
+            "panel1_scatter_colorbar_content": self._slots[1].scatter._colorbar_content,
+            "panel1_raster_colorbar_content":  self._slots[1].raster._colorbar_content,
             "panel1_raster_fig":      self._slots[1].raster.figure,
             "panel1_raster_img_src":  self._slots[1].raster._image_source,
             "panel1_raster_state":    self._slots[1].raster._state_source,
@@ -5897,10 +6275,6 @@ function doPlot(reload) {
             "panel1_scatter_img_src": self._slots[1].scatter._image_source,
             "panel1_scatter_state":   self._slots[1].scatter._state_source,
             "panel1_scatter_layout":  self._slots[1].scatter.layout,
-            "panel1_scatter_info_div":       self._slots[1].scatter._info_div,
-            "panel1_scatter_cursor_toggle":  self._slots[1].scatter._cursor_toggle,
-            "panel1_scatter_legend_content": self._slots[1].scatter._legend_content,
-            "panel1_scatter_legend_toggle":  self._slots[1].scatter._legend_toggle,
         }
 
         plot_js = CustomJS(

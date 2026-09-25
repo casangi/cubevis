@@ -636,6 +636,7 @@ class VisibilityRaster(VisibilityPlot):
 
         comm                = self._comm
         image_source        = self._image_source
+        colorbar_div        = self._colorbar_content
         msg_update_scaling  = self._msg_update_scaling
         equations           = {s: _cms.scaling_equation_label(s) for s in _cms.ALL_SCALINGS}
 
@@ -661,6 +662,11 @@ class VisibilityRaster(VisibilityPlot):
         image_source.data['dw']    = [resp.x1 - resp.x0];
         image_source.data['dh']    = [resp.y1 - resp.y0];
         image_source.change.emit();
+        // Permanent info block's colorbar (info_panel.py): assigning
+        // .text is what makes the block re-derive its visibility.
+        if (resp.colorbar_html != null && colorbar_div) {
+            colorbar_div.text = resp.colorbar_html;
+        }
     } else {
         console.warn('[visplot colormap] response had no image:', resp);
     }
@@ -668,7 +674,7 @@ class VisibilityRaster(VisibilityPlot):
 
         scaling_js = CustomJS(
             args={
-                "comm": comm, "image_source": image_source,
+                "comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                 "equation": equation, "alpha_input": alpha_input,
                 "gamma_input": gamma_input, "equations": equations,
             },
@@ -691,7 +697,7 @@ comm.send('{msg_update_scaling}', {{scaling: s}}, function(resp) {{
             Non-numeric input is silently ignored (matches the old
             Python callbacks' try/except ValueError: pass behaviour)."""
             return CustomJS(
-                args={"comm": comm, "image_source": image_source},
+                args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div},
                 code=f"""
 const v = parseFloat(cb_obj.value);
 if (isNaN(v)) return;
@@ -741,7 +747,7 @@ paired_input.value = cb_obj.location.toFixed(6);
             property-change dispatch already proven reliable for
             `location` above."""
             return CustomJS(
-                args={"comm": comm, "image_source": image_source,
+                args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                       "paired_input": paired_input},
                 code=f"""
 if (cb_obj.dragging) return;  // only act when the drag just ENDED
@@ -761,7 +767,7 @@ comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
             Unaffected by the LODEnd/dragging issue above -- ValueSubmit
             is a standard widget event, already confirmed reachable."""
             return CustomJS(
-                args={"comm": comm, "image_source": image_source,
+                args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                       "paired_span": paired_span},
                 code=f"""
 const v = parseFloat(cb_obj.value);
@@ -787,7 +793,7 @@ comm.send('{msg_update_scaling}', {{{field_key}: v}}, function(resp) {{
         # to the full range -- see update_scaling(reset_range=)) so
         # subsequent auto (global/local) ranging resumes.
         reset_js = CustomJS(
-            args={"comm": comm, "image_source": image_source,
+            args={"comm": comm, "image_source": image_source, "colorbar_div": colorbar_div,
                   "min_span": min_span, "max_span": max_span,
                   "min_input": min_input, "max_input": max_input,
                   "hist_lo": hist_lo, "hist_hi": hist_hi},
@@ -1536,6 +1542,9 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             return {"status": "error", "message": str(exc)}
         # Return the new image so JS can update image_source directly
         src = self._image_source.data
+        # Off the event loop: for a raster the colorbar's mapping is a
+        # histogram of the whole aggregation (see colorbar_html()).
+        colorbar_html = await asyncio.to_thread(self._update_colorbar)
         return {
             "status":     "ok",
             "color_mode": self._color_mode,
@@ -1544,6 +1553,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             "x1":         src["x"][0] + src["dw"][0],
             "y0":         src["y"][0],
             "y1":         src["y"][0] + src["dh"][0],
+            "colorbar_html": colorbar_html,
         }
 
     async def _handle_update_scaling_raster(self, message: dict) -> dict:
@@ -1571,6 +1581,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         if self._image_source is None:
             return {"status": "ok", "scaling": self._scaling}
         src = self._image_source.data
+        colorbar_html = await asyncio.to_thread(self._update_colorbar)
         return {
             "status":        "ok",
             "scaling":       self._scaling,
@@ -1583,6 +1594,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             "x1":            src["x"][0] + src["dw"][0],
             "y0":            src["y"][0],
             "y1":            src["y"][0] + src["dh"][0],
+            "colorbar_html": colorbar_html,
         }
 
     async def _handle_update_axes_raster(self, message: dict) -> dict:

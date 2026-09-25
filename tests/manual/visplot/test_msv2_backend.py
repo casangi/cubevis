@@ -1406,7 +1406,7 @@ class TestColorizeByAxisColumns:
         ]
         assert "__scan_time_idx" not in df.columns
 
-    def test_scan_and_antenna_columns_avoid_expensive_string_dtype(self):
+    def test_scan_and_antenna_columns_are_cheap_categoricals(self):
         """Real, measured regression guard: assigning a numpy
         object-dtype array of many distinct strings straight onto a
         DataFrame column gets silently upgraded by pandas 3.0's default
@@ -1420,16 +1420,23 @@ class TestColorizeByAxisColumns:
         actually end up with stays ``object``, so a future edit that
         drops the explicit wrapping doesn't silently reintroduce the
         cost.
+
+        Part 6b (2026-09): superseded in a better way.  These columns (and
+        spw / polarization) are now ``pandas.Categorical`` -- a small integer
+        code per row plus one shared category list -- which avoids the string
+        conversion altogether (and is 1-2 B/row instead of 8+).  The guard's
+        purpose, "these must not silently become the slow dtype", now means
+        "must stay categorical".
         """
         yaxes = [(Axis.AMPLITUDE, self.pols[0])]
         df = self.backend._query_columns_raw(Axis.TIME, yaxes, self.sel)[
             (Axis.AMPLITUDE, self.pols[0])
         ]
         for col in ("scan_name", "baseline_antenna1_name",
-                    "baseline_antenna2_name"):
-            assert df[col].dtype == object, (
-                f"{col} has dtype {df[col].dtype!r}, expected object -- "
-                "see _as_object_column's docstring"
+                    "baseline_antenna2_name", "spw", "polarization"):
+            assert isinstance(df[col].dtype, pd.CategoricalDtype), (
+                f"{col} has dtype {df[col].dtype!r}, expected category -- "
+                "see XArrayReader._identity_categoricals"
             )
 
     def test_polarization_column_matches_the_requested_key(self):

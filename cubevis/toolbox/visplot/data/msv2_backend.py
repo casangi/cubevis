@@ -913,14 +913,16 @@ class MSv2Backend(XArrayReader):
             raise ValueError("query_columns: layers must be non-empty")
 
         yaxes = [(lyr.y_axis, lyr.polarization) for lyr in layers]
-        dataframes = self._query_columns_raw(xaxis, yaxes, selection)
+        # Part 6: frames come from the per-layer cache when this selection
+        # was already read (a pan, zoom, recolor or export), else from disk.
+        dataframes = self._query_columns_cached(xaxis, yaxes, selection)
 
         x0_all, x1_all, y0_all, y1_all = [], [], [], []
         for lyr in layers:
-            df = dataframes.get((lyr.y_axis, lyr.polarization))
-            if df is not None and len(df) > 0:
-                x0_all.append(float(df["x"].min())); x1_all.append(float(df["x"].max()))
-                y0_all.append(float(df["y"].min())); y1_all.append(float(df["y"].max()))
+            ext = self._frame_extent(dataframes.get((lyr.y_axis, lyr.polarization)))
+            if ext is not None:
+                x0_all.append(ext[0]); x1_all.append(ext[1])
+                y0_all.append(ext[2]); y1_all.append(ext[3])
         full_x_range = (min(x0_all), max(x1_all)) if x0_all else (0.0, 1.0)
         full_y_range = (min(y0_all), max(y1_all)) if y0_all else (0.0, 1.0)
 
@@ -1233,28 +1235,21 @@ class MSv2Backend(XArrayReader):
         # call selected. "__scan_time_idx" is bookkeeping only, popped
         # here rather than left in the returned DataFrame.
         for (_axis, _pol), _df in frames.items():
-            _df["polarization"] = _pol
-            if spw_ident is not None:
-                _df["spw"] = spw_ident
+            # Part 6b (2026-09): every identity column -- scan, field,
+            # baseline, both antennas, spw, polarization -- is a small-integer
+            # Categorical built in one call (see
+            # XArrayReader._identity_categoricals for the why and the numbers).
+            # "__scan_time_idx" is bookkeeping only, popped here rather than
+            # left in the DataFrame.
+            idx = None
             if "__scan_time_idx" in _df.columns:
                 idx = _df.pop("__scan_time_idx").to_numpy()
-                if scan_lookup is not None:
-                    # See _as_object_column's docstring: a plain
-                    # assignment here measured ~5x more expensive due
-                    # to pandas 3.0's default string-dtype conversion.
-                    _df["scan_name"] = self._as_object_column(
-                        scan_lookup.scan_names[idx], _df.index
-                    )
-            if antenna_lookup is not None and "baseline_id" in _df.columns:
-                ant1, ant2 = self._apply_antenna_lookup(
-                    antenna_lookup, _df["baseline_id"].to_numpy()
-                )
-                _df["baseline_antenna1_name"] = self._as_object_column(
-                    ant1, _df.index
-                )
-                _df["baseline_antenna2_name"] = self._as_object_column(
-                    ant2, _df.index
-                )
+            for _name, _cat in self._identity_categoricals(
+                scan_lookup, idx,
+                _df["baseline_id"].to_numpy() if "baseline_id" in _df.columns else None,
+                spw_ident=spw_ident, pol=_pol, n=len(_df),
+            ).items():
+                _df[_name] = _cat
 
         return frames
 
@@ -1887,6 +1882,9 @@ class MSv2Backend(XArrayReader):
 
         scans: dict[tuple[str, str], list] = {}
         baseline_antennas: dict[int, tuple[str, str]] = {}
+        # Part 5b follow-up: baseline ids that actually have rows (see
+        # IdentityTables.baselines_with_data); None = unknowable.
+        with_data: Optional[set] = set()
         spw_freqs: dict = {}   # spw_id -> (frequencies ndarray, channel_width)
 
         for raw_ds in self._iter_visibility_partitions(selection):
@@ -1933,6 +1931,12 @@ class MSv2Backend(XArrayReader):
                         baseline_antennas[bid_i] = (
                             str(ant1[idx]), str(ant2[idx])
                         )
+                if with_data is not None:
+                    _ids = self._baseline_ids_with_data(ds)
+                    if _ids is None:
+                        with_data = None     # one unknowable partition -> no filtering
+                    else:
+                        with_data.update(int(b) for b in _ids)
 
             if "frequency" in ds.coords:
                 key = self._partition_spw_id(raw_ds)
@@ -1956,6 +1960,8 @@ class MSv2Backend(XArrayReader):
             scans=scan_infos,
             baseline_antennas=baseline_antennas,
             spws=spw_infos,
+            baselines_with_data=(tuple(sorted(with_data))
+                                 if with_data is not None else None),
         )
 
     # ------------------------------------------------------------------ #

@@ -273,16 +273,35 @@ class TestColorizeAxisColumnsTable:
     """The axis -> column lookup table
     visplot-colorize-by-axis-handoff-part3.md asked Part 3 to build."""
 
+    # Part 5b (2026-09) added FIELD and BASELINE; the other five entries are
+    # exactly the Part 2 table.  Order matters -- it is the axis picker's
+    # order (see the dedicated test below).
     EXPECTED = {
         Axis.SCAN: "scan_name",
+        Axis.FIELD: "field_name",
         Axis.ANTENNA1: "baseline_antenna1_name",
         Axis.ANTENNA2: "baseline_antenna2_name",
+        Axis.BASELINE: "baseline_name",
         Axis.CORRELATION: "polarization",
         Axis.SPW: "spw",
     }
 
     def test_matches_the_part2_what_landed_table(self):
         assert COLORIZE_AXIS_COLUMNS == self.EXPECTED
+
+    def test_the_part2_entries_are_unchanged(self):
+        part2 = {Axis.SCAN: "scan_name", Axis.ANTENNA1: "baseline_antenna1_name",
+                 Axis.ANTENNA2: "baseline_antenna2_name",
+                 Axis.CORRELATION: "polarization", Axis.SPW: "spw"}
+        assert {a: COLORIZE_AXIS_COLUMNS[a] for a in part2} == part2
+
+    def test_picker_order_and_default(self):
+        """Scan stays first, so it stays the picker's default; Field follows
+        it and Baseline follows the two antenna axes."""
+        order = list(COLORIZE_AXIS_COLUMNS)
+        assert order[0] is Axis.SCAN
+        assert order.index(Axis.FIELD) == 1
+        assert order.index(Axis.BASELINE) == order.index(Axis.ANTENNA2) + 1
 
     def test_colorizable_axes_matches_the_table_keys(self):
         assert set(colorizable_axes()) == set(COLORIZE_AXIS_COLUMNS)
@@ -479,7 +498,7 @@ class TestResolveCategories:
 # ---------------------------------------------------------------------------
 
 def _decode_rgb(hex_color: str) -> int:
-    """Pack a '#rrggbb' string the SAME way _argmax_shade packs pixels
+    """Pack a '#rrggbb' string the SAME way _priority_shade packs pixels
     (r | g<<8 | b<<16), for comparing rendered pixels back to a legend
     color. NOT the same bit order as reading the hex string as one
     big integer -- see this file's own investigation of that mix-up."""
@@ -491,7 +510,7 @@ def _assert_every_pixel_matches_a_legend_color(result):
     """Winner-take-all guarantee: every non-transparent pixel is
     EXACTLY one of category_colors' values, never a blend. The
     property this whole switch away from tf.shade(color_key=...) was
-    for -- see _argmax_shade's docstring."""
+    for -- see _priority_shade's docstring."""
     valid = {_decode_rgb(c) for c in result.category_colors.values()}
     nonzero = result.image[result.image != 0]
     if nonzero.size == 0:
@@ -598,7 +617,7 @@ class TestRenderLayerCategorical:
         assert result.category_members == {"1": ("1",), "2": ("2",), "3": ("3",)}
 
     def test_winner_take_all_every_pixel_matches_exactly_one_legend_color(self):
-        """Direct test of the property _argmax_shade exists for: no
+        """Direct test of the property _priority_shade exists for: no
         pixel may render a blended color that matches no legend
         swatch, even with several categories genuinely co-occupying
         the same pixels."""
@@ -620,7 +639,16 @@ class TestRenderLayerCategorical:
                                         50, 50, "global", (0, 10))
         assert np.all(empty_result.image == 0) or empty_result.skip_reason is not None
 
-    def test_alpha_respects_min_alpha_floor_for_any_populated_pixel(self):
+    def test_categorical_pixels_are_fully_opaque(self):
+        """Part 5a (2026-09): replaces the old "alpha respects the
+        _MIN_ALPHA floor" check.  A categorical layer used to carry a
+        histogram-equalized DENSITY alpha (floored at _MIN_ALPHA), which
+        drew the lone sample of a rare category faintest -- exactly the
+        thing the "rarest" draw priority exists to show -- and which the
+        client then flattened to one dim value anyway.  Every occupied
+        pixel is now alpha 255; density is the continuous mode's job.
+        See test_colorize_by_axis_part5a_priority.py for the priority
+        tests themselves."""
         df = _synthetic_df(categorical_col="scan_name",
                             categorical_values=["1", "2"], n=5000)
         result = sr.render_layer(df, self._layer(), 0, 100, 0, 10, 80, 60,
@@ -628,7 +656,7 @@ class TestRenderLayerCategorical:
         nonzero = result.image[result.image != 0]
         assert nonzero.size > 0
         alphas = (nonzero >> 24) & 0xFF
-        assert alphas.min() >= sr._MIN_ALPHA
+        assert (alphas == 255).all()
 
     def test_nan_rows_do_not_corrupt_last_category_color_weight(self):
         """Regression guard for the Datashader ds_agg.by() NaN-folding

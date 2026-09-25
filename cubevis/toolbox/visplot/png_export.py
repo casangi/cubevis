@@ -327,8 +327,38 @@ def _wants_legend(spec: "PanelSpec") -> bool:
     return bool(_categorical_bands(spec.bands))
 
 
-def _legend_ncol(bands, cap: int = 6) -> int:
+# Legend metrics per placement (Part 5d): (font size pt, columnspacing em), as
+# passed to ``fig.legend`` / ``ax.legend`` in the two draw helpers below.
+_LEGEND_METRICS = {"panel": (7.5, 1.2), "figure": (8.5, 1.6)}
+_LEGEND_GLYPH_EM = 0.66    # average glyph width, in em, for uppercase/digit-heavy labels
+
+
+def _legend_column_pt(bands, mode: str = "figure") -> float:
+    """Approximate width, in points, of ONE legend column for *bands*: the
+    longest entry's text plus the handle, its padding and the column gap.
+
+    An estimate on purpose (no renderer is available while layout space is
+    still being reserved): ~0.66 em per character measured on the
+    uppercase-and-digit labels a binned baseline axis produces, and matplotlib's
+    default 2.0 em handle length + this module's 0.4 em ``handletextpad`` +
+    the mode's ``columnspacing``.
+    """
+    fontsize, colspacing = _LEGEND_METRICS[mode]
+    labels = [h.get_label() for h in _legend_handles(bands, None)]
+    longest = max((len(str(s)) for s in labels), default=0)
+    return longest * _LEGEND_GLYPH_EM * fontsize + (2.0 + 0.4 + colspacing) * fontsize
+
+
+def _legend_ncol(bands, cap: int = 6, avail_pt: Optional[float] = None,
+                 mode: str = "figure") -> int:
     """Column count for a legend of *bands*' combined handles.
+
+    *avail_pt* (Part 5d), when given, is the width in points the legend has to
+    fit in; a categorical legend then also gets no more columns than fit that
+    width at its longest label.  Before this the count was ``min(n, cap)``
+    whatever the labels said, so 20 binned baseline labels such as
+    "DA42&DA44\u2013DA42&DV13" were laid out six across and ran off both edges of
+    the image.  ``None`` keeps the original count-only behavior exactly.
 
     A plain per-layer legend is one row (``ncol`` = its handle count,
     as before Part 4) -- there are rarely more than 2-3 layers. A
@@ -343,7 +373,11 @@ def _legend_ncol(bands, cap: int = 6) -> int:
     if not n:
         return 1
     if _categorical_bands(bands):
-        return min(n, cap)
+        ncol = min(n, cap)
+        if avail_pt is not None and avail_pt > 0:
+            fit = max(1, int(avail_pt // _legend_column_pt(bands, mode)))
+            ncol = min(ncol, fit)
+        return ncol
     return n
 
 
@@ -361,10 +395,14 @@ def _legend_handle_count(bands) -> int:
                    if not (b.kind == "categorical" and b.categories)]
     n = len(plain) if (len(visible) > 1 and plain) else 0
     n += sum(len(b.categories) for b in categorical)
+    # Part 5a: one caption entry per categorical band that carries a
+    # draw priority -- mirror of the handle _legend_handles appends.
+    n += sum(1 for b in categorical if b.priority_caption())
     return n
 
 
-def _legend_rows(bands, cap: int = 6) -> int:
+def _legend_rows(bands, cap: int = 6, avail_pt: Optional[float] = None,
+                 mode: str = "figure") -> int:
     """Row count a legend of *bands* will wrap to, at ``_legend_ncol``'s
     column count -- used to scale the reserved legend space up for a
     categorical band's potentially many entries (a plain per-layer
@@ -372,7 +410,7 @@ def _legend_rows(bands, cap: int = 6) -> int:
     n = _legend_handle_count(bands)
     if n <= 0:
         return 1
-    ncol = _legend_ncol(bands, cap)
+    ncol = _legend_ncol(bands, cap, avail_pt, mode)
     return -(-n // ncol)  # ceil division, no import needed
 
 
@@ -428,6 +466,15 @@ def _legend_handles(bands, theme: Theme):
                        markerfacecolor=colors.get(cat, "#888888"),
                        markeredgecolor="none", label=label)
             )
+        caption = b.priority_caption()
+        if caption:
+            # Part 5a: a text-only entry (no marker) saying how
+            # overlapping categories were resolved, so a shared figure
+            # explains what a color means without the GUI beside it.
+            handles.append(
+                Line2D([], [], linestyle="none", marker="",
+                       label=(f"{b.label}: {caption}" if multi_band else caption))
+            )
     return handles
 
 
@@ -451,13 +498,20 @@ def _draw_panel_legend(ax, spec: PanelSpec, theme: Theme) -> None:
         return
     leg = ax.legend(handles=handles, loc="lower right",
                     bbox_to_anchor=(0.0, 1.0, 1.0, 0.0),
-                    ncol=_legend_ncol(spec.bands),
+                    ncol=_legend_ncol(spec.bands, avail_pt=_axes_width_pt(ax),
+                                      mode="panel"),
                     frameon=False, fontsize=7.5, handletextpad=0.4,
                     columnspacing=1.2, borderaxespad=0.15)
     _style_legend(leg, theme)
 
 
-def _draw_figure_legend(fig, bands, theme: Theme, y: float) -> None:
+def _axes_width_pt(ax) -> float:
+    """Width of *ax*'s frame in points -- what a legend anchored to it has."""
+    return ax.get_position().width * ax.figure.get_figwidth() * 72.0
+
+
+def _draw_figure_legend(fig, bands, theme: Theme, y: float,
+                        avail_pt: Optional[float] = None) -> None:
     """One legend for the whole figure, at figure fraction *y*.
 
     Used when every populated cell carries the same bands, which is the
@@ -468,7 +522,8 @@ def _draw_figure_legend(fig, bands, theme: Theme, y: float) -> None:
     if not handles:
         return
     leg = fig.legend(handles=handles, loc="upper center",
-                     bbox_to_anchor=(0.5, y), ncol=_legend_ncol(bands),
+                     bbox_to_anchor=(0.5, y),
+                     ncol=_legend_ncol(bands, avail_pt=avail_pt, mode="figure"),
                      frameon=False, fontsize=8.5, handletextpad=0.4,
                      columnspacing=1.6)
     _style_legend(leg, theme)
@@ -476,6 +531,11 @@ def _draw_figure_legend(fig, bands, theme: Theme, y: float) -> None:
 
 def _band_key(spec: Optional[PanelSpec]):
     """Identity of a panel's visible band set, for sameness testing.
+
+    Includes ``category_priority`` (Part 5a) for the same reason: two
+    otherwise-identical categorical bands drawn with different overlap
+    rules mean different things by the same color, so their legends
+    (which now caption it) must not be merged.
 
     Includes ``categories`` (Part 4): two categorical bands with the
     same label/cmap can still show genuinely different real categories
@@ -487,7 +547,13 @@ def _band_key(spec: Optional[PanelSpec]):
     """
     if spec is None:
         return None
-    return tuple((b.label, b.cmap, b.categories) for b in spec.bands if b.visible)
+    # The priority is appended only when a band carries one, so a plain
+    # (non-categorical) band's key keeps exactly its pre-Part-5a shape.
+    return tuple(
+        (b.label, b.cmap, b.categories)
+        + ((b.category_priority,) if b.category_priority else ())
+        for b in spec.bands if b.visible
+    )
 
 
 def _resolve_legend(mode: str, cells) -> str:
@@ -677,7 +743,8 @@ def _draw_cell(ax, panel: Optional[RenderedPanel], theme: Theme,
             # _legend_rows) needs more clearance above the axes than
             # the single-row per-layer legend this padding was
             # originally sized for.
-            pad += _LEGEND_PT * _legend_rows(spec.bands)
+            pad += _LEGEND_PT * _legend_rows(spec.bands, avail_pt=_axes_width_pt(ax),
+                                             mode="panel")
         ax.set_title(spec.title, color=theme.text, fontsize=9.5, pad=pad)
 
     if panel is None:
@@ -867,9 +934,16 @@ def export_png(
     # per-layer legend is always exactly 1 row (unchanged), so this is a
     # no-op multiplier for every pre-Part-4 case.
     legend_rows = 1
+    # Width the legend has to fit in, in points (Part 5d): a panel legend sits
+    # over one axes (cw wide); the shared figure legend spans the whole grid of
+    # axes.  Handed to _legend_rows here and to the draw helpers later, so the
+    # rows reserved and the columns drawn can never disagree.
+    legend_avail_pt = (cw / px if legend_mode == "panel"
+                       else (ncols * cw + (ncols - 1) * wsp) / px)
     if legend_mode in ("panel", "figure"):
         legend_rows = max(
-            (_legend_rows(p.spec.bands) for p in cells
+            (_legend_rows(p.spec.bands, avail_pt=legend_avail_pt, mode=legend_mode)
+             for p in cells
              if p is not None and p.spec is not None and _wants_legend(p.spec)),
             default=1,
         )
@@ -974,7 +1048,7 @@ def export_png(
                        if c is not None and c.image is not None
                        and _band_key(c.spec)), ())
         _draw_figure_legend(fig, shared, th,
-                            1.0 - (m_t * 0.4) / fig_h)
+                            1.0 - (m_t * 0.4) / fig_h, avail_pt=legend_avail_pt)
 
     footer = _plain_text(footer) if footer else footer
     if footer:

@@ -73,7 +73,7 @@ from bokeh.model import Model
 from bokeh.core.properties import String, Int, Bool
 from bokeh.models import (
     ColumnDataSource, CustomJS, CustomJSTickFormatter,
-    Div, HoverTool, Button,
+    Div, HoverTool, Button, InlineStyleSheet,
 )
 from bokeh.plotting import figure, show as bk_show
 from bokeh.layouts import column, row
@@ -81,6 +81,76 @@ from bokeh.layouts import column, row
 from cubevis.bokeh.tools._flag_tool import FlagTool
 
 from .tick_format import TICK_FORMATTER_JS
+
+#: Shared, idempotent busy-cursor overlay -- the CORE piece of what was
+#: previously a single, plotter-only `cvSetBusy()` (see visibility_
+#: plotter.py's own doPlot() script, which now delegates its overlay work
+#: to this same function via `window.__cvSetBusy`, wrapping it with its
+#: own plot_btn/reload_btn disabling). Exposed here, on `window`, so
+#: _add_rerender_trigger()'s OWN independent CustomJS (below) -- which
+#: fires on ordinary pan/zoom, not just a Plot press -- can show the
+#: exact same busy indicator during a re-render round trip (2026-09, on
+#: request: a pan/zoom re-render with no busy indicator at all was very
+#: plausibly what looked like "cursor tracking has frozen" in earlier
+#: testing -- hovering during the ~300ms-debounced round trip a pan/zoom
+#: triggers found nothing wrong, just nothing visibly indicating a
+#: request was in flight).
+#:
+#: Embedded verbatim into MULTIPLE independently-triggered CustomJS
+#: scripts (this one included) rather than defined once and referenced,
+#: because there is no reliable guarantee about which one runs first --
+#: a user can pan/zoom a freshly-built panel before ever pressing Plot,
+#: and `window.__cvSetBusy` must already exist when that happens. The
+#: `window.X = window.X || function(){...}` idiom makes every copy a
+#: no-op after the first one runs, matching this app's existing pattern
+#: for other cross-script shared helpers (see __cvInstallSelectViewGuard).
+#: Takes no button references (unlike the original) -- purely the
+#: cursor/overlay, since the overlay already covers this app's one Bokeh
+#: root (toolbar included), and callers that also want specific buttons
+#: disabled (only doPlot() does) do that themselves around the call.
+_CV_SET_BUSY_JS = """
+window.__cvSetBusy = window.__cvSetBusy || function(on) {
+    const OVERLAY_ID = '__cv_busy_overlay';
+    const GIVE_UP_MS = 30000;
+    if (window.__cvBusyTimer != null) {
+        clearTimeout(window.__cvBusyTimer);
+        window.__cvBusyTimer = null;
+    }
+    document.body.style.cursor = on ? 'progress' : '';
+    let ov = document.getElementById(OVERLAY_ID);
+    if (!on) {
+        if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+        return;
+    }
+    if (!ov) {
+        ov = document.createElement('div');
+        ov.id = OVERLAY_ID;
+        document.body.appendChild(ov);
+    }
+    let where = 'left:0;top:0;width:100vw;height:100vh;';
+    try {
+        const roots = (window.Bokeh && Bokeh.index)
+            ? Object.values(Bokeh.index).map(function(e) { return e.model_view || e; })
+            : [];
+        let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+        for (let i = 0; i < roots.length; i++) {
+            const el = roots[i] && roots[i].el;
+            if (!el || !el.getBoundingClientRect) continue;
+            const rc = el.getBoundingClientRect();
+            if (rc.width <= 0 || rc.height <= 0) continue;
+            l = Math.min(l, rc.left);  t = Math.min(t, rc.top);
+            r = Math.max(r, rc.right); b = Math.max(b, rc.bottom);
+        }
+        if (isFinite(l) && isFinite(t) && r > l && b > t) {
+            where = 'left:' + l + 'px;top:' + t + 'px;'
+                  + 'width:' + (r - l) + 'px;height:' + (b - t) + 'px;';
+        }
+    } catch (e) { /* keep the viewport fallback */ }
+    ov.style.cssText = 'position:fixed;z-index:2147483647;'
+                     + 'background:transparent;cursor:progress;' + where;
+    window.__cvBusyTimer = setTimeout(function() { window.__cvSetBusy(false); }, GIVE_UP_MS);
+};
+"""
 
 if TYPE_CHECKING:
     from .visibility_reader import VisibilityReader
@@ -420,6 +490,9 @@ class VisibilityPlot(Model):
         self._state_source: Optional[ColumnDataSource] = None
         self._fig      = None
         self._info_div: Optional[Div] = None
+        self._legend_content: Optional[Div] = None
+        self._colorbar_content: Optional[Div] = None
+        self._info_column = None
         self._layout   = None
 
         # FlagTool / Unflag instances — created in _build() only when
@@ -565,8 +638,44 @@ class VisibilityPlot(Model):
 
     @property
     def layout(self):
-        """Bokeh column layout (figure + info Div) for embedding."""
+        """Bokeh column layout for embedding: the figure, plus the
+        cursor readout / legend / colorbar (see ``_build()``'s info
+        widgets comment for why these stay here rather than living in a
+        ``VisibilityPlotter``'s sidebar)."""
         return self._layout
+
+    def colorbar_html(self) -> str:
+        """HTML colorbar(s) for the current render, or ``""``.
+
+        Built from the same ``ColorBand``s and ``ScalarMapping``s the PNG
+        export uses (``_panel_spec()`` / ``_bands_with_mappings()``), so
+        the live bar and an exported one cannot disagree.  ``""`` before
+        the first render, for a categorical-only scatter, or if anything
+        goes wrong -- a colorbar is never worth failing a render for.
+        """
+        from .info_panel import colorbar_html
+        try:
+            spec = self._panel_spec()
+            if spec is None or spec.status != "ok":
+                return ""
+            return colorbar_html(self._bands_with_mappings(spec))
+        except Exception as exc:                       # noqa: BLE001
+            log.debug("colorbar_html failed: %s", exc)
+            return ""
+
+    def _update_colorbar(self) -> str:
+        """Refresh ``_colorbar_content`` from the current render.
+
+        Python-side only, like ``_update_legend()``: in the browser the
+        text arrives via a response payload (``colorbar_html`` field)
+        that the client applies.  Returns the HTML so a caller building
+        such a payload need not read it back.
+        """
+        html = self.colorbar_html()
+        if self._colorbar_content is not None:
+            self._colorbar_content.text = html
+            self._colorbar_content.visible = bool(html)
+        return html
 
     def show(self) -> None:
         """Open the figure in a browser tab / render inline in a notebook."""
@@ -966,101 +1075,106 @@ class VisibilityPlot(Model):
             code=TICK_FORMATTER_JS,
         )
 
-        # Info / hover status div
-        self._info_div = Div(
-            text        = "<i>Hover over the plot to inspect a pixel</i>",
-            width       = self._width,
-            visible     = True,
-            sizing_mode = "stretch_width",
-            styles      = {
-                "font-size":   "12px",
-                "font-family": "monospace",
+        # Info widgets: cursor readout, categorical legend, colorbar.
+        #
+        # Redesigned three times this session (2026-09). First: a "show
+        # one, both or none, in either order" choice replacing the
+        # original fixed-height, two-button-toggle strip. Second: the
+        # first redesign's outer scrolling wrapper (a generous 40vh cap)
+        # is gone, and the cursor readout -- which that version left with
+        # NO height cap at all, a real regression from the ORIGINAL
+        # design, which always capped it -- is bounded again. Each of the
+        # three widgets now has its OWN small FIXED height with its own
+        # overflow-y:auto (same pattern the original cursor strip always
+        # used -- a small internal scrollbar within a small fixed box,
+        # never an open-ended one), so the panel's total height is
+        # bounded by construction rather than a percentage-of-viewport
+        # guess. Third (this version): the actual, confirmed root cause
+        # of "the colorbar renders narrower than the plot" (reported
+        # three times; the first two attempts -- removing an outer
+        # wrapper's overflow, then adding explicit width/box-sizing to
+        # these Divs' OWN styles -- did not fix it). Traced directly in
+        # Bokeh 3.10's own compiled JS (bokeh-widgets.js, MarkupView.
+        # render()): every Div wraps its HTML content in an internal
+        # element it creates itself -- `div({class: 'bk-clearfix', style:
+        # {display: 'inline-block'}})` -- and that inline-block sizing is
+        # hardcoded there, invisible to and unreachable by anything set
+        # on the model's own `styles` property (which only ever reaches
+        # the OUTER element Bokeh builds for the widget as a whole).
+        # inline-block shrinks to fit its content's natural width
+        # regardless of the outer wrapper's width, which is exactly this
+        # bug. `_CLEARFIX_FULL_WIDTH_CSS` below overrides it with an
+        # `!important` rule targeting that exact class, attached via the
+        # model's `stylesheets` property (a full stylesheet reaching the
+        # widget's own shadow root, unlike `styles`) -- `!important` in a
+        # stylesheet rule beats a plain (non-!important) inline style,
+        # which is what Bokeh's own hardcoded `style: {display: ...}`
+        # is, so this is a CSS-specification guarantee, not a guess. See
+        # info_panel.py's module docstring for the fuller history,
+        # including why an under-the-figure per-panel home (rather than
+        # VisibilityPlotter's sidebar) was kept from the first redesign.
+        #
+        # The CHECKLIST that picks which of the three show, and the
+        # rotate button that reorders them, live in this panel's own
+        # gear tab (VisibilityPlotter wires them directly to the three
+        # widgets built here; see wire_info_display()).
+        #
+        # Built here, in the shared base class, so raster and scatter
+        # panels both get all three -- raster never receives legend text
+        # (no colorize-by-axis) and its Div just stays empty (and its
+        # gear tab's checklist has no "Legend" entry at all -- see
+        # info_panel.ITEM_LABELS).
+        from .info_panel import ITEM_HEIGHTS
+
+        _clearfix_full_width = InlineStyleSheet(css=(
+            ".bk-clearfix { display: block !important; "
+            "width: 100% !important; box-sizing: border-box !important; }"
+        ))
+
+        def _item_style(extra):
+            return {
+                "font-size":   "11px",
                 "padding":     "4px 8px",
                 "background":  "#1e1e2e",
+                "overflow-y":  "auto",
+                "width":       "100%",
+                "box-sizing":  "border-box",
+                **extra,
+            }
+
+        self._info_div = Div(
+            text        = "<i>Hover over the plot to inspect a pixel</i>",
+            visible     = True,
+            sizing_mode = "stretch_width",
+            height      = ITEM_HEIGHTS["cursor"],
+            stylesheets = [_clearfix_full_width],
+            styles      = _item_style({
+                "font-family": "monospace",
                 "color":       "#cdd6f4",
-            },
+            }),
         )
-
-        # Permanent per-panel legend (Part 5, 2026-09), and its shared,
-        # fixed-height "info strip" with cursor-tracking (Part 5
-        # addendum, 2026-09): distinct from colorize_controls()'s own
-        # transient legend inside the gear tab. Built here, in the
-        # shared base class, so both raster and scatter panels get the
-        # widgets -- raster has no colorize-by-axis at all, so its own
-        # copy simply never receives content and its toggle stays
-        # hidden; the cost of the extra, empty widgets is negligible
-        # and this avoids a raster/scatter split in _build() itself.
-        #
-        # First version of this (still collapsible, but stacked BELOW
-        # cursor-tracking, adding height when expanded) was reported
-        # back as pushing the status line off a laptop screen -- this
-        # app has otherwise avoided needing a page-level scrollbar, and
-        # a plot + an always-visible cursor strip + an also-always-
-        # visible, independently-growing legend can together exceed
-        # available height even with EACH piece innocuous on its own.
-        # Tabs were considered and rejected for the reason explained at
-        # the call site building _legend_toggle/_cursor_toggle below;
-        # what's built here instead keeps cursor-tracking and the
-        # legend mutually exclusive within ONE fixed-height slot, sized
-        # once, never growing regardless of which is showing or how
-        # much legend content there is (that content scrolls inside
-        # its own fixed height instead).
-        #
-        # Only VisibilityScatter ever calls _update_legend() (see that
-        # method) -- with real content, after a render that has at
-        # least one categorical layer. Reopening colorize_controls()'s
-        # gear tab does not touch this at all; the two are deliberately
-        # independent (see colorize_controls()'s own docstring for why
-        # the LIVE, tab-scoped legend it had in Part 4 was the actual
-        # bug this whole redesign fixes).
-        _STRIP_HEIGHT = 90
-        self._cursor_toggle = Button(
-            label="Cursor", button_type="primary",
-            width=70, height=20, styles={"font-size": "10px"},
-        )
-        self._legend_toggle = Button(
-            label="Legend", button_type="default", visible=False,
-            width=70, height=20, styles={"font-size": "10px"},
-        )
-        self._info_div.height = _STRIP_HEIGHT
-        self._info_div.styles = {**self._info_div.styles,
-                                   "overflow-y": "auto", "height": f"{_STRIP_HEIGHT}px"}
         self._legend_content = Div(
-            text="", visible=False, width=self._width, height=_STRIP_HEIGHT,
+            text="", visible=False, sizing_mode="stretch_width",
+            height=ITEM_HEIGHTS["legend"],
+            stylesheets=[_clearfix_full_width],
+            styles=_item_style({}),
+        )
+        # Filled on demand (colorbar_html()), never per render: for a
+        # raster it costs a histogram of the whole aggregation, which a
+        # pan/zoom re-render should not pay.
+        self._colorbar_content = Div(
+            text="", visible=False, sizing_mode="stretch_width",
+            height=ITEM_HEIGHTS["colorbar"],
+            stylesheets=[_clearfix_full_width],
+            styles=_item_style({"color": "#cdd6f4"}),
+        )
+        self._info_column = column(
+            self._info_div, self._legend_content, self._colorbar_content,
             sizing_mode="stretch_width",
-            styles={
-                "font-size":  "11px",
-                "padding":    "6px 8px",
-                "background": "#1e1e2e",
-                "overflow-y": "auto",
-                "height":     f"{_STRIP_HEIGHT}px",
-            },
+            styles={"gap": "2px"},
         )
-        _strip_toggle_row = row(
-            self._cursor_toggle, self._legend_toggle,
-            styles={"gap": "4px", "background": "#1e1e2e",
-                     "padding": "3px 8px 0px 8px", "border-top": "1px solid #45475a"},
-        )
-        # Only the legend's own toggle needs custom JS -- switching TO
-        # cursor-tracking is the same code with the two widgets
-        # swapped, so one CustomJS handles both buttons via cb_obj,
-        # rather than writing the swap out twice.
-        _strip_switch_js = CustomJS(
-            args={"cursor_btn": self._cursor_toggle, "legend_btn": self._legend_toggle,
-                  "info_div": self._info_div, "legend_div": self._legend_content},
-            code="""
-const show_legend = (cb_obj === legend_btn);
-info_div.visible   = !show_legend;
-legend_div.visible = show_legend;
-cursor_btn.button_type = show_legend ? 'default' : 'primary';
-legend_btn.button_type = show_legend ? 'primary' : 'default';
-""",
-        )
-        self._cursor_toggle.js_on_click(_strip_switch_js)
-        self._legend_toggle.js_on_click(_strip_switch_js)
-
         self._layout = column(
-            self._fig, _strip_toggle_row, self._info_div, self._legend_content,
+            self._fig, self._info_column,
             sizing_mode="stretch_width",
         )
 
@@ -1099,8 +1213,19 @@ legend_btn.button_type = show_legend ? 'primary' : 'default';
                   "fig_id": vr_id},
             code=f"""
 const now = Date.now();
-if (window._cvLastProbe && (now - window._cvLastProbe) < 120) return;
-window._cvLastProbe = now;
+// Namespaced per fig_id (2026-09, found while investigating a reported
+// "cursor tracking stops updating after colorizing categorically" bug):
+// this was previously a single window-level timestamp SHARED by every
+// panel's hover tool, so rapid movement across two panels -- or even
+// within one, this throttle's whole point -- could make one panel's
+// hover suppress the OTHER panel's next probe for up to 120ms. The
+// server-side probe handler itself was directly tested and confirmed
+// correct in both continuous and categorical modes, so this did not
+// turn out to explain that report, but it is a real bug in its own
+// right and worth fixing regardless.
+window._cvLastProbe = window._cvLastProbe || {{}};
+if (window._cvLastProbe[fig_id] && (now - window._cvLastProbe[fig_id]) < 120) return;
+window._cvLastProbe[fig_id] = now;
 const x = cb_data.geometry.x;
 const y = cb_data.geometry.y;
 if (x == null || y == null) return;
@@ -1135,14 +1260,16 @@ comm.send('{msg_probe}', {{x: x, y: y}}, function(resp) {{
                 "x_range":      self._fig.x_range,
                 "y_range":      self._fig.y_range,
             },
-            code=f"""
+            code=_CV_SET_BUSY_JS + f"""
 if (window._cvRerenderTimer) clearTimeout(window._cvRerenderTimer);
 window._cvRerenderTimer = setTimeout(function() {{
     const x0 = x_range.start, x1 = x_range.end;
     const y0 = y_range.start, y1 = y_range.end;
+    window.__cvSetBusy(true);
     comm.send('{msg_rerender}',
         {{x0: x0, x1: x1, y0: y0, y1: y1}},
         function(resp) {{
+            window.__cvSetBusy(false);
             if (!resp || resp.image == null) return;
             image_source.data['image'] = [resp.image];
             image_source.data['x']     = [resp.x0];

@@ -119,17 +119,31 @@ class VisplotRemoteBackend:
     def query_columns(self, xaxis, layers, selection, *,
                        x_range=None, y_range=None, color_mode="global",
                        width: int = 800, height: int = 600,
-                       probe_grid_max_cells: int = 3072):
+                       probe_grid_max_cells: int = 3072,
+                       ref_scale: Optional[float] = None):
         # See RemoteReductionContext.query_columns's comment: this now
         # relays a bounded ScatterRenderResult, not raw DataFrames --
         # MSv2Backend.query_columns does the binning+shading (2026-09).
         # probe_grid_max_cells added (2026-09, hover-probe redesign
         # piece 2) -- forwarded like every other keyword here.
+        # ref_scale added (2026-09, two-level rendering) -- forwarded the
+        # same way. MISSED in that pass's first cut: this worker-side
+        # wrapper is a separate, explicit signature from
+        # LocalVisibilityReader.query_columns/MSv2Backend.query_columns
+        # (deliberately -- see this class's docstring, "does not know it
+        # is being driven remotely"), so adding a parameter to those
+        # doesn't automatically reach here; it has to be added here too,
+        # by hand, every time. Confirmed via a real remote-kernel test
+        # failure (TypeError: got an unexpected keyword argument
+        # 'ref_scale') rather than caught before shipping -- this file
+        # runs only inside a worker subprocess, which nothing in the
+        # sandbox that produced the rest of that change could reach.
         return self._reader.query_columns(
             xaxis, layers, selection,
             x_range=x_range, y_range=y_range, color_mode=color_mode,
             width=width, height=height,
             probe_grid_max_cells=probe_grid_max_cells,
+            ref_scale=ref_scale,
         )
 
     def probe_scatter_region(self, x_axis, yaxes, selection, x_range, y_range,

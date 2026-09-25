@@ -119,6 +119,7 @@ class VisibilityReader(Protocol):
         width: int = 800,
         height: int = 600,
         probe_grid_max_cells: int = 3072,
+        ref_scale: Optional[float] = None,
     ):
         """Query, bin, and shade scatter layers; return a bounded result.
 
@@ -133,6 +134,10 @@ class VisibilityReader(Protocol):
 
         ``probe_grid_max_cells`` (2026-09, hover-probe redesign piece 2)
         -- see ``MSv2Backend.query_columns``'s docstring.
+
+        ``ref_scale`` (2026-09, two-level rendering) -- see
+        ``MSv2Backend.query_columns``'s docstring and
+        ``ScatterLayerReference`` (``data/reader.py``).
         """
         ...
 

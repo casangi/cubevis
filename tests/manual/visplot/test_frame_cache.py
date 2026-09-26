@@ -529,6 +529,21 @@ def plotter():
     import warnings
     warnings.filterwarnings("ignore")
     from cubevis.toolbox.visplot import VisibilityPlotter
+    # Set BEFORE constructing VisibilityPlotter, not in the (function-
+    # scoped, so runs LATER, once per test) `backend` fixture below --
+    # __init__ renders panel B once at construction time, i.e. the very
+    # first time ANY test in this class touches this module-scoped
+    # fixture (usually the first test method, which doesn't even
+    # request `backend`). Setting the budget in `backend` instead was
+    # the bug in the previous version of this fixture: it runs strictly
+    # after this construction has already happened, so it could never
+    # prevent the eviction construction's own render triggers under the
+    # ambient default -- only avoid *future* ones. Each polarization's
+    # frame here is ~1.3 GB (confirmed via frame_cache_stats()); two of
+    # them need ~2.6 GB, comfortably under this budget but over the
+    # ~2.4 GB ambient default on the machine this was diagnosed on.
+    from cubevis.toolbox.visplot.data import reader as rd
+    rd._GLOBAL_FRAME_CACHE = rd._FrameCache(4096 * 2 ** 20)
     return VisibilityPlotter(ms=_ms_path(), backend="auto", field="",
                              correlation="XX,YY", layout="side")
 
@@ -554,6 +569,85 @@ def _msg(plotter, colorize=None, reload=False):
 class TestReloadThroughThePlotter:
     @pytest.fixture()
     def backend(self, plotter, monkeypatch):
+        """Same spy-on-``_query_columns_raw`` shape as the ``be`` fixture
+        above, applied to the real ``plotter``'s own backend instead of a
+        fresh one.
+
+        Five things had to be worked through here, each resolved by
+        instrumenting real behavior rather than guessed -- including two
+        dead ends kept in this history rather than silently erased,
+        since the reasoning that ruled them out is worth keeping:
+
+        1. Deliberately does NOT reset ``_GLOBAL_FRAME_CACHE`` to
+           ``None`` the way ``be`` does, despite looking like the same
+           situation. ``plotter`` is module-scoped: ``VisibilityPlotter.
+           __init__`` already renders panel B once at construction time.
+           "warm" sends the same default axes/layers already showing, so
+           ``_handle_plot``'s own ``axes_changed`` check correctly
+           evaluates ``False`` and skips re-rendering -- "warm" was never
+           meant to populate the cache itself, only to confirm what
+           construction already put there. Resetting the cache wipes
+           that out moments before the no-op "warm" call. ``be``'s own
+           tests have no such precondition (a bare backend, never
+           rendered through a real panel) -- correct there, wasn't here.
+
+        2. Each polarization's frame for ``plotter``'s selection (one
+           full-resolution SPW, no further narrowing -- see point 4
+           below for why "narrow it" turned out not to be an option
+           here) is ~1.3 GB, confirmed directly via
+           ``frame_cache_stats()``. Two of them need ~2.6 GB, which
+           exceeds even this machine's generous ~2.4 GB *ambient*
+           default budget -- so one of the two always got evicted to
+           make room for the other, confirmed exactly: 2 misses + 1
+           eviction from construction's own render alone, before this
+           fixture ever runs.
+
+        3. DEAD END, kept for the record: I initially suspected raising
+           the budget to fit both real frames (4096 MB) caused the test
+           suite to hang shortly after -- it didn't. A watchdog thread
+           dumping every live thread's stack every 10s (via
+           ``sys._current_frames()``, since a synchronous lock wait
+           can't be introspected or cancelled at the asyncio level)
+           caught the worker thread genuinely progressing both times a
+           hang was suspected -- once inside ``_identity_categoricals``'
+           numpy indexing, once inside dask's own task-graph
+           tokenization, hashing a real data buffer -- never stuck on a
+           lock. And the same ~1.3 GB-per-polarization fetch has since
+           completed without hanging, twice, confirming the earlier hang
+           was a one-off (system load, cold disk cache -- not
+           determined, and not worth chasing further), not something
+           this fixture's budget caused.
+
+        4. ALSO A DEAD END: chasing point 3's false lead, I added
+           ``scan="12,14"`` to ``plotter`` (above, in this file),
+           reasoning it would shrink the fetched data the way it does
+           for ``_sel()``'s tests elsewhere in this file. It did
+           nothing: confirmed by reading ``VisibilityPlotter.
+           _build_selection()`` directly -- the method that actually
+           builds every query's ``SelectionSpec`` -- which only ever
+           sets ``field_names``/``spw``/``correlation``/``data_column``/
+           ``time_range``/``freq_range``. There is no ``scan`` field in
+           it at all; the constructor's own ``scan=`` parameter is wired
+           to exactly one place in the whole file, pre-populating a GUI
+           text box's displayed value. It was never going to affect what
+           gets queried, which is also confirmed directly: the cached
+           frame size was identical, to three decimal places, with and
+           without it. Removed from ``plotter`` as dead code.
+
+        5. The actual fix, once 3 and 4 were ruled out: set the budget
+           generously above the real, confirmed ~2.6 GB combined need
+           (point 2) -- but in the ``plotter`` fixture itself, *before*
+           constructing ``VisibilityPlotter``, not here. This fixture
+           runs once per test, strictly after ``plotter`` (module-
+           scoped) has already been constructed by whichever test
+           touches it first -- usually
+           ``test_the_selection_carries_the_generation``, which doesn't
+           even request this fixture. Setting the budget here would
+           always be too late to prevent the eviction construction's own
+           render triggers under the ambient default; only setting it
+           before construction can. Nothing to do here now -- see
+           ``plotter``'s own comment for where the real fix lives.
+        """
         b = getattr(plotter._reader, "_backend", None)
         if b is None or not hasattr(b, "_query_columns_raw"):
             pytest.skip("needs an in-process backend")
@@ -562,7 +656,8 @@ class TestReloadThroughThePlotter:
         monkeypatch.setattr(b, "_query_columns_raw",
                             lambda x, y, s: (reads.append(list(y)), real(x, y, s))[1])
         b.reads = reads
-        return b
+        yield b
+        b._clear_frame_cache()
 
     def test_the_selection_carries_the_generation(self, plotter):
         assert plotter._build_selection().cache_generation == plotter._cache_generation

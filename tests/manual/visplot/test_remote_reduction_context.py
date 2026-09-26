@@ -9,9 +9,11 @@ real MS/PS data, not a toy fixture class.
 Promoted 2026-09 (Chunk 2d) from ``try_remote_reduction_context.py``'s
 demo -- first pytest coverage of this path. Requires the MS or PS
 environment variable, exactly like test_msv2_backend.py/
-test_msv4_backend.py -- skips if neither is set. Runs against a local
-kernel by default; override with ``CUBEVIS_TEST_KERNEL`` for a real
-sshpyk kernel.
+test_msv4_backend.py -- skips if neither is set. Setting both MS and PS
+is no longer an error: the whole file runs twice, once per backend, via
+the parametrized ``backend_paths_and_kind`` fixture below. Runs against
+a local kernel by default; override with ``CUBEVIS_TEST_KERNEL`` for a
+real sshpyk kernel.
 
 **Against a real (non-local) ``CUBEVIS_TEST_KERNEL``, the data must be
 reachable at potentially two different paths.** MS/PS is opened
@@ -85,6 +87,11 @@ problem -- confirmed by running the test, not assumed.
 Example Execution:
 
 ulimit -n 8096 && MS=sis14_twhya_calibrated_flagged.ms CUBEVIS_TEST_KERNEL=cvpost106_python312 CUBEVIS_TEST_KERNEL_MS=/home/zuul06-2/dschieb/casa/visplot/sis14_twhya_calibrated_flagged.ms pytest test_remote_reduction_context.py
+
+ulimit -n 8096 && PS=sis14_twhya_calibrated_flagged.ps.zarr CUBEVIS_TEST_KERNEL=cvpost106_python312 CUBEVIS_TEST_KERNEL_PS=/home/zuul06-2/dschieb/casa/visplot/sis14_twhya_calibrated_flagged.ps.zarr pytest test_remote_reduction_context.py
+
+ulimit -n 8096 && MS=sis14_twhya_calibrated_flagged.ms PS=sis14_twhya_calibrated_flagged.ps.zarr CUBEVIS_TEST_KERNEL=cvpost106_python312 CUBEVIS_TEST_KERNEL_MS=/home/zuul06-2/dschieb/casa/visplot/sis14_twhya_calibrated_flagged.ms CUBEVIS_TEST_KERNEL_PS=/home/zuul06-2/dschieb/casa/visplot/sis14_twhya_calibrated_flagged.ps.zarr pytest test_remote_reduction_context.py   # both backends, one pass each
+
 """
 from __future__ import annotations
 
@@ -105,33 +112,63 @@ from cubevis.toolbox.visplot.data.reader import ScatterLayerSpec
 KERNEL_NAME = os.environ.get("CUBEVIS_TEST_KERNEL", "python3")
 
 
-def _backend_paths_and_kind():
-    """Resolve (local_path, remote_path, kind).
+def _requested_backend_kinds() -> list[str]:
+    """Which backend kind(s) MS/PS ask us to exercise.
+
+    * Neither set -> [] (the module skips entirely, same as before)
+    * One set     -> that one kind -- single pass, unchanged
+    * Both set    -> both kinds -- one full pass each, instead of the
+      old "both set -- ambiguous" pytest.fail
+    """
+    kinds = []
+    if os.environ.get("MS"):
+        kinds.append("msv2")
+    if os.environ.get("PS"):
+        kinds.append("msv4")
+    return kinds
+
+
+def _resolve_backend_paths(kind: str) -> tuple[str, str]:
+    """Resolve (local_path, remote_path) for one backend kind.
 
     local_path is what ``local_reader`` opens directly, in this
     process. remote_path is what gets handed to
     ``RemoteReductionContext``, which opens it in a worker subprocess
     on the kernel's own host -- see module docstring for why these can
-    differ, and for CUBEVIS_TEST_KERNEL_MS/CUBEVIS_TEST_KERNEL_PS.
+    differ, and for CUBEVIS_TEST_KERNEL_MS/CUBEVIS_TEST_KERNEL_PS. Each
+    pairs with its same-kind local variable (CUBEVIS_TEST_KERNEL_MS
+    with MS, CUBEVIS_TEST_KERNEL_PS with PS) and falls back to that
+    variable's own value when its override isn't set.
     """
-    ms = os.environ.get("MS")
-    ps = os.environ.get("PS")
-    if ms and ps:
-        pytest.fail("Both MS and PS are set -- ambiguous, unset one")
-    if ms:
-        kind, local_path, remote_env = "msv2", ms, "CUBEVIS_TEST_KERNEL_MS"
-    elif ps:
-        kind, local_path, remote_env = "msv4", ps, "CUBEVIS_TEST_KERNEL_PS"
+    if kind == "msv2":
+        local_env, remote_env = "MS", "CUBEVIS_TEST_KERNEL_MS"
     else:
-        pytest.skip("Neither MS nor PS set")
-
+        local_env, remote_env = "PS", "CUBEVIS_TEST_KERNEL_PS"
+    local_path = os.environ.get(local_env)
     remote_path = os.environ.get(remote_env, local_path)
+    return local_path, remote_path
+
+
+@pytest.fixture(
+    scope="module",
+    params=_requested_backend_kinds() or [None],
+    ids=lambda k: k or "no-backend",
+)
+def backend_paths_and_kind(request):
+    """(local_path, remote_path, kind) for one backend, for the module.
+
+    Every test in this file depends on this fixture, directly or via
+    ``remote_ctx``/``local_reader``. With only one of MS/PS set (or
+    neither), this is a single pass, unchanged from before. With both
+    set, it parametrizes the whole module over ``['msv2', 'msv4']``, so
+    pytest reruns everything once per backend (test ids get a `[msv2]` /
+    `[msv4]` suffix) instead of hitting the old ambiguous pytest.fail.
+    """
+    kind = request.param
+    if kind is None:
+        pytest.skip("Neither MS nor PS set")
+    local_path, remote_path = _resolve_backend_paths(kind)
     return local_path, remote_path, kind
-
-
-@pytest.fixture(scope="module")
-def backend_paths_and_kind():
-    return _backend_paths_and_kind()
 
 
 @pytest.fixture
@@ -261,6 +298,118 @@ def test_query_columns_matches_local(remote_ctx, local_reader):
                 assert np.allclose(r_val, l_val, equal_nan=True)
         assert tuple(r_lyr.id_grid_x_range) == tuple(l_lyr.id_grid_x_range)
         assert tuple(r_lyr.id_grid_y_range) == tuple(l_lyr.id_grid_y_range)
+
+
+def test_query_columns_ref_scale_continuous_matches_local(remote_ctx, local_reader):
+    """Two-level rendering's remote wire path (2026-09): ``ref_scale``
+    makes ``query_columns`` additionally return a ``ScatterLayerReference``
+    per layer (see ``data/reader.py``) -- the cached aggregation
+    ``VisibilityScatter`` resamples locally for a later pan/zoom, never
+    exercised over the actual remote wire before this test.
+
+    Specifically worth confirming here, not assumed from
+    ``test_query_columns_matches_local`` passing: ``ScatterLayerReference``
+    carries several ``xr.DataArray`` fields (``ref_agg``, ``ref_count``,
+    six ``ref_id_*`` fields) PLUS a NESTED dataclass field (``eq_curve``,
+    an ``EqualizeCurve``) -- structurally different from anything that
+    crossed this wire before. ``ScatterLayerSpec`` (the existing,
+    confirmed-working case) is flat; whether the generic dataclass wire
+    support this project relies on recursively handles a dataclass-VALUED
+    field, not just top-level JSON-primitive ones, was untested until now.
+    """
+    meta = local_reader.metadata()
+    t0, t1 = meta["time_range"]
+    selection = SelectionSpec(
+        time_range=(t0, t0 + (t1 - t0) * 0.15), channel_range=(0, 48),
+    )
+    layers = [
+        ScatterLayerSpec(y_axis=Axis.AMPLITUDE, polarization="XX",
+                         cmap=("black", "white"), scaling="eq_hist"),
+    ]
+    remote_result = remote_ctx.query_columns(
+        xaxis=Axis.TIME, layers=layers, selection=selection,
+        width=200, height=150, ref_scale=2.0,
+    )
+    local_result = local_reader.query_columns(
+        xaxis=Axis.TIME, layers=layers, selection=selection,
+        width=200, height=150, ref_scale=2.0,
+    )
+
+    assert remote_result.ref_canvas_width == local_result.ref_canvas_width
+    assert remote_result.ref_canvas_height == local_result.ref_canvas_height
+
+    for r_lyr, l_lyr in zip(remote_result.layers, local_result.layers):
+        r_ref, l_ref = r_lyr.reference, l_lyr.reference
+        assert r_ref is not None and l_ref is not None
+        assert r_ref.skip_reason == l_ref.skip_reason
+        assert tuple(r_ref.ref_x_range) == tuple(l_ref.ref_x_range)
+        assert tuple(r_ref.ref_y_range) == tuple(l_ref.ref_y_range)
+
+        assert np.allclose(np.asarray(r_ref.ref_agg.values),
+                           np.asarray(l_ref.ref_agg.values), equal_nan=True)
+        assert np.allclose(np.asarray(r_ref.ref_count.values),
+                           np.asarray(l_ref.ref_count.values), equal_nan=True)
+
+        # The nested-dataclass case this test exists to check.
+        assert (r_ref.eq_curve is None) == (l_ref.eq_curve is None)
+        if l_ref.eq_curve is not None:
+            assert r_ref.eq_curve.vmin == pytest.approx(l_ref.eq_curve.vmin)
+            assert r_ref.eq_curve.vmax == pytest.approx(l_ref.eq_curve.vmax)
+            assert np.allclose(
+                np.asarray(r_ref.eq_curve.cdf_lut), np.asarray(l_ref.eq_curve.cdf_lut),
+            )
+
+        for field in ("ref_id_t_lo", "ref_id_t_hi", "ref_id_bl_lo", "ref_id_bl_hi",
+                     "ref_id_freq_lo", "ref_id_freq_hi", "ref_id_value"):
+            r_val = getattr(r_ref, field)
+            l_val = getattr(l_ref, field)
+            if l_val is None:
+                assert r_val is None
+            else:
+                assert np.allclose(
+                    np.asarray(r_val.values), np.asarray(l_val.values), equal_nan=True,
+                )
+
+
+def test_query_columns_ref_scale_categorical_matches_local(remote_ctx, local_reader):
+    """Same as ``test_query_columns_ref_scale_continuous_matches_local``,
+    for a categorical (colorize-by-axis) layer -- a genuinely different,
+    riskier shape: ``ScatterLayerReference.ref_cube`` is a 3D
+    ``xr.DataArray`` (``float32``, see ``build_layer_reference``'s
+    docstring for why float32 rather than the native ``ds_agg.count()``
+    ``uint32``), versus the continuous case's 2D ``ref_agg``/``ref_count``.
+    """
+    meta = local_reader.metadata()
+    t0, t1 = meta["time_range"]
+    selection = SelectionSpec(
+        time_range=(t0, t0 + (t1 - t0) * 0.15), channel_range=(0, 48),
+    )
+    layers = [
+        ScatterLayerSpec(y_axis=Axis.AMPLITUDE, polarization="XX",
+                         cmap=("#000000", "#ff0000", "#00ff00", "#0000ff"),
+                         coloring="categorical", colorize_axis=Axis.SCAN,
+                         category_priority="rarest"),
+    ]
+    remote_result = remote_ctx.query_columns(
+        xaxis=Axis.TIME, layers=layers, selection=selection,
+        width=200, height=150, ref_scale=2.0,
+    )
+    local_result = local_reader.query_columns(
+        xaxis=Axis.TIME, layers=layers, selection=selection,
+        width=200, height=150, ref_scale=2.0,
+    )
+
+    for r_lyr, l_lyr in zip(remote_result.layers, local_result.layers):
+        r_ref, l_ref = r_lyr.reference, l_lyr.reference
+        assert r_ref is not None and l_ref is not None
+        assert r_ref.skip_reason == l_ref.skip_reason
+        if l_ref.skip_reason is not None:
+            continue
+        assert r_ref.ref_cube.dtype == l_ref.ref_cube.dtype == np.float32
+        assert np.allclose(np.asarray(r_ref.ref_cube.values),
+                           np.asarray(l_ref.ref_cube.values), equal_nan=True)
+        assert np.array_equal(np.asarray(r_ref.population), np.asarray(l_ref.population))
+        assert r_ref.other_index == l_ref.other_index
 
 
 def test_probe_scatter_region_matches_local(remote_ctx, local_reader):

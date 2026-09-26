@@ -10,14 +10,21 @@ Tests against:
     cubevis/cubevis/toolbox/visplot/data/msv2_backend.py
     cubevis/cubevis/toolbox/visplot/data/msv4_backend.py
 
-Backend selection (mutually exclusive)
---------------------------------------
-Set exactly one of MS or PS:
+Backend selection
+-----------------
+Set MS, PS, or both:
 
-    ulimit -n 4096 && MS=<path>.ms   pytest test_visibility_scatter.py -v   # MSv2
-    ulimit -n 4096 && PS=<path>.ps.zarr pytest test_visibility_scatter.py -v  # MSv4
+    ulimit -n 4096 && MS=<path>.ms      pytest test_visibility_scatter.py -v  # MSv2 only
+    ulimit -n 4096 && PS=<path>.ps.zarr pytest test_visibility_scatter.py -v  # MSv4 only
+    ulimit -n 4096 && MS=<path>.ms PS=<path>.ps.zarr \
+        pytest test_visibility_scatter.py -v                                 # both
 
-If both are set the suite fails immediately (ambiguous).
+If both are set, the whole suite runs twice -- once against each backend
+-- instead of failing. Under pytest this is driven by the session-scoped,
+parametrized `_backend_matrix` fixture below, which presents only one of
+MS/PS to the rest of the module at a time (test ids get a `[msv2]` /
+`[msv4]` suffix in `-v` output). The standalone `__main__` runner at the
+bottom of this file does the same thing by hand, via `_scoped_backend_env`.
 If neither is set all tests are skipped.
 
 Test classes
@@ -40,10 +47,12 @@ Test classes
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import time as time_mod
 import warnings
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -138,6 +147,13 @@ def _detect_backend_path() -> tuple[str, str]:
     * Both set     -> pytest.fail (ambiguous; hard error)
     * One set, dir missing -> pytest.skip
     * One set, dir present -> return (path, kind)
+
+    Under pytest, the `_backend_matrix` fixture below already narrows the
+    environment to a single backend before any test's setup_method runs,
+    so this function only ever sees one of MS/PS set at a time when both
+    were originally requested -- the "both set" branch above is reachable
+    only when this file is run standalone (see `__main__`), and even
+    there `_scoped_backend_env` keeps it from actually triggering.
     """
     ms_path = os.environ.get("MS", "").strip()
     ps_path = os.environ.get("PS", "").strip()
@@ -168,17 +184,102 @@ def _open_backend():
     return b
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _show_backend(request):  # noqa: ARG001
-    """Write the active backend to /dev/tty, bypassing pytest capture."""
-    ms_path = os.environ.get("MS", "").strip()
-    ps_path = os.environ.get("PS", "").strip()
-    if ms_path and not ps_path:
-        msg = f"[test_visibility_scatter] backend: MSv2  path={ms_path!r}"
-    elif ps_path and not ms_path:
-        msg = f"[test_visibility_scatter] backend: MSv4  path={ps_path!r}"
-    else:
+# ---------------------------------------------------------------------------
+# Dual-backend support -- when both MS and PS are set, run every test in
+# this module once per backend instead of pytest.fail'ing (see the
+# module docstring and _backend_matrix below).
+# ---------------------------------------------------------------------------
+
+# Snapshot what the process was actually invoked with, once, before
+# anything below starts flipping os.environ["MS"]/["PS"] on and off.
+_ORIG_MS = os.environ.get("MS", "").strip()
+_ORIG_PS = os.environ.get("PS", "").strip()
+
+
+def _requested_backend_kinds() -> list[str]:
+    """Which backend kind(s) the environment asks us to exercise.
+
+    * Neither MS nor PS set -> [] (nothing to run; the per-test skip in
+      _detect_backend_path handles this exactly as before)
+    * Exactly one set       -> that one kind -- single pass, unchanged
+    * Both set              -> both kinds -- one full pass each
+    """
+    kinds = []
+    if _ORIG_MS:
+        kinds.append("msv2")
+    if _ORIG_PS:
+        kinds.append("msv4")
+    return kinds
+
+
+@contextmanager
+def _scoped_backend_env(kind):
+    """Present only one backend's env var to the rest of the module.
+
+    ``kind`` is ``'msv2'``, ``'msv4'``, or ``None``. ``None`` leaves
+    MS/PS untouched, so the single-backend and neither-set cases behave
+    exactly as before. Restores the environment exactly as captured at
+    import time on the way out (i.e. with both MS and PS present again
+    if that's how the process was invoked), so a second pass -- or
+    anything else that inspects the environment afterwards -- sees a
+    clean starting point.
+    """
+    if kind is None:
+        yield None
         return
+    if kind == "msv2":
+        os.environ["MS"] = _ORIG_MS
+        os.environ.pop("PS", None)
+    else:
+        os.environ["PS"] = _ORIG_PS
+        os.environ.pop("MS", None)
+    try:
+        yield kind
+    finally:
+        if _ORIG_MS:
+            os.environ["MS"] = _ORIG_MS
+        else:
+            os.environ.pop("MS", None)
+        if _ORIG_PS:
+            os.environ["PS"] = _ORIG_PS
+        else:
+            os.environ.pop("PS", None)
+
+
+@pytest.fixture(
+    scope="session",
+    autouse=True,
+    params=_requested_backend_kinds() or [None],
+    ids=lambda k: k or "no-backend",
+)
+def _backend_matrix(request):
+    """Constrain MS/PS to a single backend for one full pass.
+
+    With only one of MS/PS originally set (or neither), this fixture is
+    a single no-op pass -- behaviour is unchanged from before. With both
+    set, it parametrizes the whole module over ``['msv2', 'msv4']``:
+    pytest reruns every test once per value, and for the duration of
+    each run only that one backend's env var is visible, so
+    `_detect_backend_path()` never actually sees both set and the old
+    ambiguous-hard-fail path is no longer reachable under pytest.
+    """
+    with _scoped_backend_env(request.param) as kind:
+        yield kind
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _show_backend(_backend_matrix):  # noqa: ARG001
+    """Write the active backend to /dev/tty, bypassing pytest capture.
+
+    Depending on `_backend_matrix` means this runs once per backend when
+    both MS and PS are set, printing the correct label each time.
+    """
+    kind = _backend_matrix
+    if kind is None:
+        return
+    path  = _ORIG_MS if kind == "msv2" else _ORIG_PS
+    label = "MSv2"   if kind == "msv2" else "MSv4"
+    msg = f"[test_visibility_scatter] backend: {label}  path={path!r}"
     try:
         with open("/dev/tty", "w") as tty:
             tty.write(msg + "\n")
@@ -197,6 +298,27 @@ def _suppress_warnings():
 def _require_datashader():
     if not HAS_DATASHADER:
         pytest.skip("datashader not installed — pip install datashader")
+
+
+def _run(coro):
+    """Run a coroutine-returning handler synchronously in a test.
+
+    ``_handle_set_alpha``/``_handle_update_scaling``/``_handle_probe_region``
+    are ``async def`` (``await asyncio.to_thread(...)`` around the real
+    work -- see e.g. ``_handle_set_alpha``'s own docstring, which
+    cross-references ``_handle_set_color_mode``'s: the point is to run a
+    real re-render off the event loop, not block it, matching how every
+    j2p handler that ends in a re-render now works). This file's tests
+    predate that and called them directly, expecting a dict back
+    immediately -- silently getting an un-awaited coroutine object
+    instead (`resp["status"]` raising ``TypeError: 'coroutine' object is
+    not subscriptable`` is what surfaced this, not a deliberate design
+    change these tests were written against). Matches
+    ``test_frame_cache.py``'s own ``_run = asyncio.run`` convention
+    exactly, reused here rather than inventing a second helper for the
+    same thing.
+    """
+    return asyncio.run(coro)
 
 
 def _make_single_layer(backend, selection, **kwargs) -> VisibilityScatter:
@@ -620,13 +742,13 @@ class TestAlpha:
 
     def test_handle_set_alpha(self):
         vs   = _make_single_layer(self.backend, self.sel)
-        resp = vs._handle_set_alpha({"layer_index": 0, "alpha": 0.7})
+        resp = _run(vs._handle_set_alpha({"layer_index": 0, "alpha": 0.7}))
         assert resp["status"] == "ok"
         assert abs(vs._layers[0].alpha - 0.7) < 1e-9
 
     def test_handle_set_alpha_bad_index(self):
         vs   = _make_single_layer(self.backend, self.sel)
-        resp = vs._handle_set_alpha({"layer_index": 99, "alpha": 0.5})
+        resp = _run(vs._handle_set_alpha({"layer_index": 99, "alpha": 0.5}))
         assert resp["status"] == "error"
 
     def test_partial_alpha_image_differs_from_full(self):
@@ -824,16 +946,16 @@ class TestColormapScaling:
 
     def test_handle_update_scaling_j2p(self):
         vs = _make_single_layer(self.backend, self.sel)
-        resp = vs._handle_update_scaling(
+        resp = _run(vs._handle_update_scaling(
             {"layer_index": 0, "scaling": "log", "alpha": 5.0}
-        )
+        ))
         assert resp["status"] == "ok"
         assert vs._layers[0].scaling == "log"
         assert vs._layers[0].scaling_alpha == 5.0
 
     def test_handle_update_scaling_bad_index(self):
         vs = _make_single_layer(self.backend, self.sel)
-        resp = vs._handle_update_scaling({"layer_index": 99, "scaling": "log"})
+        resp = _run(vs._handle_update_scaling({"layer_index": 99, "scaling": "log"}))
         assert resp["status"] == "error"
 
 
@@ -1646,27 +1768,28 @@ class TestTiming:
 # Standalone runner
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    _suppress_warnings()
+_TEST_CLASSES = [
+    TestScatterLayer,
+    TestLifecycle,
+    TestSingleLayer,
+    TestMultiLayer,
+    TestAlpha,
+    TestViewportRerender,
+    TestProbe,
+    TestUpdateAxes,
+    TestDeferredConstruction,
+    TestStateSource,
+    TestEmptySelection,
+    TestTiming,
+]
 
-    test_classes = [
-        TestScatterLayer,
-        TestLifecycle,
-        TestSingleLayer,
-        TestMultiLayer,
-        TestAlpha,
-        TestViewportRerender,
-        TestProbe,
-        TestUpdateAxes,
-        TestDeferredConstruction,
-        TestStateSource,
-        TestEmptySelection,
-        TestTiming,
-    ]
 
+def _run_suite() -> tuple[int, int, int]:
+    """Run every test class once against whichever backend is currently
+    visible in the environment. Returns (passed, failed, skipped)."""
     total_passed = total_failed = total_skipped = 0
 
-    for cls in test_classes:
+    for cls in _TEST_CLASSES:
         print(f"\n{'='*60}\n  {cls.__name__}\n{'='*60}")
         obj = cls()
         methods = sorted(m for m in dir(obj) if m.startswith("test_"))
@@ -1699,9 +1822,35 @@ if __name__ == "__main__":
                 except Exception:
                     pass
 
+    return total_passed, total_failed, total_skipped
+
+
+if __name__ == "__main__":
+    _suppress_warnings()
+
+    # Same idea as _backend_matrix above, applied by hand: with both MS
+    # and PS set, run the full suite once per backend instead of hitting
+    # _detect_backend_path()'s ambiguous-hard-fail.
+    kinds = _requested_backend_kinds() or [None]
+    grand_passed = grand_failed = grand_skipped = 0
+
+    for kind in kinds:
+        with _scoped_backend_env(kind):
+            _, _detected_kind = _detect_backend_path()
+            print(f"[test_visibility_scatter] backend: {_detected_kind}",
+                  file=sys.stderr)
+            passed, failed, skipped = _run_suite()
+        grand_passed  += passed
+        grand_failed  += failed
+        grand_skipped += skipped
+        if len(kinds) > 1:
+            print(f"\n{'='*60}")
+            print(f"  [{kind}] {passed} passed, {failed} failed, "
+                  f"{skipped} skipped")
+
     print(f"\n{'='*60}")
-    print(f"  {total_passed} passed, {total_failed} failed, "
-          f"{total_skipped} skipped")
+    print(f"  TOTAL: {grand_passed} passed, {grand_failed} failed, "
+          f"{grand_skipped} skipped")
 
 
 # ---------------------------------------------------------------------------
@@ -1932,7 +2081,7 @@ class TestProbeRegion:
         """A click inside the viewport resolves via a real backend call
         and reports every visible layer, not just the first."""
         x, y = self._viewport_centre()
-        resp = self.vs._handle_probe_region({"tool": "info_click", "x": x, "y": y})
+        resp = _run(self.vs._handle_probe_region({"tool": "info_click", "x": x, "y": y}))
         assert resp["status"] == "ok"
         assert "<html" in resp["info_html"].lower()
         assert resp["info_html"].count("<h3>") == len(self.vs.layers)
@@ -1945,8 +2094,8 @@ class TestProbeRegion:
         top-level status from the in-range case."""
         x1 = self.vs._x_range[1]
         y0 = self.vs._y_range[0]
-        resp = self.vs._handle_probe_region(
-            {"tool": "info_click", "x": x1 + 1e6, "y": y0})
+        resp = _run(self.vs._handle_probe_region(
+            {"tool": "info_click", "x": x1 + 1e6, "y": y0}))
         assert resp["status"] == "out_of_range"
         assert "<html" in resp["info_html"].lower()
 
@@ -1957,8 +2106,8 @@ class TestProbeRegion:
         y0, y1 = self.vs._y_range
         rx0, rx1 = x0 + (x1 - x0) * 0.2, x0 + (x1 - x0) * 0.8
         ry0, ry1 = y0 + (y1 - y0) * 0.2, y0 + (y1 - y0) * 0.8
-        resp = self.vs._handle_probe_region(
-            {"tool": "info_box", "x0": rx0, "x1": rx1, "y0": ry0, "y1": ry1})
+        resp = _run(self.vs._handle_probe_region(
+            {"tool": "info_box", "x0": rx0, "x1": rx1, "y0": ry0, "y1": ry1}))
         assert resp["status"] == "ok"
         # _rect_title's "(x0-x1, y0-y1)" tag, not the full data extent
         assert self.vs._rect_title((rx0, rx1), (ry0, ry1)) in resp["info_html"]
@@ -1970,7 +2119,7 @@ class TestProbeRegion:
             self.vs.set_alpha(i, 0.0)
         try:
             x, y = self._viewport_centre()
-            resp = self.vs._handle_probe_region({"tool": "info_click", "x": x, "y": y})
+            resp = _run(self.vs._handle_probe_region({"tool": "info_click", "x": x, "y": y}))
             assert resp["status"] == "no_layers"
             assert "<html" in resp["info_html"].lower()
         finally:
@@ -1982,7 +2131,7 @@ class TestProbeRegion:
         self.vs.set_alpha(1, 0.0)
         try:
             x, y = self._viewport_centre()
-            resp = self.vs._handle_probe_region({"tool": "info_click", "x": x, "y": y})
+            resp = _run(self.vs._handle_probe_region({"tool": "info_click", "x": x, "y": y}))
             assert resp["status"] == "ok"
             assert resp["info_html"].count("<h3>") == 1
             assert self.vs.layers[0].label in resp["info_html"]
@@ -1995,7 +2144,7 @@ class TestProbeRegion:
         ``_handle_probe_region`` must degrade to an error envelope the
         same way ``info_tool.ts`` can still render, not crash the
         widget's message loop."""
-        resp = self.vs._handle_probe_region({"tool": "info_box"})  # no x0/x1/y0/y1
+        resp = _run(self.vs._handle_probe_region({"tool": "info_box"}))  # no x0/x1/y0/y1
         assert resp["status"] == "error"
         assert "<html" in resp["info_html"].lower()
 
@@ -2004,7 +2153,7 @@ class TestProbeRegion:
         same requirement as ``_handle_probe``'s hover envelope."""
         import json
         x, y = self._viewport_centre()
-        resp = self.vs._handle_probe_region({"tool": "info_click", "x": x, "y": y})
+        resp = _run(self.vs._handle_probe_region({"tool": "info_click", "x": x, "y": y}))
         text = json.dumps(resp)
         assert "NaN" not in text and "Infinity" not in text
         json.loads(text)

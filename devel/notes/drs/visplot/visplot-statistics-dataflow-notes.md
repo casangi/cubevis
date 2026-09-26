@@ -1,10 +1,14 @@
 # Notes: statistics "harvested" during data loading
 
 **Status: background rationale only.** This document captures an
-insight from discussion, for whichever future part needs it. It does
-not authorize or schedule any implementation — nothing here is an
-active goal of Part 5 or any other current part. See
-`visplot-colorize-by-axis-design.md` §9.5 for the one-paragraph summary
+insight from discussion, for whichever future work needs it — in
+practice, that means Part 6's Slice 3 (the deferred global-reference
+tier; see `visplot-colorize-by-axis-design.md` §7.5/§7.10), since
+Slices 1+2 score against whatever's already loaded/windowed and have
+no "harvest during load" question to begin with. It
+does not authorize or schedule any implementation — nothing here is an
+active goal of Part 6 or any other current part. See
+`visplot-colorize-by-axis-design.md` §7.5 for the one-paragraph summary
 this expands on.
 
 ---
@@ -42,7 +46,7 @@ it); Dask's approximate alternative (t-digest sketches) *can* be
 updated incrementally in the same data-flow sense, but only as an
 approximation, not an exact answer. See
 `visplot-rflag-colorization-reference.md` §3 for the fuller technical
-treatment (this is the same material, just there for Part 5's specific
+treatment (this is the same material, just there for Part 6's specific
 context; here for general reference).
 
 ## The dependency that doesn't go away
@@ -67,9 +71,11 @@ resolve here, just something to not have to rediscover later.
 Harvesting any of this unconditionally, on every load, "just in case"
 some future feature wants it, would trade guaranteed cost for uncertain
 benefit — most loads would pay for statistics nobody consumes. The
-sane shape is the same one already agreed for the outlier-colorization
-feature as a whole: **whatever gets computed should ride behind the
-same opt-in flag as the feature that consumes it.** If the feature is
+sane shape is the same one already agreed for Part 6's expensive tier
+specifically (Slice 3 — Slices 1+2 have no opt-in gate to ride behind,
+since they score against data already being loaded regardless):
+**whatever gets computed should ride behind the same opt-in flag as the
+feature that consumes it.** If the feature is
 off, nothing is computed and there's no waste to worry about; if it's
 on, the read is already being paid for, and folding an associative
 reduction into that same pass is close to free by comparison. There is

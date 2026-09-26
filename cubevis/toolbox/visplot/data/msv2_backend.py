@@ -1060,10 +1060,69 @@ class MSv2Backend(XArrayReader):
         result = {}
         for key, frames in partition_frames.items():
             if frames:
-                result[key] = pd.concat(frames, ignore_index=True)
+                df = pd.concat(frames, ignore_index=True)
             else:
-                result[key] = pd.DataFrame({"x": [], "y": []})
+                df = pd.DataFrame({"x": [], "y": []})
+            if key[0] == Axis.Z_SCORE:
+                df = self._finalize_zscore_frame(df)
+            result[key] = df
         return result
+
+    def _finalize_zscore_frame(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Turn a staged Z-Score frame (``__zscore_real``/``__zscore_imag``,
+        no ``y`` yet) into a normal one (``y``, no staged columns).
+
+        Part 6 Slice 1 (2026-09): split out of ``_query_columns_raw`` so
+        ``MSv4Backend`` can share it verbatim rather than re-deriving the
+        same finalization logic -- see that class's own call site.
+
+        The reference population is "the whole current selection" (design
+        doc §7.3/§7.5) -- i.e. *this* concatenation across every
+        partition the selection spans, not any single partition's rows
+        -- which is exactly why this runs here, after
+        ``pd.concat``, rather than inside ``_query_partition_scatter``
+        (which only ever sees one partition at a time; see that
+        method's own comment where it stages these two columns instead
+        of a final ``y``).
+        """
+        if "__zscore_real" not in df.columns:
+            # No partition contributed any rows for this key at all (the
+            # `pd.DataFrame({"x": [], "y": []})` placeholder
+            # `_query_columns_raw` builds when `frames` was empty) --
+            # nothing was ever staged, nothing to finalize.
+            return df if "y" in df.columns else df.assign(y=pd.Series([], dtype=np.float64))
+        if len(df) == 0 or "baseline_id" not in df.columns:
+            # Either already empty, or baseline_id genuinely wasn't
+            # available for this selection (rare -- see
+            # _query_partition_scatter's own "conditional per
+            # coordinate" precedent for id columns generally, which
+            # applies here too: no group key means no reference
+            # population, so there is nothing to score). Either way,
+            # the right output is an EMPTY frame with the right schema
+            # -- not a NaN-filled one: `df["y"] = pd.Series([], ...)`
+            # on a non-empty df would align by index and silently
+            # produce all-NaN rows rather than zero rows, which the
+            # ordinary NaN-drop path below never runs on this branch to
+            # clean up (this was caught directly, by testing this exact
+            # case, not by inspection).
+            df = df.drop(columns=["__zscore_real", "__zscore_imag"]).iloc[0:0].copy()
+            df["y"] = pd.Series([], dtype=np.float64)
+            return df
+        df = df.copy()
+        df["y"] = _scatter_render.compute_baseline_zscore(
+            df["__zscore_real"].to_numpy(),
+            df["__zscore_imag"].to_numpy(),
+            df["baseline_id"].to_numpy(),
+        )
+        df = df.drop(columns=["__zscore_real", "__zscore_imag"])
+        # A degenerate (single-member-group) baseline scores NaN (see
+        # compute_baseline_zscore's own docstring) -- drop those rows
+        # now, matching every other axis's existing "NaN means nothing
+        # to plot here" convention (the .where(~flag_pol) + isfinite
+        # filter every other derived axis already goes through
+        # upstream, applied here instead since the NaN in this case only
+        # exists after this cross-partition step, not before it).
+        return df[np.isfinite(df["y"])].reset_index(drop=True)
 
     def _query_partition_scatter(
         self,
@@ -1104,9 +1163,28 @@ class MSv2Backend(XArrayReader):
 
         # Build lazy derived arrays for every requested (axis, pol) this
         # partition actually carries.
+        #
+        # Part 6 Slice 1 (2026-09): Axis.Z_SCORE can't be computed here
+        # -- its reference population is "the whole current selection"
+        # (design doc §7.3/§7.5), which can span many partitions, not
+        # just this one. This only stages its two raw ingredients (real
+        # and imaginary, fetched via the SAME existing Axis.REAL/
+        # Axis.IMAGINARY computation every other axis already uses, not
+        # a parallel implementation) under "__zscore_real"/
+        # "__zscore_imag" instead of a final "y" -- see
+        # _query_columns_raw's post-concatenation finalization,
+        # _scatter_render.compute_baseline_zscore, for where the actual
+        # score gets computed, once, over the complete selection.
         lazy_y: dict[tuple[Axis, str], xr.DataArray] = {}
+        lazy_zscore_imag: dict[tuple[Axis, str], xr.DataArray] = {}
         for axis, pol in yaxes_local:
-            lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, axis, pol, ds)
+            if axis == Axis.Z_SCORE:
+                lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, Axis.REAL, pol, ds)
+                lazy_zscore_imag[(axis, pol)] = self._lazy_quantity(
+                    vis, flag, Axis.IMAGINARY, pol, ds,
+                )
+            else:
+                lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, axis, pol, ds)
 
         # x-axis lazy array — broadcast to match a representative y shape
         template = next(iter(lazy_y.values()))
@@ -1182,25 +1260,40 @@ class MSv2Backend(XArrayReader):
         if use_fused:
             # Single dask.compute() — VISIBILITY read once
             id_col_names = list(lazy_id_cols.keys())
+            zscore_keys  = list(lazy_zscore_imag.keys())
             all_lazy = (list(lazy_y.values()) + [lazy_x] +
-                        [lazy_id_cols[c] for c in id_col_names])
+                        [lazy_id_cols[c] for c in id_col_names] +
+                        [lazy_zscore_imag[k] for k in zscore_keys])
             computed  = dask.compute(*all_lazy)
             n_y = len(lazy_y)
             y_computed = dict(zip(lazy_y.keys(), computed[:n_y]))
             x_computed = computed[n_y]
-            id_computed = dict(zip(id_col_names, computed[n_y + 1:]))
+            n_id = len(id_col_names)
+            id_computed = dict(zip(id_col_names, computed[n_y + 1 : n_y + 1 + n_id]))
+            zscore_imag_computed = dict(zip(zscore_keys, computed[n_y + 1 + n_id:]))
 
-            def _ravel_df(x_arr, y_arr) -> pd.DataFrame:
+            def _ravel_df(x_arr, y_arr, key) -> pd.DataFrame:
                 x_flat = np.asarray(x_arr).ravel()
                 y_flat = np.asarray(y_arr).ravel()
-                ok = np.isfinite(x_flat) & np.isfinite(y_flat)
-                cols = {"x": x_flat[ok], "y": y_flat[ok]}
+                if key in zscore_imag_computed:
+                    # Part 6 Slice 1: stage real/imag, not y -- see the
+                    # comment where lazy_zscore_imag is built above.
+                    imag_flat = np.asarray(zscore_imag_computed[key]).ravel()
+                    ok = np.isfinite(x_flat) & np.isfinite(y_flat) & np.isfinite(imag_flat)
+                    cols = {
+                        "x": x_flat[ok],
+                        "__zscore_real": y_flat[ok],
+                        "__zscore_imag": imag_flat[ok],
+                    }
+                else:
+                    ok = np.isfinite(x_flat) & np.isfinite(y_flat)
+                    cols = {"x": x_flat[ok], "y": y_flat[ok]}
                 for cname, carr in id_computed.items():
                     cols[cname] = np.asarray(carr).ravel()[ok]
                 return pd.DataFrame(cols, copy=False)
 
             frames = {
-                key: _ravel_df(x_computed, y_arr)
+                key: _ravel_df(x_computed, y_arr, key)
                 for key, y_arr in y_computed.items()
             }
         else:
@@ -1230,14 +1323,26 @@ class MSv2Backend(XArrayReader):
             # -- this now doesn't either.
             x_c = lazy_x.compute()
             id_c = {c: arr.compute() for c, arr in lazy_id_cols.items()}
+            zscore_imag_c = {k: arr.compute() for k, arr in lazy_zscore_imag.items()}
             frames = {}
             for key, lazy in lazy_y.items():
                 y_c    = lazy.compute()
                 x_bc   = x_c.broadcast_like(y_c)
                 x_flat = np.asarray(x_bc).ravel()
                 y_flat = np.asarray(y_c).ravel()
-                ok     = np.isfinite(x_flat) & np.isfinite(y_flat)
-                cols   = {"x": x_flat[ok], "y": y_flat[ok]}
+                if key in zscore_imag_c:
+                    # Part 6 Slice 1: stage real/imag, not y.
+                    imag_bc   = zscore_imag_c[key].broadcast_like(y_c)
+                    imag_flat = np.asarray(imag_bc).ravel()
+                    ok = np.isfinite(x_flat) & np.isfinite(y_flat) & np.isfinite(imag_flat)
+                    cols = {
+                        "x": x_flat[ok],
+                        "__zscore_real": y_flat[ok],
+                        "__zscore_imag": imag_flat[ok],
+                    }
+                else:
+                    ok   = np.isfinite(x_flat) & np.isfinite(y_flat)
+                    cols = {"x": x_flat[ok], "y": y_flat[ok]}
                 for cname, carr in id_c.items():
                     c_bc = carr.broadcast_like(y_c)
                     cols[cname] = np.asarray(c_bc).ravel()[ok]

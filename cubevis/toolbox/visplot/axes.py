@@ -162,6 +162,27 @@ class Axis(Enum):
     IMAGINARY = ("Imaginary", "", AxisType.DERIVED)
     """Imaginary part of the complex visibility."""
 
+    Z_SCORE = ("Z-Score", "", AxisType.DERIVED)
+    """Robust, rflag-style statistical deviation score (Part 6, 2026-09).
+
+    A single joint radial statistic over real and imaginary parts,
+    scored against a windowed per-baseline reference population (median/
+    MAD-based, real+imaginary treated jointly rather than independently
+    -- see the visplot-colorize-by-axis-design.md §7.4 for the formula
+    and the physical/statistical justification). Always >= 0 -- this is
+    a magnitude of "how anomalous," not a signed deviation. Computed the
+    same way regardless of which quantity is actually plotted; using it
+    as the plotted axis itself (this member) is one of two ways to see
+    it -- the other is coloring an existing amplitude/phase layer *by*
+    it (``ScatterLayerSpec.coloring == "statistical"``).
+
+    Excludes already-flagged samples from its own reference population
+    (§7.4, §7.10) -- follows exactly the same flag-masking convention
+    every other derived axis here already uses (see
+    ``XArrayReader._lazy_quantity``'s ``q.where(~flag_pol)``), not a
+    special case invented for this axis.
+    """
+
     WEIGHT = ("Weight", "", AxisType.DERIVED)
     WEIGHT_SPECTRUM = ("Weight Spectrum", "", AxisType.DERIVED)
 

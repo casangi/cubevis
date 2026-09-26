@@ -307,7 +307,13 @@ _SCATTER_Y_OPTIONS  = [("AMPLITUDE", "Amplitude"),
                        ("REAL",      "Real"),
                        ("IMAGINARY", "Imaginary"),
                        ("U",         "U"),
-                       ("V",         "V")]
+                       ("V",         "V"),
+                       # Part 6 Slice 1 (2026-09): falls through this
+                       # existing dropdown with no new UI mechanism, per
+                       # the design doc §7.6/§7.7 -- the whole point of
+                       # AxisType.DERIVED axes being usable everywhere
+                       # they already are.
+                       ("Z_SCORE",   "Z-Score")]
 
 # Dark-mode CSS applied to all sidebar input widgets via InlineStyleSheet.
 # Overrides Bokeh's default light component styles so widgets blend with

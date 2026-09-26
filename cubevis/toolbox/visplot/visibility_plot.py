@@ -177,8 +177,18 @@ window.__cvSetBusy = window.__cvSetBusy || function(on) {
 // own click-absorbing footprint. A tool that is NOT mid-drag simply
 // ignores this; it changes nothing when nothing was actually stuck.
 // Installed once, guarded, since this whole script is re-embedded and
-// re-run on every pan/zoom and every Plot press.
-if (!window.__cvBusyGuardInstalled) {
+// re-run on every pan/zoom and every Plot press. Also guarded on
+// `document`/`window` actually existing: this whole block is dead code
+// outside a real browser, and at least one caller (test_checkbox_guard.py)
+// evaluates this script's top-level definitions in a plain Node.js
+// context with no DOM at all, expecting -- correctly -- that merely
+// DEFINING this script never touches `document` (only actually CALLING
+// `window.__cvSetBusy(...)` may). Everything before this addition already
+// held to that (its own `document.*` calls are all safely inside
+// `__cvSetBusy`'s function body, never reached at definition time); this
+// block must hold to it too, not assume a browser.
+if (typeof document !== 'undefined' && typeof window !== 'undefined'
+        && !window.__cvBusyGuardInstalled) {
     window.__cvBusyGuardInstalled = true;
     window.__cvLastPointerX = 0;
     window.__cvLastPointerY = 0;

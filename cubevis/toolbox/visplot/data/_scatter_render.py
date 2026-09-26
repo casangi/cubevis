@@ -1415,3 +1415,120 @@ def resample_id_grid(
     if ref.ref_id_freq_lo is not None:
         out["f_lo"], out["f_hi"] = _pair(ref.ref_id_freq_lo, ref.ref_id_freq_hi)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Part 6: rflag-style statistical (Z-Score) colorization -- Slice 1
+# ---------------------------------------------------------------------------
+#
+# Per-baseline, windowed reference population (visplot-colorize-by-axis-
+# design.md §7.3 row 1, §7.4, §7.5). See that document for the full
+# design and the statistical justification: circularly symmetric complex
+# Gaussian visibility noise (real and imaginary parts i.i.d., EQUAL
+# variance -- Thompson, Moran & Swenson) makes a single joint radial
+# distance the correct generalization of a robust z-score to two
+# dimensions, not two independent per-part z-scores combined afterward.
+
+_ZSCORE_RAYLEIGH_CONST = math.sqrt(2.0 * math.log(2.0))
+"""Replaces the standard modified z-score's 0.6745 for this joint/radial
+case. 0.6745 calibrates MAD to Gaussian sigma for a SYMMETRIC 1D
+distribution (``median(|x - median(x)|) * 0.6745 ~= sigma``). The radius
+of an isotropic 2D Gaussian deviation instead follows a Rayleigh
+distribution, whose median relates to its own scale parameter as
+``median = sigma * sqrt(2 * ln(2))`` -- so THIS constant (~1.1774), not
+0.6745, is what recovers a sigma-comparable score here. See the design
+doc §7.4 for the full derivation -- a derived, not yet simulation-
+verified, calibration. The RELATIVE ordering of scores (which points are
+most anomalous) does not depend on this constant at all, only the
+absolute numbers a threshold gets compared against do.
+"""
+
+
+def compute_baseline_zscore(
+    real: np.ndarray, imag: np.ndarray, group: np.ndarray,
+) -> np.ndarray:
+    """Robust, `rflag`-style joint Z-Score of (real, imag) against a
+    per-group (typically per-baseline) reference population.
+
+    Implements the design doc's §7.4 formula exactly::
+
+        dr = real - median(real | group)
+        di = imag - median(imag | group)
+        r  = sqrt(dr**2 + di**2)
+        scale = median(r | group)
+        score = r / scale * sqrt(2 * ln(2))
+
+    A single joint radial statistic, not two independent per-part
+    z-scores -- see §7.4 for why (circularly symmetric complex Gaussian
+    visibility noise: real and imaginary parts are i.i.d. with EQUAL
+    variance, so a joint, rotation-invariant distance is the correct
+    generalization, not an artifact of an arbitrary phase convention).
+    Always >= 0 (a radius) -- there is no sign to report.
+
+    Parameters
+    ----------
+    real, imag :
+        Per-sample real/imaginary parts. Expected to already be
+        flag-masked by the caller -- every entry here should be a
+        genuine, unflagged sample. Excluding flagged data is NOT
+        handled inside this function, by design: it mirrors how every
+        other derived ``Axis`` already gets flag-masked upstream, in
+        ``XArrayReader._lazy_quantity``'s ``q.where(~flag_pol)``, rather
+        than inventing a special case here.
+    group :
+        Per-sample group key -- ``baseline_id`` for Slice 1's
+        per-baseline reference population (§7.3 row 1). Any hashable
+        per-row array works; a future per-antenna or per-(time,freq)-bin
+        reference group (§7.3's other rows) would call this the same
+        way with a different ``group`` array -- nothing in this
+        function is baseline-specific.
+
+    Returns
+    -------
+    np.ndarray
+        Same shape as *real*/*imag*, float64, the Z-Score per sample.
+        NaN wherever a group's reference population was degenerate (a
+        single-member group has zero spread by construction -- scale
+        would be exactly 0) -- callers should treat this the same way a
+        ``skip_reason``'d layer is treated elsewhere in this module:
+        nothing to show, not an error. No minimum-population floor
+        beyond that single-member case is applied HERE -- see the
+        design doc's "reference population size must be visible" trust
+        requirement (§7.6, §7.10) for the UI-level floor; this function
+        always computes something (or NaN for a truly degenerate
+        group), and it is the caller's job to decide whether N was
+        large enough to trust the result, not this function's.
+    """
+    real_arr  = np.asarray(real, dtype=np.float64)
+    imag_arr  = np.asarray(imag, dtype=np.float64)
+    group_arr = np.asarray(group)
+    if real_arr.shape != imag_arr.shape or real_arr.shape != group_arr.shape:
+        raise ValueError(
+            "compute_baseline_zscore: real/imag/group must share one "
+            f"shape; got {real_arr.shape}, {imag_arr.shape}, {group_arr.shape}"
+        )
+    if real_arr.size == 0:
+        return np.zeros(0, dtype=np.float64)
+
+    df = pd.DataFrame({"real": real_arr, "imag": imag_arr, "group": group_arr})
+    # groupby + transform("median"): one pass, broadcasts each group's
+    # own median back to every row in that group -- the standard,
+    # efficient way to compare every row against its own group's
+    # reference without a manual join.
+    med_real = df.groupby("group")["real"].transform("median").to_numpy()
+    med_imag = df.groupby("group")["imag"].transform("median").to_numpy()
+    dr = real_arr - med_real
+    di = imag_arr - med_imag
+    r = np.sqrt(dr * dr + di * di)
+
+    scale = (
+        pd.Series(r, index=df.index)
+        .groupby(df["group"])
+        .transform("median")
+        .to_numpy()
+    )
+    with np.errstate(invalid="ignore", divide="ignore"):
+        score = np.where(
+            scale > 0, r / scale * _ZSCORE_RAYLEIGH_CONST, np.nan,
+        )
+    return score

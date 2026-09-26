@@ -1,12 +1,33 @@
 # visplot Scatter "Colorize by Axis" — Design Document
 
-**Status:** v5 — Parts 1–3 complete (design, backend plumbing, and
-rendering pipeline — the latter revised once already, see §4.2/§9's v5
-entry); Part 5 (statistical/rflag-style colorization) scoped at the
-design level; Part 4 not started.
+**Status:** v9 — Parts 1–4 complete (design, backend plumbing, rendering
+pipeline, and UI wiring), plus a same-lineage Part 5/5a already shipped
+(category-exclusion checklist and rarest/majority priority selection —
+**unrelated to this document's Part 6**, see the naming note below).
+Part 6 (statistical/rflag-style colorization, formerly numbered "Part 5"
+in this document — see below) scoped at the design level, **Slices 1+2
+fully specified with no remaining open pre-implementation questions**
+(§7.10) — metric verified against the literature, raster+scatter
+synergy factored in, coloring unified into a third `coloring` mode
+(§7.4/§7.6/§7.10) — Slice 3 deferred pending user validation of 1+2.
+pending user validation of 1+2 — see §7.
 **This is a living document.** Update it as later parts surface new
 information or force a decision to change; don't create a competing copy.
 See the changelog at the bottom for revision history.
+
+**Naming note (2026-09):** this document originally called the
+statistical/rflag-style colorization feature in §7 "Part 5." By the time
+that work was actually taken up, the numbers "Part 5"/"Part 5a" had
+independently been used, in real shipped code, for a *different* feature
+(the category-exclusion checklist and rarest/majority priority selection
+for colorize-by-axis — see `colorize_controls()`'s own docstring in
+`visibility_scatter.py`). To avoid two different features answering to
+"Part 5" in code comments, docstrings, and handoff documents, every
+reference to the statistical/rflag-style colorization feature has been
+renumbered "Part 6" throughout this document and its two companions
+(`visplot-rflag-colorization-reference.md`,
+`visplot-statistics-dataflow-notes.md`). Nothing about the feature's
+scope or design changed — this is a rename only.
 
 ---
 
@@ -152,7 +173,7 @@ creep back in unnoticed), one confirming the internal `"__scan_time_idx"`
 bookkeeping column never leaks into user-facing output.
 
 This cached-lookup pattern is now real, reusable shared infrastructure —
-worth Part 3/4 (and Part 5's own backend work, §7.5's cost-tiering
+worth Part 3/4 (and Part 6's own backend work, §7.5's cost-tiering
 discussion in particular) checking for before building a parallel
 mechanism for any future per-row categorical/derived column with many
 distinct string values.
@@ -322,8 +343,8 @@ mapping Part 3 needs.
 | 1 | Design + this document + Part 2 handoff | — | **This session** |
 | 2 | Backend metadata plumbing | `msv2_backend.py`, `msv4_backend.py`, `reader.py` | **Done**, including a 2026-09 performance follow-up — see Part 3 handoff and §3 |
 | 3 | Rendering pipeline: categorical aggregation, new dataclass fields, categorical palette | `_scatter_render.py`, `reader.py`, `palettes.py` | **Done**, including a same-session revision replacing the cardinality-cap refusal with auto-binning and switching categorical shading to winner-take-all — see §4.2 and the Part 4 handoff |
-| 4 | UI wiring: axis picker, mutual-exclusivity logic, category legend widget, export swatches | `visibility_plotter.py`, `panel_spec.py`, `png_export.py` | Not started — see §7.7 for a Part 5 touchpoint worth building in now, and the Part 4 handoff for what `category_members`-aware bucketing means for the legend widget specifically |
-| 5 | Statistical/rflag-style colorization (raster + scatter) — see §7 | `msv2_backend.py`, `msv4_backend.py`, `_scatter_render.py`, `reader.py`, `axes.py`, `visibility_plotter.py` | **Scoped (design only), this session** — likely needs its own backend/render/UI sub-passes once started, the same way Parts 2–4 broke up the original feature |
+| 4 | UI wiring: axis picker, mutual-exclusivity logic, category legend widget, export swatches | `visibility_plotter.py`, `panel_spec.py`, `png_export.py` | **Done** (verified directly against the source, 2026-09 — `colorize_controls()`/`_build_scatter_config_panel` in `visibility_scatter.py`, `_colorize_key_from_layer`/`_colorize_key_from_override` in `visibility_plotter.py`), plus the category-exclusion checklist and rarest/majority priority selection beyond this document's original scope (shipped as "Part 5"/"Part 5a" in the code — see the naming note above; unrelated to this document's Part 6) — see §7.7 for the Part 6 touchpoint (N-way coloring-mode switch) this already puts in place |
+| 6 | Statistical/rflag-style colorization (raster + scatter) — see §7 | `msv2_backend.py`, `msv4_backend.py`, `_scatter_render.py`, `reader.py`, `axes.py`, `visibility_plotter.py`, `visibility_scatter.py` | **Scoped, Slices 1+2 approved for implementation** (2026-09) — Slice 3 (global reference, opt-in, cluster-relevant) deferred pending user validation of Slices 1+2; see §7.3/§7.5 for the slice breakdown and §7.10 for the approval record |
 
 Each part produces a handoff document for the next (scoped work order +
 open questions), and updates this design document if it forces a decision to
@@ -345,7 +366,7 @@ colorize-by-axis, don't let scope creep pull them in:
 
 ---
 
-## 7. Part 5 — Statistical / rflag-style colorization (raster + scatter)
+## 7. Part 6 — Statistical / rflag-style colorization (raster + scatter)
 
 ### 7.1 Motivation and origin
 
@@ -357,15 +378,17 @@ already documented as a target use case —
 lists "Bad antenna: all baselines to one antenna deviant" with the
 prescribed plot as "Scatter: amp vs time, colour-by-baseline, iterate
 by antenna." That's a manual, eyeball-driven process today. The idea
-that came out of discussion: automate the "does this look wrong"
-judgment with a computed statistical-deviation coloring, so the
-deviant pattern is visually immediate rather than something the
-astronomer has to notice by comparing many plots.
+that came out of discussion: surface a computed statistical-deviation
+score as a coloring, so the deviant pattern is visually immediate
+rather than something the astronomer has to notice by comparing many
+plots — the tool surfaces the statistic, the astronomer still makes
+the judgment (made explicit as a firm design constraint in §7.2 and
+§7.3: no automated "this antenna is bad" assessment, ever).
 
 That idea maps closely onto CASA's own `rflag`/`tfcrop` algorithms —
 real, long-established, widely-used automated flagging tools (both
 still actively referenced in current ALMA/VLA pipeline documentation).
-Anchoring Part 5 on "an approximation of rflag" rather than an invented
+Anchoring Part 6 on "an approximation of rflag" rather than an invented
 metric is a deliberate choice: it gives astronomers something they
 already have intuition for, and gives a known quantity to compare
 against. See `visplot-rflag-colorization-reference.md` for the
@@ -374,7 +397,7 @@ algorithm detail this section summarizes.
 ### 7.2 What this is (and isn't) — firm
 
 **This is a rendering/coloring feature, not a flagging feature.**
-`rflag`/`tfcrop` write directly to the MS's `FLAG` column; Part 5 does
+`rflag`/`tfcrop` write directly to the MS's `FLAG` column; Part 6 does
 not write anything — it computes a score and colors with it, the same
 way today's continuous `mean(y)` coloring or the new categorical
 colorize-by-axis coloring do. A user who spots a deviant region still
@@ -390,7 +413,34 @@ specific procedural algorithm (iterative fit convergence, threshold
 auto-calculation, `extendflags` logic, and so on). Chasing exact
 parity would be a much larger, different project.
 
-### 7.3 The reference-group decision — open, for Part 5's own backend pass to resolve
+**This presents statistics; it never renders a verdict.** Confirmed
+2026-09 (see §7.10): any per-group aggregation (per-antenna or
+otherwise) surfaces the underlying numbers — the score itself, and
+whichever summary statistics the reference-group computation produces
+— never a qualitative judgment like "this antenna is bad." The
+astronomer decides what a given score means for their data; the tool's
+job stops at making the number, and its pattern across the plot,
+visible. This applies to every reference group in §7.3, not just the
+per-antenna one the motivating example in §7.1 happens to use.
+
+**Independent of `casatools`/`python-casacore` — firm, confirmed
+2026-09.** `flagdata(action='calculate')` (§7.9's now-resolved
+validation-oracle question) does not operate on MSv4 Processing Sets,
+which settles what was previously open in §7.9 and in
+`visplot-rflag-colorization-reference.md` §2: Part 6's own statistics
+computation is the actual deliverable on both backends, not a wrapper
+around real `flagdata` on either one, and nothing in Part 6's runtime
+path may depend on `casatools` or `python-casacore`. `arcae` remains
+available if a lower-level MSv2 read genuinely needs it (it's already
+a dependency of this codebase's MSv2 path via `xarray-ms`), but
+`casatools`/`python-casacore` specifically are out — including for the
+MSv2-side `flagdata`-as-verification-technique idea in
+`visplot-rflag-colorization-reference.md` §2, which, if pursued at
+all, must stay a one-off, offline comparison script run outside this
+project's own dependency chain, never something Part 6 imports or
+calls at runtime.
+
+### 7.3 The reference-group decision — resolved 2026-09 (slices approved; see §7.10)
 
 Carried forward from discussion: "distance from typical" is
 underspecified until the comparison population is fixed, and the
@@ -399,65 +449,167 @@ choice determines what gets diagnosed:
 | Reference group | Diagnoses | Relationship to `rflag` |
 |---|---|---|
 | Per (baseline, SPW, correlation), across time/frequency | Localized RFI, transient spikes | Directly matches `rflag`'s own scope |
-| Per antenna, aggregating across its baselines | A consistently deviant antenna → likely receiver/hardware fault — **the originating ask** | A derived aggregation on top of the per-baseline score, not a separate computation — conceptually the same decomposition antenna-based gain calibration (`gaincal`/self-cal) already relies on: a bad baseline could implicate either antenna or the pair specifically, and only aggregating across many different partners disambiguates |
+| Per antenna, aggregating across its baselines | Surfaces which antenna's baselines carry the largest scores, for the astronomer to assess — **the originating ask** | A derived aggregation on top of the per-baseline score, not a separate computation — conceptually the same decomposition antenna-based gain calibration (`gaincal`/self-cal) already relies on: a bad baseline could implicate either antenna or the pair specifically, and only aggregating across many different partners disambiguates |
 | Per (time, frequency) bin, across baselines | Array-wide/correlator-wide RFI | New relative to `rflag`, which is inherently per-baseline |
 
-Recommendation carried from discussion: implement the per-baseline
-(rflag-shaped) score first, since it's directly reusable, then build
-per-antenna aggregation on top of it rather than as an independent
-computation.
+**Resolved:** implement the per-baseline (rflag-shaped) score first,
+then build per-antenna aggregation on top of it rather than as an
+independent computation — confirming the recommendation this section
+originally carried forward from discussion, now the approved plan
+(§7.10).
 
-### 7.4 Metric — proposed default
+**A distinction worth separating from the table above, surfaced during
+scope review (2026-09): "per-antenna" is not by itself the line
+between the cheap and expensive cost tiers in §7.5.** Aggregating an
+antenna's baselines *within whatever selection/iteration is already
+loaded* (the vplot/radplot + iterate-by-antenna workflow this section's
+motivating example describes) is a reduction over data already
+resident — cheap, same tier as the per-baseline score itself, no opt-in
+needed. What actually crosses into the expensive tier is scoring
+against a reference computed over a *larger population than what's on
+screen* — e.g., an antenna's typical behavior across the whole selected
+observation, not just the currently-windowed/iterated view. That's a
+genuine two-pass computation regardless of which reference group it's
+attached to. See §7.5 and §7.10 for how this reshapes the slice
+breakdown.
 
-Modified/robust z-score: `0.6745 × (x − median(x)) / MAD(x)`, where
-`MAD = median(|x − median(x)|)`. Computed on **real and imaginary
-parts separately**, not on amplitude directly, matching `rflag`'s own
-choice — visibility amplitude isn't Gaussian at low SNR (closer to
-Rician/Rayleigh), while real/imaginary parts, noise-dominated, are.
-The statistics *basis* (real/imag) and the *displayed* axis (amplitude,
-phase, whatever the layer currently plots) are independent decisions —
-this proposes always computing on real/imag regardless of what's shown.
+### 7.4 Metric — resolved 2026-09, verified against the literature (see §7.10)
 
-### 7.5 Cost tiers — firm, carried from discussion
+**Basis: real and imaginary parts, treated jointly, not amplitude.**
+Visibility noise is standard circularly symmetric complex Gaussian
+noise — real and imaginary parts i.i.d., equal variance (Thompson,
+Moran & Swenson, *Interferometry and Synthesis in Radio Astronomy* —
+the field's standard reference; confirmed directly in current
+literature, e.g. Kolopanis et al. 2023, arXiv:2211.13576 §3). Amplitude
+is not Gaussian at low SNR (Rician/Rayleigh instead), which is exactly
+why real/imaginary is the better statistical choice — this part of the
+original proposal holds up. **Correction to how this was previously
+framed:** it is not, as earlier stated, "matching `rflag`'s own
+choice" — CASA's `flagdata` `correlation` parameter, which controls
+what `rflag`/`tfcrop`/`clip` actually operate on, defaults to
+`ABS_ALL` (amplitude); real/imaginary is an option a user can select
+(`REAL_ALL`/`IMAG_ALL`), not `rflag`'s built-in default (confirmed
+directly against CASAdocs — see
+`visplot-rflag-colorization-reference.md` §1's updated citation). The
+Gaussianity argument for preferring real/imag stands on its own
+statistical merit regardless; the doc just shouldn't credit it to
+`rflag`'s own default behavior.
+
+**Combination: a single joint, rotation-invariant statistic — not two
+independent per-part z-scores.** Because real and imaginary noise are
+i.i.d. with *equal* variance (the same physical fact that justifies
+preferring them over amplitude), the correct generalization of a
+robust z-score to two dimensions is a joint radial distance, not two
+separate 1D statistics combined afterward — independent real/imag
+z-scores would implicitly assume an anisotropic noise source that
+doesn't match the physics, and would make the same real anomaly score
+differently depending on its arbitrary phase/calibration convention.
+This is the same "robust distance, then a modified z-score on the
+distance" pattern already standard for multivariate outlier detection
+generally, specialized to the isotropic case:
+
+```
+dr = real − median(real | reference population)
+di = imag − median(imag | reference population)
+r  = sqrt(dr² + di²)                      # radial deviation, one number per sample
+scale = median(r | reference population)  # robust "typical radius"
+score = r / scale × sqrt(2 × ln(2))       # ≈ r / scale × 1.1774
+```
+
+`score` is always ≥ 0 by construction (a radius), which also settles
+§7.10's magnitude-vs-signed question below in the same step — there is
+no separate sign to decide what to do with.
+
+**The reference population excludes already-flagged data — confirmed
+2026-09 (§7.10), firm.** A point flagged by a prior pass does not
+contribute to `median(real | ...)`, `median(imag | ...)`, or
+`median(r | ...)` above. It is still displayed and still scored (still
+gets a `dr`/`di`/`r`/`score` of its own) — it just isn't counted toward
+what "typical" means for everything else. Applies identically to
+whichever reference population is in play (§7.5's windowed Slice 1+2
+population, or a future Slice 3 global one).
+
+**A calibration detail flagged for implementation, not fully resolved
+here:** the standard modified z-score's `0.6745` constant calibrates
+MAD to Gaussian σ for a symmetric 1D distribution. The radius of an
+isotropic 2D Gaussian deviation instead follows a Rayleigh
+distribution, whose median relates to its scale parameter as
+`median = σ√(2 ln 2)` — hence `√(2 ln 2) ≈ 1.1774` replacing `0.6745`
+above (a standard Rayleigh-distribution property, derived here, worth
+confirming against a quick simulation during implementation rather
+than taken purely on this derivation). The outlier *threshold* itself
+(`rflag`'s `timedevscale`/`freqdevscale`, Iglewicz & Hoaglin's
+recommended 3.5 for the 1D case) would need its own recalibration for
+the same reason — treated as a policy choice either way, same as
+`rflag`'s own user-adjustable thresholds, not something to lock down
+in this document.
+
+The statistics *basis* (real/imag, combined as above) and the
+*displayed* axis (amplitude, phase, whatever the layer currently
+plots) remain independent decisions, as originally proposed — this
+computes on real/imag regardless of what's shown.
+
+### 7.5 Cost tiers — firm, carried from discussion; slice mapping added 2026-09
 
 Two genuinely different costs, matching the "sometimes I'll pay for
 extended computation" framing this started from:
 
-- **Cheap (local/windowed, within a partition):** close to free
-  relative to the per-partition compute already happening — arguably
-  usable without an explicit opt-in.
-- **Expensive (global reference, e.g. per-antenna across a whole
-  selection):** a genuine two-pass computation — reduce across every
+- **Cheap (local/windowed, within a partition, or a reduction over
+  whatever selection/iteration is already loaded):** close to free
+  relative to the per-partition compute already happening — usable
+  without an explicit opt-in. Covers both the per-baseline score
+  (§7.3's first row) **and** per-antenna aggregation of that score
+  *within the current view* (§7.3's clarifying note) — these are
+  **Slices 1 and 2**, approved for implementation (§7.10).
+- **Expensive (global reference — a population larger than what's on
+  screen, e.g. an antenna's typical behavior across the whole selected
+  observation):** a genuine two-pass computation — reduce across every
   selected partition for the reference statistic, then score every row
-  against it. This is the tier that needs the explicit gate. Within
-  it, mean/variance-based scores reduce cheaply and distribute
-  naturally (associative, tree-reduction, scales to a cluster with no
-  drama); median/MAD-based scores (the more robust, `rflag`-faithful
-  choice) do not — exact computation needs a full sort/selection at
-  scale, so distributed systems default to approximate quantile
-  sketches (t-digest) instead. See
+  against it. This is the tier that needs the explicit gate, and is
+  **Slice 3**, deferred pending user validation of Slices 1+2 (§7.10)
+  rather than built now. Within it, mean/variance-based scores reduce
+  cheaply and distribute naturally (associative, tree-reduction, scales
+  to a cluster with no drama); median/MAD-based scores (the more
+  robust, `rflag`-faithful choice) do not — exact computation needs a
+  full sort/selection at scale, so distributed systems default to
+  approximate quantile sketches (t-digest) instead. See
   `visplot-rflag-colorization-reference.md` §3 for the full technical
   treatment, and `visplot-statistics-dataflow-notes.md` for the
   related (but separate — see below) question of whether any of this
   can ride "for free" on the existing data load.
 
-**Explicitly out of scope for Part 5 itself:** the "harvest statistics
+**Architectural note for Slices 1+2, adopted specifically to keep
+Slice 3 a later addition rather than a rewrite (2026-09, see §7.10):**
+the scoring function backing Slices 1+2 must take its reference
+population (whatever the median/MAD — or mean/variance — is computed
+against) as an explicit parameter, not assume it is always "whatever
+is currently loaded." Slices 1+2 will always call it that way in
+practice, but the function itself shouldn't know that. This is a
+zero-cost discipline now — Slice 1's own reference population already
+has to be *some* explicit array — and it's what makes Slice 3, if and
+when it's taken up, a matter of computing a different (possibly
+cluster-computed) reference and passing it into the *same* scoring
+function, rather than a second, parallel implementation.
+
+**Explicitly out of scope for Part 6 itself:** the "harvest statistics
 during loading" idea from `visplot-statistics-dataflow-notes.md`. That
 document is background rationale for whichever future backend pass
-implements the expensive tier — not an instruction folded into Part 5
+implements the expensive tier — not an instruction folded into Part 6
 now. The conclusion already reached: any harvesting should ride behind
 the same opt-in gate as the feature consuming it, never computed
 speculatively.
 
 ### 7.6 Raster and scatter integration
 
-**Proposed mechanism: a new `Axis` member** (name TBD — `Axis.DEVIATION`
-is a placeholder) under `AxisType.DERIVED`, alongside `AMPLITUDE`/
+**Mechanism: a new `Axis` member, `Axis.Z_SCORE`** (confirmed 2026-09,
+see §7.10 — chosen over the `DEVIATION` placeholder as the name an
+astronomer user is most likely to already have intuition for) under
+`AxisType.DERIVED`, alongside `AMPLITUDE`/
 `PHASE`/`REAL`/`IMAGINARY`. This is the single most leveraged decision
 in this section: `AxisType.DERIVED` axes are already usable everywhere
 those are — raster Y, raster X, raster Quantity, scatter X, scatter Y —
 with no bespoke UI. Framed this way, "plot the deviation score
-directly" (e.g. a waterfall with Quantity=Deviation instead of
+directly" (e.g. a waterfall with Quantity=Z-Score instead of
 Quantity=Amplitude) needs **no new UI mechanism**, only backend support
 for computing the value — it falls through the same dropdowns
 `FLAG_FRACTION`/`WEIGHT` are already waiting to be added to per the
@@ -473,23 +625,110 @@ implementation plan's §4.3.
 - **`vplot`/`radplot`** (Baseline × Time raster, colored by Quantity)
   combined with the existing per-antenna iteration (§4.8) is the exact
   realization of the implementation plan's "Bad antenna" workflow —
-  swap the coloring Quantity from Amplitude to Deviation in that exact
+  swap the coloring Quantity from Amplitude to Z-Score in that exact
   configuration and the deviant-antenna pattern that currently requires
   eyeballing several iterations becomes visually immediate.
 
-One capability beyond "plot the score as its own axis" is worth keeping
-in scope, since it's closer to the original ask: **coloring an existing
-amplitude/phase layer *by* the score**, rather than replacing the
-plotted quantity with it (e.g. `vplot`'s scatter stays Time-vs-Amplitude,
-but point color comes from Deviation). Today's continuous coloring
-(`_scatter_render.py`) aggregates the same column being plotted
-(`ds_agg.mean("y")`); this needs the aggregation source decoupled from
-the plotted Y column (`ds_agg.mean("<deviation column>")` against a
-`df` that carries both) — a `ScatterLayerSpec` field for "color source
-column," distinct from `y_axis`, and the deviation value present as an
-extra per-row column (computed, not just copied — a materially
-different backend task than Part 2's metadata plumbing, worth not
-conflating with it).
+**Raster+scatter synergy, verified against the source (2026-09) — this
+is where visplot's dual-panel design gives Part 6 something PlotMS has
+no equivalent of, per your request to factor this in.** visplot already
+links its raster and scatter panels in two concrete ways, neither built
+for this feature but both directly useful to it:
+
+- **Linked cursor.** `cursor_source` (`visibility_plotter.py`) is one
+  shared `ColumnDataSource` passed to every raster and scatter panel
+  instance in both slots; hovering any one of them updates it, and
+  every other panel reacts. A Z-Score-colored raster's anomalous cell
+  and its exact corresponding scatter point are already linked this
+  way — "which raw sample is that anomaly, exactly" is answered by
+  hovering, across panels, with no new wiring.
+- **Linked x-range.** Confirmed directly in `_build_plot_area`:
+  `self._scatter.figure.x_range = self._raster.figure.x_range`
+  whenever the two panels share an X axis — true today for `vplot`
+  and `waterfall`, both of which give raster and scatter the same
+  Time axis. Panning or zooming one panel already pans/zooms the
+  other. For Slices 1+2, whose reference population is "whatever's
+  currently in view" (§7.5), two Z-Score-colored panels on a linked
+  axis are automatically scoring against the *same* window — a real
+  win for the trust concerns in the addition above (the same N, not
+  two different ones the astronomer has to reconcile), not something
+  to build separately.
+
+**The recommended realization of this:** the workflow this feature
+targets is naturally two-step — a Z-Score waterfall (raster) answers
+"when, or at what channel, does something look wrong"; a scatter
+colored by (or colorized by baseline, with Z-Score available via the
+linked cursor), iterated by antenna, answers "which baseline or
+antenna is responsible." Rather than a single-panel default, the new
+preset this document already proposes (§7.7) should set up *both*
+panels at once, on a linked axis, the same way `vplot`/`waterfall`
+already do — turning "spot it, then confirm what it is" into one
+synchronized view rather than two the astronomer has to configure and
+keep in sync by hand. This dual-panel pairing is also where a
+demonstration is most different from PlotMS, which has no equivalent.
+
+**One backend implication worth recording now, extending §7.5's
+swappable-reference-population note:** if both panels' queries resolve
+to the same selection and window (likely, given the linking above),
+computing the reference statistic (§7.4) once and reusing it for both
+panels' scoring — rather than recomputing it twice — keeps the two
+panels' displayed scores for the same underlying point identical, not
+merely similar, as well as avoiding redundant work. Where exactly such
+a cache should live (the existing Part 6/6b frame-cache infrastructure
+is the obvious candidate) is an implementation detail for whoever picks
+up Slice 1's backend work, not a decision needed here.
+
+**Resolved 2026-09: "color an existing amplitude/phase layer *by* the
+score" is a third `coloring` mode, not a bespoke field.** Originally
+described here as a standalone "color source column" capability
+needing its own decoupling mechanism; reframed, following the same
+shape already proven by categorical colorize-by-axis, as a third value
+of `ScatterLayerSpec.coloring` — `"continuous"` (today's `mean(y)`),
+`"categorical"` (colorize-by-axis), and now **`"statistical"`**
+(name proposed, not final) for Z-Score-sourced coloring. This is
+exactly the extensible mode value §7.7's touchpoint asked Part 3 to
+leave room for, now with a concrete third case. Consequences:
+
+- The rendering pipeline gets a third branch alongside the existing
+  continuous/categorical split (`render_layer` and, per the two-level
+  rendering work, `build_layer_reference`/`resample_layer_reference`),
+  computing the joint Z-Score (§7.4) against the plotted layer's own
+  `df` rather than aggregating the plotted Y column — the "aggregation
+  source decoupled from the plotted Y column" idea from the original
+  framing, just slotted into the mode switch rather than a separate
+  field.
+- The gear-tab UI gets a third `mode_group` option, following
+  `colorize_controls()`'s own established shape exactly: a
+  mode-specific sub-panel (display style — see below — and whatever
+  else this mode needs), staged the same way the categorical
+  checklist already is.
+- **Slice 2 needs no coloring work of its own.** Because this is a
+  layer property, not a workflow-specific one, the iterate-by-antenna
+  view (§7.3 row 2) simply shows the *same* `"statistical"`-mode
+  per-baseline coloring already in place for Slice 1, narrowed by
+  whatever selection the antenna iteration already applies — the same
+  way colorize-by-axis today doesn't care whether iteration is active.
+  This closes the open question from the previous revision (§7.9, now
+  resolved below): no per-antenna color to design, only the
+  already-approved per-antenna summary *readout* (§7.6's trust
+  additions), which can show several statistics side by side rather
+  than needing one aggregation formula to pick a color with.
+
+**Resolved 2026-09: a threshold/highlight display, as a switchable
+option, not a replacement for the continuous gradient.** Implementable
+cheaply and with confidence, not just in principle — this reuses the
+existing scaling dispatch (`"linear"`/`"log"`/`"eq_hist"`/etc., the
+same mechanism the two-level rendering work's `resample_layer_reference`
+already drives) with one more option, e.g. `"threshold"`: map the score
+to a binary indicator (over the cutoff or not, reusing the existing
+`scaling_vmin` field as the cutoff — no new field needed) and shade
+with a two-color palette instead of a gradient, rather than any new
+rendering architecture. Because it rides the same scaling dispatch,
+it's available wherever continuous scaling already is — both for
+Z-Score plotted directly as an axis/Quantity (ordinary continuous
+coloring, `scaling="threshold"`) and as the `"statistical"` coloring
+mode's own display-style choice (gradient vs. threshold), the same
+switch serving both integration paths from earlier in this section.
 
 **Scatter and raster are complementary here, not redundant:** raster
 necessarily bins into pixels before showing anything; scatter can (at
@@ -497,19 +736,41 @@ lower zoom/sample counts) show the true per-sample score before any
 spatial binning smooths it out. Both views are worth having rather than
 picking one.
 
+**Two additions to what gets displayed, approved 2026-09 specifically
+to earn user trust (§7.10) — users are expected to be, reasonably,
+suspicious of an automated score, so color alone is not enough:**
+
+- **Reference-population size, visible, with a minimum-N floor.**
+  Slices 1+2 score against whatever's currently loaded/windowed
+  (§7.5), so the same point's score can shift as the astronomer pans
+  or zooms — an honest property of "deviant from what," not a bug, but
+  one that will read as broken if the astronomer can't see why. The
+  sample count the reference was computed from must be visible
+  somewhere (colorbar tooltip or legend), and below some minimum N the
+  display should say so explicitly (e.g. grey out, "not enough samples
+  in view") rather than show a median/MAD-based score that's actually
+  too noisy to mean anything at that N.
+- **A quantitative readout alongside Slice 2's per-antenna color, not
+  color alone.** Something like sample count, median/typical score, and
+  fraction over whatever threshold is in use, per antenna, in the
+  existing legend/info-panel area. Gives the astronomer a number to
+  note down (or put in a reduction log) rather than asking them to take
+  a color on faith — cheap to add on top of infrastructure that's
+  already there.
+
 ### 7.7 Touchpoints for Parts 3 and 4 — cheap now, expensive to retrofit later
 
-Two things worth building into Parts 3/4 *now*, even though Part 5
+Two things worth building into Parts 3/4 *now*, even though Part 6
 hasn't started, because they're nearly free as part of work already
 planned and materially more expensive to unwind after the fact:
 
 - **Part 3:** whatever field distinguishes today's continuous coloring
   from the new categorical colorize-by-axis coloring should be an
   extensible mode value (e.g. a string/enum: `"continuous"` /
-  `"categorical"`), not a boolean. Part 5 will want a third mode
-  (`"computed"` or similar) for the color-source-column capability in
-  §7.6 — cheap to leave room for now, a real (if small) rework to
-  retrofit onto a two-state boolean later.
+  `"categorical"`), not a boolean. Part 6 will want a third mode
+  (`"statistical"` proposed, settled 2026-09 — see §7.6) for the
+  color-source-column capability in §7.6 — cheap to leave room for now,
+  a real (if small) rework to retrofit onto a two-state boolean later.
 - **Part 4:** the mutual-exclusivity logic that hides a layer's
   continuous scaling controls when colorize-by-axis is enabled should
   be written as an N-way mode switch, not an if/else pair, for the
@@ -517,18 +778,36 @@ planned and materially more expensive to unwind after the fact:
 
 **Good news reducing everything else:** the named-preset mechanism
 (`_PRESETS`, `_preset_js`) and the per-slot gear-tab sidebar config
-(P-5a, already shipped) are both already fully generic over axis/
-Quantity choices — Part 5 needs **no new preset or sidebar
+(P-5a, already shipped — see the naming note at the top of this
+document; unrelated to this document's Part 6 despite the similar
+label) are both already fully generic over axis/
+Quantity choices — Part 6 needs **no new preset or sidebar
 infrastructure**, just new values flowing through what's there
 (a new `Axis` member, and eventually new gear-tab controls for window
 size/threshold, using the exact pattern existing controls already use).
+Concretely, verified against the source (2026-09): `_RASTER_QTY_OPTIONS`
+and `_SCATTER_Y_OPTIONS` in `visibility_plotter.py` are plain
+`(name, label)` tuples — adding `Axis.Z_SCORE` to each is a one-line
+change per list, no new mechanism. The "color an existing layer by the
+score" capability's controls belong in the same per-layer gear-tab
+panel `colorize_controls()` already builds for colorize-by-axis —
+concretely, extending its existing `mode_group` (today a two-way
+`RadioButtonGroup`: continuous vs. categorical) to a third,
+Z-Score-sourced mode, with a parallel sub-panel the same way the
+categorical mode's checklist is today.
 
-### 7.8 Non-goals for Part 5 — firm
+### 7.8 Non-goals for Part 6 — firm
 
 - No flag-writing of any kind — visualization only (§7.2).
 - No bit-exact reproduction of CASA's `rflag`/`tfcrop` procedural
   algorithm — statistical philosophy, not the algorithm itself (§7.2).
+- No automated qualitative assessment ("this antenna is bad") — scores
+  and statistics only, the astronomer judges (§7.2, confirmed 2026-09).
+- No dependency on `casatools`/`python-casacore` at runtime — confirmed
+  2026-09, §7.2.
 - No default-on global/expensive statistics tier — opt-in only (§7.5).
+- Slice 3 (the global/expensive tier) itself is out of scope for this
+  pass — deferred pending user validation of Slices 1+2 (§7.10).
 - No speculative "harvest during load" implementation — background
   notes only, gated behind a real consumer (§7.5,
   `visplot-statistics-dataflow-notes.md`).
@@ -537,19 +816,146 @@ size/threshold, using the exact pattern existing controls already use).
 
 ### 7.9 Open questions
 
-- [ ] Which reference group (§7.3) is the actual first target — or is
+- [x] ~~Which reference group (§7.3) is the actual first target — or is
       per-baseline-then-per-antenna-aggregation (the recommended order)
-      confirmed?
-- [ ] Naming for the new `Axis` member (`DEVIATION` is a placeholder).
-- [ ] Is real/imaginary the right statistics basis by default, or
-      should it be configurable per layer (§7.4)?
-- [ ] Worth pursuing real `flagdata(action='calculate')` as an MSv2-side
-      validation oracle (`visplot-rflag-colorization-reference.md` §2)?
-      Blocked on confirming whether it supports MSv4 Processing Sets at
-      all — needs Darrell's own CASA6 knowledge, not further guessing.
-- [ ] Will Part 5, once started, need its own design→backend→render→UI
-      breakdown the way the original feature used Parts 2–4? (Current
-      guess: yes, once scoping firms up further.)
+      confirmed?~~ Confirmed 2026-09 (§7.3, §7.10): per-baseline first
+      (Slice 1), per-antenna-within-current-view second (Slice 2).
+- [x] ~~Naming for the new `Axis` member (`DEVIATION` is a
+      placeholder).~~ Resolved 2026-09: `Axis.Z_SCORE` (§7.6, §7.10).
+- [x] ~~Is real/imaginary the right statistics basis by default, or
+      should it be configurable per layer (§7.4)?~~ Confirmed 2026-09,
+      verified against the standard interferometric noise model
+      (Thompson, Moran & Swenson): real/imaginary, not configurable per
+      layer for this pass, combined as a single joint radial statistic
+      rather than two independent per-part z-scores (§7.4, §7.10) —
+      correcting this document's earlier claim that real/imaginary
+      "matches `rflag`'s own choice" (CASA's `flagdata` actually
+      defaults to amplitude; real/imaginary is available, not default —
+      §7.4).
+- [x] ~~Worth pursuing real `flagdata(action='calculate')` as an MSv2-side
+      validation oracle (`visplot-rflag-colorization-reference.md` §2)?~~
+      Resolved 2026-09: `flagdata` does not operate on MSv4 Processing
+      Sets (confirmed directly, not inferred). Part 6 builds its own
+      computation on both backends; if the MSv2-side comparison is
+      pursued at all, it stays a one-off offline script, never a
+      runtime dependency (§7.2, §7.10).
+- [ ] Will Part 6, once Slices 1+2 are validated with users, need its
+      own design→backend→render→UI breakdown the way the original
+      feature used Parts 2–4 for Slice 3? (Current guess: yes, once
+      Slice 3 is actually taken up.)
+- [x] ~~A threshold/highlight display mode (everything under a threshold
+      rendered neutrally, everything over it in one unmissable color),
+      as a first-class alternative to a continuous gradient~~ Resolved
+      2026-09: yes, as a switchable option (not a replacement) — a new
+      `"threshold"` scaling function alongside `linear`/`log`/`eq_hist`,
+      reusing the existing `scaling_vmin` field as the cutoff. See §7.6.
+- [x] ~~Whether already-flagged data should be excluded from the
+      reference-population computation~~ Confirmed 2026-09: excluded.
+      Median/MAD tolerate contamination well (up to ~50% breakdown), so
+      this was never a fragile question, but the policy is now explicit
+      rather than implicit (§7.10).
+- [x] ~~Per-antenna aggregation (§7.3 row 2, Slice 2): ... does Slice 2
+      need a distinct per-antenna color at all?~~ Resolved 2026-09: no.
+      "Color by Z-Score" is a third `ScatterLayerSpec.coloring` mode
+      (`"statistical"`, name proposed) parallel to today's
+      `"continuous"`/`"categorical"`, following `colorize_controls()`'s
+      own established shape — a layer property, not a workflow-specific
+      one. Slice 2 therefore reuses Slice 1's per-baseline coloring
+      as-is under whatever selection antenna iteration already applies;
+      the only new Slice 2 work is the summary readout (§7.6/§7.10),
+      which shows several statistics side by side rather than needing a
+      single aggregation formula. See §7.6.
+
+### 7.10 Slice approval / scope record — 2026-09
+
+Recorded here as the durable decision trail, since §7.9's resolutions
+above all trace back to this one round of scoping:
+
+- **Approved for implementation now: Slices 1 and 2** — the per-baseline
+  windowed score (§7.3 row 1) and per-antenna aggregation of it within
+  whatever's already loaded/iterated (§7.3 row 2, the clarifying note).
+  Both are cost-tier "cheap" (§7.5); neither needs the opt-in gate.
+- **Deferred: Slice 3** — the global-reference, expensive, cluster-
+  relevant tier (§7.5). Not rejected, deliberately not built yet:
+  Slices 1+2 are to be validated and tested with real users first: the
+  reference-group breakdown, the metric, and the per-antenna
+  presentation could all still change in response to that feedback, and
+  building Slice 3 before that would risk building the wrong version of
+  it.
+- **The one thing done now specifically to keep Slice 3 cheap later:**
+  the §7.5 architectural note (explicit, swappable reference-population
+  parameter on the scoring function) — a zero-cost discipline for
+  Slices 1+2 that turns Slice 3 into "compute a different reference and
+  pass it in" rather than a second implementation, if and when it's
+  taken up.
+- **Metric:** basis and combination rule both verified against the
+  literature, not just carried forward as originally proposed — see
+  §7.4 for the full derivation and citations. Real/imaginary confirmed
+  as the right basis (matches the standard circularly-symmetric-complex-
+  Gaussian interferometric noise model, Thompson/Moran/Swenson), but
+  combined as one joint radial statistic rather than two independent
+  per-part z-scores, and reported as a magnitude (always ≥ 0) rather
+  than a signed value — the latter also matches Iglewicz & Hoaglin's
+  own convention for the modified z-score they defined (thresholded on
+  absolute value). One correction made to this document's own earlier
+  framing in the same pass: real/imaginary is a well-motivated choice,
+  but is not CASA's own default for `rflag` (that's amplitude,
+  `ABS_ALL`) — see §7.4.
+- **Naming:** `Axis.Z_SCORE`, chosen for being the term most likely to
+  already mean something to an astronomer user, over the `DEVIATION`
+  placeholder.
+- **Per-antenna presentation:** statistics only, never a qualitative
+  verdict — see §7.2's firm statement and §7.3's table wording.
+- **User trust — two additions approved specifically because users are
+  expected to be (rightly) suspicious of an automated score:**
+  - The reference population's size must be visible to the user
+    (colorbar/legend), and there must be a minimum-N floor below which
+    the score is not shown as if it were reliable (grey out / an
+    explicit "not enough samples in view" rather than a noisy median/
+    MAD presented with false confidence) — see §7.6.
+  - Slice 2's per-antenna view gets a quantitative readout (sample
+    count, median/typical score, fraction over whatever threshold is in
+    use) alongside the color, in the existing legend/info-panel area —
+    not color alone. Astronomers get a number they can note down, not
+    just a visual impression to take on faith — see §7.6.
+- **Dependencies:** confirmed independent of `casatools`/
+  `python-casacore` at runtime; `arcae` remains available if needed.
+  `flagdata` confirmed not to support MSv4, closing that open question
+  in the direction §3 of `visplot-rflag-colorization-reference.md`
+  already anticipated.
+- **Raster+scatter synergy:** confirmed and factored in, per explicit
+  request — visplot's existing linked cursor and linked x-range
+  (`cursor_source`, `_build_plot_area`'s x-range sharing — both
+  verified directly against `visibility_plotter.py`, neither built for
+  this feature) already give a Z-Score-colored raster+scatter pair most
+  of the "spot it, then confirm what it is" workflow for free. The new
+  preset (§7.6/§7.7) should set up both panels at once on a linked
+  axis, not just one panel — see §7.6 for the full reasoning and the
+  backend-caching implication this adds to §7.5's architectural note.
+- **Reference population excludes already-flagged data.** Confirmed
+  2026-09: a point already flagged by a prior pass does not contribute
+  to the median/MAD (or joint-radial equivalent, §7.4) computed for
+  Slices 1+2. Still shown in the display — just not counted toward
+  what "typical" means. Robust statistics tolerate a fair amount of
+  contamination on their own (median/MAD's ~50% breakdown point), so
+  this was never a fragile question, but the policy is now explicit
+  rather than left for an implementer to guess.
+- **"Color by Z-Score" is a third `coloring` mode, `"statistical"`
+  (proposed), not a bespoke field.** Confirmed 2026-09 — see §7.6 for
+  the full reasoning. This dissolves the per-antenna color question
+  below: Slice 2 needs no coloring work of its own, only the already-
+  approved summary readout, since coloring is a layer property that
+  Slice 1's mode already provides regardless of what selection or
+  iteration is active.
+- **A threshold/highlight display, switchable, not exclusive.**
+  Confirmed 2026-09 — a new `"threshold"` scaling function, reusing the
+  existing scaling dispatch and the `scaling_vmin` field, available
+  both for Z-Score plotted directly and as the `"statistical"` mode's
+  own display-style choice. See §7.6.
+- **After this round, Slices 1+2 have no remaining open pre-
+  implementation questions** — §7.9's one remaining item (Slice 3's own
+  design→backend→render→UI breakdown) is explicitly deferred until
+  Slice 3 is taken up, not a blocker for starting Slices 1+2 now.
 
 ---
 
@@ -596,7 +1002,7 @@ with the decision recorded; add new ones as they surface.
   cardinality numbers added to §4.2. See
   `visplot-colorize-by-axis-handoff-part3.md` for the full evidence and
   what Part 3 needs to know about where the columns live.
-- **v3** — Part 5 scoped (design only): statistical/`rflag`-style
+- **v3** — Part 6 scoped (design only): statistical/`rflag`-style
   colorization for both raster and scatter (§7), originating from a
   discussion about connecting anomalous data back to the antenna/receiver
   that produced it. Anchored on CASA's real `rflag`/`tfcrop` algorithms as
@@ -637,3 +1043,78 @@ with the decision recorded; add new ones as they surface.
   real, understood residual cost rather than chased further. This is the
   note several code comments already pointed to before it existed here;
   written now to close that gap.
+- **v6** — Housekeeping + Part 6 scope decisions, both 2026-09. (1)
+  Renamed the statistical/rflag-style colorization feature from "Part 5"
+  to "Part 6" throughout this document and its two companions: the
+  numbers "Part 5"/"Part 5a" had, by this point, independently been used
+  in real shipped code for the unrelated category-exclusion/priority-
+  selection feature (see the naming note at the top of this document) —
+  a rename only, no scope change. Also corrected this document's own
+  stale status line (Part 4 was in fact complete, verified against the
+  source, not "not started" as previously stated) and fixed an
+  incorrect section citation in `visplot-rflag-colorization-reference.md`
+  (§9 → §7). (2) Part 6 scoping decisions recorded in full in the new
+  §7.10: Slices 1+2 (per-baseline score, per-antenna aggregation within
+  the current view) approved for implementation; Slice 3 (global
+  reference, cluster-relevant) deferred pending user validation of
+  Slices 1+2; metric confirmed as originally proposed (§7.4); axis named
+  `Axis.Z_SCORE`; per-antenna aggregation confirmed to present statistics
+  only, never a qualitative verdict (§7.2, §7.3); confirmed independent
+  of `casatools`/`python-casacore` at runtime, `arcae` permitted if
+  needed (§7.2); `flagdata`-as-validation-oracle question resolved —
+  does not support MSv4, so Part 6 builds its own computation on both
+  backends. A new architectural note added to §7.5: the Slice 1+2
+  scoring function takes its reference population as an explicit
+  parameter rather than assuming "whatever's currently loaded," a
+  zero-cost discipline now that keeps a later Slice 3 a matter of
+  passing in a different reference rather than a second implementation.
+- **v7** — Metric verified against the literature (2026-09), plus
+  raster+scatter synergy factored in on request. The real/imaginary
+  basis (§7.4) is confirmed correct, but its combination rule is
+  revised: a single joint, rotation-invariant radial statistic, not two
+  independent per-part z-scores, justified by the standard circularly-
+  symmetric-complex-Gaussian interferometric noise model (Thompson,
+  Moran & Swenson) rather than by intuition alone. Displaying the score
+  as a magnitude (never signed) is confirmed as the literal convention
+  for the modified z-score itself (Iglewicz & Hoaglin 1993), not a UX
+  preference. One correction made to this document's own prior claim:
+  real/imaginary does not "match `rflag`'s own choice" — CASA's
+  `flagdata` correlation parameter defaults to amplitude (`ABS_ALL`)
+  for rflag/tfcrop/clip; real/imaginary is a well-motivated option, not
+  the default. Two trust-focused UI additions approved (§7.6, §7.10):
+  visible reference-population size with a minimum-N floor, and a
+  quantitative per-antenna readout alongside Slice 2's coloring, not
+  color alone. Two more (a threshold/highlight display mode; excluding
+  already-flagged data from the reference) were proposed but not yet
+  decided — left open in §7.9 rather than assumed. Raster+scatter
+  synergy (§7.6, §7.10): visplot's existing linked cursor and linked
+  x-range (verified directly against `visibility_plotter.py`) already
+  give a Z-Score-colored raster+scatter pair most of the "spot it, then
+  confirm what it is" workflow for free; the new preset should set up
+  both panels at once on a linked axis, and a shared reference-statistic
+  cache across both panels' queries was added as a backend implication
+  of §7.5's swappable-reference-population note.
+- **v8** — Already-flagged data confirmed excluded from the reference
+  population (§7.4, §7.10) — still displayed and scored, just not
+  counted toward what "typical" means. One new open item surfaced while
+  closing that one out: Slice 2's per-antenna aggregation (§7.3 row 2)
+  has a "present statistics, not a verdict" principle but no decided
+  formula, and it's not yet settled whether Slice 2 needs a distinct
+  per-antenna *color* at all, versus keeping Slice 1's per-baseline
+  color and adding only a summary readout — see §7.9.
+- **v9** — The two items v8 left open are now resolved, and the second
+  one dissolved the first rather than just answering it. "Color by
+  Z-Score" is confirmed as a third `ScatterLayerSpec.coloring` mode
+  (`"statistical"`, proposed name), parallel to today's `"continuous"`/
+  `"categorical"` and built on `colorize_controls()`'s own established
+  shape — which means Slice 2 needs no per-antenna coloring work at
+  all, only the already-approved summary readout, since coloring is a
+  layer property indifferent to whatever selection or iteration is
+  active. A threshold/highlight display is confirmed as a new
+  `"threshold"` scaling function alongside `linear`/`log`/`eq_hist` —
+  switchable, not exclusive, reusing the existing scaling dispatch and
+  `scaling_vmin` field, and available both for Z-Score plotted directly
+  and as the new mode's own display-style choice. §7.6 rewritten
+  accordingly; the "color source column" framing it previously used is
+  retired in favor of the mode-based description. Slices 1+2 now have
+  no remaining open pre-implementation questions (§7.10).

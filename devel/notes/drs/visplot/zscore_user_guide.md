@@ -3,7 +3,9 @@
 The Z-Score views help you spot data that behaves differently from the rest of the
 same baseline: interference spikes, a bad antenna, a stretch of time where something
 went wrong. They are a screening aid: they show you where to look, and you decide
-what the data actually is.
+what the data actually is. If you know CASA's `rflag`: this is inspired by it but is
+a different method that will not reproduce its flags (see "How this relates to CASA
+rflag" below).
 
 ## In one minute
 
@@ -138,6 +140,37 @@ under the colorbar summarizes it, for example:
   baseline's data before it can score anything. Expect it to take noticeably longer
   than an Amplitude raster on large selections; narrowing the selection helps.
 - Very few samples per baseline give unreliable references.
+
+## How this relates to CASA rflag
+
+The Z-Score view was inspired by the robust, median-based statistics behind CASA's
+`flagdata` mode `rflag` (itself from AIPS, E. Greisen). It is **not** an
+implementation of rflag, it does not use rflag's algorithm, and it will **not**
+reproduce the flags rflag would set. It is a way of *looking at* how unusual each
+sample is, not a flagger.
+
+| | CASA/AIPS `rflag` | visplot Z-Score |
+|---|---|---|
+| Purpose | Automatically sets flags | Colors data by how unusual it is; you decide what to flag |
+| Reference | Local statistics: RMS of the real and imaginary parts in sliding time windows, per channel, plus a separate per-time spectral pass | One median per baseline over the whole current selection, and the median distance of samples from it |
+| What is measured | Local RMS, compared with the median RMS across windows and the median deviation | Each sample's distance from its baseline's typical (median) complex value, relative to the typical distance |
+| Time and frequency | Two steps: time analysis per channel, then spectral analysis per time | No windows; a single per-baseline reference over all times and channels selected |
+| Threshold | Scaled from noise estimates (`timedevscale`, `freqdevscale`, default 5.0), calculated automatically or supplied | 3.5 per sample (a fixed rule of thumb, about 0.2 % false alarms on noise), adjusted upward for raster cells that cover many samples |
+| Output | Flags written to the data (with recommended follow-up extension of the flags) | A score per sample shown as color; nothing is written |
+| Quantity it works on | Chosen by the `correlation` setting (amplitude by default) | The complex visibility (real and imaginary parts together) |
+
+What this means in practice:
+
+- **Do not expect the same picture.** Samples rflag flags will often score high here,
+  but not always, and Z-Score will highlight things rflag ignores (and vice versa).
+- **The numbers are not interchangeable.** A Z-Score cutoff of 3.5 is not the same
+  thing as `timedevscale=5`.
+- **Scans and fields matter more here.** rflag's local windows adapt to changes in
+  brightness between scans; the Z-Score reference does not (see the limitations
+  above). Selecting one Field or Scan makes the two easier to compare.
+- **They work well together.** Use Z-Score to see where problems are and rflag (or
+  manual flagging) to flag them. Data already flagged, by rflag or anything else, is
+  ignored by the Z-Score, so replot after flagging to see what is left.
 
 ## Glossary
 

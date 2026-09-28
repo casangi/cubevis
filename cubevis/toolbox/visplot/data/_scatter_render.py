@@ -1464,7 +1464,18 @@ def resample_id_grid(
 
 
 # ---------------------------------------------------------------------------
-# Part 6: rflag-style statistical (Z-Score) colorization -- Slice 1
+# Part 6: statistical (Z-Score) colorization -- Slice 1
+#
+# Provenance, stated precisely: INSPIRED BY the robust-statistics approach
+# of CASA/AIPS `rflag` (median-based statistics, real and imaginary
+# parts, sigma-style thresholds), but NOT an implementation of the rflag
+# algorithm, and it will not reproduce rflag's flags. rflag measures local
+# RMS in sliding time windows per channel plus a per-time spectral pass,
+# with thresholds scaled from noise estimates; this module scores each
+# sample against ONE median per baseline over the whole selection. The
+# statistic itself is the Iglewicz & Hoaglin modified z-score generalized
+# to a joint radial distance. See ZSCORE_USER_GUIDE.md, "How this relates
+# to CASA rflag".
 # ---------------------------------------------------------------------------
 #
 # Per-baseline, windowed reference population (visplot-colorize-by-axis-
@@ -1493,8 +1504,10 @@ absolute numbers a threshold gets compared against do.
 def compute_baseline_zscore(
     real: np.ndarray, imag: np.ndarray, group: np.ndarray,
 ) -> np.ndarray:
-    """Robust, `rflag`-style joint Z-Score of (real, imag) against a
-    per-group (typically per-baseline) reference population.
+    """Robust joint Z-Score of (real, imag) against a per-group (typically
+    per-baseline) reference population. Inspired by rflag's median-based
+    statistics; not an implementation of the rflag algorithm (see the
+    "Provenance" note above this section).
 
     Implements the design doc's §7.4 formula exactly::
 

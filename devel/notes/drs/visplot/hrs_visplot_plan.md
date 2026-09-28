@@ -1,6 +1,6 @@
 # HRS requirements for plotting: expanded, with a visplot gap analysis and plan
 
-Customer: USNO/NRAO High Sensitivity Subarray (HRS project). Source
+Customer: USNO/NRAO High-Resolution Subarray (HRS pathfinder). Source
 requirement (CASR-385, "Plotting tool improvements"), verbatim:
 
 - Faster and more reliable plotting tool than plotms

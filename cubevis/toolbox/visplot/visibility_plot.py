@@ -236,6 +236,30 @@ except ImportError:
 # Module-level helpers (shared by raster and scatter)
 # ---------------------------------------------------------------------------
 
+def _composite_flag_mask(img32: np.ndarray, mask: np.ndarray, rgba: tuple) -> np.ndarray:
+    """Paint *rgba* over *img32* wherever *mask* is True (in place).
+
+    *mask* is resized (nearest) to the image when shapes differ.  Returns
+    *img32*.  Byte order as ``_img_to_uint32``: R, G, B, A in memory.
+    """
+    if mask is None or img32 is None:
+        return img32
+    mask = np.asarray(mask, dtype=bool)
+    h, w = img32.shape
+    if mask.shape != (h, w):
+        mh, mw = mask.shape
+        if mh == 0 or mw == 0:
+            return img32
+        yi = (np.arange(h) * mh // h).clip(0, mh - 1)
+        xi = (np.arange(w) * mw // w).clip(0, mw - 1)
+        mask = mask[np.ix_(yi, xi)]
+    if not mask.any():
+        return img32
+    px = np.frombuffer(bytes(bytearray(rgba[:4])), dtype=np.uint32)[0]
+    img32[mask] = px
+    return img32
+
+
 def _img_to_uint32(img) -> np.ndarray:
     """Convert a Datashader Image or PIL RGBA Image to a Bokeh uint32 array.
 
@@ -562,6 +586,11 @@ class VisibilityPlot(Model):
         # FlagTool / Unflag instances — created in _build() only when
         # enable_flagging=True.  None otherwise.
         self._flag_tool   = None
+        # FlagDB v2: overlays to composite ([(flag_view, rgba), ...]) and
+        # "pending state changed; re-query before the next draw".  Both set
+        # by FlagController.push_state().
+        self._flag_overlays: list = []
+        self._flag_stale = False
         self._unflag_tool = None
 
         self._build()
@@ -1325,8 +1354,12 @@ comm.send('{msg_probe}', {{x: x, y: y}}, function(resp) {{
                 "y_range":      self._fig.y_range,
             },
             code=_CV_SET_BUSY_JS + f"""
-if (window._cvRerenderTimer) clearTimeout(window._cvRerenderTimer);
-window._cvRerenderTimer = setTimeout(function() {{
+// One debounce timer PER FIGURE (keyed by this figure's message id): a
+// single shared timer let one panel's re-render cancel another's when two
+// figures change together (e.g. both refreshed after a flag operation).
+window._cvRerenderTimers = window._cvRerenderTimers || {{}};
+if (window._cvRerenderTimers['{msg_rerender}']) clearTimeout(window._cvRerenderTimers['{msg_rerender}']);
+window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
     const x0 = x_range.start, x1 = x_range.end;
     const y0 = y_range.start, y1 = y_range.end;
     window.__cvSetBusy(true);
@@ -1400,6 +1433,11 @@ window._cvRerenderTimer = setTimeout(function() {{
         x1 = float(message["x1"])
         y0 = float(message["y0"])
         y1 = float(message["y1"])
+        if self._flag_stale and getattr(self, "_selection", None) is not None:
+            # Pending flags changed since this panel's data were read: re-read
+            # at full extent (rebuilding cached aggregates/references under
+            # the new state) before drawing the requested viewport.
+            self._render(self._selection)
         return self._do_viewport_rerender(x0, x1, y0, y1)
 
     def _parse_axis(self, message: dict, key: str) -> "Optional[Axis]":

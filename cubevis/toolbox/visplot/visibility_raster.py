@@ -38,6 +38,8 @@ import numpy as np
 
 from bokeh.models import ColumnDataSource
 
+import dataclasses
+from .visibility_plot import _composite_flag_mask
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num,
 )
@@ -1140,6 +1142,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         # matters -- the backend counts partitions to decide whether
         # Axis.CHANNEL is unique, and _panel_spec() runs on every push.
         self._refresh_axis_info(selection)
+        self._flag_stale = False
         # New data covers the full extent again; mirrors scatter.
         self._current_viewport = None
         t0     = time.perf_counter()
@@ -1172,6 +1175,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             self._ensure_identity_tables(polarization=self._polarization)
 
         self._agg          = agg
+        self._overlay_aggs = [] if defer else self._query_flag_overlays(selection, budget)
         # Before any shading below reads _scaling_vmin.
         self._apply_zscore_cell_cutoff(agg)
         self._x_range      = x_range
@@ -1229,6 +1233,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             ds_agg = cvs.raster(agg, interpolate=interpolate)
             shaded = self._shade_agg(ds_agg)
             img32  = _img_to_uint32(shaded)
+            self._apply_flag_overlays(img32, (x0, x1), (y0, y1))
 
         new_data = {
             "image": [img32],
@@ -1661,7 +1666,56 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         )
         ds_agg = cvs.raster(agg, interpolate=interpolate)
         shaded = self._shade_agg(ds_agg)
-        return _img_to_uint32(shaded)
+        return self._apply_flag_overlays(_img_to_uint32(shaded), (x0, x1), (y0, y1))
+
+    # ------------------------------------------------------------------ #
+    # FlagDB v2 overlays                                                   #
+    # ------------------------------------------------------------------ #
+
+    def _query_flag_overlays(self, selection, budget) -> list:
+        """One Flag-fraction aggregate per overlay view.
+
+        In the ``pending``/``proposal`` views only the samples whose state
+        the pending flags (or the proposal) change are "unflagged", so a
+        cell is painted when its fraction is below 1.  Restricted to the
+        displayed correlation: the Flag quantity otherwise averages over
+        correlations and would tint cells for flags on another one.
+        """
+        out = []
+        for view, rgba in getattr(self, "_flag_overlays", ()) or ():
+            try:
+                sel = dataclasses.replace(selection, flag_view=view)
+                if self._polarization is not None:
+                    sel = dataclasses.replace(sel, correlation=[self._polarization])
+                oagg, *_ = self._backend.query_raster(
+                    y_dim=self._y_dim, x_dim=self._x_dim, quantity=Axis.FLAG,
+                    selection=sel, polarization=self._polarization, max_cells=budget)
+                main = getattr(self, "_agg", None)
+                if main is not None and oagg.ndim > 2:
+                    extra = [d for d in oagg.dims if d not in main.dims]
+                    oagg = oagg.min(dim=extra, skipna=True).transpose(*main.dims)
+                out.append((rgba, oagg))
+            except Exception:
+                log.debug("flag overlay query failed", exc_info=True)
+        return out
+
+    def _apply_flag_overlays(self, img32, x_range, y_range):
+        """Paint the overlays over *img32* for the viewport (in place)."""
+        for rgba, oagg in getattr(self, "_overlay_aggs", ()) or ():
+            if oagg is None or oagg.shape[0] < 2 or oagg.shape[1] < 2:
+                continue
+            try:
+                cvs = ds.Canvas(plot_width=img32.shape[1], plot_height=img32.shape[0],
+                                x_range=tuple(x_range), y_range=tuple(y_range))
+                # "min" keeps a cell containing any changed sample visible
+                # when several cells fall in one pixel.
+                v = np.asarray(cvs.raster(oagg, interpolate="nearest", agg="min").values)
+                with np.errstate(invalid="ignore"):
+                    mask = np.isfinite(v) & (v < 1.0 - 1e-9)
+                _composite_flag_mask(img32, mask, rgba)
+            except Exception:
+                log.debug("flag overlay composite failed", exc_info=True)
+        return img32
 
     def _data_to_pixel(
         self, x: float, y: float

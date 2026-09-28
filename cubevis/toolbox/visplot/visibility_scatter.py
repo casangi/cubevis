@@ -65,6 +65,8 @@ import xarray as xr
 
 from bokeh.models import ColumnDataSource
 
+import dataclasses
+from .visibility_plot import _composite_flag_mask
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num,
 )
@@ -1645,6 +1647,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         # matters -- the backend counts partitions to decide whether
         # Axis.CHANNEL is unique, and _panel_spec() runs on every push.
         self._refresh_axis_info(selection)
+        self._flag_stale = False
         t0 = time.perf_counter()
         self._current_viewport = None   # reset — new data covers full range
         if defer:
@@ -2917,6 +2920,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         """Push a composite image into ``_image_source`` at the given range."""
         x0, x1 = x_range
         y0, y1 = y_range
+        self._apply_flag_overlays(img32, x_range, y_range)
         new_data = {
             "image": [img32],
             "x":     [x0],
@@ -2928,6 +2932,42 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._image_source = ColumnDataSource(data=new_data)
         else:
             self._image_source.data = new_data
+
+    def _apply_flag_overlays(self, img32, x_range, y_range):
+        """Paint pending / proposal overlays over *img32* (in place).
+
+        Each overlay is the same visible layers queried in a flag view in
+        which only the samples the pending flags (or the proposal) change
+        are drawn -- the exact points, at this viewport and canvas size.
+        """
+        overlays = getattr(self, "_flag_overlays", ()) or ()
+        sel = getattr(self, "_selection", None)
+        if not overlays or sel is None or img32 is None or img32.ndim != 2:
+            return img32
+        specs = [ScatterLayerSpec(y_axis=lyr.y_axis, polarization=lyr.polarization,
+                                  cmap=("#ffffff", "#ffffff"), alpha=1.0,
+                                  scaling="linear")
+                 for lyr in self._layers if lyr.alpha > 0.0]
+        if not specs:
+            return img32
+        h, w = img32.shape
+        for view, rgba in overlays:
+            try:
+                res = self._backend.query_columns(
+                    self._x_dim, specs, dataclasses.replace(sel, flag_view=view),
+                    x_range=tuple(x_range), y_range=tuple(y_range),
+                    color_mode=self._color_mode, width=w, height=h)
+                mask = None
+                for lr in res.layers:
+                    im = getattr(lr, "image", None)
+                    if im is None:
+                        continue
+                    a = np.asarray(im, dtype=np.uint32).view(np.uint8).reshape(im.shape + (4,))[..., 3] > 0
+                    mask = a if mask is None else (mask | a) if a.shape == mask.shape else mask
+                _composite_flag_mask(img32, mask, rgba)
+            except Exception:
+                log.debug("scatter flag overlay failed", exc_info=True)
+        return img32
 
     def _rerender(
         self,

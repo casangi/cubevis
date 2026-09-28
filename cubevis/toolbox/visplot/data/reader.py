@@ -1180,6 +1180,37 @@ def _resolve_vis_variable(ds: xr.Dataset, data_column: str) -> str:
 
 
 # ======================================================================
+# Flag view (FlagDB v2)
+# ======================================================================
+
+import contextvars as _contextvars
+
+_FLAG_VIEW: "_contextvars.ContextVar[str]" = _contextvars.ContextVar(
+    "cubevis_visplot_flag_view", default="effective")
+
+
+class _FlagViewContext:
+    """``with backend.flag_view("disk"): ...`` -- sets the view read by
+    ``XArrayReader._flag_mask`` for queries made in this context.  The
+    dask graph is built inside the query call, so the view is captured at
+    graph-construction time, in the calling thread."""
+
+    def __init__(self, view: str) -> None:
+        if view not in ("effective", "disk", "pending", "proposal"):
+            raise ValueError(f"unknown flag view {view!r}")
+        self._view = view
+        self._token = None
+
+    def __enter__(self):
+        self._token = _FLAG_VIEW.set(self._view)
+        return self
+
+    def __exit__(self, *exc):
+        _FLAG_VIEW.reset(self._token)
+        return False
+
+
+# ======================================================================
 # Abstract base class
 # ======================================================================
 
@@ -2149,47 +2180,70 @@ class XArrayReader(abc.ABC):
     # With ``apply=False`` (the "overlay" display mode) the render sees the
     # on-disk flags only and pending flags are drawn as a separate layer.
 
-    def set_pending_flags(self, deltas, version: int = 0, apply: bool = True) -> None:
-        """Install the pending flag state (a list of ``FlagDelta`` or of
-        their ``to_dict()`` forms).  *version* is ``FlagDB.version``; it
-        must match ``SelectionSpec.pending_version`` of later queries."""
+    def set_pending_flags(self, deltas, version: int = 0, apply: bool = True,
+                          proposal=None) -> None:
+        """Install the pending flag state.
+
+        *deltas*: ``FlagDelta`` objects (or ``to_dict()`` forms), in order.
+        *version*: the plotter's pending-state counter; must match
+        ``SelectionSpec.pending_version`` of later queries.  *proposal*: an
+        optional ``FlagDelta`` under review (drawn with
+        ``flag_view="proposal"``, never applied).  *apply* is kept for
+        compatibility; the per-query ``SelectionSpec.flag_view`` decides.
+        """
         from ..flag_model import FlagDelta
-        ds_ = [d if isinstance(d, FlagDelta) else FlagDelta.from_dict(d)
-               for d in (deltas or ())]
-        self._cv_pending = tuple(ds_)
+
+        def conv(d):
+            return d if isinstance(d, FlagDelta) else FlagDelta.from_dict(d)
+        self._cv_pending = tuple(conv(d) for d in (deltas or ()))
         self._cv_pending_version = int(version)
         self._cv_pending_apply = bool(apply)
+        self._cv_proposal = conv(proposal) if proposal is not None else None
 
     def pending_flag_state(self) -> dict:
         return {"version": getattr(self, "_cv_pending_version", 0),
                 "n_deltas": len(getattr(self, "_cv_pending", ()) or ()),
-                "apply": getattr(self, "_cv_pending_apply", True)}
+                "proposal": getattr(self, "_cv_proposal", None) is not None}
 
-    def _pending_deltas(self, applied_only: bool = True) -> tuple:
-        pend = getattr(self, "_cv_pending", ()) or ()
-        if applied_only and not getattr(self, "_cv_pending_apply", True):
-            return ()
-        return pend
+    def _pending_deltas(self) -> tuple:
+        return getattr(self, "_cv_pending", ()) or ()
+
+    @staticmethod
+    def flag_view(view: Optional[str]):
+        """Context manager selecting the flag view for queries made inside
+        it (see ``SelectionSpec.flag_view``)."""
+        return _FlagViewContext(view or "effective")
 
     def _disk_flag_mask(self, ds: "xr.Dataset") -> "xr.DataArray":
         return ds["FLAG"].astype(bool)
 
     def _flag_mask(self, ds: "xr.Dataset") -> "xr.DataArray":
-        """Effective flags: on-disk flags with the pending deltas applied."""
+        """Flags as the current view sees them (True = not drawn).
+
+        ``effective``: on-disk flags with the pending deltas applied, which
+        is also what flag evaluation always uses.  See
+        ``SelectionSpec.flag_view`` for the other views.
+        """
         base = self._disk_flag_mask(ds)
-        pend = self._pending_deltas()
-        if not pend:
+        view = _FLAG_VIEW.get()
+        if view == "disk":
             return base
+        pend = self._pending_deltas()
         from ..flag_engine import apply_pending
-        return apply_pending(self, ds, base, pend)
+        eff = apply_pending(self, ds, base, pend) if pend else base
+        if view == "pending":
+            return eff == base
+        if view == "proposal":
+            prop = getattr(self, "_cv_proposal", None)
+            if prop is None:
+                return xr.ones_like(base, dtype=bool)
+            return apply_pending(self, ds, eff, (prop,)) == eff
+        return eff
 
     def pending_flag_mask(self, ds: "xr.Dataset") -> "xr.DataArray":
-        """Samples of *ds* whose state the pending deltas change (for the
-        pending-overlay display): ``effective != on-disk``."""
-        from ..flag_engine import apply_pending
-        base = self._disk_flag_mask(ds)
-        eff = apply_pending(self, ds, base, self._pending_deltas(applied_only=False))
-        return eff != base
+        """Samples of *ds* whose state the pending deltas change."""
+        with self.flag_view("pending"):
+            return ~self._flag_mask(ds)
 
     def spw_casa_ids(self) -> dict:
         """``{SpwKey: CASA spw id}`` for windows whose numeric id is known.

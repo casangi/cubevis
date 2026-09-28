@@ -5,6 +5,7 @@ import {PanEvent} from "@bokehjs/core/ui_events"
 import {DragTool, DragToolView} from "./drag_tool"
 import {px_from_sx, py_from_sy, dx_from_px, dy_from_py} from "../util/find"
 import {Comm} from "../transport/comm_mgr"
+import {Callback} from "@bokehjs/models/callbacks/callback"
 
 // Screen-pixel movement below this threshold counts as a "click" (zoom to
 // 1:1) rather than a drag (rubber-band box).
@@ -15,13 +16,6 @@ const DRAG_THRESHOLD_PX = 3
 // next range 'end' event, so treat "close enough or finer" as at-res.
 const PIXEL_RES_TOLERANCE = 1.01
 
-// Guards against a second, redundant activate() call landing within this
-// window of a real one — observed in practice as a duplicate tap/activation
-// racing the re-render this tool's own zoom triggers, occasionally landing
-// in a transient 0x0 measurement gap while the canvas is mid-rebuild.
-// Already harmless (the guards below just no-op on bad geometry), this
-// just avoids the redundant attempt and its console noise.
-const ACTIVATE_DEBOUNCE_MS = 250
 
 export class FlagToolView extends DragToolView {
   declare model: FlagTool
@@ -29,7 +23,6 @@ export class FlagToolView extends DragToolView {
   private _start_sx = 0
   private _start_sy = 0
   private _dragging = false
-  private _last_activate_zoom_ts = 0
 
   override connect_signals(): void {
     super.connect_signals()
@@ -112,6 +105,10 @@ export class FlagToolView extends DragToolView {
 
     const {comm, msg_id, flag, panel, at_pixel_res} = this.model
     if (comm == null || !msg_id) return
+    // Busy indicator while Python resolves the box (window.__cvSetBusy is
+    // defined by the plotter's page script; absent in bare figures).
+    const set_busy = (window as any).__cvSetBusy
+    if (typeof set_busy === "function") set_busy(true)
 
     // Always send — even below flagging resolution. Python decides
     // whether to actually record a FlagDelta, and reports back through
@@ -125,6 +122,14 @@ export class FlagToolView extends DragToolView {
       flag, panel, at_pixel_res,
       tool: flag ? "flag_box" : "unflag_box",
     }, (resp: any) => {
+      if (typeof set_busy === "function") set_busy(false)
+      const {response_callback} = this.model
+      if (response_callback != null) {
+        // FlagDB v2: the plotter's own handler applies texts, the review
+        // dialog and the panel refresh.
+        response_callback.execute(this.model, {response: resp})
+        return
+      }
       if (resp == null) return
       const {notify_div, status_div} = this.model
       if (notify_div != null && resp.notify_text != null) {
@@ -160,14 +165,10 @@ export class FlagToolView extends DragToolView {
   // genuine self re-click never sets any other tool's active=true.
   // -------------------------------------------------------------------
 
-  override activate(): void {
-    const now = Date.now()
-    if (now - this._last_activate_zoom_ts < ACTIVATE_DEBOUNCE_MS) {
-      return
-    }
-    this._last_activate_zoom_ts = now
-    this._zoom_to_pixel_res_at_view_center()
-  }
+  // FlagDB v2: selecting the tool no longer zooms to 1:1 -- flagging is
+  // exact at any zoom (the box is resolved in data space; filters narrow
+  // it).  A plain click with the tool still zooms to 1:1 as a convenience.
+  override activate(): void {}
 
   override deactivate(): void {
     const {toolbar} = this.plot_view.model
@@ -216,27 +217,6 @@ export class FlagToolView extends DragToolView {
       return [model.inner_width, model.inner_height]
     }
     return [frame_bbox.width, frame_bbox.height]
-  }
-
-  private _zoom_to_pixel_res_at_view_center(allow_retry = true): void {
-    const [frame_w, frame_h] = this._frame_size()
-    if (frame_w === 0 || frame_h === 0) {
-      if (allow_retry) {
-        // Belt-and-braces: retry once more on the next frame before
-        // giving up, in case even inner_width/inner_height hasn't been
-        // set yet (e.g. genuinely the very first paint).
-        console.debug("[FlagTool] frame not yet measured (0x0), retrying next frame", {frame_w, frame_h})
-        requestAnimationFrame(() => this._zoom_to_pixel_res_at_view_center(false))
-      } else {
-        console.warn("[FlagTool] aborting zoom: frame still unmeasured after retry", {frame_w, frame_h})
-      }
-      return
-    }
-    const x_range = this.plot_view.model.x_range
-    const y_range = this.plot_view.model.y_range
-    const cx = ((x_range.start as number) + (x_range.end as number)) / 2
-    const cy = ((y_range.start as number) + (y_range.end as number)) / 2
-    this._zoom_to_pixel_res(cx, cy)
   }
 
   private _zoom_to_pixel_res(cx: number, cy: number): void {
@@ -363,6 +343,7 @@ export namespace FlagTool {
     at_pixel_res:  p.Property<boolean>
     notify_div:    p.Property<any>
     status_div:    p.Property<any>
+    response_callback: p.Property<Callback | null>
   }
 }
 
@@ -406,6 +387,7 @@ export class FlagTool extends DragTool {
       at_pixel_res:  [ Boolean, false ],
       notify_div:    [ Nullable(Any), null ],
       status_div:    [ Nullable(Any), null ],
+      response_callback: [ Nullable(Ref(Callback)), null ],
     }))
   }
 

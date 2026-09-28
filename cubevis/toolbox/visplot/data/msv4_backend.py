@@ -2009,11 +2009,20 @@ class MSv4Backend(XArrayReader):
         x_name = _axis_to_dim(x_dim, self._baseline_dim)
 
         if quantity == Axis.FLAG:
-            frac = flag.astype(float).mean(
+            # Padding (EFFECTIVE_INTEGRATION_TIME NaN) is excluded BEFORE
+            # averaging.  Masking the reduced fraction afterwards (as before
+            # 2026-09-28) re-broadcast it over (time, baseline) whenever
+            # baseline was one of the reduced dims -- a TIME x FREQUENCY
+            # Flag raster came back 3-D -- and let padded slots, which
+            # xarray-ms marks flagged, inflate the fraction.
+            f = flag.astype(float)
+            if eit is not None:
+                f = f.where(np.isfinite(eit))
+            frac = f.mean(
                 dim=[d for d in flag.dims if d not in (y_name, x_name)],
                 skipna=True,
             )
-            if eit is not None:
+            if eit is not None and all(d in frac.dims for d in eit.dims):
                 frac = frac.where(np.isfinite(eit))
             return _drop_non_raster_coords(frac, y_name, x_name)
 

@@ -538,11 +538,13 @@ class RemoteReductionContext(ReductionContext):
     # ------------------------------------------------------------------ #
 
     def set_pending_flags(self, deltas, version: int = 0, apply: bool = True,
-                          timeout: Optional[float] = None) -> None:
+                          proposal=None, timeout: Optional[float] = None) -> None:
         wire = [d.to_dict(json_safe=True) if hasattr(d, "to_dict") else d
                 for d in (deltas or ())]
+        prop = (proposal.to_dict(json_safe=True) if hasattr(proposal, "to_dict")
+                else proposal)
         self._call("set_pending_flags", deltas=wire, version=int(version),
-                   apply=bool(apply), timeout=timeout)
+                   apply=bool(apply), proposal=prop, timeout=timeout)
 
     def evaluate_flag_request(self, request: dict, timeout: Optional[float] = None) -> dict:
         if request.get("filter_obj") is not None and not request["filter_obj"].builtin:

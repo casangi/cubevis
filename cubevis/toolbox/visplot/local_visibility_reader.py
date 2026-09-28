@@ -131,15 +131,16 @@ class LocalVisibilityReader:
         polarization: Optional[str] = None,
         max_cells: int = 2_000_000,
     ) -> tuple[xr.DataArray, tuple[float, float], tuple[float, float], bool]:
-        """Delegate to ``backend.query_raster``."""
-        return self._backend.query_raster(
-            y_dim=y_dim,
-            x_dim=x_dim,
-            quantity=quantity,
-            selection=selection,
-            polarization=polarization,
-            max_cells=max_cells,
-        )
+        """Delegate to ``backend.query_raster`` (in the selection's flag view)."""
+        with self._backend.flag_view(getattr(selection, "flag_view", None)):
+            return self._backend.query_raster(
+                y_dim=y_dim,
+                x_dim=x_dim,
+                quantity=quantity,
+                selection=selection,
+                polarization=polarization,
+                max_cells=max_cells,
+            )
 
     def query_columns(
         self,
@@ -162,13 +163,14 @@ class LocalVisibilityReader:
         (2026-09 two-level rendering) forwarded like every other keyword
         here.
         """
-        return self._backend.query_columns(
-            xaxis, layers, selection,
-            x_range=x_range, y_range=y_range, color_mode=color_mode,
-            width=width, height=height,
-            probe_grid_max_cells=probe_grid_max_cells,
-            ref_scale=ref_scale,
-        )
+        with self._backend.flag_view(getattr(selection, "flag_view", None)):
+            return self._backend.query_columns(
+                xaxis, layers, selection,
+                x_range=x_range, y_range=y_range, color_mode=color_mode,
+                width=width, height=height,
+                probe_grid_max_cells=probe_grid_max_cells,
+                ref_scale=ref_scale,
+            )
 
     def probe_scatter_region(
         self,
@@ -180,10 +182,11 @@ class LocalVisibilityReader:
         max_samples: int = 200_000,
     ) -> dict:
         """Delegate to ``backend.probe_scatter_region``."""
-        return self._backend.probe_scatter_region(
-            x_axis, yaxes, selection, x_range, y_range,
-            max_samples=max_samples,
-        )
+        with self._backend.flag_view(getattr(selection, "flag_view", None)):
+            return self._backend.probe_scatter_region(
+                x_axis, yaxes, selection, x_range, y_range,
+                max_samples=max_samples,
+            )
 
     def identity_tables(
         self,
@@ -246,8 +249,9 @@ class LocalVisibilityReader:
     # FlagDB v2                                                            #
     # ------------------------------------------------------------------ #
 
-    def set_pending_flags(self, deltas, version: int = 0, apply: bool = True) -> None:
-        self._backend.set_pending_flags(deltas, version, apply)
+    def set_pending_flags(self, deltas, version: int = 0, apply: bool = True,
+                          proposal=None) -> None:
+        self._backend.set_pending_flags(deltas, version, apply, proposal)
 
     def evaluate_flag_request(self, request: dict) -> dict:
         return self._backend.evaluate_flag_request(request)

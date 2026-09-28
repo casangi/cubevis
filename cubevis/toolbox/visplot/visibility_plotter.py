@@ -114,6 +114,7 @@ from .scaling_memory import RasterScalingUnit
 from .view_state import ApplyReport, StateRegistry
 from .refresh import RefreshLevel as _RefreshLevel
 from .flag_db import FlagDB
+from .flag_controls import FlagController
 from .iteration_step import STEP_INDEX_JS
 from .info_panel import (
     build_info_selectors, wire_info_display, apply_info_defaults,
@@ -1804,6 +1805,10 @@ class VisibilityPlotter:
         raster_cmap:      Optional[str]  = None,
         scatter_cmap:     Optional[str]  = None,
         headless:         bool           = False,
+        flag_filters:     Optional[dict] = None,
+        flag_preview:     bool           = False,
+        flag_display:     str            = "hide",
+        flag_color:       str            = "#ff00ff",
     ) -> None:
         """Construct the plotter.
 
@@ -1834,7 +1839,13 @@ class VisibilityPlotter:
         # ------------------------------------------------------------------ #
         # FlagDB + hotkey scope                                                #
         # ------------------------------------------------------------------ #
-        self._flag_db         = FlagDB()
+        # FlagDB v2 (see flag_controls.py): the controller owns the FlagDB,
+        # the filter registry (built-ins + flag_filters=) and the flag GUI
+        # state.  ``self._flag_db`` stays as the historical alias.
+        self._flags           = FlagController(
+            self, filters=flag_filters, preview=flag_preview,
+            display=flag_display, color=flag_color)
+        self._flag_db         = self._flags.db
         # Part 6: bumped by Reload; carried to the backend in the
         # SelectionSpec so its frame cache re-reads instead of reusing.
         self._cache_generation = 0
@@ -2189,6 +2200,16 @@ class VisibilityPlotter:
         self._pipe["control"].register(self._ids["done"], self._handle_done)
         self._pipe["control"].register(self._ids["theme"], self._handle_theme)
         self._pipe["control"].register(self._ids["export"], self._handle_export)
+
+        # FlagDB v2 controls (filter/config, undo/redo/clear, review,
+        # export) on their own pipe WITHOUT queue squashing: a squashing
+        # queue could drop an Undo pressed twice in a row.
+        self._pipe["flag"] = self._comm_mgr.open(
+            squash_queue=False,
+            description="visibility plotter flag controls",
+        )
+        self._ids["flag"] = str(uuid4())
+        self._pipe["flag"].register(self._ids["flag"], self._flags.handle_action)
 
     def _build_panels(self) -> None:
         """Phase 2b: cursor/order sources, panel objects, slot bookkeeping.
@@ -2687,15 +2708,17 @@ for (const dt of other.tools) {
         # fire a select event from the browser; becomes Group 3's problem   #
         # once per-slot axis state exists.                                  #
         # ------------------------------------------------------------------ #
-        async def _raster_select(msg, context=None, self=self):
-            return await self._handle_box_select(msg, panel="raster")
-
-        async def _scatter_select(msg, context=None, self=self):
-            return await self._handle_box_select(msg, panel="scatter")
+        # FlagDB v2: each figure's callback carries the panel OBJECT that
+        # fired, so the box is interpreted with that panel's own axes,
+        # correlation and visible layers (not the global _raster_x/... shims).
+        def _make_select(obj, kind):
+            async def _select(msg, context=None, self=self):
+                return await self._handle_box_select(msg, panel=kind, obj=obj)
+            return _select
 
         for slot in self._slots:
-            slot.raster.register_select_callback(_raster_select)
-            slot.scatter.register_select_callback(_scatter_select)
+            slot.raster.register_select_callback(_make_select(slot.raster, "raster"))
+            slot.scatter.register_select_callback(_make_select(slot.scatter, "scatter"))
 
         # ------------------------------------------------------------------ #
         # Build layout                                                         #
@@ -3292,7 +3315,7 @@ for (const dt of other.tools) {
         # rather than something to preserve across a fresh render.
         did_reload = bool(msg.get("reload", False))
         if did_reload:
-            self._flag_db = FlagDB()
+            self._flags.reset()
             # Part 6: Reload means "read the data again".  The backend now
             # keeps what it reads (so pan/zoom/recolor are fast), which makes
             # this the one explicit way to get fresh data -- PlotMS's own
@@ -3748,111 +3771,45 @@ for (const dt of other.tools) {
         self._stop()
         return {"result": "stopped"}
 
-    async def _handle_box_select(self, msg: dict, panel: str) -> Optional[dict]:
-        x0 = float(msg.get("x0", 0.0))
-        x1 = float(msg.get("x1", 0.0))
-        y0 = float(msg.get("y0", 0.0))
-        y1 = float(msg.get("y1", 0.0))
-        # FlagTool(flag=True) vs. FlagTool(flag=False) ("Unflag") — both
-        # send through the same _msg_select channel and are distinguished
-        # here. Default True only covers messages from something older
-        # that didn't set the field.
-        flag = bool(msg.get("flag", True))
-        verb = "flag" if flag else "unflag"
+    async def _handle_box_select(self, msg: dict, panel: str,
+                                 obj=None) -> Optional[dict]:
+        """Flag / Unflag box from a FlagTool (FlagDB v2).
 
-        # No Bokeh server here, so self._notify()'s Python-side
-        # `_notify_div.text = ...` assignment never reaches the browser
-        # on its own — it's still called (keeps Python-side state
-        # consistent, e.g. for a later full-page re-render), but the
-        # thing that actually updates the browser is this handler's
-        # *return value*: FlagTool's comm.send() callback (flag_tool.ts)
-        # applies notify_text/notify_color/status_text directly to the
-        # live notify_div/status_div models, the same p2j response
-        # mechanism doPlot already uses for resp.status_text.
-        color_warn = "#f38ba8"
-        color_ok   = "#a6e3a1"
+        The box is resolved in data space by the backend
+        (``evaluate_flag_request``) against *obj*'s axes, correlation and
+        visible layers, narrowed by the selected filter, then reviewed
+        (preview) or accepted into the FlagDB.  There is no zoom gate: the
+        box addresses exactly the samples it covers at any zoom (see
+        ``flag_engine``), and filters are how to address only some of them.
+        The response is applied client-side (no Bokeh server) by the
+        FlagTool's ``response_callback``.
+        """
+        if obj is None:
+            obj = self._raster if panel == "raster" else self._scatter
+        lock = getattr(obj, "_render_lock", None)
+        if lock is not None:
+            async with lock:
+                return await self._flags.handle_box(msg, panel, obj)
+        return await self._flags.handle_box(msg, panel, obj)
 
-        # The box now draws at any zoom level (better UX feedback than a
-        # silent no-op), but flagging is still only semantically valid at
-        # or past 1:1 pixel resolution — averaged/decimated bins aren't
-        # individual visibilities. Below that, tell the user why nothing
-        # happened instead of just doing nothing.
-        if not bool(msg.get("at_pixel_res", False)):
-            text = (f"⚠ Zoom to ≥1:1 pixel resolution before you can {verb} "
-                    f"({panel}) — nothing {verb}ged.")
-            self._notify(text, color=color_warn)
-            return {"notify_text": text, "notify_color": color_warn}
+    # ------------------------------------------------------------------ #
+    # FlagDB v2 public API                                                 #
+    # ------------------------------------------------------------------ #
 
-        if panel == "raster":
-            # A raster shows exactly one polarization at a time (see
-            # _flag_key()'s documented contract) -- an unset `correlation`
-            # here previously meant "all", which would flag polarizations
-            # never actually shown at this box. Sourced from self._raster,
-            # the same "whichever slot currently holds this kind"
-            # compatibility shim already used elsewhere in this class
-            # (hover probes, crosshair sync, etc.) for the same "only one
-            # of this kind can fire a select today" simplification that
-            # self._raster_x/_scatter_x below already rely on; becomes
-            # Group 3's problem (see that shim's docstring) once per-slot
-            # select-source identity exists.
-            delta = FlagDelta(
-                flag        = flag,
-                time_range  = (min(x0, x1), max(x0, x1))
-                              if self._raster_x == Axis.TIME else None,
-                freq_range  = (min(x0, x1), max(x0, x1))
-                              if self._raster_x in (Axis.CHANNEL, Axis.FREQUENCY)
-                              else None,
-                correlation = [self._raster._polarization],
-                source  = f"raster_box_{verb}",
-                comment = f"raster {verb} box x=[{x0:.4g},{x1:.4g}] y=[{y0:.4g},{y1:.4g}]",
-            )
-        else:
-            # A scatter panel can overlay several polarization layers at
-            # once, so the box scopes to every *visible* layer (alpha >
-            # 0 -- a hidden/toggled-off layer isn't actually on screen,
-            # matching the same "flag what's displayed" principle).
-            # Same self._scatter compatibility-shim caveat as above.
-            visible_pols = [lyr.polarization for lyr in self._scatter._layers
-                            if lyr.alpha > 0.0]
-            delta = FlagDelta(
-                flag        = flag,
-                time_range  = (min(x0, x1), max(x0, x1))
-                              if self._scatter_x == Axis.TIME else None,
-                freq_range  = (min(x0, x1), max(x0, x1))
-                              if self._scatter_x in (Axis.CHANNEL, Axis.FREQUENCY)
-                              else None,
-                correlation = visible_pols or None,
-                source  = f"scatter_box_{verb}",
-                comment = f"scatter {verb} box x=[{x0:.4g},{x1:.4g}] y=[{y0:.4g},{y1:.4g}]",
-            )
+    @property
+    def flag_db(self) -> FlagDB:
+        """The pending (uncommitted) flags, in application order."""
+        return self._flags.db
 
-        self._flag_db.append(delta)
-        count = self._flag_db.pending_count
-        log.debug(
-            "%s round trip delivered to Python: panel=%s "
-            "x=[%.4g,%.4g] y=[%.4g,%.4g] count=%d",
-            verb.capitalize(), panel, x0, x1, y0, y1, count,
-        )
-        self._render_flag_overlay()
-        self._update_status_bar()
-        text = (f"✓ {verb.capitalize()}ged box recorded ({panel}) — "
-                f"preview only, stored — not yet committed. "
-                f"Flag count: {count}.")
-        self._notify(text, color=color_ok)
-        return {
-            "notify_text":  text,
-            "notify_color": color_ok,
-            "status_text":  self._status_text(),
-        }
+    @property
+    def flags(self) -> FlagController:
+        """The flag controller (filters, preview, display, export)."""
+        return self._flags
 
-    # ====================================================================== #
-    # Flag overlay rendering (stub — Phase 1 F-9/F-10)                        #
-    # ====================================================================== #
-
-    def _render_flag_overlay(self) -> None:
-        pending = self._flag_db.overlay_deltas()
-        log.debug("_render_flag_overlay: %d pending delta(s) — stub", len(pending))
-        # TODO Phase 1: query backend for flagged rows, shade red, composite.
+    def export_flags(self, path: Optional[str] = None, fmt: str = "flagdata") -> str:
+        """Write the pending flags as ``flagdata`` list commands
+        (``fmt="flagdata"``) or JSON Lines (``fmt="jsonl"``); returns the path."""
+        return self._flags.export(path, fmt)
 
     # ====================================================================== #
     # SelectionSpec construction                                               #
@@ -3882,7 +3839,16 @@ for (const dt of other.tools) {
             freq_range  = self._freq_range,
             antenna_names = antenna_names,
             cache_generation = getattr(self, "_cache_generation", 0),
-        )
+        ) if not hasattr(self, "_flags") else self._flags.stamp_selection(SelectionSpec(
+            field_names = [field_name] if field_name else None,
+            spw         = spw_ids or None,
+            correlation = corrs or None,
+            data_column = self._datacolumn,
+            time_range  = self._time_range,
+            freq_range  = self._freq_range,
+            antenna_names = antenna_names,
+            cache_generation = getattr(self, "_cache_generation", 0),
+        ))
 
     def _notify(self, text: str, color: str = "#f38ba8") -> None:
         """Show a transient notification in the status bar.
@@ -4019,6 +3985,8 @@ html, body { height: 100%; margin: 0; }
         )
 
         status_bar               = self._build_status_bar()
+        self._flag_preview_box   = self._flags.build_preview_box(
+            self._pipe["flag"], self._ids["flag"])
 
         # FlagTool/Unflag instances are built earlier (during __init__, via
         # each panel's own VisibilityPlot._build() -> _add_flag_tools()),
@@ -4036,6 +4004,15 @@ html, body { height: 100%; margin: 0; }
                     tool.status_div = self._status_div
 
         sidebar_col, toggle_btn  = self._build_sidebar()
+        # FlagDB v2: one CustomJS applies every flag response (texts,
+        # preview dialog, panel refresh) -- built after the sidebar so the
+        # Flag section's info line exists.
+        _flag_resp_cb = self._flags.response_callback()
+        for panel in self._all_panels:
+            for tool in (getattr(panel, "_flag_tool", None),
+                         getattr(panel, "_unflag_tool", None)):
+                if tool is not None:
+                    tool.response_callback = _flag_resp_cb
         toolbar                  = self._build_toolbar(toggle_btn)
         side_container, over_container = self._build_plot_area()
 
@@ -4093,6 +4070,7 @@ html, body { height: 100%; margin: 0; }
             sizing_mode="stretch_both",
         )
         return column(_css_div, toolbar, body, status_bar,
+                      self._flag_preview_box,
                       sizing_mode="stretch_both")
 
     def _style_cmap_column(self, cmap_col, dark_stylesheet) -> tuple:
@@ -4940,6 +4918,10 @@ for (let i = 0; i < cols.length; i++) {
             # visibly under it would have looked broken rather than just
             # collapsed.
             self._gear_tabs,
+            *([self._flags.build_widgets(self._pipe["flag"], self._ids["flag"],
+                                         section=_section("Flagging"),
+                                         width=_SIDEBAR_WIDTH)]
+              if self._enable_flagging else []),
             width       = _SIDEBAR_WIDTH_COL,
             visible     = True,
             sizing_mode = "stretch_height",

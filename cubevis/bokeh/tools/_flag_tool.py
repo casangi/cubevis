@@ -65,7 +65,7 @@ discussion for the full rationale.
 from os.path import join, dirname
 
 from bokeh.core.properties import Bool, String, Instance, Nullable
-from bokeh.models import Tool, ColumnDataSource, Div
+from bokeh.models import Tool, ColumnDataSource, Div, Callback
 
 from cubevis.bokeh.transport import Comm
 
@@ -177,6 +177,13 @@ class FlagTool(DragTool):
     response-callback mechanism as notify_div, used to refresh the
     pending-flag count after a successful flag/unflag.
     """)
+    response_callback = Nullable(Instance(Callback), help="""
+    FlagDB v2: executed with ``cb_data.response`` set to the Python
+    handler's reply after every flag/unflag box, so the owning plotter can
+    apply notifications, open the review dialog and refresh the panels.
+    When set it replaces the built-in notify/status handling.
+    """)
+
 
     at_pixel_res = Bool(default=False, help="""
     True once the figure's viewport is zoomed to (or past) one screen

@@ -144,6 +144,20 @@ class SelectionSpec:
     ``is_empty()``, preserved by ``copy()``.
     """
 
+    flag_view: str = "effective"
+    """Which flag state the backend renders with (FlagDB v2):
+
+    * ``"effective"`` -- on-disk flags with the pending deltas applied
+      (default; pending-flagged samples disappear);
+    * ``"disk"`` -- on-disk flags only (pending flags drawn as an overlay);
+    * ``"pending"`` -- only the samples whose state the pending deltas
+      change are unflagged (used to draw the pending overlay);
+    * ``"proposal"`` -- only the samples a proposal under review would
+      change (used to draw the proposal overlay).
+
+    Part of the frame-cache fingerprint (it decides which rows are drawn).
+    """
+
     # ------------------------------------------------------------------ #
 
     def is_empty(self) -> bool:
@@ -175,6 +189,7 @@ class SelectionSpec:
             data_column=self.data_column,
             cache_generation=self.cache_generation,
             pending_version=self.pending_version,
+            flag_view=self.flag_view,
         )
 
     # ------------------------------------------------------------------ #

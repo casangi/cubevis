@@ -496,3 +496,129 @@ def test_export_uses_ms_spw_ids(backend):
     lines = to_flagdata_lines([d], spw_ids=backend.spw_casa_ids(), comments=False)
     assert all("spw='0:" in l or "spw='1:" in l for l in lines)
     assert len(lines) == 28
+
+
+# ====================================================================== #
+# GUI path: VisibilityPlotter box handler, review, display, history        #
+# (drives the real handler; no browser needed)                             #
+# ====================================================================== #
+
+import asyncio
+
+
+@pytest.fixture(scope="module")
+def plotter(backend):
+    from cubevis.toolbox.visplot import VisibilityPlotter
+    vp = VisibilityPlotter(
+        ms=backend._path, layout="side", correlation="XX,YY",
+        flag_filters={"loud": lambda ds, level=20.0: ds["amp"] > level})
+    yield vp
+    vp.close()
+
+
+def _run(c):
+    return asyncio.run(c)
+
+
+def _eff(vp, part):
+    b = vp._reader._backend
+    return b._flag_mask(part).transpose("time", "baseline_id", "frequency", "polarization").values
+
+
+def test_handler_raster_box_flags_exactly_the_covered_cells(plotter, backend):
+    vp = plotter
+    vp.flag_db.clear(record=False)
+    r = vp._slots[0].raster
+    agg = r._agg
+    ydim, xdim = agg.dims
+    ys, xs = agg.coords[ydim].values, agg.coords[xdim].values
+    # a box strictly inside cells [2..4] (y) x [3..5] (x)
+    box = dict(x0=float(xs[3]), x1=float(xs[5]), y0=float(ys[2]), y1=float(ys[4]), flag=True)
+    resp = _run(vp._handle_box_select(box, "raster", r))
+    assert resp["notify_text"].startswith("✓"), resp["notify_text"]
+    d = vp.flag_db.deltas()[-1]
+    assert not d.is_sample_set and d.correlation == (r._polarization,)
+    # numpy reference: every sample whose time and frequency are cell
+    # centres inside [x0,x1] x [y0,y1] (overlap semantics add the half-
+    # cells on either side, so compare against the box widened by half a
+    # cell on the raster's own grids)
+    for p in _parts(backend):
+        ok_t = np.isin(p.time.values, ys[2:5]) if ydim == "time" else None
+        freqs = p.frequency.values
+        in_f = (freqs >= xs[3] - 1) & (freqs <= xs[5] + 1)
+        _v, f0 = _raw(p)
+        ref = f0.copy()
+        ip = list(p.polarization.values).index(r._polarization)
+        ref[np.ix_(ok_t, np.ones(f0.shape[1], bool), in_f, [ip])] = True
+        # padding never changes
+        eit = np.isfinite(p.EFFECTIVE_INTEGRATION_TIME.values)
+        ref = np.where(eit[:, :, None, None], ref, f0)
+        assert np.array_equal(_eff(vp, p), ref)
+    assert r._flag_stale and vp._slots[1].scatter._flag_stale
+
+
+def test_handler_scatter_box_and_review_accept_reject(plotter):
+    vp = plotter
+    vp.flag_db.clear(record=False)
+    sc = vp._slots[1].scatter
+    x0, x1 = sc._x_range
+    _run(vp.flags.handle_action({"action": "config", "preview": True}))
+    resp = _run(vp._handle_box_select(dict(x0=x0, x1=x1, y0=10, y1=100, flag=True), "scatter", sc))
+    assert "preview" in resp and len(vp.flag_db) == 0
+    assert sc._flag_overlays and sc._flag_overlays[-1][0] == "proposal"
+    before = vp.flag_db.version
+    resp = _run(vp.flags.handle_action({"action": "reject"}))
+    assert resp.get("preview_closed") and len(vp.flag_db) == 0 and vp.flag_db.version == before
+    _run(vp._handle_box_select(dict(x0=x0, x1=x1, y0=10, y1=100, flag=True), "scatter", sc))
+    resp = _run(vp.flags.handle_action({"action": "accept"}))
+    assert len(vp.flag_db) == 1 and vp.flag_db.deltas()[0].is_sample_set
+    assert vp.flag_db.deltas()[0].n_samples == 28          # both XX outliers, both windows
+    _run(vp.flags.handle_action({"action": "config", "preview": False}))
+
+
+def test_handler_user_filter_undo_redo_clear(plotter):
+    vp = plotter
+    vp.flag_db.clear(record=False)
+    r = vp._slots[0].raster
+    x0, x1 = r._x_range; y0, y1 = r._y_range
+    _run(vp.flags.handle_action({"action": "config", "filter": "loud", "params": {"level": 20.0}}))
+    _run(vp._handle_box_select(dict(x0=x0, x1=x1, y0=y0, y1=y1, flag=True), "raster", r))
+    d = vp.flag_db.deltas()[0]
+    assert d.filter.name == "loud" and not d.filter.builtin
+    assert d.n_samples == 28                                # XX outliers, both windows
+    for action, n in (("undo", 0), ("redo", 1), ("clear", 0), ("undo", 1)):
+        _run(vp.flags.handle_action({"action": action}))
+        assert len(vp.flag_db) == n
+    _run(vp.flags.handle_action({"action": "config", "filter": "all"}))
+
+
+def test_display_modes_switch_views_and_overlays(plotter):
+    vp = plotter
+    sc = vp._slots[1].scatter
+    _run(vp.flags.handle_action({"action": "config", "display": "color", "color": "#00ff00"}))
+    assert sc._selection.flag_view == "disk"
+    assert sc._flag_overlays and sc._flag_overlays[0][0] == "pending"
+    _run(vp.flags.handle_action({"action": "config", "display": "hide"}))
+    assert sc._selection.flag_view == "effective" and not sc._flag_overlays
+
+
+def test_flag_views_on_backend(backend):
+    p0 = _parts(backend)[0]
+    t = p0.time.values
+    d, _ = _eval(backend, kind="raster", x_axis="TIME", x0=t[3], x1=t[3],
+                 y_axis="BASELINE", y0=-0.5, y1=9.5, polarization="XX")
+    backend.set_pending_flags([d], 11)
+    _v, f0 = _raw(p0)
+    with backend.flag_view("disk"):
+        assert np.array_equal(backend._flag_mask(p0).transpose(*f0.dims if hasattr(f0, "dims") else ("time", "baseline_id", "frequency", "polarization")).values, f0)
+    with backend.flag_view("pending"):
+        shown = ~backend._flag_mask(p0).transpose("time", "baseline_id", "frequency", "polarization").values
+    assert shown[3, :, :, 0].all() and shown.sum() == shown[3, :, :, 0].size
+    backend.set_pending_flags([], 0)
+
+
+def test_reload_discards_pending(plotter):
+    vp = plotter
+    vp.flag_db.add(FlagDelta(time_range=(0, 1)))
+    vp.flags.reset()
+    assert len(vp.flag_db) == 0 and not vp.flag_db.can_undo()

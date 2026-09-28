@@ -160,9 +160,10 @@ class VisplotRemoteBackend:
     # FlagDB v2 -- pending flags live with the data (see flag_engine)     #
     # ------------------------------------------------------------------ #
 
-    def set_pending_flags(self, deltas, version: int = 0, apply: bool = True):
+    def set_pending_flags(self, deltas, version: int = 0, apply: bool = True,
+                          proposal=None):
         # deltas arrive as FlagDelta.to_dict() dicts (plain data on the wire)
-        self._reader.set_pending_flags(deltas, version, apply)
+        self._reader.set_pending_flags(deltas, version, apply, proposal)
         return True
 
     def evaluate_flag_request(self, request: dict):

@@ -66,6 +66,7 @@ except ImportError:
 
 from .. import colormap_scaling as _cms
 from .reader import (ScatterLayerSpec, ScatterLayerRender, ScatterLayerReference,
+                     AntennaZScoreSummary,
                      COLORIZE_AXIS_COLUMNS,
                      OTHER_CATEGORY_LABEL, OTHER_CATEGORY_COLOR, OTHER_CATEGORY_ALPHA)
 
@@ -762,27 +763,66 @@ def render_layer(
         peak_value = hist_counts = hist_edges = None
         mapping_x = mapping_u = None
     else:
-        agg = cvs.points(df, "x", "y", ds_agg.mean("y"))
+        # Part 6 (2026-09): "statistical" coloring aggregates by a
+        # DECOUPLED color column ("color", merged in by
+        # MSv2Backend.query_columns from a separate Z-Score fetch --
+        # see ScatterLayerSpec.coloring's own docstring) instead of the
+        # plotted Y column itself -- position still comes from (x, y)
+        # either way (a statistical layer still plots, say, Amplitude
+        # vs. Time; only the COLOR changes), so only the AGGREGATION
+        # source changes here, reusing every scaling/threshold/eq_hist
+        # branch below completely unchanged rather than duplicating it
+        # for a third mode.
+        agg_column = "color" if lyr.coloring == "statistical" else "y"
+        agg = cvs.points(df, "x", "y", ds_agg.mean(agg_column))
+
+        if lyr.coloring == "statistical":
+            # The color source's own range, NOT full_y_range (the
+            # PLOTTED axis's range, e.g. Amplitude's -- unrelated to the
+            # Z-Score's own scale). Computed fresh from df here rather
+            # than threaded through as a new parameter, mirroring how
+            # eq_reference below already recomputes its own reference
+            # population from df rather than being passed one.
+            color_vals = df[agg_column].to_numpy()
+            color_finite = color_vals[np.isfinite(color_vals)]
+            full_color_range = (
+                (float(color_finite.min()), float(color_finite.max()))
+                if color_finite.size else (0.0, 1.0)
+            )
+        else:
+            full_color_range = full_y_range
 
         # Reference population for eq_hist / colorbar / histogram is the
-        # TRUE per-sample y-values, not the binned agg -- running here,
-        # where the DataFrame still exists, is what makes that possible
-        # without ever shipping them anywhere. Mirrors
+        # TRUE per-sample values (of agg_column), not the binned agg --
+        # running here, where the DataFrame still exists, is what makes
+        # that possible without ever shipping them anywhere. Mirrors
         # VisibilityScatter._shade_all_layers' color_mode branch exactly.
         if color_mode == "local":
-            visible_y = df.loc[in_view, "y"]
-            if len(visible_y) > 0:
-                span = [float(visible_y.min()), float(visible_y.max())]
-                eq_reference = visible_y.to_numpy()
+            visible_vals = df.loc[in_view, agg_column]
+            if len(visible_vals) > 0:
+                span = [float(visible_vals.min()), float(visible_vals.max())]
+                eq_reference = visible_vals.to_numpy()
             else:
-                span = [float(full_y_range[0]), float(full_y_range[1])]
+                span = [float(full_color_range[0]), float(full_color_range[1])]
                 eq_reference = None
         else:  # "global"
-            span = [float(full_y_range[0]), float(full_y_range[1])]
-            eq_reference = df["y"].to_numpy()
+            span = [float(full_color_range[0]), float(full_color_range[1])]
+            eq_reference = df[agg_column].to_numpy()
 
         if lyr.scaling_vmin is not None and lyr.scaling_vmax is not None:
             span = [lyr.scaling_vmin, lyr.scaling_vmax]
+        elif lyr.scaling == "threshold" and lyr.scaling_vmin is not None:
+            # Part 6 (2026-09): unlike every other scaling above, whose
+            # override needs BOTH vmin and vmax set together, a
+            # threshold's cutoff needs only vmin -- it has one
+            # meaningful boundary, not a range, and its upper bound is
+            # irrelevant to its own classification (see
+            # colormap_scaling.apply_explicit_scaling's threshold
+            # branch). Keeps whichever upper bound span already
+            # computed (the local/global auto-range above) rather than
+            # requiring the caller to also supply a vmax that would
+            # never actually be used.
+            span = [lyr.scaling_vmin, span[1] if span is not None else lyr.scaling_vmin + 1.0]
 
         cmap = list(lyr.cmap)
         if lyr.scaling in _cms.DATASHADER_HOW:
@@ -1332,6 +1372,12 @@ def resample_layer_reference(
     span = None
     if lyr.scaling_vmin is not None and lyr.scaling_vmax is not None:
         span = [lyr.scaling_vmin, lyr.scaling_vmax]
+    elif lyr.scaling == "threshold" and lyr.scaling_vmin is not None:
+        # Part 6 (2026-09): mirrors render_layer's identical branch
+        # above -- see that one's comment for the full rationale (a
+        # threshold's cutoff needs only vmin, unlike every other
+        # scaling's vmin+vmax-together override).
+        span = [lyr.scaling_vmin, span[1] if span is not None else lyr.scaling_vmin + 1.0]
 
     if lyr.scaling in _cms.DATASHADER_HOW:
         shade_kwargs = dict(
@@ -1532,3 +1578,130 @@ def compute_baseline_zscore(
             scale > 0, r / scale * _ZSCORE_RAYLEIGH_CONST, np.nan,
         )
     return score
+
+
+# ---------------------------------------------------------------------------
+# Part 6 Slice 2: per-antenna quantitative readout
+# ---------------------------------------------------------------------------
+
+_DEFAULT_ZSCORE_THRESHOLD = 3.5
+"""Iglewicz & Hoaglin's (1993) own convention for this exact modified
+z-score statistic (``|M_i| > 3.5``) -- see the design doc's §7.4
+citation, already used there to justify displaying the score as a
+magnitude. Used as ``compute_antenna_zscore_summary``'s threshold
+whenever the caller doesn't supply one from the layer's own
+``scaling_vmin`` (which takes precedence when set, since it reflects
+what the user is actually looking at on screen right now, not a fixed
+literature default) -- see that function's own docstring.
+"""
+
+
+def zscore_cell_cutoff(
+    n_samples,
+    per_sample_cutoff: float = _DEFAULT_ZSCORE_THRESHOLD,
+) -> float:
+    """Cutoff for a cell that reports the MAX of *n_samples* Z-Scores.
+
+    Under the null (no anomaly) a Z-Score is the radial amplitude of
+    circularly symmetric complex Gaussian noise in units of its own
+    scale, i.e. Rayleigh distributed with unit scale:
+    ``P(Z > t) = exp(-t**2 / 2)`` (see ``_ZSCORE_RAYLEIGH_CONST``, which
+    calibrates the robust scale so this holds).  *per_sample_cutoff* is
+    the cutoff that is right for ONE sample (3.5, the Iglewicz & Hoaglin
+    convention -- a per-sample false-alarm rate of ``p0 = exp(-3.5**2/2)``,
+    about 0.2 %).
+
+    A raster cell does not show one sample: it shows the maximum over
+    every sample reduced into it (e.g. all channels of a Time x Baseline
+    cell), and the max of *n* draws exceeds a fixed cutoff far more
+    often -- with 384 channels, 3.5 flags ~58 % of cells that contain
+    nothing but noise.  Holding the per-CELL false-alarm rate at ``p0``
+    instead means solving ``1 - (1 - p)**n = p0`` for the per-sample
+    tail probability ``p`` (Sidak correction) and taking
+    ``t = sqrt(-2 ln p)``.  ``n = 1`` returns *per_sample_cutoff*
+    exactly; ``n = 384`` gives ~4.9.  The dependence on *n* is
+    logarithmic (``t**2 ~ c**2 + 2 ln n``), so the nominal count of
+    samples reduced per cell is accurate enough -- flagging that removes
+    a large share of them barely moves the result.
+
+    Returns *per_sample_cutoff* unchanged for a missing, non-finite or
+    ``< 1`` count, so a caller that cannot supply *n* degrades to the
+    per-sample behaviour rather than failing.
+    """
+    try:
+        n = float(n_samples)
+    except (TypeError, ValueError):
+        return float(per_sample_cutoff)
+    if not math.isfinite(n) or n <= 1.0:
+        return float(per_sample_cutoff)
+    p0 = math.exp(-0.5 * per_sample_cutoff * per_sample_cutoff)
+    # 1 - (1 - p0)**(1/n), computed stably for tiny p0 and large n.
+    p = -math.expm1(math.log1p(-p0) / n)
+    return math.sqrt(-2.0 * math.log(p))
+
+
+def compute_antenna_zscore_summary(
+    scores: np.ndarray, antenna_name: str,
+    threshold: float = _DEFAULT_ZSCORE_THRESHOLD,
+) -> AntennaZScoreSummary:
+    """Slice 2's per-antenna quantitative readout (design doc §7.6,
+    §7.10): sample count, median score, and fraction over threshold --
+    statistics only, never a qualitative verdict (§7.2's own explicit
+    requirement).
+
+    A pure summarizing function, deliberately as simple as
+    ``compute_baseline_zscore`` itself: *which* rows belong to the one
+    antenna being summarized is entirely the caller's job (see
+    ``MSv2Backend.query_columns``'s own antenna-summary handling,
+    which passes in exactly one layer's own, already-selection-
+    narrowed Z-Score column) -- this function only aggregates whatever
+    array it's given.
+
+    Parameters
+    ----------
+    scores :
+        A layer's own Z-Score values (the "y" column directly for a
+        layer plotting ``Axis.Z_SCORE``, or the merged-in "color"
+        column for a ``coloring="statistical"`` layer -- see
+        ``ScatterLayerSpec.coloring``'s own docstring for that
+        distinction). Non-finite entries (already-excluded samples,
+        degenerate single-baseline-member groups -- see
+        ``compute_baseline_zscore``'s own NaN convention) are dropped
+        before summarizing, not treated as zero or as "over threshold".
+    antenna_name :
+        Carried through unchanged into the result -- this function
+        does not resolve or validate it against any metadata; that is
+        the caller's job (``SelectionSpec.antenna_names`` naming
+        exactly one antenna).
+    threshold :
+        The cutoff ``fraction_over_threshold`` is computed against.
+        Callers should pass the layer's own ``scaling_vmin`` when set
+        (the threshold actually driving what the user sees on screen,
+        whether or not ``scaling == "threshold"`` specifically), and
+        fall back to ``_DEFAULT_ZSCORE_THRESHOLD`` otherwise -- this
+        function itself has no opinion and always uses exactly what
+        it's given, so that choice stays visible at the call site
+        rather than hidden in here.
+
+    Returns
+    -------
+    AntennaZScoreSummary
+        ``count=0`` and ``median_score=fraction_over_threshold=None``
+        when *scores* has no finite entries at all -- a real, reportable
+        state ("nothing to summarize"), not an error.
+    """
+    finite = np.asarray(scores, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return AntennaZScoreSummary(
+            antenna_name=antenna_name, count=0,
+            median_score=None, fraction_over_threshold=None,
+            threshold=float(threshold),
+        )
+    return AntennaZScoreSummary(
+        antenna_name=antenna_name,
+        count=int(finite.size),
+        median_score=float(np.median(finite)),
+        fraction_over_threshold=float((finite > threshold).mean()),
+        threshold=float(threshold),
+    )

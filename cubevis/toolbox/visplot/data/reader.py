@@ -220,15 +220,20 @@ class ScatterLayerSpec:
 
     ``coloring``/``colorize_axis`` (Part 3, 2026-09): select
     colorize-by-axis. ``coloring`` is a string, not a bool, on purpose
-    -- see the design doc's §7.7 touchpoint: Part 5's color-source-
-    column capability will want a third value (``"computed"`` or
-    similar) alongside ``"continuous"``/``"categorical"``, and a two-
-    state boolean would need a real rework to grow a third state later.
-    ``scaling``/``scaling_*``/``cmap`` keep their existing continuous-
-    coloring meaning when ``coloring="continuous"`` (the default, so
-    every pre-Part-3 caller is unaffected); the design doc's §4.3 keeps
-    the two modes mutually exclusive per layer, not combinable, so
-    nothing here reads ``scaling``/``scaling_*`` when
+    -- see the design doc's §7.7 touchpoint: Part 6's color-source-
+    column capability (``coloring="statistical"``, added 2026-09 --
+    settled from that touchpoint's own placeholder name, "computed")
+    needed a third value alongside ``"continuous"``/``"categorical"``,
+    and a two-state boolean would have needed a real rework to grow a
+    third state later. ``scaling``/``scaling_*``/``cmap`` keep their
+    existing continuous-coloring meaning when ``coloring="continuous"``
+    (the default, so every pre-Part-3 caller is unaffected) -- and,
+    deliberately reused rather than duplicated, the SAME meaning again
+    when ``coloring="statistical"``, just applied to the decoupled color
+    source (see ``_scatter_render.render_layer``'s own "statistical"
+    branch) instead of the plotted Y column; the design doc's §4.3 keeps
+    ``"categorical"`` mutually exclusive with the other two, not
+    combinable, so nothing here reads ``scaling``/``scaling_*`` when
     ``coloring="categorical"``.
 
     ``cmap`` is reused, not duplicated, for the categorical case: an
@@ -241,6 +246,22 @@ class ScatterLayerSpec:
     colors and hands the backend/render path already-concrete colors;
     ``_scatter_render.py`` never imports ``palettes.py``) rather than
     adding a second, mode-specific palette field.
+
+    ``coloring="statistical"`` (Part 6, 2026-09): colors an existing
+    continuous layer BY the per-baseline Z-Score (visplot-colorize-by-
+    axis-design.md §7.4) instead of by the plotted Y column itself --
+    ``y_axis``/``polarization`` still say what's PLOTTED (e.g. Amplitude
+    vs. Time stays Amplitude vs. Time); only the COLOR comes from the
+    Z-Score. Needs no new field of its own: ``colorize_axis``/
+    ``excluded_categories`` stay rejected here exactly as they are for
+    ``"continuous"`` (both fall through the same "not categorical" else
+    branch below), and ``scaling``/``scaling_*``/``cmap`` are reused
+    unchanged for the color source's own display (continuous gradient or
+    ``scaling="threshold"``), per the paragraph above. The actual Z-Score
+    computation and the merge that attaches it to a layer plotting
+    something else both happen in ``MSv2Backend.query_columns`` (see
+    that method's own "statistical" handling) -- not here; this class
+    only needs to accept the mode and stay out of its way.
 
     ``colorize_axis`` must be one of ``COLORIZE_AXIS_COLUMNS`` and must
     (only) be set when ``coloring="categorical"`` -- validated eagerly
@@ -296,10 +317,10 @@ class ScatterLayerSpec:
     excluded_display: str = DEFAULT_EXCLUDED_DISPLAY
 
     def __post_init__(self) -> None:
-        if self.coloring not in ("continuous", "categorical"):
+        if self.coloring not in ("continuous", "categorical", "statistical"):
             raise ValueError(
-                "ScatterLayerSpec.coloring must be 'continuous' or "
-                f"'categorical', got {self.coloring!r}"
+                "ScatterLayerSpec.coloring must be 'continuous', "
+                f"'categorical', or 'statistical', got {self.coloring!r}"
             )
         if self.excluded_display not in EXCLUDED_DISPLAYS:
             raise ValueError(
@@ -338,6 +359,60 @@ class ScatterLayerSpec:
                     "ScatterLayerSpec.excluded_categories is only valid "
                     "when coloring='categorical'"
                 )
+
+
+@dataclass(frozen=True)
+class AntennaZScoreSummary:
+    """Slice 2's per-antenna quantitative readout (visplot-colorize-by-
+    axis-design.md §7.6, §7.10): sample count, median score, and
+    fraction over threshold, for whichever single antenna the current
+    selection names -- computed once per eligible layer's own Z-Score
+    values, never a qualitative verdict (§7.2's own explicit
+    requirement: "present statistics, not a verdict").
+
+    Deliberately shows several numbers side by side rather than
+    collapsing to one, per the design doc's own resolution of the
+    per-antenna-color question: this needs no color of its own (Slice
+    1's per-baseline "statistical" coloring already covers that,
+    narrowed by whatever selection antenna iteration applies -- see
+    ``ScatterLayerSpec.coloring``'s own docstring), only a readout.
+
+    Attributes
+    ----------
+    antenna_name : str
+        The one antenna this summary is FOR -- resolved from
+        ``SelectionSpec.antenna_names`` naming exactly one antenna
+        (see ``MSv2Backend.query_columns``'s own antenna-summary
+        handling for exactly which selections qualify).
+    count : int
+        Number of finite Z-Score samples this summary was computed
+        from. Zero, not a missing summary, when a layer is eligible
+        (carries Z-Score data, exactly one antenna selected) but every
+        sample happened to be non-finite -- ``median_score``/
+        ``fraction_over_threshold`` are ``None`` in that case, matching
+        how ``compute_baseline_zscore`` itself reports "nothing to
+        show" via NaN rather than raising.
+    median_score : float | None
+        Median of the finite Z-Score samples, or ``None`` when
+        ``count == 0``.
+    fraction_over_threshold : float | None
+        Fraction of the finite samples strictly greater than
+        ``threshold``, or ``None`` when ``count == 0``.
+    threshold : float
+        The cutoff this summary was computed against -- see
+        ``_scatter_render.compute_antenna_zscore_summary``'s own
+        docstring for where this comes from (the layer's own
+        ``scaling_vmin`` when set, else the literature-standard 3.5).
+        Carried here, not just implied, so the info-panel text can
+        report which threshold produced the fraction shown -- a bare
+        percentage with no stated cutoff would be a number with no way
+        to judge its own meaning.
+    """
+    antenna_name:              str
+    count:                     int
+    median_score:              Optional[float]
+    fraction_over_threshold:   Optional[float]
+    threshold:                 float
 
 
 @dataclass(frozen=True)
@@ -470,6 +545,21 @@ class ScatterLayerRender:
     categories:       Optional[tuple[str, ...]] = None
     category_colors:  Optional[dict[str, str]] = None
     category_members: Optional[dict[str, tuple[str, ...]]] = None
+
+    # ---- Slice 2 per-antenna readout (Part 6, 2026-09) --------------- #
+    # Populated only when BOTH hold: this layer carries Z-Score data
+    # (``y_axis == Axis.Z_SCORE`` directly, or ``coloring ==
+    # "statistical"``), AND the current selection's own
+    # ``antenna_names`` names exactly one antenna -- see
+    # ``MSv2Backend.query_columns``'s own antenna-summary handling for
+    # the exact eligibility check. ``None`` otherwise: a continuous/
+    # categorical layer, a Z-Score layer with no antenna narrowed down,
+    # or multiple antennas selected at once (matches
+    # ``_antenna_iteration_position``'s own "exactly one" requirement
+    # on the widget side, computed independently here from
+    # ``SelectionSpec`` alone -- no dependency on the widget layer's own
+    # ``meta``/``antenna_str`` state).
+    antenna_summary: Optional[AntennaZScoreSummary] = None
 
     # ---- two-level (Level-1/Level-2) scatter rendering (2026-09) ---- #
     # Populated only when ``query_columns(ref_scale=...)`` was given a
@@ -1444,13 +1534,40 @@ class _FrameCache:
 
     def drop_token(self, token) -> int:
         """Drop every entry belonging to backend *token* (the first element of
-        each key); returns how many.  Called when a backend closes or is
-        garbage-collected."""
+        each key); returns how many.  Called when a backend closes.  Blocks
+        for the lock like any ordinary method here -- for an explicit,
+        user-initiated close() a brief wait is fine and expected. See
+        ``try_drop_token`` for the non-blocking variant a ``weakref.finalize``
+        callback must use instead."""
         with self.lock:
             keys = [k for k in self._d if k[0] == token]
             for k in keys:
                 self._drop(k)
             return len(keys)
+
+    def try_drop_token(self, token) -> int:
+        """Non-blocking sibling of ``drop_token``, for ``_drop_backend_frames``
+        -- a ``weakref.finalize`` callback, which can fire at essentially any
+        allocation point (2026-09 fix, found via a real hang's full stack
+        trace: this callback firing on a dask worker thread while
+        ``XArrayReader._query_columns_cached`` held this same lock across its
+        own build call deadlocked the two -- see that method's own comment
+        for the full cycle). A finalizer must never block: if the lock is
+        contended right now, this backend's entries are simply left for the
+        normal LRU/budget eviction to reclaim later rather than making the
+        callback wait on a lock some unrelated thread might be holding for an
+        unbounded time. Returns 0 (not the true count) when skipped this way
+        -- there is no count to report since nothing was inspected.
+        """
+        if not self.lock.acquire(blocking=False):
+            return 0
+        try:
+            keys = [k for k in self._d if k[0] == token]
+            for k in keys:
+                self._drop(k)
+            return len(keys)
+        finally:
+            self.lock.release()
 
     def count_token(self, token) -> int:
         with self.lock:
@@ -1492,10 +1609,15 @@ def _global_frame_cache() -> _FrameCache:
 
 
 def _drop_backend_frames(token) -> None:
-    """``weakref.finalize`` callback: a backend was collected without close()."""
+    """``weakref.finalize`` callback: a backend was collected without close().
+
+    Uses ``try_drop_token`` (non-blocking), not ``drop_token`` -- see that
+    method's own docstring for why a finalizer must never block on this
+    lock.
+    """
     cache = _GLOBAL_FRAME_CACHE
     if cache is not None:
-        cache.drop_token(token)
+        cache.try_drop_token(token)
 
 
 class XArrayReader(abc.ABC):
@@ -2015,6 +2137,71 @@ class XArrayReader(abc.ABC):
         self._antenna_lookup = None
         self._clear_frame_cache()
 
+    def _finalize_zscore_frame(self, df: "pd.DataFrame") -> "pd.DataFrame":
+        """Turn a staged Z-Score frame (``__zscore_real``/``__zscore_imag``,
+        no ``y`` yet) into a normal one (``y``, no staged columns).
+
+        Part 6 Slice 1 (2026-09; see visplot-colorize-by-axis-design.md
+        §7.3/§7.4/§7.5 -- unrelated to this file's OWN "Part 6", the
+        frame cache just below). Shared here, on the base class, rather
+        than duplicated per backend: ``MSv2Backend`` and ``MSv4Backend``
+        both stage ``Axis.Z_SCORE`` the same way (real/imaginary fetched
+        via the existing ``Axis.REAL``/``Axis.IMAGINARY`` computation,
+        under ``__zscore_real``/``__zscore_imag`` instead of a final
+        ``y``, per-partition, since neither backend's own per-partition
+        query methods can see the whole selection at once), and this
+        finalization step -- run once, per ``(axis, pol)`` key, after
+        every partition's rows are concatenated -- is pure pandas/numpy
+        with no backend-specific state, exactly like
+        ``_identity_categoricals`` above.
+
+        The reference population is "the whole current selection"
+        (§7.3/§7.5) -- i.e. THIS concatenation across every partition
+        the selection spans (and, for ``MSv4Backend``'s OPT-B path,
+        every partition fused into one ``dask.compute()`` call), not any
+        single partition's rows -- which is exactly why this runs here,
+        after concatenation, rather than inside either backend's own
+        per-partition query method.
+        """
+        if "__zscore_real" not in df.columns:
+            # No partition contributed any rows for this key at all (the
+            # `pd.DataFrame({"x": [], "y": []})` placeholder both
+            # backends build when a key gets no rows from anywhere) --
+            # nothing was ever staged, nothing to finalize.
+            return df if "y" in df.columns else df.assign(y=pd.Series([], dtype=np.float64))
+        if len(df) == 0 or "baseline_id" not in df.columns:
+            # Either already empty, or baseline_id genuinely wasn't
+            # available for this selection (rare -- see
+            # _query_partition_scatter's own "conditional per
+            # coordinate" precedent for id columns generally, which
+            # applies here too: no group key means no reference
+            # population, so there is nothing to score). Either way,
+            # the right output is an EMPTY frame with the right schema
+            # -- not a NaN-filled one: `df["y"] = pd.Series([], ...)`
+            # on a non-empty df would align by index and silently
+            # produce all-NaN rows rather than zero rows (found by
+            # testing this exact case during Slice 1's MSv2Backend
+            # work, not by inspection).
+            df = df.drop(columns=["__zscore_real", "__zscore_imag"]).iloc[0:0].copy()
+            df["y"] = pd.Series([], dtype=np.float64)
+            return df
+        from . import _scatter_render
+        df = df.copy()
+        df["y"] = _scatter_render.compute_baseline_zscore(
+            df["__zscore_real"].to_numpy(),
+            df["__zscore_imag"].to_numpy(),
+            df["baseline_id"].to_numpy(),
+        )
+        df = df.drop(columns=["__zscore_real", "__zscore_imag"])
+        # A degenerate (single-member-group) baseline scores NaN (see
+        # compute_baseline_zscore's own docstring) -- drop those rows
+        # now, matching every other axis's existing "NaN means nothing
+        # to plot here" convention (the .where(~flag_pol) + isfinite
+        # filter every other derived axis already goes through
+        # upstream, applied here instead since the NaN in this case only
+        # exists after this cross-partition step, not before it).
+        return df[np.isfinite(df["y"])].reset_index(drop=True)
+
     # ------------------------------------------------------------------ #
     # Frame cache (Part 6)                                                 #
     # ------------------------------------------------------------------ #
@@ -2079,6 +2266,25 @@ class XArrayReader(abc.ABC):
         never writes into a frame (a test pins that).  Any inability to cache
         (disabled, unhashable selection, frame over budget) degrades to the
         uncached behavior, never to an error.
+
+        Holds ``cache.lock`` across the entire get-or-build, including the
+        actual ``_query_columns_raw`` call -- this is deliberate, not an
+        oversight: it's what makes concurrent requests for the same missing
+        key coalesce into a single real read (confirmed directly: a
+        regression test drives four threads at the same key and asserts
+        exactly one backend read happens) rather than each thread
+        redundantly repeating the same expensive query. See
+        ``_drop_backend_frames``'s own docstring for how a weakref
+        finalizer can safely coexist with a lock held this long: that
+        callback uses ``try_drop_token`` (non-blocking) specifically so it
+        never becomes the other half of a cross-thread deadlock against
+        this lock, which is what actually caused a real, confirmed hang
+        this method holding the lock here did NOT need to stop causing --
+        an earlier attempt to fix the hang by splitting this method's own
+        critical section instead worked for the deadlock but silently
+        broke the coalescing guarantee above (found via that regression
+        test immediately failing), which is why the fix lives on the
+        finalizer's side instead.
         """
         cache = self._frame_cache_obj()
         sel_fp = _selection_fingerprint(selection)

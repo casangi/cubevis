@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace as _dc_replace
 from typing import Optional
@@ -931,9 +932,63 @@ class MSv2Backend(XArrayReader):
             raise ValueError("query_columns: layers must be non-empty")
 
         yaxes = [(lyr.y_axis, lyr.polarization) for lyr in layers]
+        # Part 6 (2026-09): a "statistical" layer also needs the
+        # Z-Score, decoupled from whatever its own y_axis is -- requested
+        # here as an ADDITIONAL (axis, pol) key, reusing Slice 1's
+        # existing Z-Score staging/finalization machinery completely
+        # unchanged (see XArrayReader._finalize_zscore_frame), rather
+        # than teaching the (axis, pol)-keyed cache itself about a
+        # second, coloring-only shape of data under the SAME key a plain
+        # continuous layer would use for the same (y_axis, pol) -- that
+        # would make the cache ambiguous about which shape of DataFrame
+        # a given key actually holds. A set, not a list, to de-duplicate
+        # when multiple statistical layers share a polarization.
+        color_keys = {
+            (Axis.Z_SCORE, lyr.polarization)
+            for lyr in layers if lyr.coloring == "statistical"
+        }
+        all_keys = yaxes + [k for k in color_keys if k not in yaxes]
         # Part 6: frames come from the per-layer cache when this selection
         # was already read (a pan, zoom, recolor or export), else from disk.
-        dataframes = self._query_columns_cached(xaxis, yaxes, selection)
+        dataframes = self._query_columns_cached(xaxis, all_keys, selection)
+
+        # Part 6: merge each statistical layer's own (y_axis, pol) frame
+        # with its (Z_SCORE, pol) frame on the identity columns every
+        # scatter frame already carries (time/baseline_id/frequency --
+        # see _query_partition_scatter's hover-probe id-column addition),
+        # giving a "color" column alongside "x"/"y" without the
+        # (axis, pol) cache ever needing to know about it. A LEFT join,
+        # not inner: a row missing from the Z-Score population (e.g. a
+        # degenerate single-baseline-member group -- see
+        # compute_baseline_zscore's own docstring) still gets PLOTTED
+        # (keeps its own x/y), just with no color -- render_layer's own
+        # NaN handling (mean() skips NaN, tf.shade already treats NaN as
+        # transparent) takes it from there, the same way an excluded
+        # sample already behaves for every other axis, not a new kind of
+        # gap this feature introduces. Built once per layer (not shared
+        # across layers the way the raw (axis, pol) frames are, since
+        # the merge result is specific to this one layer's own y_axis),
+        # and used ONLY for rendering below -- full_x_range/full_y_range
+        # above still read the plain, unmerged frame, since what's
+        # PLOTTED (and its extent) doesn't depend on how it's colored.
+        render_dataframes: list[Optional[pd.DataFrame]] = []
+        for lyr in layers:
+            base_df = dataframes.get((lyr.y_axis, lyr.polarization))
+            if lyr.coloring != "statistical" or base_df is None or len(base_df) == 0:
+                render_dataframes.append(base_df)
+                continue
+            color_df = dataframes.get((Axis.Z_SCORE, lyr.polarization))
+            id_cols = [c for c in ("time", "baseline_id", "frequency")
+                      if color_df is not None and c in base_df.columns and c in color_df.columns]
+            if color_df is None or len(color_df) == 0 or not id_cols:
+                merged = base_df.copy()
+                merged["color"] = np.nan
+            else:
+                merged = base_df.merge(
+                    color_df[id_cols + ["y"]].rename(columns={"y": "color"}),
+                    on=id_cols, how="left",
+                )
+            render_dataframes.append(merged)
 
         x0_all, x1_all, y0_all, y1_all = [], [], [], []
         for lyr in layers:
@@ -955,29 +1010,89 @@ class MSv2Backend(XArrayReader):
 
         rendered = tuple(
             _scatter_render.render_layer(
-                dataframes.get((lyr.y_axis, lyr.polarization)), lyr,
+                render_df, lyr,
                 x0, x1, y0, y1, canvas_w, canvas_h, color_mode, full_y_range,
                 probe_grid_max_cells=probe_grid_max_cells,
             )
-            for lyr in layers
+            for lyr, render_df in zip(layers, render_dataframes)
         )
 
         ref_canvas_width = ref_canvas_height = None
         if ref_scale is not None:
             ref_canvas_width  = max(1, int(round(canvas_w * ref_scale)))
             ref_canvas_height = max(1, int(round(canvas_h * ref_scale)))
+            # Part 6: two-level rendering's Level-1 fast path is not yet
+            # taught about "statistical" coloring (build_layer_reference/
+            # resample_layer_reference both still only know continuous
+            # vs. categorical) -- building a reference for one now would
+            # silently aggregate by the plotted Y column instead of the
+            # color source on every subsequent pan/zoom, which is wrong,
+            # not just slower. Left as None for a statistical layer
+            # instead: deliberately not built rather than built
+            # incorrectly, matching the "wrong is worse than absent"
+            # judgment already applied to this method's own error
+            # handling elsewhere in this file. A missing reference is
+            # exactly the same shape a categorical layer's own eq_hist-
+            # equivalent absence already is, so this needs no new
+            # handling on the client side -- see that side's own
+            # needs_level2_requery, which already treats "no reference"
+            # as "always re-query" for whichever layer lacks one.
             rendered = tuple(
-                _dc_replace(
+                render if lyr.coloring == "statistical" else _dc_replace(
                     render,
                     reference=_scatter_render.build_layer_reference(
-                        dataframes.get((lyr.y_axis, lyr.polarization)), lyr,
+                        render_df, lyr,
                         x0, x1, y0, y1,
                         ref_canvas_width, ref_canvas_height, canvas_w, canvas_h,
                         color_mode, probe_grid_max_cells=probe_grid_max_cells,
                     ),
                 )
-                for lyr, render in zip(layers, rendered)
+                for lyr, render, render_df in zip(layers, rendered, render_dataframes)
             )
+
+        # Part 6 Slice 2 (2026-09): the per-antenna quantitative readout
+        # (design doc §7.6, §7.10) -- computed once per eligible layer,
+        # whenever the CURRENT SELECTION itself names exactly one
+        # antenna (regardless of whether that came from Prev/Next
+        # iteration or a manual single-antenna pick -- this checks
+        # SelectionSpec directly, with no dependency on the widget
+        # layer's own meta/antenna_str state, matching
+        # _antenna_iteration_position's own "exactly one" requirement
+        # but computed independently here). Eligible layers: those that
+        # carry Z-Score data, either plotted directly (y_axis ==
+        # Axis.Z_SCORE, where "y" IS the Z-Score) or via "statistical"
+        # coloring (where the merged-in "color" column is -- see
+        # ScatterLayerSpec.coloring's own docstring). Computed from each
+        # layer's own, already-selection-narrowed render_dataframes[i]
+        # -- the FULL selection's data, matching how the Z-Score itself
+        # is scored against "whatever's currently loaded" (§7.5), not
+        # just the current viewport.
+        if selection.antenna_names is not None and len(selection.antenna_names) == 1:
+            antenna_name = selection.antenna_names[0]
+            with_summaries = []
+            for lyr, render, render_df in zip(layers, rendered, render_dataframes):
+                score_column = None
+                if lyr.y_axis == Axis.Z_SCORE:
+                    score_column = "y"
+                elif lyr.coloring == "statistical":
+                    score_column = "color"
+                if (score_column is None or render_df is None
+                        or score_column not in render_df.columns):
+                    with_summaries.append(render)
+                    continue
+                # scaling_vmin, when set, is what the user is actually
+                # looking at on screen right now (whether or not
+                # scaling=="threshold" specifically) -- takes precedence
+                # over the literature default for that reason, per
+                # compute_antenna_zscore_summary's own docstring.
+                threshold = (lyr.scaling_vmin if lyr.scaling_vmin is not None
+                            else _scatter_render._DEFAULT_ZSCORE_THRESHOLD)
+                summary = _scatter_render.compute_antenna_zscore_summary(
+                    render_df[score_column].to_numpy(), antenna_name,
+                    threshold=threshold,
+                )
+                with_summaries.append(_dc_replace(render, antenna_summary=summary))
+            rendered = tuple(with_summaries)
 
         return ScatterRenderResult(
             x_range=full_x_range, y_range=full_y_range,
@@ -1068,61 +1183,12 @@ class MSv2Backend(XArrayReader):
             result[key] = df
         return result
 
-    def _finalize_zscore_frame(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Turn a staged Z-Score frame (``__zscore_real``/``__zscore_imag``,
-        no ``y`` yet) into a normal one (``y``, no staged columns).
-
-        Part 6 Slice 1 (2026-09): split out of ``_query_columns_raw`` so
-        ``MSv4Backend`` can share it verbatim rather than re-deriving the
-        same finalization logic -- see that class's own call site.
-
-        The reference population is "the whole current selection" (design
-        doc §7.3/§7.5) -- i.e. *this* concatenation across every
-        partition the selection spans, not any single partition's rows
-        -- which is exactly why this runs here, after
-        ``pd.concat``, rather than inside ``_query_partition_scatter``
-        (which only ever sees one partition at a time; see that
-        method's own comment where it stages these two columns instead
-        of a final ``y``).
-        """
-        if "__zscore_real" not in df.columns:
-            # No partition contributed any rows for this key at all (the
-            # `pd.DataFrame({"x": [], "y": []})` placeholder
-            # `_query_columns_raw` builds when `frames` was empty) --
-            # nothing was ever staged, nothing to finalize.
-            return df if "y" in df.columns else df.assign(y=pd.Series([], dtype=np.float64))
-        if len(df) == 0 or "baseline_id" not in df.columns:
-            # Either already empty, or baseline_id genuinely wasn't
-            # available for this selection (rare -- see
-            # _query_partition_scatter's own "conditional per
-            # coordinate" precedent for id columns generally, which
-            # applies here too: no group key means no reference
-            # population, so there is nothing to score). Either way,
-            # the right output is an EMPTY frame with the right schema
-            # -- not a NaN-filled one: `df["y"] = pd.Series([], ...)`
-            # on a non-empty df would align by index and silently
-            # produce all-NaN rows rather than zero rows, which the
-            # ordinary NaN-drop path below never runs on this branch to
-            # clean up (this was caught directly, by testing this exact
-            # case, not by inspection).
-            df = df.drop(columns=["__zscore_real", "__zscore_imag"]).iloc[0:0].copy()
-            df["y"] = pd.Series([], dtype=np.float64)
-            return df
-        df = df.copy()
-        df["y"] = _scatter_render.compute_baseline_zscore(
-            df["__zscore_real"].to_numpy(),
-            df["__zscore_imag"].to_numpy(),
-            df["baseline_id"].to_numpy(),
-        )
-        df = df.drop(columns=["__zscore_real", "__zscore_imag"])
-        # A degenerate (single-member-group) baseline scores NaN (see
-        # compute_baseline_zscore's own docstring) -- drop those rows
-        # now, matching every other axis's existing "NaN means nothing
-        # to plot here" convention (the .where(~flag_pol) + isfinite
-        # filter every other derived axis already goes through
-        # upstream, applied here instead since the NaN in this case only
-        # exists after this cross-partition step, not before it).
-        return df[np.isfinite(df["y"])].reset_index(drop=True)
+    # _finalize_zscore_frame moved to XArrayReader (reader.py), alongside
+    # _identity_categoricals -- it's pure pandas/numpy with no backend-
+    # specific state, and MSv4Backend needs the exact same finalization
+    # step, so it's shared via inheritance rather than duplicated here
+    # (2026-09, when MSv4Backend's own Z-Score support was added -- see
+    # that class's _query_columns_raw for its call site).
 
     def _query_partition_scatter(
         self,
@@ -1545,6 +1611,8 @@ class MSv2Backend(XArrayReader):
         all_y_vals: list[float] = []
         # Frequency coordinates, for the Axis.CHANNEL relabelling below.
         freq_coords: list = []
+        # Per-partition count of samples reduced per Z_SCORE cell.
+        zscore_n_list: list = []
 
         for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
@@ -1564,12 +1632,48 @@ class MSv2Backend(XArrayReader):
 
             arr = self._raster_2d(ds, y_dim, x_dim, quantity, polarization)
             if arr is not None:
+                _n = arr.attrs.get('zscore_n_reduced')
+                if _n is not None:
+                    zscore_n_list.append(int(_n))
                 # Decimate per-partition before .compute() so Dask only
                 # reads the strided rows from disk.  Each partition's stride
                 # is computed independently from its local cell count; the
                 # global stride is re-applied after concat if needed.
                 arr, _ = _decimate_agg(arr, y_name, x_name, max_cells)
-                partitions_2d.append(arr.compute())
+                # Z_SCORE only (2026-09): dask/xarray operations are lazy,
+                # so _raster_2d's own .median()/.max() calls (its Z_SCORE
+                # branch) only BUILD the computation graph -- the actual
+                # nanmedian/nanmax execution, and any warning it raises,
+                # happens HERE, at .compute(), not inside _raster_2d
+                # itself (confirmed directly against a live traceback that
+                # pointed at numpy/dask's own reduction internals, not at
+                # anything in this file, after an earlier attempt to
+                # suppress this inside _raster_2d turned out to be
+                # ineffective for exactly this reason). Narrowly scoped
+                # to numpy's own "All-NaN slice encountered": confirmed
+                # from that same live run against a real, gapped MS that
+                # this fires whenever a baseline has no valid samples at
+                # all in the current selection -- exactly what the
+                # IrregularBaselineGridWarning upstream already documents
+                # for this same partitioning (missing (time, baseline_id)
+                # rows, NaN-padded). The result is already correct in that
+                # case -- median/max of an all-NaN slice correctly stays
+                # NaN, and _raster_2d's own `scale > 0` is already False
+                # for NaN, so its xr.where(...) already falls through to
+                # its own explicit np.nan branch -- this only quiets a
+                # warning about a case already handled correctly, not a
+                # real problem. Left unscoped for every other quantity:
+                # not specifically diagnosed here, so not silently
+                # suppressed on the strength of this one investigation.
+                if quantity == Axis.Z_SCORE:
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore", message="All-NaN slice encountered",
+                            category=RuntimeWarning,
+                        )
+                        partitions_2d.append(arr.compute())
+                else:
+                    partitions_2d.append(arr.compute())
 
         if not partitions_2d:
             log.warning("query_raster: no data matched selection in %s",
@@ -1666,6 +1770,11 @@ class MSv2Backend(XArrayReader):
             y_range = (float(agg.coords[y_name].values.min()),
                        float(agg.coords[y_name].values.max()))
 
+        if zscore_n_list:
+            # Largest partition's count: the cutoff grows with n, so
+            # the biggest reduction is the conservative choice when
+            # partitions differ (e.g. different channel counts).
+            agg.attrs = {**agg.attrs, 'zscore_n_reduced': max(zscore_n_list)}
         return agg, x_range, y_range, is_decimated
 
     def _raster_2d(
@@ -1742,16 +1851,74 @@ class MSv2Backend(XArrayReader):
             q = vis_pol.real.where(~flag_pol)
         elif quantity == Axis.IMAGINARY:
             q = vis_pol.imag.where(~flag_pol)
+        elif quantity == Axis.Z_SCORE:
+            # Part 6 (2026-09): raster's own version of Slice 1's
+            # per-baseline Z-Score (visplot-colorize-by-axis-design.md
+            # §7.4/§7.6). Reuses the SAME formula as
+            # compute_baseline_zscore (_scatter_render.py) -- same
+            # Rayleigh constant, same "median of the radial residual"
+            # definition -- but computed natively over this method's own
+            # xarray/dask ND arrays rather than a flat pandas DataFrame,
+            # since raster never builds one. Every raster axis
+            # combination this method documents already has baseline_id
+            # either as an explicit axis (TIME x BASELINE, FREQUENCY x
+            # BASELINE -- one baseline per row/column) or restricted to a
+            # single baseline via selection.baselines (TIME x FREQUENCY)
+            # -- confirmed directly against this method's own docstring,
+            # not assumed -- so "median over everything except
+            # baseline_id" is always a well-defined, single-baseline
+            # reference population, never an accidental cross-baseline
+            # mix.
+            baseline_name = _axis_to_dim(Axis.BASELINE)
+            real = vis_pol.real.where(~flag_pol)
+            imag = vis_pol.imag.where(~flag_pol)
+            if baseline_name not in real.dims:
+                log.warning(
+                    "_raster_2d: Z_SCORE requires a %r dimension, not "
+                    "present in this partition; skipping", baseline_name,
+                )
+                return None
+            per_baseline_dims = [d for d in real.dims if d != baseline_name]
+            dr = real - real.median(dim=per_baseline_dims, skipna=True)
+            di = imag - imag.median(dim=per_baseline_dims, skipna=True)
+            r = np.sqrt(dr ** 2 + di ** 2)
+            scale = r.median(dim=per_baseline_dims, skipna=True)
+            q = xr.where(
+                scale > 0, r / scale * _scatter_render._ZSCORE_RAYLEIGH_CONST,
+                np.nan,
+            )
         else:
             raise NotImplementedError(
                 f"Raster quantity {quantity.name} not supported. "
-                f"Use AMPLITUDE, PHASE, REAL, IMAGINARY, or FLAG."
+                f"Use AMPLITUDE, PHASE, REAL, IMAGINARY, Z_SCORE, or FLAG."
             )
 
         # --- reduce to 2D (y_name × x_name) ---
         reduce_dims = [d for d in q.dims if d not in (y_name, x_name)]
+        # Nominal number of samples each output cell is reduced over
+        # (product of the reduced dims' sizes, before flagging).
+        # Only consumed for Z_SCORE -- see zscore_cell_cutoff().
+        n_reduced = 1
+        for _d in reduce_dims:
+            n_reduced *= int(q.sizes[_d])
         if reduce_dims:
-            q = q.mean(dim=reduce_dims, skipna=True)
+            if quantity == Axis.Z_SCORE:
+                # Max, not mean (Part 6, 2026-09) -- deliberately
+                # different from every other quantity's reduction just
+                # above. Z-Score is already normalized per baseline
+                # (scale-free, so comparable across whatever gets
+                # averaged out here -- frequency for a TIME x BASELINE
+                # cell, time for FREQUENCY x BASELINE), unlike a raw
+                # physical quantity such as Amplitude, whose mean across
+                # samples is the natural summary. And the whole point of
+                # a Z-Score raster (visplot-colorize-by-axis-design.md's
+                # own "bad antenna" workflow) is spotting an outlier at a
+                # glance -- mean would dilute a single severe anomaly
+                # among many ordinary samples exactly where catching it
+                # matters most; max preserves it.
+                q = q.max(dim=reduce_dims, skipna=True)
+            else:
+                q = q.mean(dim=reduce_dims, skipna=True)
 
         # Verify we ended up with the right 2D shape
         if set(q.dims) != {y_name, x_name}:
@@ -1763,7 +1930,15 @@ class MSv2Backend(XArrayReader):
             return None
 
         # Transpose to (y_name, x_name) as required by Canvas.raster()
-        return _drop_non_raster_coords(q, y_name, x_name).transpose(y_name, x_name)
+        out = _drop_non_raster_coords(q, y_name, x_name).transpose(y_name, x_name)
+        if quantity == Axis.Z_SCORE:
+            # Part 6 (2026-09): how many samples the per-cell MAX was
+            # taken over. The raster uses it to pick a cutoff that
+            # holds the per-CELL false-alarm rate, not the per-sample
+            # one (zscore_cell_cutoff). Rides in attrs, which the
+            # remote wire format preserves.
+            out.attrs = {**out.attrs, 'zscore_n_reduced': n_reduced}
+        return out
 
     # ------------------------------------------------------------------ #
     # UV-coverage (special case — both axes from UVW)                     #

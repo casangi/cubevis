@@ -44,14 +44,26 @@ from .visibility_plot import (
 from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
 from .data.reader import _agg_value, _cell_bounds, channel_range_to_freq
+from .axes import Axis
+from .data._scatter_render import _DEFAULT_ZSCORE_THRESHOLD, zscore_cell_cutoff
+from .scaling_memory import (
+    ScalingMemory, ScalingSettings, default_scaling_settings,
+)
 
 if TYPE_CHECKING:
     import xarray as xr
     from .visibility_reader import VisibilityReader
     from .selection import SelectionSpec
-    from .axes import Axis
 
 log = logging.getLogger(__name__)
+
+# Part 6 (2026-09): the per-SAMPLE Z-Score cutoff (Iglewicz & Hoaglin's
+# 3.5, shared with the scatter's own default). Used here only as the
+# provisional cutoff set when the quantity switches to Z_SCORE, before the
+# first render reports how many samples each cell is the max of; after
+# that VisibilityRaster._apply_zscore_cell_cutoff() replaces it with the
+# n-aware per-CELL cutoff (zscore_cell_cutoff) unless the user set one.
+_ZSCORE_THRESHOLD_VMIN = _DEFAULT_ZSCORE_THRESHOLD
 
 try:
     import datashader as ds
@@ -163,7 +175,18 @@ class VisibilityRaster(VisibilityPlot):
         self._scaling_alpha = scaling_alpha
         self._scaling_gamma = scaling_gamma
         self._scaling_vmin: Optional[float] = None  # manual override; None = auto
+        # True while a Z_SCORE raster's threshold cutoff is the automatic,
+        # n-aware one (not a value the user typed/dragged). See
+        # _apply_zscore_cell_cutoff().
+        self._zscore_vmin_auto: bool = False
         self._scaling_vmax: Optional[float] = None  # (see update_scaling, _shade_agg)
+        # Per-quantity scaling memory (see scaling_memory.py). _scaling_owner
+        # is the quantity the LIVE settings above belong to -- tracked
+        # separately from self._quantity because the plotter resets that to
+        # None right before update_axes().
+        self._scaling_memory = ScalingMemory()
+        self._scaling_owner = None
+        self._init_scaling_state()
 
         # Raster-specific state (set by _render)
         self._agg:          Optional["xr.DataArray"] = None
@@ -234,6 +257,18 @@ class VisibilityRaster(VisibilityPlot):
         changed = False
         if quantity is not None and quantity != self._quantity:
             self._quantity = quantity;  changed = True
+            # Scaling settings are per-quantity (Part 6 follow-up): leaving a
+            # quantity stores its settings, arriving restores them or applies
+            # that quantity's first-visit default (Z-Score: threshold at the
+            # n-aware cutoff -- see scaling_memory.py and
+            # _apply_zscore_cell_cutoff). Keyed on _scaling_owner, NOT on the
+            # previous self._quantity, because VisibilityPlotter._handle_plot
+            # sets panel._quantity = None before calling us; logic that looks
+            # at the previous quantity silently never fires in the real GUI.
+            # Done here, in the same call that just set self._quantity, so the
+            # self._render() below can never observe an inconsistent pairing
+            # (an earlier design sent a separate comm message and raced it).
+            self._switch_scaling_owner(quantity)
         if polarization is not None and polarization != self._polarization:
             self._polarization = polarization;  changed = True
 
@@ -311,6 +346,114 @@ class VisibilityRaster(VisibilityPlot):
         self._color_mode = mode
         self._render(self._selection)
 
+    # ------------------------------------------------------------------
+    # Per-quantity scaling memory (save/restore unit: scaling_memory.py)
+    # ------------------------------------------------------------------
+
+    def _current_scaling_settings(self) -> ScalingSettings:
+        """The live scaling fields as one settings object."""
+        return ScalingSettings(
+            scaling=self._scaling, alpha=self._scaling_alpha,
+            gamma=self._scaling_gamma, vmin=self._scaling_vmin,
+            vmax=self._scaling_vmax,
+            auto_cutoff=bool(getattr(self, "_zscore_vmin_auto", False)),
+        )
+
+    def _load_scaling_settings(self, s: ScalingSettings) -> None:
+        """Make the live fields equal *s* (does not re-render)."""
+        self._scaling = s.scaling
+        self._scaling_alpha = s.alpha
+        self._scaling_gamma = s.gamma
+        self._scaling_vmin = s.vmin
+        self._scaling_vmax = s.vmax
+        self._zscore_vmin_auto = s.auto_cutoff
+
+    def _init_scaling_state(self) -> None:
+        """Called from __init__ once the scaling fields exist.  The live
+        settings belong to the constructor's quantity.  A panel BORN as
+        Z_SCORE (e.g. ``preset="zscore"``) gets Z-Score's first-visit default,
+        unless the caller passed an explicit non-default ``scaling=``."""
+        self._scaling_owner = self._quantity
+        # The constructor's alpha/gamma seed every quantity's first-visit
+        # default (NOT the live values, which may have been tuned for another
+        # quantity by the time a new one is first visited).
+        self._scaling_alpha_default = self._scaling_alpha
+        self._scaling_gamma_default = self._scaling_gamma
+        if self._quantity == Axis.Z_SCORE and self._scaling == _DEFAULT_SCALING:
+            self._load_scaling_settings(default_scaling_settings(
+                Axis.Z_SCORE, self._scaling_alpha_default, self._scaling_gamma_default))
+
+    def _switch_scaling_owner(self, new_quantity) -> None:
+        """Store the live settings under their current owner, then load
+        *new_quantity*'s remembered (or default) settings.  A no-op when the
+        owner does not change -- which is also what makes the plotter's
+        reset-to-None-then-update_axes(same quantity) pattern harmless."""
+        old = getattr(self, "_scaling_owner", None)
+        if new_quantity is None or new_quantity == old:
+            return
+        memory = getattr(self, "_scaling_memory", None)
+        if memory is None:
+            memory = self._scaling_memory = ScalingMemory()
+        if old is not None:
+            memory.remember(old.name, self._current_scaling_settings())
+        settings = memory.recall(new_quantity.name) or default_scaling_settings(
+            new_quantity,
+            getattr(self, "_scaling_alpha_default", self._scaling_alpha),
+            getattr(self, "_scaling_gamma_default", self._scaling_gamma))
+        self._load_scaling_settings(settings)
+        self._scaling_owner = new_quantity
+
+    def capture_scaling_state(self) -> dict:
+        """JSON-serializable snapshot of this panel's scaling memory,
+        including the live settings of the current owner (see
+        ``RasterScalingUnit`` for the format)."""
+        snapshot = ScalingMemory.from_dict(self._scaling_memory.to_dict())
+        owner = getattr(self, "_scaling_owner", None)
+        if owner is not None:
+            snapshot.remember(owner.name, self._current_scaling_settings())
+        return {"owner": owner.name if owner is not None else None,
+                "by_quantity": snapshot.to_dict()}
+
+    def apply_scaling_state(self, state: dict) -> None:
+        """Restore a snapshot from :meth:`capture_scaling_state`: replace the
+        memory table, load the settings for the panel's CURRENT quantity if the
+        snapshot has any, and re-shade.  The saved ``owner`` is informational:
+        the quantity itself is restored by whichever unit owns the axes."""
+        self._scaling_memory = ScalingMemory.from_dict(state.get("by_quantity", {}))
+        owner = getattr(self, "_scaling_owner", None)
+        saved = self._scaling_memory.recall(owner.name) if owner is not None else None
+        if saved is not None:
+            self._load_scaling_settings(saved)
+        self._reshade_image()
+
+    def _apply_zscore_cell_cutoff(self, agg) -> None:
+        """Set the automatic threshold for a Z_SCORE raster from its own
+        data (Part 6, 2026-09).
+
+        Each cell shows the MAX Z-Score over ``n`` reduced samples (e.g.
+        every channel of a Time x Baseline cell), so a per-sample cutoff
+        of 3.5 flags most cells of pure noise once ``n`` is a few
+        hundred. The backend records ``n`` on the array
+        (``attrs["zscore_n_reduced"]``) and ``zscore_cell_cutoff`` turns
+        it into the cutoff that keeps the per-CELL false-alarm rate equal
+        to the per-sample one -- see that function for the statistics.
+
+        Only acts while the cutoff is still automatic (set by
+        ``update_axes``, or restored by the reset button); a value the
+        user typed or dragged is never touched. Silently does nothing
+        when the backend supplied no count, leaving the provisional
+        per-sample cutoff in place.
+        """
+        if (agg is None
+                or not getattr(self, "_zscore_vmin_auto", False)
+                or self._quantity != Axis.Z_SCORE
+                or self._scaling != "threshold"):
+            return
+        n = getattr(agg, "attrs", {}).get("zscore_n_reduced")
+        if n is None:
+            return
+        self._scaling_vmin = zscore_cell_cutoff(n, _ZSCORE_THRESHOLD_VMIN)
+
     def update_scaling(
         self,
         scaling: Optional[str] = None,
@@ -360,6 +503,10 @@ class VisibilityRaster(VisibilityPlot):
                     f"scaling must be one of {_cms.ALL_SCALINGS}, got {scaling!r}"
                 )
             self._scaling = scaling
+            if scaling != "threshold":
+                # Left threshold scaling: whatever cutoff was in effect is
+                # no longer the automatic Z-Score one.
+                self._zscore_vmin_auto = False
         if alpha is not None:
             self._scaling_alpha = alpha
         if gamma is not None:
@@ -367,13 +514,28 @@ class VisibilityRaster(VisibilityPlot):
         if reset_range:
             self._scaling_vmin = None
             self._scaling_vmax = None
+            # Reset means "back to automatic" -- for a Z_SCORE threshold
+            # view that is the n-aware cutoff, not an unset (array-minimum)
+            # one.
+            if self._quantity == Axis.Z_SCORE and self._scaling == "threshold":
+                self._scaling_vmin = _ZSCORE_THRESHOLD_VMIN
+                self._zscore_vmin_auto = True
+                self._apply_zscore_cell_cutoff(self._agg)
         if vmin is not None:
             self._scaling_vmin = vmin
+            # An explicit cutoff is the user's own; stop overriding it.
+            self._zscore_vmin_auto = False
         if vmax is not None:
             self._scaling_vmax = vmax
 
+        self._reshade_image()
+
+    def _reshade_image(self) -> None:
+        """Re-shade the cached aggregation with the live scaling and push the
+        image.  No backend query.  A no-op before anything has rendered (the
+        new settings then take effect on the next ``_render``)."""
         if self._agg is None:
-            return  # nothing rendered yet — new scaling takes effect on next _render
+            return
 
         img32 = self._shade_viewport(self._x_range, self._y_range)
         new_data = {
@@ -1010,6 +1172,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             self._ensure_identity_tables(polarization=self._polarization)
 
         self._agg          = agg
+        # Before any shading below reads _scaling_vmin.
+        self._apply_zscore_cell_cutoff(agg)
         self._x_range      = x_range
         self._y_range      = y_range
         self._is_decimated = is_decimated

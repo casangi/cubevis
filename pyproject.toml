@@ -64,7 +64,7 @@ casa6 = ["casatasks"]
 # relevant ABI/build info. For combined casa6+xarray environments, use the
 # pixi environment shipped in `pixi.toml` instead of pip extras.
 xarray = [
-    "xarray-ms>=0.5,<0.6",
+    "xarray-ms>=0.5.9,<0.6.0",
     "zarr",
     "dask[array]",
     "distributed",

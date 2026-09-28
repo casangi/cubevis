@@ -286,6 +286,31 @@ def _fmt(v: float) -> str:
         return ""
 
 
+def _antenna_summary_html(summary: Any) -> str:
+    """One compact line for Slice 2's per-antenna readout (design doc
+    §7.6, §7.10): sample count, median score, and fraction over
+    threshold side by side -- statistics only, never a qualitative
+    verdict, per §7.2's own explicit requirement.
+
+    ``summary.count == 0`` (every sample happened to be non-finite --
+    see ``compute_antenna_zscore_summary``'s own docstring) is said
+    explicitly rather than shown as a blank or a bare "None", matching
+    ``colorbar_html``'s own "nothing to draw" -> "" convention one level
+    up: a real, reportable state, not an error to hide.
+    """
+    name = _html.escape(str(summary.antenna_name))
+    if summary.count == 0:
+        return f"<b>{name}</b>: no samples"
+    median = _fmt(summary.median_score)
+    thresh = _fmt(summary.threshold)
+    frac_pct = (_fmt(summary.fraction_over_threshold * 100)
+                if summary.fraction_over_threshold is not None else "")
+    return (
+        f"<b>{name}</b>: N={summary.count}  "
+        f"median={median}  {frac_pct}% &gt; {thresh}"
+    )
+
+
 def colorbar_html(bands: Iterable[Any], *, max_stops: int = 24,
                   n_ticks: int = 3) -> str:
     """HTML colorbar(s) for the live info block, from ``ColorBand``s.
@@ -302,6 +327,13 @@ def colorbar_html(bands: Iterable[Any], *, max_stops: int = 24,
 
     Text colours are ``inherit`` so the bar follows the Div's own colour
     (set by the dark/light restyle) instead of baking in one theme.
+
+    Slice 2 (Part 6, 2026-09): a band with ``antenna_summary`` set (a
+    layer carrying Z-Score data, with the current selection narrowed to
+    exactly one antenna -- see ``ScatterLayerRender.antenna_summary``'s
+    own docstring in ``data/reader.py``) gets one extra line under its
+    colorbar with that readout. Alongside the color, per the design
+    doc's own trust-building requirement -- not color alone.
     """
     bands = list(bands)
     # Whether to say WHICH layer a bar belongs to.  Decided from ALL the
@@ -334,6 +366,12 @@ def colorbar_html(bands: Iterable[Any], *, max_stops: int = 24,
         if multi:
             label = f"{getattr(b, 'label', '')}: {label}"
         spans = "".join(f"<span>{_html.escape(v)}</span>" for v in vals)
+        summary = getattr(b, "antenna_summary", None)
+        summary_div = (
+            f"<div style='font-size:10px;opacity:0.8;margin-top:2px'>"
+            f"{_antenna_summary_html(summary)}</div>"
+            if summary is not None else ""
+        )
         out.append(
             "<div style='margin:3px 0 6px 0'>"
             f"<div style='font-size:10px;opacity:0.8;white-space:nowrap;"
@@ -342,6 +380,7 @@ def colorbar_html(bands: Iterable[Any], *, max_stops: int = 24,
             f"background:linear-gradient(to right,{','.join(picks)})'></div>"
             "<div style='display:flex;justify-content:space-between;"
             f"font-size:10px;font-family:monospace'>{spans}</div>"
+            f"{summary_div}"
             "</div>"
         )
     return "".join(out)

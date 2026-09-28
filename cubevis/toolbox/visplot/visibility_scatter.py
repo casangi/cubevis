@@ -272,10 +272,10 @@ class ScatterLayer:
     def __post_init__(self):
         if not self.label:
             self.label = f"{self.y_axis.label} {self.polarization}"
-        if self.coloring not in ("continuous", "categorical"):
+        if self.coloring not in ("continuous", "categorical", "statistical"):
             raise ValueError(
-                "ScatterLayer.coloring must be 'continuous' or "
-                f"'categorical', got {self.coloring!r}"
+                "ScatterLayer.coloring must be 'continuous', "
+                f"'categorical', or 'statistical', got {self.coloring!r}"
             )
         if self.category_priority not in CATEGORY_PRIORITIES:
             raise ValueError(
@@ -414,6 +414,11 @@ class VisibilityScatter(VisibilityPlot):
         # payload has no cmap (the browser has no reason to send one) and
         # is filled from here -- see _with_default_cmaps.
         self._layer_cmaps = list(layer_cmaps or _LAYER_CMAPS)
+        # Part 6 (2026-09): ramp for layers in "statistical" coloring. None
+        # (the default) means such a layer just uses its ordinary layer
+        # cmap, as before. The plotter sets it to the RASTER's ramp -- see
+        # set_statistical_cmap().
+        self._statistical_cmap = None
         self._layers: list[ScatterLayer] = self._with_default_cmaps(layers)
 
         # Per-layer render state, cached from the last backend
@@ -812,10 +817,10 @@ class VisibilityScatter(VisibilityPlot):
         lyr = self._layers[layer_index]
 
         new_coloring = coloring if coloring is not None else lyr.coloring
-        if new_coloring not in ("continuous", "categorical"):
+        if new_coloring not in ("continuous", "categorical", "statistical"):
             raise ValueError(
-                f"coloring must be 'continuous' or 'categorical', "
-                f"got {new_coloring!r}"
+                f"coloring must be 'continuous', 'categorical', or "
+                f"'statistical', got {new_coloring!r}"
             )
 
         if isinstance(colorize_axis, str):
@@ -840,16 +845,7 @@ class VisibilityScatter(VisibilityPlot):
                 f"got {new_display!r}"
             )
 
-        if new_coloring == "continuous":
-            # Mirrors ScatterLayerSpec.__post_init__: an axis is only
-            # ever valid alongside categorical mode -- silently dropped
-            # here rather than left dangling from a previous categorical
-            # selection, exactly as switching back to continuous should
-            # behave from the user's point of view (the axis picker
-            # itself is hidden in this mode -- see colorize_controls()).
-            new_axis = None
-            new_excluded = ()
-        else:
+        if new_coloring == "categorical":
             new_axis = colorize_axis if colorize_axis is not None else lyr.colorize_axis
             if new_axis is None:
                 candidates = [
@@ -866,6 +862,26 @@ class VisibilityScatter(VisibilityPlot):
                 )
             new_excluded = (tuple(excluded_categories) if excluded_categories is not None
                             else lyr.excluded_categories)
+        else:
+            # "continuous" AND "statistical" both take this branch --
+            # neither has a colorize_axis (ScatterLayerSpec.__post_init__
+            # rejects one on either), the same "not categorical" grouping
+            # that class's own validation uses. Was previously "if
+            # new_coloring == 'continuous': ... else: [assume
+            # categorical]", which broke the moment "statistical" (Part
+            # 6, 2026-09) became a third value: it would have tried to
+            # resolve a colorize_axis for a statistical layer -- either
+            # raising "no colorizable axes available" or, worse,
+            # silently attaching one, which ScatterLayerSpec would then
+            # reject when this method's own result got converted to one.
+            # Mirrors ScatterLayerSpec.__post_init__: an axis is only
+            # ever valid alongside categorical mode -- silently dropped
+            # here rather than left dangling from a previous categorical
+            # selection, exactly as switching back to continuous should
+            # behave from the user's point of view (the axis picker
+            # itself is hidden in this mode -- see colorize_controls()).
+            new_axis = None
+            new_excluded = ()
 
         # cmap is REUSED for categorical mode (Part 3 convention -- see
         # ScatterLayerSpec's docstring): swap in a categorical palette
@@ -878,13 +894,37 @@ class VisibilityScatter(VisibilityPlot):
         # this, only entries that have actually made the switch exist.
         new_cmap = lyr.cmap
         if new_coloring == "categorical" and lyr.coloring != "categorical":
-            self._layer_continuous_cmap_backup[layer_index] = lyr.cmap
+            # A statistical layer's ramp is the special statistical one;
+            # the backup must be the ordinary layer cmap so leaving
+            # categorical for "continuous" later doesn't inherit it.
+            self._layer_continuous_cmap_backup[layer_index] = (
+                self._cmap_for_layer(layer_index, "continuous")
+                if lyr.coloring == "statistical" else lyr.cmap)
             from . import palettes
             new_cmap = tuple(palettes.categorical_cmap(theme=self._theme_hint()))
-        elif new_coloring == "continuous" and lyr.coloring == "categorical":
+        elif new_coloring in ("continuous", "statistical") and lyr.coloring == "categorical":
+            # Restores the backed-up gradient cmap for EITHER mode a
+            # layer can leave categorical for -- "statistical" (Part 6,
+            # 2026-09) needs this exactly as much as "continuous" does,
+            # since both display a gradient/threshold ramp, not a
+            # discrete category palette; was previously an == check
+            # against "continuous" alone, which meant switching straight
+            # from categorical to statistical silently kept the discrete
+            # category palette (would render, just not with the intended
+            # gradient -- the same failure mode the comment above already
+            # names for the untreated case).
             new_cmap = self._layer_continuous_cmap_backup.pop(
                 layer_index, self._layer_cmaps[layer_index % len(self._layer_cmaps)],
             )
+
+        # Part 6 (2026-09): entering/leaving "statistical" swaps between
+        # the statistical ramp and the ordinary layer ramp (no-ops when
+        # no statistical ramp has been set, or for a categorical target).
+        if getattr(self, "_statistical_cmap", None):
+            if new_coloring == "statistical" and lyr.coloring != "statistical":
+                new_cmap = self._cmap_for_layer(layer_index, "statistical")
+            elif new_coloring == "continuous" and lyr.coloring == "statistical":
+                new_cmap = self._cmap_for_layer(layer_index, "continuous")
 
         self._layers[layer_index] = ScatterLayer(
             y_axis        = lyr.y_axis,
@@ -1268,6 +1308,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._layer_categories       = [None] * n
             self._layer_category_colors  = [None] * n
             self._layer_category_members = [None] * n
+            self._layer_antenna_summary  = [None] * n
             self._layer_dfs         = [None] * n   # vestigial -- see __init__
             self._layer_aggs        = [None] * n   # vestigial -- see __init__
             self._layer_extents     = [None] * n   # vestigial -- see __init__
@@ -1370,6 +1411,13 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 # cannot rely on the reader having seen the GUI's caption.
                 category_priority = (lyr.category_priority
                                      if lyr.coloring == "categorical" else None),
+                # Slice 2 per-antenna readout (Part 6, 2026-09): same
+                # cheap-cached-read treatment as categories/colors/
+                # members above -- ScatterLayerRender's own contract
+                # already decided whether this layer/selection qualifies
+                # (data/reader.py), passed straight through here.
+                antenna_summary = self._layer_antenna_summary[i]
+                    if i < len(self._layer_antenna_summary) else None,
             )
             for i, lyr in enumerate(self._layers)
         )
@@ -1612,6 +1660,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._layer_categories       = [None] * n
             self._layer_category_colors  = [None] * n
             self._layer_category_members = [None] * n
+            self._layer_antenna_summary  = [None] * n
             self._layer_dfs         = [None] * n   # vestigial -- see __init__
             self._layer_aggs        = [None] * n   # vestigial -- see __init__
             self._layer_extents     = [None] * n   # vestigial -- see __init__
@@ -2565,6 +2614,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         self._layer_categories       = []
         self._layer_category_colors  = []
         self._layer_category_members = []
+        self._layer_antenna_summary  = []
         self._layer_reference   = []
         for lyr, rendered in zip(self._layers, result.layers):
             self._layer_images.append(rendered.image)
@@ -2586,6 +2636,11 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._layer_categories.append(rendered.categories)
             self._layer_category_colors.append(rendered.category_colors)
             self._layer_category_members.append(rendered.category_members)
+            # Slice 2 per-antenna readout (Part 6, 2026-09): None unless
+            # this layer carries Z-Score data AND the selection names
+            # exactly one antenna -- ScatterLayerRender's own contract,
+            # passed straight through the same way categories is.
+            self._layer_antenna_summary.append(rendered.antenna_summary)
 
             # Two-level rendering (2026-09): None whenever ref_scale
             # wasn't honored for some reason (shouldn't happen given we
@@ -2704,9 +2759,16 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         order is still the layer order, so several categorical layers
         stack as before.  A fixed rule, not a control.
         """
-        cont = [i for i, lyr in enumerate(self._layers) if lyr.coloring != "categorical"]
+        cont = [i for i, lyr in enumerate(self._layers)
+                if lyr.coloring not in ("categorical", "statistical")]
+        stat = [i for i, lyr in enumerate(self._layers) if lyr.coloring == "statistical"]
         cat  = [i for i, lyr in enumerate(self._layers) if lyr.coloring == "categorical"]
-        return cont + cat
+        # Part 6 (2026-09): statistical layers sit above continuous ones
+        # for the same reason categorical ones do -- they answer "which
+        # samples are flagged", and must not be buried under a density
+        # wash. (Their own flagged-over-normal ordering across layers is
+        # handled in _collapse_and_composite.)
+        return cont + stat + cat
 
     def _collapse_and_composite(self) -> np.ndarray:
         """Alpha-collapse + Porter-Duff composite the last rendered images.
@@ -2733,7 +2795,10 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         render.
         """
         canvas_pixels = max(1, self._canvas_width * self._canvas_height)
-        shaded = []
+        cont_shaded: list = []
+        stat_normal: list = []
+        stat_flagged: list = []
+        cat_shaded: list = []
         for i in self._stack_order():
             lyr = self._layers[i]
             img = self._layer_images[i] if i < len(self._layer_images) else None
@@ -2742,7 +2807,18 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             n_in_view = self._layer_n_in_view[i]
 
             img_arr = img.copy()
-            if lyr.coloring == "categorical":
+            if lyr.coloring == "statistical":
+                # Part 6 (2026-09): like a categorical layer, a statistical
+                # one answers "which", not "how dense". Keep the shader's
+                # OWN per-pixel alpha (a below-cutoff pixel is drawn
+                # translucent, a flagged one opaque) and apply only the
+                # user's layer alpha. The density-derived ``auto_alpha``
+                # used for continuous layers overwrote that per-pixel
+                # alpha, so flagged pixels were dimmed to the same 80-ish
+                # alpha as normal ones -- the flagged yellow read as dull
+                # olive instead of standing out.
+                layer_alpha = max(0, min(255, int(255 * lyr.alpha)))
+            elif lyr.coloring == "categorical":
                 # Part 5a (2026-09): a categorical layer is opaque and
                 # only the user's own alpha applies.  ``auto_alpha``
                 # below dims a layer as points-per-pixel rises (it is
@@ -2763,7 +2839,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 layer_alpha = max(0, min(255, int(auto_alpha * lyr.alpha)))
             if layer_alpha > 0:
                 nonempty = (img_arr >> 24) > 0
-                if lyr.coloring == "categorical":
+                if lyr.coloring in ("categorical", "statistical"):
                     # Part 5b: SCALE the pixel's own alpha by the layer alpha
                     # instead of overwriting it.  Every real category is 255
                     # (so this equals ``layer_alpha``, exactly as before);
@@ -2780,8 +2856,23 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                         (img_arr[nonempty] & 0x00FFFFFF)
                         | (np.uint32(layer_alpha) << np.uint32(24))
                     )
-            shaded.append(img_arr)
+            if lyr.coloring == "statistical":
+                # Split into below-cutoff and flagged pixels (by the
+                # shader's own alpha, before the layer-alpha scaling
+                # above): every layer's flagged pixels are drawn AFTER
+                # every layer's normal ones, so one polarization's
+                # translucent "normal" pixel can never tint (or cover)
+                # another's flagged one where they overlap.
+                flagged = ((img >> 24) & 0xFF) == 255
+                zero = np.uint32(0)
+                stat_normal.append(np.where(flagged, zero, img_arr).astype(np.uint32))
+                stat_flagged.append(np.where(flagged, img_arr, zero).astype(np.uint32))
+            elif lyr.coloring == "categorical":
+                cat_shaded.append(img_arr)
+            else:
+                cont_shaded.append(img_arr)
 
+        shaded = cont_shaded + stat_normal + stat_flagged + cat_shaded
         if not shaded:
             return np.zeros(
                 (self._canvas_height, self._canvas_width), dtype=np.uint32)
@@ -2926,18 +3017,48 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
     # j2p handlers (scatter-specific)
     # ------------------------------------------------------------------
 
-    def set_layer_cmaps(self, cmaps) -> None:
+    def set_statistical_cmap(self, cmap) -> None:
+        """Set the ramp used by layers in "statistical" coloring (Part 6,
+        2026-09) WITHOUT re-rendering -- for construction time, before
+        anything has been drawn. ``None`` restores the default (statistical
+        layers use their ordinary layer cmap).
+
+        Why a separate ramp at all: the scatter ramps are density ramps,
+        conditioned so a sparse pixel survives alpha blending, which
+        keeps their low end bright. For a statistical layer that made
+        the NORMAL class as loud as the flagged one and left the flagged
+        end a washed-out pale tone. The raster's opaque ramp (deep blue
+        to yellow) recedes for normal samples and makes flagged ones
+        unmistakable -- and gives both panels one color language.
+        """
+        self._statistical_cmap = tuple(cmap) if cmap else None
+
+    def _cmap_for_layer(self, i: int, coloring: str):
+        """The ramp layer *i* should use in *coloring* mode (continuous /
+        statistical only -- categorical has its own palette)."""
+        stat = getattr(self, "_statistical_cmap", None)
+        if coloring == "statistical" and stat:
+            return stat
+        return self._layer_cmaps[i % len(self._layer_cmaps)]
+
+    def set_layer_cmaps(self, cmaps, statistical_cmap=None) -> None:
         """Swap every layer's colormap and re-render.
 
         A ``SHADE``-level change (``refresh.py``).  Assigns by layer
         index modulo the family length, matching how the family is
         applied at construction, so a scatter with more layers than the
         family has entries still cycles rather than failing.
+
+        *statistical_cmap* (Part 6): the new ramp for layers in
+        "statistical" coloring, which use it instead of the family.
+        Omitted leaves the previously set one in place.
         """
         from dataclasses import replace
         self._layer_cmaps = list(cmaps)
+        if statistical_cmap is not None:
+            self.set_statistical_cmap(statistical_cmap)
         self._layers = [
-            replace(lyr, cmap=self._layer_cmaps[i % len(self._layer_cmaps)])
+            replace(lyr, cmap=self._cmap_for_layer(i, lyr.coloring))
             for i, lyr in enumerate(self._layers)
         ]
         self._reshade()
@@ -3515,7 +3636,9 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         controls : Bokeh column
             The widget tree for the sidebar.
         handles : dict
-            ``{"mode_group": RadioButtonGroup, "axis_select": Select,
+            ``{"mode_group": RadioButtonGroup (Part 6: ``active`` 0 =
+            continuous, 1 = categorical, 2 = statistical),
+            "axis_select": Select,
             "priority_select": Select (Part 5a: "rarest" / "majority"),
             "checklists": {axis_name_str: (CheckboxGroup, Column)}}`` --
             the group (``active`` = checked indices, ``tags`` = raw
@@ -3547,6 +3670,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         colorizable = [Axis[name] for name, _ in axis_options]
 
         is_categorical = lyr.coloring == "categorical"
+        is_statistical = lyr.coloring == "statistical"
         current_axis = (lyr.colorize_axis if lyr.colorize_axis is not None
                          else colorizable[0])
 
@@ -3554,9 +3678,23 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             text=f"<span style='color:#a6adc8;font-size:11px'>"
                  f"Colorize \u2014 {_html_escape(lyr.label)}</span>",
         )
+        # Part 6 (2026-09): third mode, "Statistical" -- colored by each
+        # sample's per-baseline Z-Score. Index 2; doPlot()'s
+        # buildColorizeArray() reads ``mode_group.active`` (0 continuous /
+        # 1 categorical / 2 statistical). It carries no axis/category
+        # state, so it adds no widgets of its own beyond a one-line hint;
+        # the ordinary color-scaling controls (colormap_controls(), kept
+        # visible for this mode by the caller) still apply.
         mode_group = RadioButtonGroup(
-            labels=["Continuous", "Categorical"],
-            active=(1 if is_categorical else 0),
+            labels=["Continuous", "Categorical", "Statistical"],
+            active=(1 if is_categorical else 2 if is_statistical else 0),
+        )
+        statistical_hint = Div(
+            text="<span style='color:#a6adc8;font-size:11px'>Colored by "
+                 "per-baseline Z-Score (how unusual each sample is for "
+                 "its own baseline). Threshold scaling, cutoff 3.5 by "
+                 "default, highlights outliers.</span>",
+            visible=is_statistical,
         )
         axis_select = Select(
             value=current_axis.name,
@@ -3689,8 +3827,8 @@ try { group.active = act; } catch (e) { console.warn('[visplot checklist] antenn
             checklists[axis.name] = (group, wrapper)
             checklist_cols.append(wrapper)
 
-        controls = column(section, mode_group, axis_select, priority_select,
-                          display_select, *checklist_cols)
+        controls = column(section, mode_group, statistical_hint, axis_select,
+                          priority_select, display_select, *checklist_cols)
 
         # Staged, not live (see this method's own docstring): both
         # callbacks below only manage visibility, locally, of this
@@ -3704,9 +3842,11 @@ try { group.active = act; } catch (e) { console.warn('[visplot checklist] antenn
             args={"axis_select": axis_select,
                   "priority_select": priority_select,
                   "display_select": display_select,
+                  "statistical_hint": statistical_hint,
                   "checklist_by_axis": checklist_by_axis_name},
             code="""
 const categorical = (cb_obj.active === 1);
+statistical_hint.visible = (cb_obj.active === 2);
 axis_select.visible = categorical;
 priority_select.visible = categorical;
 display_select.visible = categorical;
@@ -3782,7 +3922,7 @@ for (const name in checklist_by_axis) {
                     from . import palettes
                     cmap = tuple(palettes.categorical_cmap(theme=self._theme_hint()))
                 else:
-                    cmap = self._layer_cmaps[i % len(self._layer_cmaps)]
+                    cmap = self._cmap_for_layer(i, lyr.coloring)
                 lyr = ScatterLayer(
                     y_axis        = lyr.y_axis,
                     polarization  = lyr.polarization,

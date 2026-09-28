@@ -88,6 +88,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+import warnings
 from dataclasses import replace as _dc_replace
 from typing import Optional, Iterator
 
@@ -1042,9 +1043,58 @@ class MSv4Backend(XArrayReader):
             raise ValueError("query_columns: layers must be non-empty")
 
         yaxes = [(lyr.y_axis, lyr.polarization) for lyr in layers]
+        # Part 6 (2026-09): a "statistical" layer also needs the
+        # Z-Score, decoupled from whatever its own y_axis is -- requested
+        # here as an ADDITIONAL (axis, pol) key, reusing Slice 1's
+        # existing Z-Score staging/finalization machinery completely
+        # unchanged (see XArrayReader._finalize_zscore_frame), rather
+        # than teaching the (axis, pol)-keyed cache itself about a
+        # second, coloring-only shape of data under the SAME key a plain
+        # continuous layer would use for the same (y_axis, pol) -- that
+        # would make the cache ambiguous about which shape of DataFrame
+        # a given key actually holds. A set, not a list, to de-duplicate
+        # when multiple statistical layers share a polarization. Mirrors
+        # MSv2Backend.query_columns' own identical handling exactly --
+        # see that method's own comments for the full rationale.
+        color_keys = {
+            (Axis.Z_SCORE, lyr.polarization)
+            for lyr in layers if lyr.coloring == "statistical"
+        }
+        all_keys = yaxes + [k for k in color_keys if k not in yaxes]
         # Part 6: frames come from the per-layer cache when this selection
         # was already read (a pan, zoom, recolor or export), else from disk.
-        dataframes = self._query_columns_cached(xaxis, yaxes, selection)
+        dataframes = self._query_columns_cached(xaxis, all_keys, selection)
+
+        # Part 6: merge each statistical layer's own (y_axis, pol) frame
+        # with its (Z_SCORE, pol) frame on the identity columns every
+        # scatter frame already carries (time/baseline_id/frequency --
+        # see _query_partition_scatter's hover-probe id-column addition),
+        # giving a "color" column alongside "x"/"y" without the
+        # (axis, pol) cache ever needing to know about it. A LEFT join,
+        # not inner -- see MSv2Backend.query_columns' own identical
+        # handling for the full rationale (a row missing from the
+        # Z-Score population still gets plotted, just uncolored). Built
+        # once per layer, used only for rendering below --
+        # full_x_range/full_y_range above still read the plain, unmerged
+        # frame.
+        render_dataframes: list[Optional[pd.DataFrame]] = []
+        for lyr in layers:
+            base_df = dataframes.get((lyr.y_axis, lyr.polarization))
+            if lyr.coloring != "statistical" or base_df is None or len(base_df) == 0:
+                render_dataframes.append(base_df)
+                continue
+            color_df = dataframes.get((Axis.Z_SCORE, lyr.polarization))
+            id_cols = [c for c in ("time", "baseline_id", "frequency")
+                      if color_df is not None and c in base_df.columns and c in color_df.columns]
+            if color_df is None or len(color_df) == 0 or not id_cols:
+                merged = base_df.copy()
+                merged["color"] = np.nan
+            else:
+                merged = base_df.merge(
+                    color_df[id_cols + ["y"]].rename(columns={"y": "color"}),
+                    on=id_cols, how="left",
+                )
+            render_dataframes.append(merged)
 
         x0_all, x1_all, y0_all, y1_all = [], [], [], []
         for lyr in layers:
@@ -1066,29 +1116,63 @@ class MSv4Backend(XArrayReader):
 
         rendered = tuple(
             _scatter_render.render_layer(
-                dataframes.get((lyr.y_axis, lyr.polarization)), lyr,
+                render_df, lyr,
                 x0, x1, y0, y1, canvas_w, canvas_h, color_mode, full_y_range,
                 probe_grid_max_cells=probe_grid_max_cells,
             )
-            for lyr in layers
+            for lyr, render_df in zip(layers, render_dataframes)
         )
 
         ref_canvas_width = ref_canvas_height = None
         if ref_scale is not None:
             ref_canvas_width  = max(1, int(round(canvas_w * ref_scale)))
             ref_canvas_height = max(1, int(round(canvas_h * ref_scale)))
+            # Part 6: two-level rendering's Level-1 fast path is not yet
+            # taught about "statistical" coloring -- see
+            # MSv2Backend.query_columns' own identical comment for the
+            # full rationale (building a reference for one now would
+            # silently aggregate by the plotted Y column instead of the
+            # color source on every subsequent pan/zoom).
             rendered = tuple(
-                _dc_replace(
+                render if lyr.coloring == "statistical" else _dc_replace(
                     render,
                     reference=_scatter_render.build_layer_reference(
-                        dataframes.get((lyr.y_axis, lyr.polarization)), lyr,
+                        render_df, lyr,
                         x0, x1, y0, y1,
                         ref_canvas_width, ref_canvas_height, canvas_w, canvas_h,
                         color_mode, probe_grid_max_cells=probe_grid_max_cells,
                     ),
                 )
-                for lyr, render in zip(layers, rendered)
+                for lyr, render, render_df in zip(layers, rendered, render_dataframes)
             )
+
+        # Part 6 Slice 2 (2026-09): the per-antenna quantitative readout
+        # -- mirrors MSv2Backend.query_columns' own identical handling
+        # exactly (see that method's own comments for the full
+        # eligibility rationale: SelectionSpec.antenna_names naming
+        # exactly one antenna, and either y_axis == Axis.Z_SCORE
+        # directly or coloring == "statistical").
+        if selection.antenna_names is not None and len(selection.antenna_names) == 1:
+            antenna_name = selection.antenna_names[0]
+            with_summaries = []
+            for lyr, render, render_df in zip(layers, rendered, render_dataframes):
+                score_column = None
+                if lyr.y_axis == Axis.Z_SCORE:
+                    score_column = "y"
+                elif lyr.coloring == "statistical":
+                    score_column = "color"
+                if (score_column is None or render_df is None
+                        or score_column not in render_df.columns):
+                    with_summaries.append(render)
+                    continue
+                threshold = (lyr.scaling_vmin if lyr.scaling_vmin is not None
+                            else _scatter_render._DEFAULT_ZSCORE_THRESHOLD)
+                summary = _scatter_render.compute_antenna_zscore_summary(
+                    render_df[score_column].to_numpy(), antenna_name,
+                    threshold=threshold,
+                )
+                with_summaries.append(_dc_replace(render, antenna_summary=summary))
+            rendered = tuple(with_summaries)
 
         return ScatterRenderResult(
             x_range=full_x_range, y_range=full_y_range,
@@ -1169,10 +1253,13 @@ class MSv4Backend(XArrayReader):
                         partition_frames[key].append(df)
             result = {}
             for key, frames in partition_frames.items():
-                result[key] = (
-                    pd.concat(frames, ignore_index=True) if frames
-                    else pd.DataFrame({"x": [], "y": []})
-                )
+                if frames:
+                    df = pd.concat(frames, ignore_index=True)
+                else:
+                    df = pd.DataFrame({"x": [], "y": []})
+                if key[0] == Axis.Z_SCORE:
+                    df = self._finalize_zscore_frame(df)
+                result[key] = df
             return result
 
     def _query_all_partitions_scatter_fused(
@@ -1249,17 +1336,39 @@ class MSv4Backend(XArrayReader):
             if not yaxes_local:
                 continue
 
+            # Part 6 Slice 1 (2026-09): Axis.Z_SCORE tagged "y" for its
+            # real part (so it flows through the existing y_by_partition_
+            # key reconstruction below unchanged) plus a new "zscore_imag"
+            # tag for its imaginary part -- mirrors
+            # _query_partition_scatter's staging (real/imaginary via the
+            # existing Axis.REAL/Axis.IMAGINARY computation, finalized
+            # once by XArrayReader._finalize_zscore_frame after this
+            # method returns), adapted to this method's own flat
+            # all_lazy/layout shape since this is an independent code
+            # path, not a caller of that method (see this method's own
+            # docstring above for why colorize-by-axis Part 2 needed the
+            # same "independent path" treatment).
             for key in yaxes_local:
                 axis, pol = key
-                lazy_y = self._lazy_quantity(vis, flag, axis, pol)
-                all_lazy.append(lazy_y)
-                layout.append((p_idx, "y", key))
+                if axis == Axis.Z_SCORE:
+                    all_lazy.append(self._lazy_quantity(vis, flag, Axis.REAL, pol))
+                    layout.append((p_idx, "y", key))
+                    all_lazy.append(self._lazy_quantity(vis, flag, Axis.IMAGINARY, pol))
+                    layout.append((p_idx, "zscore_imag", key))
+                else:
+                    lazy_y = self._lazy_quantity(vis, flag, axis, pol)
+                    all_lazy.append(lazy_y)
+                    layout.append((p_idx, "y", key))
             # x — use a representative *locally-present* y to get the
             # right shape for broadcast (yaxes_local[0], guaranteed
-            # present on this partition -- yaxes[0] is not).
-            template = self._lazy_quantity(
-                vis, flag, yaxes_local[0][0], yaxes_local[0][1]
-            )
+            # present on this partition -- yaxes[0] is not). Z_SCORE
+            # itself isn't a computable quantity via _lazy_quantity (see
+            # that method's own NotImplementedError) -- REAL stands in
+            # for it here, same shape as either part.
+            template_axis, template_pol = yaxes_local[0]
+            if template_axis == Axis.Z_SCORE:
+                template_axis = Axis.REAL
+            template = self._lazy_quantity(vis, flag, template_axis, template_pol)
             all_lazy.append(self._lazy_x_axis(ds, xaxis, template))
             layout.append((p_idx, "x", None))
 
@@ -1299,12 +1408,18 @@ class MSv4Backend(XArrayReader):
         # by key too), dispatching on each layout entry's tag.
         x_by_partition: dict[int, np.ndarray] = {}
         y_by_partition_key: dict[tuple[int, tuple], np.ndarray] = {}
+        # Part 6 Slice 1: the imaginary half of a staged Z_SCORE key,
+        # keyed the same way as y_by_partition_key -- see the comment
+        # where "zscore_imag" entries get added to layout, above.
+        zscore_imag_by_partition_key: dict[tuple[int, tuple], np.ndarray] = {}
         id_by_partition: dict[int, dict[str, np.ndarray]] = {}
         for (p_idx, tag, extra), value in zip(layout, computed):
             if tag == "x":
                 x_by_partition[p_idx] = np.asarray(value)
             elif tag == "y":
                 y_by_partition_key[(p_idx, extra)] = np.asarray(value)
+            elif tag == "zscore_imag":
+                zscore_imag_by_partition_key[(p_idx, extra)] = np.asarray(value)
             else:  # tag == "id"
                 id_by_partition.setdefault(p_idx, {})[extra] = np.asarray(value)
 
@@ -1332,9 +1447,34 @@ class MSv4Backend(XArrayReader):
                 # broadcast x to y shape if needed (e.g. time-only x vs time×bl×freq y)
                 if x_flat.shape != y_flat.shape:
                     x_flat = np.broadcast_to(x_arr, y_arr.shape).ravel()
-                ok = np.isfinite(x_flat) & np.isfinite(y_flat)
+                if key[0] == Axis.Z_SCORE:
+                    # Part 6 Slice 1: y_flat here is actually the REAL
+                    # part (staged under the "y" tag -- see the comment
+                    # in the partition loop above); fold in its
+                    # imaginary counterpart the same way x gets folded
+                    # in, and stage both under __zscore_real/
+                    # __zscore_imag instead of finishing as "y" -- the
+                    # actual score is computed once, after this whole
+                    # method returns, by
+                    # XArrayReader._finalize_zscore_frame.
+                    imag_arr = zscore_imag_by_partition_key.get((p_idx, key))
+                    if imag_arr is None:
+                        continue
+                    imag_flat = imag_arr.ravel()
+                    if imag_flat.shape != y_flat.shape:
+                        imag_flat = np.broadcast_to(imag_arr, y_arr.shape).ravel()
+                    ok = np.isfinite(x_flat) & np.isfinite(y_flat) & np.isfinite(imag_flat)
+                else:
+                    ok = np.isfinite(x_flat) & np.isfinite(y_flat)
                 if ok.any():
-                    cols = {"x": x_flat[ok], "y": y_flat[ok]}
+                    if key[0] == Axis.Z_SCORE:
+                        cols = {
+                            "x": x_flat[ok],
+                            "__zscore_real": y_flat[ok],
+                            "__zscore_imag": imag_flat[ok],
+                        }
+                    else:
+                        cols = {"x": x_flat[ok], "y": y_flat[ok]}
                     for cname, carr in id_arrs.items():
                         # Same broadcast-shape defensiveness as x above --
                         # an id column is a coordinate array, same shape
@@ -1360,13 +1500,22 @@ class MSv4Backend(XArrayReader):
                         pd.DataFrame(cols, copy=False)
                     )
 
-        return {
+        result = {
             key: (
                 pd.concat(frames, ignore_index=True) if frames
                 else pd.DataFrame({"x": [], "y": []})
             )
             for key, frames in accumulator.items()
         }
+        # Part 6 Slice 1: finalize any staged Z_SCORE keys the same way
+        # _query_columns_raw's own per-partition branch does -- this
+        # method is called directly from there (see its docstring), not
+        # through that branch, so it needs the same finalization call
+        # applied to its own result before returning.
+        for key in result:
+            if key[0] == Axis.Z_SCORE:
+                result[key] = self._finalize_zscore_frame(result[key])
+        return result
 
     def _query_partition_scatter(
         self,
@@ -1401,9 +1550,25 @@ class MSv4Backend(XArrayReader):
         if not yaxes_local:
             return {}
 
+        # Part 6 Slice 1 (2026-09): mirrors MSv2Backend._query_partition_
+        # scatter's identical staging exactly (same rationale -- Z-Score's
+        # reference population is the whole selection, which this method
+        # can't see, so only real/imaginary get staged here, under
+        # "__zscore_real"/"__zscore_imag" instead of a final "y"; the
+        # actual score is computed once, after concatenation, by
+        # XArrayReader._finalize_zscore_frame, shared with MSv2Backend).
+        # The only difference from that method is this backend's
+        # 4-argument _lazy_quantity (no ds param).
         lazy_y: dict[tuple[Axis, str], xr.DataArray] = {}
+        lazy_zscore_imag: dict[tuple[Axis, str], xr.DataArray] = {}
         for axis, pol in yaxes_local:
-            lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, axis, pol)
+            if axis == Axis.Z_SCORE:
+                lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, Axis.REAL, pol)
+                lazy_zscore_imag[(axis, pol)] = self._lazy_quantity(
+                    vis, flag, Axis.IMAGINARY, pol,
+                )
+            else:
+                lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, axis, pol)
 
         template = next(iter(lazy_y.values()))
         lazy_x   = self._lazy_x_axis(ds, xaxis, template)
@@ -1448,21 +1613,39 @@ class MSv4Backend(XArrayReader):
 
         if use_fused:
             id_col_names = list(lazy_id_cols.keys())
+            zscore_keys  = list(lazy_zscore_imag.keys())
             all_lazy = (list(lazy_y.values()) + [lazy_x] +
-                        [lazy_id_cols[c] for c in id_col_names])
+                        [lazy_id_cols[c] for c in id_col_names] +
+                        [lazy_zscore_imag[k] for k in zscore_keys])
             computed  = dask.compute(*all_lazy)
             n_y = len(lazy_y)
             y_computed = dict(zip(lazy_y.keys(), computed[:n_y]))
             x_computed = computed[n_y]
-            id_computed = dict(zip(id_col_names, computed[n_y + 1:]))
+            n_id = len(id_col_names)
+            id_computed = dict(zip(id_col_names, computed[n_y + 1 : n_y + 1 + n_id]))
+            zscore_imag_computed = dict(zip(zscore_keys, computed[n_y + 1 + n_id:]))
 
-            def _ravel_df(x_arr, y_arr) -> pd.DataFrame:
+            def _ravel_df(x_arr, y_arr, key) -> pd.DataFrame:
                 x_flat = np.asarray(x_arr).ravel()
                 y_flat = np.asarray(y_arr).ravel()
                 if x_flat.shape != y_flat.shape:
                     x_flat = np.broadcast_to(np.asarray(x_arr), np.asarray(y_arr).shape).ravel()
-                ok = np.isfinite(x_flat) & np.isfinite(y_flat)
-                cols = {"x": x_flat[ok], "y": y_flat[ok]}
+                if key in zscore_imag_computed:
+                    # Part 6 Slice 1: stage real/imag, not y -- see the
+                    # comment where lazy_zscore_imag is built above.
+                    imag_np = np.asarray(zscore_imag_computed[key])
+                    imag_flat = imag_np.ravel()
+                    if imag_flat.shape != y_flat.shape:
+                        imag_flat = np.broadcast_to(imag_np, np.asarray(y_arr).shape).ravel()
+                    ok = np.isfinite(x_flat) & np.isfinite(y_flat) & np.isfinite(imag_flat)
+                    cols = {
+                        "x": x_flat[ok],
+                        "__zscore_real": y_flat[ok],
+                        "__zscore_imag": imag_flat[ok],
+                    }
+                else:
+                    ok = np.isfinite(x_flat) & np.isfinite(y_flat)
+                    cols = {"x": x_flat[ok], "y": y_flat[ok]}
                 for cname, carr in id_computed.items():
                     # Same broadcast-shape defensiveness as x above --
                     # an id column is a coordinate array, same shape
@@ -1475,7 +1658,7 @@ class MSv4Backend(XArrayReader):
                 return pd.DataFrame(cols, copy=False)
 
             frames = {
-                key: _ravel_df(x_computed, y_arr)
+                key: _ravel_df(x_computed, y_arr, key)
                 for key, y_arr in y_computed.items()
             }
         else:
@@ -1491,6 +1674,7 @@ class MSv4Backend(XArrayReader):
             # as part of this fix.
             x_c = lazy_x.compute()
             id_c = {c: arr.compute() for c, arr in lazy_id_cols.items()}
+            zscore_imag_c = {k: arr.compute() for k, arr in lazy_zscore_imag.items()}
             frames = {}
             for key, lazy in lazy_y.items():
                 y_c    = lazy.compute()
@@ -1501,8 +1685,22 @@ class MSv4Backend(XArrayReader):
                 if x_flat.shape != y_flat.shape:
                     x_flat = np.broadcast_to(np.asarray(x_bc), np.asarray(y_c).shape).ravel()
 
-                ok   = np.isfinite(x_flat) & np.isfinite(y_flat)
-                cols = {"x": x_flat[ok], "y": y_flat[ok]}
+                if key in zscore_imag_c:
+                    # Part 6 Slice 1: stage real/imag, not y.
+                    imag_bc   = zscore_imag_c[key].broadcast_like(y_c)
+                    imag_np   = np.asarray(imag_bc)
+                    imag_flat = imag_np.ravel()
+                    if imag_flat.shape != y_flat.shape:
+                        imag_flat = np.broadcast_to(imag_np, np.asarray(y_c).shape).ravel()
+                    ok = np.isfinite(x_flat) & np.isfinite(y_flat) & np.isfinite(imag_flat)
+                    cols = {
+                        "x": x_flat[ok],
+                        "__zscore_real": y_flat[ok],
+                        "__zscore_imag": imag_flat[ok],
+                    }
+                else:
+                    ok   = np.isfinite(x_flat) & np.isfinite(y_flat)
+                    cols = {"x": x_flat[ok], "y": y_flat[ok]}
                 for cname, carr in id_c.items():
                     c_bc   = carr.broadcast_like(y_c)
                     c_np   = np.asarray(c_bc)
@@ -1656,6 +1854,8 @@ class MSv4Backend(XArrayReader):
         all_y_vals: list[float]        = []
         # Frequency coordinates, for the Axis.CHANNEL relabelling below.
         freq_coords: list = []
+        # Per-partition count of samples reduced per Z_SCORE cell.
+        zscore_n_list: list = []
 
         for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
@@ -1676,6 +1876,9 @@ class MSv4Backend(XArrayReader):
 
             arr = self._raster_2d(ds, y_dim, x_dim, quantity, polarization)
             if arr is not None:
+                _n = arr.attrs.get('zscore_n_reduced')
+                if _n is not None:
+                    zscore_n_list.append(int(_n))
                 arr, _ = _decimate_agg(arr, y_name, x_name, max_cells)
                 lazy_arrs.append(arr)
 
@@ -1693,7 +1896,26 @@ class MSv4Backend(XArrayReader):
             return empty, (0.0, 1.0), (0.0, 1.0), False
 
         # OPT-B: single fused compute across all partitions
-        if HAS_DASK and len(lazy_arrs) > 1:
+        # Z_SCORE only (2026-09): same narrow "All-NaN slice encountered"
+        # suppression as MSv2Backend's own query_raster, and for the same
+        # reason -- see that method's own comment for the full rationale
+        # (confirmed from a live traceback that this fires here, at
+        # compute time, not inside _raster_2d's own lazy graph
+        # construction, and that the result is already correct when it
+        # does). Covers both the fused dask.compute() and the per-array
+        # fallback below, since either can be taken depending on
+        # partition count.
+        if quantity == Axis.Z_SCORE:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", message="All-NaN slice encountered",
+                    category=RuntimeWarning,
+                )
+                if HAS_DASK and len(lazy_arrs) > 1:
+                    computed_arrs = list(dask.compute(*lazy_arrs))
+                else:
+                    computed_arrs = [arr.compute() for arr in lazy_arrs]
+        elif HAS_DASK and len(lazy_arrs) > 1:
             computed_arrs = list(dask.compute(*lazy_arrs))
         else:
             computed_arrs = [arr.compute() for arr in lazy_arrs]
@@ -1759,6 +1981,11 @@ class MSv4Backend(XArrayReader):
             y_range = (float(agg.coords[y_name].values.min()),
                        float(agg.coords[y_name].values.max()))
 
+        if zscore_n_list:
+            # Largest partition's count: the cutoff grows with n, so
+            # the biggest reduction is the conservative choice when
+            # partitions differ (e.g. different channel counts).
+            agg.attrs = {**agg.attrs, 'zscore_n_reduced': max(zscore_n_list)}
         return agg, x_range, y_range, is_decimated
 
     def _raster_2d(
@@ -1827,15 +2054,62 @@ class MSv4Backend(XArrayReader):
             q = vis_pol.real.where(~flag_pol)
         elif quantity == Axis.IMAGINARY:
             q = vis_pol.imag.where(~flag_pol)
+        elif quantity == Axis.Z_SCORE:
+            # Part 6 (2026-09): mirrors MSv2Backend._raster_2d's own
+            # identical Z_SCORE branch -- see that method's own comments
+            # for the full rationale (same formula as
+            # compute_baseline_zscore, same per-axis-combination
+            # guarantee of an unambiguous single-group reference
+            # population). The one MSv4-specific difference: uses
+            # self._baseline_dim, not a hardcoded "baseline_id" --
+            # single-dish data has no baselines at all, and
+            # self._baseline_dim already resolves to "antenna_name" for
+            # it (see _axis_to_dim's own docstring just below), so the
+            # Z-Score's reference population becomes "this antenna's own
+            # samples" there instead, the same natural substitution
+            # Axis.BASELINE itself already makes for every other purpose
+            # in single-dish mode. Stays lazy, like every other branch
+            # here (OPT-B computes everything together at the end) --
+            # .median()/.max() on a dask-backed DataArray don't force
+            # computation on their own.
+            group_dim = self._baseline_dim
+            real = vis_pol.real.where(~flag_pol)
+            imag = vis_pol.imag.where(~flag_pol)
+            if group_dim not in real.dims:
+                log.warning(
+                    "_raster_2d: Z_SCORE requires a %r dimension, not "
+                    "present in this partition; skipping", group_dim,
+                )
+                return None
+            per_group_dims = [d for d in real.dims if d != group_dim]
+            dr = real - real.median(dim=per_group_dims, skipna=True)
+            di = imag - imag.median(dim=per_group_dims, skipna=True)
+            r = np.sqrt(dr ** 2 + di ** 2)
+            scale = r.median(dim=per_group_dims, skipna=True)
+            q = xr.where(
+                scale > 0, r / scale * _scatter_render._ZSCORE_RAYLEIGH_CONST,
+                np.nan,
+            )
         else:
             raise NotImplementedError(
                 f"Raster quantity {quantity.name} not supported. "
-                f"Use AMPLITUDE, PHASE, REAL, IMAGINARY, or FLAG."
+                f"Use AMPLITUDE, PHASE, REAL, IMAGINARY, Z_SCORE, or FLAG."
             )
 
         reduce_dims = [d for d in q.dims if d not in (y_name, x_name)]
+        # Nominal number of samples each output cell is reduced over
+        # (product of the reduced dims' sizes, before flagging).
+        # Only consumed for Z_SCORE -- see zscore_cell_cutoff().
+        n_reduced = 1
+        for _d in reduce_dims:
+            n_reduced *= int(q.sizes[_d])
         if reduce_dims:
-            q = q.mean(dim=reduce_dims, skipna=True)
+            if quantity == Axis.Z_SCORE:
+                # Max, not mean -- see MSv2Backend._raster_2d's own
+                # identical branch for the full rationale.
+                q = q.max(dim=reduce_dims, skipna=True)
+            else:
+                q = q.mean(dim=reduce_dims, skipna=True)
 
         if set(q.dims) != {y_name, x_name}:
             log.warning(
@@ -1845,7 +2119,15 @@ class MSv4Backend(XArrayReader):
             )
             return None
 
-        return _drop_non_raster_coords(q, y_name, x_name).transpose(y_name, x_name)
+        out = _drop_non_raster_coords(q, y_name, x_name).transpose(y_name, x_name)
+        if quantity == Axis.Z_SCORE:
+            # Part 6 (2026-09): how many samples the per-cell MAX was
+            # taken over. The raster uses it to pick a cutoff that
+            # holds the per-CELL false-alarm rate, not the per-sample
+            # one (zscore_cell_cutoff). Rides in attrs, which the
+            # remote wire format preserves.
+            out.attrs = {**out.attrs, 'zscore_n_reduced': n_reduced}
+        return out
 
     # ------------------------------------------------------------------ #
     # UV-coverage                                                          #

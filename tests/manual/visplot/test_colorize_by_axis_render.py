@@ -253,7 +253,18 @@ class TestScatterLayerSpecColoring:
                               cmap=("#000000",), colorize_axis=Axis.SCAN)
 
     def test_invalid_coloring_value_rejected(self):
-        with pytest.raises(ValueError, match="'continuous' or 'categorical'"):
+        """Matches a stable prefix, not the full enumerated list of
+        valid values -- Part 6 (2026-09) added "statistical" as a third
+        value, which correctly changed the full message from "'continuous'
+        or 'categorical'" to "'continuous', 'categorical', or
+        'statistical'"; a literal-full-text match would have needed
+        updating again for that (and would again for any future
+        addition), when what this test actually cares about is that a
+        garbage value is rejected with a relevant, coloring-specific
+        message -- not that the message's wording never changes as the
+        valid set grows.
+        """
+        with pytest.raises(ValueError, match="coloring must be"):
             ScatterLayerSpec(y_axis=Axis.AMPLITUDE, polarization="XX",
                               cmap=("#000000",), coloring="bogus")
 

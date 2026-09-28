@@ -172,6 +172,11 @@ class ColorBand:
     mapping:       Optional[object] = None
     peak_density:  Optional[float]  = None
     category_priority: Optional[str] = None
+    # Slice 2 per-antenna readout (Part 6, 2026-09). Added last, same
+    # reason category_priority was: no existing positional construction
+    # changes meaning. See ScatterLayerRender.antenna_summary's own
+    # docstring (data/reader.py) for exactly when this is populated.
+    antenna_summary: Optional[object] = None
 
     # ------------------------------------------------------------------
     # Labelling

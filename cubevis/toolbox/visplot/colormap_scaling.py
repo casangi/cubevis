@@ -82,9 +82,27 @@ DATASHADER_HOW = {
 # Either Datashader has no built-in equivalent, the user wants explicit
 # alpha/gamma control over the curve shape, or (eq_hist specifically)
 # Datashader's native implementation doesn't support a span= anchor.
-EXPLICIT_SCALINGS = ("eq_hist", "sqrt", "square", "gamma", "power")
+#
+# "threshold" (Part 6, 2026-09 -- visplot-colorize-by-axis-design.md
+# §7.6/§7.10): everything under a cutoff renders neutrally, everything
+# at/above it in one unmissable color -- a first-class alternative to a
+# continuous gradient, motivated by rflag's own default being
+# threshold-based (a flag/no-flag decision, not a graded severity), and
+# by reading faster for "spot the problem" than a smooth ramp. Grouped
+# under EXPLICIT_SCALINGS (Datashader has no native step-function "how="
+# to delegate to), but unlike every other member of that tuple it does
+# NOT go through apply_explicit_scaling's shared clip-normalize-
+# transform-renormalize pipeline -- see that function's own early-exit
+# branch for why: a threshold's cutoff is a single, meaningful ABSOLUTE
+# value in data units (e.g. "Z-Score >= 5"), the same convention rflag's
+# own timedevscale/freqdevscale already use, not a position relative to
+# whatever the current view's min/max happen to be -- clipping to
+# [vmin, vmax] first, the way every smooth curve here needs to, would
+# discard exactly the "is this above or below vmin" distinction the
+# whole scaling exists to draw.
+EXPLICIT_SCALINGS = ("eq_hist", "sqrt", "square", "gamma", "power", "threshold")
 
-ALL_SCALINGS = ("linear", "log", "eq_hist", "sqrt", "square", "gamma", "power")
+ALL_SCALINGS = ("linear", "log", "eq_hist", "sqrt", "square", "gamma", "power", "threshold")
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +147,23 @@ def _scale_gamma(x: np.ndarray, gamma: float = 1.0, **_kwargs) -> np.ndarray:
 def _scale_power(x: np.ndarray, alpha: float = 10.0, **_kwargs) -> np.ndarray:
     alpha = alpha if alpha > 0 and alpha != 1.0 else 1.0 + 1e-6
     return (np.power(alpha, x) - 1.0) / (alpha - 1.0)
+
+
+def _scale_threshold_binary(values: np.ndarray, cutoff: float) -> np.ndarray:
+    """``1.0`` where ``values >= cutoff``, ``0.0`` elsewhere, NaN preserved.
+
+    Deliberately NOT one of the curves in ``_SCALING_FUNCS`` above, and
+    not dispatched through ``apply_explicit_scaling``'s shared clip-
+    normalise-transform-renormalise pipeline (see that function's own
+    early-exit branch, and ``EXPLICIT_SCALINGS``' docstring, for why):
+    every other curve there takes an input already clipped to
+    ``[vmin, vmax]`` and normalised to ``[0, 1]``, which would collapse
+    a threshold's cutoff to a fixed, meaningless position (0.0) instead
+    of leaving it as the absolute data-space value it needs to stay.
+    """
+    out = np.where(values >= cutoff, 1.0, 0.0)
+    out[~np.isfinite(values)] = np.nan
+    return out
 
 
 def equalize_histogram(
@@ -340,7 +375,12 @@ def apply_explicit_scaling(
         Used by ``gamma`` scaling.
     vmin, vmax : float | None
         Optional manual clip range applied before scaling. ``None`` means
-        use the array's own finite min/max.
+        use the array's own finite min/max. For ``scaling="threshold"``,
+        *vmin* alone is the cutoff (an absolute data-space value, e.g.
+        "Z-Score >= 5" -- the same convention rflag's own
+        timedevscale/freqdevscale already use); *vmax* is not used by
+        threshold at all. ``None`` falls back to the array's own finite
+        minimum, matching every other scaling's own vmin fallback.
 
     Returns
     -------
@@ -355,6 +395,17 @@ def apply_explicit_scaling(
     NaN values pass through unchanged (Datashader's shade treats NaN as
     transparent/missing, which is the desired behaviour for empty cells).
     """
+    if scaling == "threshold":
+        # Early exit, before the "is scaling known" check and the shared
+        # pipeline below -- see _scale_threshold_binary's own docstring
+        # for why this can't go through clip-normalise-transform-
+        # renormalise the way every other explicit scaling does.
+        finite = values[np.isfinite(values)]
+        cutoff = float(vmin) if vmin is not None else (
+            float(finite.min()) if finite.size else 0.0
+        )
+        return _scale_threshold_binary(values, cutoff)
+
     if scaling not in _SCALING_FUNCS:
         print(
             f"colormap_scaling: unknown scaling {scaling!r}, using 'linear'",
@@ -473,6 +524,73 @@ class ScalarMapping:
         if finite.size == 0:
             return None
 
+        if scaling == "threshold":
+            # vmin here is the CUTOFF (see apply_explicit_scaling's own
+            # docstring), not a clip-range lower bound the way it is for
+            # every other scaling below -- the curve must span the
+            # reference's FULL range regardless of where the cutoff
+            # sits, so it represents both "below" and "at/above" the
+            # decision boundary. Using vmin as the grid's own lower
+            # bound (the convention every other scaling here uses) would
+            # only ever sample the "at/above" side, since a threshold's
+            # vmin is a decision boundary, not a display-range edge --
+            # found by testing this exact case directly (forward(4.0)
+            # wrongly returned 1.0 for a cutoff of 5.0), not by
+            # inspection. vmax is genuinely unused by threshold (see
+            # apply_explicit_scaling's own docstring), so it's ignored
+            # here too, deliberately, not merely unread.
+            cutoff = float(vmin) if vmin is not None else float(finite.min())
+            grid_lo, grid_hi = float(finite.min()), float(finite.max())
+            if grid_hi <= grid_lo:
+                return None
+            cutoff = min(max(cutoff, grid_lo), grid_hi)
+            span = grid_hi - grid_lo
+            eps = span * 1e-6
+            x1 = cutoff - eps
+            x2 = cutoff + eps
+            if not (grid_lo < x1 < x2 < grid_hi):
+                # Degenerate: cutoff at/beyond an edge (or a vanishingly
+                # small span leaves no room for the bracketing pair).
+                # Second try attempted directly, not assumed: a naive
+                # 2-point [grid_lo, grid_hi] curve with u=[0,1] would
+                # SEEM like a reasonable fallback here too, but sampling
+                # apply_explicit_scaling on it (the same way the non-
+                # threshold branch below does) confirmed it reintroduces
+                # exactly the linear-ramp bug this whole branch exists to
+                # avoid -- e.g. cutoff==grid_lo means EVERY value in
+                # range is >= cutoff, so the curve must be constant 1.0,
+                # not a ramp from 0 to 1.
+                #
+                # Known narrow imprecision, accepted rather than chased
+                # further: when cutoff lands exactly ON grid_hi, this
+                # flags the whole range "not highlighted" (u=0), even
+                # though the single point at exactly grid_hi should read
+                # as "at/above" by the inclusive ">=" convention
+                # apply_explicit_scaling itself uses (confirmed that
+                # function IS exact at this exact boundary -- only this
+                # degenerate colorbar-curve fallback has the gap, not the
+                # actual per-pixel rendering). Narrow enough (a single
+                # exact-maximum value's own colorbar/tooltip reading) not
+                # to warrant more branching here.
+                everything_above = cutoff <= grid_lo
+                flat_u = 1.0 if everything_above else 0.0
+                return cls(np.array([grid_lo, grid_hi]),
+                          np.array([flat_u, flat_u]), scaling)
+            # Four strictly x- AND u-increasing points -- guaranteed to
+            # ALL survive __init__'s "keep where u strictly increases"
+            # monotonicity filter (no reliance on distinct-enough x
+            # values the way a naive construction would need), giving a
+            # near-vertical transition confined to the tiny [x1, x2]
+            # window right at the cutoff instead of a shallow ramp
+            # spanning the entire [grid_lo, cutoff] range the way a
+            # plain 2-point curve does (confirmed directly: forward(v)
+            # for v well below the cutoff showed a materially nonzero
+            # "partway toward highlighted" result with that naive
+            # version).
+            xs = np.array([grid_lo, x1, x2, grid_hi])
+            us = np.array([0.0, 1e-6, 1.0 - 1e-6, 1.0])
+            return cls(xs, us, scaling)
+
         lo = float(finite.min()) if vmin is None else float(vmin)
         hi = float(finite.max()) if vmax is None else float(vmax)
         if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
@@ -547,11 +665,12 @@ def scaling_equation_label(scaling: str) -> str:
     can be added later without changing this module's contract).
     """
     return {
-        "linear":  "y = x",
-        "log":     "y = log_(a+1)(a*x + 1)",
-        "eq_hist": "y = histogram-equalized(x)",
-        "sqrt":    "y = sqrt(x)",
-        "square":  "y = x^2",
-        "gamma":   "y = x^g",
-        "power":   "y = (a^x - 1) / (a - 1)",
+        "linear":    "y = x",
+        "log":       "y = log_(a+1)(a*x + 1)",
+        "eq_hist":   "y = histogram-equalized(x)",
+        "sqrt":      "y = sqrt(x)",
+        "square":    "y = x^2",
+        "gamma":     "y = x^g",
+        "power":     "y = (a^x - 1) / (a - 1)",
+        "threshold": "y = 1 if x >= cutoff else 0",
     }.get(scaling, scaling)

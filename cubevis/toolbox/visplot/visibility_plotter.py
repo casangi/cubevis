@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -109,6 +110,8 @@ from .data.reader import DEFAULT_CATEGORY_PRIORITY as _DEFAULT_CATEGORY_PRIORITY
 from .data.reader import DEFAULT_EXCLUDED_DISPLAY as _DEFAULT_EXCLUDED_DISPLAY
 from .visibility_plot import _CV_SET_BUSY_JS
 from . import palettes as _palettes
+from .scaling_memory import RasterScalingUnit
+from .view_state import ApplyReport, StateRegistry
 from .refresh import RefreshLevel as _RefreshLevel
 from .flag_db import FlagDB
 from .iteration_step import STEP_INDEX_JS
@@ -192,6 +195,27 @@ _PRESETS = {
         Axis.TIME,     Axis.CHANNEL, Axis.AMPLITUDE,
         Axis.TIME,     Axis.AMPLITUDE,
         "over",
+    ),
+    "zscore": (
+        # Part 6 (2026-09): the design doc's own "bad antenna" workflow --
+        # vplot's exact axis shape, with the raster's quantity swapped
+        # from Amplitude to Z_SCORE so it's the one doing the spotting
+        # (a per-baseline-normalized outlier signal, not a raw physical
+        # quantity -- see MSv2Backend._raster_2d's own Z_SCORE branch),
+        # while the scatter panel stays a plain Amplitude vs Time view to
+        # confirm what's actually there once antenna iteration (I-3) and
+        # the two panels' existing shared x_range/cursor_source have
+        # narrowed things down -- exactly the "spot it, then confirm"
+        # combination the design doc frames as the whole point of pairing
+        # these two. The scatter panel is ALSO colored by Z-Score
+        # (Statistical mode, Part 6): the button's JS sets each scatter
+        # layer's colorize mode alongside the axis selects (see
+        # _preset_js in _build_toolbar) -- that mode is staged UI state,
+        # not part of this axis tuple, so it lives there rather than
+        # here. Constructor-time preset="zscore" sets axes only.
+        Axis.BASELINE, Axis.TIME,    Axis.Z_SCORE,
+        Axis.TIME,     Axis.AMPLITUDE,
+        "side",
     ),
 }
 
@@ -294,7 +318,14 @@ _RASTER_QTY_OPTIONS = [("AMPLITUDE", "Amplitude"),
                        ("PHASE",     "Phase"),
                        ("REAL",      "Real"),
                        ("IMAGINARY", "Imaginary"),
-                       ("FLAG",      "Flag")]
+                       ("FLAG",      "Flag"),
+                       # Part 6 (2026-09): falls through this existing
+                       # dropdown with no new UI mechanism -- same
+                       # treatment _SCATTER_Y_OPTIONS' own Z_SCORE entry
+                       # already got in Slice 1. See MSv2Backend._raster_2d's
+                       # own comments for the per-axis-combination
+                       # aggregation this quantity uses (max, not mean).
+                       ("Z_SCORE",   "Z-Score")]
 _SCATTER_X_OPTIONS  = [("UVDIST",        "UV Distance"),
                        ("UVDIST_LAMBDA", "UV Distance (wavelengths)"),
                        ("TIME",          "Time"),
@@ -615,6 +646,120 @@ def _parse_field_string(field_str: str,
     return field_str.strip() or None
 
 
+def _parse_antenna_string(antenna_str: str,
+                          meta: ObservationMetadata) -> Optional[list]:
+    """Resolve an ``antenna=`` string to a list of antenna names for
+    ``SelectionSpec.antenna_names`` -- ``None`` means "all antennas",
+    matching every other parser's own convention here.
+
+    Preview-grade, matching ``_parse_spw_string``/``_parse_field_string``'s
+    own scope note (module docstring) -- supports what antenna ITERATION
+    (this parser's actual purpose -- see ``_antenna_iteration_position``,
+    which only ever needs to name a single antenna) and a same-shaped
+    manual multi-antenna pick both need: a comma-separated list of
+    tokens, each matched against a numeric ``antenna_id`` or an exact
+    ``name`` (mirroring ``_parse_spw_string``'s combined id-or-name
+    check), and a leading ``!`` on a token to exclude rather than
+    include it.
+
+    Deliberately does NOT support the ``&``-joined specific-baseline-pair
+    form (e.g. ``DA41&DV01``) -- that selects an exact (ant1, ant2)
+    ORDERED pair via ``SelectionSpec.baselines`` instead, a materially
+    different selection from "this antenna's own baselines against
+    everyone" (confirmed directly against ``MSv2Backend._apply_selection``:
+    ``baselines`` matches an exact ordered pair, ``antenna_names`` matches
+    ANY baseline touching a named antenna via ``isin(ant1) | isin(ant2)``
+    -- the latter is what iteration needs, the former is not). Left for a
+    later pass if the free-text filter itself ever needs it beyond what
+    iteration requires.
+
+    Exclusion (``!DA42``) resolves to its positive complement here (every
+    OTHER antenna's name) rather than being passed through as a negative
+    form, since ``SelectionSpec.antenna_names`` itself has no "exclude"
+    mode -- inclusion only (see that field's own docstring). Mixing an
+    inclusion and an exclusion token in the same string is not
+    meaningful (whichever kind is applied second would just undo part of
+    the other), so a string containing both uses only the exclusions --
+    logged, matching this file's existing "ambiguous/unmatched input is
+    logged, not raised" convention.
+
+    An unmatched token is logged and skipped, the same as
+    ``_parse_spw_string``; if EVERY token in the string fails to match,
+    the whole string falls back to ``None`` ("all") rather than an empty,
+    zero-baseline selection -- mirroring that function's own
+    ``result or all_ids`` fallback for the same reason (a string that
+    matched nothing should not silently plot nothing).
+    """
+    if not antenna_str or antenna_str.strip() == "":
+        return None
+
+    includes: list = []
+    excludes: list = []
+    for tok in (t.strip() for t in antenna_str.split(",")):
+        if not tok:
+            continue
+        negate = tok.startswith("!")
+        bare = tok[1:].strip() if negate else tok
+        if not bare:
+            continue
+        hit = None
+        for a in meta.antennas:
+            if str(a.antenna_id) == bare or a.name == bare:
+                hit = a.name
+                break
+        if hit is None:
+            log.warning(
+                "antenna=%r matched no antenna id or name; ignoring it "
+                "(available: %s)", tok,
+                ", ".join(a.name for a in meta.antennas) or "none",
+            )
+            continue
+        (excludes if negate else includes).append(hit)
+
+    if excludes:
+        if includes:
+            log.warning(
+                "antenna=%r mixes inclusion and exclusion tokens; using "
+                "only the exclusions", antenna_str,
+            )
+        excl_set = set(excludes)
+        result = [a.name for a in meta.antennas if a.name not in excl_set]
+        return result or None
+    return includes or None
+
+
+def _antenna_iteration_position(antenna_str: str,
+                                meta: ObservationMetadata) -> Optional[tuple]:
+    """1-based ``(position, count)`` of the antenna ``antenna_str``
+    resolves to within ``meta.antennas``, or ``None`` when it doesn't
+    name exactly one antenna.
+
+    Mirrors ``_field_iteration_position`` exactly (see that function's
+    own docstring for the general shape: a pure lookup of *where the
+    current selection already is*, not a stepper). ``meta.antennas`` is
+    the same stable, antenna_id-ordered tuple Prev/Next will step
+    through client-side -- NOT the alphabetically-``sorted()`` name list
+    used elsewhere in this file only for the hint text's display order
+    (``ant_names`` in the Antenna field's tooltip); iteration order
+    follows the dataset's own antenna ordering, matching how Field/SPW
+    iterate ``meta.fields``/``meta.spws`` in their own natural order
+    rather than a re-sorted one.
+
+    A manual multi-antenna pick (``antenna_names`` resolving to more
+    than one name) correctly reports no position here, the same way
+    SPW's own multi-select does -- only a single-antenna selection
+    (typically reached via Prev/Next, or a one-name manual pick) has a
+    position to report at all.
+    """
+    names = _parse_antenna_string(antenna_str, meta)
+    if names is None or len(names) != 1:
+        return None
+    ordered = [a.name for a in meta.antennas]
+    if names[0] not in ordered:
+        return None
+    return ordered.index(names[0]) + 1, len(ordered)
+
+
 # ---------------------------------------------------------------------------
 # Iteration position helpers (I-1, Phase 2.5)
 # ---------------------------------------------------------------------------
@@ -826,6 +971,7 @@ def _make_scatter_layers(
     scaling_alpha: float = 50.0,
     cmaps: Optional[list] = None,
     colorize_overrides: Optional[list] = None,
+    statistical_cmap: Optional[tuple] = None,
 ) -> list[ScatterLayer]:
     """Build one ``ScatterLayer`` per polarisation with assigned cmaps.
 
@@ -857,6 +1003,14 @@ def _make_scatter_layers(
     ``DataTable`` already has for this pass, not one this function
     introduces) in place of the continuous *cmaps* cycle, matching
     ``VisibilityScatter.update_colorize()``'s own cmap-swap convention.
+    *statistical_cmap* (Part 6): ramp for layers built in statistical
+    coloring; ``None`` uses the ordinary *cmaps* cycle. Callers with a
+    plotter pass ``self._raster_ramp`` (see
+    ``VisibilityScatter.set_statistical_cmap`` for why).
+    Part 6 (2026-09): an entry ``{"coloring": "statistical"}`` builds a
+    layer colored by per-baseline Z-Score (continuous ramp, no axis or
+    categories, threshold scaling at ``_STATISTICAL_THRESHOLD_VMIN`` by
+    default).
     Shorter than *polarizations*, or entirely omitted, is fine -- missing
     entries are treated as ``None`` (continuous, the original default
     behavior when no caller passes this at all).
@@ -868,6 +1022,7 @@ def _make_scatter_layers(
     layers = []
     for i, pol in enumerate(polarizations):
         override = overrides[i] if i < len(overrides) else None
+        layer_scaling_kwargs: dict = {}
         if override and override.get("coloring") == "categorical":
             coloring = "categorical"
             colorize_axis_name = override.get("colorize_axis")
@@ -878,6 +1033,23 @@ def _make_scatter_layers(
             excluded_display = (override.get("excluded_display")
                                 or _DEFAULT_EXCLUDED_DISPLAY)
             cmap = tuple(_palettes.categorical_cmap())
+        elif override and override.get("coloring") == "statistical":
+            # Part 6 (2026-09): colored by per-baseline Z-Score. Uses a
+            # continuous ramp (like "continuous"), no axis/categories,
+            # and defaults to threshold scaling at the same
+            # literature-standard cutoff the raster's own Z_SCORE
+            # default uses -- for the same reason: eq_hist would spread
+            # an outlier-detection statistic across the whole color
+            # range and bury the outliers it exists to show.
+            coloring = "statistical"
+            colorize_axis = None
+            excluded_categories = ()
+            category_priority = _DEFAULT_CATEGORY_PRIORITY
+            excluded_display = _DEFAULT_EXCLUDED_DISPLAY
+            cmap = (tuple(statistical_cmap) if statistical_cmap
+                    else cmaps[i % len(cmaps)])
+            layer_scaling_kwargs = {"scaling": "threshold",
+                                    "scaling_vmin": _STATISTICAL_THRESHOLD_VMIN}
         else:
             coloring = "continuous"
             colorize_axis = None
@@ -895,9 +1067,17 @@ def _make_scatter_layers(
             excluded_categories = excluded_categories,
             category_priority = category_priority,
             excluded_display = excluded_display,
+            **layer_scaling_kwargs,
         ))
     return layers
 
+
+# Part 6 (2026-09): default cutoff for a "statistical"-colored scatter
+# layer -- same literature-standard Iglewicz & Hoaglin value as
+# _scatter_render._DEFAULT_ZSCORE_THRESHOLD and the raster's own
+# _ZSCORE_THRESHOLD_VMIN; duplicated rather than imported for the same
+# reason as there (one float, not worth a cross-module dependency).
+_STATISTICAL_THRESHOLD_VMIN = 3.5
 
 # The red this file already uses for its notification-line warnings (the
 # zoom-to-flag warning, the raster axis-conflict warning, ...); one name so the
@@ -927,8 +1107,8 @@ def _colorize_key_from_override(override) -> tuple:
     """Comparable identity of one layer's *requested* colorize state.
 
     ``override`` is one entry of the ``colorize`` list a Plot press sends
-    (see ``_make_scatter_layers``): ``None``/anything not categorical means
-    "continuous".  Returns ``(coloring, colorize_axis_name, excluded,
+    (see ``_make_scatter_layers``): ``None``/anything neither categorical
+    nor statistical means "continuous" (Part 6 added "statistical").  Returns ``(coloring, colorize_axis_name, excluded,
     category_priority, excluded_display)`` -- the last two are ``None`` for
     a continuous layer (they have nothing to compare; toggling those
     dropdowns while a layer is continuous must be a non-event) and default
@@ -938,6 +1118,11 @@ def _colorize_key_from_override(override) -> tuple:
     tested directly; must stay in lock-step with
     ``_colorize_key_from_layer`` -- see there.
     """
+    if override and override.get("coloring") == "statistical":
+        # Part 6 (2026-09): carries nothing else to compare, exactly
+        # like a continuous layer -- must match what
+        # _colorize_key_from_layer reads off a statistical layer.
+        return ("statistical", None, (), None, None)
     if not override or override.get("coloring") != "categorical":
         return ("continuous", None, (), None, None)
     return (
@@ -1493,7 +1678,12 @@ class VisibilityPlotter:
     spw : str
         Comma-separated SPW indices (``"0,1,2,3"``).  Default: all.
     antenna : str
-        MSSelection antenna string.  (Stored; not yet wired in preview.)
+        MSSelection antenna string (comma-separated names or IDs,
+        ``!``-prefixed for exclusion -- see ``_parse_antenna_string``'s
+        own docstring for the exact supported subset). Wired to
+        ``SelectionSpec.antenna_names`` (I-3, 2026-09); Prev/Next in the
+        sidebar steps through ``meta.antennas`` in the dataset's own
+        order.
     scan : str
         MSSelection scan string.  (Stored; not yet wired.)
     timerange : str
@@ -1519,7 +1709,8 @@ class VisibilityPlotter:
         only decides which one starts in the primary/first screen
         position; the other always takes the complementary kind.
     preset : str | None
-        Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
+        Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
+        ``"zscore"``, or ``None``.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
@@ -2252,6 +2443,47 @@ class VisibilityPlotter:
         self._all_panels = [obj for slot in self._slots
                             for obj in (slot.raster, slot.scatter)]
 
+        # Part 6 (2026-09): scatter layers in "statistical" coloring use
+        # the RASTER's ramp (opaque, deep blue -> yellow) rather than the
+        # density-oriented scatter ramps -- see
+        # VisibilityScatter.set_statistical_cmap. Stored only (no
+        # re-render): nothing has been drawn yet at this point.
+        for _p in self._all_panels:
+            if hasattr(_p, "set_statistical_cmap"):
+                _p.set_statistical_cmap(self._raster_ramp)
+
+        # Save/restore framework (view_state.py; design in VIEW_STATE_DESIGN.md).
+        # Each independently restorable piece of the GUI registers a "state
+        # unit" here; more pieces (axes/layout, selection, scatter layers,
+        # palettes, zoom, pending flags) are added the same way. Internal API
+        # only: nothing in the GUI calls capture/apply yet.
+        self._view_state = StateRegistry()
+        for _slot in self._slots:
+            self._view_state.register(RasterScalingUnit(
+                _slot.raster, f"panel.{_slot.id}.raster.scaling"))
+
+    def capture_view_state(self, keys=None, *, prefix=None, scopes=None,
+                           exclude_scopes=None) -> dict:
+        """Capture registered GUI state units into one JSON-serializable
+        envelope (see ``view_state.StateRegistry.capture`` for the selection
+        arguments: pick units by key, key prefix such as ``"panel.A"``, or
+        scope; ``exclude_scopes={"data"}`` is "without data").  Read-only and
+        safe to call at any time."""
+        return self._view_state.capture(keys, prefix=prefix, scopes=scopes,
+                                        exclude_scopes=exclude_scopes)
+
+    def apply_view_state(self, envelope: dict, keys=None, *, prefix=None,
+                         scopes=None, exclude_scopes=None) -> ApplyReport:
+        """Restore units from an envelope; returns an ``ApplyReport``.
+
+        CAUTION -- not yet GUI-ready: this is synchronous and does not take the
+        panels' ``_render_lock`` or run in a worker thread, and units that
+        re-render do so on the calling thread. The GUI path must run it like
+        ``_handle_plot`` runs ``update_axes`` (``async with panel._render_lock``
+        + ``asyncio.to_thread``). See VIEW_STATE_DESIGN.md."""
+        return self._view_state.apply(envelope, keys, prefix=prefix, scopes=scopes,
+                                      exclude_scopes=exclude_scopes)
+
     def _style_panel_figures(self) -> None:
         """Phase 2c (GUI only): sizing mode and theme on each panel figure.
 
@@ -2347,7 +2579,8 @@ class VisibilityPlotter:
             panel._theme = theme          # keeps PanelSpec.theme honest
             try:
                 if hasattr(panel, "set_layer_cmaps"):
-                    panel.set_layer_cmaps(self._scatter_ramps)
+                    panel.set_layer_cmaps(self._scatter_ramps,
+                                            statistical_cmap=self._raster_ramp)
                 elif hasattr(panel, "set_cmap"):
                     panel.set_cmap(self._raster_ramp)
             except Exception as exc:
@@ -3073,6 +3306,7 @@ for (const dt of other.tools) {
                       "cache generation -> %d", self._cache_generation)
 
         if "field"       in msg: self._field_str   = msg["field"]
+        if "antenna"     in msg: self._antenna_str  = msg["antenna"]
         if "spw_ids" in msg:
             # Identities straight from the table, no text round trip.
             # `_spw_str` is left alone so the constructor's spw= remains
@@ -3222,7 +3456,18 @@ for (const dt of other.tools) {
                     self._selection.field_names  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'field_names', None)  or
                     self._selection.spw          != getattr(self._last_raster_selection_by_slot.get(slot.id), 'spw', None)           or
                     self._selection.correlation  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'correlation', None)   or
-                    self._selection.data_column  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'data_column', None)
+                    self._selection.data_column  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'data_column', None)   or
+                    # Antenna iteration (I-3, 2026-09): found missing
+                    # here directly, not assumed -- without this,
+                    # antenna_names is the one SelectionSpec field
+                    # Prev/Next can change that this comparison never
+                    # looks at, so a raster panel would silently never
+                    # re-query when only the antenna selection changed
+                    # (same x/y/quantity/field/spw/correlation/
+                    # data_column as before). The Antenna field's own
+                    # Prev/Next buttons would then appear to do nothing
+                    # at all to this panel.
+                    self._selection.antenna_names != getattr(self._last_raster_selection_by_slot.get(slot.id), 'antenna_names', None)
                 )
                 try:
                     if axes_changed:
@@ -3391,13 +3636,22 @@ for (const dt of other.tools) {
                     self._selection.field_names  != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'field_names', None)  or
                     self._selection.spw          != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'spw', None)           or
                     self._selection.correlation  != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'correlation', None)   or
-                    self._selection.data_column  != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'data_column', None)
+                    self._selection.data_column  != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'data_column', None)   or
+                    # Antenna iteration (I-3, 2026-09): same gap, same
+                    # fix, as the raster branch's own axes_changed above
+                    # -- found missing here directly, not assumed. Without
+                    # this, Slice 2's own per-antenna readout could never
+                    # actually refresh either, since it only gets
+                    # recomputed inside query_columns, which this
+                    # condition is what decides whether to call at all.
+                    self._selection.antenna_names != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'antenna_names', None)
                 )
                 try:
                     if axes_changed:
                         layers = _make_scatter_layers(
                             y, pols, cmaps=self._scatter_ramps,
-                            colorize_overrides=colorize_overrides)
+                            colorize_overrides=colorize_overrides,
+                            statistical_cmap=self._raster_ramp)
                         log.debug("_handle_plot: panel %s scatter update_axes "
                                   "x=%s layers=%s", slot.id, x,
                                   [(l.y_axis, l.polarization) for l in layers])
@@ -3614,6 +3868,11 @@ for (const dt of other.tools) {
         spw_ids = (list(chosen) if chosen is not None
                    else _parse_spw_string(self._spw_str, self._meta))
         corrs      = _parse_correlation_string(self._corr_str, self._meta)
+        # Antenna iteration (I-3, 2026-09): antenna_names, not baselines --
+        # see _parse_antenna_string's own docstring for why the two
+        # SelectionSpec fields mean different things and only the former
+        # is what "this antenna's own baselines against everyone" needs.
+        antenna_names = _parse_antenna_string(self._antenna_str, self._meta)
         return SelectionSpec(
             field_names = [field_name] if field_name else None,
             spw         = spw_ids or None,
@@ -3621,6 +3880,7 @@ for (const dt of other.tools) {
             data_column = self._datacolumn,
             time_range  = self._time_range,
             freq_range  = self._freq_range,
+            antenna_names = antenna_names,
             cache_generation = getattr(self, "_cache_generation", 0),
         )
 
@@ -3678,13 +3938,26 @@ for (const dt of other.tools) {
         else:
             spw = f"SPW: {self._spw_str or 'all'}"
 
+        # Antenna (I-3, 2026-09): same "position once resolved to one
+        # item, else the raw string" shape as Field/SPW above -- see
+        # _antenna_iteration_position's own docstring for why a manual
+        # multi-antenna pick correctly reports no position here, the
+        # same way SPW's own multi-select does.
+        antenna_pos = _antenna_iteration_position(self._antenna_str, self._meta)
+        if antenna_pos:
+            pos, n_antennas = antenna_pos
+            antenna_name = _parse_antenna_string(self._antenna_str, self._meta)[0]
+            antenna = f"Antenna {pos}/{n_antennas}: {antenna_name}"
+        else:
+            antenna = f"Antenna: {self._antenna_str or 'all'}"
+
         col = self._datacolumn
         count = self._flag_db.pending_count
         flag_note = (f"  |  <b>Flag count:</b> {count}"
                      if count > 0 else "")
         return (
             f"<b>{fname}</b>  |  Layout: {layout_label}<br>"
-            f"{field}  |  {spw}  |  Col: {col}{flag_note}"
+            f"{field}  |  {spw}  |  {antenna}  |  Col: {col}{flag_note}"
         )
 
     def _update_status_bar(self) -> None:
@@ -4157,7 +4430,7 @@ conflict_div.text = conflict ? msg : '';
             if mode_groups:
                 mode_groups[0].js_on_change("active", CustomJS(
                     args={"scatter_cmap": scatter_cmap},
-                    code="scatter_cmap.visible = (cb_obj.active === 0);",
+                    code="scatter_cmap.visible = (cb_obj.active !== 1);",
                 ))
             scatter_cmap.visible = (lyr.coloring != "categorical")
 
@@ -4550,9 +4823,49 @@ for (let i = 0; i < cols.length; i++) {
             return inp
 
         scan_inp    = _stub_input("Scan",       self._scan_str,      self._hint_scan)
-        antenna_inp = _stub_input("Antenna",    self._antenna_str,   self._hint_antenna)
         time_inp    = _stub_input("Time range", self._timerange_str, self._hint_time)
         uv_inp      = _stub_input("UV range",   self._uvrange_str,   self._hint_uvrange)
+
+        # Antenna (I-3, 2026-09): unlike Scan/Time range/UV range, no longer
+        # a bare "stub" -- built directly rather than via _stub_input, whose
+        # shared width=_SIDEBAR_WIDTH is correct for a lone widget but too
+        # wide once Prev/Next sit beside it (needs _IterButtons.LABEL_WIDTH
+        # instead, exactly like Field's Select -- see that widget's own
+        # construction just above field_options). No title= for the same
+        # reason Field's Select has none: an EvTextInput's title renders
+        # inside the widget's own measured height, which _IterButtons'
+        # row(align="center") would then measure as part of the control's
+        # box -- _section("Antenna") supplies the label externally instead,
+        # matching Field's own external-label shape exactly (not SPW's,
+        # which uses a heading Div beside a control on its own row -- an
+        # EvTextInput's single-line shape matches Field's Select, not SPW's
+        # DataTable).
+        self._antenna_input = EvTextInput(
+            value       = self._antenna_str,
+            width       = _IterButtons.LABEL_WIDTH,
+            margin      = (0, 0, 0, 0),
+            stylesheets = [dark],
+        )
+        _focus_blur(self._antenna_input, self._hint_antenna)
+        self._antenna_iter = _IterButtons(
+            axis_label="antenna", control=self._antenna_input,
+            count=len(meta.antennas), dark=dark,
+            icon_btn_css=self._icon_btn_css, tt=self._tt,
+            # Not yet confirmed against a real browser for an
+            # EvTextInput specifically (see _IterButtons.vertical_nudge's
+            # own docstring, which names this exact axis/widget-type
+            # pairing as untested) -- carried over from Field's Select
+            # value as the best available estimate, not a verified one.
+            vertical_nudge=2,
+        )
+        self._antenna_prev_btn = self._antenna_iter.prev_btn
+        self._antenna_next_btn = self._antenna_iter.next_btn
+        antenna_col = column(
+            _section("Antenna"),
+            self._antenna_iter.row,
+            width=_SIDEBAR_WIDTH,
+            margin=(0, 0, 10, 0),
+        )
 
         # Wire focus/blur on the already-created select/checkbox widgets too
         _focus_blur(self._field_select, self._hint_field)
@@ -4618,7 +4931,7 @@ for (let i = 0; i < cols.length; i++) {
             _section("Data"),
             self._col_select, field_col, self._spw_select,
             corr_label, self._corr_cbg,
-            scan_inp, antenna_inp, time_inp, uv_inp,
+            scan_inp, antenna_col, time_inp, uv_inp,
             # "Axes" header removed (Group 3 piece 2, 2026-07-31) along
             # with self._raster_axis_section/_scatter_axis_section that
             # used to sit under it — axis controls now live inside each
@@ -5765,6 +6078,14 @@ function doPlot(reload) {
         // this is the ONE place their current values actually leave the
         // browser, exactly like every other staged control here.
         return colorize_handles.map(function(h) {
+            if (h.mode_group.active === 2) {
+                // Part 6 (2026-09): "Statistical" -- colored by each
+                // sample's per-baseline Z-Score. Carries no axis/
+                // category state at all (it reuses the ordinary
+                // continuous scaling controls), so the entry is just
+                // the mode itself.
+                return {coloring: 'statistical'};
+            }
             if (h.mode_group.active !== 1) {
                 return null;  // continuous -- explicit null, not omitted,
                                // so a layer switched back from categorical
@@ -5880,6 +6201,7 @@ function doPlot(reload) {
 
     ctrl.send(ids['plot'], {
         field:       field_sel.value,
+        antenna:     antenna_input.value,
         spw_ids:     spw_ids,
         correlation: corr.join(','),
         datacolumn:  col_sel.value,
@@ -6183,6 +6505,7 @@ function doPlot(reload) {
             "ctrl":       ctrl,
             "ids":        ids,
             "field_sel":  self._field_select,
+            "antenna_input": self._antenna_input,
             "spw_src":    self._spw_source,
             "corr_cbg":   self._corr_cbg,
             "col_sel":    self._col_select,
@@ -6393,6 +6716,38 @@ function doIterateSpw(delta) {
     spw_src.selected.indices = [idx];
 }
 """
+        # Antenna (I-3, 2026-09). Unlike field_sel/spw_src, antenna_input
+        # is a plain EvTextInput -- no .options (Select) or .data/
+        # ColumnDataSource (DataTable) to read the full ordered identity
+        # list from client-side. Embedding it here, as a JSON array
+        # literal built server-side from meta.antennas' OWN order (NOT
+        # the alphabetically-sorted ant_names used elsewhere only for
+        # hint text -- see _antenna_iteration_position's own docstring
+        # for why), gives this axis the same "full list already on the
+        # client" property Field/SPW get for free from their own widget
+        # types, with no new ColumnDataSource needed just to carry it.
+        _antenna_names_json = json.dumps([a.name for a in self._meta.antennas])
+        _iterate_antenna_js = STEP_INDEX_JS + """
+function doIterateAntenna(delta) {
+    const names = """ + _antenna_names_json + """;""" + \
+    _iter_guard_js("names.length", "antenna") + """
+    // Only a value naming EXACTLY ONE antenna (no comma list, no
+    // "!exclude", no empty/"all") has a defined position to step FROM --
+    // mirrors _antenna_iteration_position's own single-antenna
+    // requirement on the Python side. Anything else (ambiguous or no
+    // selection) starts fresh at the first antenna, the same rule
+    // Field's own "All fields" sentinel already follows via
+    // stepIterationIndex's current_index===null branch -- no separate
+    // "resolves to exactly one" check needed here, since indexOf
+    // already returns -1 (folded to null below) for every one of those
+    // cases (a multi-name string, an exclusion, or empty) exactly as
+    // it does for a genuinely unmatched name.
+    const cur = names.indexOf(antenna_input.value.trim());
+    const idx = stepIterationIndex(cur === -1 ? null : cur, names.length, delta, true);
+    if (idx === null) return;
+    antenna_input.value = names[idx];
+}
+"""
         # .wire() (see _IterButtons) assembles each button's CustomJS
         # from these bodies + self._do_plot_js exactly the way the
         # hand-written js_on_click() calls this replaced did -- the
@@ -6401,6 +6756,8 @@ function doIterateSpw(delta) {
                               _iterate_field_js, "doIterateField")
         self._spw_iter.wire(self._plot_js_args, self._do_plot_js,
                             _iterate_spw_js, "doIterateSpw")
+        self._antenna_iter.wire(self._plot_js_args, self._do_plot_js,
+                                _iterate_antenna_js, "doIterateAntenna")
 
         # Rule 3 (§3.1c of the plan): superseded by the sidebar move.
         # I-1's toolbar-resident controls (RadioButtonGroup, then
@@ -6645,6 +7002,7 @@ if (!one) {
         vplot_btn     = Button(label="vplot",     button_type="default", width=70)
         radplot_btn   = Button(label="radplot",   button_type="default", width=70)
         waterfall_btn = Button(label="Waterfall", button_type="default", width=80)
+        zscore_btn    = Button(label="Z-Score",   button_type="default", width=75)
 
         def _preset_js(preset_name: str) -> CustomJS:
             ry, rx, rq, sx, sy, pl = _PRESETS[preset_name]
@@ -6683,9 +7041,38 @@ if (!one) {
                 "panel_h":         panel_h,
                 "over_h":          over_h,
             }
+
+            # Part 6 (2026-09): the scatter's colorize mode (Continuous /
+            # Categorical / Statistical) is staged in each layer's
+            # mode_group and read by doPlot() below, so a preset sets it
+            # the same way it sets the axis selects. "zscore" puts every
+            # scatter layer in Statistical (colored by per-baseline
+            # Z-Score, threshold-scaled by default -- see
+            # _make_scatter_layers); every OTHER preset reverts a layer
+            # that is still Statistical back to Continuous, so the mode
+            # can't leak from the zscore preset into vplot/radplot/
+            # waterfall. A layer in Categorical is left exactly as it
+            # is for every preset, unchanged from before. Guarded like
+            # the axis-select sync: a failure here must never abort the
+            # preset's own doPlot().
+            if preset_name == "zscore":
+                colorize_mode_js = """
+try {
+    panel1_colorize_handles.forEach(function(h) { h.mode_group.active = 2; });
+} catch(e) { console.warn('preset colorize-mode sync failed:', e); }
+"""
+            else:
+                colorize_mode_js = """
+try {
+    panel1_colorize_handles.forEach(function(h) {
+        if (h.mode_group.active === 2) { h.mode_group.active = 0; }
+    });
+} catch(e) { console.warn('preset colorize-mode sync failed:', e); }
+"""
+
             return CustomJS(
                 args=args,
-                code=self._do_plot_js + f"""
+                code=self._do_plot_js + colorize_mode_js + f"""
 layout_rbg.active      = active_layout;
 
 // Presets' fixed target: pos0 = raster, pos1 = scatter. Set the complete
@@ -6753,10 +7140,12 @@ doPlot();
             _preset_js("vplot"),
             _preset_js("radplot"),
             _preset_js("waterfall"),
+            _preset_js("zscore"),
         ]
         vplot_btn.js_on_click(self._preset_js_objects[0])
         radplot_btn.js_on_click(self._preset_js_objects[1])
         waterfall_btn.js_on_click(self._preset_js_objects[2])
+        zscore_btn.js_on_click(self._preset_js_objects[3])
 
         # ---- Dark / Light mode toggle ------------------------------------- #
         # The toggle's initial state must follow the constructor's
@@ -6847,7 +7236,9 @@ doPlot();
                 "widgets":      [self._col_select, self._field_select,
                                  self._spw_table, self._corr_cbg,
                                  self._field_prev_btn, self._field_next_btn,
-                                 self._spw_prev_btn, self._spw_next_btn]
+                                 self._spw_prev_btn, self._spw_next_btn,
+                                 self._antenna_input,
+                                 self._antenna_prev_btn, self._antenna_next_btn]
                                 + _all_axis_widgets,
                 # Colormap histogram figures + reset-button icons (added
                 # to fix a reported light-mode gap: these previously had
@@ -6975,6 +7366,7 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             Tip(vplot_btn,     tooltip=self._tt("Preset: Baseline vs Time (raster) + Amplitude vs Time (scatter)")),
             Tip(radplot_btn,   tooltip=self._tt("Preset: Baseline vs Time (raster) + Amplitude vs UV Distance (scatter)")),
             Tip(waterfall_btn, tooltip=self._tt("Preset: Amplitude vs Channel waterfall (over/under layout)")),
+            Tip(zscore_btn,    tooltip=self._tt("Preset: Baseline vs Time raster colored by Z-Score, to spot an outlier baseline at a glance, alongside an Amplitude vs Time scatter to confirm what's there")),
             _sep(),
             Tip(export_btn, tooltip=self._tt(
                 "Write the current view to a PNG (server-side; the path is "

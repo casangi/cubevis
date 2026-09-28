@@ -11,7 +11,7 @@ requirement (CASR-385, "Plotting tool improvements"), verbatim:
 The source is four lines with no numbers, datasets or acceptance criteria. This
 document (1) turns each line into testable requirements, (2) says what visplot
 already does and what is missing, (3) proposes a phased plan, and (4) lists the
-questions that must be answered by the HRS/HSA side before the estimates below are
+questions that must be answered by the HRS side before the estimates below are
 trustworthy. Everything about visplot's current state is from the code and GUI
 sessions to date; items I could not verify are marked **(verify)**.
 
@@ -50,7 +50,7 @@ waiting on datasets and stakeholder answers.
    selection/averaging, phase rms and flagging still need code), and the useful
    version depends on the browser-side restore path, which is the real cost.
 
-## 1. What is unknown (ask HRS/HSA)
+## 1. What is unknown (ask HRS)
 
 Answers change scope, so they gate the estimates.
 - Data: format (MS v2? processing set / zarr?), size (antennas, channels/SPWs,

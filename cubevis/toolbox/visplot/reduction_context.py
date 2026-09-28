@@ -335,52 +335,10 @@ class ObservationMetadata:
 # Flag DTOs                                                               #
 # ---------------------------------------------------------------------- #
 
-@dataclass
-class FlagDelta:
-    """A single pending flag operation from ``FlagDB``.
-
-    A ``FlagDelta`` describes a coordinate-range selection in data space
-    and whether the matching rows should be flagged or unflagged.  The
-    ``ReductionContext`` implementation is responsible for converting this
-    to the concrete flag write mechanism (``flagdata``, casacore write,
-    Zarr region write, etc.).
-
-    Coordinate fields use the same units as ``SelectionSpec``:
-    * ``time_range`` — MJD seconds
-    * ``freq_range`` — Hz
-    * ``channel_range`` — integer channel indices
-    * ``baseline_ids`` — list of (ant1_name, ant2_name) string pairs
-    * ``antenna_names`` — if set, flags all baselines involving any of these
-    * ``scan_names`` — scan name strings
-    * ``field_names`` — field name strings
-    * ``correlation`` — polarization product labels e.g. ["XX", "YY"]
-
-    Extend flags
-    ------------
-    The ``extend_*`` fields mirror the plotms flag extension parameters.
-    ``ReductionContext.commit_flags()`` applies these before writing.
-    """
-    flag: bool = True   # True = flag, False = unflag
-
-    # Coordinate ranges — all optional; unset means "all"
-    time_range:     Optional[tuple[float, float]] = None
-    freq_range:     Optional[tuple[float, float]] = None
-    channel_range:  Optional[tuple[int, int]]     = None
-    baseline_ids:   Optional[list[tuple[str, str]]] = None
-    antenna_names:  Optional[list[str]] = None
-    scan_names:     Optional[list[str]] = None
-    field_names:    Optional[list[str]] = None
-    correlation:    Optional[list[str]] = None
-
-    # Extend flags
-    extend_corr:    bool = False   # extend to all correlations
-    extend_chan:    bool = False   # extend to all channels in SPW
-    extend_spw:     bool = False   # extend to all SPWs
-    extend_scan:    bool = False   # extend to all times in scan
-
-    # Provenance (for JSONL persistence and audit)
-    source:  str = ""   # "raster_box", "scatter_box", "point_flag", ...
-    comment: str = ""
+# ``FlagDelta`` (v2) is defined in ``flag_model.py`` -- region and
+# sample-set deltas, SPW keys, provenance -- and re-exported here so the
+# historical import path keeps working.
+from .flag_model import FlagDelta  # noqa: E402,F401
 
 
 @dataclass(frozen=True)

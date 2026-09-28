@@ -157,6 +157,29 @@ class VisplotRemoteBackend:
         return self._reader.identity_tables(selection, polarization=polarization)
 
     # ------------------------------------------------------------------ #
+    # FlagDB v2 -- pending flags live with the data (see flag_engine)     #
+    # ------------------------------------------------------------------ #
+
+    def set_pending_flags(self, deltas, version: int = 0, apply: bool = True):
+        # deltas arrive as FlagDelta.to_dict() dicts (plain data on the wire)
+        self._reader.set_pending_flags(deltas, version, apply)
+        return True
+
+    def evaluate_flag_request(self, request: dict):
+        # Only built-in filters can run here; a user callable never crosses
+        # the wire (evaluate_request raises a clear KeyError for it).
+        request = dict(request)
+        request.pop("filter_obj", None)
+        result = self._reader.evaluate_flag_request(request)
+        return _wire_safe(result)
+
+    def spw_casa_ids(self):
+        return [[k.to_dict(), int(v)] for k, v in self._reader.spw_casa_ids().items()]
+
+    def flag_spw_table(self):
+        return self._reader.flag_spw_table()
+
+    # ------------------------------------------------------------------ #
     # Extra methods LocalVisibilityReader also exposes                    #
     # ------------------------------------------------------------------ #
 
@@ -181,6 +204,20 @@ class VisplotRemoteBackend:
 
     def close(self) -> None:
         self._backend.close()
+
+
+def _wire_safe(obj):
+    """Convert a flag-evaluation result to JSON-like data for the wire."""
+    import numpy as np
+    if isinstance(obj, dict):
+        return {str(k): _wire_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_wire_safe(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.generic):
+        return obj.item()
+    return obj
 
 
 def register(comm, registry, **kwargs: Any) -> None:

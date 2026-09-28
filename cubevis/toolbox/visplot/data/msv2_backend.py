@@ -557,7 +557,32 @@ class MSv2Backend(XArrayReader):
                 getattr(selection, "spw", None), n_total, self._path,
             )
 
-    def _flag_mask(self, ds: xr.Dataset) -> xr.DataArray:
+    def spw_casa_ids(self) -> dict:
+        """``{SpwKey: SPECTRAL_WINDOW row}`` from the MS subtable.
+
+        xarray-ms exposes only the window *name*, which need not be unique,
+        so ``flagdata`` export would otherwise have to select windows by
+        frequency.  A window is matched by channel count and exact channel
+        frequencies; a key that matches more than one row (duplicated
+        windows) is left out rather than guessed.
+        """
+        from ..flag_engine import spw_table
+        out = super().spw_casa_ids()
+        try:
+            from arcae.lib.arrow_tables import Table
+            t = Table.from_filename(f"{self._path}::SPECTRAL_WINDOW").to_arrow()
+            freqs = [np.asarray(f, dtype=np.float64) for f in t["CHAN_FREQ"].to_pylist()]
+        except Exception as exc:  # pragma: no cover - depends on arcae build
+            log.debug("spw_casa_ids: cannot read SPECTRAL_WINDOW: %s", exc)
+            return out
+        for key, raw in spw_table(self):
+            rows = [i for i, f in enumerate(freqs)
+                    if f.size == raw.size and np.allclose(f, raw, rtol=1e-9, atol=0.0)]
+            if len(rows) == 1:
+                out[key] = rows[0]
+        return out
+
+    def _disk_flag_mask(self, ds: xr.Dataset) -> xr.DataArray:
         """Return boolean FLAG DataArray (True = flagged or padded).
 
         FLAG dtype is uint8 in xarray-ms v0.5.x (confirmed test_03).

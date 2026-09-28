@@ -648,7 +648,7 @@ class MSv4Backend(XArrayReader):
         # Default: first group (insertion order preserved in Python 3.7+)
         return next(iter(data_groups.values()))
 
-    def _flag_mask(self, ds: xr.Dataset) -> xr.DataArray:
+    def _disk_flag_mask(self, ds: xr.Dataset) -> xr.DataArray:
         """Return boolean FLAG DataArray (True = flagged or nonzero bit).
 
         Respects ``data_group`` to select the correct FLAG variable.  The
@@ -660,7 +660,7 @@ class MSv4Backend(XArrayReader):
         flag_name = group["flag"] if group and "flag" in group else "FLAG"
         if flag_name not in ds.data_vars:
             log.warning(
-                "_flag_mask: %r not in data_vars; falling back to 'FLAG'",
+                "_disk_flag_mask: %r not in data_vars; falling back to 'FLAG'",
                 flag_name,
             )
             flag_name = "FLAG"

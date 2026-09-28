@@ -72,6 +72,8 @@ devel/docs/visibility_plotter_preview.md
 from .axes import Axis, AxisType
 from .selection import SelectionSpec
 from .flag_db import FlagDB
+from .flag_model import FlagDelta
+from .flag_filters import FlagFilter, ParamSpec, make_flag_filter
 from .visibility_raster import VisibilityRaster
 from .visibility_scatter import VisibilityScatter, ScatterLayer
 from .visibility_plotter import VisibilityPlotter
@@ -86,6 +88,10 @@ __all__ = [
     "VisibilityScatter",
     "ScatterLayer",
     "FlagDB",
+    "FlagDelta",
+    "FlagFilter",
+    "ParamSpec",
+    "make_flag_filter",
     "SelectionSpec",
     "Axis",
     "AxisType",

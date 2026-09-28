@@ -533,6 +533,33 @@ class RemoteReductionContext(ReductionContext):
     # §2: "Two more methods are needed beyond the formal protocol").     #
     # ------------------------------------------------------------------ #
 
+    # ------------------------------------------------------------------ #
+    # FlagDB v2                                                            #
+    # ------------------------------------------------------------------ #
+
+    def set_pending_flags(self, deltas, version: int = 0, apply: bool = True,
+                          timeout: Optional[float] = None) -> None:
+        wire = [d.to_dict(json_safe=True) if hasattr(d, "to_dict") else d
+                for d in (deltas or ())]
+        self._call("set_pending_flags", deltas=wire, version=int(version),
+                   apply=bool(apply), timeout=timeout)
+
+    def evaluate_flag_request(self, request: dict, timeout: Optional[float] = None) -> dict:
+        if request.get("filter_obj") is not None and not request["filter_obj"].builtin:
+            raise RuntimeError(
+                "user-supplied flag filters run only with local data; the data "
+                "for this session live in a remote worker")
+        req = {k: v for k, v in request.items() if k != "filter_obj"}
+        return self._call("evaluate_flag_request", request=req, timeout=timeout)
+
+    def spw_casa_ids(self, timeout: Optional[float] = None) -> dict:
+        from .flag_model import SpwKey
+        pairs = self._call("spw_casa_ids", timeout=timeout) or []
+        return {SpwKey.from_dict(k): int(v) for k, v in pairs}
+
+    def flag_spw_table(self, timeout: Optional[float] = None) -> list:
+        return self._call("flag_spw_table", timeout=timeout) or []
+
     def metadata(self, timeout: Optional[float] = None) -> dict:
         return self._call("metadata", timeout=timeout)
 

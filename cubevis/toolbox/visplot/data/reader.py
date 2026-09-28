@@ -1445,7 +1445,7 @@ def _selection_fingerprint(selection) -> Optional[tuple]:
         if dataclasses.is_dataclass(selection):
             fp = tuple((f.name, _freeze(getattr(selection, f.name)))
                        for f in dataclasses.fields(selection)
-                       if f.name != "cache_generation")
+                       if f.name not in ("cache_generation", "pending_version"))
         else:
             fp = _freeze(selection)
         hash(fp)
@@ -2135,7 +2135,77 @@ class XArrayReader(abc.ABC):
         correctness-of-resources matter, not hygiene."""
         self._scan_lookup_cache = {}
         self._antenna_lookup = None
+        self._cv_spw_table = None
         self._clear_frame_cache()
+
+    # ------------------------------------------------------------------ #
+    # Pending flags (FlagDB v2)                                            #
+    # ------------------------------------------------------------------ #
+    #
+    # Pending (not yet committed) flags are applied here, in the one method
+    # every render path of both backends already calls for flags.  The
+    # subclasses supply the on-disk flags as ``_disk_flag_mask``; this adds
+    # the ordered pending deltas on top (see ``flag_engine.apply_pending``).
+    # With ``apply=False`` (the "overlay" display mode) the render sees the
+    # on-disk flags only and pending flags are drawn as a separate layer.
+
+    def set_pending_flags(self, deltas, version: int = 0, apply: bool = True) -> None:
+        """Install the pending flag state (a list of ``FlagDelta`` or of
+        their ``to_dict()`` forms).  *version* is ``FlagDB.version``; it
+        must match ``SelectionSpec.pending_version`` of later queries."""
+        from ..flag_model import FlagDelta
+        ds_ = [d if isinstance(d, FlagDelta) else FlagDelta.from_dict(d)
+               for d in (deltas or ())]
+        self._cv_pending = tuple(ds_)
+        self._cv_pending_version = int(version)
+        self._cv_pending_apply = bool(apply)
+
+    def pending_flag_state(self) -> dict:
+        return {"version": getattr(self, "_cv_pending_version", 0),
+                "n_deltas": len(getattr(self, "_cv_pending", ()) or ()),
+                "apply": getattr(self, "_cv_pending_apply", True)}
+
+    def _pending_deltas(self, applied_only: bool = True) -> tuple:
+        pend = getattr(self, "_cv_pending", ()) or ()
+        if applied_only and not getattr(self, "_cv_pending_apply", True):
+            return ()
+        return pend
+
+    def _disk_flag_mask(self, ds: "xr.Dataset") -> "xr.DataArray":
+        return ds["FLAG"].astype(bool)
+
+    def _flag_mask(self, ds: "xr.Dataset") -> "xr.DataArray":
+        """Effective flags: on-disk flags with the pending deltas applied."""
+        base = self._disk_flag_mask(ds)
+        pend = self._pending_deltas()
+        if not pend:
+            return base
+        from ..flag_engine import apply_pending
+        return apply_pending(self, ds, base, pend)
+
+    def pending_flag_mask(self, ds: "xr.Dataset") -> "xr.DataArray":
+        """Samples of *ds* whose state the pending deltas change (for the
+        pending-overlay display): ``effective != on-disk``."""
+        from ..flag_engine import apply_pending
+        base = self._disk_flag_mask(ds)
+        eff = apply_pending(self, ds, base, self._pending_deltas(applied_only=False))
+        return eff != base
+
+    def spw_casa_ids(self) -> dict:
+        """``{SpwKey: CASA spw id}`` for windows whose numeric id is known.
+        Backends that can read the SPECTRAL_WINDOW table override this."""
+        from ..flag_engine import spw_table
+        return {k: int(k.ident) for k, _f in spw_table(self) if k.kind == "spw"}
+
+    def flag_spw_table(self) -> list:
+        """Every window's ``SpwKey`` as dicts (crosses the remote wire)."""
+        from ..flag_engine import spw_table
+        return [k.to_dict() for k, _f in spw_table(self)]
+
+    def evaluate_flag_request(self, request: dict) -> dict:
+        """Resolve a box/filter flag request; see ``flag_engine.evaluate_request``."""
+        from ..flag_engine import evaluate_request
+        return evaluate_request(self, request)
 
     def _finalize_zscore_frame(self, df: "pd.DataFrame") -> "pd.DataFrame":
         """Turn a staged Z-Score frame (``__zscore_real``/``__zscore_imag``,
@@ -2290,7 +2360,8 @@ class XArrayReader(abc.ABC):
         sel_fp = _selection_fingerprint(selection)
         if cache.max_bytes <= 0 or sel_fp is None:
             return self._query_columns_raw(xaxis, yaxes, selection)
-        gen = int(getattr(selection, "cache_generation", 0) or 0)
+        gen = (int(getattr(selection, "cache_generation", 0) or 0),
+               int(getattr(selection, "pending_version", 0) or 0))
 
         token = self._frame_token()
 

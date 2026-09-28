@@ -1,59 +1,46 @@
 """flag_db.py
 ============
-``FlagDB`` — in-memory accumulation layer for interactive flag operations.
+``FlagDB`` -- the ordered store of *accepted* pending flag operations.
 
-``FlagDB`` is the sole owner of pending flag state between the moment the
-user draws a box-select region and the moment they press the **Flag ⚑**
-button.  It is deliberately thin:
+What it holds
+-------------
+An ordered list of ``FlagDelta`` objects (see ``flag_model.py``).  The
+effective flag state of any sample is the on-disk flag with these deltas
+applied **in order** (``flag_model.fold_deltas``): a later unflag overrides
+an earlier flag and vice versa.  Nothing here ever touches disk; pending
+flags become permanent only through ``commit(context)`` ->
+``ReductionContext.commit_flags()``.
 
-* **Append** — each box-close or point-click adds one ``FlagDelta``.
-* **Undo** — ``pop()`` removes the most recent delta (stack discipline).
-* **Commit** — ``commit()`` drains the list into
-  ``ReductionContext.commit_flags()`` and clears the pending queue.
-* **Overlay query** — ``flag_selection()`` returns a ``SelectionSpec``
-  that covers all pending deltas, used by the rendering pipeline to
-  produce the red flagged-data overlay without touching the on-disk
-  flag column.
+Only accepted deltas live here.  Proposals (a box plus a filter, awaiting
+review) are held by the caller until the reviewer accepts them, so undo
+never has to step over rejected work.
 
-Design constraints
-------------------
-Flags accumulate in Python, not JavaScript.  This is a hard requirement:
-displaying newly flagged data as a red overlay means re-running the
-Datashader pipeline (``query_raster`` / ``query_columns`` → ``tf.shade``
-→ Porter-Duff composite).  JavaScript has no access to the numpy/xarray
-pipeline, so the only role JS plays is firing the j2p message when a
-box-select region closes.  Everything after that point — ``FlagDelta``
-creation, re-render, overlay composite — runs in Python.
+Operations and history
+----------------------
+Flag, Unflag, Undo, Redo and Clear all operate on this DB:
 
-``FlagDB`` itself holds no Bokeh objects and no backend references.  It
-is constructed once by ``VisibilityPlotter.__init__`` and passed into the
-j2p box-select handler via closure.  The handler calls
-``flag_db.append(delta)`` and then triggers the re-render.
+* ``add(delta)``   -- append (Flag and Unflag both add a delta); clears redo.
+* ``undo()``       -- reverse the most recent operation (an add or a clear).
+* ``redo()``       -- re-apply the most recently undone operation.
+* ``clear()``      -- drop every pending delta; undoable.
+* ``commit(ctx)``  -- hand the ordered list to the reduction context; on
+  success the DB and its history are emptied.
 
-Relationship to ``ReductionContext``
--------------------------------------
-``FlagDB`` does **not** call ``ReductionContext`` directly on every
-``append`` — doing so would write to disk on every box-close, making
-undo impossible.  The disk write happens only when
-``FlagDB.commit(context)`` is called, which is wired to the **Flag ⚑**
-button in ``VisibilityPlotter``.
+``version`` increases on every change.  It travels to the data backend
+(``SelectionSpec.pending_version``) so cached frames built under an older
+pending state are never reused.
 
-Overlay rendering
------------------
-The re-render pipeline in ``VisibilityPlotter`` calls
-``flag_db.overlay_deltas()`` to obtain the list of pending deltas and
-constructs a masked boolean array for the Datashader composite step.
-Specifically:
+Thread safety
+-------------
+All mutators take an internal re-entrant lock; ``deltas()`` returns an
+immutable snapshot.  Listeners (``add_listener``) are called after the lock
+is released, with the new version.
 
-1. For each pending ``FlagDelta`` the raster/scatter backend is queried
-   for the set of visibility rows matching the delta's coordinate ranges.
-2. Those rows are rendered in red via a separate ``tf.shade`` pass.
-3. The red layer is composited over the main image with
-   ``tf.stack(main, red_overlay, how='over')``.
-
-``FlagDB`` does not perform this rendering itself — it is the
-``VisibilityPlotter`` re-render path that does — but the ``FlagDelta``
-objects it holds carry all coordinate information required.
+Persistence
+-----------
+``to_jsonl()`` / ``from_jsonl()`` write and read the ordered deltas (with
+provenance) as JSON Lines -- the audit/persistence form, also used by the
+view-state ``data.flags.pending`` unit.
 
 Package location
 ----------------
@@ -62,249 +49,280 @@ Package location
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import TYPE_CHECKING
+import threading
+from typing import TYPE_CHECKING, Callable, Iterable, Optional
+
+from .flag_model import FlagDelta
 
 if TYPE_CHECKING:
-    from .reduction_context import FlagDelta, FlagSummary, ReductionContext
+    from .reduction_context import FlagSummary, ReductionContext
 
 log = logging.getLogger(__name__)
 
+JSONL_FORMAT = "cubevis.visplot.flagdb"
+JSONL_VERSION = 2
+
 
 class FlagDB:
-    """In-memory accumulation layer for pending interactive flag operations.
-
-    Each entry is a ``FlagDelta`` — a coordinate-range description of one
-    flag (or unflag) operation.  The list grows on every box-select close
-    and shrinks by one on every Undo press.  It is drained to disk (via
-    ``ReductionContext.commit_flags()``) only when the **Flag ⚑** button
-    is pressed.
+    """Ordered, undoable store of accepted pending flag deltas.
 
     Parameters
     ----------
     max_undo : int
-        Maximum number of deltas retained for undo.  Oldest entries are
-        silently dropped when the limit is exceeded.  ``0`` means
-        unlimited (the default).  In practice the preview does not impose
-        a limit — the user can undo every delta in the current session.
-
-    Examples
-    --------
-    Typical usage inside ``VisibilityPlotter``'s box-select j2p handler::
-
-        delta = FlagDelta(
-            flag=True,
-            time_range=(t0, t1),
-            freq_range=(f0, f1),
-            source="raster_box",
-        )
-        flag_db.append(delta)
-        # re-render with overlay …
-
-    Undo (Undo ⟲ button)::
-
-        if flag_db:
-            flag_db.pop()
-            # re-render without that delta …
-
-    Commit (Flag ⚑ button)::
-
-        summary = flag_db.commit(reduction_context)
-        # summary.n_flagged, summary.fraction_flagged, …
+        Maximum number of operations kept for undo (``0`` = unlimited).
+        Older history is forgotten; the deltas themselves stay.
     """
 
     def __init__(self, max_undo: int = 0) -> None:
-        self._deltas: list["FlagDelta"] = []
-        self._max_undo = max_undo
+        self._deltas: list[FlagDelta] = []
+        self._undo: list[tuple] = []
+        self._redo: list[tuple] = []
+        self._max_undo = int(max_undo)
+        self._seq = 0
+        self._version = 0
+        self._lock = threading.RLock()
+        self._listeners: list[Callable[[int], None]] = []
 
     # ------------------------------------------------------------------ #
-    # Core list operations                                                 #
+    # Listeners / versioning                                               #
     # ------------------------------------------------------------------ #
 
-    def append(self, delta: "FlagDelta") -> None:
-        """Add a new ``FlagDelta`` to the pending queue.
+    @property
+    def version(self) -> int:
+        return self._version
 
-        If ``max_undo > 0`` and the list is at capacity, the oldest entry
-        is dropped before the new one is appended.
+    @property
+    def lock(self) -> threading.RLock:
+        return self._lock
 
-        Parameters
-        ----------
-        delta : FlagDelta
-            The coordinate-range flag operation to accumulate.
-        """
-        if self._max_undo > 0 and len(self._deltas) >= self._max_undo:
-            dropped = self._deltas.pop(0)
-            log.debug(
-                "FlagDB.append: max_undo=%d reached; dropped oldest delta "
-                "(source=%r, time_range=%s)",
-                self._max_undo, dropped.source, dropped.time_range,
-            )
-        self._deltas.append(delta)
-        log.debug(
-            "FlagDB.append: %d pending delta(s); latest source=%r",
-            len(self._deltas), delta.source,
-        )
+    def add_listener(self, fn: Callable[[int], None]) -> None:
+        self._listeners.append(fn)
 
-    def pop(self) -> "FlagDelta":
-        """Remove and return the most recent ``FlagDelta`` (undo one step).
+    def remove_listener(self, fn) -> None:
+        try:
+            self._listeners.remove(fn)
+        except ValueError:
+            pass
 
-        Raises
-        ------
-        IndexError
-            If the queue is empty (caller should check ``bool(flag_db)``
-            or ``flag_db.pending_count`` before calling).
-        """
-        if not self._deltas:
-            raise IndexError("FlagDB.pop(): no pending deltas to undo")
-        delta = self._deltas.pop()
-        log.debug(
-            "FlagDB.pop: undo — removed source=%r; %d delta(s) remaining",
-            delta.source, len(self._deltas),
-        )
+    def _changed(self) -> int:
+        # Called with the lock held; returns the new version.
+        self._version += 1
+        return self._version
+
+    def _notify(self, version: int) -> None:
+        for fn in list(self._listeners):
+            try:
+                fn(version)
+            except Exception:
+                log.exception("FlagDB listener failed")
+
+    def _push_undo(self, op: tuple) -> None:
+        self._undo.append(op)
+        if self._max_undo > 0 and len(self._undo) > self._max_undo:
+            del self._undo[0]
+
+    # ------------------------------------------------------------------ #
+    # Mutators                                                             #
+    # ------------------------------------------------------------------ #
+
+    def add(self, delta: FlagDelta) -> FlagDelta:
+        """Append *delta* (assigning its sequence number); returns it."""
+        with self._lock:
+            self._seq += 1
+            delta = delta.with_seq(self._seq)
+            self._deltas.append(delta)
+            self._push_undo(("add", delta))
+            self._redo.clear()
+            v = self._changed()
+        log.debug("FlagDB.add: %s (%d pending)", delta.describe(), len(self._deltas))
+        self._notify(v)
         return delta
 
-    def clear(self) -> None:
-        """Discard all pending deltas without writing to disk.
+    # v1 name
+    def append(self, delta: FlagDelta) -> FlagDelta:
+        return self.add(delta)
 
-        Called by ``VisibilityPlotter`` if the user closes the tool or
-        reloads the data without committing.
-        """
-        n = len(self._deltas)
-        self._deltas.clear()
-        log.debug("FlagDB.clear: discarded %d pending delta(s)", n)
+    def undo(self) -> Optional[tuple]:
+        """Reverse the most recent operation.  Returns ``(kind, payload)``
+        or ``None`` if there is nothing to undo."""
+        with self._lock:
+            if not self._undo:
+                return None
+            op = self._undo.pop()
+            kind, payload = op
+            if kind == "add":
+                # An add is always the newest delta unless history was
+                # rewritten; search from the end to be safe.
+                for i in range(len(self._deltas) - 1, -1, -1):
+                    if self._deltas[i].delta_id == payload.delta_id:
+                        del self._deltas[i]
+                        break
+            elif kind == "clear":
+                self._deltas = list(payload) + self._deltas
+            self._redo.append(op)
+            v = self._changed()
+        self._notify(v)
+        return op
+
+    def redo(self) -> Optional[tuple]:
+        with self._lock:
+            if not self._redo:
+                return None
+            op = self._redo.pop()
+            kind, payload = op
+            if kind == "add":
+                self._deltas.append(payload)
+            elif kind == "clear":
+                ids = {d.delta_id for d in payload}
+                self._deltas = [d for d in self._deltas if d.delta_id not in ids]
+            self._push_undo(op)
+            v = self._changed()
+        self._notify(v)
+        return op
+
+    def pop(self) -> FlagDelta:
+        """v1 compatibility: undo the most recent *add* and return its delta."""
+        with self._lock:
+            if not self._deltas:
+                raise IndexError("FlagDB.pop(): no pending deltas to undo")
+            if self._undo and self._undo[-1][0] == "add":
+                return self.undo()[1]
+            delta = self._deltas.pop()
+            self._redo.append(("add", delta))
+            v = self._changed()
+        self._notify(v)
+        return delta
+
+    def clear(self, *, record: bool = True) -> int:
+        """Drop all pending deltas.  Undoable when *record* (default).
+        ``record=False`` also forgets history (used after data reload)."""
+        with self._lock:
+            n = len(self._deltas)
+            if record and n:
+                self._push_undo(("clear", tuple(self._deltas)))
+                self._redo.clear()
+            if not record:
+                self._undo.clear()
+                self._redo.clear()
+            self._deltas = []
+            v = self._changed()
+        self._notify(v)
+        return n
+
+    def replace_all(self, deltas: Iterable[FlagDelta]) -> None:
+        """Load *deltas* (e.g. restored pending state); forgets history."""
+        with self._lock:
+            self._deltas = []
+            for d in deltas:
+                self._seq = max(self._seq, d.seq) if d.seq else self._seq + 1
+                self._deltas.append(d if d.seq else d.with_seq(self._seq))
+            self._undo.clear()
+            self._redo.clear()
+            v = self._changed()
+        self._notify(v)
 
     # ------------------------------------------------------------------ #
     # Commit                                                               #
     # ------------------------------------------------------------------ #
 
     def commit(self, context: "ReductionContext") -> "FlagSummary":
-        """Write all pending deltas to disk via ``context.commit_flags()``.
+        """Hand the ordered pending deltas to ``context.commit_flags()``.
 
-        The pending list is passed to the context **as a copy** so that
-        the context implementation can iterate it freely.  The list is
-        cleared from ``FlagDB`` only after a successful return — if the
-        context raises, the deltas remain pending and the user can retry.
-
-        Parameters
-        ----------
-        context : ReductionContext
-            The active reduction context (``Casa6ReductionContext``,
-            ``RadpsReductionContext``, etc.).  Must not be a
-            ``NullReductionContext`` — the caller (``VisibilityPlotter``)
-            is responsible for gating the **Flag ⚑** button on
-            ``context.supports_calibration()``… or more precisely on
-            whether ``commit_flags`` is meaningfully implemented; for the
-            preview the button is simply disabled in the toolbar.
-
-        Returns
-        -------
-        FlagSummary
-            Counts and fractions returned by the context implementation.
-
-        Raises
-        ------
-        NotImplementedError
-            Re-raised from ``NullReductionContext.commit_flags()`` if
-            called against the null context (should not happen in normal
-            use since the Flag button is disabled in that case).
-        RuntimeError
-            If the pending list is empty — committing zero deltas is
-            almost certainly a caller bug.
+        The DB is emptied (and its history forgotten) only after the
+        context returns successfully; if it raises, everything stays
+        pending and the user can retry.
         """
-        if not self._deltas:
-            raise RuntimeError(
-                "FlagDB.commit(): no pending deltas to commit. "
-                "Check 'if flag_db:' before calling commit()."
-            )
-
-        snapshot = list(self._deltas)   # copy; context may iterate multiple times
-        log.debug(
-            "FlagDB.commit: writing %d delta(s) via %s",
-            len(snapshot), type(context).__name__,
-        )
-
+        with self._lock:
+            if not self._deltas:
+                raise RuntimeError("FlagDB.commit(): no pending deltas to commit.")
+            snapshot = list(self._deltas)
         summary = context.commit_flags(snapshot)
-
-        # Clear only after a successful commit
-        self._deltas.clear()
-        log.debug(
-            "FlagDB.commit: done — n_flagged=%d  fraction=%.4f",
-            summary.n_flagged, summary.fraction_flagged,
-        )
+        with self._lock:
+            ids = {d.delta_id for d in snapshot}
+            self._deltas = [d for d in self._deltas if d.delta_id not in ids]
+            self._undo.clear()
+            self._redo.clear()
+            v = self._changed()
+        self._notify(v)
         return summary
 
     # ------------------------------------------------------------------ #
-    # Overlay query                                                        #
+    # Queries                                                              #
     # ------------------------------------------------------------------ #
 
-    def overlay_deltas(self) -> list["FlagDelta"]:
-        """Return a shallow copy of the pending delta list.
+    def deltas(self) -> tuple:
+        """Immutable snapshot of the ordered pending deltas."""
+        with self._lock:
+            return tuple(self._deltas)
 
-        Used by the ``VisibilityPlotter`` re-render pipeline to construct
-        the red flagged-data overlay without the risk of the list changing
-        mid-render (which could happen if a j2p handler fires concurrently
-        in a future async implementation).
+    def snapshot(self) -> tuple:
+        """``(version, deltas)`` taken atomically."""
+        with self._lock:
+            return self._version, tuple(self._deltas)
 
-        Returns an empty list when nothing is pending — callers can skip
-        the overlay composite step entirely in that case.
-        """
-        return list(self._deltas)
+    def overlay_deltas(self) -> list:
+        return list(self.deltas())
 
-    def peek(self, index: int = -1) -> "FlagDelta":
-        """Return the delta at *index* without removing it.
+    def peek(self, index: int = -1) -> FlagDelta:
+        with self._lock:
+            if not self._deltas:
+                raise IndexError("FlagDB.peek(): no pending deltas")
+            return self._deltas[index]
 
-        Default ``index=-1`` returns the most recently appended delta.
-        Positive indices count from the oldest delta (``index=0``).
+    def can_undo(self) -> bool:
+        return bool(self._undo)
 
-        Used by ``VisibilityPlotter`` to implement a step-through cursor
-        so the user can inspect accumulated flag operations one by one
-        (e.g. via ← / → toolbar buttons or hotkeys) before committing.
-
-        Parameters
-        ----------
-        index : int
-            List index into the pending delta queue.
-
-        Returns
-        -------
-        FlagDelta
-            The delta at *index* — not removed from the queue.
-
-        Raises
-        ------
-        IndexError
-            If the queue is empty or *index* is out of range.
-        """
-        if not self._deltas:
-            raise IndexError("FlagDB.peek(): no pending deltas")
-        return self._deltas[index]
+    def can_redo(self) -> bool:
+        return bool(self._redo)
 
     def has_pending(self) -> bool:
-        """Return ``True`` if there are uncommitted deltas.
-
-        Convenience alias for ``bool(flag_db)``; use whichever reads more
-        clearly at the call site.
-        """
         return bool(self._deltas)
-
-    # ------------------------------------------------------------------ #
-    # Convenience / introspection                                          #
-    # ------------------------------------------------------------------ #
 
     @property
     def pending_count(self) -> int:
-        """Number of uncommitted deltas currently in the queue."""
         return len(self._deltas)
 
     def __bool__(self) -> bool:
-        """``True`` if there are any pending deltas."""
         return bool(self._deltas)
 
     def __len__(self) -> int:
         return len(self._deltas)
 
+    def __iter__(self):
+        return iter(self.deltas())
+
     def __repr__(self) -> str:  # pragma: no cover
-        return (
-            f"FlagDB(pending={len(self._deltas)}, "
-            f"max_undo={self._max_undo!r})"
-        )
+        return (f"FlagDB(pending={len(self._deltas)}, undo={len(self._undo)}, "
+                f"redo={len(self._redo)}, version={self._version})")
+
+    # ------------------------------------------------------------------ #
+    # Persistence                                                          #
+    # ------------------------------------------------------------------ #
+
+    def to_jsonl(self, header: Optional[dict] = None) -> str:
+        lines = [json.dumps({"format": JSONL_FORMAT, "version": JSONL_VERSION,
+                             **(header or {})})]
+        for d in self.deltas():
+            lines.append(json.dumps(d.to_dict(json_safe=True)))
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def parse_jsonl(text: str) -> tuple:
+        """``(header, [FlagDelta, ...])`` from ``to_jsonl`` output."""
+        header, deltas = {}, []
+        for i, line in enumerate(l for l in text.splitlines() if l.strip()):
+            obj = json.loads(line)
+            if i == 0 and obj.get("format") == JSONL_FORMAT:
+                header = obj
+                continue
+            deltas.append(FlagDelta.from_dict(obj))
+        return header, deltas
+
+    @classmethod
+    def from_jsonl(cls, text: str, max_undo: int = 0) -> "FlagDB":
+        db = cls(max_undo=max_undo)
+        _hdr, deltas = cls.parse_jsonl(text)
+        db.replace_all(deltas)
+        return db

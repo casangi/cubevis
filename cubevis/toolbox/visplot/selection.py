@@ -133,6 +133,17 @@ class SelectionSpec:
     compared separately), but preserved by ``copy()``.
     """
 
+    pending_version: int = 0
+    """Pending-flag freshness token (FlagDB v2) -- NOT a row constraint.
+
+    ``FlagDB.version`` at the time this selection was built.  The backend
+    applies pending flags as if they were on disk (``XArrayReader.
+    _flag_mask``), so a cached frame is valid only for the pending state it
+    was read under; the frame cache compares this together with
+    ``cache_generation``.  Excluded from the selection fingerprint and from
+    ``is_empty()``, preserved by ``copy()``.
+    """
+
     # ------------------------------------------------------------------ #
 
     def is_empty(self) -> bool:
@@ -163,6 +174,7 @@ class SelectionSpec:
             correlation=list(self.correlation) if self.correlation is not None else None,
             data_column=self.data_column,
             cache_generation=self.cache_generation,
+            pending_version=self.pending_version,
         )
 
     # ------------------------------------------------------------------ #

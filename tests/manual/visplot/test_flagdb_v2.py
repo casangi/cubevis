@@ -1,0 +1,498 @@
+"""
+test_flagdb_v2.py
+=================
+FlagDB v2: model, evaluator, filters, FlagDB history, exporters, and the
+backend integration (pending flags applied in ``_flag_mask``; box/filter
+requests resolved by ``evaluate_flag_request``).
+
+Runs without a real observation: the backend tests build a small,
+deterministic MSv2 with xarray-ms's own simulator (two spectral windows of
+8 and 4 channels, both *named* ``<Unknown>`` -- the name-only, non-unique
+identity case), then drive the real ``MSv2Backend``.  Every result is
+checked against an independent numpy computation on the raw arrays.
+
+Assumes ``cubevis`` is importable (installed or on ``PYTHONPATH``); it
+needs no MS/PS environment variables and no remote kernel.
+
+    pytest -q test_flagdb_v2.py
+"""
+import json
+import math
+import warnings
+
+import numpy as np
+import pytest
+
+from cubevis.toolbox.visplot.flag_model import (
+    BlockCoords, FlagCounts, FlagDelta, SampleBlock, SpwChannels, SpwKey,
+    fold_deltas, delta_mask,
+)
+from cubevis.toolbox.visplot.flag_db import FlagDB
+from cubevis.toolbox.visplot import flag_filters as ff
+from cubevis.toolbox.visplot.flag_export import (
+    casa_timerange, to_flagdata_lines, ambiguous_spws,
+)
+
+warnings.filterwarnings("ignore")
+
+K8 = SpwKey("w", "name", 1.0e9, 1.7e9, 8)
+K4 = SpwKey("w", "name", 1.0e9, 1.3e9, 4)
+
+
+def _bc(nt=5, nb=3, nf=8, pols=("XX", "YY"), key=K8):
+    times = 100.0 + 10.0 * np.arange(nt)
+    ants = [("A", "B"), ("A", "C"), ("B", "C")][:nb]
+    freqs = np.linspace(key.freq_min, key.freq_max, key.n_chan)[:nf]
+    return BlockCoords(times, np.array([a for a, _ in ants]), np.array([b for _, b in ants]),
+                       freqs, np.array(pols), key, np.arange(nf),
+                       np.array(["1"] * 2 + ["2"] * (nt - 2)), np.array(["F"] * nt))
+
+
+# ====================================================================== #
+# Model / evaluator                                                        #
+# ====================================================================== #
+
+def test_region_mask_matches_numpy_reference():
+    bc = _bc()
+    d = FlagDelta(time_range=(110, 130), baseline_ids=[("C", "A")], correlation=["YY"],
+                  spw_channels=[SpwChannels(K8, 2, 4)])
+    m = delta_mask(d, bc)
+    ref = np.zeros(bc.shape, bool)
+    ref[1:4, 1, 2:5, 1] = True          # (A,C) given reversed must still match
+    assert np.array_equal(m, ref)
+
+
+def test_region_spw_key_is_exact_not_name_only():
+    bc4 = _bc(nf=4, key=K4)
+    assert delta_mask(FlagDelta(spw=[K8]), bc4) is None
+    assert delta_mask(FlagDelta(spw=[K4]), bc4).all()
+
+
+def test_ordered_fold_later_unflag_wins_and_padding_untouched():
+    bc = _bc()
+    base = np.zeros(bc.shape, bool)
+    base[0] = True                                  # committed flags
+    valid = np.ones(bc.shape[:2], bool)
+    valid[4, 2] = False                             # padding slot
+    base[4, 2] = True
+    deltas = [FlagDelta(flag=True, time_range=(110, 140)),
+              FlagDelta(flag=False, time_range=(100, 120), correlation=["XX"]),
+              FlagDelta(flag=True, time_range=(120, 120))]
+    out = fold_deltas(deltas, bc, base, valid)
+    ref = base.copy()
+    t = bc.times
+    for d in deltas:
+        mt = (t >= d.time_range[0]) & (t <= d.time_range[1])
+        mp = np.ones(2, bool) if d.correlation is None else (bc.pols == "XX")
+        m = mt[:, None, None, None] & mp[None, None, None, :]
+        m = m & valid[:, :, None, None]
+        ref[np.broadcast_to(m, ref.shape)] = d.flag
+    assert np.array_equal(out, ref)
+    assert out[4, 2].all()            # padding keeps its (flagged) base value
+    assert not out[0, :, :, 0].any()  # unflag of committed XX flags at t=100
+
+
+def test_extend_options_on_region():
+    bc = _bc()
+    d = FlagDelta(correlation=["XX"], spw_channels=[SpwChannels(K8, 0, 0)],
+                  extend_corr=True, extend_chan=True, time_range=(100, 100))
+    m = delta_mask(d, bc)
+    assert m[0].all() and not m[1:].any()
+
+
+def test_sample_block_roundtrip_both_encodings_and_chunk_independence():
+    k64 = SpwKey("w", "name", 1.0e9, 1.7e9, 64)
+    bc = _bc(nt=64, nf=64, key=k64)
+    rng = np.random.default_rng(3)
+    diag = np.zeros(bc.shape, bool)
+    for i in range(64):
+        diag[i, i % 3, i, i % 2] = True          # sparse even after trimming
+    for mask, enc in ((diag, "indices"), (rng.random(bc.shape) < 0.6, "bits")):
+        blk = SampleBlock.from_mask(k64, bc.times, bc.ant1, bc.ant2, bc.freqs, bc.chans, bc.pols, mask)
+        assert blk.encoding == enc
+        d = FlagDelta(samples=[blk])
+        assert np.array_equal(delta_mask(d, bc), mask)
+        # any chunking of the data gives the same answer
+        pieces = np.zeros_like(mask)
+        for st in (slice(0, 20), slice(20, 64)):
+            for sf in (slice(0, 30), slice(30, 64)):
+                sub = bc.sub(st, slice(None), sf, slice(None))
+                m = delta_mask(d, sub)
+                if m is not None:
+                    pieces[st, :, sf, :] = m
+        assert np.array_equal(pieces, mask)
+        # JSON round trip
+        d2 = FlagDelta.from_dict(json.loads(json.dumps(d.to_dict())))
+        assert np.array_equal(delta_mask(d2, bc), mask)
+
+
+def test_sample_block_extend_chan_corr():
+    bc = _bc()
+    mask = np.zeros(bc.shape, bool)
+    mask[2, 1, 5, 0] = True
+    blk = SampleBlock.from_mask(K8, bc.times, bc.ant1, bc.ant2, bc.freqs, bc.chans, bc.pols, mask)
+    d = FlagDelta(samples=[blk], extend_chan=True, extend_corr=True)
+    m = delta_mask(d, bc)
+    assert m[2, 1].all() and m.sum() == bc.shape[2] * bc.shape[3]
+
+
+def test_v1_keyword_construction_still_works():
+    d = FlagDelta(flag=True, time_range=(2.0, 1.0), freq_range=(5.0, 3.0),
+                  correlation=["XX"], source="raster_box_flag", comment="c")
+    assert d.time_range == (1.0, 2.0) and d.freq_range == (3.0, 5.0)
+    assert d.correlation == ("XX",)
+
+
+def test_counts_breakdown():
+    bc = _bc()
+    m = np.zeros(bc.shape, bool)
+    m[1, 0, :, 1] = True
+    c = FlagCounts.from_mask(m, bc, n_selected=100, n_changed=8)
+    assert c.n_matched == 8 and c.by_baseline == {"A&B": 8}
+    assert c.by_antenna == {"A": 8, "B": 8} and c.by_pol == {"YY": 8}
+    assert c.time_span == (110.0, 110.0) and c.by_scan == {"1": 8}
+
+
+# ====================================================================== #
+# FlagDB                                                                   #
+# ====================================================================== #
+
+def test_flagdb_undo_redo_clear_and_versions():
+    db = FlagDB()
+    seen = []
+    db.add_listener(seen.append)
+    a = db.add(FlagDelta(time_range=(0, 1)))
+    b = db.add(FlagDelta(flag=False, time_range=(0, 1)))
+    assert [d.seq for d in db.deltas()] == [1, 2]
+    db.undo()
+    assert db.deltas() == (a,)
+    db.redo()
+    assert [d.delta_id for d in db.deltas()] == [a.delta_id, b.delta_id]
+    db.clear()
+    assert len(db) == 0
+    db.undo()
+    assert len(db) == 2
+    db.redo(); db.undo()
+    db.add(FlagDelta())
+    assert not db.can_redo()
+    assert seen == sorted(seen) and len(set(seen)) == len(seen)
+
+
+def test_flagdb_jsonl_roundtrip():
+    db = FlagDB()
+    bc = _bc()
+    m = np.zeros(bc.shape, bool); m[0, 0, 0, 0] = True
+    blk = SampleBlock.from_mask(K8, bc.times, bc.ant1, bc.ant2, bc.freqs, bc.chans, bc.pols, m)
+    db.add(FlagDelta(samples=[blk], filter=ff.ZSCORE.record(ff.ZSCORE.resolve_params({}))))
+    db.add(FlagDelta(flag=False, spw=[K8], baseline_ids=[("A", "B")]))
+    db2 = FlagDB.from_jsonl(db.to_jsonl({"ms": "x"}))
+    for x, y in zip(db.deltas(), db2.deltas()):
+        assert x.to_dict() == y.to_dict()
+
+
+def test_flagdb_commit_clears_only_after_success():
+    class Bad:
+        def commit_flags(self, deltas):
+            raise RuntimeError("nope")
+
+    class Good:
+        def commit_flags(self, deltas):
+            self.got = deltas
+            return "summary"
+    db = FlagDB(); db.add(FlagDelta())
+    with pytest.raises(RuntimeError):
+        db.commit(Bad())
+    assert len(db) == 1
+    g = Good()
+    assert db.commit(g) == "summary" and len(db) == 0 and len(g.got) == 1
+
+
+# ====================================================================== #
+# Filters                                                                  #
+# ====================================================================== #
+
+def test_zscore_cell_cutoff_matches_scatter_render():
+    from cubevis.toolbox.visplot.data._scatter_render import zscore_cell_cutoff as ref
+    for n in (1, 2, 10, 384, 1e5):
+        for c in (3.0, 3.5, 5.0):
+            assert math.isclose(ff.zscore_cell_cutoff(n, c), ref(n, c))
+
+
+def test_registry_rejects_builtin_names_and_wraps_callables():
+    reg = ff.FilterRegistry({"high_amp": lambda ds, level=2.0: ds["amp"] > level})
+    assert "high_amp" in reg and reg.get("high_amp").builtin is False
+    with pytest.raises(ValueError):
+        ff.FilterRegistry({"zscore": lambda ds: True})
+    with pytest.raises(ValueError):
+        ff.ZSCORE.resolve_params({"cutoff": -1})
+    with pytest.raises(ValueError):
+        ff.ZSCORE.resolve_params({"nonsense": 1})
+
+
+def test_param_specs_describe_for_gui():
+    d = ff.AMPLITUDE_RANGE.describe()
+    assert [p["name"] for p in d["params"]] == ["low", "high", "mode"]
+    assert [p["name"] for p in ff.ZSCORE.describe()["params"] if p["gui"]] == \
+        ["cutoff", "granularity", "reference"]
+
+
+# ====================================================================== #
+# Export                                                                   #
+# ====================================================================== #
+
+def test_timerange_unix_and_mjd_agree():
+    unix = 1_675_209_600.0        # 2023-02-01 00:00:00 UTC
+    mjd_s = unix + 40587.0 * 86400.0
+    assert casa_timerange(unix, unix, "unix") == casa_timerange(mjd_s, mjd_s, "mjd")
+    assert casa_timerange(unix, unix + 8) == "2023/01/31/23:59:59.999~2023/02/01/00:00:08.001"
+
+
+def test_region_export_golden():
+    kid = SpwKey(3, "spw", 1e9, 1.7e9, 8)
+    d = FlagDelta(time_range=(1_675_209_600.0, 1_675_209_608.0), baseline_ids=[("A", "B")],
+                  correlation=["XX", "YY"], spw_channels=[SpwChannels(kid, 2, 5)],
+                  scan_names=["7"], seq=4)
+    lines = to_flagdata_lines([d, FlagDelta(flag=False, antenna_names=["C"], seq=5)])
+    assert lines[0].startswith("# seq 4; flag")
+    assert lines[1] == ("mode='manual' timerange='2023/01/31/23:59:59.999~2023/02/01/00:00:08.001' "
+                        "scan='7' antenna='A&B' correlation='XX,YY' spw='3:2~5'")
+    assert lines[3] == "mode='unflag' antenna='C'"
+    ext = to_flagdata_lines([FlagDelta(scan_names=["7"], time_range=(0, 1), extend_scan=True,
+                                       correlation=["XX"], extend_corr=True)], comments=False)
+    assert ext == ["mode='manual' scan='7'"]
+
+
+def test_sample_export_groups_runs_and_baselines():
+    bc = _bc()
+    m = np.zeros(bc.shape, bool)
+    m[1, 0, 2:5, :] = True
+    m[1, 1, 2:5, :] = True
+    m[3, 2, 7, 0] = True
+    blk = SampleBlock.from_mask(K8, bc.times, bc.ant1, bc.ant2, bc.freqs, bc.chans, bc.pols, m)
+    lines = to_flagdata_lines([FlagDelta(samples=[blk])], spw_ids={K8: 0}, comments=False)
+    assert len(lines) == 2
+    assert "antenna='A&B;A&C'" in lines[0] and "spw='0:2~4'" in lines[0] \
+        and "correlation='XX,YY'" in lines[0]
+    assert "spw='0:7~7'" in lines[1] and "correlation='XX'" in lines[1]
+
+
+def test_ambiguous_spw_warning():
+    a = SpwKey("<Unknown>", "name", 1e9, 2e9, 8)
+    b = SpwKey("<Unknown>", "name", 1e9, 2e9, 4)
+    assert ambiguous_spws([a, b]) == [a, b]
+    assert ambiguous_spws([a, b], {a: 0, b: 1}) == []
+    lines = to_flagdata_lines([FlagDelta(spw=[a])], all_spws=[a, b], comments=False)
+    assert lines[0].startswith("# WARNING")
+
+
+# ====================================================================== #
+# Backend integration (real MSv2Backend on a simulated MS)                  #
+# ====================================================================== #
+
+OUTLIER_AMP = 50.0
+
+
+def _transform(desc, data):
+    ddid = int(desc.DATA_DESC_ID.item())
+    rng = np.random.default_rng(1000 + ddid * 17 + int(desc.chunk_id))
+    dims, vis = data["DATA"]
+    shape = vis.shape
+    v = (1.0 + 0.1 * rng.standard_normal(shape)) + 1j * (0.1 * rng.standard_normal(shape))
+    for k in range(0, shape[0], 7):
+        v[k, k % shape[1], 0] = OUTLIER_AMP
+    data["DATA"] = (dims, v.astype(np.complex64))
+    fdims, _ = data["FLAG"]
+    f = np.zeros(shape, dtype=bool)
+    f[0, :, 0] = True
+    data["FLAG"] = (fdims, f)
+    return data
+
+
+@pytest.fixture(scope="module")
+def backend(tmp_path_factory):
+    sim = pytest.importorskip("xarray_ms.testing.simulator")
+    path = str(tmp_path_factory.mktemp("ms") / "flag_test.ms")
+    sim.MSStructureSimulator(
+        ntime=10, nantenna=5, auto_corrs=False,
+        data_description=[(8, ["XX", "XY", "YX", "YY"]), (4, ["XX", "YY"])],
+        simulate_data=True, transform_data=_transform).simulate_ms(path)
+    from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
+    b = MSv2Backend(path)
+    b.open()
+    yield b
+    b.close()
+
+
+def _parts(b):
+    return list(b._iter_visibility_partitions())
+
+
+def _raw(ds):
+    return (np.asarray(ds["VISIBILITY"].transpose("time", "baseline_id", "frequency", "polarization").values),
+            np.asarray(ds["FLAG"].transpose("time", "baseline_id", "frequency", "polarization").values, bool))
+
+
+def _eval(b, **req):
+    from cubevis.toolbox.visplot.selection import SelectionSpec
+    req.setdefault("selection", SelectionSpec())
+    req.setdefault("flag", True)
+    r = b.evaluate_flag_request(req)
+    d = FlagDelta.from_dict(r["delta"]) if r["delta"] is not None else None
+    return d, r
+
+
+def test_spw_keys_distinguish_same_named_windows(backend):
+    from cubevis.toolbox.visplot import flag_engine as fe
+    keys = [k for k, _ in fe.spw_table(backend)]
+    assert len(keys) == 2 and {k.n_chan for k in keys} == {8, 4}
+    ids = backend.spw_casa_ids()
+    assert sorted(ids.values()) == [0, 1]
+
+
+def test_raster_box_is_exact_region_and_applies_everywhere(backend):
+    p0, p1 = _parts(backend)
+    t = p0.time.values
+    d, r = _eval(backend, kind="raster", x_axis="TIME", x0=t[2] - 1, x1=t[4] + 1,
+                 y_axis="BASELINE", y0=0.6, y1=2.4, polarization="XX")
+    assert not d.is_sample_set and d.correlation == ("XX",)
+    assert d.time_range == (t[2], t[4])
+    # reference: rows 2..4, baseline ids 1..2, all channels, XX, both windows
+    tot = 0
+    for p in (p0, p1):
+        _v, f0 = _raw(p)
+        ref = np.zeros(f0.shape, bool)
+        pols = list(p.polarization.values)
+        ref[2:5, 1:3, :, pols.index("XX")] = True
+        backend.set_pending_flags([d], 1)
+        eff = backend._flag_mask(p).transpose("time", "baseline_id", "frequency", "polarization").values
+        assert np.array_equal(eff, f0 | ref)
+        tot += int((ref & ~f0).sum())
+    assert r["counts"]["n_changed"] == tot
+    backend.set_pending_flags([], 0)
+
+
+def test_raster_channel_box_uses_spw_channels(backend):
+    d, _ = _eval(backend, kind="raster", x_axis="CHANNEL", x0=1.6, x1=3.4,
+                 y_axis="BASELINE", y0=-0.5, y1=9.5, polarization="YY")
+    assert not d.is_sample_set
+    assert sorted((sc.spw.n_chan, sc.chan_lo, sc.chan_hi) for sc in d.spw_channels) == \
+        [(4, 2, 3), (8, 2, 3)]
+
+
+def test_pending_state_reaches_raster_query_and_unflag_overrides(backend):
+    from cubevis.toolbox.visplot.axes import Axis
+    from cubevis.toolbox.visplot.selection import SelectionSpec
+    p0 = _parts(backend)[0]
+    t = p0.time.values
+    flag_d, _ = _eval(backend, kind="raster", x_axis="TIME", x0=t[0], x1=t[-1],
+                      y_axis="BASELINE", y0=-0.5, y1=9.5, polarization="XX")
+    backend.set_pending_flags([flag_d], 7)
+    agg, *_ = backend.query_raster(Axis.BASELINE, Axis.TIME, Axis.FLAG,
+                                   SelectionSpec(correlation=["XX"], pending_version=7))
+    assert np.nanmin(agg.values) == 1.0
+    unflag_d, _ = _eval(backend, flag=False, kind="raster", x_axis="TIME", x0=t[0], x1=t[-1],
+                        y_axis="BASELINE", y0=-0.5, y1=9.5, polarization="XX")
+    backend.set_pending_flags([flag_d, unflag_d], 8)
+    agg, *_ = backend.query_raster(Axis.BASELINE, Axis.TIME, Axis.FLAG,
+                                   SelectionSpec(correlation=["XX"], pending_version=8))
+    assert np.nanmax(agg.values) == 0.0     # the committed XX flags were unflagged too
+    backend.set_pending_flags([], 0)
+
+
+def test_scatter_amplitude_box_matches_numpy(backend):
+    t = _parts(backend)[0].time.values
+    d, r = _eval(backend, kind="scatter", x_axis="TIME", x0=t[0] - 1, x1=t[-1] + 1,
+                 y0=10, y1=100, layers=[{"y_axis": "AMPLITUDE", "polarization": "XX"}])
+    assert d.is_sample_set and d.value_ranges[1].axis == "AMPLITUDE"
+    backend.set_pending_flags([d], 2)
+    for p in _parts(backend):
+        v, f0 = _raw(p)
+        ip = list(p.polarization.values).index("XX")
+        ref = np.zeros(f0.shape, bool)
+        ref[..., ip] = (np.abs(v[..., ip]) >= 10) & ~f0[..., ip]
+        eff = backend._flag_mask(p).transpose("time", "baseline_id", "frequency", "polarization").values
+        assert np.array_equal(eff, f0 | ref)
+    backend.set_pending_flags([], 0)
+    assert r["counts"]["n_matched"] == 28
+
+
+def test_scatter_box_respects_hidden_categories(backend):
+    t = _parts(backend)[0].time.values
+    d, r = _eval(backend, kind="scatter", x_axis="TIME", x0=t[0] - 1, x1=t[-1] + 1,
+                 y0=10, y1=100,
+                 layers=[{"y_axis": "AMPLITUDE", "polarization": "XX",
+                          "hide_axis": "ANTENNA1", "hide_values": ["ANTENNA-0"]}])
+    assert d is not None
+    assert all(a != "ANTENNA-0" for blk in d.samples for a in blk.ant1)
+
+
+def test_zscore_filter_matches_reference_formula(backend):
+    from cubevis.toolbox.visplot.data._scatter_render import compute_baseline_zscore
+    parts = _parts(backend)
+    t = parts[0].time.values
+    cutoff = 6.0
+    d, r = _eval(backend, kind="raster", x_axis="TIME", x0=t[0], x1=t[-1],
+                 y_axis="BASELINE", y0=-0.5, y1=9.5, polarization="XX",
+                 filter={"name": "zscore", "params": {"cutoff": cutoff, "reference": "selection"}})
+    backend.set_pending_flags([d], 3)
+    # independent: scatter-style reference over the whole selection, per baseline, XX
+    re, im, grp, where = [], [], [], []
+    for pi, p in enumerate(parts):
+        v, f0 = _raw(p)
+        ip = list(p.polarization.values).index("XX")
+        a1 = p.baseline_antenna1_name.values; a2 = p.baseline_antenna2_name.values
+        for it, ib, ic in zip(*np.nonzero(~f0[..., ip])):
+            re.append(v[it, ib, ic, ip].real); im.append(v[it, ib, ic, ip].imag)
+            grp.append(f"{a1[ib]}&{a2[ib]}"); where.append((pi, it, ib, ic, ip))
+    z = compute_baseline_zscore(np.array(re), np.array(im), np.array(grp))
+    for pi, p in enumerate(parts):
+        _v, f0 = _raw(p)
+        ref = f0.copy()
+        for (qi, it, ib, ic, ip), zz in zip(where, z):
+            if qi == pi and zz > cutoff:
+                ref[it, ib, ic, ip] = True
+        eff = backend._flag_mask(p).transpose("time", "baseline_id", "frequency", "polarization").values
+        assert np.array_equal(eff, ref)
+    assert d.filter.name == "zscore"
+    backend.set_pending_flags([], 0)
+
+
+def test_user_filter_and_amplitude_filter(backend):
+    t = _parts(backend)[0].time.values
+    user = ff.make_flag_filter(lambda ds, level=20.0: ds["amp"] > level, name="loud",
+                               params=[ff.ParamSpec("level", "float", 20.0)])
+    d1, _ = _eval(backend, kind="raster", x_axis="TIME", x0=t[0], x1=t[-1], y_axis="BASELINE",
+                  y0=-0.5, y1=9.5, polarization="XX", filter_obj=user)
+    d2, _ = _eval(backend, kind="raster", x_axis="TIME", x0=t[0], x1=t[-1], y_axis="BASELINE",
+                  y0=-0.5, y1=9.5, polarization="XX",
+                  filter={"name": "amplitude_range", "params": {"low": 20.0}})
+    for a, b in zip(d1.samples, d2.samples):
+        assert np.array_equal(a.dense(), b.dense())
+    assert d1.filter.builtin is False and d1.filter.code_hash
+
+
+def test_unflag_filter_only_touches_flagged(backend):
+    t = _parts(backend)[0].time.values
+    d, r = _eval(backend, flag=False, kind="raster", x_axis="TIME", x0=t[0], x1=t[0],
+                 y_axis="BASELINE", y0=-0.5, y1=9.5, polarization="XX",
+                 filter={"name": "amplitude_range", "params": {"low": 0.0}})
+    # only the committed spectrum (row 0 = time 0, baseline 0, corr 0) was flagged
+    assert r["counts"]["n_matched"] == 8 + 4
+
+
+def test_frame_cache_keyed_on_pending_version(backend):
+    from cubevis.toolbox.visplot.axes import Axis
+    from cubevis.toolbox.visplot.selection import SelectionSpec
+    from cubevis.toolbox.visplot.data.reader import _selection_fingerprint
+    a = SelectionSpec(pending_version=1)
+    b = SelectionSpec(pending_version=2)
+    assert _selection_fingerprint(a) == _selection_fingerprint(b)
+
+
+def test_export_uses_ms_spw_ids(backend):
+    t = _parts(backend)[0].time.values
+    d, _ = _eval(backend, kind="scatter", x_axis="TIME", x0=t[0] - 1, x1=t[-1] + 1,
+                 y0=10, y1=100, layers=[{"y_axis": "AMPLITUDE", "polarization": "XX"}])
+    lines = to_flagdata_lines([d], spw_ids=backend.spw_casa_ids(), comments=False)
+    assert all("spw='0:" in l or "spw='1:" in l for l in lines)
+    assert len(lines) == 28

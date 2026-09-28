@@ -242,6 +242,22 @@ class LocalVisibilityReader:
     # Repr                                                                 #
     # ------------------------------------------------------------------ #
 
+    # ------------------------------------------------------------------ #
+    # FlagDB v2                                                            #
+    # ------------------------------------------------------------------ #
+
+    def set_pending_flags(self, deltas, version: int = 0, apply: bool = True) -> None:
+        self._backend.set_pending_flags(deltas, version, apply)
+
+    def evaluate_flag_request(self, request: dict) -> dict:
+        return self._backend.evaluate_flag_request(request)
+
+    def spw_casa_ids(self) -> dict:
+        return self._backend.spw_casa_ids()
+
+    def flag_spw_table(self) -> list:
+        return self._backend.flag_spw_table()
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"LocalVisibilityReader({self._backend!r})"
 

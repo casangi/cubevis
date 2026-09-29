@@ -5,7 +5,7 @@
 groups = ["default", "casa6", "iclean", "notebook", "visplot", "xarray"]
 strategy = []
 lock_version = "4.5.1"
-content_hash = "sha256:45a86e5daa0c45b47ed0d71c25295d2914b2f60dc8f6db8a63b7698c0630ad03"
+content_hash = "sha256:d83769a004d7e49055126366eec3879d46096e791a137edf0675355429c02614"
 
 [[metadata.targets]]
 requires_python = ">=3.12"
@@ -27,7 +27,7 @@ files = [
 
 [[package]]
 name = "arcae"
-version = "0.5.4"
+version = "0.5.5"
 requires_python = ">=3.11"
 summary = "Arrow bindings for casacore"
 dependencies = [
@@ -35,19 +35,19 @@ dependencies = [
     "pyarrow==23.0.1",
 ]
 files = [
-    {file = "arcae-0.5.4-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:340c1df1757c33efc0c40d7c871db65f5c89584a07b4dbd0f27ad0002b6e5cdc"},
-    {file = "arcae-0.5.4-cp312-cp312-macosx_15_0_x86_64.whl", hash = "sha256:05bb54acf3a2ef9b029af28eeaff05aa46b5991200b51e325d155f48b7427a52"},
-    {file = "arcae-0.5.4-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:02d986fdf0f634dd58e072d96f03ff1832606651b00815be4e7e5b2bc5d8cd48"},
-    {file = "arcae-0.5.4-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:38eaf4dbf3f02c5f87d684b2208d3da1e849281cd79325ef40fa0eeaca279566"},
-    {file = "arcae-0.5.4-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:12e30f032a6716b26f80cb74f254098b9f949d1bb345d089d459031be809b563"},
-    {file = "arcae-0.5.4-cp313-cp313-macosx_15_0_x86_64.whl", hash = "sha256:d254f10f6234679d7b5ee9d62cb57a6dea8885a60bff22aa727d4ba788e1d214"},
-    {file = "arcae-0.5.4-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:42c3f99fed3d6eb1f6697a662a25d8b61aa156cabdb3099a32590162d90d765f"},
-    {file = "arcae-0.5.4-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:6488b875448f099919f59caefd2c6db56d168783d60f5e5f66a0f462bb0332b9"},
-    {file = "arcae-0.5.4-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:a8eed4fa4f4eb4916dfa1a94b0731d6bbbd2baf97017fd62cde4f17dabdd5efc"},
-    {file = "arcae-0.5.4-cp314-cp314-macosx_15_0_x86_64.whl", hash = "sha256:bc751ec1241fc3a8782921790dbacba5319177a625879fa6072d49c48ff891d3"},
-    {file = "arcae-0.5.4-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:43520c0a22bba7ac7debda32012802ce9b637d57812a461e82c58e9ee7e1339d"},
-    {file = "arcae-0.5.4-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:4eb3750340f7ab40262a26f9e46320967ea471db24e8dfaf03b40a6d7778f991"},
-    {file = "arcae-0.5.4.tar.gz", hash = "sha256:911097497d163ed591776372ca446ae2c76eeff3479d507acb772d8255cb05a9"},
+    {file = "arcae-0.5.5-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:5fbf35b430ed2f4287355fb4a510180ffa65b9636104ecdf13144964f5dc76b1"},
+    {file = "arcae-0.5.5-cp312-cp312-macosx_15_0_x86_64.whl", hash = "sha256:fdefe4c19d057a610bded1b3171e0a8da035040cc05bc73ecd47e7c7b03c7272"},
+    {file = "arcae-0.5.5-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:593ec2dd7280dece3515513ae957bab0e51bf267825ae0f3cbc8e9c8188f5970"},
+    {file = "arcae-0.5.5-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:a4c00defa32a08bb7750dcf6af703ab5278ace3d69caf60af8107c98cc4bd259"},
+    {file = "arcae-0.5.5-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:be47b738a8ba440b55842881b88fa20dbcd9eafd24f7238f6c658b517c22948c"},
+    {file = "arcae-0.5.5-cp313-cp313-macosx_15_0_x86_64.whl", hash = "sha256:1c60323afa7c6fc4edf9a4ca63f7d42def7c9d64e4bea40677f6876382405eb7"},
+    {file = "arcae-0.5.5-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:ae12c075ab5edec6cd81e1db29ae72635ca210f7486fb93e57ecbcccc2d283bd"},
+    {file = "arcae-0.5.5-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:328af5ef04c20783f5cbb4edb56b7cc2f4c720d9488820324dd4738f56dc6696"},
+    {file = "arcae-0.5.5-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:6a32252f918158fdfbeb596fdf0a4372084a3832dbfb136d38eb14e2a3888684"},
+    {file = "arcae-0.5.5-cp314-cp314-macosx_15_0_x86_64.whl", hash = "sha256:7bcb3c258fbb55a6e160219d33ee807766eabdb57d4ffedcb057a864e014e7a8"},
+    {file = "arcae-0.5.5-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:a54fa4ffb5480861135524c0c46c421f2f3d330c88e160a543f30e71799d4841"},
+    {file = "arcae-0.5.5-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:579c60e1e1ec01c34ffe6b0f227f9020d173de7dbcf11c7904254595a1ef9a90"},
+    {file = "arcae-0.5.5.tar.gz", hash = "sha256:69319bb83dae9c6b1e762e6ac825472e30349c07f1fbbc9e0c1aa2b541d8ed4c"},
 ]
 
 [[package]]
@@ -1944,18 +1944,18 @@ files = [
 
 [[package]]
 name = "xarray-ms"
-version = "0.5.8"
+version = "0.5.11"
 requires_python = ">=3.11"
 summary = "xarray MSv4 views over MSv2 Measurement Sets"
 dependencies = [
-    "arcae<0.6.0,>=0.5.4",
+    "arcae<0.6.0,>=0.5.5",
     "rarg-python-patterns>=0.0.3",
     "typing-extensions>=4.12.2",
     "xarray>=2025.0",
 ]
 files = [
-    {file = "xarray_ms-0.5.8-py3-none-any.whl", hash = "sha256:0c25b550c79ddf7667834aed21900c416bca503631166538fbf44af9f9c40c78"},
-    {file = "xarray_ms-0.5.8.tar.gz", hash = "sha256:6cd446e4e71d5307147145789b2714cbdecb7c182a455fa27febe319b91dd328"},
+    {file = "xarray_ms-0.5.11-py3-none-any.whl", hash = "sha256:7da1d2c7a59efa4ff77490f6eb109be0bbc6e8bc33d10f9d39983d03e0883286"},
+    {file = "xarray_ms-0.5.11.tar.gz", hash = "sha256:4dfa852fec6c65995a933f9d2b3bfe85b49c640c36e594be791f811d7462c126"},
 ]
 
 [[package]]

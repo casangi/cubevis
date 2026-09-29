@@ -211,11 +211,43 @@ class VisplotRemoteBackend:
         # deltas naming 325 baselines each cost ~0.7 s that way
         # (bench_remote_overhead.py, 2026-09-28).
         import json
+        from cubevis.toolbox.visplot.flag_model import FlagDelta
         if deltas_json is not None:
             deltas = json.loads(deltas_json)
         if proposal_json is not None:
             proposal = json.loads(proposal_json)
-        self._reader.set_pending_flags(deltas or [], version, apply, proposal)
+        objs = [d if isinstance(d, FlagDelta) else FlagDelta.from_dict(d)
+                for d in (deltas or [])]
+        # Full state: (re)seed the per-delta cache sync_pending_flags uses.
+        object.__setattr__(self, "_cv_delta_cache", {d.delta_id: d for d in objs})
+        self._reader.set_pending_flags(objs, version, apply, proposal)
+        return True
+
+    def sync_pending_flags(self, order, new_json: str = "[]", version: int = 0,
+                           proposal_json: Optional[str] = None):
+        """Incremental form of ``set_pending_flags``: *order* is the full
+        ordered list of delta ids; only deltas this worker has not seen are
+        sent (*new_json*).  Deltas are immutable, so an id always means the
+        same delta.  Raises ``KeyError`` for an unknown id -- the client then
+        falls back to a full ``set_pending_flags``."""
+        import json
+        from cubevis.toolbox.visplot.flag_model import FlagDelta
+        try:
+            cache = object.__getattribute__(self, "_cv_delta_cache")
+        except AttributeError:
+            cache = {}
+        for d in json.loads(new_json or "[]"):
+            fd = FlagDelta.from_dict(d)
+            cache[fd.delta_id] = fd
+        missing = [i for i in order if i not in cache]
+        if missing:
+            raise KeyError(f"unknown pending delta id(s): {missing[:3]}")
+        # keep only what is still referenced (undone/cleared deltas drop out)
+        keep = set(order)
+        cache = {k: v for k, v in cache.items() if k in keep}
+        object.__setattr__(self, "_cv_delta_cache", cache)
+        proposal = json.loads(proposal_json) if proposal_json else None
+        self._reader.set_pending_flags([cache[i] for i in order], version, True, proposal)
         return True
 
     def evaluate_flag_request(self, request: dict):

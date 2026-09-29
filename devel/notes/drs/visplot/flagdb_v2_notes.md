@@ -107,3 +107,21 @@ review dialog, panel refresh) still needs a live GUI check.
 - Info/legend/colorbar Divs use `var(--cv-info-bg)` / `var(--cv-info-fg)`;
   the theme toggle sets the variables on the page root (intermittently the
   strips stayed dark in light mode before).
+
+## Layout / overflow (2026-09-28, round 7)
+- Several colour bars in one panel use a compact one-row-per-layer form
+  (label | bar + ticks, ~22 px) so the fixed 100 px colourbar box shows them all.
+- Plot area gets class `cv-plot-area`; a page script shows a small
+  "▾ more below — colour bars / info" chip at its bottom edge only while
+  content is hidden below (click scrolls down). Verified headless at 640 px
+  (chip shown) and 820/1300 px (hidden).
+
+## Remote round 2 (2026-09-28)
+- Pending-flag sync to the worker is incremental (`sync_pending_flags`: ordered
+  ids + only unseen deltas; full resend on any mismatch). Tested.
+- `VisibilityPlotter.remote_call_stats()`.
+- `bench_remote_overhead.py --gui`: user-visible latency through the plotter,
+  local vs kernel (after a warm-up run). TW Hya/Ceres, local kernel: flag box
+  +3 ms, flag box + both redraws ~1.3 s either way (redraw dominated: both
+  panels re-query at full extent after a pending change -- the next
+  optimisation target, independent of remote execution).

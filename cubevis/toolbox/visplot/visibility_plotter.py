@@ -350,6 +350,57 @@ _SCATTER_Y_OPTIONS  = [("AMPLITUDE", "Amplitude"),
 # Dark-mode CSS applied to all sidebar input widgets via InlineStyleSheet.
 # Overrides Bokeh's default light component styles so widgets blend with
 # the #1e1e2e sidebar background.
+_MORE_BELOW_JS = r"""
+(function () {
+  function findArea(root) {
+    const hit = root.querySelector && root.querySelector('.cv-plot-area');
+    if (hit) return hit;
+    const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+    for (const el of all) {
+      if (el.shadowRoot) { const f = findArea(el.shadowRoot); if (f) return f; }
+    }
+    return null;
+  }
+  let area = null, chip = null;
+  function ensureChip() {
+    if (chip) return chip;
+    chip = document.createElement('div');
+    chip.textContent = '\u25BE more below \u2014 colour bars / info';
+    Object.assign(chip.style, {
+      position: 'fixed', zIndex: 50, padding: '2px 12px', borderRadius: '10px',
+      font: '12px system-ui, sans-serif', cursor: 'pointer', display: 'none',
+      background: 'rgba(137,180,250,0.92)', color: '#11111b',
+      boxShadow: '0 1px 6px rgba(0,0,0,0.45)', transform: 'translateX(-50%)'});
+    chip.title = 'The plot area scrolls: click to show what is below';
+    chip.addEventListener('click', () => {
+      if (area) area.scrollTo({top: area.scrollHeight, behavior: 'smooth'});
+    });
+    document.body.appendChild(chip);
+    return chip;
+  }
+  function update() {
+    if (!area || !area.isConnected) {
+      area = findArea(document);
+      if (area) area.addEventListener('scroll', update, {passive: true});
+    }
+    if (!area) return;
+    const c = ensureChip();
+    const hidden = area.scrollHeight - area.clientHeight - area.scrollTop;
+    const r = area.getBoundingClientRect();
+    if (hidden > 8 && r.height > 0) {
+      c.style.left = (r.left + r.width / 2) + 'px';
+      c.style.top = (r.bottom - 26) + 'px';
+      c.style.display = 'block';
+    } else {
+      c.style.display = 'none';
+    }
+  }
+  window.addEventListener('resize', update);
+  setInterval(update, 700);   // content (colour bars, info items) changes size
+})();
+"""
+
+
 _DARK_WIDGET_CSS = """
 :host { --bokeh-base-font: system-ui, sans-serif; }
 .bk-input {
@@ -3827,6 +3878,14 @@ for (const dt of other.tools) {
         """The flag controller (filters, preview, display, export)."""
         return self._flags
 
+    def remote_call_stats(self, reset: bool = False) -> Optional[dict]:
+        """Per-method timing of a remote (``kernel_name=``) session: client
+        round trip, worker compute and their difference (the kernel
+        execution overhead); ``None`` for local data.  See
+        ``RemoteReductionContext.call_stats``."""
+        fn = getattr(self._reader, "call_stats", None)
+        return fn(reset=reset) if callable(fn) else None
+
     def export_flags(self, path: Optional[str] = None, fmt: str = "flagdata") -> str:
         """Write the pending flags as ``flagdata`` list commands
         (``fmt="flagdata"``) or JSON Lines (``fmt="jsonl"``); returns the path."""
@@ -4085,6 +4144,19 @@ html, body { height: 100%; margin: 0; }
             side_container, over_container,
             sizing_mode="stretch_both",
             styles={"overflow-y": "auto"},
+            css_classes=["cv-plot-area"],
+        )
+        # "More below" cue (2026-09-28): when the plots plus their info /
+        # colorbar strips are taller than the window, the plot area
+        # scrolls -- but nothing said so, and at startup it looked as if
+        # there were no colorbars at all.  A small chip pinned to the
+        # bottom of the plot area appears only while content is hidden
+        # below; clicking it scrolls to the end.  Pure page script, outside
+        # Bokeh's layout (Bokeh reasserts its own inline sizes, so the
+        # chip is position:fixed and follows the area's bounding box).
+        self._app_context.add_init_script(
+            code=_MORE_BELOW_JS,
+            description="plot-area overflow cue",
         )
         body = row(
             sidebar_col, plot_area,

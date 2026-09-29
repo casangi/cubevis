@@ -372,6 +372,25 @@ def colorbar_html(bands: Iterable[Any], *, max_stops: int = 24,
             f"{_antenna_summary_html(summary)}</div>"
             if summary is not None else ""
         )
+        if len(drawn) > 1:
+            # Compact form for several bars (2026-09-28): one ~22 px row per
+            # layer -- label on the left, bar and its ticks on the right --
+            # so the fixed-height colorbar box shows every layer instead of
+            # hiding the second one below its fold.
+            out.append(
+                "<div style='display:flex;align-items:center;gap:8px;margin:2px 0'>"
+                "<div style='flex:0 0 32%;font-size:10px;opacity:0.8;white-space:nowrap;"
+                f"overflow:hidden;text-overflow:ellipsis' title='{_html.escape(label)}'>"
+                f"{_html.escape(label)}</div>"
+                "<div style='flex:1 1 auto;min-width:0'>"
+                "<div style='height:7px;border-radius:2px;"
+                f"background:linear-gradient(to right,{','.join(picks)})'></div>"
+                "<div style='display:flex;justify-content:space-between;"
+                f"font-size:9px;line-height:11px;font-family:monospace'>{spans}</div>"
+                "</div></div>"
+                f"{summary_div}"
+            )
+            continue
         out.append(
             "<div style='margin:3px 0 6px 0'>"
             f"<div style='font-size:10px;opacity:0.8;white-space:nowrap;"

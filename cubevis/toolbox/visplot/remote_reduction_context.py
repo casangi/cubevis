@@ -579,22 +579,47 @@ class RemoteReductionContext(ReductionContext):
     def set_pending_flags(self, deltas, version: int = 0, apply: bool = True,
                           proposal=None, timeout: Optional[float] = None) -> None:
         """Send the ordered pending deltas (and an optional proposal under
-        review) to the worker, where every render applies them."""
-        t0 = time.perf_counter()
-        wire = [d.to_dict(json_safe=True) if hasattr(d, "to_dict") else d
-                for d in (deltas or ())]
-        prop = (proposal.to_dict(json_safe=True) if hasattr(proposal, "to_dict")
-                else proposal)
+        review) to the worker, where every render applies them.
+
+        Incremental: deltas are immutable and identified by ``delta_id``, so
+        after the first full send only the ids (in order) plus the deltas
+        the worker has not seen cross the wire (``sync_pending_flags``).  A
+        session with many -- or large sample-set -- pending operations no
+        longer re-encodes and re-sends all of them on every flag, undo or
+        preview.  Any failure falls back to a full ``set_pending_flags``.
+        """
         import json
-        payload = json.dumps(wire)
-        log.debug("set_pending_flags -> worker: %d delta(s), version %d, %d bytes%s",
-                  len(wire), int(version), len(payload), ", with proposal" if prop else "")
+        t0 = time.perf_counter()
+        deltas = list(deltas or ())
+
+        def enc(d):
+            return d.to_dict(json_safe=True) if hasattr(d, "to_dict") else d
+
+        def did(d):
+            return getattr(d, "delta_id", None) or (d.get("delta_id") if isinstance(d, dict) else None)
+        ids = [did(d) for d in deltas]
+        prop = enc(proposal) if proposal is not None else None
+        prop_json = json.dumps(prop) if prop is not None else None
+        sent = self.__dict__.get("_cv_sent_ids")
+        if sent is not None and all(ids):
+            new = [enc(d) for d, i in zip(deltas, ids) if i not in sent]
+            new_json = json.dumps(new)
+            try:
+                self._call("sync_pending_flags", order=ids, new_json=new_json,
+                           version=int(version), proposal_json=prop_json, timeout=timeout)
+                self.__dict__["_cv_sent_ids"] = set(ids)
+                log.debug("remote sync_pending_flags: %d delta(s), %d new, %d bytes%s, %.3fs",
+                          len(ids), len(new), len(new_json),
+                          " + proposal" if prop is not None else "", time.perf_counter() - t0)
+                return
+            except Exception as exc:
+                log.debug("sync_pending_flags failed (%s); sending full state", exc)
+        payload = json.dumps([enc(d) for d in deltas])
         self._call("set_pending_flags", deltas_json=payload, version=int(version),
-                   apply=bool(apply),
-                   proposal_json=json.dumps(prop) if prop is not None else None,
-                   timeout=timeout)
-        log.debug("remote set_pending_flags: %d delta(s)%s, version %d, %.3fs",
-                  len(wire), " + proposal" if prop is not None else "", int(version),
+                   apply=bool(apply), proposal_json=prop_json, timeout=timeout)
+        self.__dict__["_cv_sent_ids"] = set(i for i in ids if i)
+        log.debug("remote set_pending_flags (full): %d delta(s), %d bytes%s, %.3fs",
+                  len(deltas), len(payload), " + proposal" if prop is not None else "",
                   time.perf_counter() - t0)
 
     def evaluate_flag_request(self, request: dict, timeout: Optional[float] = None) -> dict:

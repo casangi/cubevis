@@ -282,6 +282,8 @@ def make_flag_filter(func: Callable, *, name: Optional[str] = None,
     else:
         mask_fn = func
         hash_src = (func, prepare)
+    if not params:
+        params = _infer_params(pred if elementwise else func, skip=1 if prepare is None else 2)
     return FlagFilter(
         name=name or getattr(func, "__name__", "user_filter"),
         mask_fn=mask_fn, params=tuple(params), label=label,
@@ -289,6 +291,32 @@ def make_flag_filter(func: Callable, *, name: Optional[str] = None,
         scope="reference" if prepare is not None else "local",
         prepare_fn=prepare, builtin=False, code_hash=_code_hash(*hash_src),
     )
+
+
+def _infer_params(func, skip: int = 1) -> tuple:
+    """ParamSpecs from a plain function's keyword defaults.
+
+    ``def loud(ds, level=20.0, per_pol=False)`` gets a float ``level`` and a
+    bool ``per_pol`` control in the Flagging panel; parameters without a
+    default of type bool/int/float/str are left to the function.
+    """
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return ()
+    out = []
+    for i, p in enumerate(sig.parameters.values()):
+        if i < skip or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+            continue
+        d = p.default
+        if d is inspect.Parameter.empty:
+            continue
+        kind = ("bool" if isinstance(d, bool) else "int" if isinstance(d, int)
+                else "float" if isinstance(d, float) else None)
+        if kind is None:
+            continue
+        out.append(ParamSpec(p.name, kind, d, p.name.replace("_", " ")))
+    return tuple(out)
 
 
 def _elementwise_mask(ds, pred, params) -> np.ndarray:

@@ -2285,13 +2285,36 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             # instance state a concurrent colorize/scaling/axis-change
             # handler mutates -- without it, a probe could see a
             # torn mix of pre- and post-change state.
+            flag_totals = None
             async with self._render_lock:
-                results = await asyncio.to_thread(
-                    self._backend.probe_scatter_region,
-                    self._x_dim, yaxes, self._selection,
-                    x_range, y_range,
-                    max_samples=self._probe_region_max_samples,
-                )
+                if hasattr(self._backend, "probe_flag_region"):
+                    # FlagDB v2: resolve the box with the SAME engine the
+                    # FlagTool uses (same layers, hidden categories, flag
+                    # state, padding), so the identity shown here is exactly
+                    # what a Flag box with the same extent would flag.
+                    from .axes import Axis
+                    from .flag_controls import scatter_layer_entries, _plotted_axis
+                    req = {"selection": self._selection,
+                           "x_axis": _plotted_axis(self, "x").name,
+                           "x0": x_range[0], "x1": x_range[1],
+                           "y0": y_range[0], "y1": y_range[1],
+                           "layers": scatter_layer_entries(self),
+                           "max_samples": self._probe_region_max_samples}
+                    raw = await asyncio.to_thread(self._backend.probe_flag_region, req)
+                    results = {}
+                    for key, val in (raw.get("layers") or {}).items():
+                        ax, pol = key.split("|", 1)
+                        results[(Axis[ax], pol)] = {
+                            k: (tuple(v) if isinstance(v, list) and k != "bl_ids" else v)
+                            for k, v in val.items()}
+                    flag_totals = (raw.get("flag_n", 0), raw.get("unflag_n", 0))
+                else:
+                    results = await asyncio.to_thread(
+                        self._backend.probe_scatter_region,
+                        self._x_dim, yaxes, self._selection,
+                        x_range, y_range,
+                        max_samples=self._probe_region_max_samples,
+                    )
 
             sections = [
                 self._probe_region_layer_html(lyr, results.get(
@@ -2300,10 +2323,16 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 ))
                 for lyr in visible
             ]
+            flag_line = ""
+            if flag_totals is not None:
+                flag_line = (f"<p class='cv-rect'><b>Flag box here:</b> {flag_totals[0]:,} "
+                             f"sample(s) &nbsp; <b>Unflag box here:</b> "
+                             f"{flag_totals[1]:,} sample(s)</p>")
             body = (
                 f"<p class='cv-rect'><b>x:</b> "
                 f"{x_range[0]:.6g}&ndash;{x_range[1]:.6g} &nbsp; "
                 f"<b>y:</b> {y_range[0]:.6g}&ndash;{y_range[1]:.6g}</p>"
+                + flag_line
                 + "".join(sections)
             )
             return {

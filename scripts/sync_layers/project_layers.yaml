@@ -10,6 +10,8 @@ sources:
     class: VisibilityPlotter
     hidden_args:
       - backend
+      # a dict of Python callables: settable from Python, not from inp()
+      - flag_filters
     layer_args:
       remote_endpoint: None
       enable_flagging: True

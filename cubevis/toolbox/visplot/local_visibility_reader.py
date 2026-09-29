@@ -256,6 +256,9 @@ class LocalVisibilityReader:
     def evaluate_flag_request(self, request: dict) -> dict:
         return self._backend.evaluate_flag_request(request)
 
+    def probe_flag_region(self, request: dict) -> dict:
+        return self._backend.probe_flag_region(request)
+
     def spw_casa_ids(self) -> dict:
         return self._backend.spw_casa_ids()
 

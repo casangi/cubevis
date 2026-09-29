@@ -1560,8 +1560,16 @@ _step('info divs', () => {
             div.styles = s;
         } catch(e) { console.error('[visplot theme] sidebar container failed:', e); }
     }
+    // Page-level theme variables read by the info/legend/colorbar strips
+    // (VisibilityPlot._build: background var(--cv-info-bg), colour
+    // var(--cv-info-fg)).  Custom properties inherit into shadow DOM.
+    try {
+        document.documentElement.style.setProperty('--cv-info-bg', info_bg);
+        document.documentElement.style.setProperty('--cv-info-fg', info_c);
+    } catch(e) { console.error('[visplot theme] theme variables failed:', e); }
     for (const info_div of info_divs) {
-        recolor_div(info_div, info_bg, info_c);
+        recolor_div(info_div, 'var(--cv-info-bg, ' + info_bg + ')',
+                    'var(--cv-info-fg, ' + info_c + ')');
     }
     recolor_div(status_div, page_bg, status_c);
     recolor_div(notify_div, page_bg, light ? '#b02a37' : '#f38ba8');
@@ -1740,6 +1748,19 @@ class VisibilityPlotter:
     compact_toolbar : bool
         Whether each figure's toolbar auto-hides until the mouse is over
         that plot.  Defaults to ``True``.
+    flag_filters : dict | None
+        Extra flag filters, ``{name: callable | FlagFilter}``; each callable
+        is ``func(ds, **params) -> bool mask`` (see ``flag_filters.py``).
+        Selectable in the Flagging controls next to the built-in filters.
+        Run only with local data; a remote session offers the built-ins.
+    flag_preview : bool
+        Review each flag proposal (counts, breakdown, highlighted samples)
+        before it is added to the pending flags.  Defaults to ``False``.
+    flag_display : str
+        How pending flags are shown: ``"hide"`` (flagged points disappear,
+        the default) or ``"color"`` (drawn in ``flag_color``).
+    flag_color : str
+        Colour for pending flags when ``flag_display="color"``.
 
     Resource lifecycle
     ------------------
@@ -3786,10 +3807,10 @@ for (const dt of other.tools) {
         """
         if obj is None:
             obj = self._raster if panel == "raster" else self._scatter
-        lock = getattr(obj, "_render_lock", None)
-        if lock is not None:
-            async with lock:
-                return await self._flags.handle_box(msg, panel, obj)
+        # NOTE: no ``async with obj._render_lock`` here.  This handler is
+        # dispatched on the panel's flag Comm, which the CommMgr already runs
+        # under that same (non-reentrant) asyncio lock -- taking it again
+        # deadlocked the flag request forever (2026-09-28).
         return await self._flags.handle_box(msg, panel, obj)
 
     # ------------------------------------------------------------------ #
@@ -4917,11 +4938,15 @@ for (let i = 0; i < cols.length; i++) {
             # hidden by default, so a lone "Axes" label with nothing
             # visibly under it would have looked broken rather than just
             # collapsed.
-            self._gear_tabs,
+            # Flagging BEFORE the gear tabs: the tabs grow when a panel's
+            # configuration is opened, and anything laid out after them was
+            # drawn on top of the expanded tab content.
             *([self._flags.build_widgets(self._pipe["flag"], self._ids["flag"],
                                          section=_section("Flagging"),
-                                         width=_SIDEBAR_WIDTH)]
+                                         width=_SIDEBAR_WIDTH,
+                                         stylesheet=self._dark)]
               if self._enable_flagging else []),
+            self._gear_tabs,
             width       = _SIDEBAR_WIDTH_COL,
             visible     = True,
             sizing_mode = "stretch_height",
@@ -7193,7 +7218,14 @@ doPlot();
                 # correct theme by the time it's shown, not caught in
                 # Bokeh's raw default because the toggle never reached it.
                 "figs":         [p.figure    for p in self._all_panels],
-                "info_divs":    [p._info_div for p in self._all_panels],
+                # Cursor readout, categorical legend and colour bar of every
+                # panel: all three sit in the same info block and share its
+                # background (the legend and colour bar were missing here,
+                # so they stayed dark in light mode).  The colour bar's
+                # text uses ``inherit``, so recolouring the Div is enough.
+                "info_divs":    ([p._info_div for p in self._all_panels]
+                                 + [p._legend_content for p in self._all_panels]
+                                 + [p._colorbar_content for p in self._all_panels]),
                 "sidebar":      self._sidebar_col,
                 "status_div":   self._status_div,
                 "notify_div":   self._notify_div,
@@ -7221,7 +7253,8 @@ doPlot();
                                  self._spw_prev_btn, self._spw_next_btn,
                                  self._antenna_input,
                                  self._antenna_prev_btn, self._antenna_next_btn]
-                                + _all_axis_widgets,
+                                + _all_axis_widgets
+                                + self._flags.themed_widgets(),
                 # Colormap histogram figures + reset-button icons (added
                 # to fix a reported light-mode gap: these previously had
                 # dark colors hardcoded once at construction time in

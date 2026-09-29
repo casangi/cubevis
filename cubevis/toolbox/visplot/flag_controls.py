@@ -40,6 +40,7 @@ Package location
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import html
 import logging
@@ -130,6 +131,11 @@ class FlagController:
     def reader(self):
         return self._plotter._reader
 
+    @property
+    def is_remote(self) -> bool:
+        """True when the data live in a remote worker."""
+        return type(self.reader).__name__ == "RemoteReductionContext"
+
     def main_view(self) -> str:
         return "effective" if self.display == "hide" else "disk"
 
@@ -210,17 +216,7 @@ class FlagController:
                     f"{y_ax.name} [{req['y0']:.6g}, {req['y1']:.6g}] "
                     f"({req['polarization']})")
         else:
-            layers = []
-            for lyr in getattr(panel, "_layers", ()):
-                if getattr(lyr, "alpha", 1.0) <= 0.0:
-                    continue          # hidden layer: not displayed, not flagged
-                entry = {"y_axis": lyr.y_axis.name, "polarization": str(lyr.polarization)}
-                if (getattr(lyr, "coloring", "") == "categorical"
-                        and getattr(lyr, "excluded_display", "") == "hide"
-                        and lyr.excluded_categories and lyr.colorize_axis is not None):
-                    entry["hide_axis"] = lyr.colorize_axis.name
-                    entry["hide_values"] = [str(v) for v in lyr.excluded_categories]
-                layers.append(entry)
+            layers = scatter_layer_entries(panel)
             req.update(x_axis=x_ax.name, layers=layers)
             prov = (f"scatter box {x_ax.name} [{req['x0']:.6g}, {req['x1']:.6g}] x "
                     f"[{req['y0']:.6g}, {req['y1']:.6g}] on "
@@ -247,9 +243,15 @@ class FlagController:
                                  NOTIFY_WARN, refresh=False, preview=self._preview_payload())
         try:
             req = self.build_request(panel, kind, msg, flag)
-            prop = self.evaluate(req)
+            # Resolving a box reads data (possibly the whole selection for a
+            # scatter box or a reference-population filter): run it off the
+            # event loop so hover, pan/zoom and the other panel stay live.
+            prop = await asyncio.to_thread(self.evaluate, req)
         except Exception as exc:
-            log.exception("flag request failed")
+            if type(exc).__name__ == "UserFilterNotRemoteError":
+                log.warning("%s", exc)          # expected, not a bug: no traceback
+            else:
+                log.exception("flag request failed")
             return self.response(f"⚠ {verb.capitalize()} failed: {html.escape(str(exc))}",
                                  NOTIFY_WARN, refresh=False)
         if prop.delta is None:
@@ -319,6 +321,10 @@ class FlagController:
                 return self.accept(self.proposal)
             if action == "reject":
                 return self.reject()
+            if action == "report":
+                out = self.response("", NOTIFY_OK, refresh=False)
+                out["report_html"] = self.report_html()
+                return out
             if action in ("export_flagdata", "export_jsonl"):
                 path = self.export(fmt="flagdata" if action == "export_flagdata" else "jsonl")
                 return self.response(f"Wrote {html.escape(path)}", NOTIFY_OK, refresh=False)
@@ -485,18 +491,159 @@ class FlagController:
         return os.path.abspath(path)
 
     # ================================================================== #
+    # FlagDB report (the "Describe pending flags" page)                    #
+    # ================================================================== #
+
+    def report_html(self) -> str:
+        """A standalone HTML page describing the pending flags.
+
+        Same look as the InfoTool page.  Lists every accepted operation in
+        application order -- what it addresses (region or explicit
+        samples), the filter and its parameters (with the code hash of the
+        function), the value conditions, extend options, provenance and the
+        exact ``flagdata`` commands it exports to -- plus the review/display
+        settings and the undo/redo state.  Nothing here reads visibilities;
+        sample counts are those computed when each operation was proposed.
+        """
+        from .flag_export import to_flagdata_lines, ambiguous_spws
+        from .visibility_scatter import VisibilityScatter
+        esc = html.escape
+        deltas = self.db.deltas()
+        src = getattr(self._plotter, "_source_path", "") or ""
+        spw_ids, all_spws = {}, None
+        try:
+            spw_ids = self.reader.spw_casa_ids()
+            all_spws = [SpwKey.from_dict(k) for k in self.reader.flag_spw_table()]
+        except Exception:
+            log.debug("report: spw ids unavailable", exc_info=True)
+
+        def row(k, v):
+            return f"<tr><td class='cv-k'>{esc(k)}</td><td class='cv-v'>{v}</td></tr>"
+
+        def utc(t, fmt):
+            return time_to_datetime(t, fmt).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+        n_flag = sum(1 for d in deltas if d.flag)
+        total = sum(d.n_samples or 0 for d in deltas)
+        f = self._filter()
+        summary = "".join([
+            row("Source", esc(src)),
+            row("Pending operations", f"{len(deltas)} ({n_flag} flag, {len(deltas) - n_flag} unflag)"),
+            row("Samples (as proposed)", f"{total:,}"),
+            row("Undo / redo available", f"{'yes' if self.db.can_undo() else 'no'} / "
+                                         f"{'yes' if self.db.can_redo() else 'no'}"),
+            row("Display", esc(self.display) + (f" (colour {esc(self.color)})"
+                                               if self.display == "color" else "")),
+            row("Preview", "on" if self.preview else "off"),
+            row("Current filter", esc(f.label) + (" " + esc(str(self.filter_params.get(f.name)))
+                                                  if self.filter_params.get(f.name) else "")),
+            row("Extend", ", ".join(x for x, on in (("all correlations", self.extend_corr),
+                                                    ("all channels", self.extend_chan)) if on)
+                or "none"),
+            row("Committed to disk", "no -- pending flags live only in this session "
+                                     "until exported or committed"),
+        ])
+        parts = [f"<table class='cv-tbl'>{summary}</table>"]
+        if all_spws is not None:
+            amb = ambiguous_spws(all_spws, spw_ids)
+            if amb:
+                parts.append("<p class='cv-rect'>⚠ Spectral window(s) "
+                             + ", ".join(esc(str(k.ident)) for k in amb)
+                             + " cannot be identified uniquely without an SPW id; "
+                               "exported selections may also match other windows.</p>")
+        if not deltas:
+            parts.append("<p>No pending flag operations.</p>")
+        for d in deltas:
+            rows = [row("Action", esc(d.verb)),
+                    row("Representation", "explicit samples (frozen when proposed)"
+                        if d.is_sample_set else "coordinate region"),
+                    row("Samples (as proposed)", f"{d.n_samples:,}" if d.n_samples is not None
+                        else "—")]
+            if d.filter is not None:
+                rows.append(row("Filter", esc(d.filter.describe())
+                                + f" <span class='cv-rect'>[{'built-in' if d.filter.builtin else 'user'}, "
+                                  f"code {esc(d.filter.code_hash)}]</span>"))
+            for vr in d.value_ranges:
+                rows.append(row("Value condition",
+                                f"{esc(vr.axis)} in [{vr.lo:.6g}, {vr.hi:.6g}]"
+                                + (f" ({esc(vr.polarization)})" if vr.polarization else "")))
+            if d.time_range is not None:
+                rows.append(row("Time", f"{utc(d.time_range[0], d.time_format)} – "
+                                        f"{utc(d.time_range[1], d.time_format)} UTC"))
+            if d.scan_names is not None:
+                rows.append(row("Scans", esc(", ".join(d.scan_names))))
+            if d.field_names is not None:
+                rows.append(row("Fields", esc(", ".join(d.field_names))))
+            if d.baseline_ids is not None:
+                bl = [f"{a}&{b}" for a, b in d.baseline_ids]
+                rows.append(row("Baselines", f"{len(bl)}: " + esc(", ".join(bl[:40]))
+                                + (" …" if len(bl) > 40 else "")))
+            if d.antenna_names is not None:
+                rows.append(row("Antennas", esc(", ".join(d.antenna_names))))
+            if d.spw_channels is not None:
+                rows.append(row("Channels", esc("; ".join(
+                    f"SPW {sc.spw.ident} ({sc.spw.n_chan} ch): {sc.chan_lo}–{sc.chan_hi}"
+                    for sc in d.spw_channels))))
+            elif d.spw is not None:
+                rows.append(row("Spectral windows", esc(", ".join(str(k.ident) for k in d.spw))))
+            if d.freq_range is not None:
+                rows.append(row("Frequency", f"{d.freq_range[0] / 1e9:.9g} – "
+                                             f"{d.freq_range[1] / 1e9:.9g} GHz"))
+            if d.correlation is not None:
+                rows.append(row("Correlations", esc(", ".join(d.correlation))))
+            ext = [x for x, on in (("correlations", d.extend_corr), ("channels", d.extend_chan),
+                                   ("spectral windows", d.extend_spw), ("scans", d.extend_scan))
+                   if on]
+            if ext:
+                rows.append(row("Extended to all", esc(", ".join(ext))))
+            if d.is_sample_set:
+                blk = "; ".join(f"SPW {b.spw.ident}: {b.count:,} samples in {len(b.times)} "
+                                f"integrations × {len(b.ant1)} baselines × {len(b.freqs)} "
+                                f"channels × {len(b.pols)} correlations"
+                                for b in d.samples)
+                rows.append(row("Samples by window", esc(blk)))
+            if d.data_column:
+                rows.append(row("Data column", esc(d.data_column)))
+            if d.provenance:
+                rows.append(row("Provenance", esc(" → ".join(d.provenance))))
+            rows.append(row("Created", esc(time.strftime("%Y-%m-%d %H:%M:%S",
+                                                          time.localtime(d.created)))))
+            lines = to_flagdata_lines([d], spw_ids=spw_ids, comments=False)
+            shown = lines[:200]
+            cmd = esc("\n".join(shown)) + (f"\n… ({len(lines) - 200} more lines)"
+                                            if len(lines) > 200 else "")
+            parts.append(f"<h3>#{d.seq} — {esc(d.describe())}</h3>"
+                         f"<table class='cv-tbl'>{''.join(rows)}</table>"
+                         f"<details><summary class='cv-rect'>flagdata commands "
+                         f"({len(lines)} line{'s' if len(lines) != 1 else ''})</summary>"
+                         f"<pre class='cv-rect' style='white-space:pre-wrap'>{cmd}</pre>"
+                         f"</details>")
+        return VisibilityScatter._probe_region_page(
+            f"Pending flags — {os.path.basename(os.path.normpath(src)) or 'visplot'}",
+            "".join(parts))
+
+    # ================================================================== #
     # GUI                                                                  #
     # ================================================================== #
 
-    def build_widgets(self, comm, msg_id: str, section=None, width: int = 260):
-        """Flag section of the sidebar.  Returns a ``column``."""
+    def build_widgets(self, comm, msg_id: str, section=None, width: int = 260,
+                      stylesheet=None):
+        """Flag section of the sidebar.  Returns a ``column``.
+
+        *stylesheet* is a factory returning the sidebar's themed
+        ``InlineStyleSheet`` (``VisibilityPlotter._dark``); every widget gets
+        its own copy as ``stylesheets[0]`` so the Light/Dark toggle can
+        restyle it like the rest of the sidebar (``themed_widgets()``).
+        """
         from bokeh.layouts import column, row
         from bokeh.models import (Button, Checkbox, ColorPicker, CustomJS, Div,
                                   NumericInput, RadioButtonGroup, Select)
         names = self.registry.names()
         filt_sel = Select(title="Filter", value=self.filter_name, width=width,
                           options=[(n, self.registry.get(n).label
-                                    + ("" if self.registry.get(n).builtin else " (user)"))
+                                    + ("" if self.registry.get(n).builtin
+                                       else (" (user, local data only)" if self.is_remote
+                                             else " (user)")))
                                    for n in names])
         param_cols, param_widgets = {}, {}
         for n in names:
@@ -531,11 +678,13 @@ class FlagController:
         display = RadioButtonGroup(labels=["Hide flagged", "Show in colour"],
                                    active=DISPLAY_MODES.index(self.display), width=width)
         color = ColorPicker(title="Pending colour", color=self.color, width=width)
+        # mid-grey: readable on both the dark and the light sidebar
         info = Div(text=self.info_text(), width=width,
-                   styles={"font-size": "11px", "color": "#cdd6f4"})
+                   styles={"font-size": "11px", "color": "#8c8fa1"})
         self._widgets["info"] = info
         btns = {k: Button(label=l, width=width // 3 - 4, button_type="default")
                 for k, l in (("undo", "Undo"), ("redo", "Redo"), ("clear", "Clear"))}
+        report_btn = Button(label="Describe pending flags", width=width)
         exp_fd = Button(label="Export flagdata", width=width // 2 - 4)
         exp_js = Button(label="Export JSONL", width=width // 2 - 4)
 
@@ -554,11 +703,25 @@ class FlagController:
             b.js_on_click(CustomJS(args=dict(comm=comm, msg_id=msg_id, action=key,
                                              **self._response_args()),
                                    code=_FLAG_RESPONSE_JS + _ACTION_JS))
+        report_btn.js_on_click(CustomJS(args=dict(comm=comm, msg_id=msg_id,
+                                                  **self._response_args()),
+                                        code=_FLAG_RESPONSE_JS + _REPORT_JS))
         self._widgets.update(info=info)
+        themed = ([filt_sel, preview_cb, ext_corr, ext_chan, display, color, exp_fd, exp_js,
+                   report_btn] + list(btns.values())
+                  + [w for ws in param_widgets.values() for w in ws])
+        if stylesheet is not None:
+            for w in themed:
+                w.stylesheets = [stylesheet()] + list(w.stylesheets or [])
+        self._themed = themed
         kids = ([section] if section is not None else []) + [
             filt_sel, *param_cols.values(), preview_cb, ext_corr, ext_chan,
-            display, color, row(*btns.values()), row(exp_fd, exp_js), info]
+            display, color, row(*btns.values()), row(exp_fd, exp_js), report_btn, info]
         return column(*kids, width=width)
+
+    def themed_widgets(self) -> list:
+        """Widgets the Light/Dark toggle must restyle (``stylesheets[0]``)."""
+        return list(getattr(self, "_themed", ()))
 
     def build_preview_box(self, comm, msg_id: str):
         """Hidden review dialog (shown by a proposal response)."""
@@ -594,6 +757,28 @@ class FlagController:
         from bokeh.models import CustomJS
         return CustomJS(args=self._response_args(),
                         code=_FLAG_RESPONSE_JS + "cvApplyFlagResponse(cb_data.response);")
+
+
+def scatter_layer_entries(panel) -> list:
+    """The visible layers of a scatter panel as engine request entries.
+
+    Shared by the FlagTool (``FlagController.build_request``) and the
+    InfoTool box probe so both address exactly the same samples: hidden
+    layers (alpha 0) are skipped and categories hidden by a categorical
+    colouring are excluded.
+    """
+    layers = []
+    for lyr in getattr(panel, "_layers", ()):
+        if getattr(lyr, "alpha", 1.0) <= 0.0:
+            continue
+        entry = {"y_axis": lyr.y_axis.name, "polarization": str(lyr.polarization)}
+        if (getattr(lyr, "coloring", "") == "categorical"
+                and getattr(lyr, "excluded_display", "") == "hide"
+                and lyr.excluded_categories and lyr.colorize_axis is not None):
+            entry["hide_axis"] = lyr.colorize_axis.name
+            entry["hide_values"] = [str(v) for v in lyr.excluded_categories]
+        layers.append(entry)
+    return layers
 
 
 def _plotted_axis(panel, which: str) -> Axis:
@@ -678,4 +863,21 @@ comm.send(msg_id, {action: 'config', filter: name, params: params,
                    extend_chan: !!ext_chan.active,
                    display: display.active === 1 ? 'color' : 'hide',
                    color: color.color}, cvApplyFlagResponse);
+"""
+
+_REPORT_JS = r"""
+// Open the tab synchronously inside the click (popup blockers only allow
+// window.open from the user gesture itself), then fill it when Python
+// answers -- the same pattern as the InfoTool page.
+let w = null;
+try { w = window.open("", "_blank"); } catch (e) { console.warn("[Flagging] window.open failed", e); }
+if (w) w.document.write("<html><body style='background:#1e1e2e;color:#cdd6f4;" +
+                        "font-family:sans-serif'><p>Building pending-flag report…</p></body></html>");
+if (window.__cvSetBusy) window.__cvSetBusy(true);
+comm.send(msg_id, {action: 'report'}, (resp) => {
+    cvApplyFlagResponse(resp);
+    if (!resp || resp.report_html == null) return;
+    if (w && !w.closed) { w.document.open(); w.document.write(resp.report_html); w.document.close(); }
+    else if (notify_div) { notify_div.text = "⚠ Pop-up blocked: allow pop-ups to see the report."; }
+});
 """

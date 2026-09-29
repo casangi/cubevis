@@ -701,14 +701,18 @@ def _region_counts(backend, ds, bc, axes, flag) -> FlagCounts:
 # Scatter box                                                              #
 # ---------------------------------------------------------------------- #
 
-def _scatter_box(backend, ds, bc, req, x_axis, xr_, yr_, flag, parts_all=None):
-    """4D mask of samples a scatter box addresses on partition *ds*."""
+def _scatter_layer_masks(backend, ds, bc, req, x_axis, xr_, yr_):
+    """Per visible layer: ``(layer_index, pol_index, mask3d)`` of the samples
+    whose drawn (x, y) lies in the box and that are not hidden by a
+    categorical colouring.  ``mask3d`` is ``(time, baseline, frequency)``.
+    Flag state is NOT applied here (see ``_scatter_box`` / ``probe_region``).
+    """
     canon = _canon(backend)
     vis = backend._resolve_vis(ds)
     no_flag = xr.zeros_like(backend._disk_flag_mask(ds))
-    out = np.zeros(bc.shape, dtype=bool)
     shape3 = bc.shape[:3]
-    for lyr in req.get("layers") or ():
+    out = []
+    for li, lyr in enumerate(req.get("layers") or ()):
         pol = str(lyr["polarization"])
         if pol not in list(bc.pols):
             continue
@@ -723,6 +727,7 @@ def _scatter_box(backend, ds, bc, req, x_axis, xr_, yr_, flag, parts_all=None):
             y = np.asarray(q.transpose(*canon[:3]).values, dtype=np.float64)
         x = backend._lazy_x_axis(ds, x_axis, template)
         x = np.asarray(x.transpose(*canon[:3]).values, dtype=np.float64)
+        x = np.broadcast_to(x, shape3)
         with np.errstate(invalid="ignore"):
             m = (np.isfinite(x) & np.isfinite(y) & (x >= xr_[0]) & (x <= xr_[1])
                  & (y >= yr_[0]) & (y <= yr_[1]))
@@ -734,8 +739,90 @@ def _scatter_box(backend, ds, bc, req, x_axis, xr_, yr_, flag, parts_all=None):
                 m &= ~np.isin(cats, [str(v) for v in hide_vals])
             elif _axis(hide_axis) == Axis.CORRELATION and pol in [str(v) for v in hide_vals]:
                 m[:] = False
+        out.append((li, ip, m))
+    return out
+
+
+def _scatter_box(backend, ds, bc, req, x_axis, xr_, yr_, flag, parts_all=None):
+    """4D mask of samples a scatter box addresses on partition *ds*."""
+    out = np.zeros(bc.shape, dtype=bool)
+    for _li, ip, m in _scatter_layer_masks(backend, ds, bc, req, x_axis, xr_, yr_):
         out[..., ip] |= m
     return out
+
+
+def probe_region(backend, req: dict) -> dict:
+    """Exact identity of a scatter box -- the InfoTool's view of exactly
+    what the FlagTool would address with the same box.
+
+    Uses the same per-layer box resolution as ``evaluate_request`` (same
+    axes, visible layers, hidden categories, padding) and reports, per
+    layer, the samples that are **displayed** in the box, i.e. unflagged in
+    the effective state -- precisely the samples a Flag box would flag with
+    the identity filter.  Also returns ``flag_n`` (samples a Flag box would
+    change) and ``unflag_n`` (flagged samples an Unflag box would restore),
+    both over the union of layers.
+
+    Returns ``{"layers": {"<AXIS>|<pol>": {...probe_scatter_region keys...}},
+    "flag_n": int, "unflag_n": int}`` -- plain data for the remote wire.
+    """
+    sel = req["selection"]
+    x_axis = _axis(req["x_axis"])
+    x0, x1 = sorted((float(req["x0"]), float(req["x1"])))
+    y0, y1 = sorted((float(req["y0"]), float(req["y1"])))
+    max_samples = int(req.get("max_samples", 200_000))
+    layers = list(req.get("layers") or ())
+    keys = [f"{_axis(l['y_axis']).name}|{l['polarization']}" for l in layers]
+    acc = {k: {"n": 0, "t": [], "bl": set(), "f": []} for k in keys}
+    flag_n = unflag_n = 0
+    for raw in backend._iter_visibility_partitions(sel):
+        ds = backend._apply_selection(raw, sel)
+        if any(ds.sizes.get(d, 0) == 0 for d in _canon(backend)):
+            continue
+        bc = block_coords(backend, ds)
+        lm = _scatter_layer_masks(backend, ds, bc, req, x_axis, (x0, x1), (y0, y1))
+        if not any(m.any() for _li, _ip, m in lm):
+            continue
+        eff = np.asarray(backend._flag_mask(ds).transpose(*_canon(backend)).values, bool)
+        valid = valid_mask(backend, ds)
+        v3 = np.ones(bc.shape[:3], bool) if valid is None else np.broadcast_to(
+            valid[:, :, None], bc.shape[:3])
+        union_f = np.zeros(bc.shape, bool)
+        union_u = np.zeros(bc.shape, bool)
+        ids = np.asarray(ds.coords[_bdim(backend)].values)
+        for li, ip, m in lm:
+            shown = m & v3 & ~eff[..., ip]
+            union_f[..., ip] |= shown
+            union_u[..., ip] |= m & v3 & eff[..., ip]
+            n = int(shown.sum())
+            if not n:
+                continue
+            a = acc[keys[li]]
+            a["n"] += n
+            tt = shown.any(axis=(1, 2)); bb = shown.any(axis=(0, 2)); ff = shown.any(axis=(0, 1))
+            a["t"] += [float(bc.times[tt].min()), float(bc.times[tt].max())]
+            if np.issubdtype(ids.dtype, np.number):
+                a["bl"].update(int(b) for b in ids[bb])
+            a["f"] += [float(bc.freqs[ff].min()), float(bc.freqs[ff].max())]
+        flag_n += int(union_f.sum())
+        unflag_n += int(union_u.sum())
+    out = {}
+    for k in keys:
+        a = acc[k]
+        if a["n"] == 0:
+            out[k] = {"status": "no_data", "n_samples": 0, "t_range": None,
+                      "bl_range": None, "bl_ids": None, "freq_range": None}
+        elif a["n"] > max_samples:
+            out[k] = {"status": "too_many_points", "n_samples": a["n"], "t_range": None,
+                      "bl_range": None, "bl_ids": None, "freq_range": None}
+        else:
+            bl = sorted(a["bl"])
+            out[k] = {"status": "ok", "n_samples": a["n"],
+                      "t_range": (min(a["t"]), max(a["t"])),
+                      "bl_range": (float(bl[0]), float(bl[-1])) if bl else None,
+                      "bl_ids": bl or None,
+                      "freq_range": (min(a["f"]), max(a["f"]))}
+    return {"layers": out, "flag_n": flag_n, "unflag_n": unflag_n}
 
 
 def _scatter_zscore(backend, ds, bc, req, pol) -> np.ndarray:

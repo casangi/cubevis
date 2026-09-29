@@ -189,6 +189,11 @@ DEFAULT_CREATE_CONTEXT_TIMEOUT = 180.0
 DEFAULT_CALL_TIMEOUT = 30.0
 
 
+class UserFilterNotRemoteError(RuntimeError):
+    """A user-supplied (Python callable) flag filter was used with remote
+    data.  Callables never cross the wire; built-in filters run remotely."""
+
+
 class RemoteBackendError(RuntimeError):
     """Raised when the remote ``VisplotRemoteBackend`` method call
     itself failed (an exception inside the worker subprocess) — as
@@ -422,7 +427,41 @@ class RemoteReductionContext(ReductionContext):
         on that call alone without touching the instance-wide default.
         """
         effective_timeout = self._call_timeout if timeout is None else timeout
-        return self._bridge.run(self._acall(method, timeout=effective_timeout, **kwargs))
+        t0 = time.perf_counter()
+        ok = False
+        try:
+            out = self._bridge.run(self._acall(method, timeout=effective_timeout, **kwargs))
+            ok = True
+            return out
+        finally:
+            dt = time.perf_counter() - t0
+            stats = self.__dict__.setdefault("_cv_call_stats", {})
+            n, tot, mx, last = stats.get(method, (0, 0.0, 0.0, 0.0))
+            stats[method] = (n + 1, tot + dt, max(mx, dt), dt)
+            log.debug("remote %s: %.4fs%s", method, dt, "" if ok else " (FAILED)")
+
+    def call_stats(self, reset: bool = False, timeout: Optional[float] = None) -> dict:
+        """Round-trip timing per remote method, with the worker's own
+        compute time for the same methods.
+
+        ``{"client": {method: [count, total_s, max_s, last_s]},
+        "worker": {...same, measured inside the worker...},
+        "overhead": {method: mean client - mean worker seconds}}``.  The
+        overhead is what the Jupyter-kernel execution model costs per call
+        (transport, serialization, dispatch) on top of the computation.
+        """
+        worker = self._bridge.run(self._acall(
+            "call_stats", timeout=self._call_timeout if timeout is None else timeout,
+            reset=reset)) or {}
+        client = {k: list(v) for k, v in self.__dict__.get("_cv_call_stats", {}).items()}
+        overhead = {}
+        for m, (n, tot, _mx, _l) in client.items():
+            w = worker.get(m)
+            if w and n and w[0]:
+                overhead[m] = tot / n - w[1] / w[0]
+        if reset:
+            self.__dict__["_cv_call_stats"] = {}
+        return {"client": client, "worker": worker, "overhead": overhead}
 
     # ------------------------------------------------------------------ #
     # VisibilityReader protocol                                           #
@@ -539,20 +578,53 @@ class RemoteReductionContext(ReductionContext):
 
     def set_pending_flags(self, deltas, version: int = 0, apply: bool = True,
                           proposal=None, timeout: Optional[float] = None) -> None:
+        """Send the ordered pending deltas (and an optional proposal under
+        review) to the worker, where every render applies them."""
+        t0 = time.perf_counter()
         wire = [d.to_dict(json_safe=True) if hasattr(d, "to_dict") else d
                 for d in (deltas or ())]
         prop = (proposal.to_dict(json_safe=True) if hasattr(proposal, "to_dict")
                 else proposal)
-        self._call("set_pending_flags", deltas=wire, version=int(version),
-                   apply=bool(apply), proposal=prop, timeout=timeout)
+        import json
+        payload = json.dumps(wire)
+        log.debug("set_pending_flags -> worker: %d delta(s), version %d, %d bytes%s",
+                  len(wire), int(version), len(payload), ", with proposal" if prop else "")
+        self._call("set_pending_flags", deltas_json=payload, version=int(version),
+                   apply=bool(apply),
+                   proposal_json=json.dumps(prop) if prop is not None else None,
+                   timeout=timeout)
+        log.debug("remote set_pending_flags: %d delta(s)%s, version %d, %.3fs",
+                  len(wire), " + proposal" if prop is not None else "", int(version),
+                  time.perf_counter() - t0)
 
     def evaluate_flag_request(self, request: dict, timeout: Optional[float] = None) -> dict:
-        if request.get("filter_obj") is not None and not request["filter_obj"].builtin:
-            raise RuntimeError(
-                "user-supplied flag filters run only with local data; the data "
-                "for this session live in a remote worker")
+        """Resolve a flag box in the worker (built-in filters only)."""
+        fobj = request.get("filter_obj")
+        if fobj is not None and not getattr(fobj, "builtin", True):
+            raise UserFilterNotRemoteError(
+                f"flag filter {fobj.name!r} is a user-supplied Python function; it "
+                "runs only with local data (this session's data are in a remote "
+                "worker). Choose a built-in filter.")
         req = {k: v for k, v in request.items() if k != "filter_obj"}
-        return self._call("evaluate_flag_request", request=req, timeout=timeout)
+        t0 = time.perf_counter()
+        out = self._call("evaluate_flag_request", request=req, timeout=timeout)
+        if isinstance(out, str):            # compact JSON form (see worker)
+            import json
+            out = json.loads(out)
+        counts = (out or {}).get("counts") or {}
+        log.debug("remote evaluate_flag_request: kind=%s filter=%s -> %s, %s changed, %.3fs",
+                  req.get("kind"), (req.get("filter") or {}).get("name"),
+                  "delta" if (out or {}).get("delta") else "nothing",
+                  counts.get("n_changed"), time.perf_counter() - t0)
+        return out
+
+    def probe_flag_region(self, request: dict, timeout: Optional[float] = None) -> dict:
+        t0 = time.perf_counter()
+        out = self._call("probe_flag_region", request=request, timeout=timeout)
+        log.debug("remote probe_flag_region: flag_n=%s unflag_n=%s, %.3fs",
+                  (out or {}).get("flag_n"), (out or {}).get("unflag_n"),
+                  time.perf_counter() - t0)
+        return out
 
     def spw_casa_ids(self, timeout: Optional[float] = None) -> dict:
         from .flag_model import SpwKey

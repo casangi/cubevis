@@ -71,3 +71,39 @@ review dialog, panel refresh) still needs a live GUI check.
   optimise later if slow on large data.
 - Frame cache re-reads on every pending change; later: apply pending mask to
   cached frames instead.
+
+## Remote (2026-09-28)
+- Verified end to end with a real worker (local `python3` kernel, simulated MS
+  and sis14_twhya): box resolution, filters, pending-flag application, flag
+  views, overlays and the InfoTool box probe run in the worker; results match
+  local exactly (`tests/manual/visplot/test_remote_flagging.py`).
+- User filters: refused remotely with `UserFilterNotRemoteError` (clean status
+  message, no traceback); labelled "(user, local data only)" in the Filter menu.
+- Debug timing logs for remote flag calls (`CUBEVIS_DEBUG=1`).
+- Generic remote testing: `tests/manual/visplot/remote_visplot_check.py`
+  (local-vs-remote parity + timings) and `REMOTE_TESTING.md` (plan + manual
+  GUI checklist).
+- Light mode: legend and colour-bar Divs now recoloured with the info Divs.
+
+## Remote execution (2026-09-28)
+- `tests/manual/visplot/test_flagdb_remote.py`: 9 tests through a real Jupyter
+  kernel worker (default kernel `python3`, `CUBEVIS_TEST_KERNEL` to override):
+  box evaluation (raster, scatter, Z-Score) identical to local, pending flags
+  and flag views applied in the worker, InfoTool probe, SPW ids, user filters
+  refused, and the plotter end to end with `kernel_name=`.
+- Timing: `RemoteReductionContext.call_stats()` returns client round trip,
+  worker compute time (measured inside `VisplotRemoteBackend`) and their
+  difference (overhead) per method. Debug logs (`CUBEVIS_DEBUG=1`) on both sides.
+- Wire: pending-flag state and evaluation results now cross as one JSON string;
+  nested lists through the Bokeh serializer cost ~0.7 s for 100 region deltas
+  of 325 baselines, JSON ~50 ms.
+- `bench_remote_overhead.py --ms PATH [--field F] [--kernel K]`: local vs remote
+  vs worker vs overhead vs payload per GUI operation. Local kernel, TW Hya
+  (Ceres): ~3.5 ms per call floor; +~10 ms for a 37 kB raster, +~20 ms for a
+  2 MB scatter render; flag evaluation overhead ~5 ms on 0.2-0.6 s of compute.
+  A real remote kernel adds network latency/bandwidth on top.
+
+## Light/dark info strips
+- Info/legend/colorbar Divs use `var(--cv-info-bg)` / `var(--cv-info-fg)`;
+  the theme toggle sets the variables on the page root (intermittently the
+  strips stayed dark in light mode before).

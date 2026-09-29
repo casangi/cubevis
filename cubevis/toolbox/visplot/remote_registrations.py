@@ -47,6 +47,8 @@ hand-writes it instead.
 
 from __future__ import annotations
 
+import logging
+
 from typing import Any, Optional
 
 # Registers Serializer/Deserializer support for xr.DataArray and
@@ -81,6 +83,47 @@ class VisplotRemoteBackend:
     backend_kind : str
         ``"msv2"`` or ``"msv4"``.
     """
+
+    # ------------------------------------------------------------------ #
+    # Per-method worker-side timing (performance/overhead estimation)     #
+    # ------------------------------------------------------------------ #
+    # Every public method call is timed here, in the worker, so the P_local
+    # side (RemoteReductionContext.call_stats) can separate time spent
+    # computing from time spent in transport, serialization and dispatch.
+
+    def __getattribute__(self, name):
+        attr = object.__getattribute__(self, name)
+        if name.startswith("_") or name == "call_stats" or not callable(attr):
+            return attr
+        import time as _t
+
+        def _timed(*args, **kwargs):
+            t0 = _t.perf_counter()
+            try:
+                return attr(*args, **kwargs)
+            finally:
+                dt = _t.perf_counter() - t0
+                try:
+                    stats = object.__getattribute__(self, "_cv_stats")
+                except AttributeError:
+                    stats = {}
+                    object.__setattr__(self, "_cv_stats", stats)
+                n, tot, mx, last = stats.get(name, (0, 0.0, 0.0, 0.0))
+                stats[name] = (n + 1, tot + dt, max(mx, dt), dt)
+                logging.getLogger(__name__).debug(
+                    "worker %s: %.4fs", name, dt)
+        return _timed
+
+    def call_stats(self, reset: bool = False) -> dict:
+        """``{method: [count, total_s, max_s, last_s]}`` measured in the worker."""
+        try:
+            stats = object.__getattribute__(self, "_cv_stats")
+        except AttributeError:
+            stats = {}
+        out = {k: list(v) for k, v in stats.items()}
+        if reset:
+            object.__setattr__(self, "_cv_stats", {})
+        return out
 
     def __init__(self, path: str, backend_kind: str = "msv2") -> None:
         # Local imports: keep worker startup fast for whichever backend
@@ -160,19 +203,36 @@ class VisplotRemoteBackend:
     # FlagDB v2 -- pending flags live with the data (see flag_engine)     #
     # ------------------------------------------------------------------ #
 
-    def set_pending_flags(self, deltas, version: int = 0, apply: bool = True,
-                          proposal=None):
-        # deltas arrive as FlagDelta.to_dict() dicts (plain data on the wire)
-        self._reader.set_pending_flags(deltas, version, apply, proposal)
+    def set_pending_flags(self, deltas=None, version: int = 0, apply: bool = True,
+                          proposal=None, deltas_json: Optional[str] = None,
+                          proposal_json: Optional[str] = None):
+        # Preferred form: one JSON string (``deltas_json``).  Nested lists of
+        # dicts are slow through the Bokeh wire serializer -- 100 region
+        # deltas naming 325 baselines each cost ~0.7 s that way
+        # (bench_remote_overhead.py, 2026-09-28).
+        import json
+        if deltas_json is not None:
+            deltas = json.loads(deltas_json)
+        if proposal_json is not None:
+            proposal = json.loads(proposal_json)
+        self._reader.set_pending_flags(deltas or [], version, apply, proposal)
         return True
 
     def evaluate_flag_request(self, request: dict):
         # Only built-in filters can run here; a user callable never crosses
         # the wire (evaluate_request raises a clear KeyError for it).
+        import logging, time as _t
         request = dict(request)
         request.pop("filter_obj", None)
+        t0 = _t.perf_counter()
         result = self._reader.evaluate_flag_request(request)
-        return _wire_safe(result)
+        logging.getLogger(__name__).debug(
+            "worker evaluate_flag_request: kind=%s %.3fs", request.get("kind"),
+            _t.perf_counter() - t0)
+        return _as_json(result)
+
+    def probe_flag_region(self, request: dict):
+        return _wire_safe(self._reader.probe_flag_region(dict(request)))
 
     def spw_casa_ids(self):
         return [[k.to_dict(), int(v)] for k, v in self._reader.spw_casa_ids().items()]
@@ -205,6 +265,18 @@ class VisplotRemoteBackend:
 
     def close(self) -> None:
         self._backend.close()
+
+
+def _as_json(result: dict) -> str:
+    """A flag-evaluation result as one JSON string (fast on the wire; the
+    delta in its compact ``to_dict(json_safe=True)`` form)."""
+    import json
+    from cubevis.toolbox.visplot.flag_model import FlagDelta
+    out = dict(result)
+    d = out.get("delta")
+    if d is not None:
+        out["delta"] = FlagDelta.from_dict(d).to_dict(json_safe=True)
+    return json.dumps(_wire_safe(out))
 
 
 def _wire_safe(obj):

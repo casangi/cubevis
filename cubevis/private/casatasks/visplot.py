@@ -74,6 +74,10 @@ def _validate_params(
         theme,
         raster_cmap,
         scatter_cmap,
+        flag_filters,
+        flag_preview,
+        flag_display,
+        flag_color,
 ):
     import re as _re
 
@@ -107,6 +111,10 @@ def _validate_params(
         'theme': 'str',
         'raster_cmap': 'Optional[str]',
         'scatter_cmap': 'Optional[str]',
+        'flag_filters': 'Optional[dict]',
+        'flag_preview': 'bool',
+        'flag_display': 'str',
+        'flag_color': 'str',
     }
 
     _simple = {
@@ -198,6 +206,10 @@ def _validate_params(
     _check('theme', theme, _type_map['theme'])
     _check('raster_cmap', raster_cmap, _type_map['raster_cmap'])
     _check('scatter_cmap', scatter_cmap, _type_map['scatter_cmap'])
+    _check('flag_filters', flag_filters, _type_map['flag_filters'])
+    _check('flag_preview', flag_preview, _type_map['flag_preview'])
+    _check('flag_display', flag_display, _type_map['flag_display'])
+    _check('flag_color', flag_color, _type_map['flag_color'])
 
 
 def _visplot_t(
@@ -231,6 +243,10 @@ def _visplot_t(
         theme: str = 'dark',
         raster_cmap: Optional[str] = None,
         scatter_cmap: Optional[str] = None,
+        flag_filters: Optional[dict] = None,
+        flag_preview: bool = False,
+        flag_display: str = 'hide',
+        flag_color: str = '#ff00ff',
 ):
     _app = VisibilityPlotter(
         # user-supplied arguments
@@ -263,6 +279,10 @@ def _visplot_t(
         theme = theme,
         raster_cmap = raster_cmap,
         scatter_cmap = scatter_cmap,
+        flag_filters = flag_filters,
+        flag_preview = flag_preview,
+        flag_display = flag_display,
+        flag_color = flag_color,
         # layer-supplied arguments
         remote_endpoint = None,
         enable_flagging = True,
@@ -306,7 +326,12 @@ class _visplot:
     spw : str
         Comma-separated SPW indices (``"0,1,2,3"``).  Default: all.
     antenna : str
-        MSSelection antenna string.  (Stored; not yet wired in preview.)
+        MSSelection antenna string (comma-separated names or IDs,
+        ``!``-prefixed for exclusion -- see ``_parse_antenna_string``'s
+        own docstring for the exact supported subset). Wired to
+        ``SelectionSpec.antenna_names`` (I-3, 2026-09); Prev/Next in the
+        sidebar steps through ``meta.antennas`` in the dataset's own
+        order.
     scan : str
         MSSelection scan string.  (Stored; not yet wired.)
     timerange : str
@@ -332,7 +357,8 @@ class _visplot:
         only decides which one starts in the primary/first screen
         position; the other always takes the complementary kind.
     preset : str | None
-        Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
+        Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
+        ``"zscore"``, or ``None``.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
@@ -361,6 +387,19 @@ class _visplot:
     compact_toolbar : bool
         Whether each figure's toolbar auto-hides until the mouse is over
         that plot.  Defaults to ``True``.
+    flag_filters : dict | None
+        Extra flag filters, ``{name: callable | FlagFilter}``; each callable
+        is ``func(ds, **params) -> bool mask`` (see ``flag_filters.py``).
+        Selectable in the Flagging controls next to the built-in filters.
+        Run only with local data; a remote session offers the built-ins.
+    flag_preview : bool
+        Review each flag proposal (counts, breakdown, highlighted samples)
+        before it is added to the pending flags.  Defaults to ``False``.
+    flag_display : str
+        How pending flags are shown: ``"hide"`` (flagged points disappear,
+        the default) or ``"color"`` (drawn in ``flag_color``).
+    flag_color : str
+        Colour for pending flags when ``flag_display="color"``.
 
     Resource lifecycle
     ------------------
@@ -425,6 +464,10 @@ class _visplot:
             theme: str = 'dark',
             raster_cmap: Optional[str] = None,
             scatter_cmap: Optional[str] = None,
+            flag_filters: Optional[dict] = None,
+            flag_preview: bool = False,
+            flag_display: str = 'hide',
+            flag_color: str = '#ff00ff',
     )  -> None:
         """Construct the plotter.
 
@@ -470,6 +513,10 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             theme = theme,
             raster_cmap = raster_cmap,
             scatter_cmap = scatter_cmap,
+            flag_filters = flag_filters,
+            flag_preview = flag_preview,
+            flag_display = flag_display,
+            flag_color = flag_color,
         )
         _logging_state_ = _start_log(
             'visplot',
@@ -503,6 +550,10 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'theme=' + repr(theme),
                 'raster_cmap=' + repr(raster_cmap),
                 'scatter_cmap=' + repr(scatter_cmap),
+                'flag_filters=' + repr(flag_filters),
+                'flag_preview=' + repr(flag_preview),
+                'flag_display=' + repr(flag_display),
+                'flag_color=' + repr(flag_color),
             ],
         )
         task_result = None
@@ -537,6 +588,10 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 theme = theme,
                 raster_cmap = raster_cmap,
                 scatter_cmap = scatter_cmap,
+                flag_filters = flag_filters,
+                flag_preview = flag_preview,
+                flag_display = flag_display,
+                flag_color = flag_color,
             )
         except Exception as exc:
             _except_log('visplot', exc)

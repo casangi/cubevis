@@ -93,7 +93,7 @@ class _{{ task_name }}:
     # Per-parameter short descriptions, used by inp() display.
     _arg_description = {
 {%- for arg in methods['__init__'].args if not arg.is_self and not arg.is_star and not arg.is_layer %}
-        '{{ arg.name }}': '{{ arg.short_desc }}',
+        '{{ arg.name }}': {{ arg.short_desc | pyrepr }},
 {%- endfor %}
     }
 

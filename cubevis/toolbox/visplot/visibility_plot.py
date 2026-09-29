@@ -1228,7 +1228,12 @@ class VisibilityPlot(Model):
             return {
                 "font-size":   "11px",
                 "padding":     "4px 8px",
-                "background":  "#1e1e2e",
+                # Theme via CSS custom properties (set on the page root by
+                # the Light/Dark toggle, inherited into shadow DOM): any
+                # later re-send of these styles carries the variable, not a
+                # baked-in dark colour, so the strip can never revert to
+                # dark in light mode.
+                "background":  "var(--cv-info-bg, #1e1e2e)",
                 "overflow-y":  "auto",
                 "width":       "100%",
                 "box-sizing":  "border-box",
@@ -1243,7 +1248,7 @@ class VisibilityPlot(Model):
             stylesheets = [_clearfix_full_width],
             styles      = _item_style({
                 "font-family": "monospace",
-                "color":       "#cdd6f4",
+                "color":       "var(--cv-info-fg, #cdd6f4)",
             }),
         )
         self._legend_content = Div(
@@ -1259,7 +1264,7 @@ class VisibilityPlot(Model):
             text="", visible=False, sizing_mode="stretch_width",
             height=ITEM_HEIGHTS["colorbar"],
             stylesheets=[_clearfix_full_width],
-            styles=_item_style({"color": "#cdd6f4"}),
+            styles=_item_style({"color": "var(--cv-info-fg, #cdd6f4)"}),
         )
         self._info_column = column(
             self._info_div, self._legend_content, self._colorbar_content,

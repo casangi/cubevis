@@ -741,6 +741,9 @@ def make_env(template_string: str, template_name: str = "<template>") -> tuple:
     env.filters["strip_self"]   = _strip_self_filter
     env.filters["strip_layer"]  = _strip_layer_filter
     env.filters["strip_quotes"] = _strip_quotes_filter
+    # Python string literal (repr): short descriptions may contain quotes,
+    # e.g. "``_parse_antenna_string``'s", which broke the casashell layer.
+    env.filters["pyrepr"]       = repr
     tmpl = env.get_template(template_name)
     return env, tmpl
 

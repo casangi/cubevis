@@ -84,6 +84,10 @@ def _visplot_t(
         theme: str = 'dark',
         raster_cmap: Optional[str] = None,
         scatter_cmap: Optional[str] = None,
+        flag_filters: Optional[dict] = None,
+        flag_preview: bool = False,
+        flag_display: str = 'hide',
+        flag_color: str = '#ff00ff',
 ):
     _app = VisibilityPlotter(
         # user-supplied arguments
@@ -116,6 +120,10 @@ def _visplot_t(
         theme = theme,
         raster_cmap = raster_cmap,
         scatter_cmap = scatter_cmap,
+        flag_filters = flag_filters,
+        flag_preview = flag_preview,
+        flag_display = flag_display,
+        flag_color = flag_color,
         # layer-supplied arguments
         remote_endpoint = None,
         enable_flagging = True,
@@ -155,7 +163,12 @@ class _visplot:
     spw : str
         Comma-separated SPW indices (``"0,1,2,3"``).  Default: all.
     antenna : str
-        MSSelection antenna string.  (Stored; not yet wired in preview.)
+        MSSelection antenna string (comma-separated names or IDs,
+        ``!``-prefixed for exclusion -- see ``_parse_antenna_string``'s
+        own docstring for the exact supported subset). Wired to
+        ``SelectionSpec.antenna_names`` (I-3, 2026-09); Prev/Next in the
+        sidebar steps through ``meta.antennas`` in the dataset's own
+        order.
     scan : str
         MSSelection scan string.  (Stored; not yet wired.)
     timerange : str
@@ -181,7 +194,8 @@ class _visplot:
         only decides which one starts in the primary/first screen
         position; the other always takes the complementary kind.
     preset : str | None
-        Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``, or ``None``.
+        Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
+        ``"zscore"``, or ``None``.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
@@ -210,6 +224,19 @@ class _visplot:
     compact_toolbar : bool
         Whether each figure's toolbar auto-hides until the mouse is over
         that plot.  Defaults to ``True``.
+    flag_filters : dict | None
+        Extra flag filters, ``{name: callable | FlagFilter}``; each callable
+        is ``func(ds, **params) -> bool mask`` (see ``flag_filters.py``).
+        Selectable in the Flagging controls next to the built-in filters.
+        Run only with local data; a remote session offers the built-ins.
+    flag_preview : bool
+        Review each flag proposal (counts, breakdown, highlighted samples)
+        before it is added to the pending flags.  Defaults to ``False``.
+    flag_display : str
+        How pending flags are shown: ``"hide"`` (flagged points disappear,
+        the default) or ``"color"`` (drawn in ``flag_color``).
+    flag_color : str
+        Colour for pending flags when ``flag_display="color"``.
 
     Resource lifecycle
     ------------------
@@ -251,7 +278,7 @@ class _visplot:
         'kernel_name': 'Remote kernel to run data access/rendering on (cubevis.remote).',
         'field': 'Field name or integer index string.',
         'spw': 'Comma-separated SPW indices (``"0,1,2,3"``).',
-        'antenna': 'MSSelection antenna string.',
+        'antenna': "MSSelection antenna string (comma-separated names or IDs, ``!``-prefixed for exclusion -- see ``_parse_antenna_string``'s own docstring for the exact supported subset).",
         'scan': 'MSSelection scan string.',
         'timerange': 'MSSelection time-range string.',
         'uvrange': 'UV range string.',
@@ -268,12 +295,16 @@ class _visplot:
         'time_range': '``(start, end)`` as MJD floats.',
         'freq_range': '``(start, end)`` in Hz.',
         'uvdist_range': '``(min, max)`` in metres.',
-        'compact_toolbar': 'Whether each figure's toolbar auto-hides until the mouse is over that plot.',
+        'compact_toolbar': "Whether each figure's toolbar auto-hides until the mouse is over that plot.",
         'plot_width': '',
         'plot_height': '',
         'theme': '',
         'raster_cmap': '',
         'scatter_cmap': '',
+        'flag_filters': 'Extra flag filters, ``{name: callable | FlagFilter}``; each callable is ``func(ds, **params) -> bool mask`` (see ``flag_filters.py``).',
+        'flag_preview': 'Review each flag proposal (counts, breakdown, highlighted samples) before it is added to the pending flags.',
+        'flag_display': 'How pending flags are shown: ``"hide"`` (flagged points disappear, the default) or ``"color"`` (drawn in ``flag_color``).',
+        'flag_color': 'Colour for pending flags when ``flag_display="color"``.',
     }
 
     # Default values, derived from the canonical interface signature.
@@ -307,6 +338,10 @@ class _visplot:
         'theme': 'dark',
         'raster_cmap': None,
         'scatter_cmap': None,
+        'flag_filters': None,
+        'flag_preview': False,
+        'flag_display': 'hide',
+        'flag_color': '#ff00ff',
     }
 
     def __init__(self):
@@ -375,6 +410,10 @@ class _visplot:
             'theme': 'str',
             'raster_cmap': 'Optional[str]',
             'scatter_cmap': 'Optional[str]',
+            'flag_filters': 'Optional[dict]',
+            'flag_preview': 'bool',
+            'flag_display': 'str',
+            'flag_color': 'str',
         }
         ann = _type_map.get(name, '')
         if not ann:
@@ -901,6 +940,66 @@ class _visplot:
             desc, fmt,
         )
 
+    def __flag_filters_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('flag_filters', self._arg_default['flag_filters'])
+        default = self._arg_default['flag_filters']
+        desc    = self._arg_description.get('flag_filters', '')
+        if self.__validate_('flag_filters', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('flag_filters', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __flag_preview_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('flag_preview', self._arg_default['flag_preview'])
+        default = self._arg_default['flag_preview']
+        desc    = self._arg_description.get('flag_preview', '')
+        if self.__validate_('flag_preview', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('flag_preview', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __flag_display_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('flag_display', self._arg_default['flag_display'])
+        default = self._arg_default['flag_display']
+        desc    = self._arg_description.get('flag_display', '')
+        if self.__validate_('flag_display', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('flag_display', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __flag_color_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('flag_color', self._arg_default['flag_color'])
+        default = self._arg_default['flag_color']
+        desc    = self._arg_description.get('flag_color', '')
+        if self.__validate_('flag_color', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('flag_color', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     #--------- global default implementation --------------------------------------
     @static_var('state', __sf__('casa_inp_go_state'))
     def set_global_defaults(self):
@@ -935,6 +1034,10 @@ class _visplot:
         if 'theme' in glb: del glb['theme']
         if 'raster_cmap' in glb: del glb['raster_cmap']
         if 'scatter_cmap' in glb: del glb['scatter_cmap']
+        if 'flag_filters' in glb: del glb['flag_filters']
+        if 'flag_preview' in glb: del glb['flag_preview']
+        if 'flag_display' in glb: del glb['flag_display']
+        if 'flag_color' in glb: del glb['flag_color']
 
     #--------- inp function -------------------------------------------------------
     def inp(self):
@@ -968,6 +1071,9 @@ class _visplot:
         self.__theme_inp()
         self.__raster_cmap_inp()
         self.__scatter_cmap_inp()
+        self.__flag_preview_inp()
+        self.__flag_display_inp()
+        self.__flag_color_inp()
 
     #--------- tget function ------------------------------------------------------
     @static_var('state', __sf__('casa_inp_go_state'))
@@ -1026,6 +1132,10 @@ class _visplot:
         _invocation_parameters['theme'] = glb.get('theme', self._arg_default['theme'])
         _invocation_parameters['raster_cmap'] = glb.get('raster_cmap', self._arg_default['raster_cmap'])
         _invocation_parameters['scatter_cmap'] = glb.get('scatter_cmap', self._arg_default['scatter_cmap'])
+        _invocation_parameters['flag_filters'] = glb.get('flag_filters', self._arg_default['flag_filters'])
+        _invocation_parameters['flag_preview'] = glb.get('flag_preview', self._arg_default['flag_preview'])
+        _invocation_parameters['flag_display'] = glb.get('flag_display', self._arg_default['flag_display'])
+        _invocation_parameters['flag_color'] = glb.get('flag_color', self._arg_default['flag_color'])
 
         try:
             with open(_postfile, 'w') as _f:
@@ -1075,6 +1185,10 @@ class _visplot:
             theme = _UNSET,
             raster_cmap = _UNSET,
             scatter_cmap = _UNSET,
+            flag_filters = _UNSET,
+            flag_preview = _UNSET,
+            flag_display = _UNSET,
+            flag_color = _UNSET,
     ):
         def noobj(s):
             if s.startswith('<') and s.endswith('>'):
@@ -1117,6 +1231,10 @@ class _visplot:
             theme,
             raster_cmap,
             scatter_cmap,
+            flag_filters,
+            flag_preview,
+            flag_display,
+            flag_color,
         ]
 
         if any(x is not _UNSET for x in _arguments):
@@ -1210,6 +1328,18 @@ class _visplot:
             _invocation_parameters['scatter_cmap'] = \
                 scatter_cmap if scatter_cmap is not _UNSET \
                 else glb.get('scatter_cmap', self._arg_default['scatter_cmap'])
+            _invocation_parameters['flag_filters'] = \
+                flag_filters if flag_filters is not _UNSET \
+                else glb.get('flag_filters', self._arg_default['flag_filters'])
+            _invocation_parameters['flag_preview'] = \
+                flag_preview if flag_preview is not _UNSET \
+                else glb.get('flag_preview', self._arg_default['flag_preview'])
+            _invocation_parameters['flag_display'] = \
+                flag_display if flag_display is not _UNSET \
+                else glb.get('flag_display', self._arg_default['flag_display'])
+            _invocation_parameters['flag_color'] = \
+                flag_color if flag_color is not _UNSET \
+                else glb.get('flag_color', self._arg_default['flag_color'])
         else:
             # inp/go-style invocation: read everything from the global frame
             _invocation_parameters['ms'] = \
@@ -1270,6 +1400,14 @@ class _visplot:
                 glb.get('raster_cmap', self._arg_default['raster_cmap'])
             _invocation_parameters['scatter_cmap'] = \
                 glb.get('scatter_cmap', self._arg_default['scatter_cmap'])
+            _invocation_parameters['flag_filters'] = \
+                glb.get('flag_filters', self._arg_default['flag_filters'])
+            _invocation_parameters['flag_preview'] = \
+                glb.get('flag_preview', self._arg_default['flag_preview'])
+            _invocation_parameters['flag_display'] = \
+                glb.get('flag_display', self._arg_default['flag_display'])
+            _invocation_parameters['flag_color'] = \
+                glb.get('flag_color', self._arg_default['flag_color'])
 
         try:
             with open(_prefile, 'w') as _f:
@@ -1319,6 +1457,10 @@ class _visplot:
                     'theme=' + repr(_invocation_parameters['theme']),
                     'raster_cmap=' + repr(_invocation_parameters['raster_cmap']),
                     'scatter_cmap=' + repr(_invocation_parameters['scatter_cmap']),
+                    'flag_filters=' + repr(_invocation_parameters['flag_filters']),
+                    'flag_preview=' + repr(_invocation_parameters['flag_preview']),
+                    'flag_display=' + repr(_invocation_parameters['flag_display']),
+                    'flag_color=' + repr(_invocation_parameters['flag_color']),
                 ],
             )
             task_result = _visplot_t(
@@ -1351,6 +1493,10 @@ class _visplot:
                 theme = _invocation_parameters['theme'],
                 raster_cmap = _invocation_parameters['raster_cmap'],
                 scatter_cmap = _invocation_parameters['scatter_cmap'],
+                flag_filters = _invocation_parameters['flag_filters'],
+                flag_preview = _invocation_parameters['flag_preview'],
+                flag_display = _invocation_parameters['flag_display'],
+                flag_color = _invocation_parameters['flag_color'],
             )
         except Exception as exc:
             _except_log('visplot', exc)

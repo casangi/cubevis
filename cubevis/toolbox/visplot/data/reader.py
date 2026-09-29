@@ -2256,6 +2256,12 @@ class XArrayReader(abc.ABC):
         from ..flag_engine import spw_table
         return [k.to_dict() for k, _f in spw_table(self)]
 
+    def probe_flag_region(self, request: dict) -> dict:
+        """InfoTool box identity via the flag engine; see
+        ``flag_engine.probe_region`` (identical sample set to a Flag box)."""
+        from ..flag_engine import probe_region
+        return probe_region(self, request)
+
     def evaluate_flag_request(self, request: dict) -> dict:
         """Resolve a box/filter flag request; see ``flag_engine.evaluate_request``."""
         from ..flag_engine import evaluate_request

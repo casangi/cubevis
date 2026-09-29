@@ -622,3 +622,50 @@ def test_reload_discards_pending(plotter):
     vp.flag_db.add(FlagDelta(time_range=(0, 1)))
     vp.flags.reset()
     assert len(vp.flag_db) == 0 and not vp.flag_db.can_undo()
+
+
+# ====================================================================== #
+# InfoTool box == FlagTool box                                             #
+# ====================================================================== #
+
+def test_infotool_box_reports_exactly_what_flag_would_flag(plotter):
+    vp = plotter
+    vp.flag_db.clear(record=False)
+    sc = vp._slots[1].scatter
+    x0, x1 = sc._x_range
+    box = dict(x0=x0, x1=x1, y0=10, y1=100)
+    from cubevis.toolbox.visplot.flag_controls import scatter_layer_entries
+    req = dict(selection=sc._selection, x_axis=sc._x_dim.name,
+               layers=scatter_layer_entries(sc), **box)
+    probe = vp._reader.probe_flag_region(req)
+    per_layer = sum(v["n_samples"] for v in probe["layers"].values())
+    resp = _run(vp._handle_box_select(dict(box, flag=True), "scatter", sc))
+    d = vp.flag_db.deltas()[-1]
+    assert probe["flag_n"] == per_layer == d.n_samples == 28
+    # after flagging, the same box shows nothing to flag and everything to unflag
+    probe2 = vp._reader.probe_flag_region(req)
+    assert probe2["flag_n"] == 0 and probe2["unflag_n"] >= 28
+    # the scatter InfoTool handler goes through the same path
+    out = _run(sc._handle_probe_region(dict(tool="info_box", x0=x0, x1=x1, y0=10, y1=100)))
+    assert "Flag box here:</b> 0" in out["info_html"]
+    vp.flag_db.clear(record=False)
+
+
+def test_flagdb_report_page(plotter):
+    vp = plotter
+    vp.flag_db.clear(record=False)
+    r = vp._slots[0].raster
+    x0, x1 = r._x_range; y0, y1 = r._y_range
+    _run(vp._handle_box_select(dict(x0=x0, x1=x1, y0=y0, y1=y0 + (y1 - y0) * 0.3, flag=True),
+                               "raster", r))
+    _run(vp.flags.handle_action({"action": "config", "filter": "loud", "params": {"level": 20.0}}))
+    _run(vp._handle_box_select(dict(x0=x0, x1=x1, y0=y0, y1=y1, flag=True), "raster", r))
+    resp = _run(vp.flags.handle_action({"action": "report"}))
+    page = resp["report_html"]
+    assert page.startswith("<!DOCTYPE html>") and "Pending operations</td><td class='cv-v'>2" in page
+    import re
+    assert len(re.findall(r"<h3>#\d+ — ", page)) == 2 and "loud(level=20.0)" in page
+    assert "user, code " in page and "mode=&#x27;manual&#x27;" in page
+    _run(vp.flags.handle_action({"action": "config", "filter": "all"}))
+    vp.flag_db.clear(record=False)
+    assert "No pending flag operations" in _run(vp.flags.handle_action({"action": "report"}))["report_html"]

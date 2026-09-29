@@ -125,3 +125,17 @@ review dialog, panel refresh) still needs a live GUI check.
   +3 ms, flag box + both redraws ~1.3 s either way (redraw dominated: both
   panels re-query at full extent after a pending change -- the next
   optimisation target, independent of remote execution).
+
+## 2026-09-29: kernel_name= without backend="remote" ran locally
+- `VisibilityPlotter(kernel_name=K)` with the default backend="auto" silently
+  opened the MS locally (zuul06 bench failed with a local FileNotFoundError for
+  the kernel-host path; the earlier "GUI kernel" numbers and the end-to-end
+  remote test were in fact local). Now kernel_name + auto => remote (logged),
+  kernel_name with another explicit backend => warning. Bench and test assert
+  a RemoteReductionContext.
+- True remote GUI timing (local kernel, TW Hya Ceres): scatter full re-render
+  pays ~0.5-1.9 s of wire overhead, driven by `ref_scale=2` reference
+  aggregates (2 layers x (1100x1000 float64 + uint32)). Bokeh's remote
+  encoding is already compact (8.8 MB array -> 1.3 MB), zlib gained nothing
+  (tried, reverted); the cost is in the transport hops. Next: profile the
+  worker->supervisor->kernel->client path, or keep references worker-side.

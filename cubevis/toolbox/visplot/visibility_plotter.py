@@ -1726,7 +1726,9 @@ class VisibilityPlotter:
     kernel_name : str | None
         Kernelspec name (``jupyter kernelspec list``) to run the
         MSv2/MSv4 access and Datashader rendering on, via
-        ``cubevis.remote``.  Required when ``backend="remote"``.  The
+        ``cubevis.remote``.  Required when ``backend="remote"``; with
+        ``backend="auto"`` (the default) giving it selects the remote
+        backend.  ``ms``/``ps`` is then a path on the kernel's host.  The
         same string you'd pass to ``AsyncKernelManager(kernel_name=...)``
         directly — a local kernel (``"python3"``) works for testing the
         remote *path* without an actual cluster.  Construction blocks
@@ -2094,6 +2096,17 @@ class VisibilityPlotter:
         # ------------------------------------------------------------------ #
         # Open data source                                                     #
         # ------------------------------------------------------------------ #
+        # kernel_name= means "run the data access on that kernel".  With
+        # backend="auto" it used to be silently ignored -- the MS was opened
+        # locally and a path that exists only on the kernel's host failed
+        # with a local FileNotFoundError (2026-09-29, zuul06).
+        if kernel_name and ReductionBackend(backend) == ReductionBackend.AUTO:
+            log.info("kernel_name=%r given with backend='auto': using the remote "
+                     "backend", kernel_name)
+            backend = ReductionBackend.REMOTE
+        elif kernel_name and ReductionBackend(backend) != ReductionBackend.REMOTE:
+            log.warning("kernel_name=%r is ignored with backend=%r (only "
+                        "backend='remote' uses a kernel)", kernel_name, backend)
         if ms is not None:
             self._meta, self._reader, self._context = open_ms(
                 ms, backend=backend, remote_endpoint=remote_endpoint,

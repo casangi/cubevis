@@ -2485,6 +2485,13 @@ class XArrayReader(abc.ABC):
         """
         if getattr(self, "_cv_raw_unsupported", False):
             return None
+        # Decide BEFORE reading: a single-dish store (no baseline_id) cannot
+        # carry sample identity, and discovering that after a raw read would
+        # cost a second, legacy read of the same frames.
+        from ..flag_engine import _bdim
+        if _bdim(self) != "baseline_id":
+            self._cv_raw_unsupported = True
+            return None
         cache = cache if cache is not None else self._frame_cache_obj()
         sel_fp = _selection_fingerprint(selection)
         if cache.max_bytes <= 0 or sel_fp is None:

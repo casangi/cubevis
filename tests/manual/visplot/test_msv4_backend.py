@@ -1135,7 +1135,13 @@ def _get_or_create_dg_ps() -> str:
 
     path = os.environ.get("PS_DG", "/tmp/msv4_test_dg.ps.zarr")
     if os.path.isdir(path):
-        return path
+        # Reuse only a COMPLETE store.  A run interrupted mid-write (or an
+        # old store from another zarr format) leaves a directory without
+        # its root group metadata, and every test in the class then fails
+        # with "No group found in store ... at path ''" (2026-09-30).
+        if any(os.path.exists(os.path.join(path, m)) for m in ("zarr.json", ".zgroup")):
+            return path
+        shutil.rmtree(path)
 
     n_time, n_bl, n_freq, n_pol = 5, 3, 8, 2
     ds = xr.Dataset(

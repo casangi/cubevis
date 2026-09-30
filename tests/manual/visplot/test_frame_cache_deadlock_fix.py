@@ -248,6 +248,13 @@ class TestCoalescingPreserved:
         cache = _FrameCache(max_bytes=10_000_000)
         backend._frame_cache_obj = lambda: cache
         backend._frame_token = lambda: ("test_token",)
+        # These stub frames carry no sample identity, so they exercise the
+        # per-flag-state ("legacy") cache path.  Say so up front: otherwise
+        # the FlagDB v2 raw-frame path (2026-09-30) reads once, finds no
+        # identity columns, and falls back -- a second read that is an
+        # artefact of the stub, not of coalescing.  The raw path's own
+        # coalescing is tested below.
+        backend._cv_raw_unsupported = True
 
         reads = []
         def counting_raw(xaxis, yaxes, selection):
@@ -274,6 +281,44 @@ class TestCoalescingPreserved:
             f"expected exactly 1 real read for 4 concurrent identical "
             f"requests, got {len(reads)} -- coalescing is broken"
         )
+
+    def test_raw_frame_path_coalesces_concurrent_reads(self):
+        """FlagDB v2 raw frames (every valid sample + identity + disk flag):
+        4 concurrent identical requests -> exactly one real read."""
+        backend = MSv2Backend.__new__(MSv2Backend)
+        backend._datatree = object()
+        cache = _FrameCache(max_bytes=10_000_000)
+        backend._frame_cache_obj = lambda: cache
+        backend._frame_token = lambda: ("test_token",)
+        backend._pending_deltas = lambda: ()
+
+        reads = []
+        def counting_raw(xaxis, yaxes, selection):
+            reads.append(list(yaxes))
+            time.sleep(0.2)
+            return {k: pd.DataFrame({"x": [1.0, 2.0], "y": [2.0, 3.0],
+                                     "time": [0.0, 1.0], "baseline_id": [0, 0],
+                                     "frequency": [1e9, 1e9],
+                                     "__disk_flag": [False, True], "__spw": [0, 0],
+                                     "__chan": [0, 0]}) for k in yaxes}
+        backend._query_columns_raw = counting_raw
+
+        results, errors = [], []
+        def worker():
+            try:
+                results.append(backend._query_columns_cached(
+                    Axis.TIME, [(Axis.AMPLITUDE, "XX")], SelectionSpec(),
+                ))
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        [t.start() for t in threads]
+        [t.join(timeout=5.0) for t in threads]
+        assert not errors and len(results) == 4
+        assert len(reads) == 1, f"raw-frame path: {len(reads)} reads for 4 requests"
+        for r in results:            # the on-disk flagged row is not drawn
+            assert len(r[(Axis.AMPLITUDE, "XX")]) == 1
 
     def test_the_query_still_returns_correct_data(self):
         """The caching contract itself, unaffected by any of the above."""

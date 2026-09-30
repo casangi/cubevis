@@ -114,7 +114,7 @@ def spw_table(backend) -> list:
     if tab is not None:
         return tab
     tab = []
-    for ds in backend._iter_visibility_partitions():
+    for ds in backend._iter_visibility_partitions(None):
         ident, kind = backend._partition_spw_ident(ds)
         f = np.asarray(ds.coords["frequency"].values, dtype=np.float64)
         if f.size == 0:
@@ -822,7 +822,7 @@ def _region_delta(backend, parts, req, sel, x_axis, y_axis, flag, extend, data_c
                              "spw_channels", "baseline_ids", "antenna_names",
                              "scan_names", "field_names", "correlation")}})
     visited = {id(ds): axes for ds, _bc, axes in parts}
-    for raw in backend._iter_visibility_partitions():
+    for raw in backend._iter_visibility_partitions(None):
         ds_sel = backend._apply_selection(raw, sel)
         bc = block_coords(backend, raw)
         got = _region_axis_masks(check, bc)

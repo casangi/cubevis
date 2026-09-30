@@ -1442,15 +1442,17 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
             # Pending flags changed since this panel's data were read: re-read
             # at full extent (rebuilding cached aggregates/references under
             # the new state) before drawing the requested viewport.
-            self._prepare_stale_render(x0, x1, y0, y1)
-            self._render(self._selection)
+            if not self._prepare_stale_render(x0, x1, y0, y1):
+                self._render(self._selection)
         return self._do_viewport_rerender(x0, x1, y0, y1)
 
     def _prepare_stale_render(self, x0: float, x1: float, y0: float, y1: float) -> None:
         """Hook: called before the full-extent re-read that a pending-flag
         change triggers, with the viewport that will be drawn right after.
-        Panels may use it to skip work that viewport will not use."""
-        return None
+        Return True when the panel has prepared itself so that the
+        viewport draw alone is correct (the full-extent re-read is then
+        skipped); False (default) to re-read at full extent first."""
+        return False
 
     def _parse_axis(self, message: dict, key: str) -> "Optional[Axis]":
         """Parse an Axis enum member from a j2p message dict by key.

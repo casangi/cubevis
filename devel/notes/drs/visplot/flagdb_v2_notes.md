@@ -273,3 +273,13 @@ review dialog, panel refresh) still needs a live GUI check.
 - Agreed success criteria: no duplicated access/compute per flag operation;
   remote adds <= ~0.3 s beyond worker compute; flag/unflag/undo + both
   redraws <= 1.5 s on zuul06 zoomed or not; exact, tested sample selection.
+
+## 2026-09-30: bench 012 (part 19) and part 20
+- zuul06: raster 1.31 s, scatter 1.23 s, undo 1.29 s, zoomed 1.63 s (target
+  1.5); cvpost140 1.07 / 1.00 / 1.07 / 1.31. Skipping the full-extent
+  reference cut transfer, not worker time (binning is shared since part 17).
+- Part 20: zoomed stale redraw is ONE Level-2 query -- the viewport result
+  already carries the full-data extent, global scaling and colour-bar inputs.
+  _prepare_stale_render now returns True to skip the full re-read (refreshes
+  axis info, drops stale references). Test: one query; image, extent,
+  colour bar and histograms identical to the old full-then-zoomed path.

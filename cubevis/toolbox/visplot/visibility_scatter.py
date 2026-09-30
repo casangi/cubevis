@@ -2975,25 +2975,36 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
 
     _skip_ref_once = False
 
-    def _prepare_stale_render(self, x0, x1, y0, y1) -> None:
-        """Zoomed in after a flag change: the full-extent re-read is still
-        needed (new data extent, global colour scaling, colour bars), but
-        its full-extent REFERENCE is not -- the zoomed viewport is finer
-        than that reference can serve, so a Level-2 query follows at once
-        and replaces it.  Skip building and shipping it (2026-09-30: the
-        zoomed flag+redraw paid two full reference-bearing scatter queries,
-        ~0.84 s each on zuul06).  Only when clearly zoomed (10% margin), so
-        a view the reference could have served keeps its one-query path."""
+    def _prepare_stale_render(self, x0, x1, y0, y1) -> bool:
+        """Zoomed in after a flag change: skip the full-extent re-read.
+
+        A viewport (Level-2) query already returns everything the full one
+        would refresh -- the full-data extent (``ScatterRenderResult.
+        x_range/y_range`` are resolved over ALL data), the global colour
+        scaling and colour-bar inputs (computed from all frames in
+        ``color_mode="global"``) -- plus the zoomed image and a reference
+        for it.  The full-extent image and reference would be replaced at
+        once.  So: refresh axis info, drop the stale references (forcing
+        Level-2) and let the viewport draw do the one query.  2026-09-30:
+        the zoomed flag+redraw made two scatter queries (~0.85 s worker +
+        transfer on zuul06).  Only when clearly zoomed (10% margin) -- a view
+        the full-extent reference could serve keeps its one full query.
+        """
         rs = self._ref_scale
         if not rs or self._x_range is None or self._y_range is None:
-            return
+            return False
         ew = abs(self._x_range[1] - self._x_range[0])
         eh = abs(self._y_range[1] - self._y_range[0])
         vw, vh = abs(x1 - x0), abs(y1 - y0)
         if ew <= 0 or eh <= 0 or vw <= 0 or vh <= 0:
-            return
-        if vw < 0.9 * ew / rs or vh < 0.9 * eh / rs:
-            self._skip_ref_once = True
+            return False
+        if not (vw < 0.9 * ew / rs or vh < 0.9 * eh / rs):
+            return False
+        self._refresh_axis_info(self._selection)
+        self._flag_stale = False
+        self._layer_reference = [None] * len(self._layers)
+        self._ref_full_extent = False
+        return True
 
     def _apply_flag_overlays(self, img32, x_range, y_range):
         """Paint pending / proposal overlays over *img32* (in place).

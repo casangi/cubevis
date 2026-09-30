@@ -907,10 +907,9 @@ def test_scatter_box_fast_path_reads_no_visibilities(backend, monkeypatch):
 
 
 def test_zoomed_redraw_after_flag_skips_full_extent_reference(plotter):
-    """Zoomed in, the redraw after a flag needs the full-extent re-read (new
-    extent, scaling) but not its reference, which the zoomed Level-2 query
-    replaces at once.  The final image and reference must equal what the
-    previous two-reference path produced."""
+    """Zoomed in, the redraw after a flag is a single Level-2 query (it
+    returns the new full-data extent and global scaling too).  The final
+    image must equal what the previous full-then-zoomed path produced."""
     vp = plotter
     vp.flag_db.clear(record=False)
     sc = vp._slots[1].scatter
@@ -930,12 +929,17 @@ def test_zoomed_redraw_after_flag_skips_full_extent_reference(plotter):
         _run(vp._handle_box_select(box, "scatter", sc))
         calls.clear()
         new = sc._handle_rerender(dict(zoom))["image"].copy()
-        assert calls[0] is None and calls[-1] is not None      # full w/o ref, then Level-2
+        assert len(calls) == 1 and calls[0] is not None        # one Level-2 query only
+        state_new = (tuple(sc._x_range), tuple(sc._y_range), sc.colorbar_html(),
+                     [None if h is None else np.asarray(h).tolist() for h in sc._layer_hist_counts])
         # reference answer: same state, old behaviour (reference on the full re-read)
         sc._flag_stale = True
-        sc._prepare_stale_render = lambda *a: None
+        sc._prepare_stale_render = lambda *a: False
         old = sc._handle_rerender(dict(zoom))["image"]
         assert np.array_equal(new, old)
+        state_old = (tuple(sc._x_range), tuple(sc._y_range), sc.colorbar_html(),
+                     [None if h is None else np.asarray(h).tolist() for h in sc._layer_hist_counts])
+        assert state_new == state_old        # extent, colour bar, histograms
     finally:
         sc._backend.query_columns = orig
         sc.__dict__.pop("_prepare_stale_render", None)

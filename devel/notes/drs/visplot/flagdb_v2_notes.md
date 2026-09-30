@@ -244,3 +244,16 @@ review dialog, panel refresh) still needs a live GUI check.
   weakref-checked, locked memo (_bin_memo, 8 entries). Bit-identical output
   (test). TW Hya Ceres, 2 layers: ref 1: 352 -> 265 ms; ref 2: 388 -> 328 ms.
 - Next: scatter-box evaluation from cached raw frames; zoomed double query.
+
+## 2026-09-30: bench 010 + scatter box from cached frames (part 18)
+- Part 17 on hosts: zuul06 raster flag+redraws 1.51->1.33 s, scatter
+  1.73->1.65, undo 1.39->1.29, zoomed 2.02->1.86; query_columns -120 ms.
+- XArrayReader._raw_frames(): raw-frame retrieval factored out of
+  _query_columns_cached_raw; raw keys no longer include the flag view.
+- flag_engine._scatter_box_from_frames: identity-filter scatter boxes on
+  non-Z-Score layers are resolved over the panel's cached raw frames (drawn
+  x/y, identity, disk flag + pending view); `force_ms=True` forces the old
+  path. Tests: identical counts and flag effect vs the MS path for two-layer
+  amplitude, phase, hidden categories, unflag over pending flags; fast path
+  reads no visibilities. TW Hya Ceres two-layer box: 607 ms -> 38 ms.
+- Still on the MS path: Z-Score layers, non-identity filters, InfoTool probe.

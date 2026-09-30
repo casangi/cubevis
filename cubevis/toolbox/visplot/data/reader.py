@@ -2459,23 +2459,27 @@ class XArrayReader(abc.ABC):
                     out[k] = df
         return {k: out[k].copy(deep=False) for k in yaxes if k in out}
 
-    def _query_columns_cached_raw(self, xaxis, yaxes, selection, cache, sel_fp):
-        """FlagDB v2 (2026-09-30): cache RAW frames -- every valid sample
-        plus its on-disk flag and identity -- keyed WITHOUT the pending-flag
-        version, and apply the current flag view row by row
-        (``flag_engine.frame_keep_mask``).  A flag, unflag, undo or view
-        change then costs a vectorised mask over the cached rows instead of
-        re-reading the MS.  Returns ``None`` (caller falls back to the
-        per-state cache) when this backend's frames lack the identity
-        columns (single-dish stores).
+    def _raw_frames(self, xaxis, yaxes, selection, cache=None) -> Optional[dict]:
+        """``{(y_axis, pol): raw frame}`` for *yaxes* -- every valid sample
+        with its plotted (x, y), identity (time, baseline, frequency,
+        ``__spw``/``__chan``) and ``__disk_flag`` -- from the frame cache,
+        reading only what is missing.  ``None`` when this backend's frames
+        cannot carry identity (single-dish) or the selection is unhashable.
 
-        Z-Score frames are finalized AFTER the view is applied: their
-        per-baseline reference is the drawn (unflagged) population, exactly
-        as before.  One filtered result per layer is memoised for repeated
-        pan/zoom at an unchanged flag state.
+        Keyed without the pending-flag version AND without the flag view:
+        a raw frame depends on neither.  Shared by the scatter render
+        (``_query_columns_cached_raw``) and scatter-box flag evaluation
+        (``flag_engine``), so a box is resolved against exactly the rows
+        the panel draws, with no MS read.
         """
-        from ..flag_engine import RAW_HELPER_COLUMNS, frame_keep_mask
-        view = _FLAG_VIEW.get()
+        if getattr(self, "_cv_raw_unsupported", False):
+            return None
+        cache = cache if cache is not None else self._frame_cache_obj()
+        sel_fp = _selection_fingerprint(selection)
+        if cache.max_bytes <= 0 or sel_fp is None:
+            return None
+        sel_fp = tuple(kv for kv in sel_fp
+                       if not (isinstance(kv, tuple) and kv and kv[0] == "flag_view"))
         gen = ("raw", int(getattr(selection, "cache_generation", 0) or 0))
         token = self._frame_token()
 
@@ -2503,6 +2507,29 @@ class XArrayReader(abc.ABC):
                         return None
                     cache.put(key_of(k), gen, df)
                     raw[k] = df
+        return raw
+
+    def _query_columns_cached_raw(self, xaxis, yaxes, selection, cache, sel_fp):
+        """FlagDB v2 (2026-09-30): cache RAW frames -- every valid sample
+        plus its on-disk flag and identity -- keyed WITHOUT the pending-flag
+        version, and apply the current flag view row by row
+        (``flag_engine.frame_keep_mask``).  A flag, unflag, undo or view
+        change then costs a vectorised mask over the cached rows instead of
+        re-reading the MS.  Returns ``None`` (caller falls back to the
+        per-state cache) when this backend's frames lack the identity
+        columns (single-dish stores).
+
+        Z-Score frames are finalized AFTER the view is applied: their
+        per-baseline reference is the drawn (unflagged) population, exactly
+        as before.  One filtered result per layer is memoised for repeated
+        pan/zoom at an unchanged flag state.
+        """
+        from ..flag_engine import RAW_HELPER_COLUMNS, frame_keep_mask
+        view = _FLAG_VIEW.get()
+        gen = ("raw", int(getattr(selection, "cache_generation", 0) or 0))
+        raw = self._raw_frames(xaxis, yaxes, selection, cache=cache)
+        if raw is None:
+            return None
         memo = self.__dict__.setdefault("_cv_view_memo", {})
         state = (view, int(getattr(selection, "pending_version", 0) or 0), gen, sel_fp, xaxis)
         out: dict = {}

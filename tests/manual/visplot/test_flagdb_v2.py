@@ -838,3 +838,69 @@ def test_shared_binning_is_bit_identical(backend):
                 assert np.array_equal(np.asarray(x.reference.ref_count), np.asarray(y.reference.ref_count))
     finally:
         sr._BIN_MEMO_MAX = saved
+
+
+def _effect(backend, d):
+    backend.set_pending_flags([d], 4242)
+    out = [backend._flag_mask(p).transpose("time", "baseline_id", "frequency", "polarization").values
+           for p in _parts(backend)]
+    backend.set_pending_flags([], 0)
+    return out
+
+
+@pytest.mark.parametrize("case", ["amp_both", "phase_xx", "hidden_ant", "unflag"])
+def test_scatter_box_from_frames_matches_ms_path(backend, case):
+    """The cached-frame scatter-box path must address exactly the samples the
+    MS-reading path does, with the same counts."""
+    t = _parts(backend)[0].time.values
+    base = dict(kind="scatter", x_axis="TIME", x0=t[0] - 1, x1=t[-1] + 1)
+    pre = None
+    if case == "amp_both":
+        req = dict(base, y0=0.9, y1=100, layers=[{"y_axis": "AMPLITUDE", "polarization": "XX"},
+                                                 {"y_axis": "AMPLITUDE", "polarization": "YY"}])
+    elif case == "phase_xx":
+        req = dict(base, y0=-5, y1=5, layers=[{"y_axis": "PHASE", "polarization": "XX"}])
+    elif case == "hidden_ant":
+        req = dict(base, y0=0.9, y1=100, layers=[{"y_axis": "AMPLITUDE", "polarization": "XX",
+                                                  "hide_axis": "ANTENNA1",
+                                                  "hide_values": ["ANTENNA-0", "ANTENNA-2"]}])
+    else:   # unflag part of an earlier flag, plus the committed spectrum
+        pre, _ = _eval(backend, **dict(base, y0=10, y1=100,
+                                       layers=[{"y_axis": "AMPLITUDE", "polarization": "XX"}]))
+        req = dict(base, y0=0.0, y1=60, flag=False,
+                   layers=[{"y_axis": "AMPLITUDE", "polarization": "XX"}])
+    if pre is not None:
+        backend.set_pending_flags([pre], 77)
+    try:
+        fast, rf = _eval(backend, **req)
+        slow, rs = _eval(backend, **dict(req, force_ms=True))
+    finally:
+        backend.set_pending_flags([], 0)
+    for k in ("n_matched", "n_changed", "by_baseline", "by_pol", "by_scan", "by_antenna"):
+        assert rf["counts"][k] == rs["counts"][k], k
+    assert rf["counts"]["time_span"] == rs["counts"]["time_span"]
+    if pre is not None:
+        seq_f = [pre, fast]; seq_s = [pre, slow]
+        backend.set_pending_flags(seq_f, 78)
+        a = [backend._flag_mask(p).values for p in _parts(backend)]
+        backend.set_pending_flags(seq_s, 79)
+        b = [backend._flag_mask(p).values for p in _parts(backend)]
+        backend.set_pending_flags([], 0)
+    else:
+        a, b = _effect(backend, fast), _effect(backend, slow)
+    assert all(np.array_equal(x, y) for x, y in zip(a, b))
+
+
+def test_scatter_box_fast_path_reads_no_visibilities(backend, monkeypatch):
+    from cubevis.toolbox.visplot import flag_engine as fe
+    t = _parts(backend)[0].time.values
+    req = dict(kind="scatter", x_axis="TIME", x0=t[0] - 1, x1=t[-1] + 1, y0=10, y1=100,
+               layers=[{"y_axis": "AMPLITUDE", "polarization": "XX"}])
+    _eval(backend, **req)                         # warm the frame cache
+
+    def boom(*a, **k):
+        raise AssertionError("MS path used")
+    monkeypatch.setattr(fe, "_scatter_box", boom)
+    monkeypatch.setattr(fe, "_filter_dataset", boom)
+    d, r = _eval(backend, **req)
+    assert d is not None and r["counts"]["n_matched"] == 28

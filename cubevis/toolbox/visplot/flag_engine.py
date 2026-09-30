@@ -411,6 +411,19 @@ def evaluate_request(backend, req: dict) -> dict:
                    if d not in {_raster_dim(x_axis), _raster_dim(y_axis)}]
         params = dict(params, cell_dims=tuple(reduced))
 
+    # ---------------- scatter box from the cached frames --------------- #
+    # The panel's own raw frames hold every drawn sample's (x, y), identity
+    # and on-disk flag: resolving the box there is exact and reads nothing
+    # from the MS (the MS path below re-read the whole selection: ~0.4 s on
+    # zuul06 for TW Hya, 2026-09-30).  Used for the identity filter on
+    # non-Z-Score layers; anything else takes the general path below.
+    if (kind == "scatter" and fobj.is_identity and not req.get("force_ms")
+            and not any(_axis(l["y_axis"]) == Axis.Z_SCORE for l in (req.get("layers") or ()))):
+        fast = _scatter_box_from_frames(backend, req, flag, sel, x_axis, (x0, x1), (y0, y1),
+                                        extend, data_column)
+        if fast is not None:
+            return fast
+
     parts = []           # per partition: (ds, bc, box4d or axis masks)
     visited = []
     for raw in backend._iter_visibility_partitions(sel):
@@ -538,6 +551,103 @@ def evaluate_request(backend, req: dict) -> dict:
     )
     return {"delta": delta.to_dict(json_safe=False), "counts": counts.to_dict(),
             "warnings": warnings}
+
+
+def _scatter_box_from_frames(backend, req, flag, sel, x_axis, xr_, yr_, extend, data_column):
+    """Scatter-box resolution over the cached raw frames (identity filter).
+
+    Same semantics as the general path: a sample is addressed when its drawn
+    (x, y) on a visible layer lies in the box, it is not hidden by a
+    categorical colouring, and -- for Flag -- it is displayed (unflagged in
+    the effective state) or -- for Unflag -- it is flagged.  Samples of
+    several layers with the same correlation are united.  Returns the same
+    result dict as ``evaluate_request``, or ``None`` to fall back.
+    """
+    from .data.reader import COLORIZE_AXIS_COLUMNS
+    layers = list(req.get("layers") or ())
+    if not layers or not hasattr(backend, "_raw_frames"):
+        return None
+    keys = [(_axis(l["y_axis"]), str(l["polarization"])) for l in layers]
+    try:
+        frames = backend._raw_frames(x_axis, keys, sel)
+    except Exception:
+        log.debug("scatter box: raw frames unavailable", exc_info=True)
+        return None
+    if frames is None:
+        return None
+    spw_table = backend.__dict__.get("_cv_spw_codes") or []
+    pieces = []                      # per layer: DataFrame slice of addressed rows + pol
+    for lyr, key in zip(layers, keys):
+        df = frames.get(key)
+        if df is None or not len(df):
+            continue
+        shown = frame_keep_mask(backend, df, key[1], "effective")     # True = unflagged
+        x = df["x"].to_numpy(dtype=np.float64)
+        y = df["y"].to_numpy(dtype=np.float64)
+        with np.errstate(invalid="ignore"):
+            m = (np.isfinite(x) & np.isfinite(y) & (x >= xr_[0]) & (x <= xr_[1])
+                 & (y >= yr_[0]) & (y <= yr_[1]))
+        hide_axis, hide_vals = lyr.get("hide_axis"), lyr.get("hide_values")
+        if hide_axis and hide_vals:
+            col = COLORIZE_AXIS_COLUMNS.get(_axis(hide_axis))
+            if col is None or col not in df.columns:
+                return None                                      # cannot mirror: fall back
+            m &= ~df[col].astype(str).isin([str(v) for v in hide_vals]).to_numpy()
+        m &= shown if flag else ~shown
+        if m.any():
+            pieces.append((df.loc[m, ["time", "frequency", "__spw", "__chan",
+                                      "baseline_antenna1_name", "baseline_antenna2_name"]
+                                  + [c for c in ("scan_name",) if c in df.columns]], key[1]))
+    counts, blocks = FlagCounts(), []
+    if pieces:
+        import pandas as pd
+        allrows = pd.concat([p.assign(__pol=pol) for p, pol in pieces], ignore_index=True)
+        for code, g in allrows.groupby("__spw", sort=True):
+            key = spw_table[int(code)] if 0 <= int(code) < len(spw_table) else None
+            if key is None:
+                return None
+            times, ti = np.unique(g["time"].to_numpy(np.float64), return_inverse=True)
+            freqs, fi = np.unique(g["frequency"].to_numpy(np.float64), return_inverse=True)
+            chan_of = pd.Series(g["__chan"].to_numpy(), index=fi).groupby(level=0).first()
+            chans = chan_of.reindex(range(len(freqs))).to_numpy(np.int64)
+            pairs = pd.MultiIndex.from_arrays([g["baseline_antenna1_name"].astype(str),
+                                               g["baseline_antenna2_name"].astype(str)])
+            bi, pair_uni = pd.factorize(pairs, sort=True)
+            pols = sorted(set(g["__pol"]))
+            pi = np.array([pols.index(p) for p in g["__pol"]])
+            grid = np.zeros((len(times), len(pair_uni), len(freqs), len(pols)), dtype=bool)
+            grid[ti, bi, fi, pi] = True
+            a1 = np.array([p[0] for p in pair_uni]); a2 = np.array([p[1] for p in pair_uni])
+            scans = None
+            if "scan_name" in g.columns:
+                scans = pd.Series(g["scan_name"].astype(str).to_numpy(), index=ti) \
+                          .groupby(level=0).first().reindex(range(len(times))).to_numpy()
+            bc = BlockCoords(times, a1, a2, freqs, np.array(pols), key, chans, scans, None)
+            n = int(grid.sum())
+            counts = counts.merge(FlagCounts.from_mask(grid, bc, n_selected=n, n_changed=n))
+            blk = SampleBlock.from_mask(key, times, a1, a2, freqs, chans, pols, grid)
+            if blk is not None:
+                blocks.append(blk)
+    if not blocks:
+        return {"delta": None, "counts": counts.to_dict(),
+                "warnings": ["no samples matched"]}
+    try:
+        tfmt = time_format(next(iter(backend._iter_visibility_partitions(sel))))
+    except Exception:
+        tfmt = "unix"
+    value_ranges = [ValueRange(x_axis.name, xr_[0], xr_[1])]
+    for lyr in layers:
+        value_ranges.append(ValueRange(_axis(lyr["y_axis"]).name, yr_[0], yr_[1],
+                                       lyr.get("polarization")))
+    delta = FlagDelta(
+        flag=flag, time_format=tfmt, samples=tuple(blocks), value_ranges=tuple(value_ranges),
+        filter=None, correlation=None, source=req.get("source", ""),
+        comment=req.get("comment", ""), provenance=tuple(req.get("provenance") or ()),
+        data_column=data_column, n_samples=counts.n_matched,
+        **{k: v for k, v in extend.items() if k in ("extend_corr", "extend_chan")},
+    )
+    return {"delta": delta.to_dict(json_safe=False), "counts": counts.to_dict(),
+            "warnings": []}
 
 
 def resolve_auto_params(params: dict, kind: str, quantity: Optional[str]) -> dict:

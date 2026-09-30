@@ -406,11 +406,23 @@ class RemoteReductionContext(ReductionContext):
                       **kwargs: Any) -> Any:
         reply = await self._ctx.dispatch_fast(
             "call_method",
-            {"handle": self._handle, "method": method, "args": [], "kwargs": kwargs},
+            {"handle": self._handle, "method": method, "args": [], "kwargs": kwargs,
+             "pre_encoded": True},
             timeout=timeout,
         )
         if isinstance(reply, dict) and "error" in reply:
             raise RemoteBackendError(method, reply)
+        if isinstance(reply, dict) and "__cv_pre_encoded__" in reply:
+            # Worker-encoded result passed through the kernel untouched
+            # (see worker_main.handle_call_method): decode it here, once.
+            from cubevis.utils import remote_deserialize
+            t0 = time.perf_counter()
+            reply = remote_deserialize(reply["__cv_pre_encoded__"])
+            try:
+                from cubevis.remote._kernel_transport import CLIENT_STATS
+                CLIENT_STATS["decode_s"] += time.perf_counter() - t0
+            except Exception:
+                pass
         return reply
 
     def _call(self, method: str, *, timeout: Optional[float] = None,
@@ -580,10 +592,9 @@ class RemoteReductionContext(ReductionContext):
         polarization: Optional[str] = None,
         timeout: Optional[float] = None,
     ):
-        return self._call(
-            "identity_tables", selection=selection, polarization=polarization,
-            timeout=timeout,
-        )
+        return self._memo_call("identity_tables", selection, (polarization,),
+                               dict(selection=selection, polarization=polarization,
+                                    timeout=timeout))
 
     # ------------------------------------------------------------------ #
     # Extra methods LocalVisibilityReader also exposes (not part of the  #
@@ -683,8 +694,52 @@ class RemoteReductionContext(ReductionContext):
 
     def axis_info(self, axis: "Axis", selection: Optional["SelectionSpec"] = None,
                   query: str = "columns", timeout: Optional[float] = None):
-        return self._call("axis_info", axis=axis, selection=selection, query=query,
-                           timeout=timeout)
+        return self._memo_call("axis_info", selection, (axis, query),
+                               dict(axis=axis, selection=selection, query=query,
+                                    timeout=timeout))
+
+    # ------------------------------------------------------------------ #
+    # Client-side memo for coordinate-only queries (2026-09-30)           #
+    # ------------------------------------------------------------------ #
+    # axis_info and identity_tables read partition COORDINATES only (no
+    # visibilities, no flags), so their answer depends only on their
+    # arguments, the selection's row constraints and the data generation
+    # (Reload).  A redraw asked the worker the same five questions every
+    # time -- ~5 x 22-25 ms of pure round trip on zuul06/cvpost140
+    # (bench_remote_overhead.py --gui, 2026-09-30).  Pending flags and the
+    # flag view are deliberately NOT part of the key: they cannot change
+    # coordinates.
+
+    _MEMO_MAX = 256
+
+    def _memo_call(self, method: str, selection, extra: tuple, kwargs: dict):
+        from .data.reader import _selection_fingerprint
+        fp = _selection_fingerprint(selection) if selection is not None else None
+        if fp is not None:     # the flag view cannot change coordinates
+            fp = tuple(kv for kv in fp if not (isinstance(kv, tuple) and kv and kv[0] == "flag_view"))
+        if selection is not None and fp is None:
+            return self._call(method, **kwargs)       # unhashable selection: no memo
+        gen = int(getattr(selection, "cache_generation", 0) or 0) if selection is not None else 0
+        try:
+            key = (method, fp, gen, extra)
+            hash(key)
+        except TypeError:
+            return self._call(method, **kwargs)
+        memo = self.__dict__.setdefault("_cv_memo", {})
+        if key in memo:
+            stats = self.__dict__.setdefault("_cv_memo_hits", {})
+            stats[method] = stats.get(method, 0) + 1
+            return memo[key]
+        out = self._call(method, **kwargs)
+        if len(memo) >= self._MEMO_MAX:
+            memo.clear()
+        memo[key] = out
+        return out
+
+    def clear_memo(self) -> None:
+        """Forget memoised coordinate queries (e.g. after the data changed
+        on disk without a Reload)."""
+        self.__dict__.pop("_cv_memo", None)
 
     def available_axes(self, timeout: Optional[float] = None):
         return self._call("available_axes", timeout=timeout)

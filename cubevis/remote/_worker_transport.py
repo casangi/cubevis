@@ -47,6 +47,9 @@ _HEADER = struct.Struct(">I")  # 4-byte big-endian length prefix
 # frame AND every 4 kB chunk of every frame, and MD5-hashed each payload
 # twice -- on the order of 200 ms per MB relayed, which dominated remote
 # redraw time (bench_remote_overhead.py, 2026-09-29).
+#: High bit of a frame's length word: raw segments follow the JSON payload.
+_RAW_SEGMENTS_FLAG = 0x80000000
+
 _FRAME_DEBUG = bool(os.environ.get("CUBEVIS_FRAME_DEBUG"))
 _FRAME_DEBUG_PATH = os.environ.get("CUBEVIS_FRAME_DEBUG_PATH",
                                    "/tmp/cubevis_frame_debug2.log")
@@ -67,15 +70,29 @@ def _dbg(msg: str) -> None:
 
 async def _write_frame(writer: asyncio.StreamWriter, message: Dict[str, Any]) -> None:
     t0 = time.perf_counter()
+    from ._kernel_transport import _extract_pre_encoded
+    buffers: list = []
+    message = _extract_pre_encoded(message, buffers)
     payload = remote_serialize(message).encode("utf-8")
     FRAME_STATS["encode_s"] += time.perf_counter() - t0
     FRAME_STATS["frames_out"] += 1
-    FRAME_STATS["bytes_out"] += len(payload)
+    FRAME_STATS["bytes_out"] += len(payload) + sum(len(b) for b in buffers)
     if _FRAME_DEBUG:
         _dbg(f"_write_frame: message_id={message.get('message_id')!r}, {len(payload)} bytes, "
-             f"md5={hashlib.md5(payload).hexdigest()}")
-    writer.write(_HEADER.pack(len(payload)))
-    writer.write(payload)
+             f"{len(buffers)} raw segment(s), md5={hashlib.md5(payload).hexdigest()}")
+    if buffers:
+        # Extended frame: pre-encoded results travel as raw segments after
+        # the JSON, so they are never escaped into (and parsed back out of)
+        # the frame's JSON text.  High bit of the length marks the format.
+        writer.write(_HEADER.pack(len(payload) | _RAW_SEGMENTS_FLAG))
+        writer.write(payload)
+        writer.write(_HEADER.pack(len(buffers)))
+        for b in buffers:
+            writer.write(_HEADER.pack(len(b)))
+            writer.write(b)
+    else:
+        writer.write(_HEADER.pack(len(payload)))
+        writer.write(payload)
     await writer.drain()
 
 
@@ -87,10 +104,18 @@ async def _read_frame(reader: asyncio.StreamReader) -> Optional[Dict[str, Any]]:
         _dbg("_read_frame: EOF while reading header")
         return None
     (n,) = _HEADER.unpack(header)
+    has_segments = bool(n & _RAW_SEGMENTS_FLAG)
+    n &= ~_RAW_SEGMENTS_FLAG
     try:
         payload = await reader.readexactly(n)
+        segments = []
+        if has_segments:
+            (count,) = _HEADER.unpack(await reader.readexactly(4))
+            for _ in range(count):
+                (m,) = _HEADER.unpack(await reader.readexactly(4))
+                segments.append(await reader.readexactly(m))
     except asyncio.IncompleteReadError as e:
-        _dbg(f"_read_frame: EOF mid-payload -- got {len(e.partial)} of {n} bytes")
+        _dbg(f"_read_frame: EOF mid-frame -- got {len(e.partial)} bytes")
         return None
     if _FRAME_DEBUG:
         _dbg(f"_read_frame: {n} bytes, md5={hashlib.md5(payload).hexdigest()}")
@@ -100,9 +125,12 @@ async def _read_frame(reader: asyncio.StreamReader) -> Optional[Dict[str, Any]]:
     except BaseException as e:
         _dbg(f"_read_frame: remote_deserialize() RAISED: {type(e).__name__}: {e}")
         raise
+    if segments:
+        from ._kernel_transport import _restore_pre_encoded
+        result = _restore_pre_encoded(result, segments)
     FRAME_STATS["decode_s"] += time.perf_counter() - t0
     FRAME_STATS["frames_in"] += 1
-    FRAME_STATS["bytes_in"] += n
+    FRAME_STATS["bytes_in"] += n + sum(len(b) for b in segments)
     return result
 
 

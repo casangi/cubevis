@@ -203,3 +203,33 @@ review dialog, panel refresh) still needs a live GUI check.
   Row filter for the TW Hya scatter frame (1.46M rows, one sample-set delta):
   from scratch 166 ms, cached 0 ms, one new delta 66 ms (was ~330 ms every
   redraw). Test: incremental results == from-scratch for add/undo/redo/unflag.
+
+## 2026-09-30: step 2 -- relay pass-through (cubevis/remote)
+- Remote call_method requests carry `pre_encoded: True`; the worker encodes
+  the result once (`{"__cv_pre_encoded__": str}`, worker_main).
+- Worker -> kernel: frames with a pre-encoded result use raw segments after
+  the JSON (length word high bit = flag), so the big string is never
+  JSON-escaped/parsed (_worker_transport._write_frame/_read_frame).
+- Kernel -> P_local: KernelCommTransport moves it into a Jupyter comm binary
+  buffer; KernelClientTransport restores it; RemoteReductionContext._acall
+  decodes once. The kernel no longer rebuilds arrays or re-serializes.
+- Opt-in per request: an older client never sees buffers/segments. Kernel env
+  and P_local must both have this version for the gain (the worker and
+  kernel share the kernel env's install).
+- Local-kernel sweep (TW Hya Ceres, 2 layers, overhead): ref 1: 120 -> 64 ms;
+  2: 256 -> 133 ms; 4: 742 -> 412 ms (~45% less). Remaining is mostly worker
+  Bokeh encoding (base64 arrays) + P_local decode.
+- Tests: large results identical to local through the relay; frame raw
+  segment round trip; all tests/manual/remote (except host-specific
+  test_query_raster*) and remote flag tests pass.
+
+## 2026-09-30: bench 008 + round trips
+- Part 15 on both hosts: relay overhead halved (ref 1: 247->126 ms zuul06,
+  227->120 cvpost140); scatter flag+redraws zuul06 2.09->1.94 s.
+- RemoteReductionContext memoises axis_info / identity_tables (coordinate
+  only) keyed by selection fingerprint minus flag view, + cache_generation.
+  A redraw after a flag now makes 4 remote calls instead of 9.
+- bench --gui: per-method worker table + zoomed case. Sandbox findings:
+  query_columns 535-610 ms per redraw (drawing + reference); a SCATTER flag
+  box's evaluate_flag_request 561 ms (it re-reads the selection from the MS,
+  not the cached raw frames); zoomed redraw makes 2 query_columns.

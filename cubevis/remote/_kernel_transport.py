@@ -81,6 +81,44 @@ __all__ = ["KernelClientTransport", "KernelCommTransport"]
 ########################################################################
 # P_local side: frontend role, backed by jupyter_client
 ########################################################################
+# ---------------------------------------------------------------------------
+# Pre-encoded result pass-through (2026-09-30)
+# ---------------------------------------------------------------------------
+# A worker reply to a ``pre_encoded`` call_method arrives in the kernel as
+# ``{"__cv_pre_encoded__": <already-serialized string>}``.  Instead of
+# embedding that (large, quote-heavy) string inside the comm message's JSON
+# -- where Jupyter would escape it, and P_local would parse it once more --
+# the kernel moves it into a binary *buffer* of the comm message and leaves
+# ``{"__cv_pre_buffer__": i}`` in its place.  P_local puts it back before
+# decoding.  Only replies to requests that asked for it carry the marker,
+# so an older P_local never sees buffers.
+
+_PRE = "__cv_pre_encoded__"
+_BUF = "__cv_pre_buffer__"
+
+
+def _extract_pre_encoded(obj, buffers, depth=0):
+    if depth > 4:
+        return obj
+    if isinstance(obj, dict):
+        if _PRE in obj and isinstance(obj[_PRE], str) and len(obj) == 1:
+            buffers.append(obj[_PRE].encode("utf-8"))
+            return {_BUF: len(buffers) - 1}
+        return {k: _extract_pre_encoded(v, buffers, depth + 1) for k, v in obj.items()}
+    return obj
+
+
+def _restore_pre_encoded(obj, buffers, depth=0):
+    if depth > 4 or not buffers:
+        return obj
+    if isinstance(obj, dict):
+        if _BUF in obj and len(obj) == 1:
+            b = buffers[int(obj[_BUF])]
+            return {_PRE: bytes(b).decode("utf-8")}
+        return {k: _restore_pre_encoded(v, buffers, depth + 1) for k, v in obj.items()}
+    return obj
+
+
 #: P_local-side relay statistics: envelopes received from the kernel, their
 #: size and the time spent decoding them (bench_remote_overhead.py).
 CLIENT_STATS: Dict[str, float] = {"frames_in": 0, "bytes_in": 0, "decode_s": 0.0}
@@ -227,6 +265,10 @@ class KernelClientTransport(TransportBase):
             t0 = time.perf_counter()
             try:
                 inner = remote_deserialize(envelope)
+                bufs = msg.get("buffers") or []
+                if bufs:
+                    inner = _restore_pre_encoded(inner, bufs)
+                    CLIENT_STATS["bytes_in"] += sum(len(b) for b in bufs)
             except Exception:
                 logger.exception("KernelClientTransport.run: deserialize failed")
                 continue
@@ -381,11 +423,16 @@ class KernelCommTransport(TransportBase):
         if self._comm is None:
             raise RuntimeError("KernelCommTransport: no comm open yet")
         t0 = time.perf_counter()
+        buffers: list = []
+        message = _extract_pre_encoded(message, buffers)
         env = remote_serialize(message)
         KERNEL_STATS["encode_s"] += time.perf_counter() - t0
         KERNEL_STATS["frames_out"] += 1
-        KERNEL_STATS["bytes_out"] += len(env)
-        self._comm.send({"envelope": env})
+        KERNEL_STATS["bytes_out"] += len(env) + sum(len(b) for b in buffers)
+        if buffers:
+            self._comm.send({"envelope": env}, buffers=buffers)
+        else:
+            self._comm.send({"envelope": env})
 
     async def run(self) -> None:
         while not self._closed:

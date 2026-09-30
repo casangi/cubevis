@@ -180,9 +180,29 @@ def _register_generic_handlers(comm, registry: ObjectRegistry, namespace: Dict[s
         # travel through cubevis.utils.serialize/deserialize exactly as
         # a toy handler's return value already does (Chunk 1b never
         # required its handlers to return a specific shape either).
-        return registry.call_method(
+        result = registry.call_method(
             msg["handle"], msg["method"], msg.get("args") or [], msg.get("kwargs") or {}
         )
+        if msg.get("pre_encoded"):
+            # Relay pass-through (2026-09-30): encode the result ONCE here
+            # and hand the supervisor kernel an opaque string.  The kernel
+            # then only moves a string from the worker pipe to the Jupyter
+            # comm -- it no longer rebuilds every array as Python objects
+            # and serializes it all over again, which was most of the
+            # ~170 ms/MB remote relay cost.  P_local decodes it (see
+            # RemoteReductionContext._acall).  Opt-in per request, so an
+            # older client (no flag) gets the plain result as before.
+            import time as _t
+            from cubevis.utils import remote_serialize
+            t0 = _t.perf_counter()
+            enc = remote_serialize(result)
+            try:
+                from cubevis.remote._worker_transport import FRAME_STATS
+                FRAME_STATS["encode_s"] += _t.perf_counter() - t0
+            except Exception:
+                pass
+            return {"__cv_pre_encoded__": enc}
+        return result
 
     def handle_dispose_object(msg):
         disposed = registry.dispose_object(msg["handle"])

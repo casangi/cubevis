@@ -597,7 +597,78 @@ def _empty_render(canvas_h: int, canvas_w: int, reason: str) -> ScatterLayerRend
     )
 
 
+# ---------------------------------------------------------------------------
+# Shared binning between render_layer() and build_layer_reference()
+# (2026-09-30)
+# ---------------------------------------------------------------------------
+# One backend call renders each layer's image AND (for two-level
+# rendering) builds its reference from the SAME frame over the SAME viewport.
+# Two passes were identical work: the hover-probe id grid (same frame, range
+# and canvas -> same grid, always), and -- when the reference resolution
+# equals the display canvas, as with the remote default ref_scale=1 -- the
+# (x, y) mean aggregation itself.  Measured on TW Hya: roughly 40% of a
+# scatter render.  These are pure functions of (frame, range, size), and
+# rendering never writes into a frame, so their results are shared through a
+# tiny identity-keyed memo.  An entry is valid only while the SAME frame
+# object is alive (weakref check), so a new frame can never match an old id.
+
+import weakref as _weakref
+from collections import OrderedDict as _OrderedDict
+
+_BIN_MEMO: "_OrderedDict" = _OrderedDict()
+_BIN_MEMO_MAX = 8
+
+
+import threading as _threading
+_BIN_MEMO_LOCK = _threading.Lock()
+
+
+def _bin_memo(kind: str, df, params: tuple, compute):
+    key = (kind, id(df), params)
+    with _BIN_MEMO_LOCK:
+        hit = _BIN_MEMO.get(key)
+        if hit is not None:
+            ref, value = hit
+            if ref() is df:
+                _BIN_MEMO.move_to_end(key)
+                return value
+            del _BIN_MEMO[key]
+    value = compute()                     # outside the lock: panels render concurrently
+    try:
+        wr = _weakref.ref(df)
+    except TypeError:                     # not weak-referenceable: no memo
+        return value
+    with _BIN_MEMO_LOCK:
+        _BIN_MEMO[key] = (wr, value)
+        while len(_BIN_MEMO) > _BIN_MEMO_MAX:
+            _BIN_MEMO.popitem(last=False)
+    return value
+
+
+def _mean_count_agg(df, x0, x1, y0, y1, w, h):
+    """``{"mean": mean(y), "count": count}`` of *df* on a w x h canvas --
+    shared by the display image and a same-resolution reference."""
+    def compute():
+        cvs = ds.Canvas(plot_width=w, plot_height=h, x_range=(x0, x1), y_range=(y0, y1))
+        return cvs.points(df, "x", "y",
+                          ds_agg.summary(mean=ds_agg.mean("y"), count=ds_agg.count()))
+    return _bin_memo("mean_count", df, (x0, x1, y0, y1, w, h), compute)
+
+
+
 def _compute_id_grid(
+    df: pd.DataFrame, x0: float, x1: float, y0: float, y1: float,
+    canvas_w: int, canvas_h: int, probe_grid_max_cells: int,
+) -> dict:
+    """Memoised front end of ``_compute_id_grid_impl`` (see the shared
+    binning note above): render_layer() and build_layer_reference() ask
+    for exactly the same grid."""
+    return _bin_memo("id_grid", df, (x0, x1, y0, y1, canvas_w, canvas_h, probe_grid_max_cells),
+                     lambda: _compute_id_grid_impl(df, x0, x1, y0, y1, canvas_w, canvas_h,
+                                                   probe_grid_max_cells))
+
+
+def _compute_id_grid_impl(
     df: pd.DataFrame, x0: float, x1: float, y0: float, y1: float,
     canvas_w: int, canvas_h: int, probe_grid_max_cells: int,
 ) -> dict:
@@ -774,7 +845,11 @@ def render_layer(
         # branch below completely unchanged rather than duplicating it
         # for a third mode.
         agg_column = "color" if lyr.coloring == "statistical" else "y"
-        agg = cvs.points(df, "x", "y", ds_agg.mean(agg_column))
+        if agg_column == "y":
+            # shared with a same-resolution reference (see _mean_count_agg)
+            agg = _mean_count_agg(df, x0, x1, y0, y1, canvas_w, canvas_h)["mean"]
+        else:
+            agg = cvs.points(df, "x", "y", ds_agg.mean(agg_column))
 
         if lyr.coloring == "statistical":
             # The color source's own range, NOT full_y_range (the
@@ -1143,9 +1218,7 @@ def build_layer_reference(
         )
 
     # continuous
-    summary = ref_cvs.points(
-        df, "x", "y", ds_agg.summary(mean=ds_agg.mean("y"), count=ds_agg.count()),
-    )
+    summary = _mean_count_agg(df, x0, x1, y0, y1, ref_w, ref_h)
     ref_agg = summary["mean"]
     ref_count = summary["count"]
 

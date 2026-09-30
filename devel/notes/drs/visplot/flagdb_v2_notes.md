@@ -233,3 +233,14 @@ review dialog, panel refresh) still needs a live GUI check.
   query_columns 535-610 ms per redraw (drawing + reference); a SCATTER flag
   box's evaluate_flag_request 561 ms (it re-reads the selection from the MS,
   not the cached raw frames); zoomed redraw makes 2 query_columns.
+
+## 2026-09-30: bench 009 + shared binning (part 17)
+- zuul06 part 16: raster flag+redraws 1.51 s, scatter 1.73 s, undo 1.39 s,
+  zoomed 2.02 s. Worker per method: query_columns 0.61-0.72 s (1.0 s x2
+  zoomed), scatter-box evaluate 0.415 s vs raster 0.22 s, query_raster 0.1 s.
+- _scatter_render: render_layer() and build_layer_reference() now share the
+  hover-probe id grid (always identical) and, at equal resolution (remote
+  ref_scale=1), the (x, y) mean/count aggregation, via a small identity-keyed,
+  weakref-checked, locked memo (_bin_memo, 8 entries). Bit-identical output
+  (test). TW Hya Ceres, 2 layers: ref 1: 352 -> 265 ms; ref 2: 388 -> 328 ms.
+- Next: scatter-box evaluation from cached raw frames; zoomed double query.

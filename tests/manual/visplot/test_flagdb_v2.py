@@ -811,3 +811,30 @@ def _raw_frames(backend):
         df = v[-1] if isinstance(v, tuple) else v
         if hasattr(df, "columns") and "__disk_flag" in df.columns:
             yield df
+
+
+def test_shared_binning_is_bit_identical(backend):
+    """render_layer() and build_layer_reference() share the id grid and, at
+    equal resolution, the (x, y) mean aggregation: the result must be
+    bit-identical to computing each separately."""
+    from cubevis.toolbox.visplot.data import _scatter_render as sr
+    from cubevis.toolbox.visplot.data.reader import ScatterLayerSpec
+    from cubevis.toolbox.visplot.selection import SelectionSpec
+    from cubevis.toolbox.visplot.axes import Axis
+    layers = [ScatterLayerSpec(y_axis=Axis.AMPLITUDE, polarization=p, cmap=("#000000", "#ffffff"))
+              for p in ("XX", "YY")]
+    kw = dict(width=200, height=150, probe_grid_max_cells=3072, color_mode="global")
+    saved = sr._BIN_MEMO_MAX
+    try:
+        for rs in (1.0, 2.0):
+            sr._BIN_MEMO.clear(); sr._BIN_MEMO_MAX = 0
+            a = backend.query_columns(Axis.TIME, layers, SelectionSpec(), ref_scale=rs, **kw)
+            sr._BIN_MEMO.clear(); sr._BIN_MEMO_MAX = 8
+            b = backend.query_columns(Axis.TIME, layers, SelectionSpec(), ref_scale=rs, **kw)
+            for x, y in zip(a.layers, b.layers):
+                assert np.array_equal(x.image, y.image)
+                assert np.array_equal(x.id_grid_value, y.id_grid_value, equal_nan=True)
+                assert np.array_equal(np.asarray(x.reference.ref_agg), np.asarray(y.reference.ref_agg), equal_nan=True)
+                assert np.array_equal(np.asarray(x.reference.ref_count), np.asarray(y.reference.ref_count))
+    finally:
+        sr._BIN_MEMO_MAX = saved

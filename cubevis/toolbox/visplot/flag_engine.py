@@ -961,6 +961,15 @@ class _Rows:
         self.c1, self.cat1 = _codes(df, "baseline_antenna1_name")
         self.c2, self.cat2 = _codes(df, "baseline_antenna2_name")
         self._scan = self._field = None
+        # Unique times / frequencies and each row's index into them, computed
+        # once per raw frame (see _rows_for): a sample-set delta then matches
+        # its few integrations / channels against the UNIQUE values and
+        # gathers per row, instead of a binary search per row per delta
+        # (that searchsorted was ~0.25 s per scatter redraw on TW Hya, and
+        # 2-3x that on the remote hosts -- 2026-09-30 bench).
+        self.t_uniq, self.t_inv = np.unique(self.times, return_inverse=True)
+        self.f_uniq, self.f_inv = np.unique(self.freqs, return_inverse=True)
+        self._pairs_cache = {}
 
     @property
     def n(self):
@@ -982,6 +991,17 @@ class _Rows:
 
     def pair_matrix(self, pairs) -> np.ndarray:
         """Row lookup ``M[code1, code2]`` -> index into *pairs* or -1."""
+        key = tuple((str(a), str(b)) for a, b in pairs)
+        hit = self._pairs_cache.get(key)
+        if hit is not None:
+            return hit
+        m = self._pair_matrix(key)
+        if len(self._pairs_cache) > 64:
+            self._pairs_cache.clear()
+        self._pairs_cache[key] = m
+        return m
+
+    def _pair_matrix(self, pairs) -> np.ndarray:
         idx = {}
         for i, (a, b) in enumerate(pairs):
             idx.setdefault((str(a), str(b)), i)
@@ -1043,12 +1063,12 @@ def _row_sample_mask(d: FlagDelta, R: _Rows) -> np.ndarray:
         rows = np.flatnonzero(np.isin(R.spw, R.spw_codes_matching([blk.spw])))
         if rows.size == 0:
             continue
-        ti = _match_sorted(R.times[rows], blk.times, atol=TIME_TOL)
+        ti = _match_sorted(R.t_uniq, blk.times, atol=TIME_TOL)[R.t_inv[rows]]
         bi = R.pair_matrix(list(zip(blk.ant1, blk.ant2)))[R.c1[rows], R.c2[rows]]
         if d.extend_chan:
             fi = np.zeros(rows.size, dtype=np.int64)
         else:
-            fi = _match_sorted(R.freqs[rows], blk.freqs, rtol=FREQ_RTOL)
+            fi = _match_sorted(R.f_uniq, blk.freqs, rtol=FREQ_RTOL)[R.f_inv[rows]]
         if d.extend_corr:
             pi = 0
         else:
@@ -1074,6 +1094,60 @@ def row_delta_mask(d: FlagDelta, R: _Rows) -> np.ndarray:
     return _row_sample_mask(d, R) if d.is_sample_set else _row_region_mask(d, R)
 
 
+import weakref as _weakref
+
+# Per raw frame (the cached, never-mutated frames of
+# XArrayReader._query_columns_cached_raw): the decoded row identity, and the
+# effective flag state for the last few pending-delta lists.  Keyed weakly,
+# so they vanish with the frame.
+_FRAME_SLOTS: dict = {}          # id(frame) -> {"rows": {...}, "eff": {...}}
+
+
+def _frame_slot(df) -> dict:
+    """Per-frame scratch space that disappears with the frame (DataFrames
+    are weak-referenceable but not hashable, so key by id + finalizer)."""
+    key = id(df)
+    slot = _FRAME_SLOTS.get(key)
+    if slot is None:
+        slot = {"rows": {}, "eff": {}}
+        try:
+            _weakref.finalize(df, _FRAME_SLOTS.pop, key, None)
+        except TypeError:          # not weak-referenceable: do not cache
+            return slot
+        _FRAME_SLOTS[key] = slot
+    return slot
+
+
+_EFF_KEEP = 4
+
+
+def _rows_for(backend, df, pol) -> "_Rows":
+    per = _frame_slot(df)["rows"]
+    R = per.get(str(pol))
+    if R is None:
+        R = per[str(pol)] = _Rows(backend, df, pol)
+    return R
+
+
+def _effective_rows(df, pol, disk, pend, R) -> np.ndarray:
+    """On-disk flags of *df*'s rows with *pend* folded in, reusing the state
+    of the longest cached prefix of *pend* (a new flag applies one delta,
+    an undo returns an earlier cached state)."""
+    ids = tuple(d.delta_id for d in pend)
+    states = _frame_slot(df)["eff"].setdefault(str(pol), [])
+    best, start = None, 0
+    for key, arr in states:
+        if len(key) <= len(ids) and ids[:len(key)] == key and len(key) >= start:
+            best, start = arr, len(key)
+    eff = disk.copy() if best is None else best.copy()
+    for d in pend[start:]:
+        eff[row_delta_mask(d, R)] = bool(d.flag)
+    if best is None or start != len(ids):
+        states.append((ids, eff.copy()))
+        del states[:-_EFF_KEEP]
+    return eff
+
+
 def frame_keep_mask(backend, df, pol, view: str) -> np.ndarray:
     """Rows of a raw frame drawn in flag *view* (see SelectionSpec.flag_view)."""
     disk = df["__disk_flag"].to_numpy(dtype=bool)
@@ -1082,11 +1156,8 @@ def frame_keep_mask(backend, df, pol, view: str) -> np.ndarray:
     if view == "disk":
         return ~disk
     pend = backend._pending_deltas()
-    R = _Rows(backend, df, pol) if (pend or view == "proposal") else None
-    eff = disk.copy()
-    for d in pend:
-        m = row_delta_mask(d, R)
-        eff[m] = bool(d.flag)
+    R = _rows_for(backend, df, pol) if (pend or view == "proposal") else None
+    eff = _effective_rows(df, pol, disk, pend, R)
     if view == "effective":
         return ~eff
     if view == "pending":

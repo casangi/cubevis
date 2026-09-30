@@ -763,3 +763,51 @@ def test_raw_frames_are_not_reread_on_flag_change(backend):
     finally:
         backend._query_columns_raw = orig
         backend.set_pending_flags([], 0)
+
+
+def test_incremental_view_state_matches_uncached(backend):
+    """The per-frame effective-state cache (prefix reuse for add / undo /
+    redo) must give exactly what a from-scratch fold gives."""
+    from cubevis.toolbox.visplot import flag_engine as fe
+    from cubevis.toolbox.visplot.data.reader import ScatterLayerSpec
+    t = _parts(backend)[0].time.values
+    a, _ = _eval(backend, kind="raster", x_axis="TIME", x0=t[1], x1=t[3],
+                 y_axis="BASELINE", y0=-0.5, y1=9.5, polarization="XX")
+    b, _ = _eval(backend, kind="scatter", x_axis="TIME", x0=t[0] - 1, x1=t[-1] + 1,
+                 y0=10, y1=100, layers=[{"y_axis": "AMPLITUDE", "polarization": "XX"}])
+    c, _ = _eval(backend, flag=False, kind="raster", x_axis="TIME", x0=t[2], x1=t[2],
+                 y_axis="BASELINE", y0=-0.5, y1=9.5, polarization="XX")
+    from cubevis.toolbox.visplot.selection import SelectionSpec
+    backend.set_pending_flags([], 0)
+    layer = [ScatterLayerSpec(y_axis=Axis_AMP(), polarization="XX", cmap=("#000000", "#ffffff"))]
+    backend.query_columns(Axis_TIME(), layer, SelectionSpec(), width=100, height=100)
+    frames = [v for v in _raw_frames(backend)]
+    assert frames, "no raw frame cached"
+    df = frames[0]
+    for i, seq in enumerate(([a], [a, b], [a], [a, b, c], [a, b], [])):
+        backend.set_pending_flags(seq, 100 + i)
+        got = fe.frame_keep_mask(backend, df, "XX", "effective")
+        fe._FRAME_SLOTS.pop(id(df), None)                 # from scratch
+        want = fe.frame_keep_mask(backend, df, "XX", "effective")
+        assert np.array_equal(got, want), seq
+    backend.set_pending_flags([], 0)
+
+
+def Axis_AMP():
+    from cubevis.toolbox.visplot.axes import Axis
+    return Axis.AMPLITUDE
+
+
+def Axis_TIME():
+    from cubevis.toolbox.visplot.axes import Axis
+    return Axis.TIME
+
+
+def _raw_frames(backend):
+    """Raw frames currently held by the backend's frame cache."""
+    cache = backend._frame_cache_obj()
+    store = getattr(cache, "_entries", None) or getattr(cache, "_d", None) or {}
+    for v in list(store.values()):
+        df = v[-1] if isinstance(v, tuple) else v
+        if hasattr(df, "columns") and "__disk_flag" in df.columns:
+            yield df

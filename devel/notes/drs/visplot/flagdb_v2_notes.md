@@ -190,3 +190,16 @@ review dialog, panel refresh) still needs a live GUI check.
   filter + 0.37 s binning/reference) instead of a re-read (cold 3.4 s).
 - Single-dish stores (antenna_name dim) fall back to the per-state cache.
 - Relay binary pass-through (step 2) NOT done yet.
+
+## 2026-09-30: bench 006 (part 13 on both hosts)
+- Local (Mac) redraws improved ~20-25%; remote raster/undo redraws improved
+  ~0.1-0.2 s, but the scatter-flag redraw got slower (zuul06 2.22 -> 2.45 s):
+  the row filter matched every raw row against each sample-set delta with a
+  binary search (~0.33 s on TW Hya locally, 2-3x on the hosts).
+- Fix (part 14): per raw frame, row identity is decoded once (unique times /
+  frequencies + inverse index, cached baseline pair lookups) and the effective
+  flag state is cached per pending-delta list, reusing the longest cached
+  prefix (a flag applies one delta; an undo returns a cached state).
+  Row filter for the TW Hya scatter frame (1.46M rows, one sample-set delta):
+  from scratch 166 ms, cached 0 ms, one new delta 66 ms (was ~330 ms every
+  redraw). Test: incremental results == from-scratch for add/undo/redo/unflag.

@@ -29,6 +29,7 @@ import hashlib
 import logging
 import os
 import struct
+import time
 import sys
 from typing import Any, Callable, Dict, List, Optional
 
@@ -40,62 +41,68 @@ logger = logging.getLogger(__name__)
 _HEADER = struct.Struct(">I")  # 4-byte big-endian length prefix
 
 
+# Frame-level diagnostics (added 2026-09-06 for the DataArray investigation)
+# are now OFF unless CUBEVIS_FRAME_DEBUG is set.  Unconditionally they
+# opened, appended to and closed /tmp/cubevis_frame_debug2.log for every
+# frame AND every 4 kB chunk of every frame, and MD5-hashed each payload
+# twice -- on the order of 200 ms per MB relayed, which dominated remote
+# redraw time (bench_remote_overhead.py, 2026-09-29).
+_FRAME_DEBUG = bool(os.environ.get("CUBEVIS_FRAME_DEBUG"))
+_FRAME_DEBUG_PATH = os.environ.get("CUBEVIS_FRAME_DEBUG_PATH",
+                                   "/tmp/cubevis_frame_debug2.log")
+
+#: Per-process relay statistics (bytes, frames, encode/decode seconds),
+#: read by the benchmark through VisplotRemoteBackend.call_stats().
+FRAME_STATS: Dict[str, float] = {"frames_out": 0, "bytes_out": 0, "encode_s": 0.0,
+                                 "frames_in": 0, "bytes_in": 0, "decode_s": 0.0}
+
+
 def _dbg(msg: str) -> None:
-    # Temporary diagnostic (2026-09-06) -- reused from the DataArray
-    # investigation for the same reason: both worker and supervisor
-    # processes run on zuul06 with no confirmed path for stdio/logging
-    # to reach P_local. PID-prefixed since this file is shared by both
-    # processes. Remove once root-caused.
-    with open("/tmp/cubevis_frame_debug2.log", "a") as f:
+    if not _FRAME_DEBUG:
+        return
+    with open(_FRAME_DEBUG_PATH, "a") as f:
         f.write(f"[pid={os.getpid()}] {msg}\n")
         f.flush()
 
 
 async def _write_frame(writer: asyncio.StreamWriter, message: Dict[str, Any]) -> None:
-    _dbg(f"_write_frame: START, message_id={message.get('message_id')!r}")
+    t0 = time.perf_counter()
     payload = remote_serialize(message).encode("utf-8")
-    digest = hashlib.md5(payload).hexdigest()
-    _dbg(f"_write_frame: remote_serialize() done, {len(payload)} bytes, md5={digest}")
+    FRAME_STATS["encode_s"] += time.perf_counter() - t0
+    FRAME_STATS["frames_out"] += 1
+    FRAME_STATS["bytes_out"] += len(payload)
+    if _FRAME_DEBUG:
+        _dbg(f"_write_frame: message_id={message.get('message_id')!r}, {len(payload)} bytes, "
+             f"md5={hashlib.md5(payload).hexdigest()}")
     writer.write(_HEADER.pack(len(payload)))
     writer.write(payload)
-    _dbg("_write_frame: write() calls issued, awaiting drain()")
     await writer.drain()
-    _dbg(f"_write_frame: drain() complete -- {len(payload)} bytes (md5={digest}) "
-          f"are with the OS/pipe now")
 
 
 async def _read_frame(reader: asyncio.StreamReader) -> Optional[Dict[str, Any]]:
     """Returns None on clean EOF (peer closed its write side)."""
-    _dbg("_read_frame: waiting for 4-byte header ...")
     try:
         header = await reader.readexactly(4)
     except asyncio.IncompleteReadError:
         _dbg("_read_frame: EOF while reading header")
         return None
     (n,) = _HEADER.unpack(header)
-    _dbg(f"_read_frame: header says {n} bytes; reading payload in chunks ...")
-
-    chunks = []
-    remaining = n
-    while remaining > 0:
-        chunk = await reader.read(min(4096, remaining))
-        if not chunk:
-            _dbg(f"_read_frame: EOF mid-payload -- got {n - remaining} of {n} "
-                  f"bytes before the peer closed its write side")
-            return None
-        chunks.append(chunk)
-        remaining -= len(chunk)
-        _dbg(f"_read_frame: chunk of {len(chunk)} bytes arrived, "
-              f"{n - remaining}/{n} total so far")
-    payload = b"".join(chunks)
-    digest = hashlib.md5(payload).hexdigest()
-    _dbg(f"_read_frame: payload read OK ({n} bytes, md5={digest}); deserializing ...")
+    try:
+        payload = await reader.readexactly(n)
+    except asyncio.IncompleteReadError as e:
+        _dbg(f"_read_frame: EOF mid-payload -- got {len(e.partial)} of {n} bytes")
+        return None
+    if _FRAME_DEBUG:
+        _dbg(f"_read_frame: {n} bytes, md5={hashlib.md5(payload).hexdigest()}")
+    t0 = time.perf_counter()
     try:
         result = remote_deserialize(payload.decode("utf-8"))
     except BaseException as e:
         _dbg(f"_read_frame: remote_deserialize() RAISED: {type(e).__name__}: {e}")
         raise
-    _dbg("_read_frame: remote_deserialize() done")
+    FRAME_STATS["decode_s"] += time.perf_counter() - t0
+    FRAME_STATS["frames_in"] += 1
+    FRAME_STATS["bytes_in"] += n
     return result
 
 

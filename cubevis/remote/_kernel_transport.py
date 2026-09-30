@@ -60,6 +60,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import logging
 from queue import Empty
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
@@ -80,6 +81,15 @@ __all__ = ["KernelClientTransport", "KernelCommTransport"]
 ########################################################################
 # P_local side: frontend role, backed by jupyter_client
 ########################################################################
+#: P_local-side relay statistics: envelopes received from the kernel, their
+#: size and the time spent decoding them (bench_remote_overhead.py).
+CLIENT_STATS: Dict[str, float] = {"frames_in": 0, "bytes_in": 0, "decode_s": 0.0}
+
+#: Kernel-side (supervisor) re-encode statistics: every reply the kernel
+#: forwards to P_local is serialized again here.
+KERNEL_STATS: Dict[str, float] = {"frames_out": 0, "bytes_out": 0, "encode_s": 0.0}
+
+
 class KernelClientTransport(TransportBase):
     """
     TransportBase for P_local's kernel-facing side.
@@ -214,11 +224,15 @@ class KernelClientTransport(TransportBase):
                 logger.warning("KernelClientTransport.run: comm_msg with no envelope, dropping")
                 continue
 
+            t0 = time.perf_counter()
             try:
                 inner = remote_deserialize(envelope)
             except Exception:
                 logger.exception("KernelClientTransport.run: deserialize failed")
                 continue
+            CLIENT_STATS["decode_s"] += time.perf_counter() - t0
+            CLIENT_STATS["frames_in"] += 1
+            CLIENT_STATS["bytes_in"] += len(envelope)
 
             if self._callback is not None:
                 await self._callback(inner)
@@ -366,7 +380,12 @@ class KernelCommTransport(TransportBase):
     async def send_message(self, message: Dict[str, Any]) -> None:
         if self._comm is None:
             raise RuntimeError("KernelCommTransport: no comm open yet")
-        self._comm.send({"envelope": remote_serialize(message)})
+        t0 = time.perf_counter()
+        env = remote_serialize(message)
+        KERNEL_STATS["encode_s"] += time.perf_counter() - t0
+        KERNEL_STATS["frames_out"] += 1
+        KERNEL_STATS["bytes_out"] += len(env)
+        self._comm.send({"envelope": env})
 
     async def run(self) -> None:
         while not self._closed:

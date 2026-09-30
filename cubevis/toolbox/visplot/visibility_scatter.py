@@ -115,8 +115,17 @@ _DEFAULT_SCALING = "eq_hist"
 # open parameter", no single value recommended) -- these are starting
 # defaults, overridable per instance via the ref_scale constructor
 # parameter, not a settled tuning result.
+#
+# 2026-09-29, measured (bench_remote_overhead.py --ref-scales): the remote
+# default of 4.0 was the single largest remote cost.  A two-layer TW Hya
+# scatter render through even a LOCAL kernel: ref_scale 4.0 -> 8.4 MB on the
+# wire, 1.7 s of transport overhead per full render; 1.0 -> 1.7 MB, 0.34 s;
+# no reference -> 0.2 MB, 0.05 s.  Every full render pays it (Plot, and the
+# redraw after every flag / undo), while the Level-2 round trip it was meant
+# to avoid costs ~0.3 s.  Remote now uses 1.0: panning and zooming out stay
+# local, zooming in re-queries.
 _REF_SCALE_LOCAL_DEFAULT  = 2.0
-_REF_SCALE_REMOTE_DEFAULT = 4.0
+_REF_SCALE_REMOTE_DEFAULT = 1.0
 
 # Default color maps for successive layers
 _MIN_ALPHA = 90

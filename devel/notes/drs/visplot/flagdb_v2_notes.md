@@ -139,3 +139,29 @@ review dialog, panel refresh) still needs a live GUI check.
   encoding is already compact (8.8 MB array -> 1.3 MB), zlib gained nothing
   (tried, reverted); the cost is in the transport hops. Next: profile the
   worker->supervisor->kernel->client path, or keep references worker-side.
+
+## 2026-09-29: zuul06 / cvpost140 results and remote ref_scale
+- zuul06: kernel start 51 s; cvpost140: 2.3 s. Per-call floor ~22 ms on both.
+  Flag evaluation overhead ~25 ms. GUI redraws after a flag +2.8-6.4 s.
+- Cause: remote scatter default ref_scale=4.0 (reference grids 16x the canvas)
+  shipped on every full render. Local-kernel sweep, TW Hya Ceres, 2 layers:
+  ref 0: 126 kB / 34 ms overhead; 1: 846 kB / 139 ms; 2: 1.8 MB / 295 ms;
+  4: 3.9 MB / 834 ms (+~100 ms worker compute). Remote default now 1.0.
+- The relay costs ~200 ms per MB even over loopback (worker -> supervisor ->
+  kernel -> client, JSON/base64 each hop): next target.
+- bench: --ref-scales sweep.
+
+## 2026-09-29: step 1 -- remote breakdown, and a leftover diagnostic
+- `cubevis/remote/_worker_transport.py`: the 2026-09-06 frame diagnostics ran
+  unconditionally -- open/append/close of /tmp/cubevis_frame_debug2.log for
+  every frame and every 4 kB chunk, plus two MD5s per payload. Now only with
+  CUBEVIS_FRAME_DEBUG=1 (path CUBEVIS_FRAME_DEBUG_PATH); payload read with one
+  readexactly(). Sandbox (fast /tmp): overhead per MB ~200 -> ~150 ms; the
+  effect on zuul06 depends on its /tmp.
+- Relay stats: worker FRAME_STATS (encode/decode, bytes), kernel KERNEL_STATS
+  (re-encode), P_local CLIENT_STATS (decode); exposed via call_stats()["relay"].
+- bench --gui prints a per-operation breakdown: calls, bytes, worker compute,
+  worker encode, client decode, relay/net remainder.
+- Sandbox (local kernel, TW Hya Ceres): redraws after a flag are now worker
+  compute dominated (1.0-1.8 s of 1.4-2.4 s); relay/net 0.26-0.39 s.
+  A scatter flag triggers two query_columns (look at in step 3).

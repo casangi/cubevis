@@ -121,6 +121,14 @@ class VisplotRemoteBackend:
         except AttributeError:
             stats = {}
         out = {k: list(v) for k, v in stats.items()}
+        try:   # this worker's relay encode/decode totals (not per method)
+            from cubevis.remote._worker_transport import FRAME_STATS
+            out["__frames__"] = dict(FRAME_STATS)
+            if reset:
+                for k in FRAME_STATS:
+                    FRAME_STATS[k] = 0
+        except Exception:
+            pass
         if reset:
             object.__setattr__(self, "_cv_stats", {})
         return out

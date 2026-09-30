@@ -453,7 +453,16 @@ class RemoteReductionContext(ReductionContext):
         worker = self._bridge.run(self._acall(
             "call_stats", timeout=self._call_timeout if timeout is None else timeout,
             reset=reset)) or {}
+        frames = worker.pop("__frames__", None) if isinstance(worker, dict) else None
         client = {k: list(v) for k, v in self.__dict__.get("_cv_call_stats", {}).items()}
+        try:
+            from cubevis.remote._kernel_transport import CLIENT_STATS
+            relay = {"worker": frames, "client": dict(CLIENT_STATS)}
+            if reset:
+                for k in CLIENT_STATS:
+                    CLIENT_STATS[k] = 0
+        except Exception:
+            relay = {"worker": frames}
         overhead = {}
         for m, (n, tot, _mx, _l) in client.items():
             w = worker.get(m)
@@ -461,7 +470,7 @@ class RemoteReductionContext(ReductionContext):
                 overhead[m] = tot / n - w[1] / w[0]
         if reset:
             self.__dict__["_cv_call_stats"] = {}
-        return {"client": client, "worker": worker, "overhead": overhead}
+        return {"client": client, "worker": worker, "overhead": overhead, "relay": relay}
 
     # ------------------------------------------------------------------ #
     # VisibilityReader protocol                                           #

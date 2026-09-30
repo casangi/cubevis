@@ -175,3 +175,18 @@ review dialog, panel refresh) still needs a live GUI check.
   reference (nothing outside it); the redraw after a scatter flag that
   shrinks the extent now issues 1 query_columns instead of 2 (images 99.9%
   pixel-identical to a forced Level-2, the usual Level-1 resampling edge).
+
+## 2026-09-30: step 3b -- cached RAW scatter frames
+- The scatter frame cache now holds raw frames (every valid sample, built
+  under the new flag view "none") with `__disk_flag`, `__spw` (code into
+  backend._cv_spw_codes) and `__chan`, keyed without the pending version.
+  `flag_engine.frame_keep_mask` applies the current view row by row (region
+  and sample-set deltas, extend options, proposal); Z-Score frames are
+  finalized after the view. One filtered result per layer is memoised.
+- Tests: raw-path frames == fresh reads for AMPLITUDE/PHASE/Z_SCORE x 4 views x
+  4 pending states (flag, sample set, unflag of committed flags, extend,
+  proposal); no MS re-read on a flag change. Real-MS frame/probe/zscore tests pass.
+- TW Hya Ceres, local: scatter query after a flag change 0.51 s (0.14 s view
+  filter + 0.37 s binning/reference) instead of a re-read (cold 3.4 s).
+- Single-dish stores (antenna_name dim) fall back to the per-state cache.
+- Relay binary pass-through (step 2) NOT done yet.

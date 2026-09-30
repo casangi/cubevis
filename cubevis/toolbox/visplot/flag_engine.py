@@ -877,3 +877,225 @@ def _prepare_reference(backend, fobj: FlagFilter, params, parts, sel):
         sub = _isel_canon(backend, ds, None, ib, None, ip)
         refs.append(_filter_dataset(backend, sub, bc.sub(slice(None), ib, slice(None), ip), ""))
     return fobj.prepare(refs, params)
+
+
+# ======================================================================
+# 3. Flag views on cached scatter frames (no re-read on a flag change)
+# ======================================================================
+#
+# The scatter frame cache stores RAW frames: every valid (non-padding)
+# sample, with its on-disk flag (``__disk_flag``) and the identity needed
+# to evaluate pending deltas row by row (``__spw`` code, ``__chan``, and
+# the existing ``time``/``frequency``/antenna/scan/field columns).  A flag
+# change then only re-evaluates which rows are drawn -- the MS is not read
+# again.  ``frame_keep_mask`` is the row-wise twin of ``apply_pending``
+# and must agree with it exactly (test_flagdb_v2 pins this).
+
+RAW_HELPER_COLUMNS = ("__disk_flag", "__spw", "__chan")
+
+
+def spw_code(backend, key) -> int:
+    table = backend.__dict__.setdefault("_cv_spw_codes", [])
+    for i, k in enumerate(table):
+        if key is not None and k.matches(key):
+            return i
+    table.append(key)
+    return len(table) - 1
+
+
+def annotate_raw_frames(backend, ds, frames: dict) -> dict:
+    """Add ``__disk_flag``/``__spw``/``__chan`` to the frames of one
+    partition (built under flag view ``"none"``).  Marks the backend
+    ``_cv_raw_unsupported`` if the frames lack the identity columns."""
+    bd = _bdim(backend)
+    if bd != "baseline_id":
+        backend._cv_raw_unsupported = True
+        return frames
+    disk = np.asarray(backend._disk_flag_mask(ds).transpose(*_canon(backend)).values, bool)
+    times = np.asarray(ds.coords["time"].values, dtype=np.float64)
+    bids = np.asarray(ds.coords[bd].values)
+    freqs = np.asarray(ds.coords["frequency"].values, dtype=np.float64)
+    pols = [str(p) for p in ds.coords["polarization"].values]
+    key, chans = spw_key_of(backend, ds)
+    code = spw_code(backend, key)
+    ot, ob, of = (np.argsort(times, kind="stable"), np.argsort(bids, kind="stable"),
+                  np.argsort(freqs, kind="stable"))
+    for (_axis, pol), df in frames.items():
+        if df is None:
+            continue
+        if not all(c in df.columns for c in ("time", "baseline_id", "frequency")):
+            backend._cv_raw_unsupported = True
+            return frames
+        n = len(df)
+        if n == 0 or pol not in pols:
+            df["__disk_flag"] = np.zeros(n, bool)
+            df["__spw"] = np.full(n, code, np.int16)
+            df["__chan"] = np.full(n, -1, np.int32)
+            continue
+        ti = ot[np.clip(np.searchsorted(times[ot], df["time"].to_numpy()), 0, len(ot) - 1)]
+        bi = ob[np.clip(np.searchsorted(bids[ob], df["baseline_id"].to_numpy()), 0, len(ob) - 1)]
+        fi = of[np.clip(np.searchsorted(freqs[of], df["frequency"].to_numpy()), 0, len(of) - 1)]
+        df["__disk_flag"] = disk[ti, bi, fi, pols.index(pol)]
+        df["__spw"] = np.full(n, code, np.int16)
+        df["__chan"] = chans[fi].astype(np.int32)
+    return frames
+
+
+def _codes(df, col):
+    s = df[col]
+    if str(s.dtype) != "category":
+        s = s.astype("category")
+    return np.asarray(s.cat.codes), np.asarray(s.cat.categories).astype(str)
+
+
+class _Rows:
+    """Row identity of one raw frame (lazily decoded)."""
+
+    def __init__(self, backend, df, pol):
+        self.df, self.pol = df, str(pol)
+        self.times = df["time"].to_numpy(dtype=np.float64)
+        self.freqs = df["frequency"].to_numpy(dtype=np.float64)
+        self.chans = df["__chan"].to_numpy()
+        self.spw = df["__spw"].to_numpy()
+        self.spw_table = backend.__dict__.get("_cv_spw_codes", [])
+        self.c1, self.cat1 = _codes(df, "baseline_antenna1_name")
+        self.c2, self.cat2 = _codes(df, "baseline_antenna2_name")
+        self._scan = self._field = None
+
+    @property
+    def n(self):
+        return len(self.times)
+
+    def scan(self):
+        if self._scan is None:
+            self._scan = _codes(self.df, "scan_name") if "scan_name" in self.df else (None, None)
+        return self._scan
+
+    def field(self):
+        if self._field is None:
+            self._field = _codes(self.df, "field_name") if "field_name" in self.df else (None, None)
+        return self._field
+
+    def spw_codes_matching(self, keys) -> np.ndarray:
+        return np.array([i for i, k in enumerate(self.spw_table)
+                         if k is not None and any(k.matches(x) for x in keys)], dtype=np.int64)
+
+    def pair_matrix(self, pairs) -> np.ndarray:
+        """Row lookup ``M[code1, code2]`` -> index into *pairs* or -1."""
+        idx = {}
+        for i, (a, b) in enumerate(pairs):
+            idx.setdefault((str(a), str(b)), i)
+            idx.setdefault((str(b), str(a)), i)
+        m = np.full((max(len(self.cat1), 1), max(len(self.cat2), 1)), -1, dtype=np.int64)
+        for i, a in enumerate(self.cat1):
+            for j, b in enumerate(self.cat2):
+                m[i, j] = idx.get((a, b), -1)
+        return m
+
+
+def _row_region_mask(d: FlagDelta, R: _Rows) -> np.ndarray:
+    from .flag_model import TIME_TOL
+    m = np.ones(R.n, dtype=bool)
+    if not d.extend_spw and d.spw is not None:
+        m &= np.isin(R.spw, R.spw_codes_matching(d.spw))
+    if not d.extend_chan and not d.extend_spw:
+        if d.freq_range is not None:
+            f0, f1 = d.freq_range
+            tol = FREQ_RTOL * np.maximum(np.abs(R.freqs), 1.0)
+            m &= (R.freqs >= f0 - tol) & (R.freqs <= f1 + tol)
+        if d.spw_channels is not None:
+            mc = np.zeros(R.n, dtype=bool)
+            for sc in d.spw_channels:
+                codes = R.spw_codes_matching([sc.spw])
+                mc |= np.isin(R.spw, codes) & (R.chans >= sc.chan_lo) & (R.chans <= sc.chan_hi)
+            m &= mc
+        elif d.channel_range is not None and d.spw is not None:
+            c0, c1 = d.channel_range
+            m &= (R.chans >= c0) & (R.chans <= c1)
+    elif not d.extend_spw and d.spw_channels is not None:
+        m &= np.isin(R.spw, R.spw_codes_matching([sc.spw for sc in d.spw_channels]))
+    if d.time_range is not None and not (d.extend_scan and d.scan_names):
+        t0, t1 = d.time_range
+        m &= (R.times >= t0 - TIME_TOL) & (R.times <= t1 + TIME_TOL)
+    if d.scan_names is not None:
+        codes, cats = R.scan()
+        if codes is not None:
+            m &= np.isin(cats, [str(s) for s in d.scan_names])[codes]
+    if d.field_names is not None:
+        codes, cats = R.field()
+        if codes is not None:
+            m &= np.isin(cats, [str(s) for s in d.field_names])[codes]
+    if d.baseline_ids is not None:
+        m &= R.pair_matrix(d.baseline_ids)[R.c1, R.c2] >= 0
+    if d.antenna_names is not None:
+        names = [str(a) for a in d.antenna_names]
+        m &= np.isin(R.cat1, names)[R.c1] | np.isin(R.cat2, names)[R.c2]
+    if d.correlation is not None and not d.extend_corr:
+        if R.pol not in [str(c) for c in d.correlation]:
+            m[:] = False
+    return m
+
+
+def _row_sample_mask(d: FlagDelta, R: _Rows) -> np.ndarray:
+    from .flag_model import TIME_TOL, _match_sorted
+    out = np.zeros(R.n, dtype=bool)
+    for blk in d.samples:
+        rows = np.flatnonzero(np.isin(R.spw, R.spw_codes_matching([blk.spw])))
+        if rows.size == 0:
+            continue
+        ti = _match_sorted(R.times[rows], blk.times, atol=TIME_TOL)
+        bi = R.pair_matrix(list(zip(blk.ant1, blk.ant2)))[R.c1[rows], R.c2[rows]]
+        if d.extend_chan:
+            fi = np.zeros(rows.size, dtype=np.int64)
+        else:
+            fi = _match_sorted(R.freqs[rows], blk.freqs, rtol=FREQ_RTOL)
+        if d.extend_corr:
+            pi = 0
+        else:
+            pl = list(blk.pols)
+            if R.pol not in pl:
+                continue
+            pi = pl.index(R.pol)
+        ok = (ti >= 0) & (bi >= 0) & (fi >= 0)
+        if not ok.any():
+            continue
+        grid = blk._dense_cached()
+        if d.extend_chan:
+            grid = grid.any(axis=2, keepdims=True)
+        if d.extend_corr:
+            grid = grid.any(axis=3, keepdims=True)
+        hit = np.zeros(rows.size, dtype=bool)
+        hit[ok] = grid[ti[ok], bi[ok], fi[ok], pi]
+        out[rows] |= hit
+    return out
+
+
+def row_delta_mask(d: FlagDelta, R: _Rows) -> np.ndarray:
+    return _row_sample_mask(d, R) if d.is_sample_set else _row_region_mask(d, R)
+
+
+def frame_keep_mask(backend, df, pol, view: str) -> np.ndarray:
+    """Rows of a raw frame drawn in flag *view* (see SelectionSpec.flag_view)."""
+    disk = df["__disk_flag"].to_numpy(dtype=bool)
+    if view == "none":
+        return np.ones(len(df), dtype=bool)
+    if view == "disk":
+        return ~disk
+    pend = backend._pending_deltas()
+    R = _Rows(backend, df, pol) if (pend or view == "proposal") else None
+    eff = disk.copy()
+    for d in pend:
+        m = row_delta_mask(d, R)
+        eff[m] = bool(d.flag)
+    if view == "effective":
+        return ~eff
+    if view == "pending":
+        return eff != disk
+    if view == "proposal":
+        prop = getattr(backend, "_cv_proposal", None)
+        if prop is None:
+            return np.zeros(len(df), dtype=bool)
+        new = eff.copy()
+        new[row_delta_mask(prop, R)] = bool(prop.flag)
+        return new != eff
+    raise ValueError(f"unknown flag view {view!r}")

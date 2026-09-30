@@ -1196,7 +1196,7 @@ class _FlagViewContext:
     graph-construction time, in the calling thread."""
 
     def __init__(self, view: str) -> None:
-        if view not in ("effective", "disk", "pending", "proposal"):
+        if view not in ("effective", "disk", "pending", "proposal", "none"):
             raise ValueError(f"unknown flag view {view!r}")
         self._view = view
         self._token = None
@@ -1465,6 +1465,11 @@ def _freeze(v):
     if isinstance(v, np.ndarray):
         return tuple(v.tolist())
     return v
+
+
+def _Axis_Z_SCORE():
+    from ..axes import Axis
+    return Axis.Z_SCORE
 
 
 def _selection_fingerprint(selection) -> Optional[tuple]:
@@ -2226,6 +2231,10 @@ class XArrayReader(abc.ABC):
         """
         base = self._disk_flag_mask(ds)
         view = _FLAG_VIEW.get()
+        if view == "none":
+            # Raw scatter frames: every valid sample; the on-disk flag is
+            # carried as a column instead (flag_engine.annotate_raw_frames).
+            return xr.zeros_like(base, dtype=bool)
         if view == "disk":
             return base
         pend = self._pending_deltas()
@@ -2420,14 +2429,15 @@ class XArrayReader(abc.ABC):
         sel_fp = _selection_fingerprint(selection)
         if cache.max_bytes <= 0 or sel_fp is None:
             return self._query_columns_raw(xaxis, yaxes, selection)
+        if not getattr(self, "_cv_raw_unsupported", False):
+            raw = self._query_columns_cached_raw(xaxis, yaxes, selection, cache, sel_fp)
+            if raw is not None:
+                return raw
         gen = (int(getattr(selection, "cache_generation", 0) or 0),
                int(getattr(selection, "pending_version", 0) or 0))
-
         token = self._frame_token()
-
         def key_of(k):
             return (token, xaxis, k[0], k[1], sel_fp)
-
         out: dict = {}
         with cache.lock:
             missing = []
@@ -2447,6 +2457,76 @@ class XArrayReader(abc.ABC):
                         df.attrs["extent"] = ext
                     cache.put(key_of(k), gen, df)
                     out[k] = df
+        return {k: out[k].copy(deep=False) for k in yaxes if k in out}
+
+    def _query_columns_cached_raw(self, xaxis, yaxes, selection, cache, sel_fp):
+        """FlagDB v2 (2026-09-30): cache RAW frames -- every valid sample
+        plus its on-disk flag and identity -- keyed WITHOUT the pending-flag
+        version, and apply the current flag view row by row
+        (``flag_engine.frame_keep_mask``).  A flag, unflag, undo or view
+        change then costs a vectorised mask over the cached rows instead of
+        re-reading the MS.  Returns ``None`` (caller falls back to the
+        per-state cache) when this backend's frames lack the identity
+        columns (single-dish stores).
+
+        Z-Score frames are finalized AFTER the view is applied: their
+        per-baseline reference is the drawn (unflagged) population, exactly
+        as before.  One filtered result per layer is memoised for repeated
+        pan/zoom at an unchanged flag state.
+        """
+        from ..flag_engine import RAW_HELPER_COLUMNS, frame_keep_mask
+        view = _FLAG_VIEW.get()
+        gen = ("raw", int(getattr(selection, "cache_generation", 0) or 0))
+        token = self._frame_token()
+
+        def key_of(k):
+            return (token, xaxis, k[0], k[1], sel_fp)
+        raw: dict = {}
+        with cache.lock:
+            missing = []
+            for k in yaxes:
+                if k in raw:
+                    continue
+                frame = cache.get(key_of(k), gen)
+                if frame is None:
+                    missing.append(k)
+                else:
+                    raw[k] = frame
+            if missing:
+                with _FlagViewContext("none"):
+                    built = self._query_columns_raw(xaxis, missing, selection)
+                if getattr(self, "_cv_raw_unsupported", False):
+                    return None
+                for k, df in built.items():
+                    if len(df) and "__disk_flag" not in df.columns:
+                        self._cv_raw_unsupported = True
+                        return None
+                    cache.put(key_of(k), gen, df)
+                    raw[k] = df
+        memo = self.__dict__.setdefault("_cv_view_memo", {})
+        state = (view, int(getattr(selection, "pending_version", 0) or 0), gen, sel_fp, xaxis)
+        out: dict = {}
+        for k in yaxes:
+            if k not in raw:
+                continue
+            hit = memo.get(k)
+            if hit is not None and hit[0] == state and hit[1] is raw[k]:
+                out[k] = hit[2]
+                continue
+            df = raw[k]
+            if len(df) and "__disk_flag" in df.columns:
+                keep = frame_keep_mask(self, df, k[1], view)
+                df = df.loc[keep].drop(columns=[c for c in RAW_HELPER_COLUMNS if c in df.columns])
+                df.reset_index(drop=True, inplace=True)
+            else:
+                df = df.drop(columns=[c for c in RAW_HELPER_COLUMNS if c in df.columns])
+            if k[0] == _Axis_Z_SCORE():
+                df = self._finalize_zscore_frame(df)
+            ext = _frame_extent(df)
+            if ext is not None:
+                df.attrs["extent"] = ext
+            memo[k] = (state, raw[k], df)
+            out[k] = df
         return {k: out[k].copy(deep=False) for k in yaxes if k in out}
 
 

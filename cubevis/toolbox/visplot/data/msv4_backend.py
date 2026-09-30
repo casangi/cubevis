@@ -133,6 +133,12 @@ _THRESH_PAR   = 5_000_000
 _C_MS = 299_792_458.0
 
 
+
+def _raw_view() -> str:
+    from . import reader as _rd
+    return _rd._FLAG_VIEW.get()
+
+
 class MSv4Backend(XArrayReader):
     """``XArrayReader`` backed by MSv4 Zarr Processing Sets.
 
@@ -1229,7 +1235,7 @@ class MSv4Backend(XArrayReader):
         use_fused    = HAS_DASK and total_samples >= _THRESH_FUSED
         use_parallel = HAS_DASK and total_samples >= _THRESH_PAR
 
-        if use_fused and len(selected) > 1:
+        if use_fused and len(selected) > 1 and _raw_view() != "none":
             # OPT-B: collect ALL lazy arrays across ALL partitions, compute once
             return self._query_all_partitions_scatter_fused(
                 selected, xaxis, yaxes
@@ -1257,7 +1263,7 @@ class MSv4Backend(XArrayReader):
                     df = pd.concat(frames, ignore_index=True)
                 else:
                     df = pd.DataFrame({"x": [], "y": []})
-                if key[0] == Axis.Z_SCORE:
+                if key[0] == Axis.Z_SCORE and _raw_view() != "none":
                     df = self._finalize_zscore_frame(df)
                 result[key] = df
             return result
@@ -1739,6 +1745,10 @@ class MSv4Backend(XArrayReader):
             ).items():
                 _df[_name] = _cat
 
+        from . import reader as _rd
+        if _rd._FLAG_VIEW.get() == "none":
+            from ..flag_engine import annotate_raw_frames
+            frames = annotate_raw_frames(self, ds, frames)
         return frames
 
     def _lazy_quantity(

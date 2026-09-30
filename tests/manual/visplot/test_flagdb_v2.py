@@ -694,3 +694,72 @@ def test_scatter_redraw_after_flag_needs_one_query(plotter):
     finally:
         sc._backend.query_columns = orig
         vp.flag_db.clear(record=False)
+
+
+# ====================================================================== #
+# Cached raw scatter frames: row-wise flag views == a fresh read          #
+# ====================================================================== #
+
+def _xy(df):
+    if len(df) == 0:
+        return np.zeros((0, 2))
+    cols = ["x", "y"] if "y" in df.columns else ["x", "zscore"] if "zscore" in df.columns else list(df.columns[:2])
+    a = df[cols].to_numpy(dtype=np.float64)
+    return a[np.lexsort(a.T[::-1])]
+
+
+@pytest.mark.parametrize("yaxis", ["AMPLITUDE", "PHASE", "Z_SCORE"])
+def test_raw_frame_views_match_fresh_read(backend, yaxis):
+    from cubevis.toolbox.visplot.axes import Axis
+    from cubevis.toolbox.visplot.selection import SelectionSpec
+    from cubevis.toolbox.visplot.data.reader import _FlagViewContext
+    t = _parts(backend)[0].time.values
+    region, _ = _eval(backend, kind="raster", x_axis="TIME", x0=t[2], x1=t[5],
+                      y_axis="BASELINE", y0=0.6, y1=3.4, polarization="XX")
+    samples, _ = _eval(backend, kind="scatter", x_axis="TIME", x0=t[0] - 1, x1=t[-1] + 1,
+                       y0=10, y1=100, layers=[{"y_axis": "AMPLITUDE", "polarization": "YY"},
+                                              {"y_axis": "AMPLITUDE", "polarization": "XX"}])
+    unflag, _ = _eval(backend, flag=False, kind="raster", x_axis="TIME", x0=t[0], x1=t[3],
+                      y_axis="BASELINE", y0=-0.5, y1=9.5, polarization="XX")
+    ext = FlagDelta(correlation=["YY"], time_range=(t[7], t[7]), extend_corr=True,
+                    extend_chan=True, baseline_ids=[("ANTENNA-0", "ANTENNA-1")])
+    keys = [(Axis[yaxis], "XX"), (Axis[yaxis], "YY")]
+    states = [([], None), ([region], samples), ([region, samples, unflag], ext),
+              ([region, samples, unflag, ext], None)]
+    for i, (deltas, prop) in enumerate(states):
+        backend.set_pending_flags(deltas, 100 + i, True, prop)
+        sel = SelectionSpec(pending_version=100 + i)
+        for view in ("effective", "disk", "pending", "proposal"):
+            with _FlagViewContext(view):
+                got = backend._query_columns_cached(Axis.TIME, keys, sel)
+                want = backend._query_columns_raw(Axis.TIME, keys, sel)
+            for k in keys:
+                assert "__disk_flag" not in got[k].columns
+                g, w = _xy(got[k]), _xy(want[k])
+                assert g.shape == w.shape, (yaxis, i, view, k, g.shape, w.shape)
+                assert np.allclose(g, w, equal_nan=True), (yaxis, i, view, k)
+    backend.set_pending_flags([], 0)
+
+
+def test_raw_frames_are_not_reread_on_flag_change(backend):
+    from cubevis.toolbox.visplot.axes import Axis
+    from cubevis.toolbox.visplot.selection import SelectionSpec
+    keys = [(Axis.AMPLITUDE, "XX")]
+    backend._query_columns_cached(Axis.TIME, keys, SelectionSpec(pending_version=1))
+    n = {"reads": 0}
+    orig = backend._query_columns_raw
+
+    def spy(*a, **k):
+        n["reads"] += 1
+        return orig(*a, **k)
+    backend._query_columns_raw = spy
+    try:
+        t = _parts(backend)[0].time.values
+        d, _ = _eval(backend, kind="raster", x_axis="TIME", x0=t[1], x1=t[2],
+                     y_axis="BASELINE", y0=-0.5, y1=9.5, polarization="XX")
+        backend.set_pending_flags([d], 2)
+        backend._query_columns_cached(Axis.TIME, keys, SelectionSpec(pending_version=2))
+        assert n["reads"] == 0
+    finally:
+        backend._query_columns_raw = orig
+        backend.set_pending_flags([], 0)

@@ -553,6 +553,76 @@ def evaluate_request(backend, req: dict) -> dict:
             "warnings": warnings}
 
 
+def _probe_from_frames(backend, sel, x_axis, xr_, yr_, layers, max_samples):
+    """``probe_region`` over the cached raw frames: the same rows, box,
+    hidden categories and flag state the Flag box path uses
+    (``_scatter_box_from_frames``), so InfoTool and FlagTool agree by
+    construction and neither reads the MS.  ``None`` to fall back."""
+    import pandas as pd
+    from .data.reader import COLORIZE_AXIS_COLUMNS
+    if not layers or not hasattr(backend, "_raw_frames"):
+        return None
+    keys = [(_axis(l["y_axis"]), str(l["polarization"])) for l in layers]
+    try:
+        frames = backend._raw_frames(x_axis, keys, sel)
+    except Exception:
+        return None
+    if frames is None:
+        return None
+    out, shown_rows, flagged_rows = {}, [], []
+    # __spw too: two windows may cover the same frequencies
+    ident = ["time", "baseline_antenna1_name", "baseline_antenna2_name", "frequency", "__spw"]
+    for lyr, key in zip(layers, keys):
+        name = f"{key[0].name}|{key[1]}"
+        df = frames.get(key)
+        empty = {"status": "no_data", "n_samples": 0, "t_range": None,
+                 "bl_range": None, "bl_ids": None, "freq_range": None}
+        if df is None or not len(df):
+            out[name] = empty
+            continue
+        shown = frame_keep_mask(backend, df, key[1], "effective")
+        x = df["x"].to_numpy(dtype=np.float64)
+        y = df["y"].to_numpy(dtype=np.float64)
+        with np.errstate(invalid="ignore"):
+            m = (np.isfinite(x) & np.isfinite(y) & (x >= xr_[0]) & (x <= xr_[1])
+                 & (y >= yr_[0]) & (y <= yr_[1]))
+        hide_axis, hide_vals = lyr.get("hide_axis"), lyr.get("hide_values")
+        if hide_axis and hide_vals:
+            col = COLORIZE_AXIS_COLUMNS.get(_axis(hide_axis))
+            if col is None or col not in df.columns:
+                return None
+            m &= ~df[col].astype(str).isin([str(v) for v in hide_vals]).to_numpy()
+        sm, fm = m & shown, m & ~shown
+        if fm.any():
+            flagged_rows.append(df.loc[fm, ident].assign(__pol=key[1]))
+        n = int(sm.sum())
+        if not n:
+            out[name] = empty
+            continue
+        shown_rows.append(df.loc[sm, ident].assign(__pol=key[1]))
+        if n > max_samples:
+            out[name] = dict(empty, status="too_many_points", n_samples=n)
+            continue
+        t = df["time"].to_numpy(np.float64)[sm]
+        f = df["frequency"].to_numpy(np.float64)[sm]
+        bl = sorted(int(b) for b in pd.unique(df["baseline_id"].to_numpy()[sm]))
+        out[name] = {"status": "ok", "n_samples": n,
+                     "t_range": (float(t.min()), float(t.max())),
+                     "bl_range": (float(bl[0]), float(bl[-1])) if bl else None,
+                     "bl_ids": bl or None,
+                     "freq_range": (float(f.min()), float(f.max()))}
+
+    distinct_pols = len({str(l["polarization"]) for l in layers}) == len(layers)
+
+    def union(rows):
+        if not rows:
+            return 0
+        if distinct_pols:          # one layer per correlation: rows cannot repeat
+            return int(sum(len(r) for r in rows))
+        return int(len(pd.concat(rows, ignore_index=True).drop_duplicates()))
+    return {"layers": out, "flag_n": union(shown_rows), "unflag_n": union(flagged_rows)}
+
+
 def _scatter_box_from_frames(backend, req, flag, sel, x_axis, xr_, yr_, extend, data_column):
     """Scatter-box resolution over the cached raw frames (identity filter).
 
@@ -882,6 +952,10 @@ def probe_region(backend, req: dict) -> dict:
     y0, y1 = sorted((float(req["y0"]), float(req["y1"])))
     max_samples = int(req.get("max_samples", 200_000))
     layers = list(req.get("layers") or ())
+    if not req.get("force_ms") and not any(_axis(l["y_axis"]) == Axis.Z_SCORE for l in layers):
+        fast = _probe_from_frames(backend, sel, x_axis, (x0, x1), (y0, y1), layers, max_samples)
+        if fast is not None:
+            return fast
     keys = [f"{_axis(l['y_axis']).name}|{l['polarization']}" for l in layers]
     acc = {k: {"n": 0, "t": [], "bl": set(), "f": []} for k in keys}
     flag_n = unflag_n = 0

@@ -2618,8 +2618,9 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             x_range=x_range, y_range=y_range, color_mode=self._color_mode,
             width=self._width, height=self._height,
             probe_grid_max_cells=self._probe_grid_max_cells,
-            ref_scale=self._ref_scale,
+            ref_scale=None if self._skip_ref_once else self._ref_scale,
         )
+        self._skip_ref_once = False
 
         if len(result.layers) != len(self._layers):
             # Positional correspondence is the whole contract here (no
@@ -2971,6 +2972,28 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             self._image_source = ColumnDataSource(data=new_data)
         else:
             self._image_source.data = new_data
+
+    _skip_ref_once = False
+
+    def _prepare_stale_render(self, x0, x1, y0, y1) -> None:
+        """Zoomed in after a flag change: the full-extent re-read is still
+        needed (new data extent, global colour scaling, colour bars), but
+        its full-extent REFERENCE is not -- the zoomed viewport is finer
+        than that reference can serve, so a Level-2 query follows at once
+        and replaces it.  Skip building and shipping it (2026-09-30: the
+        zoomed flag+redraw paid two full reference-bearing scatter queries,
+        ~0.84 s each on zuul06).  Only when clearly zoomed (10% margin), so
+        a view the reference could have served keeps its one-query path."""
+        rs = self._ref_scale
+        if not rs or self._x_range is None or self._y_range is None:
+            return
+        ew = abs(self._x_range[1] - self._x_range[0])
+        eh = abs(self._y_range[1] - self._y_range[0])
+        vw, vh = abs(x1 - x0), abs(y1 - y0)
+        if ew <= 0 or eh <= 0 or vw <= 0 or vh <= 0:
+            return
+        if vw < 0.9 * ew / rs or vh < 0.9 * eh / rs:
+            self._skip_ref_once = True
 
     def _apply_flag_overlays(self, img32, x_range, y_range):
         """Paint pending / proposal overlays over *img32* (in place).

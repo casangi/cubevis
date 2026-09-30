@@ -904,3 +904,69 @@ def test_scatter_box_fast_path_reads_no_visibilities(backend, monkeypatch):
     monkeypatch.setattr(fe, "_filter_dataset", boom)
     d, r = _eval(backend, **req)
     assert d is not None and r["counts"]["n_matched"] == 28
+
+
+def test_zoomed_redraw_after_flag_skips_full_extent_reference(plotter):
+    """Zoomed in, the redraw after a flag needs the full-extent re-read (new
+    extent, scaling) but not its reference, which the zoomed Level-2 query
+    replaces at once.  The final image and reference must equal what the
+    previous two-reference path produced."""
+    vp = plotter
+    vp.flag_db.clear(record=False)
+    sc = vp._slots[1].scatter
+    fx0, fx1 = sc._x_range; fy0, fy1 = sc._y_range
+    zoom = dict(x0=fx0 + (fx1 - fx0) * 0.4, x1=fx0 + (fx1 - fx0) * 0.6,
+                y0=fy0, y1=fy0 + (fy1 - fy0) * 0.2)
+    calls = []
+    orig = sc._backend.query_columns
+
+    def spy(*a, **k):
+        calls.append(k.get("ref_scale"))
+        return orig(*a, **k)
+    sc._backend.query_columns = spy
+    try:
+        sc._handle_rerender(dict(zoom))
+        box = dict(x0=fx0, x1=fx1, y0=10, y1=100, flag=True)
+        _run(vp._handle_box_select(box, "scatter", sc))
+        calls.clear()
+        new = sc._handle_rerender(dict(zoom))["image"].copy()
+        assert calls[0] is None and calls[-1] is not None      # full w/o ref, then Level-2
+        # reference answer: same state, old behaviour (reference on the full re-read)
+        sc._flag_stale = True
+        sc._prepare_stale_render = lambda *a: None
+        old = sc._handle_rerender(dict(zoom))["image"]
+        assert np.array_equal(new, old)
+    finally:
+        sc._backend.query_columns = orig
+        sc.__dict__.pop("_prepare_stale_render", None)
+        vp.flag_db.clear(record=False)
+
+
+@pytest.mark.parametrize("case", ["amp_both", "hidden_ant", "pending"])
+def test_probe_from_frames_matches_ms_path(backend, case):
+    t = _parts(backend)[0].time.values
+    req = dict(selection=__import__("cubevis.toolbox.visplot.selection", fromlist=["x"]).SelectionSpec(),
+               x_axis="TIME", x0=t[0] - 1, x1=t[-1] + 1, y0=0.9, y1=100)
+    if case == "hidden_ant":
+        req["layers"] = [{"y_axis": "AMPLITUDE", "polarization": "XX", "hide_axis": "ANTENNA1",
+                          "hide_values": ["ANTENNA-0"]}]
+    else:
+        req["layers"] = [{"y_axis": "AMPLITUDE", "polarization": "XX"},
+                         {"y_axis": "PHASE", "polarization": "XX"},
+                         {"y_axis": "AMPLITUDE", "polarization": "YY"}]
+    if case == "pending":
+        d, _ = _eval(backend, kind="scatter", x_axis="TIME", x0=t[0] - 1, x1=t[-1] + 1,
+                     y0=10, y1=100, layers=[{"y_axis": "AMPLITUDE", "polarization": "XX"}])
+        backend.set_pending_flags([d], 91)
+    try:
+        fast = backend.probe_flag_region(dict(req))
+        slow = backend.probe_flag_region(dict(req, force_ms=True))
+    finally:
+        backend.set_pending_flags([], 0)
+    assert fast["flag_n"] == slow["flag_n"] and fast["unflag_n"] == slow["unflag_n"]
+    for k in slow["layers"]:
+        a, b = fast["layers"][k], slow["layers"][k]
+        assert a["n_samples"] == b["n_samples"] and a["status"] == b["status"], k
+        for f in ("t_range", "freq_range", "bl_ids", "bl_range"):
+            av, bv = a[f], b[f]
+            assert (av is None and bv is None) or list(av) == list(bv), (k, f)

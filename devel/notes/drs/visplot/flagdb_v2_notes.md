@@ -257,3 +257,19 @@ review dialog, panel refresh) still needs a live GUI check.
   amplitude, phase, hidden categories, unflag over pending flags; fast path
   reads no visibilities. TW Hya Ceres two-layer box: 607 ms -> 38 ms.
 - Still on the MS path: Z-Score layers, non-identity filters, InfoTool probe.
+
+## 2026-09-30: part 19 -- zoomed redraw, InfoTool from frames; success criteria
+- bench 011 (part 18): zuul06 scatter flag+redraws 1.65 -> 1.19 s (scatter
+  box evaluate 414 -> 32 ms).
+- Zoomed redraw after a flag: VisibilityPlot._prepare_stale_render hook;
+  the scatter skips the full-extent REFERENCE on the stale full re-read when
+  the viewport is clearly finer than that reference can serve (10% margin);
+  the Level-2 query that follows supplies the zoomed reference. Test: first
+  query without reference, final image identical to the old path.
+- InfoTool box probe (probe_region) resolved over the cached raw frames with
+  the same rules as the Flag box; sample identity includes __spw (windows may
+  share frequencies -- caught by the equivalence test). Tests vs force_ms for
+  multi-layer, hidden categories, pending flags. TW Hya: 360 -> 51 ms.
+- Agreed success criteria: no duplicated access/compute per flag operation;
+  remote adds <= ~0.3 s beyond worker compute; flag/unflag/undo + both
+  redraws <= 1.5 s on zuul06 zoomed or not; exact, tested sample selection.

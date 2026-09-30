@@ -1179,6 +1179,7 @@ def needs_level2_requery(
     ref: Optional[ScatterLayerReference],
     x0: float, x1: float, y0: float, y1: float,
     canvas_w: int, canvas_h: int,
+    ref_covers_all_data: bool = False,
 ) -> bool:
     """``True`` when viewport (x0,x1,y0,y1) needs finer resolution than
     *ref* can safely serve at Level-1 -- i.e. Level-2 (a real backend
@@ -1207,7 +1208,14 @@ def needs_level2_requery(
         return True
     rx0, rx1 = ref.ref_x_range
     ry0, ry1 = ref.ref_y_range
-    if x0 < rx0 or x1 > rx1 or y0 < ry0 or y1 > ry1:
+    if (x0 < rx0 or x1 > rx1 or y0 < ry0 or y1 > ry1) and not ref_covers_all_data:
+        # Outside the reference there may be data it never saw.  Not so
+        # when the reference came from a FULL-extent render
+        # (``ref_covers_all_data``): its range is the data's own extent,
+        # so beyond it there is nothing to draw and Level-1 is exact.
+        # (2026-09-29: after flagging outliers the data extent shrinks
+        # while the user's view does not; every such redraw used to pay a
+        # second backend query for an image that is empty outside.)
         return True
     agg = ref.ref_agg if ref.ref_agg is not None else ref.ref_cube
     if agg is None:

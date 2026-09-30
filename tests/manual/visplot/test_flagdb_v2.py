@@ -669,3 +669,28 @@ def test_flagdb_report_page(plotter):
     _run(vp.flags.handle_action({"action": "config", "filter": "all"}))
     vp.flag_db.clear(record=False)
     assert "No pending flag operations" in _run(vp.flags.handle_action({"action": "report"}))["report_html"]
+
+
+def test_scatter_redraw_after_flag_needs_one_query(plotter):
+    """Flagging outliers shrinks the scatter's data extent while the view
+    stays put; the redraw must not pay a second backend query for the
+    empty area outside the (full-extent) reference."""
+    vp = plotter
+    vp.flag_db.clear(record=False)
+    sc = vp._slots[1].scatter
+    view = dict(x0=sc._x_range[0], x1=sc._x_range[1], y0=0.0, y1=60.0)
+    n = {"q": 0}
+    orig = sc._backend.query_columns
+
+    def spy(*a, **k):
+        n["q"] += 1
+        return orig(*a, **k)
+    sc._backend.query_columns = spy
+    try:
+        _run(vp._handle_box_select(dict(view, y0=10, y1=100, flag=True), "scatter", sc))
+        n["q"] = 0
+        sc._handle_rerender(dict(view))
+        assert n["q"] == 1
+    finally:
+        sc._backend.query_columns = orig
+        vp.flag_db.clear(record=False)

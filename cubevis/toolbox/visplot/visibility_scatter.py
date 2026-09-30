@@ -1780,6 +1780,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             return False
         return not _sr.needs_level2_requery(
             ref, x0, x1, y0, y1, self._canvas_width, self._canvas_height,
+            ref_covers_all_data=getattr(self, "_ref_full_extent", False),
         )
 
     def _resample_and_composite(
@@ -3032,6 +3033,10 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             docstring for why this must stay ``None`` here rather than
             being pre-resolved to a possibly-stale cached value.
         """
+        # Level-1 may serve viewports beyond the reference only when that
+        # reference came from a full-extent render (see
+        # _scatter_render.needs_level2_requery's ref_covers_all_data).
+        self._ref_full_extent = x_range is None and y_range is None
         if x_range is None and y_range is None:
             x_range, y_range = self._current_render_range()
         self._render_all_layers(self._selection, x_range=x_range, y_range=y_range)

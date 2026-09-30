@@ -165,3 +165,13 @@ review dialog, panel refresh) still needs a live GUI check.
 - Sandbox (local kernel, TW Hya Ceres): redraws after a flag are now worker
   compute dominated (1.0-1.8 s of 1.4-2.4 s); relay/net 0.26-0.39 s.
   A scatter flag triggers two query_columns (look at in step 3).
+
+## 2026-09-30: remote results with part 11 confirmed on both hosts
+- w-encode now non-zero; per-MB overhead unchanged (~250 ms/MB zuul06,
+  ~230 cvpost140) -> the debug writes were not the remote cost there (the old
+  logs were ~20 MB). Remaining per MB: worker encode ~55 ms, client decode
+  ~20 ms, kernel decode/re-encode + Jupyter + network ~170 ms.
+- Step 3 started: scatter Level-1 may serve viewports beyond a FULL-extent
+  reference (nothing outside it); the redraw after a scatter flag that
+  shrinks the extent now issues 1 query_columns instead of 2 (images 99.9%
+  pixel-identical to a forced Level-2, the usual Level-1 resampling edge).

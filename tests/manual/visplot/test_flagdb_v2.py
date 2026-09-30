@@ -729,7 +729,7 @@ def test_raw_frame_views_match_fresh_read(backend, yaxis):
     for i, (deltas, prop) in enumerate(states):
         backend.set_pending_flags(deltas, 100 + i, True, prop)
         sel = SelectionSpec(pending_version=100 + i)
-        for view in ("effective", "disk", "pending", "proposal"):
+        for view in ("effective", "disk", "pending", "proposal", "flagged"):
             with _FlagViewContext(view):
                 got = backend._query_columns_cached(Axis.TIME, keys, sel)
                 want = backend._query_columns_raw(Axis.TIME, keys, sel)
@@ -974,3 +974,44 @@ def test_probe_from_frames_matches_ms_path(backend, case):
         for f in ("t_range", "freq_range", "bl_ids", "bl_range"):
             av, bv = a[f], b[f]
             assert (av is None and bv is None) or list(av) == list(bv), (k, f)
+
+
+def test_flagged_view_shows_flagged_valid_samples_only(backend):
+    """The "flagged" view draws exactly the effectively flagged samples and
+    never padding."""
+    t = _parts(backend)[0].time.values
+    d, _ = _eval(backend, kind="raster", x_axis="TIME", x0=t[4], x1=t[5],
+                 y_axis="BASELINE", y0=-0.5, y1=9.5, polarization="XX")
+    backend.set_pending_flags([d], 31)
+    try:
+        for p in _parts(backend):
+            eff = backend._flag_mask(p).transpose("time", "baseline_id", "frequency", "polarization").values
+            valid = np.isfinite(p.EFFECTIVE_INTEGRATION_TIME.values)[:, :, None, None]
+            with backend.flag_view("flagged"):
+                hidden = backend._flag_mask(p).transpose("time", "baseline_id", "frequency",
+                                                         "polarization").values
+            assert np.array_equal(~hidden, eff & valid)
+    finally:
+        backend.set_pending_flags([], 0)
+
+
+def test_show_flagged_overlay_and_unflag_committed(backend):
+    """Show flagged data at construction: the initial page carries the
+    overlay; an Unflag box over the committed spectrum restores it."""
+    from cubevis.toolbox.visplot import VisibilityPlotter
+    vp = VisibilityPlotter(ms=backend._path, layout="side", correlation="XX,YY",
+                           flag_show_flagged=True, flag_flagged_color="#102030")
+    try:
+        sc = vp._slots[1].scatter
+        assert sc._flag_overlays and sc._flag_overlays[0][0] == "flagged"
+        px = np.frombuffer(bytes([0x10, 0x20, 0x30, int(round(255 * 0.8))]), dtype=np.uint32)[0]
+        assert (np.asarray(sc._image_source.data["image"][0]) == px).sum() > 0
+        view = dict(x0=sc._x_range[0], x1=sc._x_range[1], y0=0.0, y1=60.0)
+        resp = _run(vp._handle_box_select(dict(view, flag=False), "scatter", sc))
+        assert resp["notify_text"].startswith("✓ Unflagged: 12 samples")
+        img = sc._handle_rerender(dict(view))["image"]
+        assert (img == px).sum() == 0
+        _run(vp.flags.handle_action({"action": "config", "show_flagged": False}))
+        assert not sc._flag_overlays
+    finally:
+        vp.close()

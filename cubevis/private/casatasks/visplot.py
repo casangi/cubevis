@@ -78,6 +78,8 @@ def _validate_params(
         flag_preview,
         flag_display,
         flag_color,
+        flag_show_flagged,
+        flag_flagged_color,
 ):
     import re as _re
 
@@ -115,6 +117,8 @@ def _validate_params(
         'flag_preview': 'bool',
         'flag_display': 'str',
         'flag_color': 'str',
+        'flag_show_flagged': 'bool',
+        'flag_flagged_color': 'str',
     }
 
     _simple = {
@@ -210,6 +214,8 @@ def _validate_params(
     _check('flag_preview', flag_preview, _type_map['flag_preview'])
     _check('flag_display', flag_display, _type_map['flag_display'])
     _check('flag_color', flag_color, _type_map['flag_color'])
+    _check('flag_show_flagged', flag_show_flagged, _type_map['flag_show_flagged'])
+    _check('flag_flagged_color', flag_flagged_color, _type_map['flag_flagged_color'])
 
 
 def _visplot_t(
@@ -247,6 +253,8 @@ def _visplot_t(
         flag_preview: bool = False,
         flag_display: str = 'hide',
         flag_color: str = '#ff00ff',
+        flag_show_flagged: bool = False,
+        flag_flagged_color: str = '#7f849c',
 ):
     _app = VisibilityPlotter(
         # user-supplied arguments
@@ -283,6 +291,8 @@ def _visplot_t(
         flag_preview = flag_preview,
         flag_display = flag_display,
         flag_color = flag_color,
+        flag_show_flagged = flag_show_flagged,
+        flag_flagged_color = flag_flagged_color,
         # layer-supplied arguments
         remote_endpoint = None,
         enable_flagging = True,
@@ -314,7 +324,9 @@ class _visplot:
     kernel_name : str | None
         Kernelspec name (``jupyter kernelspec list``) to run the
         MSv2/MSv4 access and Datashader rendering on, via
-        ``cubevis.remote``.  Required when ``backend="remote"``.  The
+        ``cubevis.remote``.  Required when ``backend="remote"``; with
+        ``backend="auto"`` (the default) giving it selects the remote
+        backend.  ``ms``/``ps`` is then a path on the kernel's host.  The
         same string you'd pass to ``AsyncKernelManager(kernel_name=...)``
         directly — a local kernel (``"python3"``) works for testing the
         remote *path* without an actual cluster.  Construction blocks
@@ -400,6 +412,12 @@ class _visplot:
         the default) or ``"color"`` (drawn in ``flag_color``).
     flag_color : str
         Colour for pending flags when ``flag_display="color"``.
+    flag_show_flagged : bool
+        Also draw data that are currently flagged (on disk or pending) in
+        ``flag_flagged_color``, so an Unflag box can select them.  Off by
+        default; toggled in the Flagging controls.
+    flag_flagged_color : str
+        Colour for flagged data when ``flag_show_flagged`` is on.
 
     Resource lifecycle
     ------------------
@@ -468,6 +486,8 @@ class _visplot:
             flag_preview: bool = False,
             flag_display: str = 'hide',
             flag_color: str = '#ff00ff',
+            flag_show_flagged: bool = False,
+            flag_flagged_color: str = '#7f849c',
     )  -> None:
         """Construct the plotter.
 
@@ -517,6 +537,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             flag_preview = flag_preview,
             flag_display = flag_display,
             flag_color = flag_color,
+            flag_show_flagged = flag_show_flagged,
+            flag_flagged_color = flag_flagged_color,
         )
         _logging_state_ = _start_log(
             'visplot',
@@ -554,6 +576,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'flag_preview=' + repr(flag_preview),
                 'flag_display=' + repr(flag_display),
                 'flag_color=' + repr(flag_color),
+                'flag_show_flagged=' + repr(flag_show_flagged),
+                'flag_flagged_color=' + repr(flag_flagged_color),
             ],
         )
         task_result = None
@@ -592,6 +616,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 flag_preview = flag_preview,
                 flag_display = flag_display,
                 flag_color = flag_color,
+                flag_show_flagged = flag_show_flagged,
+                flag_flagged_color = flag_flagged_color,
             )
         except Exception as exc:
             _except_log('visplot', exc)

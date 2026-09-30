@@ -1346,6 +1346,8 @@ def frame_keep_mask(backend, df, pol, view: str) -> np.ndarray:
         return ~eff
     if view == "pending":
         return eff != disk
+    if view == "flagged":            # raw frames hold valid samples only
+        return eff.copy()
     if view == "proposal":
         prop = getattr(backend, "_cv_proposal", None)
         if prop is None:

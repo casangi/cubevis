@@ -283,3 +283,19 @@ review dialog, panel refresh) still needs a live GUI check.
   _prepare_stale_render now returns True to skip the full re-read (refreshes
   axis info, drops stale references). Test: one query; image, extent,
   colour bar and histograms identical to the old full-then-zoomed path.
+
+## 2026-09-30: part 21 -- show flagged data (unflag on-disk flags)
+- New flag view "flagged": only effectively flagged (on-disk and/or pending)
+  VALID samples are drawn (padding never). Dask path: ~(eff & valid);
+  raw frames: eff (frames hold valid samples only).
+- FlagController: show_flagged / flagged_color (GUI checkbox + colour picker;
+  VisibilityPlotter(flag_show_flagged=False, flag_flagged_color="#7f849c");
+  sync_layers regenerated). Overlay drawn first so pending/proposal colours
+  stay on top; init_panels() applies configured overlays and redraws panels
+  already rendered in their constructors so the first page carries it.
+- Unflag boxes already addressed flagged samples; with the overlay they can
+  now be aimed. Report page lists the setting.
+- Tests: flagged view == eff & valid; raw-frame "flagged" view == fresh read;
+  plotter: initial overlay, scatter Unflag box restores the committed
+  spectrum, toggle off clears overlays. Headless Chrome: checkbox toggles,
+  raster cells and scatter points drawn grey.

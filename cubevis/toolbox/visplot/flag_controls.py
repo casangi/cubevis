@@ -62,6 +62,7 @@ NOTIFY_WARN = "#f38ba8"
 PROPOSAL_COLOR = "#fab387"       # orange: proposal under review
 DEFAULT_PENDING_COLOR = "#ff00ff"
 DISPLAY_MODES = ("hide", "color")
+DEFAULT_FLAGGED_COLOR = "#7f849c"   # grey: flagged data shown for unflagging
 
 
 @dataclass
@@ -105,7 +106,8 @@ class FlagController:
 
     def __init__(self, plotter, *, filters: Optional[Mapping[str, Any]] = None,
                  preview: bool = False, display: str = "hide",
-                 color: str = DEFAULT_PENDING_COLOR) -> None:
+                 color: str = DEFAULT_PENDING_COLOR, show_flagged: bool = False,
+                 flagged_color: str = DEFAULT_FLAGGED_COLOR) -> None:
         if display not in DISPLAY_MODES:
             raise ValueError(f"flag_display must be one of {DISPLAY_MODES}; got {display!r}")
         self._plotter = plotter
@@ -116,6 +118,8 @@ class FlagController:
         self.preview = bool(preview)
         self.display = display
         self.color = color or DEFAULT_PENDING_COLOR
+        self.show_flagged = bool(show_flagged)
+        self.flagged_color = flagged_color or DEFAULT_FLAGGED_COLOR
         self.extend_corr = False
         self.extend_chan = False
         self.proposal: Optional[Proposal] = None
@@ -142,6 +146,9 @@ class FlagController:
     def overlays(self) -> list:
         """``[(flag_view, rgba), ...]`` panels composite over their image."""
         out = []
+        if self.show_flagged:
+            # First, so pending / proposal colours are drawn on top of it.
+            out.append(("flagged", _hex_to_rgba(self.flagged_color, 0.8)))
         if self.display == "color" and len(self.db):
             out.append(("pending", _hex_to_rgba(self.color)))
         if self.proposal is not None:
@@ -170,6 +177,25 @@ class FlagController:
                     sel, pending_version=self.state_version, flag_view=view)
             panel._flag_overlays = overlays
             panel._flag_stale = True
+
+    def init_panels(self) -> None:
+        """Give freshly built panels the configured overlays (e.g.
+        ``flag_show_flagged=True`` at construction) before their first
+        render -- without marking them stale."""
+        overlays = self.overlays()
+        for panel in getattr(self._plotter, "_all_panels", ()):
+            panel._flag_overlays = overlays
+            # Panels render inside their constructors, before this runs:
+            # redraw the ones already drawn so the initial page carries the
+            # overlay (only when an overlay is configured at construction).
+            if overlays and getattr(panel, "_selection", None) is not None \
+                    and not getattr(panel, "_deferred", False) \
+                    and (getattr(panel, "_agg", None) is not None
+                         or any(r is not None for r in getattr(panel, "_layer_images", ()) or ())):
+                try:
+                    panel._render(panel._selection)
+                except Exception:
+                    log.debug("initial overlay render failed", exc_info=True)
 
     def stamp_selection(self, sel):
         """Apply the current pending version and view to a new selection."""
@@ -355,6 +381,12 @@ class FlagController:
         if "display" in msg and msg["display"] in DISPLAY_MODES and msg["display"] != self.display:
             self.display = msg["display"]
             refresh = True
+        if "show_flagged" in msg and bool(msg["show_flagged"]) != self.show_flagged:
+            self.show_flagged = bool(msg["show_flagged"])
+            refresh = True
+        if msg.get("flagged_color") and msg["flagged_color"] != self.flagged_color:
+            self.flagged_color = msg["flagged_color"]
+            refresh = refresh or self.show_flagged
         if "color" in msg and msg["color"] and msg["color"] != self.color:
             self.color = msg["color"]
             refresh = refresh or (self.display == "color")
@@ -535,6 +567,8 @@ class FlagController:
             row("Display", esc(self.display) + (f" (colour {esc(self.color)})"
                                                if self.display == "color" else "")),
             row("Preview", "on" if self.preview else "off"),
+            row("Show flagged data", ("on (colour " + esc(self.flagged_color) + ")")
+                if self.show_flagged else "off"),
             row("Current filter", esc(f.label) + (" " + esc(str(self.filter_params.get(f.name)))
                                                   if self.filter_params.get(f.name) else "")),
             row("Extend", ", ".join(x for x, on in (("all correlations", self.extend_corr),
@@ -665,8 +699,8 @@ class FlagController:
                 else:
                     continue
                 w.tags = [spec.name, spec.kind]
-                if spec.help:
-                    w.description = spec.help
+                if spec.help and "description" in w.properties():
+                    w.description = spec.help      # (Checkbox has no tooltip)
                 ws.append(w)
             param_widgets[n] = ws
             desc = Div(text=f"<span style='color:#a6adc8;font-size:11px'>"
@@ -678,6 +712,8 @@ class FlagController:
         display = RadioButtonGroup(labels=["Hide flagged", "Show in colour"],
                                    active=DISPLAY_MODES.index(self.display), width=width)
         color = ColorPicker(title="Pending colour", color=self.color, width=width)
+        show_flagged = Checkbox(label="Show flagged data (to unflag)", active=self.show_flagged)
+        flagged_color = ColorPicker(title="Flagged colour", color=self.flagged_color, width=width)
         # mid-grey: readable on both the dark and the light sidebar
         info = Div(text=self.info_text(), width=width,
                    styles={"font-size": "11px", "color": "#8c8fa1"})
@@ -692,9 +728,11 @@ class FlagController:
                                     param_widgets=param_widgets, param_cols=param_cols,
                                     preview_cb=preview_cb, ext_corr=ext_corr,
                                     ext_chan=ext_chan, display=display, color=color,
+                                    show_flagged=show_flagged, flagged_color=flagged_color,
                                     **self._response_args()),
                           code=_FLAG_RESPONSE_JS + _CONFIG_JS)
-        for w in [filt_sel, preview_cb, ext_corr, ext_chan, display, color] + \
+        for w in [filt_sel, preview_cb, ext_corr, ext_chan, display, color,
+                  show_flagged, flagged_color] + \
                  [w for ws in param_widgets.values() for w in ws]:
             prop = {"Select": "value", "NumericInput": "value", "Checkbox": "active",
                     "RadioButtonGroup": "active", "ColorPicker": "color"}[type(w).__name__]
@@ -707,7 +745,8 @@ class FlagController:
                                                   **self._response_args()),
                                         code=_FLAG_RESPONSE_JS + _REPORT_JS))
         self._widgets.update(info=info)
-        themed = ([filt_sel, preview_cb, ext_corr, ext_chan, display, color, exp_fd, exp_js,
+        themed = ([filt_sel, preview_cb, ext_corr, ext_chan, display, color, show_flagged,
+                   flagged_color, exp_fd, exp_js,
                    report_btn] + list(btns.values())
                   + [w for ws in param_widgets.values() for w in ws])
         if stylesheet is not None:
@@ -716,7 +755,7 @@ class FlagController:
         self._themed = themed
         kids = ([section] if section is not None else []) + [
             filt_sel, *param_cols.values(), preview_cb, ext_corr, ext_chan,
-            display, color, row(*btns.values()), row(exp_fd, exp_js), report_btn, info]
+            display, color, show_flagged, flagged_color, row(*btns.values()), row(exp_fd, exp_js), report_btn, info]
         return column(*kids, width=width)
 
     def themed_widgets(self) -> list:
@@ -862,7 +901,8 @@ comm.send(msg_id, {action: 'config', filter: name, params: params,
                    preview: !!preview_cb.active, extend_corr: !!ext_corr.active,
                    extend_chan: !!ext_chan.active,
                    display: display.active === 1 ? 'color' : 'hide',
-                   color: color.color}, cvApplyFlagResponse);
+                   color: color.color, show_flagged: !!show_flagged.active,
+                   flagged_color: flagged_color.color}, cvApplyFlagResponse);
 """
 
 _REPORT_JS = r"""

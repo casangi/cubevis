@@ -88,6 +88,8 @@ def _visplot_t(
         flag_preview: bool = False,
         flag_display: str = 'hide',
         flag_color: str = '#ff00ff',
+        flag_show_flagged: bool = False,
+        flag_flagged_color: str = '#7f849c',
 ):
     _app = VisibilityPlotter(
         # user-supplied arguments
@@ -124,6 +126,8 @@ def _visplot_t(
         flag_preview = flag_preview,
         flag_display = flag_display,
         flag_color = flag_color,
+        flag_show_flagged = flag_show_flagged,
+        flag_flagged_color = flag_flagged_color,
         # layer-supplied arguments
         remote_endpoint = None,
         enable_flagging = True,
@@ -151,7 +155,9 @@ class _visplot:
     kernel_name : str | None
         Kernelspec name (``jupyter kernelspec list``) to run the
         MSv2/MSv4 access and Datashader rendering on, via
-        ``cubevis.remote``.  Required when ``backend="remote"``.  The
+        ``cubevis.remote``.  Required when ``backend="remote"``; with
+        ``backend="auto"`` (the default) giving it selects the remote
+        backend.  ``ms``/``ps`` is then a path on the kernel's host.  The
         same string you'd pass to ``AsyncKernelManager(kernel_name=...)``
         directly — a local kernel (``"python3"``) works for testing the
         remote *path* without an actual cluster.  Construction blocks
@@ -237,6 +243,12 @@ class _visplot:
         the default) or ``"color"`` (drawn in ``flag_color``).
     flag_color : str
         Colour for pending flags when ``flag_display="color"``.
+    flag_show_flagged : bool
+        Also draw data that are currently flagged (on disk or pending) in
+        ``flag_flagged_color``, so an Unflag box can select them.  Off by
+        default; toggled in the Flagging controls.
+    flag_flagged_color : str
+        Colour for flagged data when ``flag_show_flagged`` is on.
 
     Resource lifecycle
     ------------------
@@ -305,6 +317,8 @@ class _visplot:
         'flag_preview': 'Review each flag proposal (counts, breakdown, highlighted samples) before it is added to the pending flags.',
         'flag_display': 'How pending flags are shown: ``"hide"`` (flagged points disappear, the default) or ``"color"`` (drawn in ``flag_color``).',
         'flag_color': 'Colour for pending flags when ``flag_display="color"``.',
+        'flag_show_flagged': 'Also draw data that are currently flagged (on disk or pending) in ``flag_flagged_color``, so an Unflag box can select them.',
+        'flag_flagged_color': 'Colour for flagged data when ``flag_show_flagged`` is on.',
     }
 
     # Default values, derived from the canonical interface signature.
@@ -342,6 +356,8 @@ class _visplot:
         'flag_preview': False,
         'flag_display': 'hide',
         'flag_color': '#ff00ff',
+        'flag_show_flagged': False,
+        'flag_flagged_color': '#7f849c',
     }
 
     def __init__(self):
@@ -414,6 +430,8 @@ class _visplot:
             'flag_preview': 'bool',
             'flag_display': 'str',
             'flag_color': 'str',
+            'flag_show_flagged': 'bool',
+            'flag_flagged_color': 'str',
         }
         ann = _type_map.get(name, '')
         if not ann:
@@ -1000,6 +1018,36 @@ class _visplot:
             desc, fmt,
         )
 
+    def __flag_show_flagged_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('flag_show_flagged', self._arg_default['flag_show_flagged'])
+        default = self._arg_default['flag_show_flagged']
+        desc    = self._arg_description.get('flag_show_flagged', '')
+        if self.__validate_('flag_show_flagged', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('flag_show_flagged', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __flag_flagged_color_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('flag_flagged_color', self._arg_default['flag_flagged_color'])
+        default = self._arg_default['flag_flagged_color']
+        desc    = self._arg_description.get('flag_flagged_color', '')
+        if self.__validate_('flag_flagged_color', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('flag_flagged_color', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     #--------- global default implementation --------------------------------------
     @static_var('state', __sf__('casa_inp_go_state'))
     def set_global_defaults(self):
@@ -1038,6 +1086,8 @@ class _visplot:
         if 'flag_preview' in glb: del glb['flag_preview']
         if 'flag_display' in glb: del glb['flag_display']
         if 'flag_color' in glb: del glb['flag_color']
+        if 'flag_show_flagged' in glb: del glb['flag_show_flagged']
+        if 'flag_flagged_color' in glb: del glb['flag_flagged_color']
 
     #--------- inp function -------------------------------------------------------
     def inp(self):
@@ -1074,6 +1124,8 @@ class _visplot:
         self.__flag_preview_inp()
         self.__flag_display_inp()
         self.__flag_color_inp()
+        self.__flag_show_flagged_inp()
+        self.__flag_flagged_color_inp()
 
     #--------- tget function ------------------------------------------------------
     @static_var('state', __sf__('casa_inp_go_state'))
@@ -1136,6 +1188,8 @@ class _visplot:
         _invocation_parameters['flag_preview'] = glb.get('flag_preview', self._arg_default['flag_preview'])
         _invocation_parameters['flag_display'] = glb.get('flag_display', self._arg_default['flag_display'])
         _invocation_parameters['flag_color'] = glb.get('flag_color', self._arg_default['flag_color'])
+        _invocation_parameters['flag_show_flagged'] = glb.get('flag_show_flagged', self._arg_default['flag_show_flagged'])
+        _invocation_parameters['flag_flagged_color'] = glb.get('flag_flagged_color', self._arg_default['flag_flagged_color'])
 
         try:
             with open(_postfile, 'w') as _f:
@@ -1189,6 +1243,8 @@ class _visplot:
             flag_preview = _UNSET,
             flag_display = _UNSET,
             flag_color = _UNSET,
+            flag_show_flagged = _UNSET,
+            flag_flagged_color = _UNSET,
     ):
         def noobj(s):
             if s.startswith('<') and s.endswith('>'):
@@ -1235,6 +1291,8 @@ class _visplot:
             flag_preview,
             flag_display,
             flag_color,
+            flag_show_flagged,
+            flag_flagged_color,
         ]
 
         if any(x is not _UNSET for x in _arguments):
@@ -1340,6 +1398,12 @@ class _visplot:
             _invocation_parameters['flag_color'] = \
                 flag_color if flag_color is not _UNSET \
                 else glb.get('flag_color', self._arg_default['flag_color'])
+            _invocation_parameters['flag_show_flagged'] = \
+                flag_show_flagged if flag_show_flagged is not _UNSET \
+                else glb.get('flag_show_flagged', self._arg_default['flag_show_flagged'])
+            _invocation_parameters['flag_flagged_color'] = \
+                flag_flagged_color if flag_flagged_color is not _UNSET \
+                else glb.get('flag_flagged_color', self._arg_default['flag_flagged_color'])
         else:
             # inp/go-style invocation: read everything from the global frame
             _invocation_parameters['ms'] = \
@@ -1408,6 +1472,10 @@ class _visplot:
                 glb.get('flag_display', self._arg_default['flag_display'])
             _invocation_parameters['flag_color'] = \
                 glb.get('flag_color', self._arg_default['flag_color'])
+            _invocation_parameters['flag_show_flagged'] = \
+                glb.get('flag_show_flagged', self._arg_default['flag_show_flagged'])
+            _invocation_parameters['flag_flagged_color'] = \
+                glb.get('flag_flagged_color', self._arg_default['flag_flagged_color'])
 
         try:
             with open(_prefile, 'w') as _f:
@@ -1461,6 +1529,8 @@ class _visplot:
                     'flag_preview=' + repr(_invocation_parameters['flag_preview']),
                     'flag_display=' + repr(_invocation_parameters['flag_display']),
                     'flag_color=' + repr(_invocation_parameters['flag_color']),
+                    'flag_show_flagged=' + repr(_invocation_parameters['flag_show_flagged']),
+                    'flag_flagged_color=' + repr(_invocation_parameters['flag_flagged_color']),
                 ],
             )
             task_result = _visplot_t(
@@ -1497,6 +1567,8 @@ class _visplot:
                 flag_preview = _invocation_parameters['flag_preview'],
                 flag_display = _invocation_parameters['flag_display'],
                 flag_color = _invocation_parameters['flag_color'],
+                flag_show_flagged = _invocation_parameters['flag_show_flagged'],
+                flag_flagged_color = _invocation_parameters['flag_flagged_color'],
             )
         except Exception as exc:
             _except_log('visplot', exc)

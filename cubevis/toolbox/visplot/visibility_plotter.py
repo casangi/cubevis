@@ -1814,6 +1814,12 @@ class VisibilityPlotter:
         the default) or ``"color"`` (drawn in ``flag_color``).
     flag_color : str
         Colour for pending flags when ``flag_display="color"``.
+    flag_show_flagged : bool
+        Also draw data that are currently flagged (on disk or pending) in
+        ``flag_flagged_color``, so an Unflag box can select them.  Off by
+        default; toggled in the Flagging controls.
+    flag_flagged_color : str
+        Colour for flagged data when ``flag_show_flagged`` is on.
 
     Resource lifecycle
     ------------------
@@ -1883,6 +1889,8 @@ class VisibilityPlotter:
         flag_preview:     bool           = False,
         flag_display:     str            = "hide",
         flag_color:       str            = "#ff00ff",
+        flag_show_flagged: bool          = False,
+        flag_flagged_color: str          = "#7f849c",
     ) -> None:
         """Construct the plotter.
 
@@ -1918,7 +1926,8 @@ class VisibilityPlotter:
         # state.  ``self._flag_db`` stays as the historical alias.
         self._flags           = FlagController(
             self, filters=flag_filters, preview=flag_preview,
-            display=flag_display, color=flag_color)
+            display=flag_display, color=flag_color,
+            show_flagged=flag_show_flagged, flagged_color=flag_flagged_color)
         self._flag_db         = self._flags.db
         # Part 6: bumped by Reload; carried to the backend in the
         # SelectionSpec so its frame cache re-reads instead of reusing.
@@ -2548,6 +2557,7 @@ class VisibilityPlotter:
 
         self._all_panels = [obj for slot in self._slots
                             for obj in (slot.raster, slot.scatter)]
+        self._flags.init_panels()
 
         # Part 6 (2026-09): scatter layers in "statistical" coloring use
         # the RASTER's ramp (opaque, deep blue -> yellow) rather than the

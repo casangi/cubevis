@@ -153,7 +153,9 @@ class SelectionSpec:
     * ``"pending"`` -- only the samples whose state the pending deltas
       change are unflagged (used to draw the pending overlay);
     * ``"proposal"`` -- only the samples a proposal under review would
-      change (used to draw the proposal overlay).
+      change (used to draw the proposal overlay);
+    * ``"flagged"`` -- only the samples that are flagged now (on disk and/or
+      pending), never padding (the "show flagged data" overlay).
 
     Part of the frame-cache fingerprint (it decides which rows are drawn).
     """

@@ -1196,7 +1196,7 @@ class _FlagViewContext:
     graph-construction time, in the calling thread."""
 
     def __init__(self, view: str) -> None:
-        if view not in ("effective", "disk", "pending", "proposal", "none"):
+        if view not in ("effective", "disk", "pending", "proposal", "none", "flagged"):
             raise ValueError(f"unknown flag view {view!r}")
         self._view = view
         self._token = None
@@ -2242,6 +2242,17 @@ class XArrayReader(abc.ABC):
         eff = apply_pending(self, ds, base, pend) if pend else base
         if view == "pending":
             return eff == base
+        if view == "flagged":
+            # Only the samples that ARE flagged (on disk and/or pending) are
+            # drawn -- the "show flagged data" overlay, so an Unflag box has
+            # something to aim at.  Padding (EFFECTIVE_INTEGRATION_TIME NaN,
+            # flagged by xarray-ms) is never data and never drawn.
+            from ..flag_engine import valid_mask, _bdim
+            v = valid_mask(self, ds)
+            if v is None:
+                return ~eff
+            vda = xr.DataArray(v, dims=("time", _bdim(self)))
+            return ~(eff & vda)
         if view == "proposal":
             prop = getattr(self, "_cv_proposal", None)
             if prop is None:

@@ -440,6 +440,16 @@ class RemoteReductionContext(ReductionContext):
             stats[method] = (n + 1, tot + dt, max(mx, dt), dt)
             log.debug("remote %s: %.4fs%s", method, dt, "" if ok else " (FAILED)")
 
+    def runtime_info(self, timeout: Optional[float] = None) -> dict:
+        """What the remote worker is running (paths, versions, whether the
+        relay counters exist).  ``{"error": ...}`` if the remote cubevis is
+        too old to answer."""
+        try:
+            return self._call("runtime_info", timeout=timeout)
+        except Exception as exc:
+            return {"error": f"remote cubevis has no runtime_info ({exc}); it predates "
+                             "this client -- update the kernel environment"}
+
     def call_stats(self, reset: bool = False, timeout: Optional[float] = None) -> dict:
         """Round-trip timing per remote method, with the worker's own
         compute time for the same methods.

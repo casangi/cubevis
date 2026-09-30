@@ -114,6 +114,28 @@ class VisplotRemoteBackend:
                     "worker %s: %.4fs", name, dt)
         return _timed
 
+    def runtime_info(self) -> dict:
+        """Where this worker's code comes from -- so a benchmark or a bug
+        report can tell which cubevis the REMOTE side is running (the kernel
+        environment has its own installed copy, independent of P_local)."""
+        import os
+        import sys
+        import cubevis
+        import cubevis.remote._worker_transport as wt
+        info = {"python": sys.version.split()[0], "executable": sys.executable,
+                "cubevis_path": os.path.dirname(cubevis.__file__),
+                "worker_transport": wt.__file__,
+                "frame_stats": hasattr(wt, "FRAME_STATS"),
+                "frame_debug": bool(getattr(wt, "_FRAME_DEBUG", True)),
+                "pid": os.getpid()}
+        try:
+            info["cubevis_version"] = getattr(cubevis, "__version__", None)
+        except Exception:
+            pass
+        dbg = "/tmp/cubevis_frame_debug2.log"
+        info["frame_debug_log_bytes"] = os.path.getsize(dbg) if os.path.exists(dbg) else 0
+        return info
+
     def call_stats(self, reset: bool = False) -> dict:
         """``{method: [count, total_s, max_s, last_s]}`` measured in the worker."""
         try:

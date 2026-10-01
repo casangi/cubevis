@@ -211,9 +211,31 @@ def _runs(sorted_idx: np.ndarray) -> list:
     return [(int(sorted_idx[s]), int(sorted_idx[e])) for s, e in zip(starts, ends)]
 
 
+#: Upper bound on time ranges per command line (keeps each MSSelection
+#: expression a manageable size).
+MAX_TIMES_PER_LINE = 200
+
+
 def sample_lines(d: FlagDelta, spw_ids: Optional[Mapping] = None,
                  reason: str = "") -> list:
-    """Materialized ``flagdata`` lines for a sample-set delta."""
+    """Materialized ``flagdata`` lines for a sample-set delta -- exact.
+
+    Each command selects a cross product (times x baselines x channels x
+    correlations), so samples are grouped such that every cross product is
+    exactly a set of selected samples:
+
+    1. per baseline and correlation set, contiguous runs of ACTUAL channel
+       numbers (2026-09-30 fix: runs used to be taken over the trimmed grid,
+       whose neighbouring columns need not be neighbouring channels, so a
+       run could also flag the channels in between);
+    2. the times sharing (baseline, correlations, channel run) become one
+       comma-separated ``timerange`` list;
+    3. baselines with identical (correlations, channel run, times) share one
+       ``antenna`` list.
+
+    The number of commands is then set by the structure of the selection,
+    not by the number of samples (one command per sample before).
+    """
     out = []
     for blk in d.samples:
         grid = blk.dense()
@@ -221,37 +243,48 @@ def sample_lines(d: FlagDelta, spw_ids: Optional[Mapping] = None,
             grid = np.broadcast_to(grid.any(axis=2, keepdims=True), grid.shape)
         if d.extend_corr:
             grid = np.broadcast_to(grid.any(axis=3, keepdims=True), grid.shape)
-        # (time, pol-set, channel-run) -> [baselines]
-        groups = defaultdict(list)
+        chans = np.asarray(blk.chans, dtype=np.int64)
+        freq_of = {int(c): float(f) for c, f in zip(chans, blk.freqs)}
         nt, nb, nf, npol = grid.shape
+        # (baseline, pols, run) -> [time indices]
+        per_bl = defaultdict(list)
         for it in range(nt):
             for ib in range(nb):
                 g = grid[it, ib]
                 if not g.any():
                     continue
-                # per channel run, which correlations
-                col_key = {}
+                runs_for = defaultdict(list)                     # run -> pols
                 for ip in range(npol):
-                    for run in _runs(np.flatnonzero(g[:, ip])):
-                        col_key.setdefault(run, []).append(blk.pols[ip])
-                for run, pols in col_key.items():
-                    groups[(it, tuple(pols), run)].append(ib)
-        for (it, pols, run), bls in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][2])):
-            t = float(blk.times[it])
-            fields = {"mode": _mode(d),
-                      "timerange": casa_timerange(t, t, d.time_format),
-                      "antenna": ";".join(f"{blk.ant1[b]}&{blk.ant2[b]}" for b in bls)}
-            if not d.extend_chan:
-                c0, c1 = run
-                fields["spw"] = _spw_expr(blk.spw, (int(blk.chans[c0]), int(blk.chans[c1])),
-                                          (float(blk.freqs[c0]), float(blk.freqs[c1])), spw_ids)
-            else:
-                fields["spw"] = _spw_expr(blk.spw, None, None, spw_ids)
-            if pols is not None and not d.extend_corr:
-                fields["correlation"] = ",".join(pols)
-            if reason:
-                fields["reason"] = reason
-            out.append(_line(fields))
+                    sel = np.sort(chans[np.flatnonzero(g[:, ip])])
+                    for run in _runs(sel):
+                        runs_for[run].append(blk.pols[ip])
+                for run, pols in runs_for.items():
+                    per_bl[(ib, tuple(pols), run)].append(it)
+        # (pols, run, times) -> [baselines]
+        merged = defaultdict(list)
+        for (ib, pols, run), its in per_bl.items():
+            merged[(pols, run, tuple(its))].append(ib)
+        for (pols, run, its), bls in sorted(merged.items(),
+                                             key=lambda kv: (kv[0][2][0], kv[0][1])):
+            for k in range(0, len(its), MAX_TIMES_PER_LINE):
+                chunk = its[k:k + MAX_TIMES_PER_LINE]
+                fields = {"mode": _mode(d),
+                          "timerange": ",".join(
+                              casa_timerange(float(blk.times[i]), float(blk.times[i]),
+                                             d.time_format) for i in chunk),
+                          "antenna": ";".join(f"{blk.ant1[b]}&{blk.ant2[b]}" for b in bls)}
+                if not d.extend_chan:
+                    c0, c1 = run
+                    fields["spw"] = _spw_expr(blk.spw, (c0, c1),
+                                              (freq_of.get(c0, blk.spw.freq_min),
+                                               freq_of.get(c1, blk.spw.freq_max)), spw_ids)
+                else:
+                    fields["spw"] = _spw_expr(blk.spw, None, None, spw_ids)
+                if pols is not None and not d.extend_corr:
+                    fields["correlation"] = ",".join(pols)
+                if reason:
+                    fields["reason"] = reason
+                out.append(_line(fields))
     return out
 
 

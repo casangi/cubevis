@@ -355,3 +355,20 @@ review dialog, panel refresh) still needs a live GUI check.
   time-stamped default names <data>.flags.<YYYYmmdd-HHMMSS>.jsonl /
   .flagdata.<ts>.py, and an explicit existing file name is refused.
 - Part 29: Plot/presets (doPlot) release busy only after their own updates are painted and hold it across the ~300 ms re-render debounce the new ranges trigger; headless trace after Z-Score: one continuous busy span from click to the redrawn plot.
+
+## 2026-09-30: part 30 -- MSv2 commit left points unflagged (investigation)
+- Export audit with an MSSelection-semantics emulator (cross product of
+  timerange list x baselines x spw:chan range x correlations) found a real
+  bug: sample-set channel runs were taken over the TRIMMED grid columns, so
+  '1~3' could be written for samples on channels 1 and 3 (collateral flags
+  on 2). Fixed: runs over actual channel numbers. Commands are now grouped
+  exactly (per baseline/correlations/channel run -> time LIST; identical
+  groups share an antenna list): TW Hya Ceres dense box 19,935 samples ->
+  11,861 commands, emulated selection == sample set exactly.
+- Before: one command per (time, pols, run) -> ~one per sample; a 40,899
+  sample operation became one flagdata call with tens of thousands of
+  commands. Calls are now chunked (FLAGDATA_CHUNK=500); the result message
+  reports commands/calls. The missing flags are most likely CASA-side with
+  that single huge list -- needs the commit message / CASA log to confirm.
+- Dialog readability: page colour variables, full-strength text, labels by
+  opacity, solid accent border, sans-serif.

@@ -515,11 +515,12 @@ class FlagController:
         rows.append(("Provenance", html.escape(" → ".join(d.provenance))))
         if prop.warnings:
             rows.append(("Notes", html.escape("; ".join(prop.warnings))))
-        body = "".join(f"<tr><td style='padding-right:10px;color:#a6adc8'>{k}</td>"
-                       f"<td>{v}</td></tr>" for k, v in rows)
-        return (f"<div style='font-family:monospace;font-size:12px'>"
-                f"<b style='color:{PROPOSAL_COLOR}'>Flag proposal</b>"
-                f"<table>{body}</table></div>")
+        body = "".join(f"<tr><td style='padding:1px 14px 1px 0;opacity:0.75;"
+                       f"white-space:nowrap;vertical-align:top'>{k}</td>"
+                       f"<td style='padding:1px 0'>{v}</td></tr>" for k, v in rows)
+        return (f"<div style='font-family:system-ui,sans-serif;line-height:1.35'>"
+                f"<div style='font-size:14px;font-weight:600;margin-bottom:4px'>Flag proposal</div>"
+                f"<table style='border-collapse:collapse'>{body}</table></div>")
 
     # ================================================================== #
     # Export / Python API                                                  #
@@ -726,12 +727,15 @@ class FlagController:
                 ("Samples (as proposed)", f"{n_samples:,}"), ("Method", esc(how)),
                 ("After writing", "the result is compared with what visplot showed; "
                                   "the pending list is emptied and the plots re-read the data")]
-        body = "".join(f"<tr><td style='padding-right:10px;color:#a6adc8'>{k}</td>"
-                       f"<td>{v}</td></tr>" for k, v in rows)
-        return (f"<div style='font-family:monospace;font-size:12px'>"
-                f"<b style='color:{PROPOSAL_COLOR}'>Write pending flags to the data?</b>"
-                f"<table>{body}</table>"
-                f"<div style='color:#f38ba8'>This modifies the data set on disk.</div></div>")
+        body = "".join(f"<tr><td style='padding:1px 14px 1px 0;opacity:0.75;"
+                       f"white-space:nowrap;vertical-align:top'>{k}</td>"
+                       f"<td style='padding:1px 0'>{v}</td></tr>" for k, v in rows)
+        return (f"<div style='font-family:system-ui,sans-serif;line-height:1.35'>"
+                f"<div style='font-size:14px;font-weight:600;margin-bottom:4px'>"
+                f"Write pending flags to the data?</div>"
+                f"<table style='border-collapse:collapse'>{body}</table>"
+                f"<div style='margin-top:6px;font-weight:600;color:#e64553'>"
+                f"This modifies the data set on disk.</div></div>")
 
     async def _do_commit(self) -> dict:
         pend, self._commit_pending = self._commit_pending, None
@@ -744,7 +748,9 @@ class FlagController:
                  f"backup <b>{html.escape(str(rep.get('backup')))}</b>")
         if rep.get("verified", True):
             text = (f"✓ Wrote {len(deltas)} operation(s) "
-                    f"({rep.get('expected_changes', 0):,} sample changes); verified. "
+                    f"({rep.get('expected_changes', 0):,} sample changes"
+                    + (f"; {rep['commands']:,} flagdata command(s) in {rep['flagdata_calls']} call(s)"
+                       if rep.get("commands") is not None else "") + "); verified. "
                     f"Previous flags saved as {where}.")
             color = NOTIFY_OK
         else:
@@ -1027,9 +1033,13 @@ class FlagController:
         div = Div(text="", sizing_mode="stretch_width")
         acc = Button(label="Accept", button_type="success", width=110)
         rej = Button(label="Reject", button_type="danger", width=110)
+        # Readable in both themes: page colours via the info-strip CSS
+        # variables (set by the Light/Dark toggle), full-strength text, a
+        # solid accent border (2026-09-30: grey-on-grey was hard to read).
+        div.styles = {"color": "var(--cv-info-fg, #cdd6f4)", "font-size": "13px"}
         box = column(div, row(acc, rej), visible=False, sizing_mode="stretch_width",
-                     styles={"background": "#313244", "padding": "6px 10px",
-                             "border": f"2px dashed {PROPOSAL_COLOR}"})
+                     styles={"background": "var(--cv-info-bg, #1e1e2e)", "padding": "8px 12px",
+                             "border": f"2px solid {PROPOSAL_COLOR}", "border-radius": "6px"})
         self._widgets.update(preview_div=div, preview_box=box)
         for b, action in ((acc, "accept"), (rej, "reject")):
             b.js_on_click(CustomJS(args=dict(comm=comm, msg_id=msg_id, action=action,

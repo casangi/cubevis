@@ -377,8 +377,11 @@ class FlagController:
                 out = self.response("", NOTIFY_OK, refresh=False)
                 out["report_html"] = self.report_html()
                 return out
-            if action in ("export_flagdata", "export_jsonl"):
-                path = self.export(fmt="flagdata" if action == "export_flagdata" else "jsonl")
+            if action == "export_flagdata":
+                return self.response("⚠ flagdata export was removed; use JSON or "
+                                     "Write flags (Export / commit).", NOTIFY_WARN, refresh=False)
+            if action == "export_jsonl":
+                path = self.export(fmt="jsonl")
                 return self.response(f"Wrote {html.escape(path)}", NOTIFY_OK, refresh=False)
         except Exception as exc:
             log.exception("flag action %r failed", action)
@@ -526,32 +529,21 @@ class FlagController:
     # Export / Python API                                                  #
     # ================================================================== #
 
-    def export(self, path: Optional[str] = None, fmt: str = "flagdata") -> str:
-        from .flag_export import to_flagdata_lines, to_jsonl
+    def export(self, path: Optional[str] = None, fmt: str = "jsonl") -> str:
+        """Write the pending operations as JSON Lines; returns the path.
+        (``fmt="flagdata"`` was removed on 2026-09-30 -- see flag_export.)"""
+        from .flag_export import to_jsonl
+        if fmt != "jsonl":
+            raise ValueError(f"unknown export format {fmt!r}: only 'jsonl' is supported "
+                             "(flagdata export was removed; write flags with the exact "
+                             "Export / commit path instead)")
         src = getattr(self._plotter, "_source_path", "") or "visplot"
-        base = os.path.basename(os.path.normpath(src)) or "visplot"
-        if path is None:
-            path = base + (".flagcmd.txt" if fmt == "flagdata" else ".flags.jsonl")
-        deltas = self.db.deltas()
-        if fmt == "flagdata":
-            spw_ids = {}
-            all_spws = None
-            try:
-                spw_ids = self.reader.spw_casa_ids()
-                all_spws = [SpwKey.from_dict(k) for k in self.reader.flag_spw_table()]
-            except Exception:
-                log.debug("spw id lookup unavailable", exc_info=True)
-            lines = [f"# visplot pending flags for {src}; apply in order with "
-                     f"flagdata(vis=..., mode='list', inpfile='{os.path.basename(path)}')"]
-            lines += to_flagdata_lines(deltas, spw_ids=spw_ids, all_spws=all_spws)
-            text = "\n".join(lines) + "\n"
-        elif fmt == "jsonl":
-            text = to_jsonl(deltas, self._json_header(src))
-        else:
-            raise ValueError(f"unknown export format {fmt!r}")
+        path = path or self._default_path(".flags.jsonl")
+        text = to_jsonl(self.db.deltas(), self._json_header(src))
         with open(path, "w") as fh:
             fh.write(text)
         return os.path.abspath(path)
+
 
     # ================================================================== #
     # Export / commit / load                                               #
@@ -562,10 +554,10 @@ class FlagController:
         if self._caps is None:
             fn = getattr(self.reader, "flag_commit_capabilities", None)
             try:
-                self._caps = fn() if fn else {"format": "msv2", "write": False, "script": False,
+                self._caps = fn() if fn else {"format": "msv2", "write": False,
                                               "write_reason": "reader cannot commit"}
             except Exception as exc:
-                self._caps = {"format": "?", "write": False, "script": False,
+                self._caps = {"format": "?", "write": False,
                               "write_reason": str(exc)}
         return self._caps
 
@@ -574,16 +566,10 @@ class FlagController:
         caps = self.capabilities()
         msv2 = caps.get("format") != "msv4"
         opts = [("json", "Save flags as JSON")]
-        if msv2:
-            opts.append(("script", "Python flagdata script (casatasks)"))
-        label = ("Write flags to the MS (exact, arcae)" if msv2
-                 else "Write flags to the PS (zarr)")
+        label = "Write flags to the MS" if msv2 else "Write flags to the PS"
         if not caps.get("write"):
             label += " -- unavailable"
         opts.append(("commit", label))
-        if msv2:
-            opts.append(("commit_casa", "Write flags to the MS (CASA flagdata)"
-                         + ("" if caps.get("casa") else " -- unavailable")))
         opts.append(("load", "Load flags from JSON (as pending)"))
         opts.append(("restore", "Restore flags from a commit backup (.npz)"))
         return opts
@@ -667,7 +653,7 @@ class FlagController:
         path = (msg.get("path") or "").strip() or None
         deltas = self.db.deltas()
         caps = self.capabilities()
-        if kind in ("json", "script"):
+        if kind == "json":
             refusal = self._refuse_existing(path)
             if refusal:
                 return self.response(refusal, NOTIFY_WARN, refresh=False)
@@ -675,16 +661,6 @@ class FlagController:
             p = self.export(path or self._default_path(".flags.jsonl"), fmt="jsonl")
             return self.response(f"Wrote {len(deltas)} operation(s) to {html.escape(p)}",
                                  NOTIFY_OK, refresh=False)
-        if kind == "script":
-            if caps.get("format") == "msv4":
-                return self.response("⚠ The flagdata script is for MSv2 data.", NOTIFY_WARN,
-                                     refresh=False)
-            text = await asyncio.to_thread(self.reader.flagdata_script, list(deltas))
-            p = os.path.abspath(path or self._default_path(".flagdata.py"))
-            with open(p, "w") as fh:
-                fh.write(text)
-            return self.response(f"Wrote flagdata script {html.escape(p)}", NOTIFY_OK,
-                                 refresh=False)
         if kind == "load":
             if not path:
                 return self.response("⚠ Give the JSON file to load in the file box.",
@@ -696,44 +672,40 @@ class FlagController:
             if not path:
                 return self.response("⚠ Give the backup (.npz) file in the file box.",
                                      NOTIFY_WARN, refresh=False)
+            if not os.path.exists(path):
+                return self.response(f"⚠ {html.escape(path)} does not exist.", NOTIFY_WARN,
+                                     refresh=False)
             rep = await asyncio.to_thread(self.reader.restore_flag_backup, path)
             self._after_disk_change()
             what = (f"{rep['restored']:,} sample flag(s)" if "restored" in rep
                     else f"the flags of {rep.get('restored_rows', 0):,} row(s)")
             return self.response(f"Restored {what} from {html.escape(path)}", NOTIFY_OK)
-        if kind in ("commit", "commit_casa"):
-            casa = kind == "commit_casa"
-            ok = caps.get("casa") if casa else caps.get("write")
-            if not ok:
-                reason = caps.get("casa_reason" if casa else "write_reason")
+        if kind == "commit":
+            if not caps.get("write"):
                 return self.response("⚠ Writing flags is unavailable here: "
-                                     + html.escape(reason or "unknown reason"),
+                                     + html.escape(caps.get("write_reason") or "unknown reason"),
                                      NOTIFY_WARN, refresh=False)
             if not deltas:
                 return self.response("Nothing to write: no pending operations.", NOTIFY_OK,
                                      refresh=False)
-            method = "casa" if casa else ("arcae" if caps.get("format") != "msv4" else None)
-            self._commit_pending = {"id": uuid.uuid4().hex, "deltas": deltas, "method": method}
+            self._commit_pending = {"id": uuid.uuid4().hex, "deltas": deltas}
             return self.response("Confirm writing the pending flags.", NOTIFY_OK,
                                  refresh=False,
                                  preview={"id": self._commit_pending["id"],
-                                          "html": self._commit_html(deltas, caps, method)})
+                                          "html": self._commit_html(deltas, caps)})
         return self.response(f"⚠ Unknown export kind {html.escape(str(kind))}", NOTIFY_WARN,
                              refresh=False)
 
-    def _commit_html(self, deltas, caps, method=None) -> str:
+    def _commit_html(self, deltas, caps) -> str:
         esc = html.escape
         src = getattr(self._plotter, "_source_path", "") or ""
         msv2 = caps.get("format") != "msv4"
         n_samples = sum(d.n_samples or 0 for d in deltas)
-        if method == "casa":
-            how = ("casatasks.flagdata (list mode, operations in order), after saving the "
-                   "current flags with flagmanager")
-        elif msv2:
-            how = ("arcae: the final flag of exactly the changed samples written to their "
-                   "MS rows (FLAG_ROW kept consistent), after saving their previous values "
-                   "to a backup file next to the MS"
-                   + (" and a CASA flag version" if caps.get("casa") else ""))
+        if msv2:
+            how = ("the final flag of exactly the changed samples is written to their MS "
+                   "rows with arcae (FLAG_ROW kept consistent), after saving their previous "
+                   "values to a backup file next to the MS"
+                   + (" and a CASA flag version" if caps.get("casa_version") else ""))
         else:
             how = ("zarr writes of exactly the changed samples, after saving their previous "
                    "values to a backup file next to the store")
@@ -754,8 +726,7 @@ class FlagController:
     async def _do_commit(self) -> dict:
         pend, self._commit_pending = self._commit_pending, None
         deltas = pend["deltas"]
-        opts = {"method": pend["method"]} if pend.get("method") else {}
-        rep = await asyncio.to_thread(self.reader.commit_pending_flags, list(deltas), **opts)
+        rep = await asyncio.to_thread(self.reader.commit_pending_flags, list(deltas))
         self.db.clear(record=False)
         self._after_disk_change()
         parts = []
@@ -767,8 +738,8 @@ class FlagController:
         if rep.get("verified", True):
             text = (f"✓ Wrote {len(deltas)} operation(s) "
                     f"({rep.get('expected_changes', 0):,} sample changes"
-                    + (f"; {rep['commands']:,} flagdata command(s) in {rep['flagdata_calls']} call(s)"
-                       if rep.get("commands") is not None else "") + "); verified. "
+                    + (f" in {rep['rows']:,} MS row(s)" if rep.get("rows") is not None else "")
+                    + "); verified. "
                     f"Previous flags saved as {where}.")
             color = NOTIFY_OK
         else:
@@ -803,11 +774,11 @@ class FlagController:
         application order -- what it addresses (region or explicit
         samples), the filter and its parameters (with the code hash of the
         function), the value conditions, extend options, provenance and the
-        exact ``flagdata`` commands it exports to -- plus the review/display
+        samples it addresses (times, baselines, antennas, channels,
+        correlations and per-baseline / per-antenna counts) -- plus the review/display
         settings and the undo/redo state.  Nothing here reads visibilities;
         sample counts are those computed when each operation was proposed.
         """
-        from .flag_export import to_flagdata_lines, ambiguous_spws
         from .visibility_scatter import VisibilityScatter
         esc = html.escape
         deltas = self.db.deltas()
@@ -844,17 +815,11 @@ class FlagController:
             row("Extend", ", ".join(x for x, on in (("all correlations", self.extend_corr),
                                                     ("all channels", self.extend_chan)) if on)
                 or "none"),
-            row("Committed to disk", "no -- pending flags live only in this session "
-                                     "until exported or committed"),
+            row("Committed to disk", "no -- pending flags live only in this session until "
+                                     "written (Export / commit → Write flags) or saved "
+                                     "as JSON"),
         ])
         parts = [f"<table class='cv-tbl'>{summary}</table>"]
-        if all_spws is not None:
-            amb = ambiguous_spws(all_spws, spw_ids)
-            if amb:
-                parts.append("<p class='cv-rect'>⚠ Spectral window(s) "
-                             + ", ".join(esc(str(k.ident)) for k in amb)
-                             + " cannot be identified uniquely without an SPW id; "
-                               "exported selections may also match other windows.</p>")
         if not deltas:
             parts.append("<p>No pending flag operations.</p>")
         for d in deltas:
@@ -886,10 +851,11 @@ class FlagController:
                 rows.append(row("Antennas", esc(", ".join(d.antenna_names))))
             if d.spw_channels is not None:
                 rows.append(row("Channels", esc("; ".join(
-                    f"SPW {sc.spw.ident} ({sc.spw.n_chan} ch): {sc.chan_lo}–{sc.chan_hi}"
+                    f"{_spw_label(sc.spw, spw_ids)}: channels {sc.chan_lo}–{sc.chan_hi}"
                     for sc in d.spw_channels))))
             elif d.spw is not None:
-                rows.append(row("Spectral windows", esc(", ".join(str(k.ident) for k in d.spw))))
+                rows.append(row("Spectral windows", esc(", ".join(_spw_label(k, spw_ids)
+                                                                   for k in d.spw))))
             if d.freq_range is not None:
                 rows.append(row("Frequency", f"{d.freq_range[0] / 1e9:.9g} – "
                                              f"{d.freq_range[1] / 1e9:.9g} GHz"))
@@ -901,27 +867,17 @@ class FlagController:
             if ext:
                 rows.append(row("Extended to all", esc(", ".join(ext))))
             if d.is_sample_set:
-                blk = "; ".join(f"SPW {b.spw.ident}: {b.count:,} samples in {len(b.times)} "
-                                f"integrations × {len(b.ant1)} baselines × {len(b.freqs)} "
-                                f"channels × {len(b.pols)} correlations"
-                                for b in d.samples)
-                rows.append(row("Samples by window", esc(blk)))
+                rows += _sample_set_rows(d, row, utc, spw_ids)
             if d.data_column:
                 rows.append(row("Data column", esc(d.data_column)))
             if d.provenance:
                 rows.append(row("Provenance", esc(" → ".join(d.provenance))))
             rows.append(row("Created", esc(time.strftime("%Y-%m-%d %H:%M:%S",
                                                           time.localtime(d.created)))))
-            lines = to_flagdata_lines([d], spw_ids=spw_ids, comments=False)
-            shown = lines[:200]
-            cmd = esc("\n".join(shown)) + (f"\n… ({len(lines) - 200} more lines)"
-                                            if len(lines) > 200 else "")
             parts.append(f"<h3>#{d.seq} — {esc(d.describe())}</h3>"
                          f"<table class='cv-tbl'>{''.join(rows)}</table>"
-                         f"<details><summary class='cv-rect'>flagdata commands "
-                         f"({len(lines)} line{'s' if len(lines) != 1 else ''})</summary>"
-                         f"<pre class='cv-rect' style='white-space:pre-wrap'>{cmd}</pre>"
-                         f"</details>")
+                         + (_sample_set_details(d, utc) if d.is_sample_set else
+                            _region_details(d)))
         return VisibilityScatter._probe_region_page(
             f"Pending flags — {os.path.basename(os.path.normpath(src)) or 'visplot'}",
             "".join(parts))
@@ -1223,3 +1179,100 @@ window.__cvSetBusy(true);
 comm.send(msg_id, {action: 'export', kind: exp_sel.value, path: exp_path.value || ''},
           (resp) => { window.__cvSetBusy(false); cvApplyFlagResponse(resp); });
 """
+
+
+# ---------------------------------------------------------------------- #
+# Report helpers (the "Describe pending flags" page)                       #
+# ---------------------------------------------------------------------- #
+
+def _spw_label(key, spw_ids) -> str:
+    sid = (spw_ids or {}).get(key)
+    head = f"SPW {sid}" if sid is not None else "SPW"
+    return (f"{head} {key.ident} ({key.n_chan} ch, "
+            f"{key.freq_min / 1e9:.6f}–{key.freq_max / 1e9:.6f} GHz)")
+
+
+def _ranges(vals) -> str:
+    """'3–7, 12, 20–21' from integers."""
+    import numpy as np
+    v = np.unique(np.asarray(vals, dtype=np.int64))
+    if v.size == 0:
+        return "—"
+    out, start, prev = [], v[0], v[0]
+    for x in v[1:]:
+        if x == prev + 1:
+            prev = x
+            continue
+        out.append(f"{start}" if start == prev else f"{start}–{prev}")
+        start = prev = x
+    out.append(f"{start}" if start == prev else f"{start}–{prev}")
+    return ", ".join(out)
+
+
+def _sample_set_rows(d, row, utc, spw_ids) -> list:
+    """Summary rows for an explicit-sample operation."""
+    import numpy as np
+    esc = html.escape
+    rows = []
+    t_all = np.concatenate([np.asarray(b.times) for b in d.samples]) if d.samples else []
+    if len(t_all):
+        rows.append(row("Time span", f"{utc(float(np.min(t_all)), d.time_format)} – "
+                                     f"{utc(float(np.max(t_all)), d.time_format)} UTC"))
+    for b in d.samples:
+        g = b.dense()
+        used_t = int(g.any(axis=(1, 2, 3)).sum())
+        used_b = int(g.any(axis=(0, 2, 3)).sum())
+        chans = np.asarray(b.chans)[g.any(axis=(0, 1, 3))]
+        pols = [p for p, on in zip(b.pols, g.any(axis=(0, 1, 2))) if on]
+        rows.append(row(_spw_label(b.spw, spw_ids),
+                        esc(f"{b.count:,} samples · {used_t} integrations · {used_b} baselines"
+                            f" · channels {_ranges(chans)} · correlations {', '.join(pols)}")))
+    return rows
+
+
+def _sample_set_details(d, utc) -> str:
+    """Collapsible per-baseline and per-antenna sample counts and the full
+    list of integrations of an explicit-sample operation."""
+    import numpy as np
+    from collections import Counter
+    esc = html.escape
+    per_bl, per_ant, per_pol, times = Counter(), Counter(), Counter(), set()
+    for b in d.samples:
+        g = b.dense()
+        nb = g.sum(axis=(0, 2, 3))
+        for i in np.flatnonzero(nb):
+            a1, a2 = str(b.ant1[i]), str(b.ant2[i])
+            per_bl[f"{a1}&{a2}"] += int(nb[i])
+            per_ant[a1] += int(nb[i])
+            if a2 != a1:
+                per_ant[a2] += int(nb[i])
+        for p, n in zip(b.pols, g.sum(axis=(0, 1, 2))):
+            if n:
+                per_pol[str(p)] += int(n)
+        for i in np.flatnonzero(g.any(axis=(1, 2, 3))):
+            times.add(float(b.times[i]))
+
+    def table(counter, head):
+        items = counter.most_common()
+        body = "".join(f"<tr><td class='cv-k'>{esc(k)}</td><td class='cv-v'>{v:,}</td></tr>"
+                       for k, v in items)
+        return (f"<details><summary class='cv-rect'>{head} ({len(items)})</summary>"
+                f"<table class='cv-tbl'>{body}</table></details>")
+    tl = sorted(times)
+    tlist = ", ".join(utc(t, d.time_format)[11:] for t in tl[:500]) + (" …" if len(tl) > 500 else "")
+    return (table(per_pol, "Samples per correlation")
+            + table(per_ant, "Samples per antenna")
+            + table(per_bl, "Samples per baseline")
+            + f"<details><summary class='cv-rect'>Integrations ({len(tl)}, UTC)</summary>"
+              f"<p class='cv-rect' style='white-space:normal'>{esc(tlist)}</p></details>")
+
+
+def _region_details(d) -> str:
+    """Collapsible full baseline list of a region operation."""
+    esc = html.escape
+    if not d.baseline_ids or len(d.baseline_ids) <= 40:
+        return ""
+    bl = ", ".join(f"{a}&{b}" for a, b in d.baseline_ids)
+    return (f"<details><summary class='cv-rect'>All baselines ({len(d.baseline_ids)})</summary>"
+            f"<p class='cv-rect' style='white-space:normal'>{esc(bl)}</p></details>")
+

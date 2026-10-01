@@ -29,9 +29,6 @@ from cubevis.toolbox.visplot.flag_model import (
 )
 from cubevis.toolbox.visplot.flag_db import FlagDB
 from cubevis.toolbox.visplot import flag_filters as ff
-from cubevis.toolbox.visplot.flag_export import (
-    casa_timerange, to_flagdata_lines, ambiguous_spws,
-)
 
 warnings.filterwarnings("ignore")
 
@@ -240,50 +237,15 @@ def test_param_specs_describe_for_gui():
 # Export                                                                   #
 # ====================================================================== #
 
-def test_timerange_unix_and_mjd_agree():
-    unix = 1_675_209_600.0        # 2023-02-01 00:00:00 UTC
-    mjd_s = unix + 40587.0 * 86400.0
-    assert casa_timerange(unix, unix, "unix") == casa_timerange(mjd_s, mjd_s, "mjd")
-    assert casa_timerange(unix, unix + 8) == "2023/01/31/23:59:59.999~2023/02/01/00:00:08.001"
-
-
-def test_region_export_golden():
-    kid = SpwKey(3, "spw", 1e9, 1.7e9, 8)
-    d = FlagDelta(time_range=(1_675_209_600.0, 1_675_209_608.0), baseline_ids=[("A", "B")],
-                  correlation=["XX", "YY"], spw_channels=[SpwChannels(kid, 2, 5)],
-                  scan_names=["7"], seq=4)
-    lines = to_flagdata_lines([d, FlagDelta(flag=False, antenna_names=["C"], seq=5)])
-    assert lines[0].startswith("# seq 4; flag")
-    assert lines[1] == ("mode='manual' timerange='2023/01/31/23:59:59.999~2023/02/01/00:00:08.001' "
-                        "scan='7' antenna='A&B' correlation='XX,YY' spw='3:2~5'")
-    assert lines[3] == "mode='unflag' antenna='C'"
-    ext = to_flagdata_lines([FlagDelta(scan_names=["7"], time_range=(0, 1), extend_scan=True,
-                                       correlation=["XX"], extend_corr=True)], comments=False)
-    assert ext == ["mode='manual' scan='7'"]
-
-
-def test_sample_export_groups_runs_and_baselines():
-    bc = _bc()
-    m = np.zeros(bc.shape, bool)
-    m[1, 0, 2:5, :] = True
-    m[1, 1, 2:5, :] = True
-    m[3, 2, 7, 0] = True
-    blk = SampleBlock.from_mask(K8, bc.times, bc.ant1, bc.ant2, bc.freqs, bc.chans, bc.pols, m)
-    lines = to_flagdata_lines([FlagDelta(samples=[blk])], spw_ids={K8: 0}, comments=False)
-    assert len(lines) == 2
-    assert "antenna='A&B;A&C'" in lines[0] and "spw='0:2~4'" in lines[0] \
-        and "correlation='XX,YY'" in lines[0]
-    assert "spw='0:7~7'" in lines[1] and "correlation='XX'" in lines[1]
-
-
-def test_ambiguous_spw_warning():
-    a = SpwKey("<Unknown>", "name", 1e9, 2e9, 8)
-    b = SpwKey("<Unknown>", "name", 1e9, 2e9, 4)
-    assert ambiguous_spws([a, b]) == [a, b]
-    assert ambiguous_spws([a, b], {a: 0, b: 1}) == []
-    lines = to_flagdata_lines([FlagDelta(spw=[a])], all_spws=[a, b], comments=False)
-    assert lines[0].startswith("# WARNING")
-
+def test_jsonl_is_the_only_export(tmp_path):
+    """flagdata command export was removed (2026-09-30): only JSON Lines."""
+    from cubevis.toolbox.visplot import flag_export
+    assert not hasattr(flag_export, "to_flagdata_lines")
+    db = FlagDB()
+    db.add(FlagDelta(antenna_names=["A"], time_range=(1.0, 2.0)))
+    text = flag_export.to_jsonl(db.deltas(), {"source": "x"})
+    header, deltas = FlagDB.parse_jsonl(text)
+    assert header["source"] == "x" and len(deltas) == 1
 
 # ====================================================================== #
 # Backend integration (real MSv2Backend on a simulated MS)                  #
@@ -489,15 +451,6 @@ def test_frame_cache_keyed_on_pending_version(backend):
     assert _selection_fingerprint(a) == _selection_fingerprint(b)
 
 
-def test_export_uses_ms_spw_ids(backend):
-    t = _parts(backend)[0].time.values
-    d, _ = _eval(backend, kind="scatter", x_axis="TIME", x0=t[0] - 1, x1=t[-1] + 1,
-                 y0=10, y1=100, layers=[{"y_axis": "AMPLITUDE", "polarization": "XX"}])
-    lines = to_flagdata_lines([d], spw_ids=backend.spw_casa_ids(), comments=False)
-    assert all("spw='0:" in l or "spw='1:" in l for l in lines)
-    assert len(lines) == 28
-
-
 # ====================================================================== #
 # GUI path: VisibilityPlotter box handler, review, display, history        #
 # (drives the real handler; no browser needed)                             #
@@ -665,7 +618,10 @@ def test_flagdb_report_page(plotter):
     assert page.startswith("<!DOCTYPE html>") and "Pending operations</td><td class='cv-v'>2" in page
     import re
     assert len(re.findall(r"<h3>#\d+ — ", page)) == 2 and "loud(level=20.0)" in page
-    assert "user, code " in page and "mode=&#x27;manual&#x27;" in page
+    assert "user, code " in page and "flagdata" not in page
+    # the sample-set operation (user filter) is described in detail
+    assert "Samples per baseline" in page and "Samples per antenna" in page
+    assert "integrations" in page and "channels " in page
     _run(vp.flags.handle_action({"action": "config", "filter": "all"}))
     vp.flag_db.clear(record=False)
     assert "No pending flag operations" in _run(vp.flags.handle_action({"action": "report"}))["report_html"]

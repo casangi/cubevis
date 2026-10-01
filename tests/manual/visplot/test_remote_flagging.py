@@ -329,8 +329,19 @@ def test_remote_plotter_flags_undo_export_like_local(plotters, tmp_path):
     # two or three operations were added (the Z-Score box may match nothing
     # on real data), one undone -- identically on both sides
     assert len(lp.flag_db) == len(rp.flag_db) >= 1
-    lf = open(lp.export_flags(str(tmp_path / "l.txt"))).read().splitlines()[1:]
-    rf = open(rp.export_flags(str(tmp_path / "r.txt"))).read().splitlines()[1:]
+    import json as _json
+
+    def ops(path):
+        # JSON Lines export; identity/timing fields differ between sessions
+        out = []
+        for line in open(path).read().splitlines()[1:]:
+            d = _json.loads(line)
+            for k in ("delta_id", "created", "seq"):
+                d.pop(k, None)
+            out.append(d)
+        return out
+    lf = ops(lp.export_flags(str(tmp_path / "l.jsonl")))
+    rf = ops(rp.export_flags(str(tmp_path / "r.jsonl")))
     assert lf == rf
     # display: a colour-mode re-render and the InfoTool box work remotely
     asyncio.run(rp.flags.handle_action({"action": "config", "display": "color"}))

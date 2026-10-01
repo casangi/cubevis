@@ -11,25 +11,19 @@ What each data format offers
 action                   MSv2       MSv4
 =======================  =========  =========
 save flags as JSON        yes        yes      (P_local; ``FlagDB.to_jsonl``)
-write flags to the data   arcae      zarr     (exact final state; default)
-  ... via CASA flagdata   casatools  --       (optional)
-Python flagdata script    yes        --
+write flags to the data   arcae      zarr     (exact final state, verified)
+load JSON as pending      yes        yes
+restore a commit backup   yes        yes
 =======================  =========  =========
 
-MSv2: CASA flagdata (optional; the default is the exact arcae write below)
-----------------------------------------------------------------------------
-Pending deltas are applied with ``casatasks.flagdata`` in list mode, **one
-call per delta, in application order** -- so an unflag after a flag is
-applied after it, whatever CASA's ordering within one list is.  Before any
-write the current flags are saved with ``casatasks.flagmanager`` (a flag
-version the user can restore with CASA).  The backend's read handle is
-closed around the write (casacore table locking) and reopened after.
-
-Afterwards the result is **verified**: the flags now on disk are compared,
-sample by sample, with what visplot showed (on-disk flags with the pending
-deltas folded in, by the same tested engine that drives the display).  Any
-difference is reported with counts and the name of the saved flag version,
-so the user can restore it; nothing is silently accepted.
+MSv2: exact final-state write with arcae
+-----------------------------------------
+See the section note at ``commit_msv2_arcae``.  CASA ``flagdata`` writes
+(and exported flagdata scripts) were removed on 2026-09-30: through CASA's
+selection language a 52,624-sample operation on TW Hya came out 2,689
+samples short, so they could silently differ from what visplot showed.
+When casatools works, a CASA flag version is still saved before writing so
+CASA users can restore with ``flagmanager``.
 
 MSv4: zarr, with a side-file backup
 -----------------------------------
@@ -96,11 +90,9 @@ def capabilities(backend) -> dict:
             ok, why = writable, ("" if writable else f"no write permission for {path}")
         except Exception as exc:
             ok, why = False, f"arcae not available ({exc})"
-        cok, cwhy = casatools_available()
-        if cok and not writable:
-            cok, cwhy = False, f"no write permission for {path}"
-        return {"format": fmt, "write": ok, "write_reason": why, "script": True,
-                "casa": cok, "casa_reason": cwhy}
+        cok, _cwhy = casatools_available()
+        return {"format": fmt, "write": ok, "write_reason": why,
+                "casa_version": cok}
     ok, why = True, ""
     try:
         import zarr  # noqa: F401
@@ -136,94 +128,6 @@ def _expected_changes(backend, deltas) -> list:
             valid = np.ones(base.shape, dtype=bool)
         out.append((ds, base_da, base, eff, valid))
     return out
-
-
-# ======================================================================
-# MSv2 -- casatasks.flagdata / flagmanager
-# ======================================================================
-
-def flagdata_script(deltas, vis: str, spw_ids=None, all_spws=None,
-                    version_name: Optional[str] = None) -> str:
-    """A standalone Python script applying *deltas* with ``casatasks``.
-
-    One ``flagdata(mode='list')`` call per delta, in order, after a
-    ``flagmanager`` save.  ``vis`` is a variable at the top so the script
-    can be pointed at another copy of the MS.
-    """
-    from .flag_export import to_flagdata_lines
-    version_name = version_name or f"visplot_{_time.strftime('%Y%m%d_%H%M%S')}"
-    lines = [
-        "#!/usr/bin/env python",
-        '"""Pending flags exported by cubevis visplot.',
-        "",
-        "Applies the operations in order: one flagdata(mode='list') call per",
-        "operation, so a later unflag is applied after an earlier flag.  The",
-        "current flags are saved first with flagmanager (restore with",
-        f"flagmanager(vis=vis, mode='restore', versionname='{version_name}')).",
-        "Requires casatasks.",
-        '"""',
-        "from casatasks import flagdata, flagmanager",
-        "",
-        f"vis = {vis!r}",
-        "",
-        f"flagmanager(vis=vis, mode='save', versionname={version_name!r},",
-        "            comment='before visplot pending flags')",
-        "",
-    ]
-    warn = to_flagdata_lines([], spw_ids=spw_ids, all_spws=all_spws, comments=True)
-    for w in warn:
-        lines.append(w)
-    for d in deltas:
-        cmds = [c for c in to_flagdata_lines([d], spw_ids=spw_ids, comments=False)]
-        lines.append(f"# operation {d.seq}: {d.describe()}")
-        lines.append("flagdata(vis=vis, mode='list', flagbackup=False, action='apply',")
-        lines.append("         inpfile=[")
-        for c in cmds:
-            lines.append(f"             {c!r},")
-        lines.append("         ])")
-        lines.append("")
-    return "\n".join(lines) + "\n"
-
-
-def commit_msv2(backend, deltas, version_name: Optional[str] = None,
-                verify: bool = True) -> dict:
-    """Write *deltas* to the MS with casatasks (see module docstring)."""
-    ok, why = casatools_available()
-    if not ok:
-        raise RuntimeError(why)
-    from casatasks import flagdata, flagmanager
-    from .flag_export import to_flagdata_lines
-    deltas = list(deltas)
-    vis = backend._path
-    version_name = version_name or f"visplot_{_time.strftime('%Y%m%d_%H%M%S')}"
-    spw_ids = backend.spw_casa_ids()
-    expected = _expected_changes(backend, deltas) if verify else []
-    n_expected = int(sum(int(((e != b) & v).sum()) for _ds, _bda, b, e, v in expected))
-
-    calls: list = []
-    backend.close()                 # release the read handle before CASA writes
-    try:
-        flagmanager(vis=vis, mode="save", versionname=version_name,
-                    comment="before visplot pending flags", merge="replace")
-        for d in deltas:
-            cmds = to_flagdata_lines([d], spw_ids=spw_ids, comments=False)
-            # Bounded calls: CASA builds one combined data selection for a
-            # list; a sample-set operation can have thousands of commands.
-            # Chunks of one operation are order-independent (same mode).
-            for k in range(0, len(cmds), FLAGDATA_CHUNK):
-                ret = flagdata(vis=vis, mode="list", inpfile=cmds[k:k + FLAGDATA_CHUNK],
-                               flagbackup=False, action="apply")
-                calls.append({"operation": d.seq, "commands": len(cmds[k:k + FLAGDATA_CHUNK]),
-                              "returned": repr(ret)[:200]})
-    finally:
-        backend.open()
-        backend._clear_lookup_caches()
-    report = {"format": "msv2", "version_name": version_name, "operations": len(deltas),
-              "expected_changes": n_expected, "flagdata_calls": len(calls),
-              "commands": int(sum(c["commands"] for c in calls))}
-    if verify:
-        report.update(_verify(backend, expected))
-    return report
 
 
 def _verify(backend, expected) -> dict:
@@ -571,15 +475,11 @@ def restore_msv4_backup(backend, backup_path: str) -> dict:
     return {"restored": n, "backup": backup_path}
 
 
-def commit(backend, deltas, method: Optional[str] = None, **kw) -> dict:
-    """Dispatch on the data format (MSv2: ``method="arcae"`` -- the default
-    -- or ``"casa"``)."""
+def commit(backend, deltas, **kw) -> dict:
+    """Dispatch on the data format: MSv2 -> arcae, MSv4 -> zarr."""
     fmt = data_format(backend)
     if fmt == "msv2":
-        if (method or "arcae") == "arcae":
-            return commit_msv2_arcae(backend, deltas, **{k: v for k, v in kw.items()
-                                                         if k in ("backup_path", "verify")})
-        return commit_msv2(backend, deltas, **{k: v for k, v in kw.items()
-                                               if k in ("version_name", "verify")})
+        return commit_msv2_arcae(backend, deltas, **{k: v for k, v in kw.items()
+                                                     if k in ("backup_path", "verify")})
     return commit_msv4(backend, deltas, **{k: v for k, v in kw.items()
                                            if k in ("backup_path", "verify")})

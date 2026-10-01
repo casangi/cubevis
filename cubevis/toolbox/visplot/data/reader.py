@@ -2303,15 +2303,6 @@ class XArrayReader(abc.ABC):
         from ..flag_commit import restore_backup
         return restore_backup(self, backup_path)
 
-    def flagdata_script(self, deltas, **kw) -> str:
-        """MSv2: a standalone casatasks script applying *deltas*."""
-        from ..flag_commit import flagdata_script
-        from ..flag_model import FlagDelta, SpwKey
-        objs = [d if isinstance(d, FlagDelta) else FlagDelta.from_dict(d) for d in deltas]
-        from ..flag_engine import spw_table
-        return flagdata_script(objs, vis=self._path, spw_ids=self.spw_casa_ids(),
-                               all_spws=[k for k, _f in spw_table(self)], **kw)
-
     def evaluate_flag_request(self, request: dict) -> dict:
         """Resolve a box/filter flag request; see ``flag_engine.evaluate_request``."""
         from ..flag_engine import evaluate_request

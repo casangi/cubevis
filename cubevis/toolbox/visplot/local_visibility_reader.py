@@ -268,9 +268,6 @@ class LocalVisibilityReader:
     def restore_flag_backup(self, backup_path: str) -> dict:
         return self._backend.restore_flag_backup(backup_path)
 
-    def flagdata_script(self, deltas, **kw) -> str:
-        return self._backend.flagdata_script(deltas, **kw)
-
     def spw_casa_ids(self) -> dict:
         return self._backend.spw_casa_ids()
 

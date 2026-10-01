@@ -3909,9 +3909,9 @@ for (const dt of other.tools) {
         fn = getattr(self._reader, "call_stats", None)
         return fn(reset=reset) if callable(fn) else None
 
-    def export_flags(self, path: Optional[str] = None, fmt: str = "flagdata") -> str:
-        """Write the pending flags as ``flagdata`` list commands
-        (``fmt="flagdata"``) or JSON Lines (``fmt="jsonl"``); returns the path."""
+    def export_flags(self, path: Optional[str] = None, fmt: str = "jsonl") -> str:
+        """Write the pending flags as JSON Lines; returns the path.  (The
+        ``flagdata`` command export was removed: see ``flag_export``.)"""
         return self._flags.export(path, fmt)
 
     # ====================================================================== #

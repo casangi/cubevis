@@ -695,12 +695,6 @@ class RemoteReductionContext(ReductionContext):
         return self._call("restore_flag_backup", backup_path=backup_path,
                           timeout=timeout if timeout is not None else max(self._call_timeout or 0, 3600.0))
 
-    def flagdata_script(self, deltas, timeout: Optional[float] = None, **kw) -> str:
-        import json
-        wire = [d.to_dict(json_safe=True) if hasattr(d, "to_dict") else d for d in deltas]
-        return self._call("flagdata_script", deltas_json=json.dumps(wire),
-                          options_json=json.dumps(kw), timeout=timeout)
-
     def probe_flag_region(self, request: dict, timeout: Optional[float] = None) -> dict:
         t0 = time.perf_counter()
         out = self._call("probe_flag_region", request=request, timeout=timeout)

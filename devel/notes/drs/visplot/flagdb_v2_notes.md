@@ -390,3 +390,20 @@ review dialog, panel refresh) still needs a live GUI check.
 - TW Hya copy, Ceres box of 146,966 samples: 2,449 rows written in 1.8 s,
   verified 0 mismatches. Tests: sim commit/verify/restore, FLAG_ROW
   consistency, menu flow, remote (local kernel) for MSv2 and MSv4.
+
+## 2026-10-01: part 32 -- CASA flagdata paths removed (Darrell's decision)
+- Removed: the MSv2 "Write flags (CASA flagdata)" option, the Python
+  flagdata script export, the flagdata section of the report, and
+  flag_export's flagdata generator (to_flagdata_lines, sample/region lines,
+  casa_timerange, ambiguous_spws). Reason: through CASA's selection language
+  a 52,624-sample operation came out 2,689 samples short; an exported command
+  list could silently differ from what the display showed.
+- Export / commit menu (MSv2 and MSv4): Save flags as JSON; Write flags to
+  the MS/PS (arcae / zarr, exact, verified, backup); Load flags from JSON;
+  Restore flags from a commit backup. A CASA flag version is still saved
+  before an arcae write when casatools works (restore via flagmanager).
+- export()/plotter.export_flags(): JSON Lines only (fmt="flagdata" raises).
+- Report: per operation, SPW labelled with its MS id, name, channels and
+  frequency span; sample sets: time span, per-window integrations /
+  baselines / channel ranges / correlations, and collapsible tables of
+  samples per correlation, antenna and baseline, plus the integration list.

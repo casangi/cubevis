@@ -673,6 +673,34 @@ class RemoteReductionContext(ReductionContext):
                   counts.get("n_changed"), time.perf_counter() - t0)
         return out
 
+    def flag_commit_capabilities(self, timeout: Optional[float] = None) -> dict:
+        try:
+            return self._call("flag_commit_capabilities", timeout=timeout)
+        except Exception as exc:
+            return {"format": "?", "write": False, "script": False,
+                    "write_reason": f"remote cubevis cannot report commit capabilities ({exc})"}
+
+    def commit_pending_flags(self, deltas, timeout: Optional[float] = None, **options) -> dict:
+        import json
+        wire = [d.to_dict(json_safe=True) if hasattr(d, "to_dict") else d for d in deltas]
+        out = self._call("commit_pending_flags", deltas_json=json.dumps(wire),
+                         options_json=json.dumps(options),
+                         timeout=timeout if timeout is not None else max(self._call_timeout or 0, 3600.0))
+        self.__dict__["_cv_sent_ids"] = set()          # worker pending state was cleared
+        self.__dict__.pop("_cv_memo", None)
+        return out
+
+    def restore_flag_backup(self, backup_path: str, timeout: Optional[float] = None) -> dict:
+        self.__dict__.pop("_cv_memo", None)
+        return self._call("restore_flag_backup", backup_path=backup_path,
+                          timeout=timeout if timeout is not None else max(self._call_timeout or 0, 3600.0))
+
+    def flagdata_script(self, deltas, timeout: Optional[float] = None, **kw) -> str:
+        import json
+        wire = [d.to_dict(json_safe=True) if hasattr(d, "to_dict") else d for d in deltas]
+        return self._call("flagdata_script", deltas_json=json.dumps(wire),
+                          options_json=json.dumps(kw), timeout=timeout)
+
     def probe_flag_region(self, request: dict, timeout: Optional[float] = None) -> dict:
         t0 = time.perf_counter()
         out = self._call("probe_flag_region", request=request, timeout=timeout)

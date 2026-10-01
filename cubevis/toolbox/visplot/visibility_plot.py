@@ -112,6 +112,28 @@ _CV_SET_BUSY_JS = """
 window.__cvSetBusy = window.__cvSetBusy || function(on) {
     const OVERLAY_ID = '__cv_busy_overlay';
     const GIVE_UP_MS = 30000;
+    // Reference counted (2026-09-30): several requests can be in flight at
+    // once (both panels re-rendering after a flag or display change); the
+    // first reply used to clear the busy state while the others were still
+    // running.  setBusy(true) per request, setBusy(false) per reply.
+    window.__cvBusyN = Math.max(0, (window.__cvBusyN || 0) + (on ? 1 : -1));
+    on = window.__cvBusyN > 0;
+    // Hand-offs between requests leave short idle moments -- e.g. the
+    // FlagTool clears its busy state just before its (asynchronously
+    // compiled) response callback starts the panel refresh.  Going idle is
+    // therefore deferred briefly; a new request within the grace period
+    // keeps the cursor busy without a flicker (2026-09-30).
+    if (window.__cvBusyHide != null) { clearTimeout(window.__cvBusyHide); window.__cvBusyHide = null; }
+    if (!on && !window.__cvBusyNow) {
+        window.__cvBusyHide = setTimeout(function() {
+            window.__cvBusyHide = null;
+            window.__cvBusyNow = true;
+            try { window.__cvBusyN = Math.max(0, window.__cvBusyN || 0);
+                  window.__cvSetBusy(false); window.__cvBusyN = Math.max(0, window.__cvBusyN); }
+            finally { window.__cvBusyNow = false; }
+        }, 200);
+        return;
+    }
     if (window.__cvReleaseStuckDrag) window.__cvReleaseStuckDrag('setBusy(' + on + ')');
     if (window.__cvBusyTimer != null) {
         clearTimeout(window.__cvBusyTimer);
@@ -126,6 +148,28 @@ window.__cvSetBusy = window.__cvSetBusy || function(on) {
     if (!ov) {
         ov = document.createElement('div');
         ov.id = OVERLAY_ID;
+        // A visible "working" chip as well as the cursor (2026-09-30): the
+        // OS only redraws the mouse cursor when the mouse moves, so after a
+        // flag box or a checkbox click -- with the mouse at rest -- the
+        // progress cursor could appear late or not at all.  The chip is
+        // part of the page and shows on the next paint.
+        if (!document.getElementById('__cv_busy_style')) {
+            const st = document.createElement('style');
+            st.id = '__cv_busy_style';
+            st.textContent = '@keyframes __cvspin{to{transform:rotate(360deg)}}'
+                + '#__cv_busy_chip{position:absolute;left:50%;top:46px;transform:translateX(-50%);'
+                + 'display:flex;align-items:center;gap:8px;padding:3px 12px;border-radius:12px;'
+                + 'background:rgba(30,30,46,0.85);color:#cdd6f4;font:12px system-ui,sans-serif;'
+                + 'box-shadow:0 1px 6px rgba(0,0,0,0.45);pointer-events:none}'
+                + '#__cv_busy_chip span.r{width:12px;height:12px;border-radius:50%;'
+                + 'border:2px solid #89b4fa;border-top-color:transparent;'
+                + 'animation:__cvspin 0.8s linear infinite}';
+            document.head.appendChild(st);
+        }
+        const chip = document.createElement('div');
+        chip.id = '__cv_busy_chip';
+        chip.innerHTML = '<span class="r"></span><span>Working\u2026</span>';
+        ov.appendChild(chip);
         document.body.appendChild(ov);
     }
     let where = 'left:0;top:0;width:100vw;height:100vh;';
@@ -149,7 +193,10 @@ window.__cvSetBusy = window.__cvSetBusy || function(on) {
     } catch (e) { /* keep the viewport fallback */ }
     ov.style.cssText = 'position:fixed;z-index:2147483647;'
                      + 'background:transparent;cursor:progress;' + where;
-    window.__cvBusyTimer = setTimeout(function() { window.__cvSetBusy(false); }, GIVE_UP_MS);
+    window.__cvBusyTimer = setTimeout(function() {
+        window.__cvBusyN = 1;                    // give up: clear everything
+        window.__cvSetBusy(false);
+    }, GIVE_UP_MS);
 };
 
 // Stuck-drag safety net (2026-09, reported bug: pan tool re-activates on
@@ -1371,14 +1418,24 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
     comm.send('{msg_rerender}',
         {{x0: x0, x1: x1, y0: y0, y1: y1}},
         function(resp) {{
-            window.__cvSetBusy(false);
-            if (!resp || resp.image == null) return;
+            // Clear busy only after the new image has been PAINTED: two
+            // animation frames after the data change (the first frame runs
+            // Bokeh's render, the second follows the paint).  Clearing it
+            // first left a visible gap between "not busy" and the plot
+            // actually changing (2026-09-30).
+            const done = function() {{
+                requestAnimationFrame(function() {{
+                    requestAnimationFrame(function() {{ window.__cvSetBusy(false); }});
+                }});
+            }};
+            if (!resp || resp.image == null) {{ done(); return; }}
             image_source.data['image'] = [resp.image];
             image_source.data['x']     = [resp.x0];
             image_source.data['y']     = [resp.y0];
             image_source.data['dw']    = [resp.x1 - resp.x0];
             image_source.data['dh']    = [resp.y1 - resp.y0];
             image_source.change.emit();
+            done();
         }}
     );
 }}, 300);
@@ -1423,7 +1480,7 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
 
     def _register_comm_handlers(self) -> None:
         self._comm.register(self._msg_probe,    self._handle_probe)
-        self._comm.register(self._msg_rerender, self._handle_rerender)
+        self._comm.register(self._msg_rerender, self._handle_rerender_async)
         self._register_extra_comm_handlers()
         if self._select_callback is not None and self._flag_comm is not None:
             self._flag_comm.register(self._msg_select, self._select_callback)
@@ -1431,6 +1488,16 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
     # ------------------------------------------------------------------
     # j2p handlers (base)
     # ------------------------------------------------------------------
+
+    async def _handle_rerender_async(self, message: dict, context=None) -> dict:
+        """Comm entry point: run the (possibly long) re-render in a worker
+        thread.  Run on the event loop, a redraw that re-reads data (after a
+        flag or display change, a large selection) blocked the websocket
+        heartbeat -- the browser declared the connection dead after 10 s and
+        reconnected (2026-09-30).  The comm already serializes this panel's
+        requests under its render lock, so there is no concurrent use of the
+        panel's state."""
+        return await asyncio.to_thread(self._handle_rerender, message)
 
     def _handle_rerender(self, message: dict) -> dict:
         """Route pan/zoom rerender to subclass ``_do_viewport_rerender``."""
@@ -1444,7 +1511,18 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
             # the new state) before drawing the requested viewport.
             if not self._prepare_stale_render(x0, x1, y0, y1):
                 self._render(self._selection)
+            self._overlays_stale = False
+        elif getattr(self, "_overlays_stale", False):
+            # Only the flag overlays changed (e.g. "Show flagged data"
+            # toggled): the drawn data did not, so do not re-read them.
+            self._overlays_stale = False
+            self._refresh_flag_overlays()
         return self._do_viewport_rerender(x0, x1, y0, y1)
+
+    def _refresh_flag_overlays(self) -> None:
+        """Recompute whatever this panel caches for its flag overlays
+        (nothing by default: the scatter queries them per image)."""
+        return None
 
     def _prepare_stale_render(self, x0: float, x1: float, y0: float, y1: float) -> None:
         """Hook: called before the full-extent re-read that a pending-flag

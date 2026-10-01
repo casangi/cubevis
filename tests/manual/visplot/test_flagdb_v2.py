@@ -1015,3 +1015,58 @@ def test_show_flagged_overlay_and_unflag_committed(backend):
         assert not sc._flag_overlays
     finally:
         vp.close()
+
+
+def test_display_toggles_do_not_reread_drawn_data(plotter):
+    """Show flagged data / display switches with nothing pending change only
+    overlays: panels must not re-read their main data."""
+    from cubevis.toolbox.visplot.axes import Axis
+    vp = plotter
+    vp.flag_db.clear(record=False)
+    r, sc = vp._slots[0].raster, vp._slots[1].scatter
+    rv = dict(x0=r._x_range[0], x1=r._x_range[1], y0=r._y_range[0], y1=r._y_range[1])
+    sv = dict(x0=sc._x_range[0], x1=sc._x_range[1], y0=sc._y_range[0], y1=sc._y_range[1])
+    r._handle_rerender(dict(rv)); sc._handle_rerender(dict(sv))
+    calls = []
+    orig_r, orig_c = vp._reader.query_raster, vp._reader.query_columns
+
+    def qr(*a, **k):
+        calls.append(("raster", k.get("quantity")))
+        return orig_r(*a, **k)
+
+    def qc(*a, **k):
+        calls.append(("columns", a[2].flag_view if len(a) > 2 else k["selection"].flag_view))
+        return orig_c(*a, **k)
+    for p in (r, sc):
+        p._backend.query_raster, p._backend.query_columns = qr, qc
+    try:
+        for cfg in ({"show_flagged": True}, {"display": "color"}, {"display": "hide"},
+                    {"show_flagged": False}):
+            calls.clear()
+            _run(vp.flags.handle_action(dict(action="config", **cfg)))
+            r._handle_rerender(dict(rv)); sc._handle_rerender(dict(sv))
+            main = [c for c in calls if c not in (("raster", Axis.FLAG),)
+                    and not (c[0] == "columns" and c[1] in ("flagged", "pending", "proposal"))]
+            assert main == [], (cfg, calls)
+    finally:
+        for p in (r, sc):
+            p._backend.query_raster, p._backend.query_columns = orig_r, orig_c
+        _run(vp.flags.handle_action(dict(action="config", show_flagged=False, display="hide")))
+
+
+def test_rerender_comm_handler_runs_off_the_event_loop(plotter):
+    import threading
+    sc = plotter._slots[1].scatter
+    seen = {}
+    orig = sc._handle_rerender
+
+    def spy(msg):
+        seen["thread"] = threading.current_thread() is threading.main_thread()
+        return orig(msg)
+    sc._handle_rerender = spy
+    try:
+        _run(sc._handle_rerender_async(dict(x0=sc._x_range[0], x1=sc._x_range[1],
+                                            y0=sc._y_range[0], y1=sc._y_range[1])))
+    finally:
+        del sc._handle_rerender
+    assert seen["thread"] is False

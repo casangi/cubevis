@@ -4181,6 +4181,15 @@ html, body { height: 100%; margin: 0; }
             code=_MORE_BELOW_JS,
             description="plot-area overflow cue",
         )
+        # Define the busy-cursor helper at page load.  It used to exist only
+        # once some CustomJS carrying _CV_SET_BUSY_JS had run (a pan/zoom, a
+        # Plot, a Flagging control), so a FIRST flag box -- whose FlagTool
+        # calls window.__cvSetBusy only if it exists -- showed no busy
+        # cursor until Python had already answered (2026-09-30).
+        self._app_context.add_init_script(
+            code=_CV_SET_BUSY_JS,
+            description="busy cursor helper",
+        )
         body = row(
             sidebar_col, plot_area,
             sizing_mode="stretch_both",

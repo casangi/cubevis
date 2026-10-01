@@ -52,6 +52,7 @@ from typing import Any, Mapping, Optional
 
 from .axes import Axis
 from .flag_db import FlagDB
+from .visibility_plot import _CV_SET_BUSY_JS
 from .flag_filters import FilterRegistry, FlagFilter
 from .flag_model import FlagCounts, FlagDelta, SpwKey, time_to_datetime
 
@@ -123,6 +124,8 @@ class FlagController:
         self.extend_corr = False
         self.extend_chan = False
         self.proposal: Optional[Proposal] = None
+        self._commit_pending: Optional[dict] = None
+        self._caps: Optional[dict] = None
         self.state_version = 0
         self._widgets: dict = {}
         self.db.add_listener(lambda _v: self.push_state())
@@ -155,9 +158,23 @@ class FlagController:
             out.append(("proposal", _hex_to_rgba(PROPOSAL_COLOR, 0.9)))
         return out
 
-    def push_state(self) -> None:
+    def push_state(self, data_changed: bool = True) -> None:
         """Send the pending state to the backend, re-stamp every panel's
-        selection and mark every panel stale (re-queried on next render)."""
+        selection and mark every panel stale (re-queried on next render).
+
+        ``data_changed=False``: only the overlays changed (display colour,
+        "Show flagged data", a display switch with nothing pending) -- the
+        drawn data are the same, so panels only refresh their overlays."""
+        if not data_changed:
+            overlays = self.overlays()
+            view = self.main_view()
+            for panel in getattr(self._plotter, "_all_panels", ()):
+                sel = getattr(panel, "_selection", None)
+                if sel is not None and sel.flag_view != view:
+                    panel._selection = dataclasses.replace(sel, flag_view=view)
+                panel._flag_overlays = overlays
+                panel._overlays_stale = True
+            return
         self.state_version += 1
         deltas = self.db.deltas()
         prop = self.proposal.delta if self.proposal is not None else None
@@ -341,6 +358,15 @@ class FlagController:
                 n = self.db.clear()
                 return self.response(f"Cleared {n} pending operation(s) (undo restores them).",
                                      NOTIFY_OK, refresh=bool(n))
+            if action == "accept" and self._commit_pending is not None \
+                    and msg.get("id") == self._commit_pending["id"]:
+                return await self._do_commit()
+            if action == "reject" and self._commit_pending is not None:
+                self._commit_pending = None
+                return self.response("Commit cancelled; nothing was written.", NOTIFY_OK,
+                                     refresh=False, preview_closed=True)
+            if action == "export":
+                return await self._export_action(msg)
             if action == "accept":
                 if self.proposal is None or msg.get("id") not in (None, self.proposal.proposal_id):
                     return self.response("⚠ No such proposal.", NOTIFY_WARN, preview_closed=True)
@@ -378,9 +404,13 @@ class FlagController:
             self.extend_corr = bool(msg["extend_corr"])
         if "extend_chan" in msg:
             self.extend_chan = bool(msg["extend_chan"])
+        data_changed = False
         if "display" in msg and msg["display"] in DISPLAY_MODES and msg["display"] != self.display:
             self.display = msg["display"]
             refresh = True
+            # "hide" draws the effective flags, "color" the on-disk ones:
+            # identical data unless something is pending.
+            data_changed = bool(len(self.db)) or self.proposal is not None
         if "show_flagged" in msg and bool(msg["show_flagged"]) != self.show_flagged:
             self.show_flagged = bool(msg["show_flagged"])
             refresh = True
@@ -391,7 +421,7 @@ class FlagController:
             self.color = msg["color"]
             refresh = refresh or (self.display == "color")
         if refresh:
-            self.push_state()
+            self.push_state(data_changed=data_changed)
         return self.response("", NOTIFY_OK, refresh=refresh)
 
     # ================================================================== #
@@ -515,12 +545,228 @@ class FlagController:
             lines += to_flagdata_lines(deltas, spw_ids=spw_ids, all_spws=all_spws)
             text = "\n".join(lines) + "\n"
         elif fmt == "jsonl":
-            text = to_jsonl(deltas, {"source": src, "exported": time.time()})
+            text = to_jsonl(deltas, self._json_header(src))
         else:
             raise ValueError(f"unknown export format {fmt!r}")
         with open(path, "w") as fh:
             fh.write(text)
         return os.path.abspath(path)
+
+    # ================================================================== #
+    # Export / commit / load                                               #
+    # ================================================================== #
+
+    def capabilities(self) -> dict:
+        """Cached ``flag_commit.capabilities`` of the data (remote-aware)."""
+        if self._caps is None:
+            fn = getattr(self.reader, "flag_commit_capabilities", None)
+            try:
+                self._caps = fn() if fn else {"format": "msv2", "write": False, "script": False,
+                                              "write_reason": "reader cannot commit"}
+            except Exception as exc:
+                self._caps = {"format": "?", "write": False, "script": False,
+                              "write_reason": str(exc)}
+        return self._caps
+
+    def export_options(self) -> list:
+        """``[(value, label)]`` for the Export / commit menu of this data."""
+        caps = self.capabilities()
+        msv2 = caps.get("format") != "msv4"
+        opts = [("json", "Save flags as JSON")]
+        if msv2:
+            opts.append(("script", "Python flagdata script (casatasks)"))
+        label = ("Write flags to the MS (casatools)" if msv2
+                 else "Write flags to the PS (zarr)")
+        if not caps.get("write"):
+            label += " -- unavailable"
+        opts.append(("commit", label))
+        opts.append(("load", "Load flags from JSON (as pending)"))
+        if not msv2:
+            opts.append(("restore", "Restore flags from a commit backup"))
+        return opts
+
+    def _json_header(self, src: str) -> dict:
+        hdr = {"source": src, "exported": time.time(),
+               "data_format": self.capabilities().get("format")}
+        try:
+            hdr["spw_table"] = self.reader.flag_spw_table()
+        except Exception:
+            pass
+        sel = getattr(self._plotter, "_selection", None) or None
+        dc = getattr(self._plotter, "_datacolumn", None)
+        if dc:
+            hdr["data_column"] = dc
+        try:
+            import cubevis
+            hdr["cubevis_version"] = getattr(cubevis, "__version__", None)
+        except Exception:
+            pass
+        return hdr
+
+    def load_jsonl(self, path: str) -> int:
+        """Add the operations of an exported JSON Lines file as pending
+        flags (in order).  Refuses a file whose spectral windows do not
+        exist in the open data."""
+        with open(path) as fh:
+            header, deltas = FlagDB.parse_jsonl(fh.read())
+        current = [SpwKey.from_dict(k) for k in self.reader.flag_spw_table()]
+
+        def known(k):
+            return any(k.matches(c) for c in current)
+        bad = set()
+        for d in deltas:
+            keys = []
+            if d.samples is not None:
+                keys += [b.spw for b in d.samples]
+            if d.spw is not None:
+                keys += list(d.spw)
+            if d.spw_channels is not None:
+                keys += [sc.spw for sc in d.spw_channels]
+            bad.update(f"{k.ident} ({k.n_chan} ch)" for k in keys if not known(k))
+        if bad:
+            raise ValueError("the file refers to spectral windows not in this data: "
+                             + ", ".join(sorted(bad)))
+        have = {d.delta_id for d in self.db.deltas()}
+        n = 0
+        for d in deltas:
+            if d.delta_id in have:
+                continue
+            self.db.add(d)
+            n += 1
+        return n
+
+    def _default_path(self, suffix: str) -> str:
+        """``<data name>.<kind>.<YYYYmmdd-HHMMSS>.<ext>`` -- unique per export
+        (to the second) and sortable, so a later export never replaces an
+        earlier one."""
+        src = getattr(self._plotter, "_source_path", "") or "visplot"
+        base = os.path.basename(os.path.normpath(src)) or "visplot"
+        stem, ext = os.path.splitext(suffix)            # ".flags", ".jsonl"
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        path = f"{base}{stem}.{stamp}{ext}"
+        n = 2
+        while os.path.exists(path):                      # same second
+            path = f"{base}{stem}.{stamp}-{n}{ext}"
+            n += 1
+        return path
+
+    @staticmethod
+    def _refuse_existing(path: Optional[str]) -> Optional[str]:
+        """Explicit file names are never overwritten silently."""
+        if path and os.path.exists(path):
+            return (f"⚠ {html.escape(os.path.abspath(path))} already exists; nothing was "
+                    "written.  Choose another name, or leave the file box empty for a "
+                    "new time-stamped name.")
+        return None
+
+    async def _export_action(self, msg: dict) -> dict:
+        kind = msg.get("kind") or "json"
+        path = (msg.get("path") or "").strip() or None
+        deltas = self.db.deltas()
+        caps = self.capabilities()
+        if kind in ("json", "script"):
+            refusal = self._refuse_existing(path)
+            if refusal:
+                return self.response(refusal, NOTIFY_WARN, refresh=False)
+        if kind == "json":
+            p = self.export(path or self._default_path(".flags.jsonl"), fmt="jsonl")
+            return self.response(f"Wrote {len(deltas)} operation(s) to {html.escape(p)}",
+                                 NOTIFY_OK, refresh=False)
+        if kind == "script":
+            if caps.get("format") == "msv4":
+                return self.response("⚠ The flagdata script is for MSv2 data.", NOTIFY_WARN,
+                                     refresh=False)
+            text = await asyncio.to_thread(self.reader.flagdata_script, list(deltas))
+            p = os.path.abspath(path or self._default_path(".flagdata.py"))
+            with open(p, "w") as fh:
+                fh.write(text)
+            return self.response(f"Wrote flagdata script {html.escape(p)}", NOTIFY_OK,
+                                 refresh=False)
+        if kind == "load":
+            if not path:
+                return self.response("⚠ Give the JSON file to load in the file box.",
+                                     NOTIFY_WARN, refresh=False)
+            n = self.load_jsonl(path)
+            return self.response(f"Loaded {n} pending operation(s) from {html.escape(path)}",
+                                 NOTIFY_OK)
+        if kind == "restore":
+            if not path:
+                return self.response("⚠ Give the backup (.npz) file in the file box.",
+                                     NOTIFY_WARN, refresh=False)
+            rep = await asyncio.to_thread(self.reader.restore_flag_backup, path)
+            self._after_disk_change()
+            return self.response(f"Restored {rep.get('restored', 0):,} sample flag(s) from "
+                                 f"{html.escape(path)}", NOTIFY_OK)
+        if kind == "commit":
+            if not caps.get("write"):
+                return self.response("⚠ Writing flags is unavailable here: "
+                                     + html.escape(caps.get("write_reason") or "unknown reason"),
+                                     NOTIFY_WARN, refresh=False)
+            if not deltas:
+                return self.response("Nothing to write: no pending operations.", NOTIFY_OK,
+                                     refresh=False)
+            self._commit_pending = {"id": uuid.uuid4().hex, "deltas": deltas}
+            return self.response("Confirm writing the pending flags.", NOTIFY_OK,
+                                 refresh=False,
+                                 preview={"id": self._commit_pending["id"],
+                                          "html": self._commit_html(deltas, caps)})
+        return self.response(f"⚠ Unknown export kind {html.escape(str(kind))}", NOTIFY_WARN,
+                             refresh=False)
+
+    def _commit_html(self, deltas, caps) -> str:
+        esc = html.escape
+        src = getattr(self._plotter, "_source_path", "") or ""
+        msv2 = caps.get("format") != "msv4"
+        n_samples = sum(d.n_samples or 0 for d in deltas)
+        how = ("casatasks.flagdata (list mode, one call per operation, in order), after "
+               "saving the current flags with flagmanager" if msv2 else
+               "zarr writes of exactly the changed samples, after saving their previous "
+               "values to a backup file next to the store")
+        rows = [("Write to", esc(src)), ("Operations", str(len(deltas))),
+                ("Samples (as proposed)", f"{n_samples:,}"), ("Method", esc(how)),
+                ("After writing", "the result is compared with what visplot showed; "
+                                  "the pending list is emptied and the plots re-read the data")]
+        body = "".join(f"<tr><td style='padding-right:10px;color:#a6adc8'>{k}</td>"
+                       f"<td>{v}</td></tr>" for k, v in rows)
+        return (f"<div style='font-family:monospace;font-size:12px'>"
+                f"<b style='color:{PROPOSAL_COLOR}'>Write pending flags to the data?</b>"
+                f"<table>{body}</table>"
+                f"<div style='color:#f38ba8'>This modifies the data set on disk.</div></div>")
+
+    async def _do_commit(self) -> dict:
+        pend, self._commit_pending = self._commit_pending, None
+        deltas = pend["deltas"]
+        rep = await asyncio.to_thread(self.reader.commit_pending_flags, list(deltas))
+        self.db.clear(record=False)
+        self._after_disk_change()
+        where = (f"flag version <b>{html.escape(str(rep.get('version_name')))}</b>"
+                 if rep.get("version_name") else
+                 f"backup <b>{html.escape(str(rep.get('backup')))}</b>")
+        if rep.get("verified", True):
+            text = (f"✓ Wrote {len(deltas)} operation(s) "
+                    f"({rep.get('expected_changes', 0):,} sample changes); verified. "
+                    f"Previous flags saved as {where}.")
+            color = NOTIFY_OK
+        else:
+            k = rep.get("mismatch_kinds", {})
+            text = (f"⚠ Wrote {len(deltas)} operation(s), but {rep.get('mismatches', 0):,} "
+                    f"sample(s) differ from what visplot showed "
+                    f"({k.get('should_be_flagged', 0):,} not flagged, "
+                    f"{k.get('should_be_unflagged', 0):,} not unflagged, "
+                    f"{k.get('collateral', 0):,} changed that should not have). "
+                    f"Previous flags saved as {where} -- restore them if needed.")
+            color = NOTIFY_WARN
+        return self.response(text, color, preview_closed=True)
+
+    def _after_disk_change(self) -> None:
+        """On-disk flags changed: every cached frame is stale."""
+        p = self._plotter
+        p._cache_generation = getattr(p, "_cache_generation", 0) + 1
+        for panel in getattr(p, "_all_panels", ()):
+            sel = getattr(panel, "_selection", None)
+            if sel is not None:
+                panel._selection = dataclasses.replace(sel, cache_generation=p._cache_generation)
+        self.push_state()
 
     # ================================================================== #
     # FlagDB report (the "Describe pending flags" page)                    #
@@ -721,8 +967,16 @@ class FlagController:
         btns = {k: Button(label=l, width=width // 3 - 4, button_type="default")
                 for k, l in (("undo", "Undo"), ("redo", "Redo"), ("clear", "Clear"))}
         report_btn = Button(label="Describe pending flags", width=width)
-        exp_fd = Button(label="Export flagdata", width=width // 2 - 4)
-        exp_js = Button(label="Export JSONL", width=width // 2 - 4)
+        from bokeh.models import TextInput
+        caps = self.capabilities()
+        exp_sel = Select(title="Export / commit", value="json", width=width,
+                         options=self.export_options())
+        exp_sel.description = ("Write flags: " + ("available" if caps.get("write") else
+                               "unavailable -- " + (caps.get("write_reason") or "")))
+        exp_path = TextInput(title="File (optional; required to load / restore)",
+                             placeholder="default: <data name>.<kind>.<date-time>.<ext>",
+                             width=width)
+        exp_go = Button(label="Go", width=width, button_type="primary")
 
         cfg_js = CustomJS(args=dict(comm=comm, msg_id=msg_id, filt_sel=filt_sel,
                                     param_widgets=param_widgets, param_cols=param_cols,
@@ -730,23 +984,26 @@ class FlagController:
                                     ext_chan=ext_chan, display=display, color=color,
                                     show_flagged=show_flagged, flagged_color=flagged_color,
                                     **self._response_args()),
-                          code=_FLAG_RESPONSE_JS + _CONFIG_JS)
+                          code=_CV_SET_BUSY_JS + _FLAG_RESPONSE_JS + _CONFIG_JS)
         for w in [filt_sel, preview_cb, ext_corr, ext_chan, display, color,
                   show_flagged, flagged_color] + \
                  [w for ws in param_widgets.values() for w in ws]:
             prop = {"Select": "value", "NumericInput": "value", "Checkbox": "active",
                     "RadioButtonGroup": "active", "ColorPicker": "color"}[type(w).__name__]
             w.js_on_change(prop, cfg_js)
-        for key, b in list(btns.items()) + [("export_flagdata", exp_fd), ("export_jsonl", exp_js)]:
+        exp_go.js_on_click(CustomJS(args=dict(comm=comm, msg_id=msg_id, exp_sel=exp_sel,
+                                              exp_path=exp_path, **self._response_args()),
+                                    code=_CV_SET_BUSY_JS + _FLAG_RESPONSE_JS + _EXPORT_JS))
+        for key, b in list(btns.items()):
             b.js_on_click(CustomJS(args=dict(comm=comm, msg_id=msg_id, action=key,
                                              **self._response_args()),
-                                   code=_FLAG_RESPONSE_JS + _ACTION_JS))
+                                   code=_CV_SET_BUSY_JS + _FLAG_RESPONSE_JS + _ACTION_JS))
         report_btn.js_on_click(CustomJS(args=dict(comm=comm, msg_id=msg_id,
                                                   **self._response_args()),
-                                        code=_FLAG_RESPONSE_JS + _REPORT_JS))
+                                        code=_CV_SET_BUSY_JS + _FLAG_RESPONSE_JS + _REPORT_JS))
         self._widgets.update(info=info)
         themed = ([filt_sel, preview_cb, ext_corr, ext_chan, display, color, show_flagged,
-                   flagged_color, exp_fd, exp_js,
+                   flagged_color, exp_sel, exp_path, exp_go,
                    report_btn] + list(btns.values())
                   + [w for ws in param_widgets.values() for w in ws])
         if stylesheet is not None:
@@ -755,7 +1012,8 @@ class FlagController:
         self._themed = themed
         kids = ([section] if section is not None else []) + [
             filt_sel, *param_cols.values(), preview_cb, ext_corr, ext_chan,
-            display, color, show_flagged, flagged_color, row(*btns.values()), row(exp_fd, exp_js), report_btn, info]
+            display, color, show_flagged, flagged_color, row(*btns.values()),
+            exp_sel, exp_path, exp_go, report_btn, info]
         return column(*kids, width=width)
 
     def themed_widgets(self) -> list:
@@ -776,7 +1034,7 @@ class FlagController:
         for b, action in ((acc, "accept"), (rej, "reject")):
             b.js_on_click(CustomJS(args=dict(comm=comm, msg_id=msg_id, action=action,
                                              **self._response_args()),
-                                   code=_FLAG_RESPONSE_JS + _ACTION_JS))
+                                   code=_CV_SET_BUSY_JS + _FLAG_RESPONSE_JS + _ACTION_JS))
         return box
 
     def _response_args(self) -> dict:
@@ -795,7 +1053,7 @@ class FlagController:
         """CustomJS for ``FlagTool.response_callback`` (``cb_data.response``)."""
         from bokeh.models import CustomJS
         return CustomJS(args=self._response_args(),
-                        code=_FLAG_RESPONSE_JS + "cvApplyFlagResponse(cb_data.response);")
+                        code=_CV_SET_BUSY_JS + _FLAG_RESPONSE_JS + "cvApplyFlagResponse(cb_data.response);")
 
 
 def scatter_layer_entries(panel) -> list:
@@ -854,7 +1112,6 @@ def _accepts_proposal(fn) -> bool:
 
 _FLAG_RESPONSE_JS = r"""
 function cvApplyFlagResponse(resp) {
-    if (window.__cvSetBusy) window.__cvSetBusy(false);
     if (!resp) return;
     if (resp.notify_text != null && notify_div) {
         notify_div.text = resp.notify_text;
@@ -874,6 +1131,14 @@ function cvApplyFlagResponse(resp) {
     // callback, and the Python side re-queries a panel whose pending-flag
     // state changed before drawing it.
     const idx = resp.refresh || [];
+    if (idx.length && window.__cvSetBusy) {
+        // Bridge the pan/zoom re-render's 300 ms debounce: each panel's
+        // re-render request sets busy itself only when it is actually sent,
+        // so without this hold the cursor went idle between this reply and
+        // the redraw.  Released once those requests are under way.
+        window.__cvSetBusy(true);
+        setTimeout(function() { window.__cvSetBusy(false); }, 450);
+    }
     for (const i of idx) {
         const r = ranges[i];
         if (r) r.properties.end.change.emit();
@@ -882,10 +1147,10 @@ function cvApplyFlagResponse(resp) {
 """
 
 _ACTION_JS = r"""
-if (window.__cvSetBusy) window.__cvSetBusy(true);
+window.__cvSetBusy(true);
 const payload = {action: action};
 if (preview_box && preview_box.tags && preview_box.tags.length) payload.id = preview_box.tags[0];
-comm.send(msg_id, payload, cvApplyFlagResponse);
+comm.send(msg_id, payload, (resp) => { window.__cvSetBusy(false); cvApplyFlagResponse(resp); });
 """
 
 _CONFIG_JS = r"""
@@ -897,12 +1162,14 @@ for (const w of (param_widgets[name] || [])) {
     if (kind === 'bool') params[pname] = !!w.active;
     else if (w.value !== null && w.value !== undefined && w.value !== '') params[pname] = w.value;
 }
+window.__cvSetBusy(true);
 comm.send(msg_id, {action: 'config', filter: name, params: params,
                    preview: !!preview_cb.active, extend_corr: !!ext_corr.active,
                    extend_chan: !!ext_chan.active,
                    display: display.active === 1 ? 'color' : 'hide',
                    color: color.color, show_flagged: !!show_flagged.active,
-                   flagged_color: flagged_color.color}, cvApplyFlagResponse);
+                   flagged_color: flagged_color.color},
+          (resp) => { window.__cvSetBusy(false); cvApplyFlagResponse(resp); });
 """
 
 _REPORT_JS = r"""
@@ -913,11 +1180,18 @@ let w = null;
 try { w = window.open("", "_blank"); } catch (e) { console.warn("[Flagging] window.open failed", e); }
 if (w) w.document.write("<html><body style='background:#1e1e2e;color:#cdd6f4;" +
                         "font-family:sans-serif'><p>Building pending-flag report…</p></body></html>");
-if (window.__cvSetBusy) window.__cvSetBusy(true);
+window.__cvSetBusy(true);
 comm.send(msg_id, {action: 'report'}, (resp) => {
+    window.__cvSetBusy(false);
     cvApplyFlagResponse(resp);
     if (!resp || resp.report_html == null) return;
     if (w && !w.closed) { w.document.open(); w.document.write(resp.report_html); w.document.close(); }
     else if (notify_div) { notify_div.text = "⚠ Pop-up blocked: allow pop-ups to see the report."; }
 });
+"""
+
+_EXPORT_JS = r"""
+window.__cvSetBusy(true);
+comm.send(msg_id, {action: 'export', kind: exp_sel.value, path: exp_path.value || ''},
+          (resp) => { window.__cvSetBusy(false); cvApplyFlagResponse(resp); });
 """

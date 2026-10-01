@@ -259,6 +259,18 @@ class LocalVisibilityReader:
     def probe_flag_region(self, request: dict) -> dict:
         return self._backend.probe_flag_region(request)
 
+    def flag_commit_capabilities(self) -> dict:
+        return self._backend.flag_commit_capabilities()
+
+    def commit_pending_flags(self, deltas, **options) -> dict:
+        return self._backend.commit_pending_flags(deltas, **options)
+
+    def restore_flag_backup(self, backup_path: str) -> dict:
+        return self._backend.restore_flag_backup(backup_path)
+
+    def flagdata_script(self, deltas, **kw) -> str:
+        return self._backend.flagdata_script(deltas, **kw)
+
     def spw_casa_ids(self) -> dict:
         return self._backend.spw_casa_ids()
 

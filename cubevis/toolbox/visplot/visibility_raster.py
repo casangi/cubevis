@@ -1175,6 +1175,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             self._ensure_identity_tables(polarization=self._polarization)
 
         self._agg          = agg
+        self._overlay_budget = budget
         self._overlay_aggs = [] if defer else self._query_flag_overlays(selection, budget)
         # Before any shading below reads _scaling_vmin.
         self._apply_zscore_cell_cutoff(agg)
@@ -1698,6 +1699,13 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             except Exception:
                 log.debug("flag overlay query failed", exc_info=True)
         return out
+
+    def _refresh_flag_overlays(self) -> None:
+        sel = getattr(self, "_selection", None)
+        if sel is None or self._agg is None:
+            return
+        self._overlay_aggs = self._query_flag_overlays(
+            sel, getattr(self, "_overlay_budget", None))
 
     def _apply_flag_overlays(self, img32, x_range, y_range):
         """Paint the overlays over *img32* for the viewport (in place)."""

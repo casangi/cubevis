@@ -293,6 +293,21 @@ class VisplotRemoteBackend:
             _t.perf_counter() - t0)
         return _as_json(result)
 
+    def flag_commit_capabilities(self):
+        return self._reader.flag_commit_capabilities()
+
+    def commit_pending_flags(self, deltas_json: str, options_json: str = "{}"):
+        import json
+        return _wire_safe(self._reader.commit_pending_flags(json.loads(deltas_json),
+                                                            **json.loads(options_json)))
+
+    def restore_flag_backup(self, backup_path: str):
+        return _wire_safe(self._reader.restore_flag_backup(backup_path))
+
+    def flagdata_script(self, deltas_json: str, options_json: str = "{}"):
+        import json
+        return self._reader.flagdata_script(json.loads(deltas_json), **json.loads(options_json))
+
     def probe_flag_region(self, request: dict):
         return _wire_safe(self._reader.probe_flag_region(dict(request)))
 

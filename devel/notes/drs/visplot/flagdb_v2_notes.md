@@ -299,3 +299,58 @@ review dialog, panel refresh) still needs a live GUI check.
   plotter: initial overlay, scatter Unflag box restores the committed
   spectrum, toggle off clears overlays. Headless Chrome: checkbox toggles,
   raster cells and scatter points drawn grey.
+
+## 2026-09-30: part 25 -- export / commit (flag_commit.py)
+- Decisions (Darrell): MSv2 written ONLY via CASA (flagdata/flagmanager);
+  MSv4 backup as a side file; write option disabled with a reason when the
+  tools are missing. MSv4 gets no script option (JSON + "Describe pending
+  flags" cover it).
+- Menu "Export / commit" (context-sensitive): JSON (both), flagdata script
+  (MSv2), write to data (MSv2 casatasks / MSv4 zarr), load JSON as pending,
+  restore commit backup (MSv4). Writes need a confirmation (preview dialog).
+- MSv2 commit: flagmanager save -> one flagdata(mode='list') per delta, in
+  order -> reopen -> VERIFY against the display's fold (counts of
+  not-flagged / not-unflagged / collateral), report with flag version name.
+- MSv4 commit: exactly the changed samples written with zarr vindex into the
+  data group's flag variable; previous raw values saved first to
+  <store>.visplot_flag_backup_<ts>.npz; restore_msv4_backup; verify.
+- Runs where the data are (worker for remote); P_local clears the DB, bumps
+  cache generation, refreshes.
+- Tests: tests/manual/visplot/test_flag_commit.py (MSv4 commit/verify/
+  restore, via menu, remote via local kernel; MSv2 call order with a
+  recording casatasks stand-in + verification catches unwritten changes;
+  real-CASA test skipped unless casatools imports; script compiles; JSON
+  round trip and SPW check).
+- Sandbox note: the PyPI casatools wheel (RHEL build) cannot load on Ubuntu
+  24 (bundled libssl/libldap need RHEL OpenSSL symbols), so the real-CASA
+  test must run on NRAO hosts.
+
+## 2026-09-30: part 26 -- responsiveness of display toggles
+- Report: toggling Hide/Show in colour or "Show flagged data" started long
+  operations with no busy cursor, and stalled the websocket heartbeat
+  (browser declared the socket dead after 10 s and reconnected).
+- Causes: (1) panel re-render comm handler ran synchronously on the asyncio
+  event loop; (2) busy cursor was a boolean, cleared by the first reply
+  while the other panel was still rendering, and the flag-control scripts
+  never set it; (3) every toggle marked panels stale, re-reading the drawn
+  data even when only overlays changed.
+- Fixes: _handle_rerender_async runs the re-render in a worker thread (comm
+  lock still serializes per panel); __cvSetBusy is reference counted, every
+  flag-control request balances its own true/false and defines the helper
+  itself; push_state(data_changed=False) for overlay-only changes (Show
+  flagged, colours, display switch with nothing pending) -> panels refresh
+  only overlays (_overlays_stale / _refresh_flag_overlays).
+- Tests: toggles make no main-data queries; rerender runs off the main
+  thread; headless: busy counter returns to 0.
+- Part 27: busy cursor stays on until the new image is painted (rerender
+  reply clears it two animation frames after the image update), and a flag
+  response that refreshes panels holds busy across the 300 ms re-render
+  debounce. Headless trace: busy continuous from click to paint, no gaps.
+- Part 28: (a) __cvSetBusy defined by a page init script (the FlagTool's
+  first box had no busy state before any CustomJS had defined it); (b) going
+  idle is deferred 200 ms so hand-offs (FlagTool clears busy before its
+  asynchronously compiled response callback starts the refresh) don't
+  flicker; (c) a visible "Working..." chip under the toolbar while busy --
+  the OS mouse cursor only updates on mouse movement; (d) exports get
+  time-stamped default names <data>.flags.<YYYYmmdd-HHMMSS>.jsonl /
+  .flagdata.<ts>.py, and an explicit existing file name is refused.

@@ -576,14 +576,16 @@ class FlagController:
         opts = [("json", "Save flags as JSON")]
         if msv2:
             opts.append(("script", "Python flagdata script (casatasks)"))
-        label = ("Write flags to the MS (casatools)" if msv2
+        label = ("Write flags to the MS (exact, arcae)" if msv2
                  else "Write flags to the PS (zarr)")
         if not caps.get("write"):
             label += " -- unavailable"
         opts.append(("commit", label))
+        if msv2:
+            opts.append(("commit_casa", "Write flags to the MS (CASA flagdata)"
+                         + ("" if caps.get("casa") else " -- unavailable")))
         opts.append(("load", "Load flags from JSON (as pending)"))
-        if not msv2:
-            opts.append(("restore", "Restore flags from a commit backup"))
+        opts.append(("restore", "Restore flags from a commit backup (.npz)"))
         return opts
 
     def _json_header(self, src: str) -> dict:
@@ -696,33 +698,45 @@ class FlagController:
                                      NOTIFY_WARN, refresh=False)
             rep = await asyncio.to_thread(self.reader.restore_flag_backup, path)
             self._after_disk_change()
-            return self.response(f"Restored {rep.get('restored', 0):,} sample flag(s) from "
-                                 f"{html.escape(path)}", NOTIFY_OK)
-        if kind == "commit":
-            if not caps.get("write"):
+            what = (f"{rep['restored']:,} sample flag(s)" if "restored" in rep
+                    else f"the flags of {rep.get('restored_rows', 0):,} row(s)")
+            return self.response(f"Restored {what} from {html.escape(path)}", NOTIFY_OK)
+        if kind in ("commit", "commit_casa"):
+            casa = kind == "commit_casa"
+            ok = caps.get("casa") if casa else caps.get("write")
+            if not ok:
+                reason = caps.get("casa_reason" if casa else "write_reason")
                 return self.response("⚠ Writing flags is unavailable here: "
-                                     + html.escape(caps.get("write_reason") or "unknown reason"),
+                                     + html.escape(reason or "unknown reason"),
                                      NOTIFY_WARN, refresh=False)
             if not deltas:
                 return self.response("Nothing to write: no pending operations.", NOTIFY_OK,
                                      refresh=False)
-            self._commit_pending = {"id": uuid.uuid4().hex, "deltas": deltas}
+            method = "casa" if casa else ("arcae" if caps.get("format") != "msv4" else None)
+            self._commit_pending = {"id": uuid.uuid4().hex, "deltas": deltas, "method": method}
             return self.response("Confirm writing the pending flags.", NOTIFY_OK,
                                  refresh=False,
                                  preview={"id": self._commit_pending["id"],
-                                          "html": self._commit_html(deltas, caps)})
+                                          "html": self._commit_html(deltas, caps, method)})
         return self.response(f"⚠ Unknown export kind {html.escape(str(kind))}", NOTIFY_WARN,
                              refresh=False)
 
-    def _commit_html(self, deltas, caps) -> str:
+    def _commit_html(self, deltas, caps, method=None) -> str:
         esc = html.escape
         src = getattr(self._plotter, "_source_path", "") or ""
         msv2 = caps.get("format") != "msv4"
         n_samples = sum(d.n_samples or 0 for d in deltas)
-        how = ("casatasks.flagdata (list mode, one call per operation, in order), after "
-               "saving the current flags with flagmanager" if msv2 else
-               "zarr writes of exactly the changed samples, after saving their previous "
-               "values to a backup file next to the store")
+        if method == "casa":
+            how = ("casatasks.flagdata (list mode, operations in order), after saving the "
+                   "current flags with flagmanager")
+        elif msv2:
+            how = ("arcae: the final flag of exactly the changed samples written to their "
+                   "MS rows (FLAG_ROW kept consistent), after saving their previous values "
+                   "to a backup file next to the MS"
+                   + (" and a CASA flag version" if caps.get("casa") else ""))
+        else:
+            how = ("zarr writes of exactly the changed samples, after saving their previous "
+                   "values to a backup file next to the store")
         rows = [("Write to", esc(src)), ("Operations", str(len(deltas))),
                 ("Samples (as proposed)", f"{n_samples:,}"), ("Method", esc(how)),
                 ("After writing", "the result is compared with what visplot showed; "
@@ -740,12 +754,16 @@ class FlagController:
     async def _do_commit(self) -> dict:
         pend, self._commit_pending = self._commit_pending, None
         deltas = pend["deltas"]
-        rep = await asyncio.to_thread(self.reader.commit_pending_flags, list(deltas))
+        opts = {"method": pend["method"]} if pend.get("method") else {}
+        rep = await asyncio.to_thread(self.reader.commit_pending_flags, list(deltas), **opts)
         self.db.clear(record=False)
         self._after_disk_change()
-        where = (f"flag version <b>{html.escape(str(rep.get('version_name')))}</b>"
-                 if rep.get("version_name") else
-                 f"backup <b>{html.escape(str(rep.get('backup')))}</b>")
+        parts = []
+        if rep.get("backup"):
+            parts.append(f"backup <b>{html.escape(str(rep.get('backup')))}</b>")
+        if rep.get("version_name"):
+            parts.append(f"CASA flag version <b>{html.escape(str(rep.get('version_name')))}</b>")
+        where = " and ".join(parts) or "nowhere"
         if rep.get("verified", True):
             text = (f"✓ Wrote {len(deltas)} operation(s) "
                     f"({rep.get('expected_changes', 0):,} sample changes"

@@ -372,3 +372,21 @@ review dialog, panel refresh) still needs a live GUI check.
   that single huge list -- needs the commit message / CASA log to confirm.
 - Dialog readability: page colour variables, full-strength text, labels by
   opacity, solid accent border, sans-serif.
+
+## 2026-09-30: part 31 -- exact MSv2 write with arcae (default)
+- Darrell's run with part 30: CASA flagdata write verified with 2,689 of
+  52,624 samples NOT flagged (0 collateral) -- although the exported
+  selections are exact under MSSelection semantics (emulator test).
+- New default MSv2 write (flag_commit.commit_msv2_arcae): compute the final
+  flag of every changed sample with the display's engine, map each to its MS
+  row via (DATA_DESC_ID, TIME to the microsecond, ANTENNA1, ANTENNA2) --
+  refusing on missing or ambiguous rows -- and write FLAG per data
+  description (FLAG is variably shaped across DDIDs) with arcae putcol;
+  FLAG_ROW = all(FLAG) for written rows. Previous FLAG/FLAG_ROW of the rows
+  saved first to <ms>.visplot_flag_backup_<ts>.npz (restore_backup), plus a
+  CASA flag version when casatools works. Then verify.
+- CASA flagdata write kept as a menu option ("CASA flagdata"); arcae needs
+  no CASA, so writing is available wherever visplot reads MSv2.
+- TW Hya copy, Ceres box of 146,966 samples: 2,449 rows written in 1.8 s,
+  verified 0 mismatches. Tests: sim commit/verify/restore, FLAG_ROW
+  consistency, menu flow, remote (local kernel) for MSv2 and MSv4.

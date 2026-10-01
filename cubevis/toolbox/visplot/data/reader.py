@@ -2300,8 +2300,8 @@ class XArrayReader(abc.ABC):
 
     def restore_flag_backup(self, backup_path: str) -> dict:
         """MSv4: undo a commit from its side-file backup."""
-        from ..flag_commit import restore_msv4_backup
-        return restore_msv4_backup(self, backup_path)
+        from ..flag_commit import restore_backup
+        return restore_backup(self, backup_path)
 
     def flagdata_script(self, deltas, **kw) -> str:
         """MSv2: a standalone casatasks script applying *deltas*."""

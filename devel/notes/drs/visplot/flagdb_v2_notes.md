@@ -354,3 +354,4 @@ review dialog, panel refresh) still needs a live GUI check.
   the OS mouse cursor only updates on mouse movement; (d) exports get
   time-stamped default names <data>.flags.<YYYYmmdd-HHMMSS>.jsonl /
   .flagdata.<ts>.py, and an explicit existing file name is refused.
+- Part 29: Plot/presets (doPlot) release busy only after their own updates are painted and hold it across the ~300 ms re-render debounce the new ranges trigger; headless trace after Z-Score: one continuous busy span from click to the redrawn plot.

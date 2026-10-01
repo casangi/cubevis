@@ -6319,7 +6319,18 @@ function doPlot(reload) {
         panels:      panels,
         reload:      !!reload,
     }, function(resp) {
-        cvSetBusy(false);
+        // Release the busy state only after this response's own updates
+        // have been PAINTED (two animation frames after this callback),
+        // and bridge the pan/zoom re-render debounce: the new ranges and
+        // axes applied below make each panel request its viewport image
+        // ~300 ms later, and that request is what actually draws the new
+        // plot (2026-09-30: after Z-Score the cursor went idle, then the
+        // plot changed a noticeable moment later).
+        window.__cvSetBusy(true);
+        setTimeout(function() { window.__cvSetBusy(false); }, 450);
+        requestAnimationFrame(function() {
+            requestAnimationFrame(function() { cvSetBusy(false); });
+        });
         if (!resp) return;
         console.log('[visplot doPlot] received status:', resp.status,
                      'panels:', resp.panels ? JSON.parse(JSON.stringify(resp.panels)) : resp.panels);

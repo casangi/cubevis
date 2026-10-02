@@ -419,8 +419,13 @@ def evaluate_request(backend, req: dict) -> dict:
     # non-Z-Score layers; anything else takes the general path below.
     if (kind == "scatter" and fobj.is_identity and not req.get("force_ms")
             and not any(_axis(l["y_axis"]) == Axis.Z_SCORE for l in (req.get("layers") or ()))):
+        import time as _t
+        _t0 = _t.perf_counter()
         fast = _scatter_box_from_frames(backend, req, flag, sel, x_axis, (x0, x1), (y0, y1),
                                         extend, data_column)
+        log.info("visplot timing: scatter box via cached frames %s in %.2f s",
+                 "resolved" if fast is not None else "NOT usable (MS path follows)",
+                 _t.perf_counter() - _t0)
         if fast is not None:
             return fast
 
@@ -638,11 +643,16 @@ def _scatter_box_from_frames(backend, req, flag, sel, x_axis, xr_, yr_, extend, 
     if not layers or not hasattr(backend, "_raw_frames"):
         return None
     keys = [(_axis(l["y_axis"]), str(l["polarization"])) for l in layers]
+    import time as _t
+    _t0 = _t.perf_counter()
     try:
         frames = backend._raw_frames(x_axis, keys, sel)
     except Exception:
         log.debug("scatter box: raw frames unavailable", exc_info=True)
         return None
+    _tf = _t.perf_counter() - _t0
+    _t0 = _t.perf_counter()
+    _tk = 0.0
     if frames is None:
         return None
     spw_table = backend.__dict__.get("_cv_spw_codes") or []
@@ -651,7 +661,9 @@ def _scatter_box_from_frames(backend, req, flag, sel, x_axis, xr_, yr_, extend, 
         df = frames.get(key)
         if df is None or not len(df):
             continue
+        _tk0 = _t.perf_counter()
         shown = frame_keep_mask(backend, df, key[1], "effective")     # True = unflagged
+        _tk += _t.perf_counter() - _tk0
         x = df["x"].to_numpy(dtype=np.float64)
         y = df["y"].to_numpy(dtype=np.float64)
         with np.errstate(invalid="ignore"):
@@ -668,6 +680,8 @@ def _scatter_box_from_frames(backend, req, flag, sel, x_axis, xr_, yr_, extend, 
             pieces.append((df.loc[m, ["time", "frequency", "__spw", "__chan",
                                       "baseline_antenna1_name", "baseline_antenna2_name"]
                                   + [c for c in ("scan_name",) if c in df.columns]], key[1]))
+    _tm = _t.perf_counter() - _t0
+    _t0 = _t.perf_counter()
     counts, blocks = FlagCounts(), []
     if pieces:
         import pandas as pd
@@ -698,6 +712,10 @@ def _scatter_box_from_frames(backend, req, flag, sel, x_axis, xr_, yr_, extend, 
             blk = SampleBlock.from_mask(key, times, a1, a2, freqs, chans, pols, grid)
             if blk is not None:
                 blocks.append(blk)
+    log.info("visplot timing: scatter box detail: frames %.2f s (rows %s), flag state %.2f s, "
+             "box/rows %.2f s, sample blocks %.2f s", _tf,
+             ",".join(f"{len(f):,}" for f in frames.values() if f is not None),
+             _tk, _tm - _tk, _t.perf_counter() - _t0)
     if not blocks:
         return {"delta": None, "counts": counts.to_dict(),
                 "warnings": ["no samples matched"]}

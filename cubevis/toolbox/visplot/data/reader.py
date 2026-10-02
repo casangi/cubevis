@@ -1554,12 +1554,22 @@ class _FrameCache:
             self._drop(key)
             nbytes = _frame_nbytes(frame)
             if self.max_bytes <= 0 or nbytes > self.max_bytes:
+                if self.max_bytes > 0:
+                    # A frame larger than the whole budget is re-read from
+                    # disk on EVERY redraw / flag operation -- say so.
+                    log.warning("visplot frame cache: a %.0f MiB frame exceeds the %.0f MiB "
+                                "budget and is not cached (every redraw re-reads it); set "
+                                "%s to raise the budget", nbytes / 2**20,
+                                self.max_bytes / 2**20, FRAME_CACHE_ENV)
                 return False
             self._d[key] = (generation, nbytes, frame)
             self.bytes += nbytes
             while self.bytes > self.max_bytes and self._d:
                 old_key, (_g, old_bytes, _f) = self._d.popitem(last=False)
                 self.bytes -= old_bytes
+                log.info("visplot frame cache: evicted a %.0f MiB frame to stay within "
+                         "%.0f MiB (%s)", old_bytes / 2**20, self.max_bytes / 2**20,
+                         FRAME_CACHE_ENV)
                 self.evictions += 1
             return key in self._d
 

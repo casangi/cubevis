@@ -110,9 +110,21 @@ def capabilities(backend) -> dict:
 def _expected_changes(backend, deltas) -> list:
     """Per raw partition: ``(ds, flag_name, base(bool), eff(bool), valid)`` for
     partitions the deltas change.  Arrays in the FLAG variable's own order."""
-    from .flag_engine import apply_pending, valid_mask, _bdim
+    from .flag_engine import apply_pending, valid_mask, _bdim, block_coords
+    from .flag_model import delta_mask
     out = []
     for ds in backend._iter_visibility_partitions(None):
+        # Coordinates only: skip partitions no operation touches without
+        # reading their flags (2026-10-02: a 45-sample commit spent ~1 s
+        # reading and folding the FLAG column of every partition).
+        try:
+            bc = block_coords(backend, ds)
+            touched = any((m := delta_mask(d, bc)) is not None and bool(np.any(m))
+                          for d in deltas)
+        except Exception:
+            touched = True                      # be safe: do the full fold
+        if not touched:
+            continue
         base_da = backend._disk_flag_mask(ds)
         eff_da = apply_pending(backend, ds, base_da, tuple(deltas))
         base = np.asarray(base_da.values, dtype=bool)
@@ -309,6 +321,7 @@ def commit_msv2_arcae(backend, deltas, backup_path: Optional[str] = None,
     rows = np.array(sorted(plan), dtype=np.int64)
     n = 0
     version_name = None
+    snapshot = _snapshot_frames(backend)
     backend.close()                     # release the read handle before writing
     try:
         ok, _why = casatools_available()
@@ -378,6 +391,8 @@ def commit_msv2_arcae(backend, deltas, backup_path: Optional[str] = None,
               "expected_changes": n}
     if verify:
         report.update(_verify(backend, expected))
+    if n and report.get("verified", False):
+        report["frames_refreshed"] = refresh_cached_frames(backend, deltas, snapshot)
     return report
 
 
@@ -492,6 +507,7 @@ def commit_msv4(backend, deltas, backup_path: Optional[str] = None,
             vals = np.where(new, np.where(prev != 0, prev, 1), 0).astype(prev.dtype)
         arr.vindex[idx] = vals
         n += int(np.asarray(new).size)
+    snapshot = _snapshot_frames(backend)
     backend.close()
     backend.open()
     backend._clear_lookup_caches()
@@ -499,6 +515,8 @@ def commit_msv4(backend, deltas, backup_path: Optional[str] = None,
               "written": n, "expected_changes": n}
     if verify:
         report.update(_verify(backend, expected))
+    if n and report.get("verified", False):
+        report["frames_refreshed"] = refresh_cached_frames(backend, deltas, snapshot)
     return report
 
 
@@ -556,3 +574,43 @@ def list_backups(backend) -> list:
             continue
     return sorted(out, key=lambda e: -e["created"])
 
+
+def _snapshot_frames(backend) -> list:
+    """``[(key, generation, raw frame)]`` held by *backend*'s frame cache --
+    taken before a commit closes the backend (closing drops them)."""
+    cache = backend._frame_cache_obj()
+    with cache.lock:
+        return [(k, e[0], e[2]) for k, e in cache._d.items()
+                if hasattr(e[2], "columns") and "__disk_flag" in e[2].columns]
+
+
+def refresh_cached_frames(backend, deltas, snapshot) -> int:
+    """After a VERIFIED commit: put the raw scatter frames cached before the
+    commit back, brought up to date, instead of re-reading them.
+
+    Each raw frame row carries its on-disk flag (``__disk_flag``).  The new
+    on-disk state of every row is the old one with the committed operations
+    folded in -- the same fold ``flag_engine`` uses for the display, and the
+    one the write was just verified against -- so that column is replaced
+    and the frame's derived caches are dropped.  Without this the redraw
+    after a commit re-read every cached selection from disk (seconds for a
+    full data set, however few samples were written).  Returns the number
+    of frames restored."""
+    from . import flag_engine as fe
+    cache = backend._frame_cache_obj()
+    n = 0
+    for key, gen, df in snapshot:
+        fe._FRAME_SLOTS.pop(id(df), None)             # built against the old state
+        pol = key[3] if len(key) > 3 else None
+        disk = df["__disk_flag"].to_numpy(dtype=bool)
+        new = disk.copy()
+        R = fe._rows_for(backend, df, pol)
+        for d in deltas:
+            new[fe.row_delta_mask(d, R)] = bool(d.flag)
+        df["__disk_flag"] = new
+        fe._FRAME_SLOTS.pop(id(df), None)
+        with cache.lock:
+            cache.put(key, gen, df)
+        n += 1
+    backend.__dict__.pop("_cv_view_memo", None)       # filtered views of the old state
+    return n

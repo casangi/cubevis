@@ -854,7 +854,13 @@ class FlagController:
         deltas = pend["deltas"]
         rep = await asyncio.to_thread(self.reader.commit_pending_flags, list(deltas))
         self.db.clear(record=False)
-        self._after_disk_change()
+        if rep.get("verified") and "frames_refreshed" in rep:
+            # Cached frames were brought up to date in place (flag_commit.
+            # refresh_cached_frames): the redraw only re-filters, like any
+            # flag change -- no re-read of every cached selection.
+            self.push_state()
+        else:
+            self._after_disk_change()
         parts = []
         if rep.get("backup"):
             parts.append(f"backup <b>{html.escape(str(rep.get('backup')))}</b>")

@@ -133,7 +133,9 @@ def test_msv4_commit_through_the_plotter_menu(sim_ps, tmp_path):
         assert "preview" in resp and "modifies the data set" in resp["preview"]["html"]
         resp = asyncio.run(f.handle_action({"action": "accept", "id": resp["preview"]["id"]}))
         assert resp["notify_text"].startswith("✓ Wrote") and "verified" in resp["notify_text"]
-        assert len(f.db) == 0 and vp._cache_generation == before_gen + 1
+        # cached frames were updated in place (no re-read); the generation
+        # only moves when that was not possible
+        assert len(f.db) == 0 and vp._cache_generation in (before_gen, before_gen + 1)
         # cancel path writes nothing
         f.db.add(_deltas(b)[0])
         resp = asyncio.run(f.handle_action({"action": "export", "kind": "commit"}))
@@ -418,3 +420,38 @@ def test_backup_dropdown_lists_backups(sim_ms, tmp_path):
         assert "1 op(s)" in r["backups"][0][1]
     finally:
         vp.close()
+
+
+@pytest.mark.parametrize("kind", ["msv2", "msv4"])
+def test_cached_frames_after_commit_match_a_fresh_read(sim_ms, sim_ps, tmp_path, kind):
+    """After a commit the cached scatter frames are updated in place (no
+    re-read); what they draw must equal a fresh read of the written data."""
+    from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
+    from cubevis.toolbox.visplot.data.msv4_backend import MSv4Backend
+    from cubevis.toolbox.visplot.data.reader import ScatterLayerSpec
+    from cubevis.toolbox.visplot.axes import Axis
+    B = MSv2Backend if kind == "msv2" else MSv4Backend
+    path = str(tmp_path / ("f.ms" if kind == "msv2" else "f.ps.zarr"))
+    shutil.copytree(sim_ms if kind == "msv2" else sim_ps, path)
+    pol = "XX"
+    layers = [ScatterLayerSpec(y_axis=Axis.AMPLITUDE, polarization=pol, cmap=("#000000", "#ffffff"))]
+    kw = dict(width=120, height=90, ref_scale=None)
+    b = B(path); b.open()
+    try:
+        b.query_columns(Axis.TIME, layers, SelectionSpec(), **kw)      # fill the cache
+        reads = []
+        orig = b._query_columns_raw
+        b._query_columns_raw = lambda *a, **k: (reads.append(1), orig(*a, **k))[1]
+        rep = fc.commit(b, _deltas(b))
+        assert rep["verified"] and rep.get("frames_refreshed", 0) >= 1
+        after = b.query_columns(Axis.TIME, layers, SelectionSpec(), **kw)
+        assert reads == [], "the post-commit redraw re-read the data"
+    finally:
+        b.close()
+    fresh_b = B(path); fresh_b.open()
+    try:
+        fresh = fresh_b.query_columns(Axis.TIME, layers, SelectionSpec(), **kw)
+    finally:
+        fresh_b.close()
+    for a, f in zip(after.layers, fresh.layers):
+        assert np.array_equal(a.image, f.image)

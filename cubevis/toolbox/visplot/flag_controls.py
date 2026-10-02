@@ -865,6 +865,10 @@ class FlagController:
         else:
             where_extra = ""
         where = " and ".join(parts) or "nowhere"
+        if not rep.get("written", rep.get("expected_changes", 1)):
+            return self.response(f"Nothing to write: the {len(deltas)} pending operation(s) "
+                                 "change no flags on disk (already in that state).",
+                                 NOTIFY_OK, preview_closed=True)
         if rep.get("verified", True):
             text = (f"✓ Wrote {len(deltas)} operation(s) "
                     f"({rep.get('expected_changes', 0):,} sample changes"

@@ -438,3 +438,4 @@ review dialog, panel refresh) still needs a live GUI check.
   the copy is deleted afterwards. Restore: "Existing backups" dropdown appears
   when Restore is chosen (filled via kind=list_backups, newest first) and
   puts the chosen path into the file box, which still accepts typed paths.
+- Part 36: a commit that changes no flag (box over already-flagged data) writes nothing and creates NO backup (report backup=None, written=0; MSv2 and MSv4); the menu says 'Nothing to write'. Darrell's cvpost140 failure was exactly this: the remote test's box (last field, baselines 0.6-3.4) changed nothing, the report still named a backup path that was never written, so restore failed. The remote test now uses the first field where an all-baseline box changes flags and asserts written > 0 and a backup.

@@ -370,6 +370,8 @@ def commit_msv2_arcae(backend, deltas, backup_path: Optional[str] = None,
             commands=ops[:50] + ([f"... {len(ops) - 50} more"] if len(ops) > 50 else []),
             params=[f"cubevis={_cubevis_version()}", f"backup={backup_path}",
                     f"operations={len(deltas)}", f"samples={n}"])
+    if not n:                      # nothing changed: no write, no backup file
+        backup_path = None
     report = {"format": "msv2", "method": "arcae", "backup": backup_path,
               "version_name": version_name, "history": history,
               "operations": len(deltas), "written": n, "rows": int(rows.size),
@@ -459,6 +461,12 @@ def commit_msv4(backend, deltas, backup_path: Optional[str] = None,
         eff_r = np.transpose(eff, perm)
         idx = np.nonzero(change_r)
         plan.append((gpath, fname, idx, eff_r[idx]))
+    if not plan:                   # nothing changes: no write, no backup file
+        report = {"format": "msv4", "backup": None, "operations": len(deltas),
+                  "written": 0, "expected_changes": 0}
+        if verify:
+            report.update(_verify(backend, expected))
+        return report
     root = zarr.open_group(store, mode="r+")
     # 1. backup (previous raw values of exactly the samples that change)
     arrays = {}

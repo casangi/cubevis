@@ -1151,9 +1151,42 @@ class _Rows:
         # gathers per row, instead of a binary search per row per delta
         # (that searchsorted was ~0.25 s per scatter redraw on TW Hya, and
         # 2-3x that on the remote hosts -- 2026-09-30 bench).
-        self.t_uniq, self.t_inv = np.unique(self.times, return_inverse=True)
-        self.f_uniq, self.f_inv = np.unique(self.freqs, return_inverse=True)
+        self._t = self._f = None
         self._pairs_cache = {}
+
+    # Unique times / frequencies and each row's index into them -- decoded on
+    # first use (only sample-set operations need them), with a hash-based
+    # factorize: ~5x faster than the sort-based np.unique on tens of
+    # millions of rows (2026-10-02: all-field TW Hya frames).
+    @staticmethod
+    def _factorize(values):
+        import pandas as pd
+        codes, uniq = pd.factorize(values, sort=True)
+        return np.asarray(uniq), codes.astype(np.int64, copy=False)
+
+    @property
+    def t_uniq(self):
+        if self._t is None:
+            self._t = self._factorize(self.times)
+        return self._t[0]
+
+    @property
+    def t_inv(self):
+        if self._t is None:
+            self._t = self._factorize(self.times)
+        return self._t[1]
+
+    @property
+    def f_uniq(self):
+        if self._f is None:
+            self._f = self._factorize(self.freqs)
+        return self._f[0]
+
+    @property
+    def f_inv(self):
+        if self._f is None:
+            self._f = self._factorize(self.freqs)
+        return self._f[1]
 
     @property
     def n(self):

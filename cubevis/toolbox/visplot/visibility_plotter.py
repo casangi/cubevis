@@ -1820,6 +1820,17 @@ class VisibilityPlotter:
         default; toggled in the Flagging controls.
     flag_flagged_color : str
         Colour for flagged data when ``flag_show_flagged`` is on.
+    frame_cache_mb : float | None
+        Budget (MiB) of the cache of scatter frames -- the decoded samples a
+        scatter panel draws, flags and probes.  When a selection's frames do
+        not fit, every redraw and flag operation re-reads them from the data
+        (an INFO/WARNING line says so).  ``None`` (default): the
+        ``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` environment variable if set, else
+        a tenth of physical memory, clamped to 256 MiB .. 4 GiB.  Remote
+        sessions apply it in the worker, where the frames live.  Example:
+        TW Hya with all fields (2 x 31 M samples, ~1.5 GiB per frame) needs
+        about 3-4 GiB; on a 24 GB Mac the 2.4 GiB default evicted frames
+        and a flag box took 3.6 s instead of 0.5 s.
 
     Resource lifecycle
     ------------------
@@ -1891,6 +1902,7 @@ class VisibilityPlotter:
         flag_color:       str            = "#ff00ff",
         flag_show_flagged: bool          = False,
         flag_flagged_color: str          = "#7f849c",
+        frame_cache_mb:   Optional[float] = None,
     ) -> None:
         """Construct the plotter.
 
@@ -1902,6 +1914,7 @@ class VisibilityPlotter:
 
         See ``_resolve_config``, ``_build_panels`` and ``_build_gui``.
         """
+        self._frame_cache_mb = frame_cache_mb
         self._headless = bool(headless)
 
         self._resolve_config(
@@ -2127,6 +2140,9 @@ class VisibilityPlotter:
                 kernel_name=kernel_name
             )
 
+        fc = getattr(self, "_frame_cache_mb", None)
+        if fc is not None and hasattr(self._reader, "set_frame_cache_limit_mb"):
+            self._reader.set_frame_cache_limit_mb(float(fc))
         self._selection = self._build_selection()
         # Group 3 piece 3, Chunk 2 bug fix (added 2026-08-02): per-slot,
         # not a single shared attribute. Was self._last_raster_selection

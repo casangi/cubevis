@@ -301,6 +301,10 @@ class VisplotRemoteBackend:
         return _wire_safe(self._reader.commit_pending_flags(json.loads(deltas_json),
                                                             **json.loads(options_json)))
 
+    def set_frame_cache_limit_mb(self, mb: float):
+        self._reader.set_frame_cache_limit_mb(float(mb))
+        return True
+
     def list_flag_backups(self):
         return _wire_safe(self._reader.list_flag_backups())
 

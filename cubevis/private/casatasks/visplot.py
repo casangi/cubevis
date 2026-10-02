@@ -80,6 +80,7 @@ def _validate_params(
         flag_color,
         flag_show_flagged,
         flag_flagged_color,
+        frame_cache_mb,
 ):
     import re as _re
 
@@ -119,6 +120,7 @@ def _validate_params(
         'flag_color': 'str',
         'flag_show_flagged': 'bool',
         'flag_flagged_color': 'str',
+        'frame_cache_mb': 'Optional[float]',
     }
 
     _simple = {
@@ -216,6 +218,7 @@ def _validate_params(
     _check('flag_color', flag_color, _type_map['flag_color'])
     _check('flag_show_flagged', flag_show_flagged, _type_map['flag_show_flagged'])
     _check('flag_flagged_color', flag_flagged_color, _type_map['flag_flagged_color'])
+    _check('frame_cache_mb', frame_cache_mb, _type_map['frame_cache_mb'])
 
 
 def _visplot_t(
@@ -255,6 +258,7 @@ def _visplot_t(
         flag_color: str = '#ff00ff',
         flag_show_flagged: bool = False,
         flag_flagged_color: str = '#7f849c',
+        frame_cache_mb: Optional[float] = None,
 ):
     _app = VisibilityPlotter(
         # user-supplied arguments
@@ -293,6 +297,7 @@ def _visplot_t(
         flag_color = flag_color,
         flag_show_flagged = flag_show_flagged,
         flag_flagged_color = flag_flagged_color,
+        frame_cache_mb = frame_cache_mb,
         # layer-supplied arguments
         remote_endpoint = None,
         enable_flagging = True,
@@ -418,6 +423,17 @@ class _visplot:
         default; toggled in the Flagging controls.
     flag_flagged_color : str
         Colour for flagged data when ``flag_show_flagged`` is on.
+    frame_cache_mb : float | None
+        Budget (MiB) of the cache of scatter frames -- the decoded samples a
+        scatter panel draws, flags and probes.  When a selection's frames do
+        not fit, every redraw and flag operation re-reads them from the data
+        (an INFO/WARNING line says so).  ``None`` (default): the
+        ``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` environment variable if set, else
+        a tenth of physical memory, clamped to 256 MiB .. 4 GiB.  Remote
+        sessions apply it in the worker, where the frames live.  Example:
+        TW Hya with all fields (2 x 31 M samples, ~1.5 GiB per frame) needs
+        about 3-4 GiB; on a 24 GB Mac the 2.4 GiB default evicted frames
+        and a flag box took 3.6 s instead of 0.5 s.
 
     Resource lifecycle
     ------------------
@@ -488,6 +504,7 @@ class _visplot:
             flag_color: str = '#ff00ff',
             flag_show_flagged: bool = False,
             flag_flagged_color: str = '#7f849c',
+            frame_cache_mb: Optional[float] = None,
     )  -> None:
         """Construct the plotter.
 
@@ -539,6 +556,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             flag_color = flag_color,
             flag_show_flagged = flag_show_flagged,
             flag_flagged_color = flag_flagged_color,
+            frame_cache_mb = frame_cache_mb,
         )
         _logging_state_ = _start_log(
             'visplot',
@@ -578,6 +596,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'flag_color=' + repr(flag_color),
                 'flag_show_flagged=' + repr(flag_show_flagged),
                 'flag_flagged_color=' + repr(flag_flagged_color),
+                'frame_cache_mb=' + repr(frame_cache_mb),
             ],
         )
         task_result = None
@@ -618,6 +637,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 flag_color = flag_color,
                 flag_show_flagged = flag_show_flagged,
                 flag_flagged_color = flag_flagged_color,
+                frame_cache_mb = frame_cache_mb,
             )
         except Exception as exc:
             _except_log('visplot', exc)

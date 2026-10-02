@@ -721,6 +721,10 @@ class RemoteReductionContext(ReductionContext):
         self.__dict__.pop("_cv_memo", None)
         return out
 
+    def set_frame_cache_limit_mb(self, mb: float, timeout: Optional[float] = None) -> None:
+        """Frame cache budget of the WORKER (where the frames live)."""
+        self._call("set_frame_cache_limit_mb", mb=float(mb), timeout=timeout)
+
     def list_flag_backups(self, timeout: Optional[float] = None) -> list:
         try:
             return self._call("list_flag_backups", timeout=timeout) or []

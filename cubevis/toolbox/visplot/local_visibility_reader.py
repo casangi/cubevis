@@ -271,6 +271,9 @@ class LocalVisibilityReader:
     def list_flag_backups(self) -> list:
         return self._backend.list_flag_backups()
 
+    def set_frame_cache_limit_mb(self, mb: float) -> None:
+        self._backend.set_frame_cache_limit_mb(mb)
+
     def spw_casa_ids(self) -> dict:
         return self._backend.spw_casa_ids()
 

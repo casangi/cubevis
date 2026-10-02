@@ -90,6 +90,7 @@ def _visplot_t(
         flag_color: str = '#ff00ff',
         flag_show_flagged: bool = False,
         flag_flagged_color: str = '#7f849c',
+        frame_cache_mb: Optional[float] = None,
 ):
     _app = VisibilityPlotter(
         # user-supplied arguments
@@ -128,6 +129,7 @@ def _visplot_t(
         flag_color = flag_color,
         flag_show_flagged = flag_show_flagged,
         flag_flagged_color = flag_flagged_color,
+        frame_cache_mb = frame_cache_mb,
         # layer-supplied arguments
         remote_endpoint = None,
         enable_flagging = True,
@@ -249,6 +251,17 @@ class _visplot:
         default; toggled in the Flagging controls.
     flag_flagged_color : str
         Colour for flagged data when ``flag_show_flagged`` is on.
+    frame_cache_mb : float | None
+        Budget (MiB) of the cache of scatter frames -- the decoded samples a
+        scatter panel draws, flags and probes.  When a selection's frames do
+        not fit, every redraw and flag operation re-reads them from the data
+        (an INFO/WARNING line says so).  ``None`` (default): the
+        ``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` environment variable if set, else
+        a tenth of physical memory, clamped to 256 MiB .. 4 GiB.  Remote
+        sessions apply it in the worker, where the frames live.  Example:
+        TW Hya with all fields (2 x 31 M samples, ~1.5 GiB per frame) needs
+        about 3-4 GiB; on a 24 GB Mac the 2.4 GiB default evicted frames
+        and a flag box took 3.6 s instead of 0.5 s.
 
     Resource lifecycle
     ------------------
@@ -319,6 +332,7 @@ class _visplot:
         'flag_color': 'Colour for pending flags when ``flag_display="color"``.',
         'flag_show_flagged': 'Also draw data that are currently flagged (on disk or pending) in ``flag_flagged_color``, so an Unflag box can select them.',
         'flag_flagged_color': 'Colour for flagged data when ``flag_show_flagged`` is on.',
+        'frame_cache_mb': 'Budget (MiB) of the cache of scatter frames -- the decoded samples a scatter panel draws, flags and probes.',
     }
 
     # Default values, derived from the canonical interface signature.
@@ -358,6 +372,7 @@ class _visplot:
         'flag_color': '#ff00ff',
         'flag_show_flagged': False,
         'flag_flagged_color': '#7f849c',
+        'frame_cache_mb': None,
     }
 
     def __init__(self):
@@ -432,6 +447,7 @@ class _visplot:
             'flag_color': 'str',
             'flag_show_flagged': 'bool',
             'flag_flagged_color': 'str',
+            'frame_cache_mb': 'Optional[float]',
         }
         ann = _type_map.get(name, '')
         if not ann:
@@ -1048,6 +1064,21 @@ class _visplot:
             desc, fmt,
         )
 
+    def __frame_cache_mb_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('frame_cache_mb', self._arg_default['frame_cache_mb'])
+        default = self._arg_default['frame_cache_mb']
+        desc    = self._arg_description.get('frame_cache_mb', '')
+        if self.__validate_('frame_cache_mb', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('frame_cache_mb', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     #--------- global default implementation --------------------------------------
     @static_var('state', __sf__('casa_inp_go_state'))
     def set_global_defaults(self):
@@ -1088,6 +1119,7 @@ class _visplot:
         if 'flag_color' in glb: del glb['flag_color']
         if 'flag_show_flagged' in glb: del glb['flag_show_flagged']
         if 'flag_flagged_color' in glb: del glb['flag_flagged_color']
+        if 'frame_cache_mb' in glb: del glb['frame_cache_mb']
 
     #--------- inp function -------------------------------------------------------
     def inp(self):
@@ -1126,6 +1158,7 @@ class _visplot:
         self.__flag_color_inp()
         self.__flag_show_flagged_inp()
         self.__flag_flagged_color_inp()
+        self.__frame_cache_mb_inp()
 
     #--------- tget function ------------------------------------------------------
     @static_var('state', __sf__('casa_inp_go_state'))
@@ -1190,6 +1223,7 @@ class _visplot:
         _invocation_parameters['flag_color'] = glb.get('flag_color', self._arg_default['flag_color'])
         _invocation_parameters['flag_show_flagged'] = glb.get('flag_show_flagged', self._arg_default['flag_show_flagged'])
         _invocation_parameters['flag_flagged_color'] = glb.get('flag_flagged_color', self._arg_default['flag_flagged_color'])
+        _invocation_parameters['frame_cache_mb'] = glb.get('frame_cache_mb', self._arg_default['frame_cache_mb'])
 
         try:
             with open(_postfile, 'w') as _f:
@@ -1245,6 +1279,7 @@ class _visplot:
             flag_color = _UNSET,
             flag_show_flagged = _UNSET,
             flag_flagged_color = _UNSET,
+            frame_cache_mb = _UNSET,
     ):
         def noobj(s):
             if s.startswith('<') and s.endswith('>'):
@@ -1293,6 +1328,7 @@ class _visplot:
             flag_color,
             flag_show_flagged,
             flag_flagged_color,
+            frame_cache_mb,
         ]
 
         if any(x is not _UNSET for x in _arguments):
@@ -1404,6 +1440,9 @@ class _visplot:
             _invocation_parameters['flag_flagged_color'] = \
                 flag_flagged_color if flag_flagged_color is not _UNSET \
                 else glb.get('flag_flagged_color', self._arg_default['flag_flagged_color'])
+            _invocation_parameters['frame_cache_mb'] = \
+                frame_cache_mb if frame_cache_mb is not _UNSET \
+                else glb.get('frame_cache_mb', self._arg_default['frame_cache_mb'])
         else:
             # inp/go-style invocation: read everything from the global frame
             _invocation_parameters['ms'] = \
@@ -1476,6 +1515,8 @@ class _visplot:
                 glb.get('flag_show_flagged', self._arg_default['flag_show_flagged'])
             _invocation_parameters['flag_flagged_color'] = \
                 glb.get('flag_flagged_color', self._arg_default['flag_flagged_color'])
+            _invocation_parameters['frame_cache_mb'] = \
+                glb.get('frame_cache_mb', self._arg_default['frame_cache_mb'])
 
         try:
             with open(_prefile, 'w') as _f:
@@ -1531,6 +1572,7 @@ class _visplot:
                     'flag_color=' + repr(_invocation_parameters['flag_color']),
                     'flag_show_flagged=' + repr(_invocation_parameters['flag_show_flagged']),
                     'flag_flagged_color=' + repr(_invocation_parameters['flag_flagged_color']),
+                    'frame_cache_mb=' + repr(_invocation_parameters['frame_cache_mb']),
                 ],
             )
             task_result = _visplot_t(
@@ -1569,6 +1611,7 @@ class _visplot:
                 flag_color = _invocation_parameters['flag_color'],
                 flag_show_flagged = _invocation_parameters['flag_show_flagged'],
                 flag_flagged_color = _invocation_parameters['flag_flagged_color'],
+                frame_cache_mb = _invocation_parameters['frame_cache_mb'],
             )
         except Exception as exc:
             _except_log('visplot', exc)

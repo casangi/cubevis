@@ -176,6 +176,9 @@ _LIGHT_TABLE_CSS = ""
 """Empty: SlickGrid's own defaults are already a light theme."""
 
 _SIDEBAR_WIDTH     = 260
+_SPW_ROW_H        = 24    # SPW table row height (px)
+_SPW_HDR_H        = 28    # SPW table header height (px)
+_SPW_MAX_ROWS     = 10    # rows shown before the table scrolls
 _SIDEBAR_WIDTH_COL = 268    # column width including padding
 
 # Preset definitions: (raster_y, raster_x, raster_qty, scatter_x, scatter_y, layout)
@@ -425,6 +428,16 @@ label {
 .bk-btn:hover {
     background: #45475a !important;
 }
+/* The blanket .bk-btn rule above is !important, so it also flattened the
+   selected button of every RadioButtonGroup (Raster/Scatter, colorize
+   mode, ...) to the same colour as its unselected neighbours -- no way to
+   tell which mode was active.  More specific, so it wins. */
+.bk-btn.bk-active, .bk-btn.bk-active:hover {
+    background:   #89b4fa !important;
+    color:        #1e1e2e !important;
+    border-color: #89b4fa !important;
+    font-weight:  600;
+}
 """
 
 # Light-mode counterpart -- previously existed ONLY as inline JS text
@@ -454,6 +467,12 @@ label {
     background: #f0f0f0 !important;
     color:      #222 !important;
     border-color: #aaa !important;
+}
+.bk-btn.bk-active, .bk-btn.bk-active:hover {
+    background:   #2563eb !important;
+    color:        #ffffff !important;
+    border-color: #2563eb !important;
+    font-weight:  600;
 }
 """
 
@@ -4098,6 +4117,7 @@ html, body { height: 100%; margin: 0; }
 .cv-light .cv-sidebar .bk-label,
 .cv-light .cv-sidebar label { color: #222222 !important; }
 .cv-light .cv-sidebar .bk-btn { background: #f0f0f0 !important; color: #222 !important; border-color: #aaa !important; }
+.cv-light .cv-sidebar .bk-btn.bk-active { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; }
 </style>""",
             width=0, height=0,
             styles={"display": "none"},
@@ -4788,9 +4808,27 @@ for (let i = 0; i < cols.length; i++) {
             selectable      = "checkbox",
             index_position  = None,
             width           = _SIDEBAR_WIDTH,
-            height          = min(max(len(spws), 1) * 26 + 30, 170),
+            # Explicit row height + a ~10-row cap.  The old cap
+            # (min(n*26+30, 170) with Bokeh's default 25px rows) showed
+            # only ~5-6 rows, and the dark-theme scrollbar is easy to
+            # miss, so a 16-SPW MS looked like it listed only half its
+            # windows (stakeholder report) even though all 16 were in
+            # the source and plotted.  See _spw_overflow_note below.
+            row_height      = _SPW_ROW_H,
+            height          = (min(max(len(spws), 1), _SPW_MAX_ROWS) * _SPW_ROW_H
+                               + _SPW_HDR_H),
             stylesheets     = [dark, self._table_css_dark],
             sizing_mode     = "fixed",
+        )
+        # Shown only when the table is actually clipped, so the user is
+        # never left to infer "this is the whole list" from a table that
+        # silently scrolls.
+        self._spw_overflow_note = Div(
+            text=(f"<i>{len(spws)} spectral windows &mdash; "
+                  f"scroll the list to see all</i>"),
+            visible=len(spws) > _SPW_MAX_ROWS,
+            stylesheets=[dark],
+            margin=(0, 0, 0, 5),
         )
         # No All/None buttons: DataTable's checkbox column puts a
         # select-all toggle in the header row, which does both jobs.  The
@@ -4828,6 +4866,7 @@ for (let i = 0; i < cols.length; i++) {
         self._spw_select = column(
             self._spw_iter.row,
             self._spw_table,
+            self._spw_overflow_note,
             width=_SIDEBAR_WIDTH,
             # Same 10px-bottom-only fix as field_col, same reason: this
             # wrapper's all-zero margin fixed the row's internal
@@ -5827,6 +5866,14 @@ if (sidebarEl && prevScrollTop !== null) {
                                               "position with the other "
                                               "panel — instant, no "
                                               "replot"))),
+                    # Raster/Scatter and the axis choices below are staged:
+                    # nothing changes on screen until Plot is pressed.
+                    # Nothing said so, and a stakeholder clicking Raster
+                    # concluded the control was broken.
+                    Div(text="<i>Changes apply when you press "
+                             "<b>Plot &#9654;</b></i>",
+                        stylesheets=[dark],
+                        margin=(2, 0, 4, 5)),
                     raster_panel,
                     scatter_panel,
                 ),
@@ -5936,6 +5983,18 @@ if (sidebarEl && prevScrollTop !== null) {
         full_w   = _PANEL_WIDTH_FULL
         panel_h  = _PANEL_HEIGHT
         over_h   = _PANEL_HEIGHT_OVER
+
+        # Constructed here (was further down, in the Layout section) so it
+        # can be passed to doPlot(): after a Plot the response handler
+        # must know whether the layout is "One", or it un-hides the
+        # hidden slot's panel and a single-panel view turns into two
+        # (stakeholder report, 2026-10).
+        layout_rbg = RadioButtonGroup(
+            labels = ["One", "Side by Side", "Over / Under"],
+            active = {"one": 0, "side": 1, "over": 2}.get(self._layout, 1),
+            width  = 320,
+        )
+        self._layout_rbg = layout_rbg
 
         # ---- Plot ▶ and Reload ↺ ----------------------------------------- #
         plot_btn   = Button(label="Plot ▶",   button_type="success", width=80)
@@ -6365,6 +6424,35 @@ function doPlot(reload) {
         const p0 = resp.panels ? resp.panels[panel0_id] : null;
         const p1 = resp.panels ? resp.panels[panel1_id] : null;
 
+        // "One" layout: only the slot in the primary screen position is
+        // shown (layout_js's rule).  doPlot() still sends BOTH slots, so
+        // the hidden one is rendered and answered too -- but its layouts
+        // must stay hidden.  Before this check the handler set
+        // `.visible = (kind === ...)` unconditionally, which un-hid the
+        // hidden slot and turned a one-panel view into two.
+        const _order   = display_order_source.data['order'][0];
+        const _one     = (layout_rbg.active === 0);
+        const hide0    = _one && (_order[0] !== 0);
+        const hide1    = _one && (_order[0] !== 1);
+
+        // Show the kind that rendered, hide the other (both hidden when
+        // this slot is the hidden one in "One" layout).  A figure that
+        // replaces the other kind adopts that figure's size: layout_js
+        // only ever resizes the *visible* kind's figure, so the newly
+        // shown one otherwise comes up at whatever size it was built
+        // with -- e.g. a scatter shown full-width in "One" layout became
+        // a small raster after Scatter -> Raster.
+        function cvShowKind(rLayout, sLayout, rFig, sFig, kind, hide) {
+            const prev = rLayout.visible ? rFig : (sLayout.visible ? sFig : null);
+            const next = (kind === 'raster') ? rFig : sFig;
+            if (!hide && prev && prev !== next) {
+                next.width  = prev.width;
+                next.height = prev.height;
+            }
+            rLayout.visible = !hide && (kind === 'raster');
+            sLayout.visible = !hide && (kind === 'scatter');
+        }
+
         // Group 3 piece 3, Chunk 2 (added 2026-07-31): pick the correct
         // kind-specific fig/img_src/state/layout for each slot at
         // runtime, from resp.panels[id].kind (what _handle_plot() says
@@ -6434,8 +6522,9 @@ function doPlot(reload) {
             // response actually arrived, so a request that only updated
             // the other slot doesn't needlessly re-toggle this one.
             if (p0) {
-                panel0_raster_layout.visible  = (p0_kind === 'raster');
-                panel0_scatter_layout.visible = (p0_kind === 'scatter');
+                cvShowKind(panel0_raster_layout, panel0_scatter_layout,
+                           panel0_raster_fig, panel0_scatter_fig,
+                           p0_kind, hide0);
             }
             // Legend / colorbar, applied exactly like image/state above:
             // Python setting a Div's text does nothing in the browser (no
@@ -6502,8 +6591,9 @@ function doPlot(reload) {
             if (p1 && p1.title   != null) p1_fig.title.text           = p1.title;
 
             if (p1) {
-                panel1_raster_layout.visible  = (p1_kind === 'raster');
-                panel1_scatter_layout.visible = (p1_kind === 'scatter');
+                cvShowKind(panel1_raster_layout, panel1_scatter_layout,
+                           panel1_raster_fig, panel1_scatter_fig,
+                           p1_kind, hide1);
             }
             // Same as panel 0's info block above.
             if (p1) {
@@ -6642,6 +6732,8 @@ function doPlot(reload) {
         _plot_js_args = {
             "ctrl":       ctrl,
             "ids":        ids,
+            "layout_rbg":           layout_rbg,
+            "display_order_source": self._display_order_source,
             "field_sel":  self._field_select,
             "antenna_input": self._antenna_input,
             "spw_src":    self._spw_source,
@@ -6923,12 +7015,9 @@ function doIterateAntenna(delta) {
         # hidden within it) rather than a third container — a hidden
         # LayoutDOM child in a Bokeh row/column is removed from the render
         # flow, so no extra widget is needed for the single-panel case.
-        layout_rbg = RadioButtonGroup(
-            labels = ["One", "Side by Side", "Over / Under"],
-            active = {"one": 0, "side": 1, "over": 2}.get(self._layout, 1),
-            width  = 320,
-        )
-        self._layout_rbg = layout_rbg
+        # (layout_rbg itself is constructed above, next to Plot/Reload:
+        # doPlot()'s response handler needs to read it, and Plot's args
+        # dict is built before this point.)
 
         # --- Export PNG ------------------------------------------------ #
         export_btn = Button(label="Export PNG", button_type="default",

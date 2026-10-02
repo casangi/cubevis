@@ -84,6 +84,7 @@ from .reader import (
     _PartitionScanLookup,
 )
 from . import _scatter_render
+from ._raster_merge import merge_raster_partitions
 from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
 
@@ -1727,13 +1728,10 @@ class MSv2Backend(XArrayReader):
             agg = partitions_2d[0]
         else:
             try:
-                agg = xr.concat(
-                    partitions_2d,
-                    dim=y_name,
-                    join="outer",
-                    coords="minimal",
-                    compat="override",
-                )
+                # Merge on the union of BOTH axes -- not xr.concat along
+                # y, which stacks SPWs as extra time rows for Time x
+                # Channel (see _raster_merge's module docstring).
+                agg = merge_raster_partitions(partitions_2d, y_name, x_name)
             except Exception as exc:
                 log.warning("query_raster: could not concat partitions: %s", exc)
                 agg = partitions_2d[0]

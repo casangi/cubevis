@@ -108,58 +108,74 @@ def capabilities(backend) -> dict:
 # ======================================================================
 
 def _expected_changes(backend, deltas) -> list:
-    """Per raw partition: ``(ds, flag_name, base(bool), eff(bool), valid)`` for
-    partitions the deltas change.  Arrays in the FLAG variable's own order."""
+    """Per touched partition: ``(ds_sub, base_da, base, eff, valid, info)``.
+
+    Only the (time, baseline) rectangle the operations touch is read
+    (``ds_sub``; ``info`` holds the indices into the full partition and its
+    full time/frequency coordinates, to find it again after reopening).
+    Partitions no operation touches are skipped from coordinates alone.
+    2026-10-02: a few-sample commit on all of TW Hya took ~18 s, most of it
+    reading and folding the FLAG column of whole partitions (twice, with
+    the verification).  Arrays are in the FLAG variable's own dim order."""
     from .flag_engine import apply_pending, valid_mask, _bdim, block_coords
     from .flag_model import delta_mask
     out = []
+    bd = _bdim(backend)
     for ds in backend._iter_visibility_partitions(None):
-        # Coordinates only: skip partitions no operation touches without
-        # reading their flags (2026-10-02: a 45-sample commit spent ~1 s
-        # reading and folding the FLAG column of every partition).
         try:
             bc = block_coords(backend, ds)
-            touched = any((m := delta_mask(d, bc)) is not None and bool(np.any(m))
-                          for d in deltas)
+            um = None
+            for d in deltas:
+                m = delta_mask(d, bc)
+                if m is None or not np.any(m):
+                    continue
+                tb = np.asarray(m).any(axis=(2, 3))
+                um = tb if um is None else (um | tb)
         except Exception:
-            touched = True                      # be safe: do the full fold
-        if not touched:
+            um = np.ones((ds.sizes["time"], ds.sizes[bd]), dtype=bool)   # be safe
+        if um is None or not um.any():
             continue
-        base_da = backend._disk_flag_mask(ds)
-        eff_da = apply_pending(backend, ds, base_da, tuple(deltas))
+        ti = np.flatnonzero(um.any(axis=1))
+        bi = np.flatnonzero(um.any(axis=0))
+        sub = ds.isel({"time": ti, bd: bi})
+        base_da = backend._disk_flag_mask(sub)
+        eff_da = apply_pending(backend, sub, base_da, tuple(deltas))
         base = np.asarray(base_da.values, dtype=bool)
         eff = np.asarray(eff_da.values, dtype=bool)
         if np.array_equal(base, eff):
             continue
-        v = valid_mask(backend, ds)
+        v = valid_mask(backend, sub)
         if v is not None:
             import xarray as xr
-            valid = np.asarray(xr.DataArray(np.asarray(v, dtype=bool), dims=("time", _bdim(backend)))
+            valid = np.asarray(xr.DataArray(np.asarray(v, dtype=bool), dims=("time", bd))
                                .broadcast_like(base_da).transpose(*base_da.dims).values)
         else:
             valid = np.ones(base.shape, dtype=bool)
-        out.append((ds, base_da, base, eff, valid))
+        info = {"ti": ti, "bi": bi, "bdim": bd,
+                "full_time": np.asarray(ds.coords["time"].values),
+                "full_freq": np.asarray(ds.coords["frequency"].values)}
+        out.append((sub, base_da, base, eff, valid, info))
     return out
 
 
+def _same_partition(ds, info) -> bool:
+    return (ds.sizes.get("time") == info["full_time"].size
+            and np.array_equal(ds.coords["time"].values, info["full_time"])
+            and np.array_equal(ds.coords["frequency"].values, info["full_freq"]))
+
+
 def _verify(backend, expected) -> dict:
-    """Compare the flags now on disk with the expected effective flags."""
+    """Compare the flags now on disk with the expected effective flags
+    (only the touched rectangle of each touched partition is read)."""
     wrong = checked = 0
     by_kind = {"should_be_flagged": 0, "should_be_unflagged": 0, "collateral": 0}
     parts = list(backend._iter_visibility_partitions(None))
-    for ds_old, bda, base, eff, valid in expected:
-        # find the same partition after reopen (same coordinates)
-        match = None
-        for ds in parts:
-            if (ds.sizes == ds_old.sizes
-                    and np.array_equal(ds.coords["time"].values, ds_old.coords["time"].values)
-                    and np.array_equal(ds.coords["frequency"].values,
-                                       ds_old.coords["frequency"].values)):
-                match = ds
-                break
+    for _sub, bda, base, eff, valid, info in expected:
+        match = next((ds for ds in parts if _same_partition(ds, info)), None)
         if match is None:
             raise RuntimeError("verification: a partition could not be matched after reopen")
-        now = np.asarray(backend._disk_flag_mask(match).transpose(*bda.dims).values, dtype=bool)
+        sub = match.isel({"time": info["ti"], info["bdim"]: info["bi"]})
+        now = np.asarray(backend._disk_flag_mask(sub).transpose(*bda.dims).values, dtype=bool)
         diff = (now != eff) & valid
         checked += int(valid.sum())
         wrong += int(diff.sum())
@@ -221,7 +237,7 @@ def _plan_msv2(backend, expected, tables, lut) -> dict:
     from .flag_model import TIME_TOL
     spw_ids = backend.spw_casa_ids()
     plan: dict = {}
-    for ds, bda, base, eff, valid in expected:
+    for ds, bda, base, eff, valid, _info in expected:
         bc = block_coords(backend, ds)
         dims = list(bda.dims)
         change = (base != eff) & valid
@@ -310,8 +326,12 @@ def commit_msv2_arcae(backend, deltas, backup_path: Optional[str] = None,
     ms = backend._path
     stamp = _time.strftime("%Y%m%d_%H%M%S")
     backup_path = backup_path or f"{os.path.normpath(ms)}.visplot_flag_backup_{stamp}.npz"
+    T = {}
+    t0 = _time.perf_counter()
     expected = _expected_changes(backend, deltas)
+    T["expected"] = _time.perf_counter() - t0
     tables = _ms_tables(ms)
+    t0 = _time.perf_counter()
     ro = Table.from_filename(ms)                     # plan while the backend is open
     try:
         lut = _row_lookup(ro)
@@ -319,9 +339,11 @@ def commit_msv2_arcae(backend, deltas, backup_path: Optional[str] = None,
         ro.close()
     plan = _plan_msv2(backend, expected, tables, lut)
     rows = np.array(sorted(plan), dtype=np.int64)
+    T["rows"] = _time.perf_counter() - t0
     n = 0
     version_name = None
     snapshot = _snapshot_frames(backend)
+    t0 = _time.perf_counter()
     backend.close()                     # release the read handle before writing
     try:
         ok, _why = casatools_available()
@@ -383,16 +405,23 @@ def commit_msv2_arcae(backend, deltas, backup_path: Optional[str] = None,
             commands=ops[:50] + ([f"... {len(ops) - 50} more"] if len(ops) > 50 else []),
             params=[f"cubevis={_cubevis_version()}", f"backup={backup_path}",
                     f"operations={len(deltas)}", f"samples={n}"])
+    T["write+reopen"] = _time.perf_counter() - t0
     if not n:                      # nothing changed: no write, no backup file
         backup_path = None
     report = {"format": "msv2", "method": "arcae", "backup": backup_path,
               "version_name": version_name, "history": history,
               "operations": len(deltas), "written": n, "rows": int(rows.size),
               "expected_changes": n}
+    t0 = _time.perf_counter()
     if verify:
         report.update(_verify(backend, expected))
+    T["verify"] = _time.perf_counter() - t0
+    t0 = _time.perf_counter()
     if n and report.get("verified", False):
         report["frames_refreshed"] = refresh_cached_frames(backend, deltas, snapshot)
+    T["refresh_frames"] = _time.perf_counter() - t0
+    report["timing"] = {k: round(v, 3) for k, v in T.items()}
+    log.info("visplot commit (arcae): %s", report["timing"])
     return report
 
 
@@ -455,27 +484,23 @@ def commit_msv4(backend, deltas, backup_path: Optional[str] = None,
     nodes = _partition_nodes(backend)
     plan = []                                          # (group, var, idx tuple, new raw)
     backup = {}
-    for ds_c, bda, base, eff, valid in expected:
-        node = None
-        for gpath, fname, ds_n in nodes:
-            if (ds_n.sizes.get("time") == ds_c.sizes.get("time")
-                    and np.array_equal(ds_n.coords["time"].values, ds_c.coords["time"].values)
-                    and np.array_equal(ds_n.coords["frequency"].values,
-                                       ds_c.coords["frequency"].values)):
-                node = (gpath, fname, ds_n)
-                break
+    for _sub, bda, base, eff, valid, info in expected:
+        node = next(((g, f, d) for g, f, d in nodes if _same_partition(d, info)), None)
         if node is None:
             raise RuntimeError("commit: could not locate a partition's zarr group")
         gpath, fname, ds_n = node
         change = (base != eff) & valid
         if not change.any():
             continue
+        dims = list(bda.dims)
+        idx_sub = list(np.nonzero(change))
+        full = list(idx_sub)
+        full[dims.index("time")] = info["ti"][idx_sub[dims.index("time")]]
+        full[dims.index(info["bdim"])] = info["bi"][idx_sub[dims.index(info["bdim"])]]
+        new_vals = eff[tuple(idx_sub)]
         raw_dims = list(ds_n[fname].dims)
-        perm = [list(bda.dims).index(d) for d in raw_dims]
-        change_r = np.transpose(change, perm)
-        eff_r = np.transpose(eff, perm)
-        idx = np.nonzero(change_r)
-        plan.append((gpath, fname, idx, eff_r[idx]))
+        idx = tuple(full[dims.index(d)] for d in raw_dims)
+        plan.append((gpath, fname, idx, new_vals))
     if not plan:                   # nothing changes: no write, no backup file
         report = {"format": "msv4", "backup": None, "operations": len(deltas),
                   "written": 0, "expected_changes": 0}
@@ -600,7 +625,9 @@ def refresh_cached_frames(backend, deltas, snapshot) -> int:
     cache = backend._frame_cache_obj()
     n = 0
     for key, gen, df in snapshot:
-        fe._FRAME_SLOTS.pop(id(df), None)             # built against the old state
+        slot = fe._FRAME_SLOTS.get(id(df))
+        if slot is not None:                          # row identity stays valid;
+            slot["eff"].clear()                       # effective states do not
         pol = key[3] if len(key) > 3 else None
         disk = df["__disk_flag"].to_numpy(dtype=bool)
         new = disk.copy()
@@ -608,7 +635,8 @@ def refresh_cached_frames(backend, deltas, snapshot) -> int:
         for d in deltas:
             new[fe.row_delta_mask(d, R)] = bool(d.flag)
         df["__disk_flag"] = new
-        fe._FRAME_SLOTS.pop(id(df), None)
+        if slot is not None:
+            slot["eff"].clear()
         with cache.lock:
             cache.put(key, gen, df)
         n += 1

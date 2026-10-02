@@ -288,6 +288,15 @@ class FlagController:
                         kind=req.get("kind", ""), db_version=self.db.version)
 
     async def handle_box(self, msg: dict, kind: str, panel) -> dict:
+        t0 = time.perf_counter()
+        try:
+            return await self._handle_box(msg, kind, panel)
+        finally:
+            log.info("visplot timing: %s %s box evaluated in %.2f s (the redraws follow)",
+                     "flag" if msg.get("flag", True) else "unflag", kind,
+                     time.perf_counter() - t0)
+
+    async def _handle_box(self, msg: dict, kind: str, panel) -> dict:
         flag = bool(msg.get("flag", True))
         verb = "flag" if flag else "unflag"
         if panel is None:
@@ -852,7 +861,10 @@ class FlagController:
     async def _do_commit(self) -> dict:
         pend, self._commit_pending = self._commit_pending, None
         deltas = pend["deltas"]
+        t0 = time.perf_counter()
         rep = await asyncio.to_thread(self.reader.commit_pending_flags, list(deltas))
+        log.info("visplot commit: %.2f s in the backend %s", time.perf_counter() - t0,
+                 rep.get("timing", ""))
         self.db.clear(record=False)
         if rep.get("verified") and "frames_refreshed" in rep:
             # Cached frames were brought up to date in place (flag_commit.

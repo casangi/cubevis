@@ -1490,6 +1490,15 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
     # ------------------------------------------------------------------
 
     async def _handle_rerender_async(self, message: dict, context=None) -> dict:
+        import time as _t
+        t0 = _t.perf_counter()
+        stale = bool(getattr(self, "_flag_stale", False))
+        out = await asyncio.to_thread(self._handle_rerender, message)
+        log.info("visplot timing: %s redraw %.2f s%s", type(self).__name__.replace("Visibility", ""),
+                 _t.perf_counter() - t0, " (after a flag change)" if stale else "")
+        return out
+
+    async def _handle_rerender_async_unlogged(self, message: dict, context=None) -> dict:
         """Comm entry point: run the (possibly long) re-render in a worker
         thread.  Run on the event loop, a redraw that re-reads data (after a
         flag or display change, a large selection) blocked the websocket

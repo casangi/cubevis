@@ -407,3 +407,4 @@ review dialog, panel refresh) still needs a live GUI check.
   frequency span; sample sets: time span, per-window integrations /
   baselines / channel ranges / correlations, and collapsible tables of
   samples per correlation, antenna and baseline, plus the integration list.
+- Part 33: report time rows split into 'UTC time span' and 'MS time span' (MS TIME column, MJD seconds, full precision; 'PS time span' in UNIX seconds for MSv4), for region and sample-set operations; operation titles show TIME boxes with full-precision values and UTC; SPW id lookup in the report falls back to SpwKey.matches.

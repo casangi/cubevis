@@ -255,14 +255,14 @@ class FlagController:
             req.update(x_axis=x_ax.name, y_axis=y_ax.name,
                        polarization=getattr(panel, "_polarization", None),
                        quantity=getattr(getattr(panel, "_quantity", None), "name", None))
-            prov = (f"raster box {x_ax.name} [{req['x0']:.6g}, {req['x1']:.6g}] x "
-                    f"{y_ax.name} [{req['y0']:.6g}, {req['y1']:.6g}] "
+            prov = (f"raster box {x_ax.name} {_rng(x_ax, req['x0'], req['x1'])} x "
+                    f"{y_ax.name} {_rng(y_ax, req['y0'], req['y1'])} "
                     f"({req['polarization']})")
         else:
             layers = scatter_layer_entries(panel)
             req.update(x_axis=x_ax.name, layers=layers)
-            prov = (f"scatter box {x_ax.name} [{req['x0']:.6g}, {req['x1']:.6g}] x "
-                    f"[{req['y0']:.6g}, {req['y1']:.6g}] on "
+            prov = (f"scatter box {x_ax.name} {_rng(x_ax, req['x0'], req['x1'])} x "
+                    f"{_rng(None, req['y0'], req['y1'])} on "
                     + ", ".join(f"{l['y_axis']}({l['polarization']})" for l in layers))
         req["provenance"] = [prov]
         req["comment"] = prov
@@ -798,6 +798,7 @@ class FlagController:
 
         n_flag = sum(1 for d in deltas if d.flag)
         total = sum(d.n_samples or 0 for d in deltas)
+        data_fmt = self.capabilities().get("format")
         f = self._filter()
         summary = "".join([
             row("Source", esc(src)),
@@ -837,8 +838,8 @@ class FlagController:
                                 f"{esc(vr.axis)} in [{vr.lo:.6g}, {vr.hi:.6g}]"
                                 + (f" ({esc(vr.polarization)})" if vr.polarization else "")))
             if d.time_range is not None:
-                rows.append(row("Time", f"{utc(d.time_range[0], d.time_format)} – "
-                                        f"{utc(d.time_range[1], d.time_format)} UTC"))
+                rows += _time_rows(row, d.time_range[0], d.time_range[1], d.time_format,
+                                   data_fmt)
             if d.scan_names is not None:
                 rows.append(row("Scans", esc(", ".join(d.scan_names))))
             if d.field_names is not None:
@@ -867,14 +868,14 @@ class FlagController:
             if ext:
                 rows.append(row("Extended to all", esc(", ".join(ext))))
             if d.is_sample_set:
-                rows += _sample_set_rows(d, row, utc, spw_ids)
+                rows += _sample_set_rows(d, row, utc, spw_ids, data_fmt)
             if d.data_column:
                 rows.append(row("Data column", esc(d.data_column)))
             if d.provenance:
                 rows.append(row("Provenance", esc(" → ".join(d.provenance))))
             rows.append(row("Created", esc(time.strftime("%Y-%m-%d %H:%M:%S",
                                                           time.localtime(d.created)))))
-            parts.append(f"<h3>#{d.seq} — {esc(d.describe())}</h3>"
+            parts.append(f"<h3>#{d.seq} — {_title_with_times(d)}</h3>"
                          f"<table class='cv-tbl'>{''.join(rows)}</table>"
                          + (_sample_set_details(d, utc) if d.is_sample_set else
                             _region_details(d)))
@@ -1187,6 +1188,11 @@ comm.send(msg_id, {action: 'export', kind: exp_sel.value, path: exp_path.value |
 
 def _spw_label(key, spw_ids) -> str:
     sid = (spw_ids or {}).get(key)
+    if sid is None:          # keys rebuilt from JSON may differ in the last float bits
+        for k, v in (spw_ids or {}).items():
+            if hasattr(key, "matches") and key.matches(k):
+                sid = v
+                break
     head = f"SPW {sid}" if sid is not None else "SPW"
     return (f"{head} {key.ident} ({key.n_chan} ch, "
             f"{key.freq_min / 1e9:.6f}–{key.freq_max / 1e9:.6f} GHz)")
@@ -1209,15 +1215,15 @@ def _ranges(vals) -> str:
     return ", ".join(out)
 
 
-def _sample_set_rows(d, row, utc, spw_ids) -> list:
+def _sample_set_rows(d, row, utc, spw_ids, data_format=None) -> list:
     """Summary rows for an explicit-sample operation."""
     import numpy as np
     esc = html.escape
     rows = []
     t_all = np.concatenate([np.asarray(b.times) for b in d.samples]) if d.samples else []
     if len(t_all):
-        rows.append(row("Time span", f"{utc(float(np.min(t_all)), d.time_format)} – "
-                                     f"{utc(float(np.max(t_all)), d.time_format)} UTC"))
+        rows += _time_rows(row, float(np.min(t_all)), float(np.max(t_all)), d.time_format,
+                           data_format)
     for b in d.samples:
         g = b.dense()
         used_t = int(g.any(axis=(1, 2, 3)).sum())
@@ -1275,4 +1281,72 @@ def _region_details(d) -> str:
     bl = ", ".join(f"{a}&{b}" for a, b in d.baseline_ids)
     return (f"<details><summary class='cv-rect'>All baselines ({len(d.baseline_ids)})</summary>"
             f"<p class='cv-rect' style='white-space:normal'>{esc(bl)}</p></details>")
+
+
+# ---------------------------------------------------------------------- #
+# Time ranges: raw values and UTC                                           #
+# ---------------------------------------------------------------------- #
+
+_MJD_UNIX = 40587.0 * 86400.0
+
+
+def _rng(axis, a, b) -> str:
+    """``[a, b]`` for provenance strings.  TIME keeps every digit of the
+    stored value (to the millisecond) -- %.6g turned 1353311129.52 into
+    1.35331e+09, losing the integration -- other axes stay compact."""
+    if axis is not None and getattr(axis, "name", "") == "TIME":
+        return f"[{float(a):.3f}, {float(b):.3f}]"
+    return f"[{float(a):.6g}, {float(b):.6g}]"
+
+
+def _time_text(t0: float, t1: float, time_format: str = "unix") -> str:
+    """A time range as the raw stored values, the MS TIME column values
+    (MJD seconds), and UTC -- e.g. for cross-checking against the MS."""
+    fmt = (time_format or "unix").lower()
+    if "mjd" in fmt:
+        mjd0, mjd1 = t0, t1
+        unix0, unix1 = t0 - _MJD_UNIX, t1 - _MJD_UNIX
+    else:
+        unix0, unix1 = t0, t1
+        mjd0, mjd1 = t0 + _MJD_UNIX, t1 + _MJD_UNIX
+    u0 = time_to_datetime(t0, time_format).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    u1 = time_to_datetime(t1, time_format).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    if u0[:10] == u1[:10]:
+        u1 = u1[11:]
+    return (f"{u0} – {u1} UTC  ·  unix {unix0:.3f} – {unix1:.3f} s  ·  "
+            f"MS TIME (MJD s) {mjd0:.3f} – {mjd1:.3f}")
+
+
+def _time_rows(row, t0: float, t1: float, time_format: str, data_format) -> list:
+    """Two rows: the span in UTC, and as the data set stores it -- the MS
+    TIME column (MJD seconds) for MSv2, UNIX seconds for MSv4 (PS) --
+    at full precision, for cross-checking against the data."""
+    esc = html.escape
+    mjd = "mjd" in (time_format or "unix").lower()
+    unix0, unix1 = (t0 - _MJD_UNIX, t1 - _MJD_UNIX) if mjd else (t0, t1)
+    u0 = time_to_datetime(t0, time_format).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    u1 = time_to_datetime(t1, time_format).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    if data_format == "msv4":
+        raw = row("PS time span", esc(f"{unix0:.3f} – {unix1:.3f} s (UNIX seconds, as stored "
+                                      "in the processing set)"))
+    else:
+        raw = row("MS time span", esc(f"{unix0 + _MJD_UNIX:.3f} – {unix1 + _MJD_UNIX:.3f} s "
+                                      "(MJD seconds, MS TIME column)"))
+    return [row("UTC time span", f"{u0} – {u1} UTC"), raw]
+
+
+def _title_with_times(d) -> str:
+    """The operation's one-line description with its TIME box shown as raw
+    values and UTC (descriptions store the plotted values)."""
+    import re
+    esc = html.escape
+    text = esc(d.describe())
+
+    def repl(m):
+        try:
+            a, b = float(m.group(1)), float(m.group(2))
+        except ValueError:
+            return m.group(0)
+        return f"TIME [{a:.3f}, {b:.3f}] ({_time_text(a, b, d.time_format).split('  ·  ')[0]})"
+    return re.sub(r"TIME \[([-+0-9.eE]+), ([-+0-9.eE]+)\]", repl, text)
 

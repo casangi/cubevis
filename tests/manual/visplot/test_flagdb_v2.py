@@ -622,6 +622,9 @@ def test_flagdb_report_page(plotter):
     # the sample-set operation (user filter) is described in detail
     assert "Samples per baseline" in page and "Samples per antenna" in page
     assert "integrations" in page and "channels " in page
+    # time spans in UTC and as the MS stores them (TIME column, MJD seconds)
+    assert "UTC time span" in page and "MS time span" in page
+    assert "MJD seconds, MS TIME column" in page
     _run(vp.flags.handle_action({"action": "config", "filter": "all"}))
     vp.flag_db.clear(record=False)
     assert "No pending flag operations" in _run(vp.flags.handle_action({"action": "report"}))["report_html"]

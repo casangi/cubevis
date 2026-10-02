@@ -27,7 +27,9 @@
 * **Export / commit** menu (MSv2 and MSv4 alike): *Save flags as JSON*,
   *Write flags to the MS / PS*, *Load flags from JSON (as pending)*, *Restore
   flags from a commit backup* (dropdown of backups found next to the data),
-  and in remote sessions *Recover autosaved flags*.
+  and in remote sessions *Recover autosaved flags*.  MSv2 additionally offers
+  *Write flags with CASA flagdata (CASA-like)* — a secondary option shown only
+  when casatasks/casatools are installed (§2.7.1).
 * **Describe pending flags**: a standalone HTML report (summary, one section
   per operation with UTC and MS/PS time spans, SPWs with MS ids, channel
   ranges, per-correlation / antenna / baseline counts, integrations).
@@ -65,7 +67,8 @@ results cross the wire (deltas, counts, images).
 | `flag_engine.py` | Data-side evaluation: box → `FlagDelta` + exact counts, pending application (`apply_pending`), per-row flag views of cached frames (`frame_keep_mask`), InfoTool probe, cached-frame fast paths |
 | `flag_controls.py` | `FlagController`: GUI widgets and JS, actions, preview, display modes, overlays, export/commit/load/restore/recover menu, autosave, report page |
 | `flag_commit.py` | Writing flags: arcae (MSv2) / zarr (MSv4), backups, verification, HISTORY, restore, cached-frame refresh, backup listing |
-| `flag_export.py` | JSON Lines only (`to_jsonl`) — CASA flagdata generation was removed (§6.4) |
+| `flag_export.py` | JSON Lines (`to_jsonl`) |
+| `flag_casa.py` | OPTIONAL CASA write: cheap detection (`casa_detected`), exact flagdata command generation (`to_flagdata_lines`), `commit_msv2_casa` (§2.7.1) |
 | `data/reader.py` | `XArrayReader`: flag views (`_flag_mask`, `_FLAG_VIEW` contextvar), raw frame cache (`_raw_frames`, `_query_columns_cached_raw`), commit / restore / backup API |
 | `visibility_plot.py`, `visibility_raster.py`, `visibility_scatter.py` | Panels: stale handling after flag changes, overlays, async re-render, busy cursor JS |
 | `remote_reduction_context.py`, `remote_registrations.py` | Remote API (P_local / worker) |
@@ -207,6 +210,21 @@ Common to both formats: confirmation dialog → `reader.commit_pending_flags`
 * **MSv4 (zarr)**: coordinate (`vindex`) writes into the data group's flag
   variable; bit-field flags keep other bits; backup
   `<store>.visplot_flag_backup_<ts>.npz`.
+#### 2.7.1 Optional CASA flagdata write (MSv2, secondary)
+
+Offered only when `importlib.util.find_spec` finds casatasks and casatools
+(no import at start-up; visplot never needs CASA otherwise).  Same discipline
+as the default: expected state → visplot side-file backup of the target rows
+→ `flagmanager` save → `flagdata(mode='list')` per operation in order, at most
+`FLAGDATA_CHUNK` (500) commands per call → HISTORY row → verification.  Cached
+frames are refreshed in place only if the result verified; otherwise the
+plots re-read (they must show what is on disk).  The confirmation dialog shows
+the command count and warns that CASA may apply large or scattered
+selections incompletely (in testing 2,689 of 52,624 samples were missed),
+with a stronger warning above `LARGE_COMMAND_COUNT` (1000) commands; the menu
+tooltip says the same.  A broken CASA install fails cleanly before anything
+is written.
+
 * **Restore**: `restore_backup` dispatches on the backup manifest
   (`cubevis.visplot.flag_backup.msv2` / v4); `list_backups` finds them next
   to the data, newest first.
@@ -263,7 +281,7 @@ small simulated MSv2 / MSv4 data sets).
 | file | covers |
 |---|---|
 | `test_flagdb_v2.py` | model, FlagDB, filters, engine, views, overlays, display toggles, report, cached-frame equivalence, single-query redraws |
-| `test_flag_commit.py` | MSv2 arcae / MSv4 zarr commit, verify, restore, history, menu, JSON round trip, backup dropdown, autosave, post-commit frame refresh == fresh read |
+| `test_flag_commit.py` | MSv2 arcae / MSv4 zarr commit, verify, restore, history, menu, JSON round trip, backup dropdown, autosave, post-commit frame refresh == fresh read; optional CASA write (recording casatasks stand-in, detection on/off, MSSelection-exact commands, broken-install handling) |
 | `test_flag_commit_real.py` | the same on real data (`MS`, `PS`; copied to tmp) and remotely (`CUBEVIS_TEST_KERNEL` + `CUBEVIS_TEST_KERNEL_MS/_PS`; copied on the kernel host by the worker) |
 | `test_flagdb_remote.py`, `test_remote_flagging.py` | remote vs local equality (simulated data with a local kernel, or real data on both hosts via `MS`/`PS` + `CUBEVIS_TEST_KERNEL_MS/_PS`) |
 | `test_frame_cache*.py` | cache budget, coalescing (legacy and raw paths) |
@@ -330,11 +348,14 @@ only).
 1. **Pending flags first, writing later**; preview optional and off by default.
 2. **Scatter flags only what is displayed** (hidden categories excluded).
 3. **The 1:1 zoom gate was removed**; flags are exact at any zoom.
-4. **CASA `flagdata` writes and exported flagdata scripts were removed**
-   (2026-10-01): written through CASA's selection language, a 52,624-sample
-   operation on TW Hya came out 2,689 samples short (reproducible with the
-   exported `sis14_twhya_calibrated_flagged.ms.flagdata.py`).  JSON is the
-   exchange format; arcae / zarr writes are exact and verified.
+4. **The default write is exact (arcae / zarr); CASA `flagdata` is an
+   optional secondary path** (removed 2026-10-01, re-enabled 2026-10-02 at a
+   CASA stakeholder's request): through CASA's selection language a
+   52,624-sample operation on TW Hya came out 2,689 samples short
+   (reproducible with plain `flagdata`).  It is offered only when CASA is
+   installed, warned about, and verified like the default.  Exported flagdata
+   scripts and the report's flagdata commands stay removed; JSON is the
+   exchange format.
 5. **MSv4 backups are side files** (no flag versions in MSv4).
 6. **"Show flagged data" stays fully in the flag colour**; **"Hide flagged"
    shows what a fresh open after the commit shows** (pinned by a test) — no

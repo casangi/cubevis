@@ -652,6 +652,9 @@ class FlagController:
         if not caps.get("write"):
             label += " -- unavailable"
         opts.append(("commit", label))
+        if msv2 and caps.get("casa"):
+            # Secondary, CASA-native path -- only when CASA is installed.
+            opts.append(("commit_casa", "Write flags with CASA flagdata (CASA-like)"))
         opts.append(("load", "Load flags from JSON (as pending)"))
         auto = self.autosaved()
         if auto:
@@ -815,28 +818,48 @@ class FlagController:
             what = (f"{rep['restored']:,} sample flag(s)" if "restored" in rep
                     else f"the flags of {rep.get('restored_rows', 0):,} row(s)")
             return self.response(f"Restored {what} from {html.escape(path)}", NOTIFY_OK)
-        if kind == "commit":
-            if not caps.get("write"):
+        if kind in ("commit", "commit_casa"):
+            casa = kind == "commit_casa"
+            if not caps.get("casa" if casa else "write"):
                 return self.response("⚠ Writing flags is unavailable here: "
-                                     + html.escape(caps.get("write_reason") or "unknown reason"),
+                                     + html.escape(caps.get("casa_reason" if casa else
+                                                            "write_reason") or "unknown reason"),
                                      NOTIFY_WARN, refresh=False)
             if not deltas:
                 return self.response("Nothing to write: no pending operations.", NOTIFY_OK,
                                      refresh=False)
-            self._commit_pending = {"id": uuid.uuid4().hex, "deltas": deltas}
+            self._commit_pending = {"id": uuid.uuid4().hex, "deltas": deltas,
+                                    "method": "casa" if casa else None}
             return self.response("Confirm writing the pending flags.", NOTIFY_OK,
                                  refresh=False,
                                  preview={"id": self._commit_pending["id"],
-                                          "html": self._commit_html(deltas, caps)})
+                                          "html": self._commit_html(deltas, caps,
+                                                                    "casa" if casa else None)})
         return self.response(f"⚠ Unknown export kind {html.escape(str(kind))}", NOTIFY_WARN,
                              refresh=False)
 
-    def _commit_html(self, deltas, caps) -> str:
+    def _commit_html(self, deltas, caps, method=None) -> str:
         esc = html.escape
         src = getattr(self._plotter, "_source_path", "") or ""
         msv2 = caps.get("format") != "msv4"
         n_samples = sum(d.n_samples or 0 for d in deltas)
-        if msv2:
+        casa_note = ""
+        if method == "casa":
+            n_cmd = self._casa_command_count(deltas)
+            how = (f"casatasks.flagdata (list mode, {n_cmd:,} command(s), operations in order), "
+                   "after saving a CASA flag version (flagmanager) and a visplot backup of the "
+                   "target rows")
+            casa_note = (
+                "<div style='margin-top:6px;color:#df8e1d;font-weight:600'>CASA-like write: "
+                "CASA may apply large or scattered selections incompletely (in testing, "
+                "2,689 of 52,624 samples of one operation were missed). The result is "
+                "verified and any difference reported; the exact default write is "
+                "\u201cWrite flags to the MS\u201d.</div>")
+            if n_cmd > self._casa_large():
+                casa_note += ("<div style='color:#e64553;font-weight:600'>This is a large "
+                              f"selection ({n_cmd:,} flagdata commands): expect it to be slow "
+                              "and more likely to be incomplete.</div>")
+        elif msv2:
             how = ("the final flag of exactly the changed samples is written to their MS "
                    "rows with arcae (FLAG_ROW kept consistent), after saving their previous "
                    "values to a backup file next to the MS"
@@ -855,14 +878,32 @@ class FlagController:
                 f"<div style='font-size:14px;font-weight:600;margin-bottom:4px'>"
                 f"Write pending flags to the data?</div>"
                 f"<table style='border-collapse:collapse'>{body}</table>"
+                f"{casa_note}"
                 f"<div style='margin-top:6px;font-weight:600;color:#e64553'>"
                 f"This modifies the data set on disk.</div></div>")
+
+    @staticmethod
+    def _casa_large() -> int:
+        from .flag_casa import LARGE_COMMAND_COUNT
+        return LARGE_COMMAND_COUNT
+
+    def _casa_command_count(self, deltas) -> int:
+        """flagdata commands the CASA write would issue (generated locally
+        from the deltas; the SPW ids come from the reader)."""
+        try:
+            from .flag_casa import to_flagdata_lines
+            ids = self.reader.spw_casa_ids()
+            return int(sum(len(to_flagdata_lines([d], spw_ids=ids, comments=False))
+                           for d in deltas))
+        except Exception:
+            return 0
 
     async def _do_commit(self) -> dict:
         pend, self._commit_pending = self._commit_pending, None
         deltas = pend["deltas"]
         t0 = time.perf_counter()
-        rep = await asyncio.to_thread(self.reader.commit_pending_flags, list(deltas))
+        opts = {"method": pend["method"]} if pend.get("method") else {}
+        rep = await asyncio.to_thread(self.reader.commit_pending_flags, list(deltas), **opts)
         log.info("visplot commit: %.2f s in the backend %s", time.perf_counter() - t0,
                  rep.get("timing", ""))
         self.db.clear(record=False)
@@ -891,6 +932,8 @@ class FlagController:
             text = (f"✓ Wrote {len(deltas)} operation(s) "
                     f"({rep.get('expected_changes', 0):,} sample changes"
                     + (f" in {rep['rows']:,} MS row(s)" if rep.get("rows") is not None else "")
+                    + (f" with CASA flagdata, {rep['commands']:,} command(s) in "
+                       f"{rep['flagdata_calls']} call(s)" if rep.get("method") == "casa" else "")
                     + "); verified. "
                     f"Previous flags saved as {where}.{where_extra}")
             color = NOTIFY_OK
@@ -1104,8 +1147,13 @@ class FlagController:
         caps = self.capabilities()
         exp_sel = Select(title="Export / commit", value="json", width=width,
                          options=self.export_options())
-        exp_sel.description = ("Write flags: " + ("available" if caps.get("write") else
-                               "unavailable -- " + (caps.get("write_reason") or "")))
+        exp_sel.description = (
+            "Write flags to the MS / PS: exact, verified, with a backup"
+            + ("" if caps.get("write") else " (unavailable: " + (caps.get("write_reason") or "")
+               + ")")
+            + (". 'Write flags with CASA flagdata' is a CASA-like alternative: CASA may "
+               "apply large or scattered selections incompletely -- prefer the default for "
+               "many points; the result is verified either way." if caps.get("casa") else ""))
         exp_path = TextInput(title="File (optional; required to load / restore)",
                              placeholder="default: <data name>.<kind>.<date-time>.<ext>",
                              width=width)

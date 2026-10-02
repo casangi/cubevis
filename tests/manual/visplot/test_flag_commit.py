@@ -124,7 +124,7 @@ def test_msv4_commit_through_the_plotter_menu(sim_ps, tmp_path):
     try:
         f = vp.flags
         opts = dict(f.export_options())
-        assert set(opts) == {"json", "commit", "load", "restore"}
+        assert set(opts) == {"json", "commit", "load", "restore"}     # MSv4: no CASA option
         b = vp._reader._backend
         for d in _deltas(b):
             f.db.add(d)
@@ -160,12 +160,13 @@ def test_msv4_commit_through_the_plotter_menu(sim_ps, tmp_path):
 
 def test_msv2_write_needs_no_casatools(sim_ms, monkeypatch):
     from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
+    from cubevis.toolbox.visplot import flag_casa
     monkeypatch.setattr(fc, "casatools_available", lambda: (False, "casatools missing"))
+    monkeypatch.setattr(flag_casa, "casa_detected", lambda: (False, "casatools missing"))
     b = MSv2Backend(sim_ms); b.open()
     try:
         caps = fc.capabilities(b)
-        assert caps["write"] is True and caps["casa_version"] is False
-        assert not hasattr(fc, "commit_msv2") and not hasattr(fc, "flagdata_script")
+        assert caps["write"] is True and caps["casa"] is False
     finally:
         b.close()
 
@@ -327,7 +328,7 @@ def test_msv2_arcae_commit_through_the_menu(sim_ms, tmp_path, monkeypatch):
     try:
         f = vp.flags
         opts = dict(f.export_options())
-        assert set(opts) == {"json", "commit", "load", "restore"}
+        assert set(opts) - {"commit_casa"} == {"json", "commit", "load", "restore"}
         assert opts["commit"] == "Write flags to the MS"
         for d in _deltas(vp._reader._backend):
             f.db.add(d)
@@ -455,3 +456,156 @@ def test_cached_frames_after_commit_match_a_fresh_read(sim_ms, sim_ps, tmp_path,
         fresh_b.close()
     for a, f in zip(after.layers, fresh.layers):
         assert np.array_equal(a.image, f.image)
+
+
+# ---------------------------------------------------------------------- #
+# Optional CASA flagdata write (secondary; only when CASA is installed)    #
+# ---------------------------------------------------------------------- #
+
+@pytest.fixture
+def fake_casatasks(monkeypatch):
+    """A recording stand-in for casatasks (writes nothing)."""
+    import sys
+    import types
+    from cubevis.toolbox.visplot import flag_casa
+    calls = []
+    mod = types.ModuleType("casatasks")
+    mod.flagmanager = lambda **kw: calls.append(("flagmanager", kw))
+    mod.flagdata = lambda **kw: calls.append(("flagdata", kw))
+    monkeypatch.setitem(sys.modules, "casatasks", mod)
+    monkeypatch.setattr(flag_casa, "casa_detected", lambda: (True, ""))
+    return calls
+
+
+def test_casa_option_only_when_casa_is_installed(sim_ms, monkeypatch):
+    from cubevis.toolbox.visplot import VisibilityPlotter, flag_casa
+    for ok in (False, True):
+        monkeypatch.setattr(flag_casa, "casa_detected",
+                            lambda ok=ok: (ok, "" if ok else "casatasks is not installed"))
+        vp = VisibilityPlotter(ms=sim_ms, layout="side", correlation="XX,YY")
+        try:
+            assert ("commit_casa" in dict(vp.flags.export_options())) is ok
+        finally:
+            vp.close()
+
+
+def test_casa_write_calls_in_order_backs_up_and_verifies(sim_ms, tmp_path, fake_casatasks):
+    from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
+    ms = str(tmp_path / "c.ms")
+    shutil.copytree(sim_ms, ms)
+    b = MSv2Backend(ms); b.open()
+    try:
+        deltas = _deltas(b)
+        rep = fc.commit(b, deltas, method="casa", version_name="vtest")
+        kinds = [c[0] for c in fake_casatasks]
+        assert kinds[0] == "flagmanager" and set(kinds[1:]) == {"flagdata"}
+        assert fake_casatasks[0][1]["versionname"] == "vtest"
+        for _k, kw in fake_casatasks[1:]:
+            assert kw["mode"] == "list" and kw["flagbackup"] is False and kw["inpfile"]
+        # the stand-in wrote nothing: the verification must say so, and the
+        # cached frames must NOT be refreshed to a state that is not on disk
+        assert rep["verified"] is False and rep["mismatches"] == rep["expected_changes"] > 0
+        assert "frames_refreshed" not in rep
+        assert os.path.exists(rep["backup"]) and rep["history"]
+    finally:
+        b.close()
+
+
+def test_casa_write_via_menu_warns_and_reports(sim_ms, tmp_path, fake_casatasks):
+    from cubevis.toolbox.visplot import VisibilityPlotter
+    ms = str(tmp_path / "m.ms")
+    shutil.copytree(sim_ms, ms)
+    vp = VisibilityPlotter(ms=ms, layout="side", correlation="XX,YY")
+    try:
+        f = vp.flags
+        f._caps = None
+        for d in _deltas(vp._reader._backend):
+            f.db.add(d)
+        r = asyncio.run(f.handle_action({"action": "export", "kind": "commit_casa"}))
+        html_ = r["preview"]["html"]
+        assert "CASA-like write" in html_ and "flagdata" in html_ and "command(s)" in html_
+        r = asyncio.run(f.handle_action({"action": "accept", "id": r["preview"]["id"]}))
+        assert r["notify_text"].startswith("⚠ Wrote") and "differ from what visplot showed" \
+            in r["notify_text"]
+    finally:
+        vp.close()
+
+
+def test_casa_write_reports_a_broken_casa_install(sim_ms, tmp_path, monkeypatch):
+    import sys
+    from cubevis.toolbox.visplot import flag_casa
+    from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
+    monkeypatch.setitem(sys.modules, "casatasks", None)        # import fails
+    ms = str(tmp_path / "b.ms")
+    shutil.copytree(sim_ms, ms)
+    b = MSv2Backend(ms); b.open()
+    try:
+        before = _disk(b)
+        with pytest.raises(RuntimeError, match="casatasks could not be imported"):
+            fc.commit(b, _deltas(b), method="casa")
+        assert all(np.array_equal(x, y) for x, y in zip(before, _disk(b)))
+    finally:
+        b.close()
+
+
+def _emulate_casa(lines, backend, spw_ids):
+    """Samples selected by manual/unflag lines under MSSelection semantics:
+    the cross product of the timerange list, baselines, spw:channels and
+    correlations of each command."""
+    import datetime as _dt
+    import re
+    from cubevis.toolbox.visplot.flag_engine import block_coords
+    epoch = _dt.datetime(1970, 1, 1, tzinfo=_dt.timezone.utc)
+
+    def ts(x):
+        d = _dt.datetime.strptime(x, "%Y/%m/%d/%H:%M:%S.%f").replace(tzinfo=_dt.timezone.utc)
+        return (d - epoch).total_seconds()
+    cmds = []
+    for line in lines:
+        kv = dict(re.findall(r"(\w+)='([^']*)'", line))
+        trs = [tuple(ts(y) for y in x.split("~")) for x in kv["timerange"].split(",")]
+        pairs = set(tuple(p.split("&")) for p in kv["antenna"].split(";"))
+        sid, ch = kv["spw"].split(":")
+        c0, c1 = map(int, ch.split("~"))
+        cmds.append((trs, pairs, int(sid), c0, c1, set(kv["correlation"].split(","))))
+    out = []
+    for p in backend._iter_visibility_partitions(None):
+        bc = block_coords(backend, p)
+        got = np.zeros(bc.shape, bool)
+        sid = spw_ids.get(bc.spw)
+        for trs, pairs, s_, c0, c1, corr in cmds:
+            if s_ != sid:
+                continue
+            mt = np.zeros(len(bc.times), bool)
+            for t0, t1 in trs:
+                mt |= (bc.times >= t0) & (bc.times <= t1)
+            mb = np.array([(a, c) in pairs or (c, a) in pairs for a, c in zip(bc.ant1, bc.ant2)])
+            mf = (bc.chans >= c0) & (bc.chans <= c1)
+            mp = np.isin(bc.pols, list(corr))
+            got |= (mt[:, None, None, None] & mb[None, :, None, None]
+                    & mf[None, None, :, None] & mp[None, None, None, :])
+        out.append((bc, got))
+    return out
+
+
+def test_casa_commands_are_exact_under_msselection(sim_ms):
+    from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
+    from cubevis.toolbox.visplot.flag_casa import to_flagdata_lines
+    from cubevis.toolbox.visplot.flag_model import delta_mask
+    b = MSv2Backend(sim_ms); b.open()
+    try:
+        ids = b.spw_casa_ids()
+        t = next(iter(b._iter_visibility_partitions(None))).time.values
+        for y0 in (10.0, 0.9):
+            r = b.evaluate_flag_request(dict(
+                flag=True, selection=SelectionSpec(), kind="scatter", x_axis="TIME",
+                x0=t[0] - 1, x1=t[-1] + 1, y0=y0, y1=1e9,
+                layers=[{"y_axis": "AMPLITUDE", "polarization": "XX"}]))
+            d = FlagDelta.from_dict(r["delta"])
+            lines = to_flagdata_lines([d], spw_ids=ids, comments=False)
+            for bc, got in _emulate_casa(lines, b, ids):
+                want = delta_mask(d, bc)
+                want = np.zeros(bc.shape, bool) if want is None else want
+                assert np.array_equal(got, want)
+    finally:
+        b.close()

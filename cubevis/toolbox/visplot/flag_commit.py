@@ -90,9 +90,12 @@ def capabilities(backend) -> dict:
             ok, why = writable, ("" if writable else f"no write permission for {path}")
         except Exception as exc:
             ok, why = False, f"arcae not available ({exc})"
-        cok, _cwhy = casatools_available()
+        from .flag_casa import casa_detected
+        cok, cwhy = casa_detected()                  # cheap: no casatools import
+        if cok and not writable:
+            cok, cwhy = False, f"no write permission for {path}"
         return {"format": fmt, "write": ok, "write_reason": why,
-                "casa_version": cok}
+                "casa_version": cok, "casa": cok, "casa_reason": cwhy}
     ok, why = True, ""
     try:
         import zarr  # noqa: F401
@@ -572,9 +575,16 @@ def restore_msv4_backup(backend, backup_path: str) -> dict:
     return {"restored": n, "backup": backup_path}
 
 
-def commit(backend, deltas, **kw) -> dict:
-    """Dispatch on the data format: MSv2 -> arcae, MSv4 -> zarr."""
+def commit(backend, deltas, method: Optional[str] = None, **kw) -> dict:
+    """Dispatch on the data format: MSv2 -> arcae (default) or, with
+    ``method="casa"``, the optional CASA flagdata path (``flag_casa``);
+    MSv4 -> zarr."""
     fmt = data_format(backend)
+    if fmt == "msv2" and method == "casa":
+        from .flag_casa import commit_msv2_casa
+        return commit_msv2_casa(backend, deltas, **{k: v for k, v in kw.items()
+                                                   if k in ("version_name", "backup_path",
+                                                            "verify")})
     if fmt == "msv2":
         return commit_msv2_arcae(backend, deltas, **{k: v for k, v in kw.items()
                                                      if k in ("backup_path", "verify")})

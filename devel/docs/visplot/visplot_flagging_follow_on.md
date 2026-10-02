@@ -108,9 +108,13 @@ Document the expected behaviour for CASA users.
 `sis14_twhya_calibrated_flagged.ms.flagdata.py` (exported before the
 removal) reproduces CASA applying exact list-mode selections incompletely
 (2,689 of 52,624 samples missed).  Package it with a small MS subset and the
-expected sample list for the CASA team.  If CASA fixes it, a flagdata
-*script* export could return as an optional, clearly-labelled convenience
-(never as the write path).
+expected sample list for the CASA team.  The optional CASA write
+(re-enabled as a secondary menu entry) will then become reliable; until
+then its verification reports any shortfall.  A flagdata *script* export
+could also return as a clearly-labelled convenience.  Worth testing first:
+whether shorter command lists (smaller `FLAGDATA_CHUNK`) or one
+`flagdata` call per command avoid the shortfall — the verification makes
+such experiments cheap.
 
 ## 8. Remote sessions
 

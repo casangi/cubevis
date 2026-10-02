@@ -336,3 +336,66 @@ def test_msv2_arcae_commit_through_the_menu(sim_ms, tmp_path, monkeypatch):
         assert len(f.db) == 0
     finally:
         vp.close()
+
+
+def test_restore_picker_confirmation_and_history(sim_ms, tmp_path):
+    """Restore without a path offers the newest backup; restoring asks for
+    confirmation; commit and restore each add one HISTORY row."""
+    from cubevis.toolbox.visplot import VisibilityPlotter
+    from arcae.lib.arrow_tables import Table
+    ms = str(tmp_path / "r.ms")
+    shutil.copytree(sim_ms, ms)
+
+    def nhist():
+        t = Table.from_filename(f"{ms}::HISTORY")
+        n = t.nrow(); t.close()
+        return n
+    vp = VisibilityPlotter(ms=ms, layout="side", correlation="XX,YY")
+    try:
+        f = vp.flags
+        before = _disk(vp._reader._backend)
+        h0 = nhist()
+        for d in _deltas(vp._reader._backend):
+            f.db.add(d)
+        r = asyncio.run(f.handle_action({"action": "export", "kind": "commit"}))
+        r = asyncio.run(f.handle_action({"action": "accept", "id": r["preview"]["id"]}))
+        assert "HISTORY entry" in r["notify_text"] and nhist() == h0 + 1
+        r = asyncio.run(f.handle_action({"action": "export", "kind": "restore"}))
+        assert r["export_path"].endswith(".npz") and "1 backup(s)" in r["notify_text"]
+        r = asyncio.run(f.handle_action({"action": "export", "kind": "restore",
+                                         "path": r["export_path"]}))
+        assert "Restore flags from this backup?" in r["preview"]["html"]
+        r = asyncio.run(f.handle_action({"action": "accept", "id": r["preview"]["id"]}))
+        assert r["notify_text"].startswith("Restored") and nhist() == h0 + 2
+        assert all(np.array_equal(x, y) for x, y in zip(before, _disk(vp._reader._backend)))
+    finally:
+        vp.close()
+
+
+def test_remote_sessions_autosave_and_recover(sim_ms, tmp_path, monkeypatch):
+    """Pending flags of a REMOTE session are kept in a local JSON Lines
+    autosave and can be recovered; local sessions write nothing."""
+    from cubevis.toolbox.visplot import VisibilityPlotter
+    from cubevis.toolbox.visplot.flag_controls import FlagController
+    monkeypatch.setenv("HOME", str(tmp_path))
+    vp = VisibilityPlotter(ms=sim_ms, layout="side", correlation="XX,YY")
+    try:
+        f = vp.flags
+        assert not f.is_remote and f.autosaved() is None
+        monkeypatch.setattr(FlagController, "is_remote", property(lambda self: True))
+        deltas = _deltas(vp._reader._backend)
+        for d in deltas:
+            f.db.add(d)
+        f._autosave_now()
+        auto = f.autosaved()
+        assert auto and auto["operations"] == len(deltas)
+        assert auto["path"].startswith(str(tmp_path))
+        assert "recover" in dict(f.export_options())
+        f.db.clear(record=False)
+        r = asyncio.run(f.handle_action({"action": "export", "kind": "recover"}))
+        assert f"Recovered {len(deltas)}" in r["notify_text"] and len(f.db) == len(deltas)
+        f.db.clear(record=False)
+        f._autosave_now()                      # nothing pending -> autosave removed
+        assert f.autosaved() is None
+    finally:
+        vp.close()

@@ -2298,6 +2298,11 @@ class XArrayReader(abc.ABC):
         self.set_pending_flags([], int(options.get("version", 0) or 0))
         return report
 
+    def list_flag_backups(self) -> list:
+        """Commit backups next to this data set, newest first."""
+        from ..flag_commit import list_backups
+        return list_backups(self)
+
     def restore_flag_backup(self, backup_path: str) -> dict:
         """MSv4: undo a commit from its side-file backup."""
         from ..flag_commit import restore_backup

@@ -408,3 +408,26 @@ review dialog, panel refresh) still needs a live GUI check.
   baselines / channel ranges / correlations, and collapsible tables of
   samples per correlation, antenna and baseline, plus the integration list.
 - Part 33: report time rows split into 'UTC time span' and 'MS time span' (MS TIME column, MJD seconds, full precision; 'PS time span' in UNIX seconds for MSv4), for region and sample-set operations; operation titles show TIME boxes with full-precision values and UTC; SPW id lookup in the report falls back to SpwKey.matches.
+
+## 2026-10-01: part 34 -- real-data commit tests, autosave, HISTORY, restore picker
+- tests/manual/visplot/test_flag_commit_real.py: local (MS/PS copied to tmp)
+  commit of raster box + scatter box + unflag on the smallest field,
+  verified; "Hide flagged" before == fresh open after the commit; MSv2 one
+  HISTORY row per commit/restore; restore == original. Remote: commit in the
+  worker on a SCRATCH copy (CUBEVIS_TEST_KERNEL_SCRATCH_MS/_PS), verified,
+  restored. Passed here: TW Hya MS + real TW Hya PS locally; scratch MS/PS
+  through a local kernel.
+- Decisions (Darrell): "Show flagged data" stays full flag colour; "Hide
+  flagged" = what a fresh open after commit shows (already the behaviour;
+  now pinned by the test above) -- no partial-cell marker.
+- Remote sessions only: debounced background JSON Lines autosave of pending
+  flags on P_local (~/.cache/cubevis/visplot/autosave/<name>-<sha1>.flags.jsonl,
+  atomic replace; removed when nothing is pending); menu "Recover autosaved
+  flags". Local sessions: no autosave overhead.
+- MSv2 commit/restore add one HISTORY row (MESSAGE summary, ORIGIN
+  cubevis.visplot, APPLICATION visplot, CLI_COMMAND = operation
+  descriptions (<= 50), APP_PARAMS cubevis version / backup / counts).
+- Restore picker: Go with an empty file box lists backups next to the data
+  (newest first) and fills in the newest; Go again shows a confirmation.
+- Open (for the session summary): casacore table locking when another
+  process (e.g. CASA) has the MS open during a commit -- skipped for now.

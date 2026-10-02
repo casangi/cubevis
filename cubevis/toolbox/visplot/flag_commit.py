@@ -257,6 +257,39 @@ def _plan_msv2(backend, expected, tables, lut) -> dict:
     return plan
 
 
+def _append_history(ms: str, message: str, commands=(), params=()) -> bool:
+    """One HISTORY row (MSv2): a small audit entry, nothing else grows."""
+    try:
+        from arcae.lib.arrow_tables import Table
+        h = Table.from_filename(f"{ms}::HISTORY", readonly=False)
+        try:
+            n = h.nrow()
+            h.addrows(1)
+            idx = (np.array([n]),)
+            h.putcol("TIME", np.array([_time.time() + _MJD_UNIX_OFFSET]), index=idx)
+            h.putcol("OBSERVATION_ID", np.array([0], dtype=np.int32), index=idx)
+            h.putcol("MESSAGE", np.array([message]), index=idx)
+            h.putcol("PRIORITY", np.array(["NORMAL"]), index=idx)
+            h.putcol("ORIGIN", np.array(["cubevis.visplot"]), index=idx)
+            h.putcol("APPLICATION", np.array(["visplot"]), index=idx)
+            h.putcol("CLI_COMMAND", np.array([list(commands) or [""]]), index=idx)
+            h.putcol("APP_PARAMS", np.array([list(params) or [""]]), index=idx)
+        finally:
+            h.close()
+        return True
+    except Exception as exc:             # the flags are written; history is best effort
+        log.warning("could not add a HISTORY row to %s: %s", ms, exc)
+        return False
+
+
+def _cubevis_version() -> str:
+    try:
+        import cubevis
+        return str(getattr(cubevis, "__version__", "") or "unknown")
+    except Exception:
+        return "unknown"
+
+
 def commit_msv2_arcae(backend, deltas, backup_path: Optional[str] = None,
                       verify: bool = True) -> dict:
     """Write *deltas* into the MS with arcae (see the section note)."""
@@ -327,8 +360,18 @@ def commit_msv2_arcae(backend, deltas, backup_path: Optional[str] = None,
     finally:
         backend.open()
         backend._clear_lookup_caches()
+    history = False
+    if n:
+        ops = [d.describe() for d in deltas]
+        history = _append_history(
+            ms, f"visplot wrote {n} flag change(s) in {rows.size} row(s) from "
+                f"{len(deltas)} pending operation(s); previous flags saved in "
+                f"{os.path.basename(backup_path)}",
+            commands=ops[:50] + ([f"... {len(ops) - 50} more"] if len(ops) > 50 else []),
+            params=[f"cubevis={_cubevis_version()}", f"backup={backup_path}",
+                    f"operations={len(deltas)}", f"samples={n}"])
     report = {"format": "msv2", "method": "arcae", "backup": backup_path,
-              "version_name": version_name,
+              "version_name": version_name, "history": history,
               "operations": len(deltas), "written": n, "rows": int(rows.size),
               "expected_changes": n}
     if verify:
@@ -355,6 +398,9 @@ def restore_msv2_backup(backend, backup_path: str) -> dict:
     finally:
         backend.open()
         backend._clear_lookup_caches()
+    _append_history(backend._path, f"visplot restored the flags of {n_rows} row(s) from "
+                                   f"{os.path.basename(backup_path)}",
+                    params=[f"cubevis={_cubevis_version()}", f"backup={backup_path}"])
     return {"restored_rows": n_rows, "backup": backup_path}
 
 
@@ -483,3 +529,22 @@ def commit(backend, deltas, **kw) -> dict:
                                                      if k in ("backup_path", "verify")})
     return commit_msv4(backend, deltas, **{k: v for k, v in kw.items()
                                            if k in ("backup_path", "verify")})
+
+
+def list_backups(backend) -> list:
+    """Commit backups next to the data, newest first:
+    ``[{"path", "created", "operations", "kind"}]``."""
+    import glob
+    base = os.path.normpath(backend._path)
+    out = []
+    for p in glob.glob(f"{glob.escape(base)}.visplot_flag_backup_*.npz"):
+        try:
+            with np.load(p, allow_pickle=False) as z:
+                m = json.loads(str(z["manifest"]))
+            out.append({"path": p, "created": float(m.get("created", os.path.getmtime(p))),
+                        "operations": len(m.get("operations", [])),
+                        "kind": "msv2" if m.get("format", "").endswith(".msv2") else "msv4"})
+        except Exception:
+            continue
+    return sorted(out, key=lambda e: -e["created"])
+

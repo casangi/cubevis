@@ -46,6 +46,7 @@ import html
 import logging
 import os
 import time
+import threading
 import uuid
 from dataclasses import dataclass, field as dc_field
 from typing import Any, Mapping, Optional
@@ -125,10 +126,20 @@ class FlagController:
         self.extend_chan = False
         self.proposal: Optional[Proposal] = None
         self._commit_pending: Optional[dict] = None
+        self._restore_pending: Optional[dict] = None
         self._caps: Optional[dict] = None
         self.state_version = 0
         self._widgets: dict = {}
         self.db.add_listener(lambda _v: self.push_state())
+        # Remote sessions only: pending flags live in this process, but the
+        # kernel/worker they depend on can die with the remote host or link.
+        # Keep a JSON Lines copy on THIS machine after every change (in a
+        # background thread, debounced), offered back by the Export /
+        # commit menu.  Local sessions skip it (no overhead).
+        self._autosave_timer = None
+        self._autosave_lock = threading.Lock()
+        if self.is_remote:
+            self.db.add_listener(lambda _v: self._schedule_autosave())
 
     # ================================================================== #
     # State pushed to the data backend and the panels                     #
@@ -365,6 +376,17 @@ class FlagController:
                 self._commit_pending = None
                 return self.response("Commit cancelled; nothing was written.", NOTIFY_OK,
                                      refresh=False, preview_closed=True)
+            if action == "accept" and getattr(self, "_restore_pending", None) is not None \
+                    and msg.get("id") == self._restore_pending["id"]:
+                pend, self._restore_pending = self._restore_pending, None
+                resp = await self._export_action({"kind": "restore", "path": pend["path"],
+                                                  "confirmed": True})
+                resp["preview_closed"] = True
+                return resp
+            if action == "reject" and getattr(self, "_restore_pending", None) is not None:
+                self._restore_pending = None
+                return self.response("Restore cancelled; nothing was changed.", NOTIFY_OK,
+                                     refresh=False, preview_closed=True)
             if action == "export":
                 return await self._export_action(msg)
             if action == "accept":
@@ -549,6 +571,57 @@ class FlagController:
     # Export / commit / load                                               #
     # ================================================================== #
 
+    # ---------------- autosave (remote sessions) ----------------------- #
+
+    AUTOSAVE_DELAY_S = 1.0
+
+    def autosave_path(self) -> str:
+        import hashlib
+        src = os.path.normpath(getattr(self._plotter, "_source_path", "") or "visplot")
+        tag = hashlib.sha1(src.encode()).hexdigest()[:10]
+        root = os.path.join(os.path.expanduser("~"), ".cache", "cubevis", "visplot", "autosave")
+        return os.path.join(root, f"{os.path.basename(src) or 'visplot'}-{tag}.flags.jsonl")
+
+    def _schedule_autosave(self) -> None:
+        with self._autosave_lock:
+            if self._autosave_timer is not None:
+                self._autosave_timer.cancel()
+            self._autosave_timer = threading.Timer(self.AUTOSAVE_DELAY_S, self._autosave_now)
+            self._autosave_timer.daemon = True
+            self._autosave_timer.start()
+
+    def _autosave_now(self) -> None:
+        """Write (or, with nothing pending, remove) the autosave file."""
+        from .flag_export import to_jsonl
+        path = self.autosave_path()
+        try:
+            deltas = self.db.deltas()
+            if not deltas:
+                if os.path.exists(path):
+                    os.remove(path)
+                return
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            src = getattr(self._plotter, "_source_path", "") or ""
+            tmp = path + ".tmp"
+            with open(tmp, "w") as fh:
+                fh.write(to_jsonl(deltas, self._json_header(src)))
+            os.replace(tmp, path)                 # atomic: never a half-written file
+        except Exception:
+            log.warning("pending-flag autosave failed", exc_info=True)
+
+    def autosaved(self) -> Optional[dict]:
+        """``{"path", "operations", "saved"}`` of a recoverable autosave."""
+        path = self.autosave_path()
+        if not (self.is_remote and os.path.exists(path)):
+            return None
+        try:
+            with open(path) as fh:
+                n = sum(1 for _ in fh) - 1
+            return {"path": path, "operations": max(0, n), "saved": os.path.getmtime(path)} \
+                if n > 0 else None
+        except Exception:
+            return None
+
     def capabilities(self) -> dict:
         """Cached ``flag_commit.capabilities`` of the data (remote-aware)."""
         if self._caps is None:
@@ -571,6 +644,11 @@ class FlagController:
             label += " -- unavailable"
         opts.append(("commit", label))
         opts.append(("load", "Load flags from JSON (as pending)"))
+        auto = self.autosaved()
+        if auto:
+            opts.append(("recover", f"Recover autosaved flags ({auto['operations']} operation(s), "
+                                    + time.strftime("%Y-%m-%d %H:%M",
+                                                    time.localtime(auto["saved"])) + ")"))
         opts.append(("restore", "Restore flags from a commit backup (.npz)"))
         return opts
 
@@ -668,6 +746,44 @@ class FlagController:
             n = self.load_jsonl(path)
             return self.response(f"Loaded {n} pending operation(s) from {html.escape(path)}",
                                  NOTIFY_OK)
+        if kind == "recover":
+            auto = self.autosaved()
+            if not auto:
+                return self.response("No autosaved flags to recover.", NOTIFY_OK, refresh=False)
+            n = self.load_jsonl(auto["path"])
+            return self.response(f"Recovered {n} pending operation(s) from the autosave.",
+                                 NOTIFY_OK)
+        if kind == "restore" and not path:
+            fn = getattr(self.reader, "list_flag_backups", None)
+            found = fn() if fn else []
+            if not found:
+                return self.response("No commit backups found next to the data.", NOTIFY_OK,
+                                     refresh=False)
+            lines = "; ".join(
+                f"{os.path.basename(e['path'])} ({e['operations']} op(s), "
+                f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(e['created']))})"
+                for e in found[:5])
+            resp = self.response(f"{len(found)} backup(s), newest first: {html.escape(lines)}. "
+                                 "The newest is in the file box -- press Go to review it.",
+                                 NOTIFY_OK, refresh=False)
+            resp["export_path"] = found[0]["path"]
+            return resp
+        if kind == "restore" and not msg.get("confirmed"):
+            if not os.path.exists(path) and not self.is_remote:
+                return self.response(f"⚠ {html.escape(path)} does not exist.", NOTIFY_WARN,
+                                     refresh=False)
+            self._restore_pending = {"id": uuid.uuid4().hex, "path": path}
+            body = (f"<div style='font-family:system-ui,sans-serif;line-height:1.35'>"
+                    f"<div style='font-size:14px;font-weight:600;margin-bottom:4px'>"
+                    f"Restore flags from this backup?</div>"
+                    f"<div>{html.escape(path)}</div>"
+                    f"<div style='margin-top:4px;opacity:0.85'>The flags the commit changed are "
+                    f"set back to their previous values; pending operations are kept.</div>"
+                    f"<div style='margin-top:6px;font-weight:600;color:#e64553'>"
+                    f"This modifies the data set on disk.</div></div>")
+            return self.response("Confirm restoring flags from the backup.", NOTIFY_OK,
+                                 refresh=False,
+                                 preview={"id": self._restore_pending["id"], "html": body})
         if kind == "restore":
             if not path:
                 return self.response("⚠ Give the backup (.npz) file in the file box.",
@@ -734,13 +850,17 @@ class FlagController:
             parts.append(f"backup <b>{html.escape(str(rep.get('backup')))}</b>")
         if rep.get("version_name"):
             parts.append(f"CASA flag version <b>{html.escape(str(rep.get('version_name')))}</b>")
+        if rep.get("history"):
+            where_extra = " A HISTORY entry records the write."
+        else:
+            where_extra = ""
         where = " and ".join(parts) or "nowhere"
         if rep.get("verified", True):
             text = (f"✓ Wrote {len(deltas)} operation(s) "
                     f"({rep.get('expected_changes', 0):,} sample changes"
                     + (f" in {rep['rows']:,} MS row(s)" if rep.get("rows") is not None else "")
                     + "); verified. "
-                    f"Previous flags saved as {where}.")
+                    f"Previous flags saved as {where}.{where_extra}")
             color = NOTIFY_OK
         else:
             k = rep.get("mismatch_kinds", {})
@@ -1178,7 +1298,11 @@ comm.send(msg_id, {action: 'report'}, (resp) => {
 _EXPORT_JS = r"""
 window.__cvSetBusy(true);
 comm.send(msg_id, {action: 'export', kind: exp_sel.value, path: exp_path.value || ''},
-          (resp) => { window.__cvSetBusy(false); cvApplyFlagResponse(resp); });
+          (resp) => {
+              window.__cvSetBusy(false);
+              if (resp && resp.export_path != null) exp_path.value = resp.export_path;
+              cvApplyFlagResponse(resp);
+          });
 """
 
 

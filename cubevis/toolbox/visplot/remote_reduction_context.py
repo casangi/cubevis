@@ -690,6 +690,12 @@ class RemoteReductionContext(ReductionContext):
         self.__dict__.pop("_cv_memo", None)
         return out
 
+    def list_flag_backups(self, timeout: Optional[float] = None) -> list:
+        try:
+            return self._call("list_flag_backups", timeout=timeout) or []
+        except Exception:
+            return []
+
     def restore_flag_backup(self, backup_path: str, timeout: Optional[float] = None) -> dict:
         self.__dict__.pop("_cv_memo", None)
         return self._call("restore_flag_backup", backup_path=backup_path,

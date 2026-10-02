@@ -462,6 +462,37 @@ class RemoteReductionContext(ReductionContext):
             return {"error": f"remote cubevis has no runtime_info ({exc}); it predates "
                              "this client -- update the kernel environment"}
 
+    # ------------------------------------------------------------------ #
+    # Worker-side code and re-targeting (tests, diagnostics)              #
+    # ------------------------------------------------------------------ #
+
+    def eval_code(self, code: str, timeout: Optional[float] = None):
+        """Evaluate a Python expression in the worker (on the kernel host)
+        and return its value -- e.g. to inspect or prepare files there."""
+        import asyncio
+        return self._bridge.run(asyncio.wait_for(self._ctx.eval_code(code),
+                                                 timeout or self._call_timeout or 600))
+
+    def exec_code(self, code: str, timeout: Optional[float] = None):
+        """Execute Python statements in the worker; ``_result`` is returned."""
+        import asyncio
+        return self._bridge.run(asyncio.wait_for(self._ctx.exec_code(code),
+                                                 timeout or self._call_timeout or 600))
+
+    def reopen(self, path: str, backend_kind: Optional[str] = None) -> None:
+        """Point this session at another data set on the kernel host,
+        reusing the running kernel and worker (no new connection: on
+        zuul06 that saves ~2.5 minutes).  Caches tied to the old data are
+        dropped and metadata is refreshed."""
+        kind = backend_kind or self._backend_kind
+        self._handle = self._bridge.run(self._acreate_object(
+            _BACKEND_CLASS_NAME, kwargs={"path": path, "backend_kind": kind}))
+        self._path, self._backend_kind = path, kind
+        for k in ("_cv_memo", "_cv_sent_ids"):
+            self.__dict__.pop(k, None)
+        self._meta = ObservationMetadata.from_backend_metadata(
+            self._call("metadata"), source_path=path)
+
     def call_stats(self, reset: bool = False, timeout: Optional[float] = None) -> dict:
         """Round-trip timing per remote method, with the worker's own
         compute time for the same methods.

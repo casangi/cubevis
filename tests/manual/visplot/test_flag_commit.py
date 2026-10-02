@@ -399,3 +399,22 @@ def test_remote_sessions_autosave_and_recover(sim_ms, tmp_path, monkeypatch):
         assert f.autosaved() is None
     finally:
         vp.close()
+
+
+def test_backup_dropdown_lists_backups(sim_ms, tmp_path):
+    from cubevis.toolbox.visplot import VisibilityPlotter
+    ms = str(tmp_path / "d.ms")
+    shutil.copytree(sim_ms, ms)
+    vp = VisibilityPlotter(ms=ms, layout="side", correlation="XX,YY")
+    try:
+        f = vp.flags
+        r = asyncio.run(f.handle_action({"action": "export", "kind": "list_backups"}))
+        assert r["backups"] == [] and "No commit backups" in r["notify_text"]
+        f.db.add(_deltas(vp._reader._backend)[0])
+        p = asyncio.run(f.handle_action({"action": "export", "kind": "commit"}))
+        asyncio.run(f.handle_action({"action": "accept", "id": p["preview"]["id"]}))
+        r = asyncio.run(f.handle_action({"action": "export", "kind": "list_backups"}))
+        assert len(r["backups"]) == 1 and r["backups"][0][0].endswith(".npz")
+        assert "1 op(s)" in r["backups"][0][1]
+    finally:
+        vp.close()

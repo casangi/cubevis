@@ -431,3 +431,10 @@ review dialog, panel refresh) still needs a live GUI check.
   (newest first) and fills in the newest; Go again shows a confirmation.
 - Open (for the session summary): casacore table locking when another
   process (e.g. CASA) has the MS open during a commit -- skipped for now.
+- Part 35: test_flag_commit_real.py remote test uses CUBEVIS_TEST_KERNEL_MS/_PS
+  (no scratch variables): the worker copies the data into tempfile.mkdtemp()
+  on the kernel host (RemoteReductionContext.eval_code/exec_code), the session
+  is re-pointed with RemoteReductionContext.reopen() (same kernel/worker), and
+  the copy is deleted afterwards. Restore: "Existing backups" dropdown appears
+  when Restore is chosen (filled via kind=list_backups, newest first) and
+  puts the chosen path into the file box, which still accepts typed paths.

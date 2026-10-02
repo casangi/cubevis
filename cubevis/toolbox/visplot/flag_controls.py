@@ -746,6 +746,16 @@ class FlagController:
             n = self.load_jsonl(path)
             return self.response(f"Loaded {n} pending operation(s) from {html.escape(path)}",
                                  NOTIFY_OK)
+        if kind == "list_backups":
+            fn = getattr(self.reader, "list_flag_backups", None)
+            found = (await asyncio.to_thread(fn)) if fn else []
+            out = self.response("" if found else "No commit backups found next to the data.",
+                                NOTIFY_OK, refresh=False)
+            out["backups"] = [
+                [e["path"], f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(e['created']))}"
+                            f" · {e['operations']} op(s) · {os.path.basename(e['path'])}"]
+                for e in found]
+            return out
         if kind == "recover":
             auto = self.autosaved()
             if not auto:
@@ -1078,6 +1088,11 @@ class FlagController:
                              placeholder="default: <data name>.<kind>.<date-time>.<ext>",
                              width=width)
         exp_go = Button(label="Go", width=width, button_type="primary")
+        # Restore: a dropdown of the backups found next to the data, filled
+        # when "Restore" is chosen; picking one puts its path in the file
+        # box (which still accepts any typed path).
+        exp_backups = Select(title="Existing backups (newest first)", value="",
+                             options=[("", "—")], width=width, visible=False)
 
         cfg_js = CustomJS(args=dict(comm=comm, msg_id=msg_id, filt_sel=filt_sel,
                                     param_widgets=param_widgets, param_cols=param_cols,
@@ -1093,8 +1108,16 @@ class FlagController:
                     "RadioButtonGroup": "active", "ColorPicker": "color"}[type(w).__name__]
             w.js_on_change(prop, cfg_js)
         exp_go.js_on_click(CustomJS(args=dict(comm=comm, msg_id=msg_id, exp_sel=exp_sel,
-                                              exp_path=exp_path, **self._response_args()),
+                                              exp_path=exp_path, exp_backups=exp_backups,
+                                              **self._response_args()),
                                     code=_CV_SET_BUSY_JS + _FLAG_RESPONSE_JS + _EXPORT_JS))
+        exp_sel.js_on_change("value", CustomJS(
+            args=dict(comm=comm, msg_id=msg_id, exp_sel=exp_sel, exp_path=exp_path,
+                      exp_backups=exp_backups, **self._response_args()),
+            code=_CV_SET_BUSY_JS + _FLAG_RESPONSE_JS + _BACKUP_LIST_JS))
+        exp_backups.js_on_change("value", CustomJS(
+            args=dict(exp_path=exp_path, exp_backups=exp_backups),
+            code="if (exp_backups.value) exp_path.value = exp_backups.value;"))
         for key, b in list(btns.items()):
             b.js_on_click(CustomJS(args=dict(comm=comm, msg_id=msg_id, action=key,
                                              **self._response_args()),
@@ -1104,7 +1127,7 @@ class FlagController:
                                         code=_CV_SET_BUSY_JS + _FLAG_RESPONSE_JS + _REPORT_JS))
         self._widgets.update(info=info)
         themed = ([filt_sel, preview_cb, ext_corr, ext_chan, display, color, show_flagged,
-                   flagged_color, exp_sel, exp_path, exp_go,
+                   flagged_color, exp_sel, exp_backups, exp_path, exp_go,
                    report_btn] + list(btns.values())
                   + [w for ws in param_widgets.values() for w in ws])
         if stylesheet is not None:
@@ -1114,7 +1137,7 @@ class FlagController:
         kids = ([section] if section is not None else []) + [
             filt_sel, *param_cols.values(), preview_cb, ext_corr, ext_chan,
             display, color, show_flagged, flagged_color, row(*btns.values()),
-            exp_sel, exp_path, exp_go, report_btn, info]
+            exp_sel, exp_backups, exp_path, exp_go, report_btn, info]
         return column(*kids, width=width)
 
     def themed_widgets(self) -> list:
@@ -1473,4 +1496,21 @@ def _title_with_times(d) -> str:
             return m.group(0)
         return f"TIME [{a:.3f}, {b:.3f}] ({_time_text(a, b, d.time_format).split('  ·  ')[0]})"
     return re.sub(r"TIME \[([-+0-9.eE]+), ([-+0-9.eE]+)\]", repl, text)
+
+_BACKUP_LIST_JS = r"""
+if (exp_sel.value !== 'restore') {
+    exp_backups.visible = false;
+} else {
+    window.__cvSetBusy(true);
+    comm.send(msg_id, {action: 'export', kind: 'list_backups', path: ''}, (resp) => {
+        window.__cvSetBusy(false);
+        const items = (resp && resp.backups) || [];
+        exp_backups.options = items.length ? items : [['', '(no backups found)']];
+        exp_backups.value = items.length ? items[0][0] : '';
+        if (items.length) exp_path.value = items[0][0];
+        exp_backups.visible = true;
+        cvApplyFlagResponse(resp);
+    });
+}
+"""
 

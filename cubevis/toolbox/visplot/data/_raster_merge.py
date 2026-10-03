@@ -8,20 +8,26 @@ combine them.  It used to do::
 
     xr.concat(parts, dim=y_name, join="outer", ...)
 
-which is only right when the partitions are disjoint along *y* and
-share *x*.  That holds for e.g. Baseline (y) x Time (x) split by scan,
-only by accident -- and it is wrong whenever partitions are disjoint
-along *x* and share *y*, which is exactly Time (y) x Channel/Frequency
-(x) on a multi-SPW MS: every SPW has the same times but its own
-frequencies.  ``concat`` then stacked the SPWs as extra *time* rows
-(N_spw x N_time rows, each NaN outside its own 64 channels), so
+which stacks the partitions along *y*.  That is only right when the
+partitions are disjoint along *y*.  Partitions are routinely disjoint
+along *x* instead, or share both axes' members, and then ``concat``
+produces wrong grids:
 
-* SPWs appeared offset from one another in time (each SPW's row for a
-  given timestamp is a different image row),
-* ~(N_spw-1)/N_spw of the grid was NaN (black gaps), and
-* the grid's inflated row count tripped ``_decimate_agg``, which then
-  strided away whole rows -- i.e. whole SPWs at some timestamps -- so
-  data appeared only once every few seconds.
+* Baseline (y) x Time (x) -- the default vplot layout -- over partitions
+  that are disjoint in time but observe the same baselines (one per
+  scan/intent): every baseline appeared once *per partition*.  On
+  sis14_twhya (26 antennas) that is 650 rows instead of 325, each
+  baseline listed twice with its data split between the copies.
+* Time (y) x Channel/Frequency (x) on a multi-SPW MS: every SPW has the
+  same times but its own frequencies, so the SPWs were stacked as extra
+  *time* rows (N_spw x N_time rows, each NaN outside its own channels).
+  That produced SPWs offset from one another in time, ~(N_spw-1)/N_spw of
+  the grid NaN (black gaps), and an inflated row count that tripped
+  ``_decimate_agg``, which then strided away whole rows -- data only
+  every few seconds.
+
+(Time (y) x Baseline (x) happened to work, because there the partitions
+really are disjoint along y.)
 
 The merge here is placement by coordinate on the union of *both* axes,
 so it is correct regardless of which axis (or both) the partitions

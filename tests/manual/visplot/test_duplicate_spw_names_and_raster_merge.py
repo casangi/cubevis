@@ -102,6 +102,21 @@ def test_baseline_by_time_split_by_scan(merge):
                  _mk(2, bl, np.arange(100, 180.0), "baseline_id", "time")],
                 "baseline_id", "time")
     assert agg.shape == (6, 180) and not np.isnan(agg.values).any()
+    # Regression (sis14_twhya, 26 antennas): xr.concat(dim=y) gave 650 rows,
+    # every baseline listed once per partition.
+    assert agg.baseline_id.values.tolist() == list(range(6))
+    assert agg.baseline_id.to_index().is_unique
+
+
+def test_same_baselines_in_many_partitions_are_not_duplicated(merge):
+    bl = np.arange(325)
+    parts = [_mk(i + 1, bl, np.arange(i * 10.0, i * 10.0 + 10), "baseline_id", "time")
+             for i in range(4)]
+    agg = merge(parts, "baseline_id", "time")
+    assert agg.shape == (325, 40)            # NOT (1300, 40)
+    assert agg.baseline_id.to_index().is_unique
+    for i in range(4):
+        assert (agg.values[:, i * 10:(i + 1) * 10] == i + 1).all()
 
 
 def test_overlap_first_wins_and_sorted(merge):

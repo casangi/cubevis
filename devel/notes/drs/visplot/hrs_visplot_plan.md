@@ -1,323 +1,179 @@
-# HRS requirements for plotting: expanded, with a visplot gap analysis and plan
+# HRS plotting requirements: visplot plan (revision 2)
 
-Customer: USNO/NRAO High-Resolution Subarray (HRS pathfinder). Source
-requirement (CASR-385, "Plotting tool improvements"), verbatim:
+*Revision 2, 2026-10-02, against `casangi/cubevis` `main` at `3b5eb82`.
+Supersedes the preliminary plan at this path (recoverable from git at that
+commit). Background and evidence: `hrs_commissioning_workflow_survey.md`.*
+
+Customer: USNO/NRAO High-Resolution Subarray pathfinder. Source requirement
+(CASR-385), verbatim:
 
 - Faster and more reliable plotting tool than plotms
 - Waterfall plot
 - Ability to plot phase rms vs time and frequency
 - Flagging tool similar to AIPS TVFLG, SPFLG, and FTFLG
 
-The source is four lines with no numbers, datasets or acceptance criteria. This
-document (1) turns each line into testable requirements, (2) says what visplot
-already does and what is missing, (3) proposes a phased plan, and (4) lists the
-questions that must be answered by the HRS side before the estimates below are
-trustworthy. Everything about visplot's current state is from the code and GUI
-sessions to date; items I could not verify are marked **(verify)**.
+Needed by: late spring / summer 2027. Aim: working prototypes now, leaving
+the intervening time for validation on real HRS data.
 
-## 0. Summary and recommendations
+## 1. Decisions
 
-| Requirement | Status today | Main gap | Rough effort* |
-|---|---|---|---|
-| Faster / more reliable than plotms | Substantial performance machinery exists; **no plotms comparison has ever been measured**; reliability work ongoing | A benchmark harness with agreed datasets and targets; a soak/regression story | M |
-| Waterfall plot | A `Waterfall` preset exists (Time x Channel raster, Over/Under layout) | Per-baseline selection/iteration, averaging controls, multi-SPW/IF handling, phase view | M |
-| Phase rms vs time and frequency | **Not present** (no phase-rms quantity) | New statistic (circular rms) in both backends; raster + scatter forms; definition agreed with users | M-L |
-| Flagging like TVFLG / SPFLG / FTFLG | Scaffolding exists (box-select tool, pending-flag store with undo, overlay, commit interface) **(verify how much is wired end to end)** | AIPS-style workflows, flagging of decimated cells, threshold/"flag above" tools, flag versions, command export, persistence for the target data format | L |
+The preliminary plan listed questions for HRS. Definitive answers are not
+available, so these are working decisions, to be revisited when users test.
 
-\*S < 1 day, M = 1-3 days, L = 1-2 weeks of focused work in the style of this
-project's sessions (design + both backends + tests). These are rough and exclude
-waiting on datasets and stakeholder answers.
+| Topic | Decision | Basis |
+|---|---|---|
+| Data format | MSv2 is primary; every feature must also work on MSv4, with parity tests | Darrell |
+| Users / environment | One user; local first, remote kernel supported | Darrell |
+| Initial users | Instrument commissioning staff | Darrell |
+| Speed comparison with plotms | Deferred. No benchmark milestone now; return to it when requirements are clearer | Darrell |
+| Phase rms definition | Circular standard deviation in a user-set time x channel window, with vector-mean (and optional linear slope) removal; coherence ratio reported from the same sums. Three views: raster quantity, rms vs time / vs frequency scatter, rms vs baseline length | Survey section 2. AIPS has no literal phase-rms display; this follows the AIPS windowed-statistic pattern and common commissioning practice |
+| Which flagging workflows | Provide the three AIPS *views* (baseline x time; channel x time per baseline; channel x time all baselines) and the AIPS flag *scopes* (baseline / antenna / all baselines; channel / all channels; IF / all IFs; Stokes; source) on top of the existing FlagDB | Survey section 1 |
+| Flagging interaction style | Web-native: toolbar tools, checkboxes and dropdowns in the Flagging panel. No attempt to reproduce AIPS menus or keyboard driving at first | Darrell |
+| Raster (static) output | Secondary priority; goal is a static output path for every interactive view | Darrell |
+| JSON plot modes / view save-restore (old M1b) | Not on the HRS critical path. New views are added as presets in code for now; revisit if users ask to author views | Simplification; the requirement does not need it |
 
-**Recommendations.**
-1. **Benchmark against plotms first.** "Faster than plotms" is the only
-   requirement that is fully measurable and we have no numbers. It also gives the
-   Z-Score optimization work a target (see `ZSCORE_OPTIMIZATION_HANDOFF.md`).
-2. **Do not wait for all feature testing before touching flagging.** See section 5:
-   I recommend a flagging *design spike and non-destructive slice* in parallel with
-   the phase-rms work, and disk persistence after GUI testing. Reasons are in
-   section 5; the short version: flagging is the point of the other three, and
-   its requirements constrain decisions we would otherwise make blind
-   (decimated cells, cache invalidation, flag semantics).
-3. **Get the phase-rms definition agreed before coding.** "Phase rms" has at least
-   three reasonable meanings (section 3.3); building the wrong one is the largest
-   avoidable rework in this plan.
-4. **Obtain a real HSA-sized dataset early.** Everything about "faster" and
-   "reliable" is dataset-dependent, and today's tests use one small MS.
-5. **Build view save/restore and JSON "plot modes" before the waterfall work** (new
-   milestone M1b; design in `VIEW_STATE_DESIGN.md`). Internal users could then
-   author and ship view requirements as files instead of waiting for code changes.
-   Limits: modes compose only what already exists (per-baseline waterfall
-   selection/averaging, phase rms and flagging still need code), and the useful
-   version depends on the browser-side restore path, which is the real cost.
+## 2. Status against the requirement at `3b5eb82`
 
-## 1. What is unknown (ask HRS)
+| Requirement | State | Remaining |
+|---|---|---|
+| Faster / more reliable than plotms | Two-level rendering, frame cache, remote path exist. Large-data flagging performance work is listed in `devel/docs/visplot/visplot_flagging_follow_on.md` | Comparison deferred. Reliability work continues under H8 |
+| Waterfall | `waterfall` preset: Time x Channel raster, one baseline via selection | Baseline iteration; all-baseline form; vector averaging; phase waterfall preset; multi-SPW handling |
+| Phase rms | Absent | H2 |
+| Flagging like TVFLG/SPFLG/FTFLG | FlagDB v2 is in: flag/unflag boxes, filters with preview, undo/redo, JSON, commit to MSv2 and MSv4 with backup and verification, report | Views (H3, H4) and scopes (H5) |
 
-Answers change scope, so they gate the estimates.
-- Data: format (MS v2? processing set / zarr?), size (antennas, channels/SPWs,
-  integration time, total GB), typical selection they plot, where it lives (local
-  disk, shared filesystem, remote kernel).
-- "Phase rms": over what (channels, time window, baselines), about what (vector
-  mean, linear fit / delay-rate removal), wrapped or unwrapped, per baseline or
-  per antenna, absolute degrees or noise-normalized.
-- "Waterfall": one baseline at a time (as I assume) or averaged; which
-  quantities (amp, phase, both); time/channel averaging; multiple SPWs stacked?
-- Flagging: which of TVFLG/SPFLG/FTFLG workflows do users actually rely on
-  (keyboard-driven? threshold flagging? "flag all antenna X at time T"?), must flags
-  be written to the MS `FLAG` column, do they need versioning/undo across
-  sessions, and must the operations be reproducible as a command list?
-- Comparison targets: what plotms operations are slow or crash for them today
-  (concrete cases beat generic targets), and what "faster" means (seconds to first
-  image? interactive re-plot?).
-- Users/environment: how many concurrent users, remote vs local browser, OS.
-- Which plot modes/views they would want to author or receive as files (feeds M1b).
-- Deadline/priority order among the four bullets.
+The preliminary plan's M4 (flagging design spike) and most of M5
+(persistence) are complete and are dropped from the roadmap.
 
-## 2. Current visplot capability relevant to HRS
+## 3. Milestones
 
-Already built (see the Part 6 handoffs for detail):
-- Raster (Time x Baseline, Frequency x Baseline, Time x Frequency/Channel) and scatter
-  panels; quantities Amplitude, Phase, Real, Imaginary, Flag fraction, Z-Score.
-- Presets: vplot, radplot, Waterfall, Z-Score; side-by-side and over/under layouts;
-  linked cursors and shared x ranges; PNG export.
-- Two-level rendering (fast local resample, backend re-query when zoomed past the
-  aggregation), decimation to a cell budget, byte-budgeted frame cache with request
-  coalescing, fused multi-partition reads (MSv4 "OPT-B"), async rendering with a busy
-  indicator.
-- Selection: Field, SPW, correlation, antenna (with Prev/Next iteration), scan,
-  time/UV range strings. Colorize-by-axis (categorical/statistical), per-antenna Z
-  readout.
-- Two backends (MSv2 and MSv4/processing set) with cross-backend parity tests;
-  remote-kernel execution path.
-- A save/restore framework (`view_state.py`, `scaling_memory.py`): a registry of
-  state units, currently holding per-quantity raster scaling; not yet wired to
-  the GUI (see `VIEW_STATE_DESIGN.md`).
-- Flag scaffolding **(verify)**: `FlagTool` (box drag; flags only at 1:1 pixel
-  resolution), `FlagDB` (pending deltas, undo stack, red overlay through the
-  render pipeline, commit on the Flag button), `ReductionContext.commit_flags()` as
-  the persistence interface (documented to call `flagdata()` for a casatasks
-  context and RADPS/AstroVIPER equivalents for others; a null context raises).
+Order is by dependency and by value to a commissioning user. Each milestone
+is delivered for both backends with a parity test, and each new GUI control
+gets a constructor / `visplot()` task argument (regenerated by
+`sync_layers`). Effort: S under a day, M one to three days, L one to two
+weeks of sessions.
 
-## 3. Requirement-by-requirement plan
+### H1. Vector averaging in raster reductions (M)
 
-### 3.1 Faster and more reliable than plotms
+Today a raster cell is the arithmetic mean of per-sample amplitude and of
+per-sample phase in degrees. Phase cells are therefore wrong when samples
+straddle +/-180 degrees, and amplitude cannot show coherent averages.
 
-**Make it testable.** Proposed acceptance criteria (numbers to be agreed with HRS):
-- *Speed:* for a defined dataset/selection set, median time to first image and to
-  re-plot after an axis change is <= 0.5x plotms (cold) and interactive (< 1 s) for
-  pan/zoom/recolor (warm). Memory no worse than plotms on the largest dataset.
-- *Reliability:* a scripted soak (>= 200 randomized interactions: axis/selection
-  changes, presets, iteration, colorize, zoom) completes with zero unhandled
-  exceptions, no hangs (watchdog), and stable memory (frame-cache budget honored,
-  no growth across repeated plots).
+- Reduce the complex visibility first, then take amplitude / phase
+  (vector); keep scalar amplitude as a selectable alternative.
+- Control: Averaging = Vector | Scalar; default Vector for Phase, Real,
+  Imaginary; default for Amplitude to be decided at implementation (vector
+  matches AIPS/plotms averaging defaults; scalar is today's behaviour).
+- Exit: synthetic test with phases at +/-179 degrees gives 180, not 0;
+  noise-only data gives vector amplitude well below scalar; MSv2 == MSv4.
 
-**Work items**
-1. Benchmark harness (`bench/`): datasets x operations x {visplot MSv2, visplot
-   MSv4, plotms}, cold/warm, median of N, recording wall time, peak RSS, and a
-   phase split (read/compute/shade/wire). Include the Z-Score cases. Emit a table
-   suitable for the HRS report. Fairness rules (same selection, same averaging,
-   plotms defaults documented).
-2. Baseline numbers on sis14 now; HSA-sized dataset when available.
-3. Reliability: real-MS regression suite in CI (today several real-MS tests only run
-   on the developer's machine); a randomized interaction soak driven through the
-   plotter's message API; keep the deadlock/race lessons as regression tests
-   (frame-cache finalizer, scaling race, force-change-to-None pattern).
-4. Failure behavior: every backend error must surface as a message in the UI, never
-   a silent blank panel or a hung busy indicator (a give-up timer exists for the
-   latter); OOM guards for very large selections (cell budget exists; add a
-   pre-flight size estimate and warning).
-5. Fix known fragilities: a rare full-suite hang was observed once and traced to
-   the cache/finalizer deadlock (fixed); keep watching for others.
-6. Performance work items from the Z-Score handoff (subsampled reference, shared
-   reference cache) feed this requirement.
+### H2. Windowed statistics: phase rms, coherence, difference from running mean (L)
 
-**Risks:** no HSA data yet; plotms behavior on huge data may be poor for reasons
-unrelated to visplot, making "faster" easy on some cases and unreachable on others
-(disk-bound reads).
+One reduction framework, several quantities.
 
-### 3.2 Waterfall plot
+- `PHASE_RMS` (degrees), `COHERENCE` (|vector mean| / scalar mean),
+  `AMP_VDIFF` (amplitude of sample minus running vector mean), `PHASE_DIFF`
+  (|phase minus phase of running vector mean|).
+- Window controls: time length and channel count; option to remove a linear
+  phase slope within the window.
+- Raster: quantities available on Time x Baseline and Time x Frequency.
+- Scatter: aggregated frame of windowed values vs time, vs frequency, and vs
+  baseline length (UV distance). Precedent for aggregated scatter frames:
+  the Z-Score staging path.
+- Presets: `phaserms-time`, `phaserms-freq`, `phaserms-uvdist`.
+- Exit: values match an independent numpy computation on synthetic data
+  with known phase noise, including a wrap case and a pure-delay case
+  (slope removal on gives near zero, off gives the analytic value); flagged
+  samples excluded; parity.
 
-**Today:** the `Waterfall` preset shows a Time x Channel raster of Amplitude in
-Over/Under layout, with a scatter below. As I understand the raster rules, a
-Time x Frequency raster of a *single* baseline needs an explicit baseline
-selection; without one the raster averages over baselines (the screenshot shows
-that averaged form).
+### H3. Baseline iteration and ordering (M)
 
-**Gaps and work**
-1. **Per-baseline waterfall with iteration.** A baseline picker with Prev/Next (same
-   pattern as the antenna iteration), accepting antenna pairs; status line shows
-   "Baseline N/M: A1&A2". (M)
-2. **Quantity choice:** Amplitude/Phase/Real/Imag/Flag already exist as raster
-   quantities; make Phase waterfall a first-class preset with a cyclic colormap.
-3. **Averaging controls:** time and channel averaging factors (with the
-   decimation logic accounting for them); important for large channel counts.
-4. **Frequency axis:** channel index vs frequency (GHz); multiple SPWs/IFs (the
-   channel axis is only well defined for one SPW today, and is relabelled in that
-   case), stacked or iterated per SPW.
-5. **Flag overlay** on the waterfall (uses the Flag quantity / overlay path), needed
-   for the flagging workflow.
-6. **Mode variants:** waterfall flavors that only recombine existing behavior
-   (quantity, layout, colormap/scaling, averaging once it exists) should be
-   authored as modes (M1b) rather than new presets in code.
-7. **Acceptance:** for a chosen baseline/SPW on the HSA dataset, the waterfall renders
-   within the speed target; iteration through all baselines is fast because of the
-   frame cache; values match a direct numpy computation on that baseline.
+- Baseline Prev/Next using the existing Field/SPW/Antenna iteration
+  pattern, status "Baseline n/N: A&B". With an antenna selected, step only
+  through that antenna's baselines.
+- Time x Baseline raster: order baselines by id (now) or by length.
+- Phase waterfall preset with a cyclic colormap.
+- Exit: stepping through all baselines of the test MS shows each once;
+  sorted order matches lengths computed from antenna positions.
 
-### 3.3 Phase rms vs time and frequency
+### H4. All-baseline Time x Frequency raster (FTFLG view) (M)
 
-**Nothing exists.** The interpretations, in order of what I would build first:
-- **A. Rms across channels, per time (plotted vs time)** and **rms across time,
-  per channel (plotted vs frequency)**, per baseline. This is what the existing
-  raster axis combinations give almost for free once the quantity exists:
-  Time x Baseline reduces over frequency; Frequency x Baseline reduces over time.
-- **B. Rms across baselines/antennas, per (time, channel) cell**, a Time x Frequency
-  map of phase scatter across the array. The current raster rule (Time x
-  Frequency requires a single baseline) would need to allow multi-baseline
-  reduction for this quantity.
-- **C. Local-window rms** (sliding window in time and/or frequency).
+- Allow baseline to be a reduced dimension for Time x Frequency / Channel.
+  Reduction choices: vector mean, scalar mean, and max (max finds RFI on a
+  few baselines without the dilution the AIPS documentation warns about).
+- Flags drawn on this view apply to all selected baselines, and the pending
+  flag count says so before commit.
+- Exit: equals the mean over per-baseline waterfalls computed
+  independently; a box flags the expected sample count across baselines.
 
-**Statistic.** Phase is circular, so a plain standard deviation of wrapped phase is
-wrong near +/-180 deg. Proposed default: rms of the wrapped residual about the
-vector-mean phase, computed in two cheap passes (mean unit phasor per group, then
-mean squared wrapped residual); equivalently a circular standard deviation from
-the mean resultant length. Both are streaming reductions (no medians), so this
-should be **as fast as Amplitude**, unlike Z-Score. Options to decide with users:
-optional linear-trend (delay/rate) removal before the rms; amplitude weighting;
-absolute degrees vs normalization by the expected thermal phase noise (1/SNR),
-which makes values comparable across baselines with different sensitivity.
+### H5. Flag scope and selection conveniences (M-L)
 
-**Work items**
-1. Define and document the statistic (section 1 answers).
-2. `Axis.PHASE_RMS`: axis metadata; a `_raster_2d` branch in both backends
-   (custom reduction instead of mean/max); flag-aware; parity test MSv2 == MSv4;
-   tests against numpy on synthetic data including wrapped phases straddling
-   +/-180 deg and noise-only data.
-3. Scatter form (points of rms vs time, and rms vs frequency): the scatter pipeline
-   is per-sample, so this needs an aggregated frame (precedent: the Z-Score staging
-   and `_finalize_zscore_frame`); simplest is to flatten the raster result into
-   (x, baseline, value) rows.
-4. Presets/UI: `phaserms-time` and `phaserms-freq` presets; colorbar in degrees;
-   a threshold-scaling default consistent with the Z-Score work.
-5. Interaction with Z-Score: consider separate amplitude-Z and phase-Z (Z-Score
-   backlog item 6), since phase problems and gain problems have different causes.
-6. **Acceptance:** results agree with an independent numpy/CASA computation on a
-   reference dataset to a stated tolerance; runtime within 1.5x Amplitude.
+- Extend options added to the Flagging panel: all baselines to an antenna
+  of the boxed baseline(s); all baselines; all SPWs; whole scan; all
+  fields. (`extend_spw` and `extend_scan` already exist in the model.)
+- Row / column selection: click a time, a baseline, or a channel to select
+  the whole line of the image.
+- Clip on the displayed quantity (above / below / outside range) for any
+  raster quantity including the H2 ones, with the existing preview.
+- User-settable reason text stored with each operation.
+- Exit: each scope produces exactly the expected flag array on a scratch
+  copy, survives undo/redo, JSON round trip and commit; the description
+  report states the scope in words.
 
-### 3.4 Flagging like AIPS TVFLG, SPFLG, FTFLG
+### H6. Averaged line plots for commissioning (M-L)
 
-*(The user plans to add flagging after GUI feature testing; my recommendation on
-timing is in section 5.)* My understanding of the AIPS tools, **to be confirmed with
-HRS users**: TVFLG is a time x baseline grid display for editing; SPFLG is a
-channel x time display for editing one baseline's spectra; FTFLG is a
-frequency/time-oriented editor (details to confirm). visplot's existing views
-already correspond: Baseline x Time raster (TVFLG-like), Time x Channel waterfall
-per baseline (SPFLG-like), Frequency x Baseline / Time x Frequency (FTFLG-like,
-pending confirmation).
+- Time and channel averaging controls for scatter (vector or scalar).
+- Presets: spectrum (amplitude and phase vs frequency, scan-averaged, per
+  baseline, SPWs across the x axis) and time series (amplitude and phase vs
+  time, channel-averaged, per baseline), each as a stacked pair.
+- Confirm autocorrelations can be selected and plotted.
+- Exit: averaged values match numpy; presets work with baseline and antenna
+  iteration.
 
-**What to build (gap list)**
-1. **Flag scope semantics.** A raster cell at a decimated zoom stands for many
-   samples. Today's tool only flags at 1:1 pixel resolution, which is safe but
-   awkward for TVFLG-style editing of a whole baseline-time cell. Define exactly
-   what a drawn box means at any zoom (cells x channels x pols), show the number of
-   samples that would be flagged before applying, and allow "flag cell across
-   all channels" style operations.
-2. **Scopes and targets:** displayed polarization vs all polarizations; single
-   baseline vs all baselines of an antenna at a time; channel across all times; time
-   across all baselines.
-3. **Tools driven by statistics:** "flag everything above the cutoff" using
-   Z-Score (the n-aware cutoff) or an amplitude threshold, with preview, per-baseline
-   or global scope, and undo. This is where Z-Score and phase-rms views pay off.
-4. **Undo/redo and versions:** pending-delta undo exists; add flag versions
-   (equivalent of CASA flagmanager save/restore) so a session can be rolled back
-   after commit.
-5. **Reproducibility:** export the applied operations as a flag command list
-   (flagdata-style), with a dry-run summary (samples newly flagged, percent of
-   data). Important for pipelines and for auditing.
-6. **Persistence:** define and implement `commit_flags` per context and data format
-   (MSv2 -> `FLAG` column; MSv4/zarr -> equivalent), always operable on a copy for
-   testing; concurrency/locking; the Z-Score/frame caches must be invalidated
-   (`cache_generation`) after a commit since flags change the reference population.
-7. **Workflow polish:** keyboard-driven operation if HRS users need it (AIPS style),
-   linked panels updating after each flag, iteration through baselines while
-   flagging.
-8. **Safety:** confirmation for destructive commits, never write during tests
-   except on scratch copies.
-9. **Acceptance:** scripted flagging operations produce exactly the expected flag
-   array (compared to an independent computation), survive undo/redo and
-   versioning, and the resulting MS is readable by CASA/AIPS-side tools.
+### H7. Antenna x antenna matrix (S-M)
 
-## 4. Phased roadmap
+- Raster of ANTENNA1 x ANTENNA2 with any raster quantity, reduced over time
+  and frequency. Lowest priority of the interactive items.
 
-| # | Milestone | Depends on | Effort | Exit criteria |
-|---|---|---|---|---|
-| M0 | Requirements clarification + datasets | - | S (mostly waiting) | Section 1 answered; an HSA-sized dataset available |
-| M1 | Benchmark harness + baseline numbers vs plotms | M0 (partly) | M | Table of speed/memory results; targets agreed |
-| M1b | View save/restore + JSON plot modes (`VIEW_STATE_DESIGN.md` V2-V4): server-held units, browser-side restore path, mode loader with validation, the four presets converted to modes | M0 (mode wishlist) | M-L | A mode file reproduces each existing preset exactly (parity test); internal users can author, save and load a mode without code changes |
-| M2 | Waterfall completion (3.2) | M1b (framework); per-baseline selection/averaging are code, not modes | M | Per-baseline iteration, averaging, phase waterfall, tests; composable variants authored as modes |
-| M3 | Phase rms (3.3) | M0 (definition) | M-L | Raster + scatter, both backends, parity + numpy tests |
-| M4 | Flagging design spike + non-destructive slice (section 5) | M2 | M | Written flag-semantics spec; overlay/undo/threshold flag on decimated cells, in memory |
-| M5 | Flagging persistence + AIPS-style workflows (3.4) | M4, M0 | L | Commit to scratch copies, versions, command export |
-| M6 | Hardening and release | all | M | Soak test, real-MS CI, user guide, performance targets met |
+### H8. Static output and hardening (M, ongoing)
 
-Z-Score optimization (`ZSCORE_OPTIMIZATION_HANDOFF.md`) slots in after M1 (it
-needs the same benchmark data) and can run alongside M2-M3.
+- Static (PNG at least) output for each view above, from the task
+  interface without a browser where possible; see `task-hardcopy-output.md`
+  and `visplot_export_handoff.md` for the existing path.
+- User guide section: the commissioning workflow (survey with Z-Score /
+  phase rms, confirm on waterfall, flag with scope, commit).
+- Carry the large-data items from `visplot_flagging_follow_on.md` as time
+  allows; they bear on "faster and more reliable".
 
-Suggested order rationale: M1 first (cheap, decision-relevant); then M1b, because
-every later view requirement gets cheaper once modes can be authored as files and
-because it proves the framework on real use before anything depends on it; then M2
-and M3 (what users look at while flagging); M4 starts as soon as M2's waterfall
-exists. Flagging (M4/M5) stays code: modes can describe the *views* a flagging
-workflow uses, not the flagging operations.
+Suggested sequence: H1, H2, H3, H4, H5, H6, H7, with H8 items picked up as
+each view lands. H3 can be taken before H2 if a quick visible result is
+wanted; it has no dependency on H1 or H2.
 
-## 5. When to add flagging
+## 4. Validation without stakeholders
 
-I recommend starting it **earlier than "after all feature testing"**, in two
-stages:
-- **Stage 1 (early, in parallel with M3): design and a non-destructive slice.**
-  Reasons: (a) it is the actual purpose of the other three bullets, so feedback from
-  HRS users will be far more informative once a view-to-flag loop exists, even
-  in memory; (b) its requirements constrain earlier decisions: how decimated
-  cells map to samples, how caches are invalidated, whether Z-Score references
-  must be recomputed after flagging; discovering these late means rework in the
-  raster/backends; (c) much of the scaffolding already exists, so the risk is
-  design, not volume; (d) reproducibility (command export) is easier to design in
-  than to retrofit.
-- **Stage 2 (after GUI feature testing): disk persistence.** Keeps the destructive
-  part behind evidence that the views and semantics are right, as you planned.
-  Until then flags exist only as pending deltas and overlays, and nothing is
-  written.
+- Synthetic data with analytically known answers for every new statistic.
+- The TW Hya test MS for end-to-end and parity checks. It is ALMA data with
+  43 antennas and linear polarizations, so it does not exercise VLBI
+  conditions (few antennas, long baselines, residual delay and rate, many
+  IFs).
+- **Needed: a VLBI-style test MS**, ideally a public VLBA data set
+  converted to MSv2, before H2's defaults and H6's presets are frozen.
+  Sourcing one is an open action.
+- AIPS and CASA remain the reference for "what should this plot look like";
+  where practical, compare a visplot view with the corresponding AIPS or
+  plotms plot of the same data.
 
-## 6. Cross-cutting
-
-- **Documentation:** a user guide with the HRS workflows (spot with Z-Score /
-  phase-rms, confirm on waterfall, flag), and architecture notes for maintainers
-  (the hazards list in the Z-Score handoff is a starting point).
-- **Testing:** keep the synthetic suite fast; add real-MS CI; mutation-check new
-  tests; drive `update_axes` the way the plotter does.
-- **Compatibility:** MSv2 and MSv4 parity on every new quantity; remote-kernel path
-  tested for anything that adds array attributes or new backend methods.
-- **Parity with plotms features HRS actually uses:** collect from users; do not
-  assume.
-
-## 7. Risks
+## 5. Risks
 
 | Risk | Mitigation |
 |---|---|
-| Wrong phase-rms definition | Agree the statistic (3.3) before coding; ship the general reduction machinery so variants are cheap |
-| No large dataset; performance claims unproven | M0/M1 first; synthetic benchmarks are only indicative |
-| Flag persistence bugs corrupt data | Scratch copies only in testing; commit dry-run; versions/undo before enabling on originals |
-| Decimated-cell flagging ambiguity | Explicit semantics + sample-count preview (section 3.4 item 1) |
-| Real-MS tests not in CI | Add real-MS CI (M1/M6) |
-| M1b delays the first visible HRS feature by roughly the cost of the browser-side restore path | Do the small server-held units first (quick wins), time-box the browser-side path, keep M2's code-only items (per-baseline selection, averaging) independent of it so they can start in parallel |
-| Mode files become a public contract once internal users author them | Freeze unit keys/schema before authoring starts; saved-file fixtures per released schema; `requires` capability check so a mode fails cleanly on a build lacking a feature |
-| Users author invalid or dataset-specific modes | Validation with clear messages; templates ("automatic", rules) instead of hardcoded antennas/SPWs (`VIEW_STATE_DESIGN.md` 7A) |
-| Requirements grow after first demo | Written acceptance criteria per requirement, agreed up front |
+| Phase-rms definition differs from what HRS users meant | Window, detrending and coherence are options on one framework, so a different definition is a parameter change, not a rewrite |
+| No VLBI-like data during development | Synthetic delay/rate cases now; source a public VLBA data set (section 4) |
+| Scope extensions flag far more than the user intended (the FTFLG warning) | Sample counts and scope stated in the preview and in the report before commit; backups on commit already exist |
+| Changing raster averaging to vector alters existing plots | Explicit control, documented default, and a test that pins both behaviours |
+| Large-data performance of new windowed quantities | Streaming sums (no medians); reuse of the frame cache; measured on TW Hya all-fields before defaults are set |
 
-## 8. Immediate next steps
+## 6. Tracking
 
-1. Send section 1 to the HRS contact.
-2. Time the two rasters (Amplitude vs Z-Score) on the real MS and record plotms
-   equivalents (M1 starter; see the Z-Score handoff section 3).
-3. Ask the HRS contact which plot modes they would want to author or receive (feeds
-   M1b's scope), and decide whether to start M1b's small server-held units now.
-4. Decide whether M2's code-only items (per-baseline selection, averaging) start in
-   parallel with M1b; they do not depend on it.
+| Date | `main` | Note |
+|---|---|---|
+| 2026-10-02 | `3b5eb82` | Survey and revision 2 of this plan written |

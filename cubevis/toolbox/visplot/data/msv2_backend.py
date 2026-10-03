@@ -85,6 +85,9 @@ from .reader import (
 )
 from . import _scatter_render
 from ._raster_merge import merge_raster_partitions
+from ._spw_identity import (
+    build_ambiguous_spw_map, make_disambiguating_ident,
+)
 from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
 
@@ -202,6 +205,15 @@ class MSv2Backend(XArrayReader):
                 raise RuntimeError(
                     f"xarray-ms failed to open {self._path!r}: {exc} <{type(exc)}>"
                 ) from exc
+            # Same-named spectral windows (EVLA: Subband:0..7 in every
+            # baseband pair) would otherwise collapse to one identity --
+            # see _spw_identity's docstring.  Installed on the instance,
+            # shadowing the pure static method, which stays as is: every
+            # caller reaches it through the instance.
+            self._partition_spw_ident = make_disambiguating_ident(
+                type(self)._partition_spw_ident,
+                build_ambiguous_spw_map(self._path),
+            )
 
         n = sum(1 for _ in self._iter_visibility_partitions())
         log.debug("MSv2Backend: opened — %d visibility partition(s)", n)
@@ -405,8 +417,7 @@ class MSv2Backend(XArrayReader):
             Axis.CHANNEL, dim=dim, is_index=True, context=context,
         )
 
-    @classmethod
-    def _partition_spw_id(cls, ds) -> "Optional[int]":
+    def _partition_spw_id(self, ds) -> "Optional[int]":
         """SPW id of a partition, or ``None`` if it does not declare one.
 
         Tries ``spectral_window_id`` then ``DATA_DESC_ID`` -- the same
@@ -414,7 +425,7 @@ class MSv2Backend(XArrayReader):
         stores and xradio-written stores disagree on which key
         carries it.
         """
-        ident, _kind = cls._partition_spw_ident(ds)
+        ident, _kind = self._partition_spw_ident(ds)
         return ident
 
     @staticmethod
@@ -1028,13 +1039,18 @@ class MSv2Backend(XArrayReader):
             if ext is not None:
                 x0_all.append(ext[0]); x1_all.append(ext[1])
                 y0_all.append(ext[2]); y1_all.append(ext[3])
-        full_x_range = (min(x0_all), max(x1_all)) if x0_all else (0.0, 1.0)
-        full_y_range = (min(y0_all), max(y1_all)) if y0_all else (0.0, 1.0)
+        # nonzero_span: a constant X or Y (one sample / one time / one
+        # channel / constant quantity) gives a zero-width extent, which
+        # datashader divides by -- see _scatter_render.nonzero_span.
+        full_x_range = _scatter_render.nonzero_span(
+            *((min(x0_all), max(x1_all)) if x0_all else (0.0, 1.0)))
+        full_y_range = _scatter_render.nonzero_span(
+            *((min(y0_all), max(y1_all)) if y0_all else (0.0, 1.0)))
 
         xr_ = x_range if x_range is not None else full_x_range
         yr_ = y_range if y_range is not None else full_y_range
-        x0, x1 = (min(xr_), max(xr_))
-        y0, y1 = (min(yr_), max(yr_))
+        x0, x1 = _scatter_render.nonzero_span(min(xr_), max(xr_))
+        y0, y1 = _scatter_render.nonzero_span(min(yr_), max(yr_))
 
         canvas_w, canvas_h = _scatter_render.compute_canvas_size(
             dataframes, layers, x0, x1, y0, y1, width, height,

@@ -101,6 +101,12 @@ try:
 except ImportError:
     HAS_DATASHADER = False
 
+# Serialise datashader's numba-parallel kernels across panel threads
+# (see _numba_gate's docstring: concurrent entry aborts the process).
+if HAS_DATASHADER:
+    from . import _numba_gate
+    _numba_gate.install()
+
 _DEFAULT_SCALING = "eq_hist"
 
 # Two-level (Level-1/Level-2) rendering (2026-09): default REF_SCALE per

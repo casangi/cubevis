@@ -278,6 +278,12 @@ try:
 except ImportError:
     HAS_DATASHADER = False
 
+# Serialise datashader's numba-parallel kernels across panel threads
+# (see _numba_gate's docstring: concurrent entry aborts the process).
+if HAS_DATASHADER:
+    from . import _numba_gate
+    _numba_gate.install()
+
 
 # ---------------------------------------------------------------------------
 # Module-level helpers (shared by raster and scatter)

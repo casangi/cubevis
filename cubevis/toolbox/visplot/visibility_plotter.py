@@ -4789,7 +4789,12 @@ for (let i = 0; i < cols.length; i++) {
         preselected = _parse_spw_string(self._spw_str, meta)
         self._spw_source = ColumnDataSource(data=dict(
             ident   = [s.spw_id for s in spws],
-            name    = [s.name or str(s.spw_id) for s in spws],
+            # Numeric id shown with the name: window names are not
+            # unique (EVLA repeats Subband:0..7 per baseband), so the
+            # name alone can't tell two rows apart.
+            name    = [(f"{s.spw_id}: {s.name}"
+                        if s.name and isinstance(s.spw_id, int)
+                        else (s.name or str(s.spw_id))) for s in spws],
             freq    = [f"{(s.centre_freq_hz - s.bandwidth_hz / 2) / 1e9:.2f}"
                        f"–{(s.centre_freq_hz + s.bandwidth_hz / 2) / 1e9:.2f}"
                        if s.bandwidth_hz else "" for s in spws],

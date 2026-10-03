@@ -74,6 +74,12 @@ try:
 except ImportError:
     HAS_DATASHADER = False
 
+# Serialise datashader's numba-parallel kernels across panel threads
+# (see _numba_gate's docstring: concurrent entry aborts the process).
+if HAS_DATASHADER:
+    from . import _numba_gate
+    _numba_gate.install()
+
 _DEFAULT_CMAP = [
     "#0d0887", "#46039f", "#7201a8", "#9c179e", "#bd3786",
     "#d8576b", "#ed7953", "#fb9f3a", "#fdcb26", "#f0f921",

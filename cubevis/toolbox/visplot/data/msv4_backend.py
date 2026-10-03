@@ -1109,13 +1109,18 @@ class MSv4Backend(XArrayReader):
             if ext is not None:
                 x0_all.append(ext[0]); x1_all.append(ext[1])
                 y0_all.append(ext[2]); y1_all.append(ext[3])
-        full_x_range = (min(x0_all), max(x1_all)) if x0_all else (0.0, 1.0)
-        full_y_range = (min(y0_all), max(y1_all)) if y0_all else (0.0, 1.0)
+        # nonzero_span: a constant X or Y (one sample / one time / one
+        # channel / constant quantity) gives a zero-width extent, which
+        # datashader divides by -- see _scatter_render.nonzero_span.
+        full_x_range = _scatter_render.nonzero_span(
+            *((min(x0_all), max(x1_all)) if x0_all else (0.0, 1.0)))
+        full_y_range = _scatter_render.nonzero_span(
+            *((min(y0_all), max(y1_all)) if y0_all else (0.0, 1.0)))
 
         xr_ = x_range if x_range is not None else full_x_range
         yr_ = y_range if y_range is not None else full_y_range
-        x0, x1 = (min(xr_), max(xr_))
-        y0, y1 = (min(yr_), max(yr_))
+        x0, x1 = _scatter_render.nonzero_span(min(xr_), max(xr_))
+        y0, y1 = _scatter_render.nonzero_span(min(yr_), max(yr_))
 
         canvas_w, canvas_h = _scatter_render.compute_canvas_size(
             dataframes, layers, x0, x1, y0, y1, width, height,

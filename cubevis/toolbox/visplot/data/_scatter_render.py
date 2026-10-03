@@ -58,6 +58,12 @@ try:
 except ImportError:
     HAS_DATASHADER = False
 
+# Serialise datashader's numba-parallel kernels across panel threads
+# (see _numba_gate's docstring: concurrent entry aborts the process).
+if HAS_DATASHADER:
+    from .. import _numba_gate
+    _numba_gate.install()
+
 try:
     from scipy.ndimage import minimum_filter, maximum_filter
     HAS_SCIPY = True
@@ -587,6 +593,34 @@ def _id_grid_size(
     h = max(1, int(round(math.sqrt(max_cells / max(aspect, 1e-9)))))
     w = max(1, int(round(max_cells / h)))
     return w, h
+
+
+def nonzero_span(lo, hi):
+    """Return ``(lo, hi)`` guaranteed finite and of non-zero width.
+
+    Datashader computes ``n / (end - start)`` per axis, so a zero-width
+    range raises ``ZeroDivisionError`` (and a NaN one produces garbage).
+    That is reachable whenever a scatter layer's X or Y is constant in the
+    current selection: one sample, one distinct time or channel, or a
+    constant quantity.  Such an axis gets a small symmetric margin around
+    its single value instead, so the data draws as a point/line in the
+    middle of the panel rather than crashing the render.
+
+    A genuine (non-degenerate) range is returned unchanged.  The margin is
+    5% of the value for ordinary magnitudes and 0.5 units for zero or for
+    large offset-style axes (epoch times, Hz), where a relative margin
+    would be absurdly wide.
+    """
+    lo, hi = float(lo), float(hi)
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        return (0.0, 1.0)
+    if lo > hi:
+        lo, hi = hi, lo
+    if hi > lo:
+        return (lo, hi)
+    mag = abs(lo)
+    pad = 0.05 * mag if 1e-12 < mag < 1e3 else 0.5
+    return (lo - pad, lo + pad)
 
 
 def _empty_render(canvas_h: int, canvas_w: int, reason: str) -> ScatterLayerRender:

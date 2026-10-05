@@ -27,6 +27,25 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+AVERAGING_MODES = ("scalar", "vector")
+"""Valid values of ``SelectionSpec.averaging``."""
+
+
+def normalize_averaging(value) -> str:
+    """Return *value* as a member of ``AVERAGING_MODES``.
+
+    ``None`` / empty means the default (``"scalar"``); anything else
+    unrecognised raises ``ValueError`` naming the valid choices.
+    """
+    if value is None or value == "":
+        return "scalar"
+    v = str(value).strip().lower()
+    if v not in AVERAGING_MODES:
+        raise ValueError(
+            f"averaging must be one of {AVERAGING_MODES}; got {value!r}")
+    return v
+
+
 @dataclass
 class SelectionSpec:
     """Explicit, portable representation of a data selection.
@@ -61,6 +80,9 @@ class SelectionSpec:
     data_column:
         Which visibility column to read: ``'DATA'``, ``'CORRECTED'``,
         or ``'MODEL'``.  Defaults to ``'DATA'``.
+    averaging:
+        How raster cells combine the samples they cover: ``'scalar'``
+        (default) or ``'vector'``.  See the field's own docstring.
     """
 
     # Selection axes ---------------------------------------------------- #
@@ -118,6 +140,30 @@ class SelectionSpec:
 
     data_column: str = "DATA"
     """Visibility column: ``'DATA'``, ``'CORRECTED'``, or ``'MODEL'``."""
+
+    averaging: str = "scalar"
+    """How a raster cell combines the samples it covers (HRS H1, 2026-10).
+
+    * ``"scalar"`` (default) -- Amplitude is the mean of the per-sample
+      amplitudes (the behaviour before this field existed).  Phase is the
+      circular mean: the direction of the mean *unit* phasor, every sample
+      weighted equally.
+    * ``"vector"`` -- the complex visibilities are averaged first and
+      Amplitude / Phase are taken from that mean.  Amplitude then drops
+      where the samples are incoherent (noise, residual delay or rate),
+      which is what AIPS and plotms users expect of an averaged
+      visibility; Phase is weighted by amplitude.
+
+    Real and Imaginary are linear, so both modes give the same value.
+    Flag fraction and Z-Score ignore this field.  In neither mode is Phase
+    the arithmetic mean of wrapped per-sample phases (which gives ~0 deg
+    for samples straddling +/-180 deg): that was a bug, not a mode.
+
+    Not a row constraint: excluded from ``is_empty()``, preserved by
+    ``copy()``.  It is part of the frame-cache fingerprint like every
+    other field; scatter frames do not depend on it, so changing it costs
+    one scatter re-read.  Use ``AVERAGING_MODES`` to validate.
+    """
 
     cache_generation: int = 0
     """Data-freshness token -- NOT a constraint on which rows are selected.
@@ -189,6 +235,7 @@ class SelectionSpec:
             channel_range=self.channel_range,
             correlation=list(self.correlation) if self.correlation is not None else None,
             data_column=self.data_column,
+            averaging=self.averaging,
             cache_generation=self.cache_generation,
             pending_version=self.pending_version,
             flag_view=self.flag_view,

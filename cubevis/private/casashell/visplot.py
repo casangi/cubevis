@@ -67,6 +67,7 @@ def _visplot_t(
         uvrange: str = '',
         correlation: str = '',
         datacolumn: str = 'data',
+        averaging: str = 'scalar',
         layout: str = 'side',
         kind: Optional[str] = None,
         preset: Optional[str] = None,
@@ -106,6 +107,7 @@ def _visplot_t(
         uvrange = uvrange,
         correlation = correlation,
         datacolumn = datacolumn,
+        averaging = averaging,
         layout = layout,
         kind = kind,
         preset = preset,
@@ -187,6 +189,12 @@ class _visplot:
         Comma-separated correlation labels (``"XX,YY"``).  Default: all.
     datacolumn : str
         Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.
+    averaging : str
+        How raster cells combine the samples they cover: ``"scalar"``
+        (default; Amplitude is the mean of the amplitudes, Phase the
+        circular mean) or ``"vector"`` (average the complex visibility,
+        then take Amplitude / Phase -- drops where samples are
+        incoherent).  Also the sidebar's "Averaging" control.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -309,6 +317,7 @@ class _visplot:
         'uvrange': 'UV range string.',
         'correlation': 'Comma-separated correlation labels (``"XX,YY"``).',
         'datacolumn': 'Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.',
+        'averaging': 'How raster cells combine the samples they cover: ``"scalar"`` (default; Amplitude is the mean of the amplitudes, Phase the circular mean) or ``"vector"`` (average the complex visibility, then take Amplitude / Phase -- drops where samples are incoherent).',
         'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), or ``"over"`` (both panels, one above the other).',
         'kind': 'Which panel kind leads: ``"raster"`` (default when omitted) or ``"scatter"``.',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
@@ -349,6 +358,7 @@ class _visplot:
         'uvrange': '',
         'correlation': '',
         'datacolumn': 'data',
+        'averaging': 'scalar',
         'layout': 'side',
         'kind': None,
         'preset': None,
@@ -424,6 +434,7 @@ class _visplot:
             'uvrange': 'str',
             'correlation': 'str',
             'datacolumn': 'str',
+            'averaging': 'str',
             'layout': 'str',
             'kind': 'Optional[str]',
             'preset': 'Optional[str]',
@@ -716,6 +727,21 @@ class _visplot:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
         self.__do_inp_output(
             '%-23.23s = %s%-23s%s' % ('datacolumn', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __averaging_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('averaging', self._arg_default['averaging'])
+        default = self._arg_default['averaging']
+        desc    = self._arg_description.get('averaging', '')
+        if self.__validate_('averaging', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('averaging', pre, self.__to_string_(value), post),
             desc, fmt,
         )
 
@@ -1096,6 +1122,7 @@ class _visplot:
         if 'uvrange' in glb: del glb['uvrange']
         if 'correlation' in glb: del glb['correlation']
         if 'datacolumn' in glb: del glb['datacolumn']
+        if 'averaging' in glb: del glb['averaging']
         if 'layout' in glb: del glb['layout']
         if 'kind' in glb: del glb['kind']
         if 'preset' in glb: del glb['preset']
@@ -1136,6 +1163,7 @@ class _visplot:
         self.__uvrange_inp()
         self.__correlation_inp()
         self.__datacolumn_inp()
+        self.__averaging_inp()
         self.__layout_inp()
         self.__kind_inp()
         self.__preset_inp()
@@ -1200,6 +1228,7 @@ class _visplot:
         _invocation_parameters['uvrange'] = glb.get('uvrange', self._arg_default['uvrange'])
         _invocation_parameters['correlation'] = glb.get('correlation', self._arg_default['correlation'])
         _invocation_parameters['datacolumn'] = glb.get('datacolumn', self._arg_default['datacolumn'])
+        _invocation_parameters['averaging'] = glb.get('averaging', self._arg_default['averaging'])
         _invocation_parameters['layout'] = glb.get('layout', self._arg_default['layout'])
         _invocation_parameters['kind'] = glb.get('kind', self._arg_default['kind'])
         _invocation_parameters['preset'] = glb.get('preset', self._arg_default['preset'])
@@ -1256,6 +1285,7 @@ class _visplot:
             uvrange = _UNSET,
             correlation = _UNSET,
             datacolumn = _UNSET,
+            averaging = _UNSET,
             layout = _UNSET,
             kind = _UNSET,
             preset = _UNSET,
@@ -1305,6 +1335,7 @@ class _visplot:
             uvrange,
             correlation,
             datacolumn,
+            averaging,
             layout,
             kind,
             preset,
@@ -1371,6 +1402,9 @@ class _visplot:
             _invocation_parameters['datacolumn'] = \
                 datacolumn if datacolumn is not _UNSET \
                 else glb.get('datacolumn', self._arg_default['datacolumn'])
+            _invocation_parameters['averaging'] = \
+                averaging if averaging is not _UNSET \
+                else glb.get('averaging', self._arg_default['averaging'])
             _invocation_parameters['layout'] = \
                 layout if layout is not _UNSET \
                 else glb.get('layout', self._arg_default['layout'])
@@ -1469,6 +1503,8 @@ class _visplot:
                 glb.get('correlation', self._arg_default['correlation'])
             _invocation_parameters['datacolumn'] = \
                 glb.get('datacolumn', self._arg_default['datacolumn'])
+            _invocation_parameters['averaging'] = \
+                glb.get('averaging', self._arg_default['averaging'])
             _invocation_parameters['layout'] = \
                 glb.get('layout', self._arg_default['layout'])
             _invocation_parameters['kind'] = \
@@ -1549,6 +1585,7 @@ class _visplot:
                     'uvrange=' + repr(_invocation_parameters['uvrange']),
                     'correlation=' + repr(_invocation_parameters['correlation']),
                     'datacolumn=' + repr(_invocation_parameters['datacolumn']),
+                    'averaging=' + repr(_invocation_parameters['averaging']),
                     'layout=' + repr(_invocation_parameters['layout']),
                     'kind=' + repr(_invocation_parameters['kind']),
                     'preset=' + repr(_invocation_parameters['preset']),
@@ -1588,6 +1625,7 @@ class _visplot:
                 uvrange = _invocation_parameters['uvrange'],
                 correlation = _invocation_parameters['correlation'],
                 datacolumn = _invocation_parameters['datacolumn'],
+                averaging = _invocation_parameters['averaging'],
                 layout = _invocation_parameters['layout'],
                 kind = _invocation_parameters['kind'],
                 preset = _invocation_parameters['preset'],

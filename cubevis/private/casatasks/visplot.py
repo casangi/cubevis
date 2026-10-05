@@ -57,6 +57,7 @@ def _validate_params(
         uvrange,
         correlation,
         datacolumn,
+        averaging,
         layout,
         kind,
         preset,
@@ -97,6 +98,7 @@ def _validate_params(
         'uvrange': 'str',
         'correlation': 'str',
         'datacolumn': 'str',
+        'averaging': 'str',
         'layout': 'str',
         'kind': 'Optional[str]',
         'preset': 'Optional[str]',
@@ -195,6 +197,7 @@ def _validate_params(
     _check('uvrange', uvrange, _type_map['uvrange'])
     _check('correlation', correlation, _type_map['correlation'])
     _check('datacolumn', datacolumn, _type_map['datacolumn'])
+    _check('averaging', averaging, _type_map['averaging'])
     _check('layout', layout, _type_map['layout'])
     _check('kind', kind, _type_map['kind'])
     _check('preset', preset, _type_map['preset'])
@@ -235,6 +238,7 @@ def _visplot_t(
         uvrange: str = '',
         correlation: str = '',
         datacolumn: str = 'data',
+        averaging: str = 'scalar',
         layout: str = 'side',
         kind: Optional[str] = None,
         preset: Optional[str] = None,
@@ -274,6 +278,7 @@ def _visplot_t(
         uvrange = uvrange,
         correlation = correlation,
         datacolumn = datacolumn,
+        averaging = averaging,
         layout = layout,
         kind = kind,
         preset = preset,
@@ -359,6 +364,12 @@ class _visplot:
         Comma-separated correlation labels (``"XX,YY"``).  Default: all.
     datacolumn : str
         Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.
+    averaging : str
+        How raster cells combine the samples they cover: ``"scalar"``
+        (default; Amplitude is the mean of the amplitudes, Phase the
+        circular mean) or ``"vector"`` (average the complex visibility,
+        then take Amplitude / Phase -- drops where samples are
+        incoherent).  Also the sidebar's "Averaging" control.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -481,6 +492,7 @@ class _visplot:
             uvrange: str = '',
             correlation: str = '',
             datacolumn: str = 'data',
+            averaging: str = 'scalar',
             layout: str = 'side',
             kind: Optional[str] = None,
             preset: Optional[str] = None,
@@ -533,6 +545,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             uvrange = uvrange,
             correlation = correlation,
             datacolumn = datacolumn,
+            averaging = averaging,
             layout = layout,
             kind = kind,
             preset = preset,
@@ -573,6 +586,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'uvrange=' + repr(uvrange),
                 'correlation=' + repr(correlation),
                 'datacolumn=' + repr(datacolumn),
+                'averaging=' + repr(averaging),
                 'layout=' + repr(layout),
                 'kind=' + repr(kind),
                 'preset=' + repr(preset),
@@ -614,6 +628,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 uvrange = uvrange,
                 correlation = correlation,
                 datacolumn = datacolumn,
+                averaging = averaging,
                 layout = layout,
                 kind = kind,
                 preset = preset,

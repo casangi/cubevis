@@ -54,6 +54,9 @@ weeks of sessions.
 
 ### H1. Vector averaging in raster reductions (M)
 
+*Status 2026-10-03: implemented against `7bc261c`; details and open
+items in `hrs_h1_raster_averaging.md`.*
+
 Today a raster cell is the arithmetic mean of per-sample amplitude and of
 per-sample phase in degrees. Phase cells are therefore wrong when samples
 straddle +/-180 degrees, and amplitude cannot show coherent averages.
@@ -92,6 +95,9 @@ One reduction framework, several quantities.
   through that antenna's baselines.
 - Time x Baseline raster: order baselines by id (now) or by length.
 - Phase waterfall preset with a cyclic colormap.
+- H1b: make the display resample phase-safe (carry cos/sin planes through
+  the Datashader resample and interpolation), so zoomed-out Phase images do
+  not blend across the +/-180 degree wrap.
 - Exit: stepping through all baselines of the test MS shows each once;
   sorted order matches lengths computed from antenna positions.
 
@@ -177,3 +183,5 @@ wanted; it has no dependency on H1 or H2.
 | Date | `main` | Note |
 |---|---|---|
 | 2026-10-02 | `3b5eb82` | Survey and revision 2 of this plan written |
+| 2026-10-03 | `7bc261c` | H1 delivered: `averaging` scalar/vector, Phase wrap fix, both backends; see `hrs_h1_raster_averaging.md`. Default left at scalar pending real-data comparison. GUI control not yet exercised in a browser. H1b (phase-safe display resample) added to H3 |
+| 2026-10-05 | `7f6e2f5` | H1 rebased over the duplicate-SPW-name and local/remote-skew fixes. One conflict (adjacent imports in `msv2_backend.py`), no change to H1 code |

@@ -103,7 +103,7 @@ from cubevis.bokeh.transport import CommMgr
 from cubevis import exe
 
 from .axes import Axis
-from .selection import SelectionSpec
+from .selection import SelectionSpec, normalize_averaging
 from .visibility_raster import VisibilityRaster
 from .visibility_scatter import VisibilityScatter, ScatterLayer, _LAYER_CMAPS
 from .data.reader import DEFAULT_CATEGORY_PRIORITY as _DEFAULT_CATEGORY_PRIORITY
@@ -1775,6 +1775,12 @@ class VisibilityPlotter:
         Comma-separated correlation labels (``"XX,YY"``).  Default: all.
     datacolumn : str
         Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.
+    averaging : str
+        How raster cells combine the samples they cover: ``"scalar"``
+        (default; Amplitude is the mean of the amplitudes, Phase the
+        circular mean) or ``"vector"`` (average the complex visibility,
+        then take Amplitude / Phase -- drops where samples are
+        incoherent).  Also the sidebar's "Averaging" control.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -1896,6 +1902,7 @@ class VisibilityPlotter:
         uvrange:          str           = "",
         correlation:      str           = "",
         datacolumn:       str           = "data",
+        averaging:        str           = "scalar",
         layout:           str           = "side",
         kind:             Optional[str] = None,
         preset:           Optional[str] = None,
@@ -1940,7 +1947,8 @@ class VisibilityPlotter:
             ms=ms, ps=ps, backend=backend, remote_endpoint=remote_endpoint,
             kernel_name=kernel_name, field=field, spw=spw, antenna=antenna, scan=scan,
             timerange=timerange, uvrange=uvrange, correlation=correlation,
-            datacolumn=datacolumn, layout=layout, kind=kind, preset=preset,
+            datacolumn=datacolumn, averaging=averaging,
+            layout=layout, kind=kind, preset=preset,
             raster_y=raster_y, raster_x=raster_x, raster_qty=raster_qty,
             scatter_x=scatter_x, scatter_y=scatter_y,
             time_range=time_range, freq_range=freq_range,
@@ -2040,7 +2048,8 @@ class VisibilityPlotter:
         self,
         *,
         ms, ps, backend, remote_endpoint, kernel_name, field, spw, antenna, scan,
-        timerange, uvrange, correlation, datacolumn, layout, kind, preset,
+        timerange, uvrange, correlation, datacolumn, averaging,
+        layout, kind, preset,
         raster_y, raster_x, raster_qty, scatter_x, scatter_y,
         time_range, freq_range, uvdist_range, enable_flagging,
         compact_toolbar, theme, raster_cmap, scatter_cmap,
@@ -2080,6 +2089,10 @@ class VisibilityPlotter:
         self._uvrange_str   = uvrange
         self._corr_str      = correlation
         self._datacolumn    = datacolumn.upper()
+        # HRS H1 (2026-10): raster cell averaging, "scalar" | "vector".
+        # Validated here so a typo fails at construction, not as a
+        # silently-defaulted plot.
+        self._averaging     = normalize_averaging(averaging)
         # layout="raster"/"scatter" is sugar for layout="one", kind=X --
         # resolved once here, before either attribute is set, so nothing
         # downstream (the layout radio, layout_js, export/preset JS,
@@ -3472,6 +3485,13 @@ for (const dt of other.tools) {
             self._spw_ids = None
         if "correlation" in msg: self._corr_str     = msg["correlation"]
         if "datacolumn"  in msg: self._datacolumn   = msg["datacolumn"].upper()
+        if "averaging"   in msg:
+            # Browser-supplied: fall back to the current value rather
+            # than raise on something unrecognised.
+            try:
+                self._averaging = normalize_averaging(msg["averaging"])
+            except ValueError:
+                log.warning("ignoring unknown averaging %r", msg["averaging"])
 
         # Group 3 piece 3 / Chunk 1 (added 2026-07-31): request is now
         # per-slot (msg["panels"][slot.id] = {"kind": ..., ...}) instead
@@ -3610,6 +3630,10 @@ for (const dt of other.tools) {
                     self._selection.spw          != getattr(self._last_raster_selection_by_slot.get(slot.id), 'spw', None)           or
                     self._selection.correlation  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'correlation', None)   or
                     self._selection.data_column  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'data_column', None)   or
+                    # HRS H1 (2026-10): averaging changes what a raster
+                    # cell holds, so it must re-query.  Raster only --
+                    # scatter draws per-sample values and ignores it.
+                    self._selection.averaging    != getattr(self._last_raster_selection_by_slot.get(slot.id), 'averaging', None)     or
                     # Antenna iteration (I-3, 2026-09): found missing
                     # here directly, not assumed -- without this,
                     # antenna_names is the one SelectionSpec field
@@ -3973,6 +3997,7 @@ for (const dt of other.tools) {
             spw         = spw_ids or None,
             correlation = corrs or None,
             data_column = self._datacolumn,
+            averaging   = getattr(self, "_averaging", "scalar"),
             time_range  = self._time_range,
             freq_range  = self._freq_range,
             antenna_names = antenna_names,
@@ -3982,6 +4007,7 @@ for (const dt of other.tools) {
             spw         = spw_ids or None,
             correlation = corrs or None,
             data_column = self._datacolumn,
+            averaging   = getattr(self, "_averaging", "scalar"),
             time_range  = self._time_range,
             freq_range  = self._freq_range,
             antenna_names = antenna_names,
@@ -4691,6 +4717,18 @@ for (let i = 0; i < cols.length; i++) {
             stylesheets = [dark],
         )
 
+        # ---- Averaging (HRS H1, 2026-10) ---------------------------------- #
+        # How raster cells combine the samples they cover.  Read at Plot
+        # time by the same JS that reads the Data column Select, so it
+        # needs no callback of its own.
+        self._avg_select = Select(
+            title       = "Averaging (raster)",
+            value       = self._averaging,
+            options     = [("scalar", "Scalar"), ("vector", "Vector")],
+            width       = _SIDEBAR_WIDTH,
+            stylesheets = [dark],
+        )
+
         # ---- Field --------------------------------------------------------- #
         # Include an "All fields" sentinel so the widget can represent the
         # initial state (field_names=None) without auto-selecting a specific field.
@@ -5092,7 +5130,7 @@ for (let i = 0; i < cols.length; i++) {
         self._sidebar_col = column(
             path_div,
             _section("Data"),
-            self._col_select, field_col, self._spw_select,
+            self._col_select, self._avg_select, field_col, self._spw_select,
             corr_label, self._corr_cbg,
             scan_inp, antenna_col, time_inp, uv_inp,
             # "Axes" header removed (Group 3 piece 2, 2026-07-31) along
@@ -6396,6 +6434,7 @@ function doPlot(reload) {
         spw_ids:     spw_ids,
         correlation: corr.join(','),
         datacolumn:  col_sel.value,
+        averaging:   avg_sel.value,
         panels:      panels,
         reload:      !!reload,
     }, function(resp) {
@@ -6744,6 +6783,7 @@ function doPlot(reload) {
             "spw_src":    self._spw_source,
             "corr_cbg":   self._corr_cbg,
             "col_sel":    self._col_select,
+            "avg_sel":    self._avg_select,
             "status_div": self._status_div,
             "notify_div": self._notify_div,
             "gear_tabs":  self._gear_tabs,
@@ -7472,7 +7512,8 @@ doPlot();
                 # _spw_table, not _spw_select: the latter is now a column
                 # wrapping the label, the All/None row and the table, and
                 # the restyle walks widgets rather than containers.
-                "widgets":      [self._col_select, self._field_select,
+                "widgets":      [self._col_select, self._avg_select,
+                                 self._field_select,
                                  self._spw_table, self._corr_cbg,
                                  self._field_prev_btn, self._field_next_btn,
                                  self._spw_prev_btn, self._spw_next_btn,

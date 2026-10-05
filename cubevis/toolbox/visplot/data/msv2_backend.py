@@ -88,6 +88,7 @@ from ._raster_merge import merge_raster_partitions
 from ._spw_identity import (
     build_ambiguous_spw_map, make_disambiguating_ident,
 )
+from ._raster_average import reduce_amp_phase
 from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
 
@@ -1682,7 +1683,8 @@ class MSv2Backend(XArrayReader):
             if "frequency" in ds.coords:
                 freq_coords.append(np.asarray(ds.coords["frequency"].values))
 
-            arr = self._raster_2d(ds, y_dim, x_dim, quantity, polarization)
+            arr = self._raster_2d(ds, y_dim, x_dim, quantity, polarization,
+                                  averaging=getattr(selection, "averaging", "scalar"))
             if arr is not None:
                 _n = arr.attrs.get('zscore_n_reduced')
                 if _n is not None:
@@ -1833,6 +1835,7 @@ class MSv2Backend(XArrayReader):
         x_dim: Axis,
         quantity: Axis,
         polarization: Optional[str],
+        averaging: str = "scalar",
     ) -> Optional[xr.DataArray]:
         """Reduce a single partition to a 2D DataArray for raster mode."""
         vis  = self._resolve_vis(ds)
@@ -1972,6 +1975,17 @@ class MSv2Backend(XArrayReader):
                 # among many ordinary samples exactly where catching it
                 # matters most; max preserves it.
                 q = q.max(dim=reduce_dims, skipna=True)
+            elif quantity in (Axis.AMPLITUDE, Axis.PHASE):
+                # HRS H1 (2026-10): Amplitude and Phase are reduced from
+                # the complex visibility, not as mean(per-sample
+                # quantity) -- the arithmetic mean of wrapped phases is
+                # not a phase (+179 and -179 deg averaged to 0, not 180).
+                # ``averaging`` picks scalar (default; Amplitude
+                # unchanged, Phase = circular mean) or vector.  The
+                # per-sample ``q`` built above is only what is shown
+                # when there is nothing to reduce.  See _raster_average.
+                q = reduce_amp_phase(vis_pol, flag_pol, quantity,
+                                     reduce_dims, averaging)
             else:
                 q = q.mean(dim=reduce_dims, skipna=True)
 

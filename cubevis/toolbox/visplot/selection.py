@@ -94,6 +94,9 @@ class SelectionSpec:
     averaging:
         How raster cells combine the samples they cover: ``'vector'``
         (default) or ``'scalar'``.  See the field's own docstring.
+    detrend:
+        Remove a linear phase slope before Phase RMS / Coherence raster
+        statistics (default ``True``).  See the field's own docstring.
     """
 
     # Selection axes ---------------------------------------------------- #
@@ -183,6 +186,22 @@ class SelectionSpec:
     ``normalize_averaging`` to validate.
     """
 
+    detrend: bool = True
+    """Remove a linear phase slope before a Phase RMS / Coherence raster
+    statistic is taken (HRS H2, 2026-10).
+
+    ``True`` (default): per cell, the residual delay (slope along
+    frequency) and rate (slope along time) are estimated and removed
+    along whichever of those dimensions the cell is reduced over, so the
+    statistic measures scatter about the slope.  ``False``: the statistic
+    is of the data as they are, slope included.  Ignored by every other
+    quantity.  See ``data/_raster_stats.py``.
+
+    Like ``averaging`` this is transport, not GUI state: it belongs to
+    each raster panel (``VisibilityRaster.detrend``), which stamps it
+    onto a copy of the selection at query time.  Not a row constraint.
+    """
+
     cache_generation: int = 0
     """Data-freshness token -- NOT a constraint on which rows are selected.
 
@@ -254,6 +273,7 @@ class SelectionSpec:
             correlation=list(self.correlation) if self.correlation is not None else None,
             data_column=self.data_column,
             averaging=self.averaging,
+            detrend=self.detrend,
             cache_generation=self.cache_generation,
             pending_version=self.pending_version,
             flag_view=self.flag_view,

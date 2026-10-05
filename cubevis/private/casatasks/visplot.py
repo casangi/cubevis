@@ -58,6 +58,7 @@ def _validate_params(
         correlation,
         datacolumn,
         averaging,
+        detrend,
         layout,
         kind,
         preset,
@@ -99,6 +100,7 @@ def _validate_params(
         'correlation': 'str',
         'datacolumn': 'str',
         'averaging': 'str',
+        'detrend': 'bool',
         'layout': 'str',
         'kind': 'Optional[str]',
         'preset': 'Optional[str]',
@@ -198,6 +200,7 @@ def _validate_params(
     _check('correlation', correlation, _type_map['correlation'])
     _check('datacolumn', datacolumn, _type_map['datacolumn'])
     _check('averaging', averaging, _type_map['averaging'])
+    _check('detrend', detrend, _type_map['detrend'])
     _check('layout', layout, _type_map['layout'])
     _check('kind', kind, _type_map['kind'])
     _check('preset', preset, _type_map['preset'])
@@ -239,6 +242,7 @@ def _visplot_t(
         correlation: str = '',
         datacolumn: str = 'data',
         averaging: str = 'vector',
+        detrend: bool = True,
         layout: str = 'side',
         kind: Optional[str] = None,
         preset: Optional[str] = None,
@@ -279,6 +283,7 @@ def _visplot_t(
         correlation = correlation,
         datacolumn = datacolumn,
         averaging = averaging,
+        detrend = detrend,
         layout = layout,
         kind = kind,
         preset = preset,
@@ -372,6 +377,13 @@ class _visplot:
         circular mean).  Initial value for every raster panel; each
         panel's own "Averaging" control (raster gear tab) changes it
         independently afterwards.
+    detrend : bool
+        For the Phase RMS and Coherence raster quantities: remove a
+        linear phase slope (residual delay along frequency, residual
+        rate along time) before the statistic is taken (default
+        ``True``).  ``False`` measures the data as they are, slope
+        included.  Initial value for every raster panel; each panel's
+        "Phase slope" control changes it afterwards.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -495,6 +507,7 @@ class _visplot:
             correlation: str = '',
             datacolumn: str = 'data',
             averaging: str = 'vector',
+            detrend: bool = True,
             layout: str = 'side',
             kind: Optional[str] = None,
             preset: Optional[str] = None,
@@ -548,6 +561,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             correlation = correlation,
             datacolumn = datacolumn,
             averaging = averaging,
+            detrend = detrend,
             layout = layout,
             kind = kind,
             preset = preset,
@@ -589,6 +603,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'correlation=' + repr(correlation),
                 'datacolumn=' + repr(datacolumn),
                 'averaging=' + repr(averaging),
+                'detrend=' + repr(detrend),
                 'layout=' + repr(layout),
                 'kind=' + repr(kind),
                 'preset=' + repr(preset),
@@ -631,6 +646,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 correlation = correlation,
                 datacolumn = datacolumn,
                 averaging = averaging,
+                detrend = detrend,
                 layout = layout,
                 kind = kind,
                 preset = preset,

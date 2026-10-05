@@ -72,6 +72,11 @@ straddle +/-180 degrees, and amplitude cannot show coherent averages.
 
 ### H2. Windowed statistics: phase rms, coherence, difference from running mean (L)
 
+*Status 2026-10-05: slice 1 implemented against `aba8829` -- `PHASE_RMS`
+and `COHERENCE` as raster quantities over the undisplayed dimension, with
+per-panel slope removal. Sliding / per-scan windows, the scatter views,
+presets and the DIFF quantities remain; see `hrs_h2_phase_statistics.md`.*
+
 One reduction framework, several quantities.
 
 - `PHASE_RMS` (degrees), `COHERENCE` (|vector mean| / scalar mean),
@@ -154,7 +159,10 @@ One reduction framework, several quantities.
   static image so the result is a self-contained record. Open questions:
   trigger (toolbar button, plus a key through `casalib.hotkeys` scoped to
   the hovered plot as iclean does; `casalib` is loaded on every cubevis
-  page but has not been exercised from visplot), and whether the content
+  page but has not been exercised from visplot. Key delivery in notebooks
+  (JupyterLab, Colab) is handled by the `Showable` wrapper in
+  `cubevis.bokeh.models`, which wraps every cubevis application and
+  controls event propagation so hotkeys arrive (Darrell, 2026-10-05)), and whether the content
   is assembled in Python on request (as the pending-flags report is) or
   in the browser. Best built after H2/H3, when the settings it reports
   have settled; the first step, the averaging mode in the raster title,
@@ -201,3 +209,4 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-05 | `7f6e2f5` | H1 rebased over the duplicate-SPW-name and local/remote-skew fixes. One conflict (adjacent imports in `msv2_backend.py`), no change to H1 code |
 | 2026-10-05 | `e46febc` | H1 revised: averaging is per raster panel (control moved from the sidebar to each raster gear tab); default switched to vector via `selection.DEFAULT_AVERAGING`. Amplitude rasters that average change accordingly |
 | 2026-10-05 | `e46febc` | Per-panel control confirmed working in the browser by Darrell (TW Hya, vector vs scalar Amplitude). Raster title now names the averaging for Amplitude and Phase. Plot summary dialog added under H8 |
+| 2026-10-05 | `aba8829` | H2 slice 1: Phase RMS and Coherence raster quantities, per-panel `detrend`. Agreed order: finish H2/H3 before the plot summary dialog |

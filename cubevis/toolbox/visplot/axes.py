@@ -162,6 +162,29 @@ class Axis(Enum):
     IMAGINARY = ("Imaginary", "", AxisType.DERIVED)
     """Imaginary part of the complex visibility."""
 
+    PHASE_RMS = ("Phase RMS", "deg", AxisType.DERIVED)
+    """RMS scatter of phase, in degrees, over the samples a raster cell
+    covers (HRS H2, 2026-10).
+
+    Raster only.  Each sample's phase is compared with the cell's mean
+    phase direction, the difference wrapped into (-180, 180], and the RMS
+    taken; every unflagged sample counts equally.  0 for a perfectly
+    stable phase, about 104 deg for pure noise.  A linear phase slope
+    (residual delay along frequency, residual rate along time) is removed
+    first unless the panel's *detrend* option is off.  See
+    ``data/_raster_stats.py``.
+    """
+
+    COHERENCE = ("Coherence", "", AxisType.DERIVED)
+    """Vector-averaged over scalar-averaged amplitude, in [0, 1], over
+    the samples a raster cell covers (HRS H2, 2026-10).
+
+    Raster only.  1 when the samples add coherently, near ``1/sqrt(N)``
+    for noise: the fraction of the signal that survives averaging.
+    Carries the same information as ``PHASE_RMS`` and takes the same
+    *detrend* option.  See ``data/_raster_stats.py``.
+    """
+
     Z_SCORE = ("Z-Score", "", AxisType.DERIVED)
     """Robust, rflag-style statistical deviation score (Part 6, 2026-09).
 

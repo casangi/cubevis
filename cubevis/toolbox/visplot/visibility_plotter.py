@@ -322,6 +322,11 @@ _RASTER_QTY_OPTIONS = [("AMPLITUDE", "Amplitude"),
                        ("PHASE",     "Phase"),
                        ("REAL",      "Real"),
                        ("IMAGINARY", "Imaginary"),
+                       # HRS H2 (2026-10): statistics over the samples
+                       # each cell covers (the dimension not displayed).
+                       # Raster only -- see data/_raster_stats.py.
+                       ("PHASE_RMS", "Phase RMS"),
+                       ("COHERENCE", "Coherence"),
                        ("FLAG",      "Flag"),
                        # Part 6 (2026-09): falls through this existing
                        # dropdown with no new UI mechanism -- same
@@ -1783,6 +1788,13 @@ class VisibilityPlotter:
         circular mean).  Initial value for every raster panel; each
         panel's own "Averaging" control (raster gear tab) changes it
         independently afterwards.
+    detrend : bool
+        For the Phase RMS and Coherence raster quantities: remove a
+        linear phase slope (residual delay along frequency, residual
+        rate along time) before the statistic is taken (default
+        ``True``).  ``False`` measures the data as they are, slope
+        included.  Initial value for every raster panel; each panel's
+        "Phase slope" control changes it afterwards.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -1908,6 +1920,7 @@ class VisibilityPlotter:
         # verbatim into the generated task layers, where that name does
         # not exist.  test_raster_averaging pins the two together.
         averaging:        str           = "vector",
+        detrend:          bool          = True,
         layout:           str           = "side",
         kind:             Optional[str] = None,
         preset:           Optional[str] = None,
@@ -1952,7 +1965,7 @@ class VisibilityPlotter:
             ms=ms, ps=ps, backend=backend, remote_endpoint=remote_endpoint,
             kernel_name=kernel_name, field=field, spw=spw, antenna=antenna, scan=scan,
             timerange=timerange, uvrange=uvrange, correlation=correlation,
-            datacolumn=datacolumn, averaging=averaging,
+            datacolumn=datacolumn, averaging=averaging, detrend=detrend,
             layout=layout, kind=kind, preset=preset,
             raster_y=raster_y, raster_x=raster_x, raster_qty=raster_qty,
             scatter_x=scatter_x, scatter_y=scatter_y,
@@ -2053,7 +2066,7 @@ class VisibilityPlotter:
         self,
         *,
         ms, ps, backend, remote_endpoint, kernel_name, field, spw, antenna, scan,
-        timerange, uvrange, correlation, datacolumn, averaging,
+        timerange, uvrange, correlation, datacolumn, averaging, detrend,
         layout, kind, preset,
         raster_y, raster_x, raster_qty, scatter_x, scatter_y,
         time_range, freq_range, uvdist_range, enable_flagging,
@@ -2100,6 +2113,9 @@ class VisibilityPlotter:
         # from that slot's raster gear tab).  Validated here so a typo
         # fails at construction, not as a silently-defaulted plot.
         self._averaging     = normalize_averaging(averaging)
+        # HRS H2 (2026-10): Phase RMS / Coherence slope removal.  Same
+        # arrangement: initial value here, per panel afterwards.
+        self._detrend       = bool(detrend)
         # layout="raster"/"scatter" is sugar for layout="one", kind=X --
         # resolved once here, before either attribute is set, so nothing
         # downstream (the layout radio, layout_js, export/preset JS,
@@ -2476,6 +2492,7 @@ class VisibilityPlotter:
             x_dim         = self._raster_x,
             quantity      = self._raster_qty,
             averaging     = self._averaging,
+            detrend       = self._detrend,
             polarization  = first_pol,
             width         = self._plot_width,
             height        = self._plot_height,
@@ -2535,6 +2552,7 @@ class VisibilityPlotter:
             x_dim         = self._raster_x,
             quantity      = self._raster_qty,
             averaging     = self._averaging,
+            detrend       = self._detrend,
             polarization  = first_pol,
             width         = self._plot_width,
             height        = self._plot_height,
@@ -3604,6 +3622,11 @@ for (const dt of other.tools) {
                     log.warning("_handle_plot: unknown averaging %r for "
                                 "panel %s", panel_msg.get("averaging"), slot.id)
                     avg = panel.averaging
+                # Slope removal for this slot's Phase RMS / Coherence
+                # (HRS H2).  Sent as "remove" | "keep"; absent = unchanged.
+                det = panel_msg.get("detrend")
+                det = (panel.detrend if det not in ("remove", "keep")
+                       else det == "remove")
 
                 # Force re-render when this slot's raster axes or
                 # selection content actually changed — not just because a
@@ -3647,6 +3670,7 @@ for (const dt of other.tools) {
                     # slot's requested mode against the mode its raster
                     # last rendered with.
                     avg != panel.averaging or
+                    det != panel.detrend or
                     # Antenna iteration (I-3, 2026-09): found missing
                     # here directly, not assumed -- without this,
                     # antenna_names is the one SelectionSpec field
@@ -3683,6 +3707,7 @@ for (const dt of other.tools) {
                                 quantity     = qty,
                                 polarization = first_pol,
                                 averaging    = avg,
+                                detrend      = det,
                             )
                         self._last_raster_selection_by_slot[slot.id] = self._selection
                 except Exception as exc:
@@ -4475,6 +4500,16 @@ html, body { height: 100%; margin: 0; }
             options=[("vector", "Vector"), ("scalar", "Scalar")],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+        # Slope removal (HRS H2, 2026-10) for Phase RMS / Coherence:
+        # take out the residual delay / rate before measuring scatter,
+        # or leave it in to see it.  Same arrangement as ra_sel: per
+        # slot, read at Plot-press time.  Other quantities ignore it.
+        rd_sel = Select(
+            title="Phase slope (RMS / Coherence)",
+            value="remove" if slot.raster.detrend else "keep",
+            options=[("remove", "Remove"), ("keep", "Keep")],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
 
         # Per-slot Y/X conflict indicator — an inline Div scoped to this
         # panel, not the shared self._notify_div the old single global
@@ -4514,14 +4549,14 @@ conflict_div.text = conflict ? msg : '';
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Raster ──</span>", width=_SIDEBAR_WIDTH),
-            ry_sel, rx_sel, rq_sel, ra_sel,
+            ry_sel, rx_sel, rq_sel, ra_sel, rd_sel,
             conflict_div,
             raster_cmap,
             info_sel.column,
         )
         widgets = {
             "y_sel": ry_sel, "x_sel": rx_sel, "q_sel": rq_sel,
-            "avg_sel": ra_sel,
+            "avg_sel": ra_sel, "detrend_sel": rd_sel,
             "info_selectors": info_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
@@ -6362,10 +6397,10 @@ function doPlot(reload) {
     }
 
     function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel,
-                                colorize_handles, ra_sel) {
+                                colorize_handles, ra_sel, rd_sel) {
         if (kind_switch.active === 0) {
             return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value,
-                    averaging: ra_sel.value};
+                    averaging: ra_sel.value, detrend: rd_sel.value};
         } else {
             return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value,
                      colorize: buildColorizeArray(colorize_handles)};
@@ -6403,10 +6438,12 @@ function doPlot(reload) {
     const panels = {};
     panels[panel0_id] = buildPanelPayload(
         panel0_kind_switch, panel0_ry_sel, panel0_rx_sel, panel0_rq_sel,
-        panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles, panel0_ra_sel);
+        panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles, panel0_ra_sel,
+        panel0_rd_sel);
     panels[panel1_id] = buildPanelPayload(
         panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
-        panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles, panel1_ra_sel);
+        panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles, panel1_ra_sel,
+        panel1_rd_sel);
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
 
@@ -6837,6 +6874,7 @@ function doPlot(reload) {
             "panel0_rx_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["x_sel"],
             "panel0_rq_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["q_sel"],
             "panel0_ra_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["avg_sel"],
+            "panel0_rd_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["detrend_sel"],
             "panel0_sx_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["x_sel"],
             "panel0_sy_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["y_sel"],
             # Part 5 (2026-09): one entry per scatter layer, in the
@@ -6852,6 +6890,7 @@ function doPlot(reload) {
             "panel1_rx_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["x_sel"],
             "panel1_rq_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["q_sel"],
             "panel1_ra_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["avg_sel"],
+            "panel1_rd_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["detrend_sel"],
             "panel1_sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
             "panel1_sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
             "panel1_colorize_handles": self._panel_axis_widgets[self._slots[1].id]["scatter"]["colorize_handles"],
@@ -7470,7 +7509,7 @@ doPlot();
                 w = self._panel_axis_widgets[slot.id][kind]
                 if kind == "raster":
                     _all_axis_widgets += [w["y_sel"], w["x_sel"], w["q_sel"],
-                                          w["avg_sel"]]
+                                          w["avg_sel"], w["detrend_sel"]]
                 else:
                     _all_axis_widgets += [w["x_sel"], w["y_sel"]]
                 _all_axis_widgets += w["cmap_widgets"]

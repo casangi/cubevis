@@ -90,7 +90,8 @@ _DEFAULT_SCALING = "eq_hist"
 
 
 def _auto_title(quantity: "Axis", y_label: str, x_label: str,
-                polarization: str, averaging: Optional[str] = None) -> str:
+                polarization: str, averaging: Optional[str] = None,
+                detrend: Optional[bool] = None) -> str:
     """Compose the default panel title.
 
     Takes *resolved* axis names, not ``Axis`` members: a title reading
@@ -112,6 +113,11 @@ def _auto_title(quantity: "Axis", y_label: str, x_label: str,
     q_label = quantity.label
     if averaging and quantity in (Axis.AMPLITUDE, Axis.PHASE):
         q_label = f"{q_label} ({averaging})"
+    # Phase RMS / Coherence (HRS H2): say whether the slope was removed,
+    # for the same reason -- it changes the picture completely on data
+    # with a residual delay, and nothing else on the plot shows it.
+    if detrend is not None and quantity in (Axis.PHASE_RMS, Axis.COHERENCE):
+        q_label = f"{q_label} ({'slope removed' if detrend else 'slope kept'})"
     return (
         f"{q_label}  "
         f"[{y_label} vs {x_label}]"
@@ -184,6 +190,7 @@ class VisibilityRaster(VisibilityPlot):
         raster_interpolate: str = "auto",
         probe_debug: bool = False,
         averaging: Optional[str] = None,
+        detrend: bool = True,
         **kwargs,
     ) -> None:
         self._quantity     = quantity
@@ -193,6 +200,10 @@ class VisibilityRaster(VisibilityPlot):
         # differently; stamped onto a copy of the selection at query
         # time (see _render), never onto the shared selection itself.
         self._averaging    = normalize_averaging(averaging)
+        # HRS H2 (2026-10): remove a linear phase slope (residual delay /
+        # rate) before this raster's Phase RMS / Coherence statistic.
+        # Per panel and stamped at query time, exactly like averaging.
+        self._detrend      = bool(detrend)
         self._polarization = polarization
         self._cmap         = cmap or _DEFAULT_CMAP
         self._max_cells    = max_cells
@@ -275,6 +286,15 @@ class VisibilityRaster(VisibilityPlot):
         """
         return self._averaging
 
+    @property
+    def detrend(self) -> bool:
+        """Whether a linear phase slope is removed before this raster's
+        Phase RMS / Coherence statistic.
+
+        Change it with ``update_axes(detrend=...)``.
+        """
+        return self._detrend
+
     def update_axes(
         self,
         y_dim: Optional["Axis"]  = None,
@@ -283,16 +303,20 @@ class VisibilityRaster(VisibilityPlot):
         polarization: Optional[str] = None,
         title: Optional[str] = None,
         averaging: Optional[str] = None,
+        detrend: Optional[bool] = None,
     ) -> None:
         """Change axes, quantity, polarization or averaging and re-render
         in place.
 
         Extends the base ``update_axes`` with ``quantity``,
         ``polarization`` and ``averaging`` parameters specific to raster
-        mode.  ``averaging`` is ``"vector"`` or ``"scalar"``; ``None``
-        leaves it as it is.
+        mode.  ``averaging`` is ``"vector"`` or ``"scalar"``; ``detrend``
+        is a bool (Phase RMS / Coherence slope removal); ``None`` leaves
+        either as it is.
         """
         changed = False
+        if detrend is not None and bool(detrend) != self._detrend:
+            self._detrend = bool(detrend);  changed = True
         if averaging is not None:
             averaging = normalize_averaging(averaging)
             if averaging != self._averaging:
@@ -346,7 +370,7 @@ class VisibilityRaster(VisibilityPlot):
     def _effective_title(self) -> str:
         return self._title or _auto_title(
             self._quantity, self._y_info.label, self._x_info.label,
-            self._polarization, self._averaging,
+            self._polarization, self._averaging, self._detrend,
         )
 
     def set_cmap(self, cmap) -> None:
@@ -1198,7 +1222,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 # This panel's own averaging, on a copy: the caller's
                 # selection (shared with the other panels) is untouched.
                 selection    = dataclasses.replace(
-                    selection, averaging=self._averaging),
+                    selection, averaging=self._averaging,
+                    detrend=self._detrend),
                 polarization = self._polarization,
                 max_cells    = budget,
             )

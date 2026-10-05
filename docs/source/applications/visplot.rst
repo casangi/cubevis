@@ -187,6 +187,12 @@ Task arguments (preview)
        incoherent; ``"scalar"`` averages the amplitudes themselves.
        Sets the initial value for every raster panel; each panel's
        gear tab has its own *Averaging* control.
+   * - ``detrend``
+     - bool
+     - For the *Phase RMS* and *Coherence* raster quantities: remove a
+       linear phase slope (residual delay or rate) before the statistic
+       is taken. Default ``True``. Initial value for every raster panel;
+       each panel's gear tab has its own *Phase slope* control.
    * - ``mode``
      - str
      - ``"both"``, ``"raster"``, or ``"scatter"`` — initial display
@@ -269,7 +275,13 @@ Sidebar
 
 * **Data selection** — field, SPW, correlation, data column
 * **Raster axis controls** — X/Y axis choice, quantity and averaging
-  (vector or scalar) for the raster panel
+  (vector or scalar) for the raster panel. Besides amplitude, phase,
+  real, imaginary, flag and Z-Score, the quantity can be *Phase RMS*
+  (scatter of phase, in degrees, over the samples each cell covers) or
+  *Coherence* (vector over scalar averaged amplitude, 0 to 1). On
+  Baseline vs Time these show phase stability across the band for each
+  integration; on Baseline vs Channel, stability over the selected time
+  range for each channel.
 * **Scatter axis controls** — X axis, plus one or more overplotted
   layers (quantity, correlation, color, opacity) for the scatter panel
 * **Colormap controls** — scaling (default: histogram-equalized) and

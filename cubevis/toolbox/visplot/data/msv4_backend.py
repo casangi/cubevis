@@ -119,6 +119,7 @@ from .reader import (
 from . import _scatter_render
 from ._raster_merge import merge_raster_partitions
 from ._raster_average import reduce_amp_phase
+from ._raster_stats import STAT_QUANTITIES, reduce_phase_stat
 from ..selection import DEFAULT_AVERAGING
 from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
@@ -1893,7 +1894,8 @@ class MSv4Backend(XArrayReader):
                 freq_coords.append(np.asarray(ds.coords["frequency"].values))
 
             arr = self._raster_2d(ds, y_dim, x_dim, quantity, polarization,
-                                  averaging=getattr(selection, "averaging", DEFAULT_AVERAGING))
+                                  averaging=getattr(selection, "averaging", DEFAULT_AVERAGING),
+                                  detrend=getattr(selection, "detrend", True))
             if arr is not None:
                 _n = arr.attrs.get('zscore_n_reduced')
                 if _n is not None:
@@ -2012,6 +2014,7 @@ class MSv4Backend(XArrayReader):
         quantity: Axis,
         polarization: Optional[str],
         averaging: str = DEFAULT_AVERAGING,
+        detrend: bool = True,
     ) -> Optional[xr.DataArray]:
         """Reduce a single partition to a lazy 2D DataArray for raster mode.
 
@@ -2076,6 +2079,16 @@ class MSv4Backend(XArrayReader):
                 dims=vis_pol.dims,
                 attrs=vis_pol.attrs,
             ).where(~flag_pol)
+        elif quantity in STAT_QUANTITIES:
+            # HRS H2 (2026-10): Phase RMS / Coherence are statistics OF
+            # the reduction, not a per-sample quantity that is then
+            # averaged, so there is nothing meaningful to build here.
+            # A NaN placeholder of the right shape and coords keeps the
+            # shared code below (reduce_dims, coord stripping) uniform;
+            # reduce_phase_stat() replaces it.  With nothing to reduce
+            # (one sample per cell) the placeholder is what is returned:
+            # a scatter of one sample is undefined, and NaN says so.
+            q = (vis_pol.real * np.nan).where(~flag_pol)
         elif quantity == Axis.REAL:
             q = vis_pol.real.where(~flag_pol)
         elif quantity == Axis.IMAGINARY:
@@ -2119,7 +2132,8 @@ class MSv4Backend(XArrayReader):
         else:
             raise NotImplementedError(
                 f"Raster quantity {quantity.name} not supported. "
-                f"Use AMPLITUDE, PHASE, REAL, IMAGINARY, Z_SCORE, or FLAG."
+                f"Use AMPLITUDE, PHASE, REAL, IMAGINARY, PHASE_RMS, "
+                f"COHERENCE, Z_SCORE, or FLAG."
             )
 
         reduce_dims = [d for d in q.dims if d not in (y_name, x_name)]
@@ -2145,6 +2159,9 @@ class MSv4Backend(XArrayReader):
                 # when there is nothing to reduce.  See _raster_average.
                 q = reduce_amp_phase(vis_pol, flag_pol, quantity,
                                      reduce_dims, averaging)
+            elif quantity in STAT_QUANTITIES:
+                q = reduce_phase_stat(vis_pol, flag_pol, quantity,
+                                      reduce_dims, detrend)
             else:
                 q = q.mean(dim=reduce_dims, skipna=True)
 

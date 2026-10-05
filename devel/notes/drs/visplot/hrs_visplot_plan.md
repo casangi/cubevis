@@ -146,6 +146,19 @@ One reduction framework, several quantities.
 - Static (PNG at least) output for each view above, from the task
   interface without a browser where possible; see `task-hardcopy-output.md`
   and `visplot_export_handoff.md` for the existing path.
+- **Plot summary dialog** (proposed 2026-10-05). A popup describing the
+  plot under the cursor: dataset, data column, full selection, axes,
+  quantity, averaging (and the H2 window settings), colormap and scaling
+  limits, decimation, displayed range, uncommitted flags, cubevis
+  version, and the `visplot(...)` call that reproduces it; optionally a
+  static image so the result is a self-contained record. Open questions:
+  trigger (toolbar button, plus a key through `casalib.hotkeys` scoped to
+  the hovered plot as iclean does; `casalib` is loaded on every cubevis
+  page but has not been exercised from visplot), and whether the content
+  is assembled in Python on request (as the pending-flags report is) or
+  in the browser. Best built after H2/H3, when the settings it reports
+  have settled; the first step, the averaging mode in the raster title,
+  is done.
 - User guide section: the commissioning workflow (survey with Z-Score /
   phase rms, confirm on waterfall, flag with scope, commit).
 - Carry the large-data items from `visplot_flagging_follow_on.md` as time
@@ -187,3 +200,4 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-03 | `7bc261c` | H1 delivered: `averaging` scalar/vector, Phase wrap fix, both backends; see `hrs_h1_raster_averaging.md`. Default left at scalar pending real-data comparison. GUI control not yet exercised in a browser. H1b (phase-safe display resample) added to H3 |
 | 2026-10-05 | `7f6e2f5` | H1 rebased over the duplicate-SPW-name and local/remote-skew fixes. One conflict (adjacent imports in `msv2_backend.py`), no change to H1 code |
 | 2026-10-05 | `e46febc` | H1 revised: averaging is per raster panel (control moved from the sidebar to each raster gear tab); default switched to vector via `selection.DEFAULT_AVERAGING`. Amplitude rasters that average change accordingly |
+| 2026-10-05 | `e46febc` | Per-panel control confirmed working in the browser by Darrell (TW Hya, vector vs scalar Amplitude). Raster title now names the averaging for Amplitude and Phase. Plot summary dialog added under H8 |

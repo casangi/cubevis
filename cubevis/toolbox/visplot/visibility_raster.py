@@ -90,7 +90,7 @@ _DEFAULT_SCALING = "eq_hist"
 
 
 def _auto_title(quantity: "Axis", y_label: str, x_label: str,
-                polarization: str) -> str:
+                polarization: str, averaging: Optional[str] = None) -> str:
     """Compose the default panel title.
 
     Takes *resolved* axis names, not ``Axis`` members: a title reading
@@ -101,9 +101,19 @@ def _auto_title(quantity: "Axis", y_label: str, x_label: str,
     Bare names, without the unit suffix -- "[Time vs Frequency]" reads
     better in a title than "[Time [s] vs Frequency [Hz]]", and the axis
     labels carry the units already.
+
+    *averaging* (``"vector"`` / ``"scalar"``) is named after the quantity
+    for Amplitude and Phase, the two quantities it changes -- "Amplitude
+    (vector)".  Added 2026-10-05: two panels showing the same data
+    averaged differently had identical titles, so a screenshot could not
+    say which was which.  Other quantities do not depend on it and are
+    titled as before.
     """
+    q_label = quantity.label
+    if averaging and quantity in (Axis.AMPLITUDE, Axis.PHASE):
+        q_label = f"{q_label} ({averaging})"
     return (
-        f"{quantity.label}  "
+        f"{q_label}  "
         f"[{y_label} vs {x_label}]"
         f"  pol={polarization}"
     )
@@ -336,7 +346,7 @@ class VisibilityRaster(VisibilityPlot):
     def _effective_title(self) -> str:
         return self._title or _auto_title(
             self._quantity, self._y_info.label, self._x_info.label,
-            self._polarization,
+            self._polarization, self._averaging,
         )
 
     def set_cmap(self, cmap) -> None:

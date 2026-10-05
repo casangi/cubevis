@@ -617,3 +617,47 @@ class TestRasterPanelOwnsAveraging:
         vr = self._vr(r, SelectionSpec())
         with pytest.raises(ValueError):
             vr.update_axes(averaging="median")
+
+
+# ---------------------------------------------------------------------------
+# 12. The title says which averaging a panel shows
+# ---------------------------------------------------------------------------
+
+class TestTitleNamesAveraging:
+
+    def _vr(self, **kw):
+        pytest.importorskip("datashader")
+        from cubevis.toolbox.visplot.visibility_raster import VisibilityRaster
+        return VisibilityRaster(_RecordingReader(), SelectionSpec(),
+                                Axis.TIME, Axis.BASELINE, **kw)
+
+    @pytest.mark.parametrize("qty", [Axis.AMPLITUDE, Axis.PHASE])
+    def test_amp_phase_titles_name_the_mode(self, qty, mode):
+        vr = self._vr(quantity=qty, averaging=mode)
+        assert f"{qty.label} ({mode})" in vr._effective_title()
+        assert vr.figure.title.text == vr._effective_title()
+
+    def test_two_panels_have_different_titles(self):
+        a = self._vr(quantity=Axis.AMPLITUDE, averaging="vector")
+        b = self._vr(quantity=Axis.AMPLITUDE, averaging="scalar")
+        assert a._effective_title() != b._effective_title()
+
+    @pytest.mark.parametrize("qty", [Axis.REAL, Axis.IMAGINARY,
+                                     Axis.FLAG, Axis.Z_SCORE])
+    def test_other_quantities_unchanged(self, qty):
+        t = self._vr(quantity=qty, averaging="scalar")._effective_title()
+        assert "scalar" not in t and "vector" not in t
+
+    def test_title_follows_a_mode_change(self):
+        vr = self._vr(quantity=Axis.AMPLITUDE, averaging="vector")
+        vr.update_axes(averaging="scalar")
+        assert "(scalar)" in vr._effective_title()
+
+    def test_custom_title_wins(self):
+        vr = self._vr(quantity=Axis.AMPLITUDE, title="Mine")
+        assert vr._effective_title() == "Mine"
+
+    def test_rest_of_title_as_before(self):
+        t = self._vr(quantity=Axis.AMPLITUDE, averaging="vector",
+                     polarization="XX")._effective_title()
+        assert "vs" in t and t.endswith("pol=XX") and t.startswith("Amplitude (vector)  [")

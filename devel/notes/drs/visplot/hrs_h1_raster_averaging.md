@@ -70,7 +70,7 @@ untouched. To get the old picture: Averaging = Scalar in the gear tab, or
 
 ## Verified
 
-- `test_raster_averaging.py`: 109 passed. Adds, since 2026-10-03: the
+- `test_raster_averaging.py`: 121 passed. Adds, since 2026-10-03: the
   default is vector everywhere; a raster panel stamps its own mode on a
   copy and leaves the shared selection alone; two panels on one selection
   query with different modes; an unchanged mode does not re-query.
@@ -83,17 +83,24 @@ untouched. To get the old picture: Averaging = Scalar in the gear tab, or
   the default switch; they have not been run.
 - `scripts/sync_layers --check` clean after regeneration.
 
+## Verified in the browser (Darrell, 2026-10-05)
+
+Two raster panels on TW Hya, Time x Baseline, Amplitude, one Vector and
+one Scalar, set from each slot's gear tab: the calibrator scans agree and
+the target scans are clearly darker in Vector.
+
+## Title
+
+For Amplitude and Phase the default raster title names the mode,
+"Amplitude (vector)  [Time vs Baseline]  pol=XX", so two panels that
+differ only in averaging can be told apart in a screenshot. Other
+quantities are titled as before; a custom title still wins.
+
 ## Not verified
 
-- **The gear-tab control in a browser.** It is wired exactly like *Raster
-  quantity* (same builder, same payload function, same args dict), and
-  the module compiles, but no plotter was instantiated here: that needs a
-  real MS or PS.
-- **Real data, either format, and the remote path.**
-
-Suggested check: two raster panels, Time x Baseline, Amplitude, one
-Vector and one Scalar. On calibrator scans they should agree; on
-noise-dominated scans Vector should be clearly darker.
+- The title change in a browser (the title is sent with the same response
+  that already updates it on a quantity change).
+- The real-data tests, the MSv4 format on real data, and the remote path.
 
 ## Known remaining issue (H1b)
 

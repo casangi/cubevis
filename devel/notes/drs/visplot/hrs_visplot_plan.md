@@ -210,3 +210,4 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-05 | `e46febc` | H1 revised: averaging is per raster panel (control moved from the sidebar to each raster gear tab); default switched to vector via `selection.DEFAULT_AVERAGING`. Amplitude rasters that average change accordingly |
 | 2026-10-05 | `e46febc` | Per-panel control confirmed working in the browser by Darrell (TW Hya, vector vs scalar Amplitude). Raster title now names the averaging for Amplitude and Phase. Plot summary dialog added under H8 |
 | 2026-10-05 | `aba8829` | H2 slice 1: Phase RMS and Coherence raster quantities, per-panel `detrend`. Agreed order: finish H2/H3 before the plot summary dialog |
+| 2026-10-05 | `9ab33e0` | H2 slice 1 confirmed in the browser by Darrell. Fix: a replotted panel's cursor readout is reset to its placeholder (it kept the previous plot's values until the next mouse move) |

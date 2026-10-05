@@ -406,6 +406,16 @@ def _axis_label(axis: "Axis") -> str:
 # Base class
 # ---------------------------------------------------------------------------
 
+CURSOR_PLACEHOLDER_HTML = "<i>Hover over the plot to inspect a pixel</i>"
+"""What a panel's cursor readout shows before anything has been probed.
+
+Also what it is put back to when that panel is replotted (the plotter's
+plot-response handler): a readout left over from the previous plot --
+"Amplitude: ..." under a panel that now shows Phase RMS -- describes a
+plot that is no longer there.
+"""
+
+
 class VisibilityPlot(Model):
     """Abstract Bokeh Model base for visibility plot components.
 
@@ -1294,7 +1304,7 @@ class VisibilityPlot(Model):
             }
 
         self._info_div = Div(
-            text        = "<i>Hover over the plot to inspect a pixel</i>",
+            text        = CURSOR_PLACEHOLDER_HTML,
             visible     = True,
             sizing_mode = "stretch_width",
             height      = ITEM_HEIGHTS["cursor"],

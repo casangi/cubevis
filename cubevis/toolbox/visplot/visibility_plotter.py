@@ -108,7 +108,7 @@ from .visibility_raster import VisibilityRaster
 from .visibility_scatter import VisibilityScatter, ScatterLayer, _LAYER_CMAPS
 from .data.reader import DEFAULT_CATEGORY_PRIORITY as _DEFAULT_CATEGORY_PRIORITY
 from .data.reader import DEFAULT_EXCLUDED_DISPLAY as _DEFAULT_EXCLUDED_DISPLAY
-from .visibility_plot import _CV_SET_BUSY_JS
+from .visibility_plot import _CV_SET_BUSY_JS, CURSOR_PLACEHOLDER_HTML
 from . import palettes as _palettes
 from .scaling_memory import RasterScalingUnit
 from .view_state import ApplyReport, StateRegistry
@@ -6605,6 +6605,20 @@ function doPlot(reload) {
             if (p0 && p0.x_label != null) p0_fig.below[0].axis_label = p0.x_label;
             if (p0 && p0.y_label != null) p0_fig.left[0].axis_label  = p0.y_label;
             if (p0 && p0.title   != null) p0_fig.title.text           = p0.title;
+            // Reset this panel's cursor readout (2026-10-05).  A title in
+            // the response means the panel was really re-queried (axes,
+            // quantity, averaging, selection...), so whatever the readout
+            // says describes the previous plot -- e.g. "Amplitude: ..."
+            // left under a panel now showing Phase RMS.  Only the panel
+            // that was replotted, and only the kind that rendered.  The
+            // next mouse move over the plot fills it in again; the cursor
+            // Div has no js_on_change hook (info_panel.wire_info_display),
+            // so this triggers nothing else.
+            if (p0 && p0.title != null) {
+                const cur0 = (p0_kind === 'raster') ? panel0_raster_cursor
+                                                    : panel0_scatter_cursor;
+                if (cur0) cur0.text = cursor_placeholder;
+            }
 
             // Reveal whichever of this slot's two layout objects matches
             // what actually rendered, hide the other — the visibility-
@@ -6682,6 +6696,20 @@ function doPlot(reload) {
             if (p1 && p1.x_label != null) p1_fig.below[0].axis_label = p1.x_label;
             if (p1 && p1.y_label != null) p1_fig.left[0].axis_label  = p1.y_label;
             if (p1 && p1.title   != null) p1_fig.title.text           = p1.title;
+            // Reset this panel's cursor readout (2026-10-05).  A title in
+            // the response means the panel was really re-queried (axes,
+            // quantity, averaging, selection...), so whatever the readout
+            // says describes the previous plot -- e.g. "Amplitude: ..."
+            // left under a panel now showing Phase RMS.  Only the panel
+            // that was replotted, and only the kind that rendered.  The
+            // next mouse move over the plot fills it in again; the cursor
+            // Div has no js_on_change hook (info_panel.wire_info_display),
+            // so this triggers nothing else.
+            if (p1 && p1.title != null) {
+                const cur1 = (p1_kind === 'raster') ? panel1_raster_cursor
+                                                    : panel1_scatter_cursor;
+                if (cur1) cur1.text = cursor_placeholder;
+            }
 
             if (p1) {
                 cvShowKind(panel1_raster_layout, panel1_scatter_layout,
@@ -6913,10 +6941,16 @@ function doPlot(reload) {
             # Info block Divs (info_panel.py) that doPlot()'s response
             # writes text into.  None of these get a comm.send of their
             # own; the response applies to them here, same pattern as
-            # image_source above.  Only the legend/colorbar Divs are
-            # needed: the cursor readout is written by the hover
-            # callback, and visibility is derived by each block's own
-            # js_on_change hooks.
+            # image_source above.  Visibility is derived by each block's
+            # own js_on_change hooks.
+            # Cursor readouts: reset when their panel is replotted (see
+            # the response handler).  Still written by the hover callback
+            # otherwise.
+            "panel0_raster_cursor":   self._slots[0].raster._info_div,
+            "panel0_scatter_cursor":  self._slots[0].scatter._info_div,
+            "panel1_raster_cursor":   self._slots[1].raster._info_div,
+            "panel1_scatter_cursor":  self._slots[1].scatter._info_div,
+            "cursor_placeholder":     CURSOR_PLACEHOLDER_HTML,
             "panel0_scatter_legend_content":   self._slots[0].scatter._legend_content,
             "panel0_scatter_colorbar_content": self._slots[0].scatter._colorbar_content,
             "panel0_raster_colorbar_content":  self._slots[0].raster._colorbar_content,

@@ -67,7 +67,7 @@ def _visplot_t(
         uvrange: str = '',
         correlation: str = '',
         datacolumn: str = 'data',
-        averaging: str = 'scalar',
+        averaging: str = 'vector',
         layout: str = 'side',
         kind: Optional[str] = None,
         preset: Optional[str] = None,
@@ -190,11 +190,13 @@ class _visplot:
     datacolumn : str
         Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.
     averaging : str
-        How raster cells combine the samples they cover: ``"scalar"``
-        (default; Amplitude is the mean of the amplitudes, Phase the
-        circular mean) or ``"vector"`` (average the complex visibility,
-        then take Amplitude / Phase -- drops where samples are
-        incoherent).  Also the sidebar's "Averaging" control.
+        How raster cells combine the samples they cover: ``"vector"``
+        (default; average the complex visibility, then take Amplitude /
+        Phase -- Amplitude drops where samples are incoherent) or
+        ``"scalar"`` (Amplitude is the mean of the amplitudes, Phase the
+        circular mean).  Initial value for every raster panel; each
+        panel's own "Averaging" control (raster gear tab) changes it
+        independently afterwards.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -317,7 +319,7 @@ class _visplot:
         'uvrange': 'UV range string.',
         'correlation': 'Comma-separated correlation labels (``"XX,YY"``).',
         'datacolumn': 'Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.',
-        'averaging': 'How raster cells combine the samples they cover: ``"scalar"`` (default; Amplitude is the mean of the amplitudes, Phase the circular mean) or ``"vector"`` (average the complex visibility, then take Amplitude / Phase -- drops where samples are incoherent).',
+        'averaging': 'How raster cells combine the samples they cover: ``"vector"`` (default; average the complex visibility, then take Amplitude / Phase -- Amplitude drops where samples are incoherent) or ``"scalar"`` (Amplitude is the mean of the amplitudes, Phase the circular mean).',
         'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), or ``"over"`` (both panels, one above the other).',
         'kind': 'Which panel kind leads: ``"raster"`` (default when omitted) or ``"scatter"``.',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
@@ -358,7 +360,7 @@ class _visplot:
         'uvrange': '',
         'correlation': '',
         'datacolumn': 'data',
-        'averaging': 'scalar',
+        'averaging': 'vector',
         'layout': 'side',
         'kind': None,
         'preset': None,

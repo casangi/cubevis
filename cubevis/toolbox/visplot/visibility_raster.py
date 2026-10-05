@@ -47,6 +47,7 @@ from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
 from .data.reader import _agg_value, _cell_bounds, channel_range_to_freq
 from .axes import Axis
+from .selection import normalize_averaging
 from .data._scatter_render import _DEFAULT_ZSCORE_THRESHOLD, zscore_cell_cutoff
 from .scaling_memory import (
     ScalingMemory, ScalingSettings, default_scaling_settings,
@@ -172,9 +173,16 @@ class VisibilityRaster(VisibilityPlot):
         scaling_gamma: float = 1.0,
         raster_interpolate: str = "auto",
         probe_debug: bool = False,
+        averaging: Optional[str] = None,
         **kwargs,
     ) -> None:
         self._quantity     = quantity
+        # HRS H1 (2026-10): how THIS raster's cells combine the samples
+        # they cover -- "vector" | "scalar" (None = DEFAULT_AVERAGING).
+        # Per panel, so two rasters can show the same selection averaged
+        # differently; stamped onto a copy of the selection at query
+        # time (see _render), never onto the shared selection itself.
+        self._averaging    = normalize_averaging(averaging)
         self._polarization = polarization
         self._cmap         = cmap or _DEFAULT_CMAP
         self._max_cells    = max_cells
@@ -249,6 +257,14 @@ class VisibilityRaster(VisibilityPlot):
         """Cached float64 2D DataArray from the last ``query_raster`` call."""
         return self._agg
 
+    @property
+    def averaging(self) -> str:
+        """This raster's cell averaging: ``"vector"`` or ``"scalar"``.
+
+        Change it with ``update_axes(averaging=...)``.
+        """
+        return self._averaging
+
     def update_axes(
         self,
         y_dim: Optional["Axis"]  = None,
@@ -256,13 +272,21 @@ class VisibilityRaster(VisibilityPlot):
         quantity: Optional["Axis"] = None,
         polarization: Optional[str] = None,
         title: Optional[str] = None,
+        averaging: Optional[str] = None,
     ) -> None:
-        """Change axes, quantity, or polarization and re-render in place.
+        """Change axes, quantity, polarization or averaging and re-render
+        in place.
 
-        Extends the base ``update_axes`` with ``quantity`` and
-        ``polarization`` parameters specific to raster mode.
+        Extends the base ``update_axes`` with ``quantity``,
+        ``polarization`` and ``averaging`` parameters specific to raster
+        mode.  ``averaging`` is ``"vector"`` or ``"scalar"``; ``None``
+        leaves it as it is.
         """
         changed = False
+        if averaging is not None:
+            averaging = normalize_averaging(averaging)
+            if averaging != self._averaging:
+                self._averaging = averaging;  changed = True
         if quantity is not None and quantity != self._quantity:
             self._quantity = quantity;  changed = True
             # Scaling settings are per-quantity (Part 6 follow-up): leaving a
@@ -1161,7 +1185,10 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 y_dim        = self._y_dim,
                 x_dim        = self._x_dim,
                 quantity     = self._quantity,
-                selection    = selection,
+                # This panel's own averaging, on a copy: the caller's
+                # selection (shared with the other panels) is untouched.
+                selection    = dataclasses.replace(
+                    selection, averaging=self._averaging),
                 polarization = self._polarization,
                 max_cells    = budget,
             )

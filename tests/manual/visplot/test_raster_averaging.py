@@ -2,8 +2,9 @@
 test_raster_averaging.py
 ==========================
 Tests for HRS milestone H1 (2026-10): Amplitude and Phase raster cells
-are reduced from the complex visibility, with ``SelectionSpec.averaging``
-choosing scalar (default) or vector averaging.
+are reduced from the complex visibility, with vector (default) or scalar
+averaging chosen per raster panel (``VisibilityRaster.averaging``) and
+carried to the backend on ``SelectionSpec.averaging``.
 
 Location in repository:
     cubevis/tests/manual/visplot/test_raster_averaging.py
@@ -16,8 +17,8 @@ What is pinned here:
 * the bug: Phase used to be the arithmetic mean of wrapped per-sample
   phases, so samples straddling +/-180 deg averaged to ~0 deg.  Both
   modes now give ~180 deg;
-* scalar Amplitude is unchanged (mean of |V|), so existing plots and
-  tests that rely on it keep their values;
+* scalar Amplitude is mean of |V| -- what every Amplitude raster was
+  before 2026-10, still available, no longer the default;
 * vector Amplitude is |mean(V)| and falls for incoherent samples
   (noise, a delay slope across the averaged channels);
 * flagged samples are excluded in every mode; a fully flagged cell is
@@ -25,7 +26,10 @@ What is pinned here:
 * Real / Imaginary / Z-Score / Flag do not depend on the mode;
 * with nothing to reduce the per-sample value is returned;
 * MSv2Backend and MSv4Backend agree;
-* the option travels on SelectionSpec (default, copy, validation).
+* the option travels on SelectionSpec (default, copy, validation);
+* each VisibilityRaster stamps its own mode onto a copy of the selection,
+  so two panels can differ and the shared selection is never modified;
+* every default in the package is the one ``DEFAULT_AVERAGING``.
 
 All synthetic -- no real MS/PS needed for any test in this file.
 """
@@ -43,7 +47,7 @@ from cubevis.toolbox.visplot.data._raster_average import reduce_amp_phase
 from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
 from cubevis.toolbox.visplot.data.msv4_backend import MSv4Backend
 from cubevis.toolbox.visplot.selection import (
-    AVERAGING_MODES, SelectionSpec, normalize_averaging,
+    AVERAGING_MODES, DEFAULT_AVERAGING, SelectionSpec, normalize_averaging,
 )
 
 DIMS = ("time", "baseline_id", "frequency", "polarization")
@@ -417,7 +421,7 @@ class TestQueryRasterUsesSelection:
         vis = np.broadcast_to(_phasor(360.0 * np.arange(nf) / nf), (3, 2, nf)).copy()
         b = self._backend("msv2", _dataset(vis))
         s, *_ = b.query_raster(Axis.TIME, Axis.BASELINE, Axis.AMPLITUDE,
-                               SelectionSpec(), polarization="XX")
+                               SelectionSpec(averaging="scalar"), polarization="XX")
         v, *_ = b.query_raster(Axis.TIME, Axis.BASELINE, Axis.AMPLITUDE,
                                SelectionSpec(averaging="vector"), polarization="XX")
         assert np.allclose(s.values, 1.0)
@@ -457,8 +461,8 @@ class TestHelperContract:
 
 class TestSelectionSpec:
 
-    def test_default_is_scalar(self):
-        assert SelectionSpec().averaging == "scalar"
+    def test_default(self):
+        assert SelectionSpec().averaging == DEFAULT_AVERAGING
 
     def test_copy_preserves(self):
         assert SelectionSpec(averaging="vector").copy().averaging == "vector"
@@ -477,7 +481,7 @@ class TestSelectionSpec:
 
     @pytest.mark.parametrize("given, want", [
         ("vector", "vector"), ("Vector", "vector"), (" SCALAR ", "scalar"),
-        (None, "scalar"), ("", "scalar"),
+        (None, DEFAULT_AVERAGING), ("", DEFAULT_AVERAGING),
     ])
     def test_normalize(self, given, want):
         assert normalize_averaging(given) == want
@@ -485,3 +489,131 @@ class TestSelectionSpec:
     def test_normalize_rejects_unknown(self):
         with pytest.raises(ValueError, match="scalar"):
             normalize_averaging("median")
+
+
+# ---------------------------------------------------------------------------
+# 10. One default, everywhere
+# ---------------------------------------------------------------------------
+
+class TestDefault:
+
+    def test_default_is_vector(self):
+        # A deliberate decision (2026-10-05, HRS): AIPS and plotms average
+        # vectorially.  Changing it should mean editing this test too.
+        assert DEFAULT_AVERAGING == "vector"
+
+    def test_backends_default(self, backend_name):
+        import inspect
+        sig = inspect.signature(BACKENDS[backend_name]()._raster_2d)
+        assert sig.parameters["averaging"].default == DEFAULT_AVERAGING
+
+    def test_backend_default_behaviour_is_vector(self, backend_name):
+        # No averaging argument at all: a delay slope must decorrelate.
+        nf = 32
+        vis = np.broadcast_to(_phasor(360.0 * np.arange(nf) / nf), (2, 2, nf)).copy()
+        out = _raster(backend_name, _dataset(vis),
+                      Axis.TIME, Axis.BASELINE, Axis.AMPLITUDE)
+        assert np.all(out < 1e-12)
+
+    def test_plotter_constructor_literal_matches(self):
+        # VisibilityPlotter.__init__ has to spell the default as a
+        # literal (sync_layers copies it into the generated task layers);
+        # this keeps the literal honest.
+        import inspect
+        from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+        sig = inspect.signature(VisibilityPlotter.__init__)
+        assert sig.parameters["averaging"].default == DEFAULT_AVERAGING
+
+
+# ---------------------------------------------------------------------------
+# 11. Averaging belongs to the raster panel
+# ---------------------------------------------------------------------------
+
+class _RecordingReader:
+    """Minimal reader: records the averaging each query arrives with."""
+
+    def __init__(self):
+        self.calls = []
+
+    def query_raster(self, y_dim, x_dim, quantity, selection,
+                     polarization=None, max_cells=2_000_000, **kw):
+        self.calls.append((quantity, selection.averaging))
+        agg = xr.DataArray(
+            np.ones((4, 3)), dims=("time", "baseline_id"),
+            coords={"time": np.arange(4.0), "baseline_id": np.arange(3)})
+        return agg, (0.0, 2.0), (0.0, 3.0), False
+
+    def identity_tables(self, *a, **kw):
+        return {}
+
+
+class TestRasterPanelOwnsAveraging:
+
+    def _vr(self, reader, selection, **kw):
+        pytest.importorskip("datashader")
+        from cubevis.toolbox.visplot.visibility_raster import VisibilityRaster
+        return VisibilityRaster(reader, selection, Axis.TIME, Axis.BASELINE,
+                                Axis.AMPLITUDE, **kw)
+
+    def test_default(self):
+        r = _RecordingReader()
+        vr = self._vr(r, SelectionSpec())
+        assert vr.averaging == DEFAULT_AVERAGING
+        assert r.calls[-1] == (Axis.AMPLITUDE, DEFAULT_AVERAGING)
+
+    def test_constructor_value_reaches_backend(self):
+        r = _RecordingReader()
+        vr = self._vr(r, SelectionSpec(), averaging="scalar")
+        assert vr.averaging == "scalar"
+        assert r.calls[-1][1] == "scalar"
+
+    def test_shared_selection_is_not_modified(self):
+        r = _RecordingReader()
+        sel = SelectionSpec()                    # carries the default
+        self._vr(r, sel, averaging="scalar")
+        assert sel.averaging == DEFAULT_AVERAGING
+
+    def test_panel_overrides_whatever_the_selection_says(self):
+        # The selection's own field is transport only; the panel decides.
+        r = _RecordingReader()
+        self._vr(r, SelectionSpec(averaging="scalar"), averaging="vector")
+        assert r.calls[-1][1] == "vector"
+
+    def test_update_axes_changes_and_requeries(self):
+        r = _RecordingReader()
+        vr = self._vr(r, SelectionSpec(), averaging="scalar")
+        n = len(r.calls)
+        vr.update_axes(averaging="vector")
+        assert vr.averaging == "vector"
+        assert len(r.calls) == n + 1 and r.calls[-1][1] == "vector"
+
+    def test_update_axes_same_value_does_not_requery(self):
+        r = _RecordingReader()
+        vr = self._vr(r, SelectionSpec(), averaging="vector")
+        n = len(r.calls)
+        vr.update_axes(averaging="vector")
+        assert len(r.calls) == n
+
+    def test_update_axes_none_keeps_mode(self):
+        r = _RecordingReader()
+        vr = self._vr(r, SelectionSpec(), averaging="scalar")
+        vr.update_axes(quantity=Axis.PHASE)
+        assert vr.averaging == "scalar"
+        assert r.calls[-1] == (Axis.PHASE, "scalar")
+
+    def test_two_panels_one_selection_differ(self):
+        r = _RecordingReader()
+        sel = SelectionSpec()
+        a = self._vr(r, sel, averaging="vector")
+        b = self._vr(r, sel, averaging="scalar")
+        a.update_axes(quantity=Axis.PHASE)
+        b.update_axes(quantity=Axis.PHASE)
+        assert r.calls[-2:] == [(Axis.PHASE, "vector"), (Axis.PHASE, "scalar")]
+
+    def test_rejects_unknown_mode(self):
+        r = _RecordingReader()
+        with pytest.raises(ValueError):
+            self._vr(r, SelectionSpec(), averaging="median")
+        vr = self._vr(r, SelectionSpec())
+        with pytest.raises(ValueError):
+            vr.update_axes(averaging="median")

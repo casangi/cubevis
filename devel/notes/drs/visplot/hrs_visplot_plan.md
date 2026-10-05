@@ -66,6 +66,7 @@ straddle +/-180 degrees, and amplitude cannot show coherent averages.
 - Control: Averaging = Vector | Scalar; default Vector for Phase, Real,
   Imaginary; default for Amplitude to be decided at implementation (vector
   matches AIPS/plotms averaging defaults; scalar is today's behaviour).
+  *Decided 2026-10-05: one per-panel control, default Vector.*
 - Exit: synthetic test with phases at +/-179 degrees gives 180, not 0;
   noise-only data gives vector amplitude well below scalar; MSv2 == MSv4.
 
@@ -185,3 +186,4 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-02 | `3b5eb82` | Survey and revision 2 of this plan written |
 | 2026-10-03 | `7bc261c` | H1 delivered: `averaging` scalar/vector, Phase wrap fix, both backends; see `hrs_h1_raster_averaging.md`. Default left at scalar pending real-data comparison. GUI control not yet exercised in a browser. H1b (phase-safe display resample) added to H3 |
 | 2026-10-05 | `7f6e2f5` | H1 rebased over the duplicate-SPW-name and local/remote-skew fixes. One conflict (adjacent imports in `msv2_backend.py`), no change to H1 code |
+| 2026-10-05 | `e46febc` | H1 revised: averaging is per raster panel (control moved from the sidebar to each raster gear tab); default switched to vector via `selection.DEFAULT_AVERAGING`. Amplitude rasters that average change accordingly |

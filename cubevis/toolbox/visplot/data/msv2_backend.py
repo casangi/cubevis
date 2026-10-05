@@ -89,6 +89,7 @@ from ._spw_identity import (
     build_ambiguous_spw_map, make_disambiguating_ident,
 )
 from ._raster_average import reduce_amp_phase
+from ..selection import DEFAULT_AVERAGING
 from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
 
@@ -1684,7 +1685,7 @@ class MSv2Backend(XArrayReader):
                 freq_coords.append(np.asarray(ds.coords["frequency"].values))
 
             arr = self._raster_2d(ds, y_dim, x_dim, quantity, polarization,
-                                  averaging=getattr(selection, "averaging", "scalar"))
+                                  averaging=getattr(selection, "averaging", DEFAULT_AVERAGING))
             if arr is not None:
                 _n = arr.attrs.get('zscore_n_reduced')
                 if _n is not None:
@@ -1835,7 +1836,7 @@ class MSv2Backend(XArrayReader):
         x_dim: Axis,
         quantity: Axis,
         polarization: Optional[str],
-        averaging: str = "scalar",
+        averaging: str = DEFAULT_AVERAGING,
     ) -> Optional[xr.DataArray]:
         """Reduce a single partition to a 2D DataArray for raster mode."""
         vis  = self._resolve_vis(ds)
@@ -1980,8 +1981,8 @@ class MSv2Backend(XArrayReader):
                 # the complex visibility, not as mean(per-sample
                 # quantity) -- the arithmetic mean of wrapped phases is
                 # not a phase (+179 and -179 deg averaged to 0, not 180).
-                # ``averaging`` picks scalar (default; Amplitude
-                # unchanged, Phase = circular mean) or vector.  The
+                # ``averaging`` picks vector (default) or scalar
+                # (Amplitude = mean |V|, Phase = circular mean).  The
                 # per-sample ``q`` built above is only what is shown
                 # when there is nothing to reduce.  See _raster_average.
                 q = reduce_amp_phase(vis_pol, flag_pol, quantity,

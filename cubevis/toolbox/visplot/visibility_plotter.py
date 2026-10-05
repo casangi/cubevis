@@ -1776,11 +1776,13 @@ class VisibilityPlotter:
     datacolumn : str
         Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.
     averaging : str
-        How raster cells combine the samples they cover: ``"scalar"``
-        (default; Amplitude is the mean of the amplitudes, Phase the
-        circular mean) or ``"vector"`` (average the complex visibility,
-        then take Amplitude / Phase -- drops where samples are
-        incoherent).  Also the sidebar's "Averaging" control.
+        How raster cells combine the samples they cover: ``"vector"``
+        (default; average the complex visibility, then take Amplitude /
+        Phase -- Amplitude drops where samples are incoherent) or
+        ``"scalar"`` (Amplitude is the mean of the amplitudes, Phase the
+        circular mean).  Initial value for every raster panel; each
+        panel's own "Averaging" control (raster gear tab) changes it
+        independently afterwards.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -1902,7 +1904,10 @@ class VisibilityPlotter:
         uvrange:          str           = "",
         correlation:      str           = "",
         datacolumn:       str           = "data",
-        averaging:        str           = "scalar",
+        # Literal, not DEFAULT_AVERAGING: sync_layers copies this default
+        # verbatim into the generated task layers, where that name does
+        # not exist.  test_raster_averaging pins the two together.
+        averaging:        str           = "vector",
         layout:           str           = "side",
         kind:             Optional[str] = None,
         preset:           Optional[str] = None,
@@ -2089,9 +2094,11 @@ class VisibilityPlotter:
         self._uvrange_str   = uvrange
         self._corr_str      = correlation
         self._datacolumn    = datacolumn.upper()
-        # HRS H1 (2026-10): raster cell averaging, "scalar" | "vector".
-        # Validated here so a typo fails at construction, not as a
-        # silently-defaulted plot.
+        # HRS H1 (2026-10): raster cell averaging, "vector" | "scalar".
+        # The INITIAL value for every raster panel; after construction
+        # each panel carries its own (VisibilityRaster.averaging, set
+        # from that slot's raster gear tab).  Validated here so a typo
+        # fails at construction, not as a silently-defaulted plot.
         self._averaging     = normalize_averaging(averaging)
         # layout="raster"/"scatter" is sugar for layout="one", kind=X --
         # resolved once here, before either attribute is set, so nothing
@@ -2468,6 +2475,7 @@ class VisibilityPlotter:
             y_dim         = self._raster_y,
             x_dim         = self._raster_x,
             quantity      = self._raster_qty,
+            averaging     = self._averaging,
             polarization  = first_pol,
             width         = self._plot_width,
             height        = self._plot_height,
@@ -2526,6 +2534,7 @@ class VisibilityPlotter:
             y_dim         = self._raster_y,
             x_dim         = self._raster_x,
             quantity      = self._raster_qty,
+            averaging     = self._averaging,
             polarization  = first_pol,
             width         = self._plot_width,
             height        = self._plot_height,
@@ -3485,13 +3494,6 @@ for (const dt of other.tools) {
             self._spw_ids = None
         if "correlation" in msg: self._corr_str     = msg["correlation"]
         if "datacolumn"  in msg: self._datacolumn   = msg["datacolumn"].upper()
-        if "averaging"   in msg:
-            # Browser-supplied: fall back to the current value rather
-            # than raise on something unrecognised.
-            try:
-                self._averaging = normalize_averaging(msg["averaging"])
-            except ValueError:
-                log.warning("ignoring unknown averaging %r", msg["averaging"])
 
         # Group 3 piece 3 / Chunk 1 (added 2026-07-31): request is now
         # per-slot (msg["panels"][slot.id] = {"kind": ..., ...}) instead
@@ -3592,6 +3594,16 @@ for (const dt of other.tools) {
                     log.warning("_handle_plot: unknown Axis %r for panel %s",
                                 exc, slot.id)
                     continue
+                # Averaging for THIS slot's raster (HRS H1).  Absent
+                # (older client, preset payload) or unrecognised: keep
+                # what the panel already has rather than fail the plot.
+                try:
+                    avg = (normalize_averaging(panel_msg["averaging"])
+                           if panel_msg.get("averaging") else panel.averaging)
+                except ValueError:
+                    log.warning("_handle_plot: unknown averaging %r for "
+                                "panel %s", panel_msg.get("averaging"), slot.id)
+                    avg = panel.averaging
 
                 # Force re-render when this slot's raster axes or
                 # selection content actually changed — not just because a
@@ -3631,9 +3643,10 @@ for (const dt of other.tools) {
                     self._selection.correlation  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'correlation', None)   or
                     self._selection.data_column  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'data_column', None)   or
                     # HRS H1 (2026-10): averaging changes what a raster
-                    # cell holds, so it must re-query.  Raster only --
-                    # scatter draws per-sample values and ignores it.
-                    self._selection.averaging    != getattr(self._last_raster_selection_by_slot.get(slot.id), 'averaging', None)     or
+                    # cell holds, so it must re-query.  Per panel: this
+                    # slot's requested mode against the mode its raster
+                    # last rendered with.
+                    avg != panel.averaging or
                     # Antenna iteration (I-3, 2026-09): found missing
                     # here directly, not assumed -- without this,
                     # antenna_names is the one SelectionSpec field
@@ -3669,6 +3682,7 @@ for (const dt of other.tools) {
                                 x_dim        = x,
                                 quantity     = qty,
                                 polarization = first_pol,
+                                averaging    = avg,
                             )
                         self._last_raster_selection_by_slot[slot.id] = self._selection
                 except Exception as exc:
@@ -3997,7 +4011,6 @@ for (const dt of other.tools) {
             spw         = spw_ids or None,
             correlation = corrs or None,
             data_column = self._datacolumn,
-            averaging   = getattr(self, "_averaging", "scalar"),
             time_range  = self._time_range,
             freq_range  = self._freq_range,
             antenna_names = antenna_names,
@@ -4007,7 +4020,6 @@ for (const dt of other.tools) {
             spw         = spw_ids or None,
             correlation = corrs or None,
             data_column = self._datacolumn,
-            averaging   = getattr(self, "_averaging", "scalar"),
             time_range  = self._time_range,
             freq_range  = self._freq_range,
             antenna_names = antenna_names,
@@ -4452,6 +4464,17 @@ html, body { height: 100%; margin: 0; }
             options=[(k, v) for k, v in _RASTER_QTY_OPTIONS],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+        # Averaging (HRS H1, 2026-10): how this slot's raster cells
+        # combine the samples they cover.  Per slot, like the three
+        # pickers above, and like them a plain picker read at Plot-press
+        # time (buildPanelPayload) -- so one panel can show vector and
+        # the other scalar amplitude of the same data, which is itself a
+        # coherence check.  Only Amplitude and Phase depend on it.
+        ra_sel = Select(
+            title="Averaging", value=slot.raster.averaging,
+            options=[("vector", "Vector"), ("scalar", "Scalar")],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
 
         # Per-slot Y/X conflict indicator — an inline Div scoped to this
         # panel, not the shared self._notify_div the old single global
@@ -4491,13 +4514,14 @@ conflict_div.text = conflict ? msg : '';
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Raster ──</span>", width=_SIDEBAR_WIDTH),
-            ry_sel, rx_sel, rq_sel,
+            ry_sel, rx_sel, rq_sel, ra_sel,
             conflict_div,
             raster_cmap,
             info_sel.column,
         )
         widgets = {
             "y_sel": ry_sel, "x_sel": rx_sel, "q_sel": rq_sel,
+            "avg_sel": ra_sel,
             "info_selectors": info_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
@@ -4713,18 +4737,6 @@ for (let i = 0; i < cols.length; i++) {
             value       = self._datacolumn if self._datacolumn in col_options
                           else col_options[0],
             options     = col_options,
-            width       = _SIDEBAR_WIDTH,
-            stylesheets = [dark],
-        )
-
-        # ---- Averaging (HRS H1, 2026-10) ---------------------------------- #
-        # How raster cells combine the samples they cover.  Read at Plot
-        # time by the same JS that reads the Data column Select, so it
-        # needs no callback of its own.
-        self._avg_select = Select(
-            title       = "Averaging (raster)",
-            value       = self._averaging,
-            options     = [("scalar", "Scalar"), ("vector", "Vector")],
             width       = _SIDEBAR_WIDTH,
             stylesheets = [dark],
         )
@@ -5130,7 +5142,7 @@ for (let i = 0; i < cols.length; i++) {
         self._sidebar_col = column(
             path_div,
             _section("Data"),
-            self._col_select, self._avg_select, field_col, self._spw_select,
+            self._col_select, field_col, self._spw_select,
             corr_label, self._corr_cbg,
             scan_inp, antenna_col, time_inp, uv_inp,
             # "Axes" header removed (Group 3 piece 2, 2026-07-31) along
@@ -6350,9 +6362,10 @@ function doPlot(reload) {
     }
 
     function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel,
-                                colorize_handles) {
+                                colorize_handles, ra_sel) {
         if (kind_switch.active === 0) {
-            return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value};
+            return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value,
+                    averaging: ra_sel.value};
         } else {
             return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value,
                      colorize: buildColorizeArray(colorize_handles)};
@@ -6390,10 +6403,10 @@ function doPlot(reload) {
     const panels = {};
     panels[panel0_id] = buildPanelPayload(
         panel0_kind_switch, panel0_ry_sel, panel0_rx_sel, panel0_rq_sel,
-        panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles);
+        panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles, panel0_ra_sel);
     panels[panel1_id] = buildPanelPayload(
         panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
-        panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles);
+        panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles, panel1_ra_sel);
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
 
@@ -6434,7 +6447,6 @@ function doPlot(reload) {
         spw_ids:     spw_ids,
         correlation: corr.join(','),
         datacolumn:  col_sel.value,
-        averaging:   avg_sel.value,
         panels:      panels,
         reload:      !!reload,
     }, function(resp) {
@@ -6783,7 +6795,6 @@ function doPlot(reload) {
             "spw_src":    self._spw_source,
             "corr_cbg":   self._corr_cbg,
             "col_sel":    self._col_select,
-            "avg_sel":    self._avg_select,
             "status_div": self._status_div,
             "notify_div": self._notify_div,
             "gear_tabs":  self._gear_tabs,
@@ -6825,6 +6836,7 @@ function doPlot(reload) {
             "panel0_ry_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["y_sel"],
             "panel0_rx_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["x_sel"],
             "panel0_rq_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["q_sel"],
+            "panel0_ra_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["avg_sel"],
             "panel0_sx_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["x_sel"],
             "panel0_sy_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["y_sel"],
             # Part 5 (2026-09): one entry per scatter layer, in the
@@ -6839,6 +6851,7 @@ function doPlot(reload) {
             "panel1_ry_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["y_sel"],
             "panel1_rx_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["x_sel"],
             "panel1_rq_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["q_sel"],
+            "panel1_ra_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["avg_sel"],
             "panel1_sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
             "panel1_sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
             "panel1_colorize_handles": self._panel_axis_widgets[self._slots[1].id]["scatter"]["colorize_handles"],
@@ -7456,7 +7469,8 @@ doPlot();
             for kind in ("raster", "scatter"):
                 w = self._panel_axis_widgets[slot.id][kind]
                 if kind == "raster":
-                    _all_axis_widgets += [w["y_sel"], w["x_sel"], w["q_sel"]]
+                    _all_axis_widgets += [w["y_sel"], w["x_sel"], w["q_sel"],
+                                          w["avg_sel"]]
                 else:
                     _all_axis_widgets += [w["x_sel"], w["y_sel"]]
                 _all_axis_widgets += w["cmap_widgets"]
@@ -7512,8 +7526,7 @@ doPlot();
                 # _spw_table, not _spw_select: the latter is now a column
                 # wrapping the label, the All/None row and the table, and
                 # the restyle walks widgets rather than containers.
-                "widgets":      [self._col_select, self._avg_select,
-                                 self._field_select,
+                "widgets":      [self._col_select, self._field_select,
                                  self._spw_table, self._corr_cbg,
                                  self._field_prev_btn, self._field_next_btn,
                                  self._spw_prev_btn, self._spw_next_btn,

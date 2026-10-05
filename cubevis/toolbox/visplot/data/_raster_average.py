@@ -14,16 +14,16 @@ to 180 deg; their arithmetic mean is 0 deg, the opposite direction.
 This module provides the two reductions that are meaningful
 (``SelectionSpec.averaging``):
 
-``"scalar"``
-    Amplitude: mean of ``|V|`` (unchanged from before).
-    Phase: circular mean -- the direction of the mean *unit* phasor, so
-    every unflagged sample counts equally whatever its amplitude.
-
-``"vector"``
+``"vector"`` (the package default, ``selection.DEFAULT_AVERAGING``)
     Average the complex visibility, then take amplitude / phase.
     Amplitude falls where the samples are incoherent (noise, residual
     delay across the averaged channels, residual rate across the
     averaged times).  This is the average AIPS and plotms users expect.
+
+``"scalar"``
+    Amplitude: mean of ``|V|`` (the only behaviour before 2026-10).
+    Phase: circular mean -- the direction of the mean *unit* phasor, so
+    every unflagged sample counts equally whatever its amplitude.
 
 Everything stays lazy: the inputs are dask-backed ``DataArray``s and the
 result is too, so the MSv4 backend's single fused ``dask.compute()``
@@ -51,7 +51,7 @@ def reduce_amp_phase(
     flag: xr.DataArray,
     quantity: Axis,
     reduce_dims: Sequence[str],
-    averaging: str = "scalar",
+    averaging: str = "vector",
 ) -> xr.DataArray:
     """Reduce *vis* over *reduce_dims* to Amplitude or Phase (degrees).
 

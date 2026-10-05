@@ -30,15 +30,26 @@ from typing import Optional
 AVERAGING_MODES = ("scalar", "vector")
 """Valid values of ``SelectionSpec.averaging``."""
 
+DEFAULT_AVERAGING = "vector"
+"""The averaging used when none is given -- the one place to change it.
+
+Vector since 2026-10-05 (it was ``"scalar"`` when the option was
+introduced two days earlier): the HRS commissioning users this is being
+built for come from AIPS, and AIPS and plotms both average visibilities
+vectorially unless told otherwise.  Every default in the package
+(``SelectionSpec.averaging``, ``VisibilityRaster``, ``VisibilityPlotter``,
+the backends' ``_raster_2d``) refers to this name.
+"""
+
 
 def normalize_averaging(value) -> str:
     """Return *value* as a member of ``AVERAGING_MODES``.
 
-    ``None`` / empty means the default (``"scalar"``); anything else
+    ``None`` / empty means ``DEFAULT_AVERAGING``; anything else
     unrecognised raises ``ValueError`` naming the valid choices.
     """
     if value is None or value == "":
-        return "scalar"
+        return DEFAULT_AVERAGING
     v = str(value).strip().lower()
     if v not in AVERAGING_MODES:
         raise ValueError(
@@ -81,8 +92,8 @@ class SelectionSpec:
         Which visibility column to read: ``'DATA'``, ``'CORRECTED'``,
         or ``'MODEL'``.  Defaults to ``'DATA'``.
     averaging:
-        How raster cells combine the samples they cover: ``'scalar'``
-        (default) or ``'vector'``.  See the field's own docstring.
+        How raster cells combine the samples they cover: ``'vector'``
+        (default) or ``'scalar'``.  See the field's own docstring.
     """
 
     # Selection axes ---------------------------------------------------- #
@@ -141,18 +152,18 @@ class SelectionSpec:
     data_column: str = "DATA"
     """Visibility column: ``'DATA'``, ``'CORRECTED'``, or ``'MODEL'``."""
 
-    averaging: str = "scalar"
+    averaging: str = DEFAULT_AVERAGING
     """How a raster cell combines the samples it covers (HRS H1, 2026-10).
 
-    * ``"scalar"`` (default) -- Amplitude is the mean of the per-sample
-      amplitudes (the behaviour before this field existed).  Phase is the
+    * ``"vector"`` (default) -- the complex visibilities are averaged
+      first and Amplitude / Phase are taken from that mean.  Amplitude
+      then drops where the samples are incoherent (noise, residual delay
+      or rate), which is what AIPS and plotms users expect of an averaged
+      visibility; Phase is weighted by amplitude.
+    * ``"scalar"`` -- Amplitude is the mean of the per-sample amplitudes
+      (the only behaviour before this field existed).  Phase is the
       circular mean: the direction of the mean *unit* phasor, every sample
       weighted equally.
-    * ``"vector"`` -- the complex visibilities are averaged first and
-      Amplitude / Phase are taken from that mean.  Amplitude then drops
-      where the samples are incoherent (noise, residual delay or rate),
-      which is what AIPS and plotms users expect of an averaged
-      visibility; Phase is weighted by amplitude.
 
     Real and Imaginary are linear, so both modes give the same value.
     Flag fraction and Z-Score ignore this field.  In neither mode is Phase
@@ -160,9 +171,16 @@ class SelectionSpec:
     for samples straddling +/-180 deg): that was a bug, not a mode.
 
     Not a row constraint: excluded from ``is_empty()``, preserved by
-    ``copy()``.  It is part of the frame-cache fingerprint like every
-    other field; scatter frames do not depend on it, so changing it costs
-    one scatter re-read.  Use ``AVERAGING_MODES`` to validate.
+    ``copy()``.
+
+    This field is transport, not GUI state.  Averaging is a property of
+    each raster panel (``VisibilityRaster.averaging``): the panel stamps
+    its own mode onto a copy of the selection just before it queries, so
+    two rasters can show the same data averaged differently, and the
+    selection the plotter shares between panels never changes because
+    of it (scatter frames, which do not depend on averaging, are
+    therefore never invalidated by a mode change).  Use
+    ``normalize_averaging`` to validate.
     """
 
     cache_generation: int = 0

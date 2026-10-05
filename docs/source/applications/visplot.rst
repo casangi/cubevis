@@ -179,6 +179,14 @@ Task arguments (preview)
      - str
      - ``"data"`` (default), ``"corrected"``, or ``"model"``,
        depending on what columns are present in the MS.
+   * - ``averaging``
+     - str
+     - How raster cells combine the samples they cover: ``"vector"``
+       (default) averages the complex visibilities and then takes
+       amplitude or phase, so amplitude drops where the samples are
+       incoherent; ``"scalar"`` averages the amplitudes themselves.
+       Sets the initial value for every raster panel; each panel's
+       gear tab has its own *Averaging* control.
    * - ``mode``
      - str
      - ``"both"``, ``"raster"``, or ``"scatter"`` — initial display
@@ -260,8 +268,8 @@ Sidebar
 ```````
 
 * **Data selection** — field, SPW, correlation, data column
-* **Raster axis controls** — X/Y axis choice and quantity for the
-  raster panel
+* **Raster axis controls** — X/Y axis choice, quantity and averaging
+  (vector or scalar) for the raster panel
 * **Scatter axis controls** — X axis, plus one or more overplotted
   layers (quantity, correlation, color, opacity) for the scatter panel
 * **Colormap controls** — scaling (default: histogram-equalized) and

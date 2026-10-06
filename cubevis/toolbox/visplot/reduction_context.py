@@ -197,6 +197,33 @@ class AntennaInfo:
 
 
 @dataclass(frozen=True)
+class BaselineInfo:
+    """One baseline, as the data spell it (added 2026-10, HRS H3).
+
+    ``ant1`` / ``ant2`` are in the data's own orientation: this exact
+    ordered pair is what ``SelectionSpec.baselines`` has to carry for the
+    backends to match it.  ``baseline_id`` is the number the Baseline
+    axis of a raster shows for it.
+    """
+    baseline_id: int
+    ant1:        str
+    ant2:        str
+
+    @property
+    def name(self) -> str:
+        """``"ANT1&ANT2"`` -- the form the cursor readout shows."""
+        return f"{self.ant1}&{self.ant2}"
+
+    @property
+    def pair(self) -> tuple:
+        return (self.ant1, self.ant2)
+
+    @property
+    def is_auto(self) -> bool:
+        return self.ant1 == self.ant2
+
+
+@dataclass(frozen=True)
 class ScanInfo:
     """Metadata for a single scan."""
     scan_id:    int
@@ -243,6 +270,10 @@ class ObservationMetadata:
     freq_range_hz:   tuple[float, float]      # Hz, across all SPWs
     n_baselines:     int
     source_path:     str = ""                 # path to the MS / PS for display
+    # Every baseline in the data, in baseline-id order (2026-10).  Empty
+    # for single-dish data and for a backend that does not report them;
+    # defaulted so existing constructions of this class keep working.
+    baselines:       tuple = ()               # tuple[BaselineInfo, ...]
 
     @classmethod
     def from_backend_metadata(cls, meta: dict, source_path: str = "") -> "ObservationMetadata":
@@ -328,6 +359,10 @@ class ObservationMetadata:
             freq_range_hz=tuple(meta.get("freq_range", (0.0, 0.0))),
             n_baselines=meta.get("n_baselines", 0),
             source_path=source_path,
+            baselines=tuple(
+                BaselineInfo(baseline_id=int(b[0]), ant1=str(b[1]), ant2=str(b[2]))
+                for b in (meta.get("baselines") or [])
+            ),
         )
 
 

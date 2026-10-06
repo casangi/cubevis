@@ -89,6 +89,7 @@ from ._spw_identity import (
     build_ambiguous_spw_map, make_disambiguating_ident,
 )
 from ._raster_average import reduce_amp_phase
+from ._baseline_meta import baselines_to_meta, collect_baselines
 from ._raster_stats import STAT_QUANTITIES, reduce_phase_stat
 from ..selection import DEFAULT_AVERAGING
 from ..axes import Axis, AxisInfo, AxisType
@@ -794,6 +795,7 @@ class MSv2Backend(XArrayReader):
         t_min = float("inf");  t_max = float("-inf")
         f_min = float("inf");  f_max = float("-inf")
         n_baselines  = 0
+        baselines:    dict = {}
         data_columns: set[str] = set()
 
         for ds in self._iter_visibility_partitions():
@@ -801,6 +803,9 @@ class MSv2Backend(XArrayReader):
             _collect_string_coord(ds, "field_name",             field_names)
             _collect_string_coord(ds, "baseline_antenna1_name", ant_names)
             _collect_string_coord(ds, "baseline_antenna2_name", ant_names)
+            # The pairs themselves, in the data's own orientation, for
+            # the sidebar's Baseline table (see _baseline_meta).
+            collect_baselines(ds, baselines)
 
             # Spectral window identity and per-window detail.
             #
@@ -880,6 +885,7 @@ class MSv2Backend(XArrayReader):
             "time_range":        (t_min, t_max),
             "freq_range":        (f_min, f_max),
             "n_baselines":       n_baselines,
+            "baselines":         baselines_to_meta(baselines),
             "data_columns":      sorted(data_columns),
         }
 
@@ -1687,7 +1693,9 @@ class MSv2Backend(XArrayReader):
 
             arr = self._raster_2d(ds, y_dim, x_dim, quantity, polarization,
                                   averaging=getattr(selection, "averaging", DEFAULT_AVERAGING),
-                                  detrend=getattr(selection, "detrend", True))
+                                  detrend=getattr(selection, "detrend", True),
+                                  time_window=getattr(selection, "stat_time_window", "auto"),
+                                  chan_window=getattr(selection, "stat_chan_window", "off"))
             if arr is not None:
                 _n = arr.attrs.get('zscore_n_reduced')
                 if _n is not None:
@@ -1840,6 +1848,8 @@ class MSv2Backend(XArrayReader):
         polarization: Optional[str],
         averaging: str = DEFAULT_AVERAGING,
         detrend: bool = True,
+        time_window="auto",
+        chan_window="off",
     ) -> Optional[xr.DataArray]:
         """Reduce a single partition to a 2D DataArray for raster mode."""
         vis  = self._resolve_vis(ds)
@@ -2002,10 +2012,28 @@ class MSv2Backend(XArrayReader):
                 q = reduce_amp_phase(vis_pol, flag_pol, quantity,
                                      reduce_dims, averaging)
             elif quantity in STAT_QUANTITIES:
-                q = reduce_phase_stat(vis_pol, flag_pol, quantity,
-                                      reduce_dims, detrend)
+                pass        # reduced below, together with any windows
             else:
                 q = q.mean(dim=reduce_dims, skipna=True)
+
+        if quantity in STAT_QUANTITIES:
+            # HRS H2: Phase RMS / Coherence.  Outside ``if reduce_dims``
+            # because a window along a displayed axis (slice 2) gives a
+            # cell something to take a statistic over even when nothing
+            # is reduced -- the single-baseline Time x Channel waterfall.
+            # With neither, there is one sample per cell and the NaN
+            # placeholder built above is the honest answer.
+            try:
+                q = reduce_phase_stat(
+                    vis_pol, flag_pol, quantity, reduce_dims, detrend,
+                    time_window=time_window, chan_window=chan_window)
+            except ValueError as exc:
+                # Nothing to take a statistic over: a blank (all-NaN)
+                # raster of the right shape.  The placeholder still has
+                # the reduced dimensions; drop them.
+                log.debug("_raster_2d: %s left blank: %s", quantity.name, exc)
+                if reduce_dims:
+                    q = q.isel({d: 0 for d in reduce_dims}, drop=True)
 
         # Verify we ended up with the right 2D shape
         if set(q.dims) != {y_name, x_name}:

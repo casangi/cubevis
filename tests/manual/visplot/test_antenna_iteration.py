@@ -161,40 +161,40 @@ class TestAntennaIterationPosition:
 # 3. doIterateAntenna -- the real, shipped JS stepping logic
 # ---------------------------------------------------------------------------
 
-def _build_shipped_antenna_js(antenna_names: list) -> str:
-    """Reconstructs the EXACT string _build_toolbar() ships for
-    doIterateAntenna, from the real STEP_INDEX_JS and _iter_guard_js
-    this file also imports -- exercising the shipped implementation,
-    not a hand-transcribed copy of it (mirrors test_iteration_step.py's
-    TestJavaScriptParity._run_js docstring, which states this exact
-    principle for its own JS tests). Only _antenna_names_json is
-    substituted with test data; every other character is the same
-    template _build_toolbar() itself concatenates.
+def _build_shipped_antenna_js() -> str:
+    """The EXACT string _build_toolbar() ships for doIterateAntenna.
+
+    Since 2026-10 the Antenna control is a checkbox table, not a text
+    box, and the function body lives in ``antenna_baseline_select`` --
+    so this is now the shipped builder itself rather than a
+    reconstruction of its template, called the way _build_toolbar()
+    calls it.
     """
-    return STEP_INDEX_JS + """
-function doIterateAntenna(delta) {
-    const names = """ + json.dumps(antenna_names) + """;""" + \
-    _iter_guard_js("names.length", "antenna") + """
-    const cur = names.indexOf(antenna_input.value.trim());
-    const idx = stepIterationIndex(cur === -1 ? null : cur, names.length, delta, true);
-    if (idx === null) return;
-    antenna_input.value = names[idx];
-}
-"""
+    from cubevis.toolbox.visplot.antenna_baseline_select import iterate_antenna_js
+    return STEP_INDEX_JS + iterate_antenna_js(
+        _iter_guard_js("names.length", "antenna"))
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
 class TestDoIterateAntennaJS:
     @staticmethod
     def _run(antenna_names: list, start_value: str, delta: int) -> tuple:
-        """Runs doIterateAntenna(delta) against a mock antenna_input
-        starting at start_value, returns (final_value, notify_text)."""
-        fn_src = _build_shipped_antenna_js(antenna_names)
-        script = fn_src + f"""
-let antenna_input = {{ value: {json.dumps(start_value)} }};
+        """Runs doIterateAntenna(delta) against a mock Antenna table
+        whose ticked rows are the antennas named in start_value (comma-
+        separated; "" = none), returns (final_value, notify_text) with
+        final_value the ticked antenna names joined the same way -- the
+        shape these tests were written against when the control was a
+        text box."""
+        start = [antenna_names.index(n.strip())
+                 for n in start_value.split(",") if n.strip() in antenna_names]
+        script = _build_shipped_antenna_js() + f"""
+const names = {json.dumps(antenna_names)};
+let ant_src = {{ data: {{ name: names }}, selected: {{ indices: {json.dumps(start)} }} }};
+let bl_src = {{ data: {{ ant1: [], ant2: [] }}, selected: {{ indices: [] }} }};
 let notify_div = {{ text: "" }};
 doIterateAntenna({delta});
-process.stdout.write(JSON.stringify([antenna_input.value, notify_div.text]));
+process.stdout.write(JSON.stringify(
+    [ant_src.selected.indices.map(i => names[i]).join(","), notify_div.text]));
 """
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "harness.js"

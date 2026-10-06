@@ -1,4 +1,4 @@
-# HRS H2: phase rms and coherence (slice 1: raster quantities)
+# HRS H2: phase rms and coherence (slices 1-2: raster quantities, windows)
 
 *2026-10-05. Built against `main` at `aba8829`; in `main` as of `9ab33e0`. Plan:
 `hrs_visplot_plan.md` (milestone H2). Background:
@@ -76,44 +76,106 @@ This is not a fringe fit. It needs enough signal per sample for adjacent
 phases to be related; on pure noise there is no slope to find and the
 result is the noise value either way.
 
+## Windows (slice 2, 2026-10-05, against `452ed8f`)
+
+By default a cell's statistic is taken over the samples it covers (the
+undisplayed dimension). Two per-panel settings refine that.
+
+| Setting | Values | Default |
+|---|---|---|
+| Time window | Auto, Off, Scan, or seconds (gear tab offers 10 s to 10 min) | Auto |
+| Channel window | Off, or a channel count (gear tab offers 4 to 256) | Off |
+
+How a window acts depends on whether its axis is on the plot:
+
+- **Displayed axis: painted back.** The statistic is taken within each
+  window and every cell in the window shows it. The grid does not change,
+  so the flag overlay, the cursor readout and box flagging behave as
+  before; the picture becomes blocky at the window size. This is what
+  gives Phase RMS and Coherence on the Time x Channel waterfall, which
+  is otherwise blank for them (one sample per baseline per cell).
+- **Reduced axis: pooled.** Each window's scatter is measured about its
+  own mean phase and slope, and the windows are combined (sums of squares
+  and degrees of freedom added). So scan-to-scan phase jumps and changes
+  of source do not count as scatter.
+
+- **Baselines reduced into a cell: always pooled one by one.** The GUI's
+  antenna filter selects every baseline of the named antennas (a single
+  baseline cannot be selected there), so a Time x Channel raster normally
+  has several baselines in each cell. Each has its own phase, so the
+  scatter is measured per baseline and the baselines combined; the result
+  is the phase stability of the selected baselines as a set. The first
+  build of slice 2 lumped them instead, which read 80 to 90 deg for five
+  baselines of 10 deg each; caught before delivery of this revision, when
+  checking how a single baseline is selected (it is not).
+
+**Auto** means Off where Time is a plot axis and Scan where it is not.
+That changes slice 1's Baseline x Channel behaviour, deliberately: it used
+the whole selected time range as one window, which read high whenever
+more than one scan was selected (three scans with 10, 30 and 10 deg of
+noise and different phase offsets: 67 deg as one window, 19 deg pooled
+per scan, the correct pooled value being 19.1). Off restores the old
+behaviour.
+
+A "scan" is a contiguous run of integrations: the time axis is split
+wherever consecutive samples are more than 1.5 median steps apart.
+Windows in seconds are cut within each run and never span a gap; a final
+piece shorter than half a window joins the one before it. The scan number
+itself is not consulted, so two scans recorded back to back with no gap
+count as one run.
+
+The title names the window: "Phase RMS (slope removed, 60 s x 16 ch)",
+"(slope removed, per scan)".
+
+API: `stat_time_window=`, `stat_chan_window=` on `VisibilityPlotter`,
+`visplot()`, `VisibilityRaster` and `update_axes`; carried on
+`SelectionSpec` like `detrend`.
+
 ## Cost
 
 A numpy kernel applied block by block through `xr.apply_ufunc`, lazy on
-dask input. Measured on 200 x 45 x 512 samples in this sandbox: Amplitude
-3.4 s, Phase RMS 12.4 s with slope removal, 10.9 s without (about 3.5x).
-A first version built from lazy xarray operations was correct but took
-47 to 70 s on the same data and was replaced.
+dask input; windows are a loop inside the kernel. Measured in this
+sandbox:
 
-Each block must hold a cell's whole window, so the reduced dimension is
-rechunked to one chunk. Cheap for Baseline x Time. For Baseline x Channel
-every block spans the full selected time range, so memory grows with the
-time range selected (Z-Score's per-baseline median has the same need).
+| Case | Time |
+|---|---|
+| Amplitude, 200 x 45 x 512 samples | 2.6 s |
+| Phase RMS, same data, slope removed | 2.6 s |
+| Waterfall 600 x 2048, per scan | 0.3 s |
+| Waterfall 600 x 2048, 60 s x 64 ch | 0.6 s |
+| Waterfall 600 x 2048, 20 s x 16 ch (7680 windows) | 4.0 s |
 
-## Limits of this slice
+(Slice 1 measured 12 s for the second row; slice 2 also rechunks the
+batch dimensions into larger blocks, which removed most of that.)
 
-1. **The window is the undisplayed dimension, whole.** No sliding or
-   per-scan windows yet. Consequences:
-   - Baseline x Channel takes the statistic over the entire selected time
-     range, across scans and fields. Select one field or scan for a
-     meaningful number.
-   - A single-baseline Time x Channel waterfall has one sample per cell,
-     so both quantities are blank (NaN) there.
-2. **Multiple SPWs on Baseline x Time.** `_raster_merge` keeps the first
+Memory: the windowed time / frequency dimensions must be whole in each
+block, and the batch dimensions are rechunked to keep a block under 8
+million samples. So memory no longer grows with the number of baselines,
+but one baseline's worth of the windowed dimensions must fit; for
+Baseline x Channel that is the full selected time range times the
+channels.
+
+## Limits
+
+1. **Multiple SPWs on Baseline x Time.** `_raster_merge` keeps the first
    non-NaN value where partitions overlap a cell, so the statistic shown
-   is the first selected SPW's, not all SPWs combined. That is how every
-   quantity already behaves on that view; it matters more here. Select
-   one SPW to be sure which is shown.
-3. **Raster only.** The collapsed line plots (rms vs time, vs frequency),
-   rms vs baseline length, and presets are later slices.
+   is the first selected SPW's. True of every quantity on that view.
+2. **Windows are blocks, not sliding.** Values step at window edges.
+3. **Gap-based scans** (above).
+4. **Raster only.** The collapsed line plots (rms vs time, vs frequency),
+   rms vs baseline length, and presets are slice 3.
 
 ## Verified
 
-- `test_raster_phase_stats.py`: 131 passed, both backends: known answers,
+- `test_raster_phase_stats.py`: 221 passed, both backends (90 of them
+  for windows and pooled baselines: painted back, pooled, never across a gap, auto, flags,
+  chunking, parity, panel and title). Slice 1: known answers,
   wrap, slope removal (steep delays, rate, scan gap, descending frequency,
   datetime64 time, per-cell slopes), flags and padding, too-few-samples,
   independence of chunking, laziness, MSv2 == MSv4, per-panel plumbing,
   titles.
-- `test_raster_averaging.py`: 121 passed (unchanged).
+- `test_raster_averaging.py`: 121 passed; `test_cursor_readout_reset.py`:
+  4 passed (both unchanged).
 - Rest of `tests/manual/visplot`, with and without: identical (1000
   passed; the same 11 failures and 3 collection errors that need packages
   or data absent in the sandbox; 679 skipped for lack of a real MS).
@@ -135,12 +197,14 @@ read about 100 deg, i.e. noise per sample.
 - How colormap scaling defaults suit these quantities; nothing was tuned
   (the screenshots used eq_hist).
 
+## Not verified (slice 2)
+
+- The two window controls in a browser (wired exactly like *Phase slope*).
+- Windows on real data: whether gap-based scans match the MS's scans on
+  TW Hya, and how the blocky waterfall reads in practice.
+
 ## Next slices
 
-- 2: windows along the displayed axes (time length, channel count,
-  per-scan), which also gives these quantities on the waterfall. Needs a
-  check that the flag overlay copes with an aggregate coarser than the
-  data.
 - 3: collapsed scatter views (rms vs time, vs frequency, vs baseline
   length) and presets.
 - 4: difference-from-running-mean displays (AMP V DIFF, PHASE DIFF).

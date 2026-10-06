@@ -72,9 +72,10 @@ straddle +/-180 degrees, and amplitude cannot show coherent averages.
 
 ### H2. Windowed statistics: phase rms, coherence, difference from running mean (L)
 
-*Status 2026-10-05: slice 1 implemented against `aba8829` -- `PHASE_RMS`
-and `COHERENCE` as raster quantities over the undisplayed dimension, with
-per-panel slope removal. Sliding / per-scan windows, the scatter views,
+*Status 2026-10-05: slices 1 and 2 implemented -- `PHASE_RMS` and
+`COHERENCE` as raster quantities with per-panel slope removal, and
+time / channel windows (painted back on displayed axes, pooled on reduced
+ones; per-scan by default where time is reduced). The scatter views,
 presets and the DIFF quantities remain; see `hrs_h2_phase_statistics.md`.*
 
 One reduction framework, several quantities.
@@ -95,6 +96,12 @@ One reduction framework, several quantities.
   samples excluded; parity.
 
 ### H3. Baseline iteration and ordering (M)
+
+*Status 2026-10-05: baseline selection and iteration delivered, with
+antenna / baseline tables and "tick from text" boxes (also for SPW); see
+`hrs_h3_antenna_baseline_selection.md`. Remaining: sort the Time x
+Baseline raster by length, the phase waterfall preset with a cyclic
+colormap, and H1b.*
 
 - Baseline Prev/Next using the existing Field/SPW/Antenna iteration
   pattern, status "Baseline n/N: A&B". With an antenna selected, step only
@@ -211,3 +218,5 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-05 | `e46febc` | Per-panel control confirmed working in the browser by Darrell (TW Hya, vector vs scalar Amplitude). Raster title now names the averaging for Amplitude and Phase. Plot summary dialog added under H8 |
 | 2026-10-05 | `aba8829` | H2 slice 1: Phase RMS and Coherence raster quantities, per-panel `detrend`. Agreed order: finish H2/H3 before the plot summary dialog |
 | 2026-10-05 | `9ab33e0` | H2 slice 1 confirmed in the browser by Darrell. Fix: a replotted panel's cursor readout is reset to its placeholder (it kept the previous plot's values until the next mouse move) |
+| 2026-10-05 | `452ed8f` | H2 slice 2: statistic windows (`stat_time_window`, `stat_chan_window`); Phase RMS / Coherence now work on the waterfall; Baseline x Channel pools per scan by default |
+| 2026-10-05 | `452ed8f` | H3 (part): Antenna and Baseline checkbox tables replace the antenna text box; Either end / Both ends switch; tick-from-text boxes for SPW, Antenna, Baseline; Baseline Prev/Next. Simulated-MS testing of real backends and a headless plotter is now possible in the sandbox (xarray-ms simulator). Open: `equalize_histogram` float32 crash, reported not fixed |

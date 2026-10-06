@@ -1227,6 +1227,7 @@ METADATA_KEYS = frozenset({
     "time_range",
     "freq_range",
     "n_baselines",
+    "baselines",
     "data_columns",
     "spws",
 })
@@ -1258,6 +1259,14 @@ the key means:
     ``centre_freq_hz``, ``bandwidth_hz``, ``channel_width_hz``,
     ``freq_min_hz``, ``freq_max_hz``.  One entry per id in ``spw_ids``,
     in the same order.
+``baselines``
+    Every baseline in the data as ``[baseline_id, antenna1_name,
+    antenna2_name]``, in id order (added 2026-10).  The names are in the
+    data's own orientation: ``SelectionSpec.baselines`` is matched as an
+    ordered pair, so this is the spelling a selection must use.
+    ``baseline_id`` is the value the Baseline axis of a raster shows.
+    Empty for single-dish data.  Built by
+    ``_baseline_meta.collect_baselines`` in both backends.
 """
 
 METADATA_OPTIONAL_KEYS = frozenset({
@@ -2651,6 +2660,10 @@ class XArrayReader(abc.ABC):
             ``(f_min, f_max)`` in Hz, across all SPWs.
         ``n_baselines`` : int
             Total number of unique baselines.
+        ``baselines`` : list[list]
+            ``[baseline_id, antenna1_name, antenna2_name]`` per baseline,
+            in id order, names in the data's own orientation; empty for
+            single-dish data.  See ``METADATA_KEYS`` for the details.
         ``data_columns`` : list[str]
             Available data columns, e.g. ``['DATA', 'CORRECTED']``.
         """

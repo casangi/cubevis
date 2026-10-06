@@ -69,6 +69,8 @@ def _visplot_t(
         datacolumn: str = 'data',
         averaging: str = 'vector',
         detrend: bool = True,
+        stat_time_window = 'auto',
+        stat_chan_window = 'off',
         layout: str = 'side',
         kind: Optional[str] = None,
         preset: Optional[str] = None,
@@ -110,6 +112,8 @@ def _visplot_t(
         datacolumn = datacolumn,
         averaging = averaging,
         detrend = detrend,
+        stat_time_window = stat_time_window,
+        stat_chan_window = stat_chan_window,
         layout = layout,
         kind = kind,
         preset = preset,
@@ -180,7 +184,11 @@ class _visplot:
         own docstring for the exact supported subset). Wired to
         ``SelectionSpec.antenna_names`` (I-3, 2026-09); Prev/Next in the
         sidebar steps through ``meta.antennas`` in the dataset's own
-        order.
+        order.  ``NAME&NAME`` tokens select exact baselines instead
+        (``"DA44&DV19"``, several separated by ``;`` or ``,``), in
+        either order; they take precedence over antenna names.  Sets
+        what is initially ticked in the sidebar's Antenna and Baseline
+        tables.
     scan : str
         MSSelection scan string.  (Stored; not yet wired.)
     timerange : str
@@ -206,6 +214,18 @@ class _visplot:
         ``True``).  ``False`` measures the data as they are, slope
         included.  Initial value for every raster panel; each panel's
         "Phase slope" control changes it afterwards.
+    stat_time_window : str or float
+        Time window the Phase RMS / Coherence statistic is taken within:
+        ``"auto"`` (default), ``"off"``, ``"scan"``, or a number of
+        seconds.  Where Time is a plot axis every integration shows its
+        window's value; where it is not, the windows are pooled into
+        each cell.  ``"auto"`` is ``"off"`` in the first case and
+        ``"scan"`` in the second.  Windows never span a gap between
+        scans.  Initial value for every raster panel; each panel's "Time
+        window" control changes it afterwards.
+    stat_chan_window : str or int
+        Channel window for the same statistic: ``"off"`` (default) or a
+        number of channels.  Same rules as ``stat_time_window``.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -330,6 +350,8 @@ class _visplot:
         'datacolumn': 'Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.',
         'averaging': 'How raster cells combine the samples they cover: ``"vector"`` (default; average the complex visibility, then take Amplitude / Phase -- Amplitude drops where samples are incoherent) or ``"scalar"`` (Amplitude is the mean of the amplitudes, Phase the circular mean).',
         'detrend': 'For the Phase RMS and Coherence raster quantities: remove a linear phase slope (residual delay along frequency, residual rate along time) before the statistic is taken (default ``True``).',
+        'stat_time_window': 'Time window the Phase RMS / Coherence statistic is taken within: ``"auto"`` (default), ``"off"``, ``"scan"``, or a number of seconds.',
+        'stat_chan_window': 'Channel window for the same statistic: ``"off"`` (default) or a number of channels.',
         'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), or ``"over"`` (both panels, one above the other).',
         'kind': 'Which panel kind leads: ``"raster"`` (default when omitted) or ``"scatter"``.',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
@@ -372,6 +394,8 @@ class _visplot:
         'datacolumn': 'data',
         'averaging': 'vector',
         'detrend': True,
+        'stat_time_window': 'auto',
+        'stat_chan_window': 'off',
         'layout': 'side',
         'kind': None,
         'preset': None,
@@ -449,6 +473,8 @@ class _visplot:
             'datacolumn': 'str',
             'averaging': 'str',
             'detrend': 'bool',
+            'stat_time_window': '',
+            'stat_chan_window': '',
             'layout': 'str',
             'kind': 'Optional[str]',
             'preset': 'Optional[str]',
@@ -771,6 +797,36 @@ class _visplot:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
         self.__do_inp_output(
             '%-23.23s = %s%-23s%s' % ('detrend', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __stat_time_window_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('stat_time_window', self._arg_default['stat_time_window'])
+        default = self._arg_default['stat_time_window']
+        desc    = self._arg_description.get('stat_time_window', '')
+        if self.__validate_('stat_time_window', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('stat_time_window', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __stat_chan_window_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('stat_chan_window', self._arg_default['stat_chan_window'])
+        default = self._arg_default['stat_chan_window']
+        desc    = self._arg_description.get('stat_chan_window', '')
+        if self.__validate_('stat_chan_window', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('stat_chan_window', pre, self.__to_string_(value), post),
             desc, fmt,
         )
 
@@ -1153,6 +1209,8 @@ class _visplot:
         if 'datacolumn' in glb: del glb['datacolumn']
         if 'averaging' in glb: del glb['averaging']
         if 'detrend' in glb: del glb['detrend']
+        if 'stat_time_window' in glb: del glb['stat_time_window']
+        if 'stat_chan_window' in glb: del glb['stat_chan_window']
         if 'layout' in glb: del glb['layout']
         if 'kind' in glb: del glb['kind']
         if 'preset' in glb: del glb['preset']
@@ -1195,6 +1253,8 @@ class _visplot:
         self.__datacolumn_inp()
         self.__averaging_inp()
         self.__detrend_inp()
+        self.__stat_time_window_inp()
+        self.__stat_chan_window_inp()
         self.__layout_inp()
         self.__kind_inp()
         self.__preset_inp()
@@ -1261,6 +1321,8 @@ class _visplot:
         _invocation_parameters['datacolumn'] = glb.get('datacolumn', self._arg_default['datacolumn'])
         _invocation_parameters['averaging'] = glb.get('averaging', self._arg_default['averaging'])
         _invocation_parameters['detrend'] = glb.get('detrend', self._arg_default['detrend'])
+        _invocation_parameters['stat_time_window'] = glb.get('stat_time_window', self._arg_default['stat_time_window'])
+        _invocation_parameters['stat_chan_window'] = glb.get('stat_chan_window', self._arg_default['stat_chan_window'])
         _invocation_parameters['layout'] = glb.get('layout', self._arg_default['layout'])
         _invocation_parameters['kind'] = glb.get('kind', self._arg_default['kind'])
         _invocation_parameters['preset'] = glb.get('preset', self._arg_default['preset'])
@@ -1319,6 +1381,8 @@ class _visplot:
             datacolumn = _UNSET,
             averaging = _UNSET,
             detrend = _UNSET,
+            stat_time_window = _UNSET,
+            stat_chan_window = _UNSET,
             layout = _UNSET,
             kind = _UNSET,
             preset = _UNSET,
@@ -1370,6 +1434,8 @@ class _visplot:
             datacolumn,
             averaging,
             detrend,
+            stat_time_window,
+            stat_chan_window,
             layout,
             kind,
             preset,
@@ -1442,6 +1508,12 @@ class _visplot:
             _invocation_parameters['detrend'] = \
                 detrend if detrend is not _UNSET \
                 else glb.get('detrend', self._arg_default['detrend'])
+            _invocation_parameters['stat_time_window'] = \
+                stat_time_window if stat_time_window is not _UNSET \
+                else glb.get('stat_time_window', self._arg_default['stat_time_window'])
+            _invocation_parameters['stat_chan_window'] = \
+                stat_chan_window if stat_chan_window is not _UNSET \
+                else glb.get('stat_chan_window', self._arg_default['stat_chan_window'])
             _invocation_parameters['layout'] = \
                 layout if layout is not _UNSET \
                 else glb.get('layout', self._arg_default['layout'])
@@ -1544,6 +1616,10 @@ class _visplot:
                 glb.get('averaging', self._arg_default['averaging'])
             _invocation_parameters['detrend'] = \
                 glb.get('detrend', self._arg_default['detrend'])
+            _invocation_parameters['stat_time_window'] = \
+                glb.get('stat_time_window', self._arg_default['stat_time_window'])
+            _invocation_parameters['stat_chan_window'] = \
+                glb.get('stat_chan_window', self._arg_default['stat_chan_window'])
             _invocation_parameters['layout'] = \
                 glb.get('layout', self._arg_default['layout'])
             _invocation_parameters['kind'] = \
@@ -1626,6 +1702,8 @@ class _visplot:
                     'datacolumn=' + repr(_invocation_parameters['datacolumn']),
                     'averaging=' + repr(_invocation_parameters['averaging']),
                     'detrend=' + repr(_invocation_parameters['detrend']),
+                    'stat_time_window=' + repr(_invocation_parameters['stat_time_window']),
+                    'stat_chan_window=' + repr(_invocation_parameters['stat_chan_window']),
                     'layout=' + repr(_invocation_parameters['layout']),
                     'kind=' + repr(_invocation_parameters['kind']),
                     'preset=' + repr(_invocation_parameters['preset']),
@@ -1667,6 +1745,8 @@ class _visplot:
                 datacolumn = _invocation_parameters['datacolumn'],
                 averaging = _invocation_parameters['averaging'],
                 detrend = _invocation_parameters['detrend'],
+                stat_time_window = _invocation_parameters['stat_time_window'],
+                stat_chan_window = _invocation_parameters['stat_chan_window'],
                 layout = _invocation_parameters['layout'],
                 kind = _invocation_parameters['kind'],
                 preset = _invocation_parameters['preset'],

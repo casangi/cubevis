@@ -48,6 +48,9 @@ from . import colormap_scaling as _cms
 from .data.reader import _agg_value, _cell_bounds, channel_range_to_freq
 from .axes import Axis
 from .selection import normalize_averaging
+from .data._raster_stats import (
+    describe_windows, normalize_chan_window, normalize_time_window,
+)
 from .data._scatter_render import _DEFAULT_ZSCORE_THRESHOLD, zscore_cell_cutoff
 from .scaling_memory import (
     ScalingMemory, ScalingSettings, default_scaling_settings,
@@ -91,7 +94,7 @@ _DEFAULT_SCALING = "eq_hist"
 
 def _auto_title(quantity: "Axis", y_label: str, x_label: str,
                 polarization: str, averaging: Optional[str] = None,
-                detrend: Optional[bool] = None) -> str:
+                detrend: Optional[bool] = None, windows: str = "") -> str:
     """Compose the default panel title.
 
     Takes *resolved* axis names, not ``Axis`` members: a title reading
@@ -116,8 +119,13 @@ def _auto_title(quantity: "Axis", y_label: str, x_label: str,
     # Phase RMS / Coherence (HRS H2): say whether the slope was removed,
     # for the same reason -- it changes the picture completely on data
     # with a residual delay, and nothing else on the plot shows it.
+    # ...and the window it was taken within, when there is one beyond
+    # "the samples the cell covers" (slice 2): "per scan", "60 s x 16 ch".
     if detrend is not None and quantity in (Axis.PHASE_RMS, Axis.COHERENCE):
-        q_label = f"{q_label} ({'slope removed' if detrend else 'slope kept'})"
+        note = "slope removed" if detrend else "slope kept"
+        if windows:
+            note = f"{note}, {windows}"
+        q_label = f"{q_label} ({note})"
     return (
         f"{q_label}  "
         f"[{y_label} vs {x_label}]"
@@ -191,6 +199,8 @@ class VisibilityRaster(VisibilityPlot):
         probe_debug: bool = False,
         averaging: Optional[str] = None,
         detrend: bool = True,
+        stat_time_window="auto",
+        stat_chan_window="off",
         **kwargs,
     ) -> None:
         self._quantity     = quantity
@@ -204,6 +214,11 @@ class VisibilityRaster(VisibilityPlot):
         # rate) before this raster's Phase RMS / Coherence statistic.
         # Per panel and stamped at query time, exactly like averaging.
         self._detrend      = bool(detrend)
+        # HRS H2 slice 2: the windows a Phase RMS / Coherence statistic
+        # is taken within (see SelectionSpec.stat_time_window).  Per
+        # panel, stamped at query time, like detrend.
+        self._stat_time_window = normalize_time_window(stat_time_window)
+        self._stat_chan_window = normalize_chan_window(stat_chan_window)
         self._polarization = polarization
         self._cmap         = cmap or _DEFAULT_CMAP
         self._max_cells    = max_cells
@@ -295,6 +310,20 @@ class VisibilityRaster(VisibilityPlot):
         """
         return self._detrend
 
+    @property
+    def stat_time_window(self):
+        """Time window of this raster's Phase RMS / Coherence statistic:
+        ``"auto"``, ``"off"``, ``"scan"`` or seconds.  Change it with
+        ``update_axes(stat_time_window=...)``."""
+        return self._stat_time_window
+
+    @property
+    def stat_chan_window(self):
+        """Channel window of this raster's Phase RMS / Coherence
+        statistic: ``"off"`` or a number of channels.  Change it with
+        ``update_axes(stat_chan_window=...)``."""
+        return self._stat_chan_window
+
     def update_axes(
         self,
         y_dim: Optional["Axis"]  = None,
@@ -304,6 +333,8 @@ class VisibilityRaster(VisibilityPlot):
         title: Optional[str] = None,
         averaging: Optional[str] = None,
         detrend: Optional[bool] = None,
+        stat_time_window=None,
+        stat_chan_window=None,
     ) -> None:
         """Change axes, quantity, polarization or averaging and re-render
         in place.
@@ -317,6 +348,16 @@ class VisibilityRaster(VisibilityPlot):
         changed = False
         if detrend is not None and bool(detrend) != self._detrend:
             self._detrend = bool(detrend);  changed = True
+        # Windows: None leaves the setting alone (so "auto" has to be
+        # asked for by name).
+        if stat_time_window is not None:
+            tw = normalize_time_window(stat_time_window)
+            if tw != self._stat_time_window:
+                self._stat_time_window = tw;  changed = True
+        if stat_chan_window is not None:
+            cw = normalize_chan_window(stat_chan_window)
+            if cw != self._stat_chan_window:
+                self._stat_chan_window = cw;  changed = True
         if averaging is not None:
             averaging = normalize_averaging(averaging)
             if averaging != self._averaging:
@@ -371,6 +412,11 @@ class VisibilityRaster(VisibilityPlot):
         return self._title or _auto_title(
             self._quantity, self._y_info.label, self._x_info.label,
             self._polarization, self._averaging, self._detrend,
+            describe_windows(
+                self._stat_time_window, self._stat_chan_window,
+                time_displayed=Axis.TIME in (self._y_dim, self._x_dim),
+                chan_displayed=any(a in (self._y_dim, self._x_dim)
+                                   for a in (Axis.CHANNEL, Axis.FREQUENCY))),
         )
 
     def set_cmap(self, cmap) -> None:
@@ -1223,7 +1269,9 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 # selection (shared with the other panels) is untouched.
                 selection    = dataclasses.replace(
                     selection, averaging=self._averaging,
-                    detrend=self._detrend),
+                    detrend=self._detrend,
+                    stat_time_window=self._stat_time_window,
+                    stat_chan_window=self._stat_chan_window),
                 polarization = self._polarization,
                 max_cells    = budget,
             )

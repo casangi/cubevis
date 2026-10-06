@@ -59,6 +59,8 @@ def _validate_params(
         datacolumn,
         averaging,
         detrend,
+        stat_time_window,
+        stat_chan_window,
         layout,
         kind,
         preset,
@@ -101,6 +103,8 @@ def _validate_params(
         'datacolumn': 'str',
         'averaging': 'str',
         'detrend': 'bool',
+        'stat_time_window': '',
+        'stat_chan_window': '',
         'layout': 'str',
         'kind': 'Optional[str]',
         'preset': 'Optional[str]',
@@ -201,6 +205,8 @@ def _validate_params(
     _check('datacolumn', datacolumn, _type_map['datacolumn'])
     _check('averaging', averaging, _type_map['averaging'])
     _check('detrend', detrend, _type_map['detrend'])
+    _check('stat_time_window', stat_time_window, _type_map['stat_time_window'])
+    _check('stat_chan_window', stat_chan_window, _type_map['stat_chan_window'])
     _check('layout', layout, _type_map['layout'])
     _check('kind', kind, _type_map['kind'])
     _check('preset', preset, _type_map['preset'])
@@ -243,6 +249,8 @@ def _visplot_t(
         datacolumn: str = 'data',
         averaging: str = 'vector',
         detrend: bool = True,
+        stat_time_window = 'auto',
+        stat_chan_window = 'off',
         layout: str = 'side',
         kind: Optional[str] = None,
         preset: Optional[str] = None,
@@ -284,6 +292,8 @@ def _visplot_t(
         datacolumn = datacolumn,
         averaging = averaging,
         detrend = detrend,
+        stat_time_window = stat_time_window,
+        stat_chan_window = stat_chan_window,
         layout = layout,
         kind = kind,
         preset = preset,
@@ -358,7 +368,11 @@ class _visplot:
         own docstring for the exact supported subset). Wired to
         ``SelectionSpec.antenna_names`` (I-3, 2026-09); Prev/Next in the
         sidebar steps through ``meta.antennas`` in the dataset's own
-        order.
+        order.  ``NAME&NAME`` tokens select exact baselines instead
+        (``"DA44&DV19"``, several separated by ``;`` or ``,``), in
+        either order; they take precedence over antenna names.  Sets
+        what is initially ticked in the sidebar's Antenna and Baseline
+        tables.
     scan : str
         MSSelection scan string.  (Stored; not yet wired.)
     timerange : str
@@ -384,6 +398,18 @@ class _visplot:
         ``True``).  ``False`` measures the data as they are, slope
         included.  Initial value for every raster panel; each panel's
         "Phase slope" control changes it afterwards.
+    stat_time_window : str or float
+        Time window the Phase RMS / Coherence statistic is taken within:
+        ``"auto"`` (default), ``"off"``, ``"scan"``, or a number of
+        seconds.  Where Time is a plot axis every integration shows its
+        window's value; where it is not, the windows are pooled into
+        each cell.  ``"auto"`` is ``"off"`` in the first case and
+        ``"scan"`` in the second.  Windows never span a gap between
+        scans.  Initial value for every raster panel; each panel's "Time
+        window" control changes it afterwards.
+    stat_chan_window : str or int
+        Channel window for the same statistic: ``"off"`` (default) or a
+        number of channels.  Same rules as ``stat_time_window``.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -508,6 +534,8 @@ class _visplot:
             datacolumn: str = 'data',
             averaging: str = 'vector',
             detrend: bool = True,
+            stat_time_window = 'auto',
+            stat_chan_window = 'off',
             layout: str = 'side',
             kind: Optional[str] = None,
             preset: Optional[str] = None,
@@ -562,6 +590,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             datacolumn = datacolumn,
             averaging = averaging,
             detrend = detrend,
+            stat_time_window = stat_time_window,
+            stat_chan_window = stat_chan_window,
             layout = layout,
             kind = kind,
             preset = preset,
@@ -604,6 +634,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'datacolumn=' + repr(datacolumn),
                 'averaging=' + repr(averaging),
                 'detrend=' + repr(detrend),
+                'stat_time_window=' + repr(stat_time_window),
+                'stat_chan_window=' + repr(stat_chan_window),
                 'layout=' + repr(layout),
                 'kind=' + repr(kind),
                 'preset=' + repr(preset),
@@ -647,6 +679,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 datacolumn = datacolumn,
                 averaging = averaging,
                 detrend = detrend,
+                stat_time_window = stat_time_window,
+                stat_chan_window = stat_chan_window,
                 layout = layout,
                 kind = kind,
                 preset = preset,

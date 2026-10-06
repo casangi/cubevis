@@ -202,6 +202,35 @@ class SelectionSpec:
     onto a copy of the selection at query time.  Not a row constraint.
     """
 
+    stat_time_window: object = "auto"
+    """Time window for Phase RMS / Coherence raster statistics (HRS H2
+    slice 2, 2026-10): ``"auto"``, ``"off"``, ``"scan"``, or a number of
+    seconds.
+
+    The statistic is taken within each window.  Where time is a displayed
+    axis, every integration shows its window's value (the grid does not
+    change).  Where time is reduced, the windows are pooled into the
+    cell, each about its own mean phase and slope.
+
+    * ``"off"``  -- no windowing: one integration per cell where time is
+      displayed, the whole selected range where it is reduced.
+    * ``"scan"`` -- one window per contiguous run of integrations.
+    * seconds    -- each run cut into windows of that length.
+    * ``"auto"`` (default) -- ``"off"`` where time is displayed,
+      ``"scan"`` where it is reduced, so that scan-to-scan phase jumps
+      and changes of source do not read as scatter.
+
+    Windows never span a gap.  Transport, per raster panel, exactly like
+    ``detrend``.  See ``data/_raster_stats.py``.
+    """
+
+    stat_chan_window: object = "off"
+    """Channel window for Phase RMS / Coherence raster statistics:
+    ``"off"`` (default) or a number of channels.  Same rules as
+    ``stat_time_window``: painted back where frequency is displayed,
+    pooled where it is reduced.
+    """
+
     cache_generation: int = 0
     """Data-freshness token -- NOT a constraint on which rows are selected.
 
@@ -274,6 +303,8 @@ class SelectionSpec:
             data_column=self.data_column,
             averaging=self.averaging,
             detrend=self.detrend,
+            stat_time_window=self.stat_time_window,
+            stat_chan_window=self.stat_chan_window,
             cache_generation=self.cache_generation,
             pending_version=self.pending_version,
             flag_view=self.flag_view,

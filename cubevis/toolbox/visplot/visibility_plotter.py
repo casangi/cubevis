@@ -104,6 +104,9 @@ from cubevis import exe
 
 from .axes import Axis
 from .selection import SelectionSpec, normalize_averaging
+from .data._raster_stats import normalize_chan_window, normalize_time_window
+from . import antenna_baseline_select as _abs
+from .antenna_baseline_select import SELECTION_PAYLOAD_JS as _SELECTION_PAYLOAD_JS
 from .visibility_raster import VisibilityRaster
 from .visibility_scatter import VisibilityScatter, ScatterLayer, _LAYER_CMAPS
 from .data.reader import DEFAULT_CATEGORY_PRIORITY as _DEFAULT_CATEGORY_PRIORITY
@@ -335,6 +338,34 @@ _RASTER_QTY_OPTIONS = [("AMPLITUDE", "Amplitude"),
                        # own comments for the per-axis-combination
                        # aggregation this quantity uses (max, not mean).
                        ("Z_SCORE",   "Z-Score")]
+# Phase RMS / Coherence statistic windows offered in the raster gear tab
+# (HRS H2 slice 2).  Values are what goes over the wire and into
+# normalize_time_window / normalize_chan_window.
+_STAT_TIME_WINDOW_OPTIONS = [("auto", "Auto"), ("off", "Off"),
+                             ("scan", "Scan"),
+                             ("10", "10 s"), ("30", "30 s"), ("60", "1 min"),
+                             ("120", "2 min"), ("300", "5 min"),
+                             ("600", "10 min")]
+_STAT_CHAN_WINDOW_OPTIONS = [("off", "Off"), ("4", "4 ch"), ("8", "8 ch"),
+                             ("16", "16 ch"), ("32", "32 ch"),
+                             ("64", "64 ch"), ("128", "128 ch"),
+                             ("256", "256 ch")]
+
+
+def _window_value(window) -> str:
+    """A normalized window setting as its Select value string."""
+    return window if isinstance(window, str) else f"{window:g}"
+
+
+def _window_options(options, window, unit) -> list:
+    """*options*, plus an entry for *window* if it is not among them (a
+    constructor-supplied value such as 45 seconds)."""
+    value = _window_value(window)
+    if any(v == value for v, _ in options):
+        return list(options)
+    return list(options) + [(value, f"{value} {unit}")]
+
+
 _SCATTER_X_OPTIONS  = [("UVDIST",        "UV Distance"),
                        ("UVDIST_LAMBDA", "UV Distance (wavelengths)"),
                        ("TIME",          "Time"),
@@ -771,8 +802,12 @@ def _parse_antenna_string(antenna_str: str,
 
     includes: list = []
     excludes: list = []
-    for tok in (t.strip() for t in antenna_str.split(",")):
-        if not tok:
+    # ';' as well as ',' (CASA separates baseline specifications with
+    # ';').  A token containing '&' names a baseline, not an antenna: it
+    # belongs to antenna_baseline_select.parse_baseline_string (2026-10)
+    # and is skipped here without the "matched no antenna" warning.
+    for tok in _abs.split_antenna_tokens(antenna_str):
+        if "&" in tok:
             continue
         negate = tok.startswith("!")
         bare = tok[1:].strip() if negate else tok
@@ -1557,6 +1592,15 @@ _step('spw table', () => {
                              light ? table_css_light : table_css_dark];
 });
 
+// Antenna / Baseline tables (2026-10): same treatment and reasoning as
+// the SPW table above, over a list.
+_step('selection tables', () => {
+    if (typeof selection_tables === 'undefined' || !selection_tables) return;
+    for (const t of selection_tables) {
+        t.stylesheets = [sidebar_css, light ? table_css_light : table_css_dark];
+    }
+});
+
 // Part 5, 2026-09: colorize_controls()'s per-axis checklist tables --
 // same treatment and same reasoning as the SPW table above, just over a
 // list (one per layer times one per colorizable axis) instead of a
@@ -1769,7 +1813,11 @@ class VisibilityPlotter:
         own docstring for the exact supported subset). Wired to
         ``SelectionSpec.antenna_names`` (I-3, 2026-09); Prev/Next in the
         sidebar steps through ``meta.antennas`` in the dataset's own
-        order.
+        order.  ``NAME&NAME`` tokens select exact baselines instead
+        (``"DA44&DV19"``, several separated by ``;`` or ``,``), in
+        either order; they take precedence over antenna names.  Sets
+        what is initially ticked in the sidebar's Antenna and Baseline
+        tables.
     scan : str
         MSSelection scan string.  (Stored; not yet wired.)
     timerange : str
@@ -1795,6 +1843,18 @@ class VisibilityPlotter:
         ``True``).  ``False`` measures the data as they are, slope
         included.  Initial value for every raster panel; each panel's
         "Phase slope" control changes it afterwards.
+    stat_time_window : str or float
+        Time window the Phase RMS / Coherence statistic is taken within:
+        ``"auto"`` (default), ``"off"``, ``"scan"``, or a number of
+        seconds.  Where Time is a plot axis every integration shows its
+        window's value; where it is not, the windows are pooled into
+        each cell.  ``"auto"`` is ``"off"`` in the first case and
+        ``"scan"`` in the second.  Windows never span a gap between
+        scans.  Initial value for every raster panel; each panel's "Time
+        window" control changes it afterwards.
+    stat_chan_window : str or int
+        Channel window for the same statistic: ``"off"`` (default) or a
+        number of channels.  Same rules as ``stat_time_window``.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -1921,6 +1981,8 @@ class VisibilityPlotter:
         # not exist.  test_raster_averaging pins the two together.
         averaging:        str           = "vector",
         detrend:          bool          = True,
+        stat_time_window                = "auto",
+        stat_chan_window                = "off",
         layout:           str           = "side",
         kind:             Optional[str] = None,
         preset:           Optional[str] = None,
@@ -1966,6 +2028,8 @@ class VisibilityPlotter:
             kernel_name=kernel_name, field=field, spw=spw, antenna=antenna, scan=scan,
             timerange=timerange, uvrange=uvrange, correlation=correlation,
             datacolumn=datacolumn, averaging=averaging, detrend=detrend,
+            stat_time_window=stat_time_window,
+            stat_chan_window=stat_chan_window,
             layout=layout, kind=kind, preset=preset,
             raster_y=raster_y, raster_x=raster_x, raster_qty=raster_qty,
             scatter_x=scatter_x, scatter_y=scatter_y,
@@ -2067,6 +2131,7 @@ class VisibilityPlotter:
         *,
         ms, ps, backend, remote_endpoint, kernel_name, field, spw, antenna, scan,
         timerange, uvrange, correlation, datacolumn, averaging, detrend,
+        stat_time_window, stat_chan_window,
         layout, kind, preset,
         raster_y, raster_x, raster_qty, scatter_x, scatter_y,
         time_range, freq_range, uvdist_range, enable_flagging,
@@ -2102,6 +2167,12 @@ class VisibilityPlotter:
         # parsing _spw_str.  Set by the Plot handler.
         self._spw_ids       = None
         self._antenna_str   = antenna
+        # What is ticked in the sidebar's Antenna / Baseline tables, as
+        # last sent by the Plot handler (2026-10).  None = the browser
+        # has sent nothing yet, so _antenna_str (the constructor's
+        # antenna=) still decides -- the same split as _spw_str/_spw_ids.
+        self._antenna_sel   = None
+        self._baseline_sel  = None
         self._scan_str      = scan
         self._timerange_str = timerange
         self._uvrange_str   = uvrange
@@ -2116,6 +2187,10 @@ class VisibilityPlotter:
         # HRS H2 (2026-10): Phase RMS / Coherence slope removal.  Same
         # arrangement: initial value here, per panel afterwards.
         self._detrend       = bool(detrend)
+        # HRS H2 slice 2: statistic windows; initial value here, per
+        # panel afterwards.  Validated now so a typo fails here.
+        self._stat_time_window = normalize_time_window(stat_time_window)
+        self._stat_chan_window = normalize_chan_window(stat_chan_window)
         # layout="raster"/"scatter" is sugar for layout="one", kind=X --
         # resolved once here, before either attribute is set, so nothing
         # downstream (the layout radio, layout_js, export/preset JS,
@@ -2493,6 +2568,8 @@ class VisibilityPlotter:
             quantity      = self._raster_qty,
             averaging     = self._averaging,
             detrend       = self._detrend,
+            stat_time_window = self._stat_time_window,
+            stat_chan_window = self._stat_chan_window,
             polarization  = first_pol,
             width         = self._plot_width,
             height        = self._plot_height,
@@ -2553,6 +2630,8 @@ class VisibilityPlotter:
             quantity      = self._raster_qty,
             averaging     = self._averaging,
             detrend       = self._detrend,
+            stat_time_window = self._stat_time_window,
+            stat_chan_window = self._stat_chan_window,
             polarization  = first_pol,
             width         = self._plot_width,
             height        = self._plot_height,
@@ -3499,7 +3578,25 @@ for (const dt of other.tools) {
                       "cache generation -> %d", self._cache_generation)
 
         if "field"       in msg: self._field_str   = msg["field"]
-        if "antenna"     in msg: self._antenna_str  = msg["antenna"]
+        if "antenna_names" in msg or "baselines" in msg:
+            # Ticked rows of the Antenna / Baseline tables, as lists --
+            # no text round trip, like spw_ids just below.  Validated
+            # against the data in _build_selection (see
+            # antenna_baseline_select.resolve_antenna_baseline_selection).
+            self._antenna_sel  = list(msg.get("antenna_names") or [])
+            self._baseline_sel = list(msg.get("baselines") or [])
+            # Status-bar wording only: how many antennas were ticked
+            # when the baselines came from the "Both ends" rule.
+            try:
+                self._both_ends_antennas = int(msg.get("both_ends_antennas") or 0)
+            except (TypeError, ValueError):
+                self._both_ends_antennas = 0
+        elif "antenna" in msg:
+            # Legacy string form (older clients, programmatic callers).
+            self._antenna_str  = msg["antenna"]
+            self._antenna_sel  = None
+            self._baseline_sel = None
+            self._both_ends_antennas = 0
         if "spw_ids" in msg:
             # Identities straight from the table, no text round trip.
             # `_spw_str` is left alone so the constructor's spw= remains
@@ -3627,6 +3724,16 @@ for (const dt of other.tools) {
                 det = panel_msg.get("detrend")
                 det = (panel.detrend if det not in ("remove", "keep")
                        else det == "remove")
+                # Statistic windows for this slot (HRS H2 slice 2).
+                # Absent or unparseable: keep what the panel has.
+                try:
+                    twin = (normalize_time_window(panel_msg["twin"])
+                            if panel_msg.get("twin") else panel.stat_time_window)
+                    cwin = (normalize_chan_window(panel_msg["cwin"])
+                            if panel_msg.get("cwin") else panel.stat_chan_window)
+                except ValueError as exc:
+                    log.warning("_handle_plot: %s (panel %s)", exc, slot.id)
+                    twin, cwin = panel.stat_time_window, panel.stat_chan_window
 
                 # Force re-render when this slot's raster axes or
                 # selection content actually changed — not just because a
@@ -3671,6 +3778,8 @@ for (const dt of other.tools) {
                     # last rendered with.
                     avg != panel.averaging or
                     det != panel.detrend or
+                    twin != panel.stat_time_window or
+                    cwin != panel.stat_chan_window or
                     # Antenna iteration (I-3, 2026-09): found missing
                     # here directly, not assumed -- without this,
                     # antenna_names is the one SelectionSpec field
@@ -3681,7 +3790,13 @@ for (const dt of other.tools) {
                     # data_column as before). The Antenna field's own
                     # Prev/Next buttons would then appear to do nothing
                     # at all to this panel.
-                    self._selection.antenna_names != getattr(self._last_raster_selection_by_slot.get(slot.id), 'antenna_names', None)
+                    self._selection.antenna_names != getattr(self._last_raster_selection_by_slot.get(slot.id), 'antenna_names', None) or
+                    # Baseline table (2026-10): the same gap again for
+                    # the same reason -- baselines is a separate
+                    # SelectionSpec field, and without this a panel
+                    # would not re-query when only the ticked baselines
+                    # changed (Baseline Prev/Next would do nothing).
+                    self._selection.baselines != getattr(self._last_raster_selection_by_slot.get(slot.id), 'baselines', None)
                 )
                 try:
                     if axes_changed:
@@ -3708,6 +3823,8 @@ for (const dt of other.tools) {
                                 polarization = first_pol,
                                 averaging    = avg,
                                 detrend      = det,
+                                stat_time_window = twin,
+                                stat_chan_window = cwin,
                             )
                         self._last_raster_selection_by_slot[slot.id] = self._selection
                 except Exception as exc:
@@ -3860,7 +3977,9 @@ for (const dt of other.tools) {
                     # actually refresh either, since it only gets
                     # recomputed inside query_columns, which this
                     # condition is what decides whether to call at all.
-                    self._selection.antenna_names != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'antenna_names', None)
+                    self._selection.antenna_names != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'antenna_names', None) or
+                    # Baseline table (2026-10): see the raster branch.
+                    self._selection.baselines != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'baselines', None)
                 )
                 try:
                     if axes_changed:
@@ -4026,11 +4145,11 @@ for (const dt of other.tools) {
         spw_ids = (list(chosen) if chosen is not None
                    else _parse_spw_string(self._spw_str, self._meta))
         corrs      = _parse_correlation_string(self._corr_str, self._meta)
-        # Antenna iteration (I-3, 2026-09): antenna_names, not baselines --
-        # see _parse_antenna_string's own docstring for why the two
-        # SelectionSpec fields mean different things and only the former
-        # is what "this antenna's own baselines against everyone" needs.
-        antenna_names = _parse_antenna_string(self._antenna_str, self._meta)
+        # Antenna / baseline selection (I-3 2026-09; tables 2026-10).
+        # antenna_names = "these antennas against everyone"; baselines =
+        # exactly these pairs, and takes precedence.  One function owns
+        # the rule -- see antenna_baseline_select's module docstring.
+        antenna_names, baselines = self._antenna_baseline_selection()
         return SelectionSpec(
             field_names = [field_name] if field_name else None,
             spw         = spw_ids or None,
@@ -4039,6 +4158,7 @@ for (const dt of other.tools) {
             time_range  = self._time_range,
             freq_range  = self._freq_range,
             antenna_names = antenna_names,
+            baselines   = baselines,
             cache_generation = getattr(self, "_cache_generation", 0),
         ) if not hasattr(self, "_flags") else self._flags.stamp_selection(SelectionSpec(
             field_names = [field_name] if field_name else None,
@@ -4048,8 +4168,100 @@ for (const dt of other.tools) {
             time_range  = self._time_range,
             freq_range  = self._freq_range,
             antenna_names = antenna_names,
+            baselines   = baselines,
             cache_generation = getattr(self, "_cache_generation", 0),
         ))
+
+    def _tick_text_input(self, placeholder: str, dark):
+        """A one-line "tick from text" box for a selection table.
+
+        Only the widget; ``_wire_tick_text_inputs`` attaches the
+        behaviour once the status bar's notify Div exists.  The box
+        never holds a selection: on Enter its text is turned into ticks
+        and it is cleared (``antenna_baseline_select``, "Text entry").
+        """
+        inp = EvTextInput(
+            value       = "",
+            placeholder = placeholder,
+            width       = _SIDEBAR_WIDTH,
+            margin      = (2, 0, 2, 0),
+            stylesheets = [dark],
+        )
+        # Best effort: stop the browser offering its own history of
+        # things typed into other pages' text fields (unrelated numbers
+        # dropping down when the box is clicked).  See
+        # antenna_baseline_select.NO_AUTOFILL_JS for why this is "best
+        # effort" and harmless if it finds nothing.
+        inp.js_on_event(MouseEnter, CustomJS(
+            code=_abs.NO_AUTOFILL_JS + "cvNoAutofill(cb_obj.origin);"))
+        return inp
+
+    def _wire_tick_text_inputs(self) -> None:
+        """Attach "tick from text" to the SPW / Antenna / Baseline boxes.
+
+        Each box's value change (Enter, or leaving the box) runs
+        ``cvApplySelectionText`` against its own table.  The row names
+        are passed as plain lists in the CustomJS args rather than read
+        from the table's source, so the interpreter sees exactly what
+        its Python twin is tested with.
+        """
+        meta = self._meta
+        notify = getattr(self, "_notify_div", None)
+        specs = [
+            (self._spw_text, self._spw_source, _abs.spw_keys(meta), None,
+             "SPW", None, None),
+            (self._antenna_text, self._antenna_source, _abs.antenna_keys(meta),
+             None, "Antenna", self._antenna_mode, self._baseline_source),
+            (self._baseline_text, self._baseline_source,
+             _abs.baseline_keys(meta), _abs.baseline_pairs(meta),
+             "Baseline", None, None),
+        ]
+        for inp, src, keys, pairs, label, mode, clear in specs:
+            args = {"src": src, "keys": keys, "label": label}
+            # Optional models are left out rather than passed as null;
+            # the code below checks for them with typeof.
+            if pairs is not None: args["pairs"] = pairs
+            if notify is not None: args["notify"] = notify
+            if mode is not None: args["mode_switch"] = mode
+            if clear is not None: args["clear_src"] = clear
+            inp.js_on_change("value", CustomJS(args=args, code=(
+                _abs.APPLY_SELECTION_TEXT_JS + """
+cvApplySelectionText(
+    cb_obj, src, keys,
+    (typeof pairs === 'undefined') ? null : pairs,
+    label,
+    (typeof notify === 'undefined') ? null : notify,
+    (typeof mode_switch === 'undefined') ? null : mode_switch,
+    (typeof clear_src === 'undefined') ? null : clear_src);
+""")))
+
+    def _antenna_initial_state(self) -> dict:
+        """``antenna_baseline_select.initial_state`` for the current
+        ``antenna=`` string, computed once per string (it logs a warning
+        for each part that matches nothing, and is asked for on every
+        selection build until the browser's first Plot)."""
+        cached = getattr(self, "_ab_init_cache", None)
+        if cached is None or cached[0] != self._antenna_str:
+            cached = (self._antenna_str,
+                      _abs.initial_state(self._antenna_str, self._meta))
+            self._ab_init_cache = cached
+        return cached[1]
+
+    def _antenna_baseline_selection(self) -> tuple:
+        """``(antenna_names, baselines)`` for the current selection.
+
+        What is ticked in the sidebar's Antenna / Baseline tables as of
+        the last Plot, or -- before the browser has sent anything --
+        what the constructor's ``antenna=`` string names.  The rule
+        itself lives in ``antenna_baseline_select``.
+        """
+        init = self._antenna_initial_state()
+        return _abs.resolve_antenna_baseline_selection(
+            init["antenna_names"], init["baselines"],
+            getattr(self, "_antenna_sel", None),
+            getattr(self, "_baseline_sel", None),
+            self._meta,
+        )
 
     def _notify(self, text: str, color: str = "#f38ba8") -> None:
         """Show a transient notification in the status bar.
@@ -4110,13 +4322,19 @@ for (const dt of other.tools) {
         # _antenna_iteration_position's own docstring for why a manual
         # multi-antenna pick correctly reports no position here, the
         # same way SPW's own multi-select does.
-        antenna_pos = _antenna_iteration_position(self._antenna_str, self._meta)
-        if antenna_pos:
-            pos, n_antennas = antenna_pos
-            antenna_name = _parse_antenna_string(self._antenna_str, self._meta)[0]
-            antenna = f"Antenna {pos}/{n_antennas}: {antenna_name}"
-        else:
-            antenna = f"Antenna: {self._antenna_str or 'all'}"
+        # 2026-10: from the resolved selection (the tables, or the
+        # constructor string before the first Plot), and a baseline
+        # readout when baselines are ticked -- "Baseline 67/325:
+        # DA44&DV19".
+        _both = getattr(self, "_both_ends_antennas", None)
+        if _both is None and getattr(self, "_antenna_sel", None) is None:
+            # Before the first Plot: what the constructor string ticked.
+            _init = self._antenna_initial_state()
+            _both = (len(_init["antenna_rows"])
+                     if _init["both"] and not _init["baseline_rows"] else 0)
+        antenna = _abs.selection_status(
+            *self._antenna_baseline_selection(), self._meta,
+            both_ends_antennas=_both)
 
         col = self._datacolumn
         count = self._flag_db.pending_count
@@ -4510,6 +4728,27 @@ html, body { height: 100%; margin: 0; }
             options=[("remove", "Remove"), ("keep", "Keep")],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+        # Statistic windows (HRS H2 slice 2, 2026-10) for Phase RMS /
+        # Coherence: what each cell's scatter is taken within.  Same
+        # arrangement again: per slot, read at Plot-press time.  A fixed
+        # list rather than free text so nothing needs validating in the
+        # browser; the constructor takes any number of seconds /
+        # channels, and such a value is added to the list so the Select
+        # can show it.
+        rt_sel = Select(
+            title="Time window (RMS / Coherence)",
+            value=_window_value(slot.raster.stat_time_window),
+            options=_window_options(_STAT_TIME_WINDOW_OPTIONS,
+                                    slot.raster.stat_time_window, "s"),
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        rc_sel = Select(
+            title="Channel window (RMS / Coherence)",
+            value=_window_value(slot.raster.stat_chan_window),
+            options=_window_options(_STAT_CHAN_WINDOW_OPTIONS,
+                                    slot.raster.stat_chan_window, "ch"),
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
 
         # Per-slot Y/X conflict indicator — an inline Div scoped to this
         # panel, not the shared self._notify_div the old single global
@@ -4549,7 +4788,7 @@ conflict_div.text = conflict ? msg : '';
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Raster ──</span>", width=_SIDEBAR_WIDTH),
-            ry_sel, rx_sel, rq_sel, ra_sel, rd_sel,
+            ry_sel, rx_sel, rq_sel, ra_sel, rd_sel, rt_sel, rc_sel,
             conflict_div,
             raster_cmap,
             info_sel.column,
@@ -4557,6 +4796,7 @@ conflict_div.text = conflict ? msg : '';
         widgets = {
             "y_sel": ry_sel, "x_sel": rx_sel, "q_sel": rq_sel,
             "avg_sel": ra_sel, "detrend_sel": rd_sel,
+            "twin_sel": rt_sel, "cwin_sel": rc_sel,
             "info_selectors": info_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
@@ -4953,9 +5193,11 @@ for (let i = 0; i < cols.length; i++) {
         )
         self._spw_prev_btn = self._spw_iter.prev_btn
         self._spw_next_btn = self._spw_iter.next_btn
+        self._spw_text = self._tick_text_input("id, name, a~b, !id", dark)
         self._spw_select = column(
             self._spw_iter.row,
             self._spw_table,
+            self._spw_text,
             self._spw_overflow_note,
             width=_SIDEBAR_WIDTH,
             # Same 10px-bottom-only fix as field_col, same reason: this
@@ -5003,10 +5245,15 @@ for (let i = 0; i < cols.length; i++) {
             + "  | e.g. <tt>1,3,7</tt>  or  <tt>1~7</tt>"
         )
         ant_hint     = (
-            f"<b>Antenna</b> — name or index, MSSelection syntax  "
-            f"| Antennas: {', '.join(ant_names[:6])}"
-            + (f" … ({len(ant_names)} total)" if len(ant_names) > 6 else "")
-            + "  | e.g. <tt>DA41</tt>  or  <tt>DA41&DV01</tt>  or  <tt>!DA42</tt>"
+            f"<b>Antenna / Baseline</b> — tick rows to select  "
+            f"| {len(ant_names)} antennas, {len(meta.baselines)} baselines  "
+            "| Antennas ticked: their baselines to every other antenna  "
+            "| Baselines ticked: exactly those (overrides antennas)  "
+            "| Nothing ticked: all  "
+            "| ◀ ▶ step one at a time; Baseline ◀ ▶ stays within the "
+            "ticked antennas  "
+            "| Text box: type e.g. <tt>DA41,DA43~DA46</tt>, <tt>!DA42</tt> "
+            "or <tt>DA41&amp;DV01</tt> and press Enter to set the ticks"
         )
         time_hint    = (
             f"<b>Time range</b> — YYYY/MM/DD/HH:MM:SS~YYYY/MM/DD/HH:MM:SS  "
@@ -5041,6 +5288,26 @@ for (let i = 0; i < cols.length; i++) {
         self._hint_antenna.text = ant_hint
         self._hint_time.text    = time_hint
         self._hint_uvrange.text = uvrange_hint
+        _a0 = ant_names[0] if ant_names else "NAME"
+        _a1 = ant_names[-1] if len(ant_names) > 1 else _a0
+        _tick_tail = ("  | Enter replaces the ticks and clears the box; "
+                      "if any part matches nothing, nothing changes  "
+                      "| then press Plot")
+        self._hint_spw_text.text = (
+            "<b>SPW from text</b> — id or name as the table shows it  "
+            "| e.g. <tt>0,2</tt>  or  <tt>0~3</tt>  or  <tt>!1</tt> (all but 1)"
+            + _tick_tail)
+        self._hint_antenna_text.text = (
+            "<b>Antennas from text</b> — name or number  "
+            f"| e.g. <tt>{_a0}</tt>  or  <tt>{_a0}~{_a1}</tt>  or  <tt>0,3,5</tt>  "
+            f"or  <tt>!{_a0}</tt> (all but; sets Both ends)"
+            + _tick_tail)
+        self._hint_baseline_text.text = (
+            "<b>Baselines from text</b> — two antennas joined by &amp;, or the "
+            "baseline's # "
+            f"| e.g. <tt>{_a0}&amp;{_a1}</tt>  or  <tt>12</tt>  or  <tt>10~20</tt>  "
+            "or  <tt>!3</tt> (all but 3)"
+            + _tick_tail)
 
         def _focus_blur(widget, hint_div):
             """Wire MouseEnter→show hint (full width), MouseLeave→show
@@ -5074,45 +5341,133 @@ for (let i = 0; i < cols.length; i++) {
         time_inp    = _stub_input("Time range", self._timerange_str, self._hint_time)
         uv_inp      = _stub_input("UV range",   self._uvrange_str,   self._hint_uvrange)
 
-        # Antenna (I-3, 2026-09): unlike Scan/Time range/UV range, no longer
-        # a bare "stub" -- built directly rather than via _stub_input, whose
-        # shared width=_SIDEBAR_WIDTH is correct for a lone widget but too
-        # wide once Prev/Next sit beside it (needs _IterButtons.LABEL_WIDTH
-        # instead, exactly like Field's Select -- see that widget's own
-        # construction just above field_options). No title= for the same
-        # reason Field's Select has none: an EvTextInput's title renders
-        # inside the widget's own measured height, which _IterButtons'
-        # row(align="center") would then measure as part of the control's
-        # box -- _section("Antenna") supplies the label externally instead,
-        # matching Field's own external-label shape exactly (not SPW's,
-        # which uses a heading Div beside a control on its own row -- an
-        # EvTextInput's single-line shape matches Field's Select, not SPW's
-        # DataTable).
-        self._antenna_input = EvTextInput(
-            value       = self._antenna_str,
-            width       = _IterButtons.LABEL_WIDTH,
-            margin      = (0, 0, 0, 0),
-            stylesheets = [dark],
+        # ---- Antenna and Baseline tables (2026-10, HRS H3) ---------------- #
+        #
+        # Two scrolling checkbox tables, built exactly like the SPW table
+        # above (same DataTable options, same two stylesheets, same
+        # heading-Div-plus-_IterButtons row), replacing the free-text
+        # antenna box.  Why tables: a baseline could not be selected at
+        # all before (the text box only took antenna names, selecting
+        # every baseline of each), and the SPFLG-style per-baseline
+        # waterfall needs exactly that; and a list to tick from needs no
+        # syntax.  The constructor's antenna= string still works -- it
+        # decides what is ticked initially.
+        #
+        # The selection rule (nothing ticked = all; ticked antennas =
+        # their baselines against everyone; ticked baselines = exactly
+        # those, overriding the antennas) and the table contents live in
+        # antenna_baseline_select.py, which is testable without Bokeh.
+        _ant_data = _abs.antenna_table_data(meta)
+        _ab_init  = self._antenna_initial_state()
+        self._antenna_source = ColumnDataSource(data=_ant_data)
+        self._antenna_source.selected.indices = list(_ab_init["antenna_rows"])
+        self._antenna_table = DataTable(
+            source          = self._antenna_source,
+            columns         = [
+                TableColumn(field="name",  title="Antenna", width=180),
+                TableColumn(field="ident", title="#",       width=44),
+            ],
+            selectable      = "checkbox",
+            index_position  = None,
+            width           = _SIDEBAR_WIDTH,
+            row_height      = _SPW_ROW_H,
+            height          = (min(max(len(_ant_data["name"]), 1),
+                                   _abs.ANTENNA_MAX_ROWS) * _SPW_ROW_H
+                               + _SPW_HDR_H),
+            stylesheets     = [dark, self._table_css_dark],
+            sizing_mode     = "fixed",
         )
-        _focus_blur(self._antenna_input, self._hint_antenna)
+        _focus_blur(self._antenna_table, self._hint_antenna)
+        antenna_heading = _section("Antenna", width=_IterButtons.LABEL_WIDTH,
+                                   margin=(0, 0, 0, 0))
         self._antenna_iter = _IterButtons(
-            axis_label="antenna", control=self._antenna_input,
+            axis_label="antenna", control=antenna_heading,
             count=len(meta.antennas), dark=dark,
             icon_btn_css=self._icon_btn_css, tt=self._tt,
-            # Not yet confirmed against a real browser for an
-            # EvTextInput specifically (see _IterButtons.vertical_nudge's
-            # own docstring, which names this exact axis/widget-type
-            # pairing as untested) -- carried over from Field's Select
-            # value as the best available estimate, not a verified one.
-            vertical_nudge=2,
         )
         self._antenna_prev_btn = self._antenna_iter.prev_btn
         self._antenna_next_btn = self._antenna_iter.next_btn
+        # Always-visible reminder of the one rule that differs from the
+        # SPW table (where an empty selection is refused).
+        self._antenna_note = Div(
+            text="<i>None ticked = all antennas</i>",
+            stylesheets=[dark],
+            margin=(0, 0, 0, 5),
+        )
+        # Which baselines the ticked antennas select (see the module
+        # docstring of antenna_baseline_select for why this has to be a
+        # choice): 0 = a ticked antenna at either end, 1 = at both ends.
+        self._antenna_mode = RadioButtonGroup(
+            labels=["Either end", "Both ends"],
+            active=1 if _ab_init["both"] else 0,
+            width=_SIDEBAR_WIDTH,
+            stylesheets=[dark],
+        )
+        self._antenna_text = self._tick_text_input(
+            "name, number, a~b, !name", dark)
+        _focus_blur(self._antenna_text, self._hint_antenna_text)
         antenna_col = column(
-            _section("Antenna"),
             self._antenna_iter.row,
+            self._antenna_table,
+            self._antenna_text,
+            self._antenna_mode,
+            self._antenna_note,
             width=_SIDEBAR_WIDTH,
             margin=(0, 0, 10, 0),
+        )
+
+        _bl_data = _abs.baseline_table_data(meta)
+        self._baseline_source = ColumnDataSource(data=_bl_data)
+        self._baseline_source.selected.indices = list(_ab_init["baseline_rows"])
+        self._baseline_table = DataTable(
+            source          = self._baseline_source,
+            columns         = [
+                # "#" is the number the Baseline axis of a raster (and
+                # the cursor readout) shows for the row, so a baseline
+                # spotted on a plot can be found here.
+                TableColumn(field="name",  title="Baseline", width=180),
+                TableColumn(field="ident", title="#",        width=44),
+            ],
+            selectable      = "checkbox",
+            index_position  = None,
+            width           = _SIDEBAR_WIDTH,
+            row_height      = _SPW_ROW_H,
+            height          = (min(max(len(_bl_data["name"]), 1),
+                                   _abs.BASELINE_MAX_ROWS) * _SPW_ROW_H
+                               + _SPW_HDR_H),
+            stylesheets     = [dark, self._table_css_dark],
+            sizing_mode     = "fixed",
+        )
+        _focus_blur(self._baseline_table, self._hint_antenna)
+        baseline_heading = _section("Baseline", width=_IterButtons.LABEL_WIDTH,
+                                    margin=(0, 0, 0, 0))
+        self._baseline_iter = _IterButtons(
+            axis_label="baseline", control=baseline_heading,
+            count=len(_bl_data["name"]), dark=dark,
+            icon_btn_css=self._icon_btn_css, tt=self._tt,
+        )
+        self._baseline_prev_btn = self._baseline_iter.prev_btn
+        self._baseline_next_btn = self._baseline_iter.next_btn
+        self._baseline_note = Div(
+            text=(f"<i>{len(_bl_data['name'])} baselines. None ticked = "
+                  f"as the antennas say. Ticked baselines override the "
+                  f"antennas.</i>"),
+            stylesheets=[dark],
+            margin=(0, 0, 0, 5),
+            width=_SIDEBAR_WIDTH - 10,
+        )
+        self._baseline_text = self._tick_text_input(
+            "A&B, number, a~b, !number", dark)
+        _focus_blur(self._baseline_text, self._hint_baseline_text)
+        baseline_col = column(
+            self._baseline_iter.row,
+            self._baseline_table,
+            self._baseline_text,
+            self._baseline_note,
+            width=_SIDEBAR_WIDTH,
+            margin=(0, 0, 10, 0),
+            # Single-dish data have no baselines: nothing to list.
+            visible=len(_bl_data["name"]) > 0,
         )
 
         # Wire focus/blur on the already-created select/checkbox widgets too
@@ -5121,6 +5476,7 @@ for (let i = 0; i < cols.length; i++) {
         # MouseEnter/MouseLeave, which a layout container does not
         # emit, and the hint would silently never appear.
         _focus_blur(self._spw_table,    self._hint_spw)
+        _focus_blur(self._spw_text,     self._hint_spw_text)
         _focus_blur(self._corr_cbg,     self._hint_corr)
 
         # ---- Global raster/scatter axis sections removed (Group 3 piece
@@ -5179,7 +5535,7 @@ for (let i = 0; i < cols.length; i++) {
             _section("Data"),
             self._col_select, field_col, self._spw_select,
             corr_label, self._corr_cbg,
-            scan_inp, antenna_col, time_inp, uv_inp,
+            scan_inp, antenna_col, baseline_col, time_inp, uv_inp,
             # "Axes" header removed (Group 3 piece 2, 2026-07-31) along
             # with self._raster_axis_section/_scatter_axis_section that
             # used to sit under it — axis controls now live inside each
@@ -6091,7 +6447,14 @@ if (sidebarEl && prevScrollTop !== null) {
         reload_btn = Button(label="Reload ↺", button_type="default", width=80)
 
         # Shared plot-send logic used by Plot ▶, Reload ↺, and all presets.
-        _do_plot_js = _CV_SET_BUSY_JS + """
+        # SELECTION_PAYLOAD_JS defines cvAntennaBaselineSelection(), which
+        # doPlot() calls to read the Antenna / Baseline tables (2026-10).
+        # A plain function declaration, so it is harmless if this string
+        # ends up concatenated into one CustomJS more than once.
+        # (A bare module-level name rather than _abs.SELECTION_PAYLOAD_JS:
+        # test_checkbox_guard.py reads this expression from the source
+        # and resolves names, not attribute lookups.)
+        _do_plot_js = _CV_SET_BUSY_JS + _SELECTION_PAYLOAD_JS + """
 // Shared with gear_click_js (a separate, non-concatenated CustomJS
 // string, hence a global rather than a local function) -- defining it
 // here too, identically, since switchToTab() below can be the very
@@ -6397,10 +6760,11 @@ function doPlot(reload) {
     }
 
     function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel,
-                                colorize_handles, ra_sel, rd_sel) {
+                                colorize_handles, ra_sel, rd_sel, rt_sel, rc_sel) {
         if (kind_switch.active === 0) {
             return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value,
-                    averaging: ra_sel.value, detrend: rd_sel.value};
+                    averaging: ra_sel.value, detrend: rd_sel.value,
+                    twin: rt_sel.value, cwin: rc_sel.value};
         } else {
             return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value,
                      colorize: buildColorizeArray(colorize_handles)};
@@ -6439,11 +6803,11 @@ function doPlot(reload) {
     panels[panel0_id] = buildPanelPayload(
         panel0_kind_switch, panel0_ry_sel, panel0_rx_sel, panel0_rq_sel,
         panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles, panel0_ra_sel,
-        panel0_rd_sel);
+        panel0_rd_sel, panel0_rt_sel, panel0_rc_sel);
     panels[panel1_id] = buildPanelPayload(
         panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
         panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles, panel1_ra_sel,
-        panel1_rd_sel);
+        panel1_rd_sel, panel1_rt_sel, panel1_rc_sel);
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
 
@@ -6476,11 +6840,29 @@ function doPlot(reload) {
     // the request finished and control should come back to the user.
     // cvSetBusy() (defined above) also owns the give-up timer for a
     // response that never arrives.
+    // Ticked rows of the Antenna / Baseline tables (2026-10) -- see
+    // antenna_baseline_select.SELECTION_PAYLOAD_JS.  Empty lists mean
+    // "nothing ticked", which the server reads as "all": no guard here,
+    // unlike the SPW table above.
+    const _ab = cvAntennaBaselineSelection(ant_src, bl_src,
+                                           ant_mode && ant_mode.active === 1);
+    if (_ab.none) {
+        // "Both ends" with antennas that share no baseline (typically a
+        // single antenna): nothing to plot.  Refused here, like an
+        // empty SPW selection, rather than sent as an empty request.
+        if (notify_div)
+            notify_div.text = "<b>No baseline has a ticked antenna at both ends.</b>"
+                            + " Tick more antennas, or switch to Either end.";
+        return;
+    }
+
     cvSetBusy(true);
 
     ctrl.send(ids['plot'], {
         field:       field_sel.value,
-        antenna:     antenna_input.value,
+        antenna_names: _ab.antenna_names,
+        baselines:   _ab.baselines,
+        both_ends_antennas: _ab.both_ends_antennas,
         spw_ids:     spw_ids,
         correlation: corr.join(','),
         datacolumn:  col_sel.value,
@@ -6856,7 +7238,11 @@ function doPlot(reload) {
             "layout_rbg":           layout_rbg,
             "display_order_source": self._display_order_source,
             "field_sel":  self._field_select,
-            "antenna_input": self._antenna_input,
+            # Antenna / Baseline tables' sources (2026-10): read by
+            # doPlot() and stepped by their Prev/Next buttons.
+            "ant_src":    self._antenna_source,
+            "bl_src":     self._baseline_source,
+            "ant_mode":   self._antenna_mode,
             "spw_src":    self._spw_source,
             "corr_cbg":   self._corr_cbg,
             "col_sel":    self._col_select,
@@ -6903,6 +7289,8 @@ function doPlot(reload) {
             "panel0_rq_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["q_sel"],
             "panel0_ra_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["avg_sel"],
             "panel0_rd_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["detrend_sel"],
+            "panel0_rt_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["twin_sel"],
+            "panel0_rc_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["cwin_sel"],
             "panel0_sx_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["x_sel"],
             "panel0_sy_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["y_sel"],
             # Part 5 (2026-09): one entry per scatter layer, in the
@@ -6919,6 +7307,8 @@ function doPlot(reload) {
             "panel1_rq_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["q_sel"],
             "panel1_ra_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["avg_sel"],
             "panel1_rd_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["detrend_sel"],
+            "panel1_rt_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["twin_sel"],
+            "panel1_rc_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["cwin_sel"],
             "panel1_sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
             "panel1_sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
             "panel1_colorize_handles": self._panel_axis_widgets[self._slots[1].id]["scatter"]["colorize_handles"],
@@ -7077,38 +7467,19 @@ function doIterateSpw(delta) {
     spw_src.selected.indices = [idx];
 }
 """
-        # Antenna (I-3, 2026-09). Unlike field_sel/spw_src, antenna_input
-        # is a plain EvTextInput -- no .options (Select) or .data/
-        # ColumnDataSource (DataTable) to read the full ordered identity
-        # list from client-side. Embedding it here, as a JSON array
-        # literal built server-side from meta.antennas' OWN order (NOT
-        # the alphabetically-sorted ant_names used elsewhere only for
-        # hint text -- see _antenna_iteration_position's own docstring
-        # for why), gives this axis the same "full list already on the
-        # client" property Field/SPW get for free from their own widget
-        # types, with no new ColumnDataSource needed just to carry it.
-        _antenna_names_json = json.dumps([a.name for a in self._meta.antennas])
-        _iterate_antenna_js = STEP_INDEX_JS + """
-function doIterateAntenna(delta) {
-    const names = """ + _antenna_names_json + """;""" + \
-    _iter_guard_js("names.length", "antenna") + """
-    // Only a value naming EXACTLY ONE antenna (no comma list, no
-    // "!exclude", no empty/"all") has a defined position to step FROM --
-    // mirrors _antenna_iteration_position's own single-antenna
-    // requirement on the Python side. Anything else (ambiguous or no
-    // selection) starts fresh at the first antenna, the same rule
-    // Field's own "All fields" sentinel already follows via
-    // stepIterationIndex's current_index===null branch -- no separate
-    // "resolves to exactly one" check needed here, since indexOf
-    // already returns -1 (folded to null below) for every one of those
-    // cases (a multi-name string, an exclusion, or empty) exactly as
-    // it does for a genuinely unmatched name.
-    const cur = names.indexOf(antenna_input.value.trim());
-    const idx = stepIterationIndex(cur === -1 ? null : cur, names.length, delta, true);
-    if (idx === null) return;
-    antenna_input.value = names[idx];
-}
-"""
+        # Antenna and Baseline (tables, 2026-10).  Both are DataTables
+        # now, so -- like SPW -- the full ordered list is already on the
+        # client in the table's own source and stepping is a change of
+        # selected.indices.  The function bodies live in
+        # antenna_baseline_select.py so that tests run the shipped
+        # strings under node rather than a transcription; they read
+        # ant_src / bl_src from _plot_js_args.  (Before the tables, the
+        # antenna axis was a free-text box and its name list had to be
+        # embedded here as a JSON literal.)
+        _iterate_antenna_js = STEP_INDEX_JS + _abs.iterate_antenna_js(
+            _iter_guard_js("names.length", "antenna"))
+        _iterate_baseline_js = STEP_INDEX_JS + _abs.iterate_baseline_js(
+            _iter_guard_js("cand.length", "baseline"))
         # .wire() (see _IterButtons) assembles each button's CustomJS
         # from these bodies + self._do_plot_js exactly the way the
         # hand-written js_on_click() calls this replaced did -- the
@@ -7119,6 +7490,9 @@ function doIterateAntenna(delta) {
                             _iterate_spw_js, "doIterateSpw")
         self._antenna_iter.wire(self._plot_js_args, self._do_plot_js,
                                 _iterate_antenna_js, "doIterateAntenna")
+        self._baseline_iter.wire(self._plot_js_args, self._do_plot_js,
+                                 _iterate_baseline_js, "doIterateBaseline")
+        self._wire_tick_text_inputs()
 
         # Rule 3 (§3.1c of the plan): superseded by the sidebar move.
         # I-1's toolbar-resident controls (RadioButtonGroup, then
@@ -7543,7 +7917,8 @@ doPlot();
                 w = self._panel_axis_widgets[slot.id][kind]
                 if kind == "raster":
                     _all_axis_widgets += [w["y_sel"], w["x_sel"], w["q_sel"],
-                                          w["avg_sel"], w["detrend_sel"]]
+                                          w["avg_sel"], w["detrend_sel"],
+                                          w["twin_sel"], w["cwin_sel"]]
                 else:
                     _all_axis_widgets += [w["x_sel"], w["y_sel"]]
                 _all_axis_widgets += w["cmap_widgets"]
@@ -7593,7 +7968,9 @@ doPlot();
                 "hint_divs":    [self._hint_field, self._hint_spw,
                                  self._hint_corr, self._hint_scan,
                                  self._hint_antenna, self._hint_time,
-                                 self._hint_uvrange],
+                                 self._hint_uvrange, self._hint_spw_text,
+                                 self._hint_antenna_text,
+                                 self._hint_baseline_text],
                 "path_div":         self._path_div,
                 "source_basename":  os.path.basename(self._source_path),
                 # _spw_table, not _spw_select: the latter is now a column
@@ -7603,8 +7980,12 @@ doPlot();
                                  self._spw_table, self._corr_cbg,
                                  self._field_prev_btn, self._field_next_btn,
                                  self._spw_prev_btn, self._spw_next_btn,
-                                 self._antenna_input,
-                                 self._antenna_prev_btn, self._antenna_next_btn]
+                                 self._antenna_table, self._baseline_table,
+                                 self._antenna_note, self._baseline_note,
+                                 self._antenna_mode, self._antenna_text,
+                                 self._baseline_text, self._spw_text,
+                                 self._antenna_prev_btn, self._antenna_next_btn,
+                                 self._baseline_prev_btn, self._baseline_next_btn]
                                 + _all_axis_widgets
                                 + self._flags.themed_widgets(),
                 # Colormap histogram figures + reset-button icons (added
@@ -7647,6 +8028,10 @@ doPlot();
                 "section_dark":   _SECTION_DARK,
                 "section_light":  _SECTION_LIGHT,
                 "spw_table":       self._spw_table,
+                # Antenna / Baseline tables (2026-10): the same
+                # [sidebar_css, table_css_dark/light] swap, in their own
+                # _step('selection tables', ...) block.
+                "selection_tables": [self._antenna_table, self._baseline_table],
                 "sidebar_css":     self._sidebar_css,
                 "table_css_dark":  self._table_css_dark,
                 "table_css_light": self._table_css_light,
@@ -8009,6 +8394,12 @@ if (x != null && !isNaN(x)) {
         self._hint_antenna  = _hint("")
         self._hint_time     = _hint("")
         self._hint_uvrange  = _hint("")
+        # The "tick from text" boxes under the SPW / Antenna / Baseline
+        # tables (2026-10): what may be typed, shown while the pointer
+        # is over the box, like Time range's and UV range's.
+        self._hint_spw_text      = _hint("")
+        self._hint_antenna_text  = _hint("")
+        self._hint_baseline_text = _hint("")
 
         return column(
             self._status_row,
@@ -8019,5 +8410,8 @@ if (x != null && !isNaN(x)) {
             self._hint_antenna,
             self._hint_time,
             self._hint_uvrange,
+            self._hint_spw_text,
+            self._hint_antenna_text,
+            self._hint_baseline_text,
             sizing_mode="stretch_width",
         )

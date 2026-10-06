@@ -158,9 +158,13 @@ Task arguments (preview)
        ranges, channel selection). Default: all.
    * - ``antenna``
      - str
-     - MSSelection antenna string. **Accepted and validated, but not
-       yet applied to the query in the preview** — see the caveat
-       below.
+     - Antennas and baselines to tick initially in the sidebar's
+       *Antenna* and *Baseline* tables: names or numbers
+       (``"DA41,DA43"``), ranges (``"DA41~DA46"``), exclusion
+       (``"!DA42"``), and exact baselines (``"DA44&DV19"``), separated
+       by ``,`` or ``;``. Ticked antennas select their baselines to
+       every other antenna; ``!`` selects only baselines between the
+       remaining antennas; ticked baselines select exactly those.
    * - ``scan``
      - str
      - MSSelection scan string. **Not yet wired** — same caveat.
@@ -193,6 +197,18 @@ Task arguments (preview)
        linear phase slope (residual delay or rate) before the statistic
        is taken. Default ``True``. Initial value for every raster panel;
        each panel's gear tab has its own *Phase slope* control.
+   * - ``stat_time_window``
+     - str or float
+     - Time window the *Phase RMS* / *Coherence* statistic is taken
+       within: ``"auto"`` (default), ``"off"``, ``"scan"``, or seconds.
+       Where Time is a plot axis every integration shows its window's
+       value; where it is not, the windows are pooled into each cell.
+       ``"auto"`` is ``"off"`` in the first case and ``"scan"`` in the
+       second. Windows never span a gap between scans.
+   * - ``stat_chan_window``
+     - str or int
+     - Channel window for the same statistic: ``"off"`` (default) or a
+       number of channels.
    * - ``mode``
      - str
      - ``"both"``, ``"raster"``, or ``"scatter"`` — initial display
@@ -218,12 +234,12 @@ Task arguments (preview)
 
 .. caution::
 
-   ``antenna``, ``scan``, ``timerange``, and ``uvrange`` are accepted
+   ``scan``, ``timerange``, and ``uvrange`` are accepted
    by ``visplot`` and pass type validation, but are **stored without
    effect** in the preview — they do not currently filter what gets
    plotted. Passing a value for one of these will not raise an error,
-   which can be misleading. Use ``field``, ``spw``, and ``correlation``
-   for selection in this release.
+   which can be misleading. Use ``field``, ``spw``, ``antenna``, and
+   ``correlation`` for selection in this release.
 
 All arguments are plain strings, numbers, or simple tuples/lists —
 there's no need to construct any internal ``cubevis`` objects to get a
@@ -280,8 +296,12 @@ Sidebar
   (scatter of phase, in degrees, over the samples each cell covers) or
   *Coherence* (vector over scalar averaged amplitude, 0 to 1). On
   Baseline vs Time these show phase stability across the band for each
-  integration; on Baseline vs Channel, stability over the selected time
-  range for each channel.
+  integration; on Baseline vs Channel, stability over time for each
+  channel (scan by scan, by default). The *Time window* and *Channel
+  window* controls set what each cell's statistic is taken within; with
+  a window set, the two quantities are also available on a Time vs
+  Channel waterfall, where the selected baselines are measured one by
+  one and combined.
 * **Scatter axis controls** — X axis, plus one or more overplotted
   layers (quantity, correlation, color, opacity) for the scatter panel
 * **Colormap controls** — scaling (default: histogram-equalized) and
@@ -428,11 +448,13 @@ Not yet available (tracked for the full release):
 * Flagging: box-select currently accumulates into ``FlagDB`` internally
   and drives a red-overlay re-render, but the Flag/Undo toolbar buttons
   are disabled and nothing is written back to the MS
-* ``antenna``, ``scan``, ``timerange``, and ``uvrange`` selection: the
+* ``scan``, ``timerange``, and ``uvrange`` selection: the
   ``visplot`` task accepts and validates these arguments, but they are
-  not yet applied to the query — only ``field``, ``spw``, and
-  ``correlation`` currently filter what's plotted
-* Iteration (Prev/Next by antenna, baseline, scan, etc.)
+  not yet applied to the query — only ``field``, ``spw``, ``antenna``
+  (antennas and baselines), and ``correlation`` currently filter what's
+  plotted
+* Iteration (Prev/Next) by scan or time; field, spectral window, antenna
+  and baseline are available
 * Locate
 * Save plot / image export
 * Copy-flagdata-command export

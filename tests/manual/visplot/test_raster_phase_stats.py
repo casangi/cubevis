@@ -25,7 +25,13 @@ What is pinned here:
 * the result does not depend on how the data are chunked, and is lazy;
 * MSv2Backend and MSv4Backend agree;
 * the option is per raster panel, travels on SelectionSpec, and shows in
-  the title.
+  the title;
+* windows (slice 2): along a displayed axis every sample shows its
+  window's value and the grid is unchanged; along a reduced axis the
+  windows are pooled, each about its own mean phase; windows never span
+  a gap between scans; "auto" means off where time is displayed and
+  per-scan where it is reduced; the single-baseline waterfall works once
+  a window is given.
 
 All synthetic -- no real MS/PS needed for any test in this file.
 """
@@ -40,7 +46,9 @@ import xarray as xr
 
 from cubevis.toolbox.visplot.axes import Axis
 from cubevis.toolbox.visplot.data._raster_stats import (
-    STAT_QUANTITIES, _lag_ladder, _step_index, reduce_phase_stat,
+    STAT_QUANTITIES, _lag_ladder, _runs, _split, _step_index, chan_blocks,
+    describe_windows, normalize_chan_window, normalize_time_window,
+    reduce_phase_stat, resolve_time_window, time_blocks,
 )
 from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
 from cubevis.toolbox.visplot.data.msv4_backend import MSv4Backend
@@ -578,3 +586,442 @@ class TestPlumbing:
         assert Axis.PHASE_RMS.label == "Phase RMS"
         assert Axis.COHERENCE.label == "Coherence"
         assert set(STAT_QUANTITIES) == {Axis.PHASE_RMS, Axis.COHERENCE}
+
+
+# ---------------------------------------------------------------------------
+# 9. Windows (slice 2)
+# ---------------------------------------------------------------------------
+
+def _three_scans(nb=1, nf=64, seed=30):
+    """Three 40-integration scans, 2 s sampling, gaps between them; phase
+    noise 10 / 30 / 10 deg and a different phase offset in each scan."""
+    t = np.concatenate([np.arange(40) * 2.0,
+                        300.0 + np.arange(40) * 2.0,
+                        700.0 + np.arange(40) * 2.0]) + 5.0e9
+    sig = np.repeat([10.0, 30.0, 10.0], 40)
+    off = np.repeat([0.0, 120.0, -90.0], 40)
+    rng = np.random.default_rng(seed)
+    ph = rng.normal(0, 1, (120, nb, nf)) * sig[:, None, None] + off[:, None, None]
+    return _phasor(ph), t
+
+
+WF = (Axis.TIME, Axis.FREQUENCY)          # single-baseline waterfall
+
+
+class TestWindowHelpers:
+
+    @pytest.mark.parametrize("given, want", [
+        (None, "auto"), ("", "auto"), ("AUTO", "auto"), ("off", "off"),
+        ("Scan", "scan"), ("60", 60.0), (30, 30.0), (2.5, 2.5),
+    ])
+    def test_normalize_time(self, given, want):
+        assert normalize_time_window(given) == want
+
+    @pytest.mark.parametrize("bad", ["soon", 0, -5, "0", float("nan")])
+    def test_normalize_time_rejects(self, bad):
+        with pytest.raises(ValueError):
+            normalize_time_window(bad)
+
+    @pytest.mark.parametrize("given, want", [
+        (None, "off"), ("", "off"), ("off", "off"), (0, "off"), (1, "off"),
+        ("16", 16), (8, 8), (8.0, 8),
+    ])
+    def test_normalize_chan(self, given, want):
+        assert normalize_chan_window(given) == want
+
+    @pytest.mark.parametrize("bad", ["wide", -2])
+    def test_normalize_chan_rejects(self, bad):
+        with pytest.raises(ValueError):
+            normalize_chan_window(bad)
+
+    def test_auto_resolution(self):
+        assert resolve_time_window("auto", time_displayed=True) == "off"
+        assert resolve_time_window("auto", time_displayed=False) == "scan"
+        assert resolve_time_window("off", time_displayed=False) == "off"
+        assert resolve_time_window(60, time_displayed=True) == 60.0
+
+    def test_runs_split_at_gaps(self):
+        k = np.array([0, 1, 2, 3, 53, 54, 55, 200.0])
+        assert _runs(k) == [(0, 4), (4, 7), (7, 8)]
+
+    def test_split_merges_a_short_tail(self):
+        # A tail shorter than half a window joins the window before it...
+        assert _split(0, 9, 4) == [(0, 4), (4, 9)]
+        # ...one of half a window or more stands alone.
+        assert _split(0, 10, 4) == [(0, 4), (4, 8), (8, 10)]
+        assert _split(0, 11, 4) == [(0, 4), (4, 8), (8, 11)]
+        assert _split(0, 3, 8) == [(0, 3)]
+
+    def test_time_blocks(self):
+        _, t = _three_scans()
+        c = xr.DataArray(t, dims=("time",))
+        assert time_blocks(c, "off") == [(0, 120)]
+        assert time_blocks(c, "scan") == [(0, 40), (40, 80), (80, 120)]
+        # 20 s at 2 s sampling: 10 integrations, never across a gap.
+        b = time_blocks(c, 20.0)
+        assert len(b) == 12 and all(e - a == 10 for a, e in b)
+        assert (40, 50) in b and not any(a < 40 < e for a, e in b)
+
+    def test_chan_blocks(self):
+        assert chan_blocks(64, "off") == [(0, 64)]
+        assert chan_blocks(64, 16) == [(0, 16), (16, 32), (32, 48), (48, 64)]
+
+    @pytest.mark.parametrize("tw, cw, td, cd, want", [
+        ("auto", "off", True, False, ""),
+        ("auto", "off", False, True, "per scan"),
+        ("off", "off", False, True, ""),
+        (60, 16, True, True, "60 s x 16 ch"),
+        ("scan", 8, True, False, "per scan x 8 ch"),
+    ])
+    def test_describe(self, tw, cw, td, cd, want):
+        assert describe_windows(tw, cw, td, cd) == want
+
+
+class TestWindowsOnDisplayedAxes:
+
+    def test_waterfall_blank_without_a_window(self, backend_name):
+        vis, t = _three_scans()
+        out = _raster(backend_name, _dataset(vis, time=t), *WF, Axis.PHASE_RMS)
+        assert out.shape == (120, 64) and np.isnan(out).all()
+
+    def test_waterfall_per_scan(self, backend_name):
+        vis, t = _three_scans()
+        out = _raster(backend_name, _dataset(vis, time=t), *WF, Axis.PHASE_RMS,
+                      time_window="scan")
+        # Grid unchanged; each channel shows its scan's scatter over time.
+        assert out.shape == (120, 64)
+        assert out[:40].mean() == pytest.approx(10.0, rel=0.06)
+        assert out[40:80].mean() == pytest.approx(30.0, rel=0.06)
+        assert out[80:].mean() == pytest.approx(10.0, rel=0.06)
+        # Constant along time within a scan, different between channels.
+        assert np.allclose(out[:40], out[0])
+        assert not np.allclose(out[0], out[0, 0])
+
+    def test_waterfall_time_and_channel_blocks(self, backend_name):
+        vis, t = _three_scans()
+        out = _raster(backend_name, _dataset(vis, time=t), *WF, Axis.PHASE_RMS,
+                      time_window=20, chan_window=16)
+        assert out.shape == (120, 64)
+        # One value per 10-integration x 16-channel block.
+        blk = out[:10, :16]
+        assert np.allclose(blk, blk[0, 0])
+        assert not np.isclose(out[0, 0], out[10, 0])
+        assert not np.isclose(out[0, 0], out[0, 16])
+        assert out[:40].mean() == pytest.approx(10.0, rel=0.08)
+        assert out[40:80].mean() == pytest.approx(30.0, rel=0.08)
+
+    def test_window_does_not_span_the_gap(self, backend_name):
+        # A 1000 s window is longer than any scan: it must still stop at
+        # the gaps, so the 30-deg scan cannot contaminate its neighbours.
+        vis, t = _three_scans()
+        out = _raster(backend_name, _dataset(vis, time=t), *WF, Axis.PHASE_RMS,
+                      time_window=1000)
+        assert out[:40].mean() == pytest.approx(10.0, rel=0.06)
+        assert out[80:].mean() == pytest.approx(10.0, rel=0.06)
+
+    def test_baseline_time_default_is_per_integration(self, backend_name):
+        vis, t = _three_scans(nb=3)
+        ds = _dataset(vis, time=t)
+        auto = _raster(backend_name, ds, *TB, Axis.PHASE_RMS)
+        off = _raster(backend_name, ds, *TB, Axis.PHASE_RMS, time_window="off")
+        assert np.allclose(auto, off, equal_nan=True)
+        assert len(np.unique(auto[:40, 0].round(9))) == 40    # not blocked
+
+    def test_baseline_time_per_scan(self, backend_name):
+        vis, t = _three_scans(nb=3)
+        out = _raster(backend_name, _dataset(vis, time=t), *TB, Axis.PHASE_RMS,
+                      time_window="scan")
+        assert out.shape == (120, 3)
+        assert np.allclose(out[:40], out[0])
+        assert out[:40].mean() == pytest.approx(10.0, rel=0.04)
+        assert out[40:80].mean() == pytest.approx(30.0, rel=0.04)
+
+    def test_coherence_windows(self, backend_name):
+        vis, t = _three_scans(nb=2)
+        out = _raster(backend_name, _dataset(vis, time=t), *TB, Axis.COHERENCE,
+                      time_window="scan", chan_window=16)
+        assert out[:40].mean() == pytest.approx(np.exp(-np.deg2rad(10) ** 2 / 2), rel=0.01)
+        assert out[40:80].mean() == pytest.approx(np.exp(-np.deg2rad(30) ** 2 / 2), rel=0.02)
+
+    def test_slope_removed_within_each_window(self, backend_name):
+        # A rate that differs from scan to scan: only per-window slope
+        # removal can take it out.
+        vis, t = _three_scans(seed=31)
+        rate = np.repeat([2.0, -5.0, 9.0], 40) * np.tile(np.arange(40) * 2.0, 3)
+        vis = vis * _phasor(rate)[:, None, None]
+        ds = _dataset(vis, time=t)
+        on = _raster(backend_name, ds, *WF, Axis.PHASE_RMS, time_window="scan")
+        off = _raster(backend_name, ds, *WF, Axis.PHASE_RMS, time_window="scan",
+                      detrend=False)
+        assert on[:40].mean() == pytest.approx(10.0, rel=0.08)
+        assert on[80:].mean() == pytest.approx(10.0, rel=0.08)
+        assert off[80:].mean() > 60.0
+
+    def test_flagged_samples_in_a_window(self, backend_name):
+        vis, t = _three_scans()
+        flag = np.zeros(vis.shape, dtype=bool)
+        vis[5:15] = 99.0 * _phasor(77.0)
+        flag[5:15] = True
+        out = _raster(backend_name, _dataset(vis, flag, time=t), *WF,
+                      Axis.PHASE_RMS, time_window="scan")
+        assert out[:40].mean() == pytest.approx(10.0, rel=0.08)
+
+    def test_fully_flagged_window_is_nan_others_fine(self, backend_name):
+        vis, t = _three_scans()
+        flag = np.zeros(vis.shape, dtype=bool)
+        flag[40:80] = True
+        out = _raster(backend_name, _dataset(vis, flag, time=t), *WF,
+                      Axis.PHASE_RMS, time_window="scan")
+        assert np.isnan(out[40:80]).all()
+        assert np.isfinite(out[:40]).all() and np.isfinite(out[80:]).all()
+
+
+class TestWindowsPooledOnReducedAxes:
+
+    def test_default_pools_per_scan(self, backend_name):
+        # Frequency x Baseline, time reduced.  Per-scan pooling ignores
+        # the 120 / -90 deg offsets between scans: pooled RMS is
+        # sqrt((10^2 + 30^2 + 10^2) / 3) = 19.1.
+        vis, t = _three_scans(nb=3)
+        out = _raster(backend_name, _dataset(vis, time=t), *FB, Axis.PHASE_RMS)
+        assert out.shape == (64, 3)
+        assert out.mean() == pytest.approx(np.sqrt(1100.0 / 3.0), rel=0.04)
+
+    def test_off_takes_the_whole_range(self, backend_name):
+        # ...whereas the whole range as one window sees the offsets.
+        vis, t = _three_scans(nb=3)
+        out = _raster(backend_name, _dataset(vis, time=t), *FB, Axis.PHASE_RMS,
+                      time_window="off")
+        assert out.mean() > 50.0
+
+    def test_scan_equals_auto_when_time_is_reduced(self, backend_name):
+        vis, t = _three_scans(nb=2)
+        ds = _dataset(vis, time=t)
+        a = _raster(backend_name, ds, *FB, Axis.PHASE_RMS)
+        b = _raster(backend_name, ds, *FB, Axis.PHASE_RMS, time_window="scan")
+        assert np.allclose(a, b)
+
+    def test_pooled_channel_windows(self, backend_name):
+        # Baseline x Time, frequency reduced in 16-channel windows.  A
+        # steep delay is removed window by window; with a phase step
+        # between the two halves of the band, only windowing avoids
+        # counting the step as scatter.
+        nf = 64
+        step = np.where(np.arange(nf) < 32, 0.0, 150.0)
+        ph = _noisy((20, 2, nf), 10.0, seed=32) + step
+        ds = _dataset(_phasor(ph))
+        whole = _raster(backend_name, ds, *TB, Axis.PHASE_RMS, detrend=False)
+        win = _raster(backend_name, ds, *TB, Axis.PHASE_RMS, detrend=False,
+                      chan_window=16)
+        assert whole.mean() > 60.0
+        assert win.mean() == pytest.approx(10.0, rel=0.06)
+
+    def test_single_scan_unaffected_by_scan_pooling(self, backend_name):
+        ph = _noisy((60, 2, 16), 15.0, seed=33)
+        ds = _dataset(_phasor(ph))
+        a = _raster(backend_name, ds, *FB, Axis.PHASE_RMS, time_window="scan")
+        b = _raster(backend_name, ds, *FB, Axis.PHASE_RMS, time_window="off")
+        assert np.allclose(a, b)
+
+
+class TestWindowsChunkingParityPlumbing:
+
+    @pytest.mark.parametrize("axes, kw", [
+        (WF, dict(time_window=20, chan_window=16)),
+        (TB, dict(time_window="scan")),
+        (FB, dict()),
+        (FB, dict(time_window=30, chan_window=8)),
+    ])
+    def test_independent_of_chunking_and_backend(self, axes, kw):
+        vis, t = _three_scans(nb=1 if axes == WF else 3)
+        ref = _raster("msv2", _dataset(vis, time=t, chunks=None), *axes,
+                      Axis.PHASE_RMS, **kw)
+        for name in sorted(BACKENDS):
+            for chunks in [(120, vis.shape[1], 64, 1), (7, 1, 5, 1)]:
+                out = _raster(name, _dataset(vis, time=t, chunks=chunks), *axes,
+                              Axis.PHASE_RMS, **kw)
+                assert np.allclose(out, ref, rtol=1e-9, atol=1e-9, equal_nan=True)
+
+    def test_windowed_result_is_lazy_and_keeps_coords(self, backend_name):
+        vis, t = _three_scans()
+        arr = BACKENDS[backend_name]()._raster_2d(
+            _dataset(vis, time=t), *WF, Axis.PHASE_RMS, "XX",
+            time_window="scan", chan_window=16)
+        assert isinstance(arr.data, da.Array)
+        assert arr.dims == ("time", "frequency")
+        assert np.array_equal(arr.coords["time"].values, t)
+
+    def test_large_batch_is_rechunked_not_refused(self, monkeypatch):
+        # Force a tiny block budget: the result must not change.
+        from cubevis.toolbox.visplot.data import _raster_stats as rs
+        vis, t = _three_scans(nb=6)
+        ds = _dataset(vis, time=t, chunks=(120, 6, 64, 1))
+        ref = _raster("msv2", ds, *FB, Axis.PHASE_RMS)
+        monkeypatch.setattr(rs, "_MAX_BLOCK_SAMPLES", 300)
+        out = _raster("msv2", ds, *FB, Axis.PHASE_RMS)
+        assert np.allclose(out, ref, rtol=1e-9)
+
+    def test_selection_fields(self):
+        s = SelectionSpec()
+        assert s.stat_time_window == "auto" and s.stat_chan_window == "off"
+        c = SelectionSpec(stat_time_window=60.0, stat_chan_window=16).copy()
+        assert c.stat_time_window == 60.0 and c.stat_chan_window == 16
+        assert SelectionSpec(stat_time_window="scan").is_empty()
+
+    @pytest.mark.parametrize("name", sorted(BACKENDS))
+    def test_query_raster_reads_windows_from_selection(self, name):
+        vis, t = _three_scans()
+        ds = _dataset(vis, time=t)
+        b = BACKENDS[name]()
+        b._iter_visibility_partitions = lambda selection: iter([ds])
+        b._apply_selection = lambda raw_ds, selection: raw_ds
+        blank, *_ = b.query_raster(Axis.TIME, Axis.FREQUENCY, Axis.PHASE_RMS,
+                                   SelectionSpec(baselines=[0]), polarization="XX")
+        win, *_ = b.query_raster(
+            Axis.TIME, Axis.FREQUENCY, Axis.PHASE_RMS,
+            SelectionSpec(baselines=[0], stat_time_window="scan"),
+            polarization="XX")
+        assert np.isnan(blank.values).all()
+        assert np.isfinite(win.values).all()
+
+
+class _WinReader:
+    def __init__(self):
+        self.calls = []
+
+    def query_raster(self, y_dim, x_dim, quantity, selection,
+                     polarization=None, max_cells=2_000_000, **kw):
+        self.calls.append((selection.stat_time_window, selection.stat_chan_window))
+        agg = xr.DataArray(
+            np.ones((4, 3)), dims=("time", "baseline_id"),
+            coords={"time": np.arange(4.0), "baseline_id": np.arange(3)})
+        return agg, (0.0, 2.0), (0.0, 3.0), False
+
+    def identity_tables(self, *a, **kw):
+        return {}
+
+
+class TestWindowsOnThePanel:
+
+    def _vr(self, reader, y=Axis.TIME, x=Axis.BASELINE, **kw):
+        pytest.importorskip("datashader")
+        from cubevis.toolbox.visplot.visibility_raster import VisibilityRaster
+        kw.setdefault("quantity", Axis.PHASE_RMS)
+        return VisibilityRaster(reader, SelectionSpec(), y, x, **kw)
+
+    def test_defaults_reach_backend(self):
+        r = _WinReader()
+        vr = self._vr(r)
+        assert (vr.stat_time_window, vr.stat_chan_window) == ("auto", "off")
+        assert r.calls[-1] == ("auto", "off")
+
+    def test_update_axes(self):
+        r = _WinReader()
+        vr = self._vr(r)
+        n = len(r.calls)
+        vr.update_axes(stat_time_window="60", stat_chan_window=16)
+        assert r.calls[-1] == (60.0, 16) and len(r.calls) == n + 1
+        vr.update_axes(stat_time_window=60, stat_chan_window="16")
+        assert len(r.calls) == n + 1                       # unchanged
+        vr.update_axes(quantity=Axis.COHERENCE)            # None keeps them
+        assert r.calls[-1] == (60.0, 16)
+
+    def test_rejects_bad_values(self):
+        with pytest.raises(ValueError):
+            self._vr(_WinReader(), stat_time_window="soon")
+        vr = self._vr(_WinReader())
+        with pytest.raises(ValueError):
+            vr.update_axes(stat_chan_window=-4)
+
+    def test_title_names_the_window(self):
+        r = _WinReader()
+        assert "(slope removed)" in self._vr(r)._effective_title()
+        t = self._vr(r, stat_time_window=60, stat_chan_window=16)._effective_title()
+        assert "Phase RMS (slope removed, 60 s x 16 ch)" in t
+        # Time not displayed: auto means per scan, and the title says so.
+        t = self._vr(r, y=Axis.BASELINE, x=Axis.CHANNEL)._effective_title()
+        assert "Phase RMS (slope removed, per scan)" in t
+
+    def test_plotter_arguments_and_options(self):
+        from cubevis.toolbox.visplot import visibility_plotter as vp
+        sig = inspect.signature(vp.VisibilityPlotter.__init__)
+        assert sig.parameters["stat_time_window"].default == "auto"
+        assert sig.parameters["stat_chan_window"].default == "off"
+        # Every offered value is one the normalizers accept.
+        for v, _ in vp._STAT_TIME_WINDOW_OPTIONS:
+            normalize_time_window(v)
+        for v, _ in vp._STAT_CHAN_WINDOW_OPTIONS:
+            normalize_chan_window(v)
+        # A constructor value outside the list is added so the Select
+        # can show it.
+        opts = vp._window_options(vp._STAT_TIME_WINDOW_OPTIONS, 45.0, "s")
+        assert ("45", "45 s") in opts
+        assert vp._window_value(45.0) == "45" and vp._window_value("scan") == "scan"
+
+
+# ---------------------------------------------------------------------------
+# 10. Several baselines on the waterfall: pooled one by one, never lumped
+# ---------------------------------------------------------------------------
+
+class TestBaselinesArePooled:
+    """The GUI's antenna filter selects every baseline of the named
+    antennas, so a Time x Channel raster normally has several baselines
+    reduced into each cell.  Each baseline has its own phase; lumping
+    them read ~80-90 deg however stable each one was (found 2026-10-05,
+    before this reached a real data set)."""
+
+    def _ds(self, nb=5, sigma=10.0, seed=40):
+        rng = np.random.default_rng(seed)
+        vis, t = _three_scans(nb=nb, seed=seed)
+        # _three_scans gives 10/30/10 deg; use only the first scan's
+        # level by rebuilding with a fixed sigma, plus a different phase
+        # on every baseline.
+        ph = (rng.normal(0, sigma, (120, nb, 64))
+              + rng.uniform(-180, 180, (1, nb, 1)))
+        return _dataset(_phasor(ph), time=t)
+
+    def test_blank_without_a_window(self, backend_name):
+        out = _raster(backend_name, self._ds(), *WF, Axis.PHASE_RMS)
+        assert out.shape == (120, 64) and np.isnan(out).all()
+
+    def test_per_scan_reads_each_baselines_own_scatter(self, backend_name):
+        out = _raster(backend_name, self._ds(), *WF, Axis.PHASE_RMS,
+                      time_window="scan")
+        assert out.shape == (120, 64)
+        assert np.nanmean(out) == pytest.approx(10.0, rel=0.05)
+
+    def test_coherence_likewise(self, backend_name):
+        out = _raster(backend_name, self._ds(), *WF, Axis.COHERENCE,
+                      time_window=20, chan_window=8)
+        assert np.nanmean(out) == pytest.approx(
+            np.exp(-np.deg2rad(10.0) ** 2 / 2), rel=0.01)
+
+    def test_one_noisy_baseline_raises_the_pooled_value(self, backend_name):
+        # 4 baselines at 10 deg and one at 40: pooled RMS is
+        # sqrt((4*100 + 1600) / 5) = 20.
+        rng = np.random.default_rng(41)
+        _, t = _three_scans()
+        sig = np.array([10.0, 10.0, 10.0, 10.0, 40.0])[None, :, None]
+        ph = rng.normal(0, 1, (120, 5, 64)) * sig + rng.uniform(-180, 180, (1, 5, 1))
+        out = _raster(backend_name, _dataset(_phasor(ph), time=t), *WF,
+                      Axis.PHASE_RMS, time_window="scan")
+        assert np.nanmean(out) == pytest.approx(20.0, rel=0.06)
+
+    def test_fully_flagged_baseline_does_not_count(self, backend_name):
+        rng = np.random.default_rng(42)
+        _, t = _three_scans()
+        ph = rng.normal(0, 10.0, (120, 3, 64)) + rng.uniform(-180, 180, (1, 3, 1))
+        vis = _phasor(ph)
+        flag = np.zeros(vis.shape, dtype=bool)
+        vis[:, 1] = 500.0
+        flag[:, 1] = True
+        out = _raster(backend_name, _dataset(vis, flag, time=t), *WF,
+                      Axis.PHASE_RMS, time_window="scan")
+        assert np.nanmean(out) == pytest.approx(10.0, rel=0.06)
+
+    def test_single_baseline_unchanged(self, backend_name):
+        vis, t = _three_scans(nb=1)
+        out = _raster(backend_name, _dataset(vis, time=t), *WF, Axis.PHASE_RMS,
+                      time_window="scan")
+        assert out[:40].mean() == pytest.approx(10.0, rel=0.06)
+        assert out[40:80].mean() == pytest.approx(30.0, rel=0.06)

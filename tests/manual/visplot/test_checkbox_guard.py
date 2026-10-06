@@ -105,7 +105,14 @@ def _do_plot_js() -> str:
         if (isinstance(node, ast.Assign)
                 and any(isinstance(t, ast.Name) and t.id == "_do_plot_js"
                         for t in node.targets)):
-            return _eval_str_expr(node.value, {"_CV_SET_BUSY_JS": cv_set_busy_js})
+            return _eval_str_expr(node.value, {
+                "_CV_SET_BUSY_JS": cv_set_busy_js,
+                # 2026-10: doPlot() also uses cvAntennaBaselineSelection(),
+                # defined in antenna_baseline_select.py and prepended here.
+                "_SELECTION_PAYLOAD_JS": _module_level_str(
+                    _find_module("antenna_baseline_select.py"),
+                    "SELECTION_PAYLOAD_JS"),
+            })
     raise RuntimeError("_do_plot_js not found")
 
 

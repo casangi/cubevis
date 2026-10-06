@@ -83,6 +83,10 @@ from .data.reader import (ScatterLayerSpec, ScatterLayerReference, CATEGORY_PRIO
 # require. See _do_viewport_rerender/_can_resample_locally/
 # _resample_and_composite below for how these are used.
 from .data import _scatter_render as _sr
+from .data._raster_stats import (
+    STAT_QUANTITIES, describe_scatter_stat, normalize_chan_window,
+    normalize_time_window, scatter_stat_spec,
+)
 from cubevis.bokeh.tools._info_tool import InfoTool
 
 if TYPE_CHECKING:
@@ -410,8 +414,22 @@ class VisibilityScatter(VisibilityPlot):
         enable_info_tool: bool = True,
         probe_region_max_samples: int = 200_000,
         ref_scale: Optional[float] = None,
+        detrend: Optional[bool] = None,
+        stat_time_window=None,
+        stat_chan_window=None,
         **kwargs,
     ) -> None:
+        # HRS H2 slice 4 (2026-10): this scatter's own Phase RMS /
+        # Coherence settings -- slope removal and the two windows.  None
+        # means "whatever the selection carries" (the plotter's
+        # constructor values); a value is stamped onto the selection in
+        # _render(), so two scatters can differ, like two rasters.  Set
+        # before anything renders.
+        self._detrend = None if detrend is None else bool(detrend)
+        self._stat_time_window = (None if stat_time_window is None
+                                  else normalize_time_window(stat_time_window))
+        self._stat_chan_window = (None if stat_chan_window is None
+                                  else normalize_chan_window(stat_chan_window))
         if not layers:
             raise ValueError("VisibilityScatter: layers must be non-empty")
 
@@ -1288,11 +1306,34 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
 
         return controls
 
+    def _with_stat_settings(self, selection):
+        """*selection* with this panel's own Phase RMS / Coherence
+        settings stamped on (those that are set; the rest pass through)."""
+        over = {}
+        if self._detrend is not None:
+            over["detrend"] = self._detrend
+        if self._stat_time_window is not None:
+            over["stat_time_window"] = self._stat_time_window
+        if self._stat_chan_window is not None:
+            over["stat_chan_window"] = self._stat_chan_window
+        return dataclasses.replace(selection, **over) if over else selection
+
+    def stat_spec(self):
+        """How this scatter's Phase RMS / Coherence layers are windowed
+        right now (a ``ScatterStatSpec``): its settings, or the
+        selection's where it has none, resolved for its x axis."""
+        sel = self._with_stat_settings(self._selection)
+        return scatter_stat_spec(self._x_dim, sel.stat_time_window,
+                                 sel.stat_chan_window, sel.detrend)
+
     def update_axes(
         self,
         x_dim: Optional["Axis"] = None,
         layers: Optional[list[ScatterLayer]] = None,
         title: Optional[str] = None,
+        detrend: Optional[bool] = None,
+        stat_time_window=None,
+        stat_chan_window=None,
     ) -> None:
         """Change the x-axis or layer list and re-render.
 
@@ -1343,6 +1384,24 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             changed = True
         if title is not None:
             self._title = title;  changed = True
+        # Phase RMS / Coherence settings: None leaves each as it is.
+        if detrend is not None and bool(detrend) != self._detrend:
+            self._detrend = bool(detrend);  changed = True
+        if stat_time_window is not None:
+            tw = normalize_time_window(stat_time_window)
+            if tw != self._stat_time_window:
+                self._stat_time_window = tw;  changed = True
+        if stat_chan_window is not None:
+            cw = normalize_chan_window(stat_chan_window)
+            if cw != self._stat_chan_window:
+                self._stat_chan_window = cw;  changed = True
+        # The base class labels the y axis from _y_dim, which was set
+        # once, from the first layer, at construction -- so after the Y
+        # quantity was changed here the axis went on saying what it said
+        # before ("Amplitude" over a Phase RMS plot, 2026-10-06).  Keep
+        # it on the first layer's quantity.
+        if self._layers and self._y_dim is not self._layers[0].y_axis:
+            self._y_dim = self._layers[0].y_axis;  changed = True
 
         # A never-yet-rendered (defer_initial_render=True) panel must
         # render on its first update_axes() call regardless of what else
@@ -1374,7 +1433,15 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         # _x_info.label, not _x_dim.label: the title must name the axis
         # that was actually plotted, for the same reason the axis label
         # must.  Bare name, no unit suffix -- the axis label carries that.
-        return f"{labels}  vs  {self._x_info.label}"
+        title = f"{labels}  vs  {self._x_info.label}"
+        # Phase RMS / Coherence: say how they were windowed and whether
+        # the slope was removed -- nothing else on the plot shows it.
+        if any(lyr.y_axis in STAT_QUANTITIES for lyr in self._layers):
+            try:
+                title = f"{title}  ({describe_scatter_stat(self.stat_spec())})"
+            except Exception:           # a title must never break a render
+                pass
+        return title
 
     def _panel_spec(self) -> PanelSpec:
         """Describe this scatter: one colour band per ScatterLayer.
@@ -1655,6 +1722,12 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             ``VisibilityRaster._render``'s ``defer``; see decision 11 in
             the grid/iteration design notes.
         """
+        # This panel's own Phase RMS / Coherence settings, stamped once
+        # here so that everything downstream of a render -- the query,
+        # the flag overlays, the hover probe (which reads
+        # self._selection) -- sees the same selection.
+        selection = self._with_stat_settings(selection)
+        self._selection = selection
         # Re-resolve axis labels before anything reads them: this is the
         # one place that knows both the current axes and the current
         # selection, and every axis- or selection-changing path funnels

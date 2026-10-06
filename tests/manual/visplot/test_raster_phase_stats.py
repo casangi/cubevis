@@ -52,8 +52,9 @@ from cubevis.toolbox.visplot.axes import Axis
 from cubevis.toolbox.visplot.data._raster_stats import (
     STAT_QUANTITIES, _lag_ladder, _runs, _split, _step_index, chan_blocks,
     describe_windows, normalize_chan_window, normalize_time_window,
-    ScatterStatSpec, paint_phase_stat, reduce_phase_stat,
-    resolve_time_window, scatter_stat_spec, time_blocks,
+    ScatterStatSpec, _slope_threshold, describe_scatter_stat,
+    paint_phase_stat, reduce_phase_stat, resolve_time_window,
+    scatter_stat_spec, time_blocks,
 )
 from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
 from cubevis.toolbox.visplot.data.msv4_backend import MSv4Backend
@@ -374,12 +375,16 @@ class TestFlagsAndCounts:
             assert np.isnan(out).all()
 
     def test_too_few_samples_for_the_fit_is_nan(self, backend_name):
-        # 3 channels, slope removed: mean + slope = 2 parameters, 1
-        # degree of freedom -> defined.  Flag one more: none -> NaN.
+        # The mean phase is one fitted parameter, so two samples leave
+        # one degree of freedom (defined) and one sample leaves none
+        # (NaN).  A slope is never fitted to fewer than four samples.
         vis = _phasor(_noisy((2, 1, 3), 10.0, seed=22))
         flag = np.zeros(vis.shape, dtype=bool)
         assert np.isfinite(_raster(backend_name, _dataset(vis), *TB, Axis.PHASE_RMS)).all()
         flag[0, 0, 0] = True
+        out = _raster(backend_name, _dataset(vis, flag), *TB, Axis.PHASE_RMS)
+        assert np.isfinite(out).all()
+        flag[0, 0, 1] = True
         out = _raster(backend_name, _dataset(vis, flag), *TB, Axis.PHASE_RMS)
         assert np.isnan(out[0, 0]) and np.isfinite(out[1, 0])
 
@@ -1271,3 +1276,215 @@ def test_constructor_settings_reach_the_scatter(sim_paths, fmt):
             vp.close()
     # 8-channel windows scatter more than the whole 64-channel band.
     assert rng["8ch"][1] - rng["8ch"][0] > rng["band"][1] - rng["band"][0]
+
+
+# ---------------------------------------------------------------------------
+# 12. Conditional slope removal (2026-10-06)
+# ---------------------------------------------------------------------------
+
+class TestConditionalSlopeRemoval:
+    """A slope is removed only where the data show one.
+
+    Found on TW Hya, Phase RMS against Channel: each window was the few
+    integrations of a scan, the samples were noise, and the slope search
+    lined the noise up -- pure noise (true value ~104 deg) read 37 deg
+    for 3 samples, 67 for 10, 80 for 20, 91 for 50.
+    """
+
+    def _noise_median(self, backend_name, n, detrend):
+        rng = np.random.default_rng(60 + n)
+        shape = (40, 30, n)
+        vis = rng.normal(size=shape) + 1j * rng.normal(size=shape)
+        out = _raster(backend_name, _dataset(vis), *TB, Axis.PHASE_RMS,
+                      detrend=detrend)
+        return float(np.nanmedian(out))
+
+    @pytest.mark.parametrize("n, floor", [(6, 78.0), (10, 82.0), (20, 88.0), (50, 93.0)])
+    def test_noise_reads_as_noise_at_short_windows(self, backend_name, n, floor):
+        assert self._noise_median(backend_name, n, True) > floor
+
+    @pytest.mark.parametrize("n", [6, 10, 20, 50])
+    def test_removing_adds_no_bias_on_noise(self, backend_name, n):
+        # With the slope search switched on, noise must read what it
+        # reads with it off (the small remaining shortfall from 104 at
+        # short windows is the fitted mean phase, not the slope).
+        on = self._noise_median(backend_name, n, True)
+        off = self._noise_median(backend_name, n, False)
+        assert on == pytest.approx(off, abs=6.0)
+
+    @pytest.mark.parametrize("n", [8, 16, 64])
+    def test_real_slopes_are_still_removed(self, backend_name, n):
+        turns = min(3.0, n / 4.0)
+        ph = _noisy((60, 3, n), 10.0, seed=61) + 360.0 * turns * np.arange(n) / n
+        out = _raster(backend_name, _dataset(_phasor(ph)), *TB, Axis.PHASE_RMS)
+        assert float(np.median(out)) == pytest.approx(10.0, rel=0.15)
+
+    def test_noisy_real_slope_removed_given_enough_samples(self, backend_name):
+        n = 64
+        ph = _noisy((40, 3, n), 45.0, seed=62) + 360.0 * 3.0 * np.arange(n) / n
+        out = _raster(backend_name, _dataset(_phasor(ph)), *TB, Axis.PHASE_RMS)
+        assert float(np.median(out)) == pytest.approx(45.0, rel=0.1)
+
+    def test_threshold_shape(self):
+        # Falls with window length, never above 0.98, and 45 deg of
+        # phase noise (resultant length 0.73) clears it from ~12 samples.
+        t = _slope_threshold(np.array([4, 8, 12, 50, 400]))
+        assert np.all(np.diff(t) < 0) and t[0] <= 0.98
+        assert t[1] > 0.73 > t[2]
+
+    def test_too_few_samples_never_fits_a_slope(self, backend_name):
+        # Three samples exactly on a steep slope: nothing is removed, so
+        # the slope itself is what is measured.
+        ph = np.broadcast_to(np.array([0.0, 100.0, 200.0]), (4, 2, 3)).copy()
+        on = _raster(backend_name, _dataset(_phasor(ph)), *TB, Axis.PHASE_RMS)
+        off = _raster(backend_name, _dataset(_phasor(ph)), *TB, Axis.PHASE_RMS,
+                      detrend=False)
+        assert np.allclose(on, off) and float(on.mean()) > 50.0
+
+
+# ---------------------------------------------------------------------------
+# 13. Scatter panel: its own settings, y label, title, help (slice 4)
+# ---------------------------------------------------------------------------
+
+def test_describe_scatter_stat():
+    d = describe_scatter_stat
+    assert d(scatter_stat_spec(Axis.TIME)) == "slope removed, whole band"
+    assert d(scatter_stat_spec(Axis.CHANNEL)) == "slope removed, per scan"
+    assert d(scatter_stat_spec(Axis.UVDIST, detrend=False)) == \
+        "slope kept, per scan x whole band"
+    assert d(scatter_stat_spec(Axis.TIME, 60, 16)) == "slope removed, 60 s x 16 ch"
+    assert d(scatter_stat_spec(Axis.CHANNEL, "off")) == "slope removed, whole time range"
+
+
+def _scatter_msg(vp, **scatter_over):
+    W = vp._panel_axis_widgets
+    b = {"kind": "scatter", "x": "TIME", "y": "PHASE_RMS", "colorize": [None]}
+    b.update(scatter_over)
+    return {"field": "", "correlation": "XX", "datacolumn": "data",
+            "reload": False, "spw_ids": [s.spw_id for s in vp._meta.spws],
+            "antenna_names": [], "baselines": [], "both_ends_antennas": 0,
+            "panels": {
+                "A": {"kind": "raster",
+                      "y": W["A"]["raster"]["y_sel"].value,
+                      "x": W["A"]["raster"]["x_sel"].value,
+                      "qty": W["A"]["raster"]["q_sel"].value},
+                "B": b}}
+
+
+@pytest.fixture(params=["msv2", "msv4"])
+def sim_plotter(request, sim_paths):
+    import warnings
+    warnings.filterwarnings("ignore")
+    from cubevis.toolbox.visplot import VisibilityPlotter
+    vp = VisibilityPlotter(layout="side", correlation="XX", **sim_paths[request.param])
+    yield vp
+    vp.close()
+
+
+class TestScatterPanelSettings:
+
+    def test_y_label_follows_the_quantity(self, sim_plotter):
+        # It used to stay "Amplitude" whatever Y was changed to.
+        import asyncio
+        vp = sim_plotter
+        sc = vp._slots[1].scatter
+        assert sc.y_label.startswith("Amplitude")
+        resp = asyncio.run(vp._handle_plot(_scatter_msg(vp)))
+        assert sc.y_label == "Phase RMS [deg]"
+        assert resp["panels"]["B"].get("y_label", "Phase RMS [deg]") == "Phase RMS [deg]"
+        asyncio.run(vp._handle_plot(_scatter_msg(vp, y="PHASE")))
+        assert sc.y_label.startswith("Phase") and "RMS" not in sc.y_label
+
+    def test_title_names_slope_and_window(self, sim_plotter):
+        import asyncio
+        vp = sim_plotter
+        resp = asyncio.run(vp._handle_plot(_scatter_msg(vp)))
+        assert resp["panels"]["B"]["title"].endswith("(slope removed, whole band)")
+        resp = asyncio.run(vp._handle_plot(_scatter_msg(
+            vp, detrend="keep", twin="off", cwin="8")))
+        assert resp["panels"]["B"]["title"].endswith("(slope kept, 8 ch)")
+        resp = asyncio.run(vp._handle_plot(_scatter_msg(vp, y="AMPLITUDE")))
+        assert "slope" not in resp["panels"]["B"]["title"]
+
+    def test_settings_are_per_panel_and_requery(self, sim_plotter):
+        import asyncio
+        vp = sim_plotter
+        sc = vp._slots[1].scatter
+        asyncio.run(vp._handle_plot(_scatter_msg(vp, detrend="remove", twin="auto", cwin="off")))
+        band = tuple(float(v) for v in sc._y_range)
+        same = asyncio.run(vp._handle_plot(_scatter_msg(
+            vp, detrend="remove", twin="auto", cwin="off")))
+        assert same["panels"]["B"]["title"] is None            # nothing changed
+        new = asyncio.run(vp._handle_plot(_scatter_msg(
+            vp, detrend="remove", twin="auto", cwin="8")))
+        assert new["panels"]["B"]["title"] is not None         # re-rendered
+        assert sc._stat_chan_window == 8 and sc._selection.stat_chan_window == 8
+        eight = tuple(float(v) for v in sc._y_range)
+        assert eight[1] - eight[0] > band[1] - band[0]         # 8 ch scatter more
+        # The shared selection and the raster are untouched.
+        assert vp._selection.stat_chan_window == "off"
+        assert vp._slots[0].raster.stat_chan_window == "off"
+
+    def test_junk_settings_are_ignored(self, sim_plotter):
+        import asyncio
+        vp = sim_plotter
+        sc = vp._slots[1].scatter
+        asyncio.run(vp._handle_plot(_scatter_msg(vp, cwin="16")))
+        resp = asyncio.run(vp._handle_plot(_scatter_msg(
+            vp, detrend="maybe", twin="soon", cwin="wide")))
+        assert resp.get("status") != "error" and sc._stat_chan_window == 16
+
+    def test_gear_tab_controls_exist_and_are_in_the_request(self, sim_plotter):
+        vp = sim_plotter
+        for slot in vp._slots:
+            w = vp._panel_axis_widgets[slot.id]["scatter"]
+            assert w["detrend_sel"].value == "remove"
+            assert w["twin_sel"].value == "auto" and w["cwin_sel"].value == "off"
+        a = vp._plot_js_args
+        for n in (0, 1):
+            for key in ("sd", "st", "sc"):
+                assert f"panel{n}_{key}_sel" in a
+        code = vp._do_plot_js
+        assert "detrend: sd_sel.value, twin: st_sel.value, cwin: sc_sel.value" in code
+        assert "panel1_sd_sel, panel1_st_sel, panel1_sc_sel);" in code
+
+
+class TestStatusAreaHelp:
+
+    def _has_hint(self, widget, hint):
+        from bokeh.events import MouseEnter, MouseLeave
+        enter = widget.js_event_callbacks.get(MouseEnter.event_name, [])
+        leave = widget.js_event_callbacks.get(MouseLeave.event_name, [])
+        return (any(cb.args.get("hint") is hint and "hint.visible = true" in cb.code
+                    for cb in enter)
+                and any(cb.args.get("hint") is hint and "hint.visible = false" in cb.code
+                        for cb in leave))
+
+    def test_gear_tab_controls_have_help(self, sim_plotter):
+        vp = sim_plotter
+        for slot in vp._slots:
+            r = vp._panel_axis_widgets[slot.id]["raster"]
+            s = vp._panel_axis_widgets[slot.id]["scatter"]
+            assert self._has_hint(r["avg_sel"], vp._hint_averaging)
+            assert self._has_hint(r["detrend_sel"], vp._hint_detrend)
+            assert self._has_hint(r["twin_sel"], vp._hint_twin)
+            assert self._has_hint(r["cwin_sel"], vp._hint_cwin)
+            assert self._has_hint(s["detrend_sel"], vp._hint_detrend)
+            assert self._has_hint(s["twin_sel"], vp._hint_s_twin)
+            assert self._has_hint(s["cwin_sel"], vp._hint_s_cwin)
+        assert self._has_hint(vp._antenna_mode, vp._hint_ant_mode)
+
+    def test_help_text_says_something_and_starts_hidden(self, sim_plotter):
+        vp = sim_plotter
+        for name, words in (("averaging", ("Vector", "Scalar")),
+                            ("detrend", ("Remove", "Keep")),
+                            ("twin", ("Auto", "Scan")), ("cwin", ("Off",)),
+                            ("ant_mode", ("Either", "Both")),
+                            ("s_twin", ("Auto",)), ("s_cwin", ("Off",))):
+            hint = getattr(vp, f"_hint_{name}")
+            assert hint.visible is False and len(hint.text) > 80
+            assert all(w in hint.text for w in words)
+
+    def test_missing_hint_is_harmless(self, sim_plotter):
+        from bokeh.models import Select
+        assert sim_plotter._attach_hint(Select(), "no_such_hint") is False

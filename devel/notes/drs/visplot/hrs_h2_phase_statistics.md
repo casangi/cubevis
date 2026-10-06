@@ -1,4 +1,4 @@
-# HRS H2: phase rms and coherence (slices 1-3: raster quantities, windows, scatter)
+# HRS H2: phase rms and coherence (slices 1-4: raster quantities, windows, scatter, scatter controls)
 
 *2026-10-05. Built against `main` at `aba8829`; in `main` as of `9ab33e0`. Plan:
 `hrs_visplot_plan.md` (milestone H2). Background:
@@ -166,6 +166,74 @@ for a scatter come from the constructor / task arguments (`detrend`,
 GUI; raster panels keep their own per-panel controls. The scatter's title
 does not yet say which window was used.
 
+## Conditional slope removal (2026-10-06, against `ec5809d`)
+
+Found on TW Hya (Darrell, Phase RMS against Channel): where each window is
+the few integrations of a scan and the samples are noise, the plot filled
+continuously from 0 to about 110 deg instead of sitting near 104.
+
+Cause: the slope search always returns *a* slope, and on noise it returns
+whichever one lines the noise up best; removing it removes real scatter.
+Pure noise, slope removal on, before the fix (median, deg):
+
+| Samples in window | 3 | 10 | 20 | 50 |
+|---|---|---|---|---|
+| Before | 37 | 67 | 80 | 91 |
+| Slope kept (reference) | 78 | 90 | 94 | 97 |
+
+Fix: a slope is removed only where the data show one. After the slope is
+taken out, the phasors must line up better than searched noise would: mean
+resultant length at least `sqrt((ln n + 3) / n)`, and at least 4 samples.
+Otherwise the samples are left as they are, and no slope is counted
+against the degrees of freedom.
+
+After the fix (median, deg), slope removal on:
+
+| Samples | Pure noise | 10 deg, 3-turn slope | 45 deg + slope | 60 deg + slope |
+|---|---|---|---|---|
+| 4 | 81 | 8 | 92 | 89 |
+| 6 | 86 | 9 | 82 | 86 |
+| 10 | 89 | 10 | 43 | 85 |
+| 20 | 93 | 10 | 44 | 59 |
+| 50 | 97 | 10 | 45 | 59 |
+| 384 | 101 | 10 | 45 | 60 |
+
+Reading the table:
+
+- Noise now reads the same with slope removal on as off. The shortfall
+  from 104 that remains at short windows (81 at 4 samples) is the fitted
+  mean phase, which the degrees-of-freedom correction only partly covers
+  for wrapped phases; it is not the slope.
+- A clean slope is still removed from 6 samples up.
+- A slope under heavy noise needs more samples to be believed: about 20
+  at 45 deg, about 50 at 60 deg. Below that it is left in and the value
+  reads high. That is the trade the threshold makes; the constant (3) was
+  chosen from this table, with 2 and 4 also measured.
+- The whole-band case (hundreds of channels) is unchanged.
+
+## Scatter controls (slice 4, 2026-10-06)
+
+Each scatter gear tab now has the raster's three controls: *Phase slope*,
+*Time window*, *Channel window*. Per panel, read when Plot is pressed. A
+scatter that has not been given its own value shows and uses the
+constructor's. The scatter title now says how the statistic was taken:
+"Phase RMS XX  vs  Time  (slope removed, whole band)".
+
+**Bug fixed:** the scatter's y-axis label was set once, from its first
+quantity at construction, so after changing Y in the GUI it still said
+"Amplitude" (over a Phase RMS plot in Darrell's screenshots; over anything
+else too). It now follows the first layer's quantity.
+
+## Status-area help (2026-10-06)
+
+While the pointer is over one of these controls, the status area shows
+what it does and when to use it, the same way the sidebar's inputs do:
+raster *Averaging*, *Phase slope*, *Time window*, *Channel window*; the
+scatter's three; and the Antenna table's *Either end / Both ends* switch.
+No special widget class is needed: `VisibilityPlotter._attach_hint(widget,
+name)` attaches `self._hint_<name>` to any Bokeh widget, and adding help
+to another control is one hint Div in `_build_status_bar` plus one call.
+
 ## Cost
 
 A numpy kernel applied block by block through `xr.apply_ufunc`, lazy on
@@ -197,12 +265,14 @@ channels.
    is the first selected SPW's. True of every quantity on that view.
 2. **Windows are blocks, not sliding.** Values step at window edges.
 3. **Gap-based scans** (above).
-4. **Scatter windows are not adjustable in the GUI** (above), and there
-   are no presets for these views yet.
+4. **No presets** for the scatter views yet.
+5. **Short windows of noisy data** read somewhat low and scattered even
+   after the slope fix (see "Conditional slope removal").
 
 ## Verified
 
-- `test_raster_phase_stats.py`: 253 passed, both backends, including the
+- `test_raster_phase_stats.py`: 297 passed (conditional slope removal,
+  scatter settings, y label, titles and help wiring added), both backends, including the
   scatter form through the real backends and a real plotter on simulated
   data (90 of them for windows and pooled baselines: painted back, pooled, never across a gap, auto, flags,
   chunking, parity, panel and title). Slice 1: known answers,
@@ -241,7 +311,7 @@ read about 100 deg, i.e. noise per sample.
 
 ## Next slices
 
-- 4: scatter gear-tab controls for slope and windows; the window in the
-  scatter title; presets (toolbar buttons) for phase rms vs time, vs
-  frequency and vs UV distance.
-- 5: difference-from-running-mean displays (AMP V DIFF, PHASE DIFF).
+- Presets (toolbar buttons) for phase rms vs time, vs frequency and vs UV
+  distance.
+- Status-area help for the remaining gear-tab and toolbar controls.
+- Difference-from-running-mean displays (AMP V DIFF, PHASE DIFF).

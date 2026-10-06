@@ -3960,6 +3960,19 @@ for (const dt of other.tools) {
                 colorize_changed = (
                     current_pols == pols and requested_colorize != current_colorize
                 )
+                # This scatter's Phase RMS / Coherence settings (HRS H2
+                # slice 4).  Absent or unparseable: keep what it has.
+                s_det = panel_msg.get("detrend")
+                s_det = (panel._detrend if s_det not in ("remove", "keep")
+                         else s_det == "remove")
+                try:
+                    s_twin = (normalize_time_window(panel_msg["twin"])
+                              if panel_msg.get("twin") else panel._stat_time_window)
+                    s_cwin = (normalize_chan_window(panel_msg["cwin"])
+                              if panel_msg.get("cwin") else panel._stat_chan_window)
+                except ValueError as exc:
+                    log.warning("_handle_plot: %s (panel %s)", exc, slot.id)
+                    s_twin, s_cwin = panel._stat_time_window, panel._stat_chan_window
 
                 never_rendered = (not panel._layers or
                                   all(img is None for img in panel._layer_images))
@@ -3984,7 +3997,12 @@ for (const dt of other.tools) {
                     # condition is what decides whether to call at all.
                     self._selection.antenna_names != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'antenna_names', None) or
                     # Baseline table (2026-10): see the raster branch.
-                    self._selection.baselines != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'baselines', None)
+                    self._selection.baselines != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'baselines', None) or
+                    # This scatter's own Phase RMS / Coherence settings
+                    # (2026-10): a change re-renders, like the raster's.
+                    s_det != panel._detrend or
+                    s_twin != panel._stat_time_window or
+                    s_cwin != panel._stat_chan_window
                 )
                 try:
                     if axes_changed:
@@ -4001,7 +4019,9 @@ for (const dt of other.tools) {
                         # branch above.
                         async with panel._render_lock:
                             await asyncio.to_thread(
-                                panel.update_axes, x_dim=x, layers=layers)
+                                panel.update_axes, x_dim=x, layers=layers,
+                                detrend=s_det, stat_time_window=s_twin,
+                                stat_chan_window=s_cwin)
                         # POST-2026-09: _layer_aggs is permanently
                         # [None] * n now (vestigial -- see
                         # ScatterRenderResult's docstring in
@@ -4190,6 +4210,31 @@ for (const dt of other.tools) {
             stat_chan_window = getattr(self, "_stat_chan_window", "off"),
             cache_generation = getattr(self, "_cache_generation", 0),
         ))
+
+    def _attach_hint(self, widget, name: str) -> bool:
+        """Show the status-area help ``self._hint_<name>`` while the
+        pointer is over *widget*, exactly as the sidebar's own inputs do
+        (see ``_focus_blur`` in ``_build_sidebar``): the status row is
+        hidden and the hint shown on MouseEnter, and the reverse on
+        MouseLeave.  Works on any Bokeh widget -- the Field dropdown and
+        the SPW table are plain ``Select`` / ``DataTable`` -- so no
+        special widget class is needed.
+
+        Returns False, and does nothing, if the hint or the status row
+        does not exist yet (a panel built before the status bar), so a
+        missing hint can never break building the GUI; a test checks
+        the ones that are expected are attached.
+        """
+        hint = getattr(self, f"_hint_{name}", None)
+        row = getattr(self, "_status_row", None)
+        if hint is None or row is None:
+            return False
+        args = {"hint": hint, "status_row": row}
+        widget.js_on_event(MouseEnter, CustomJS(
+            args=args, code="status_row.visible = false; hint.visible = true;"))
+        widget.js_on_event(MouseLeave, CustomJS(
+            args=args, code="hint.visible = false; status_row.visible = true;"))
+        return True
 
     def _tick_text_input(self, placeholder: str, dark):
         """A one-line "tick from text" box for a selection table.
@@ -4768,6 +4813,12 @@ html, body { height: 100%; margin: 0; }
                                     slot.raster.stat_chan_window, "ch"),
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+        # Help in the status area while the pointer is over a control
+        # (2026-10-06), the same mechanism the sidebar's inputs use.
+        self._attach_hint(ra_sel, "averaging")
+        self._attach_hint(rd_sel, "detrend")
+        self._attach_hint(rt_sel, "twin")
+        self._attach_hint(rc_sel, "cwin")
 
         # Per-slot Y/X conflict indicator — an inline Div scoped to this
         # panel, not the shared self._notify_div the old single global
@@ -4890,6 +4941,38 @@ conflict_div.text = conflict ? msg : '';
             options=[(k, v) for k, v in _SCATTER_Y_OPTIONS],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+        # Phase RMS / Coherence settings for THIS scatter (HRS H2 slice
+        # 4, 2026-10): the same three controls the raster gear tab has,
+        # same arrangement -- per slot, read at Plot-press time.  A
+        # scatter that has not been given its own value shows the
+        # plotter's (the constructor's), which is what it is using.
+        _sc = slot.scatter
+        _s_det = self._detrend if _sc._detrend is None else _sc._detrend
+        _s_tw  = (self._stat_time_window if _sc._stat_time_window is None
+                  else _sc._stat_time_window)
+        _s_cw  = (self._stat_chan_window if _sc._stat_chan_window is None
+                  else _sc._stat_chan_window)
+        sd_sel = Select(
+            title="Phase slope (RMS / Coherence)",
+            value="remove" if _s_det else "keep",
+            options=[("remove", "Remove"), ("keep", "Keep")],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        st_sel = Select(
+            title="Time window (RMS / Coherence)",
+            value=_window_value(_s_tw),
+            options=_window_options(_STAT_TIME_WINDOW_OPTIONS, _s_tw, "s"),
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        sc_sel = Select(
+            title="Channel window (RMS / Coherence)",
+            value=_window_value(_s_cw),
+            options=_window_options(_STAT_CHAN_WINDOW_OPTIONS, _s_cw, "ch"),
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        self._attach_hint(sd_sel, "detrend")
+        self._attach_hint(st_sel, "s_twin")
+        self._attach_hint(sc_sel, "s_cwin")
 
         layers = slot.scatter.layers
         cmap_widgets: list = []
@@ -4948,12 +5031,13 @@ for (let i = 0; i < cols.length; i++) {
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Scatter ──</span>", width=_SIDEBAR_WIDTH),
-            sx_sel, sy_sel,
+            sx_sel, sy_sel, sd_sel, st_sel, sc_sel,
             *extra_children,
             info_sel.column,
         )
         widgets = {
             "x_sel": sx_sel, "y_sel": sy_sel,
+            "detrend_sel": sd_sel, "twin_sel": st_sel, "cwin_sel": sc_sel,
             "info_selectors": info_sel,
             "layer_select": layer_select, "layer_columns": layer_columns,
             "cmap_widgets": cmap_widgets,
@@ -5422,6 +5506,7 @@ for (let i = 0; i < cols.length; i++) {
             width=_SIDEBAR_WIDTH,
             stylesheets=[dark],
         )
+        self._attach_hint(self._antenna_mode, "ant_mode")
         self._antenna_text = self._tick_text_input(
             "name, number, a~b, !name", dark)
         _focus_blur(self._antenna_text, self._hint_antenna_text)
@@ -6779,14 +6864,16 @@ function doPlot(reload) {
     }
 
     function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel,
-                                colorize_handles, ra_sel, rd_sel, rt_sel, rc_sel) {
+                                colorize_handles, ra_sel, rd_sel, rt_sel, rc_sel,
+                                sd_sel, st_sel, sc_sel) {
         if (kind_switch.active === 0) {
             return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value,
                     averaging: ra_sel.value, detrend: rd_sel.value,
                     twin: rt_sel.value, cwin: rc_sel.value};
         } else {
             return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value,
-                     colorize: buildColorizeArray(colorize_handles)};
+                     colorize: buildColorizeArray(colorize_handles),
+                     detrend: sd_sel.value, twin: st_sel.value, cwin: sc_sel.value};
         }
     }
     function rasterConflict(kind_switch, ry_sel, rx_sel) {
@@ -6822,11 +6909,13 @@ function doPlot(reload) {
     panels[panel0_id] = buildPanelPayload(
         panel0_kind_switch, panel0_ry_sel, panel0_rx_sel, panel0_rq_sel,
         panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles, panel0_ra_sel,
-        panel0_rd_sel, panel0_rt_sel, panel0_rc_sel);
+        panel0_rd_sel, panel0_rt_sel, panel0_rc_sel,
+        panel0_sd_sel, panel0_st_sel, panel0_sc_sel);
     panels[panel1_id] = buildPanelPayload(
         panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
         panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles, panel1_ra_sel,
-        panel1_rd_sel, panel1_rt_sel, panel1_rc_sel);
+        panel1_rd_sel, panel1_rt_sel, panel1_rc_sel,
+        panel1_sd_sel, panel1_st_sel, panel1_sc_sel);
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
 
@@ -7312,6 +7401,9 @@ function doPlot(reload) {
             "panel0_rc_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["cwin_sel"],
             "panel0_sx_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["x_sel"],
             "panel0_sy_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["y_sel"],
+            "panel0_sd_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["detrend_sel"],
+            "panel0_st_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["twin_sel"],
+            "panel0_sc_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["cwin_sel"],
             # Part 5 (2026-09): one entry per scatter layer, in the
             # same order as _make_scatter_layers()/pols -- see
             # colorize_controls()'s own returned handles dict. doPlot()
@@ -7330,6 +7422,9 @@ function doPlot(reload) {
             "panel1_rc_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["cwin_sel"],
             "panel1_sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
             "panel1_sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
+            "panel1_sd_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["detrend_sel"],
+            "panel1_st_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["twin_sel"],
+            "panel1_sc_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["cwin_sel"],
             "panel1_colorize_handles": self._panel_axis_widgets[self._slots[1].id]["scatter"]["colorize_handles"],
             # Group 3 piece 3, Chunk 2 (added 2026-07-31): both kinds'
             # figure/image-source/state-source/layout per slot, replacing
@@ -7939,7 +8034,9 @@ doPlot();
                                           w["avg_sel"], w["detrend_sel"],
                                           w["twin_sel"], w["cwin_sel"]]
                 else:
-                    _all_axis_widgets += [w["x_sel"], w["y_sel"]]
+                    _all_axis_widgets += [w["x_sel"], w["y_sel"],
+                                          w["detrend_sel"], w["twin_sel"],
+                                          w["cwin_sel"]]
                 _all_axis_widgets += w["cmap_widgets"]
                 _all_cmap_figs     += w["cmap_figs"]
                 _all_cmap_icons    += w["cmap_icons"]
@@ -7989,7 +8086,14 @@ doPlot();
                                  self._hint_antenna, self._hint_time,
                                  self._hint_uvrange, self._hint_spw_text,
                                  self._hint_antenna_text,
-                                 self._hint_baseline_text],
+                                 self._hint_baseline_text,
+                                 self._hint_averaging,
+                                 self._hint_detrend,
+                                 self._hint_twin,
+                                 self._hint_cwin,
+                                 self._hint_ant_mode,
+                                 self._hint_s_twin,
+                                 self._hint_s_cwin],
                 "path_div":         self._path_div,
                 "source_basename":  os.path.basename(self._source_path),
                 # _spw_table, not _spw_select: the latter is now a column
@@ -8419,6 +8523,16 @@ if (x != null && !isNaN(x)) {
         self._hint_spw_text      = _hint("")
         self._hint_antenna_text  = _hint("")
         self._hint_baseline_text = _hint("")
+        # Controls in the gear tabs and the antenna switch (2026-10-06):
+        # what each one does and when to use it.  Fixed text, so filled
+        # here; attached to the widgets by _attach_hint().
+        self._hint_averaging  = _hint("<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities, then take amplitude / phase. Amplitude drops where samples do not line up (noise, uncalibrated phase, a delay across the averaged channels). What AIPS and plotms do  | <b>Scalar</b>: average the amplitudes themselves; shows signal plus noise level, no loss from decorrelation  | Vector next to Scalar on two panels shows where coherence is lost")
+        self._hint_detrend    = _hint("<b>Phase slope</b> \u2014 for Phase RMS and Coherence  | <b>Remove</b>: take out a linear phase slope (a delay across frequency, a rate in time) before measuring the scatter, wherever the data clearly show one. Use for data that are not yet fringe-fitted  | <b>Keep</b>: measure the data as they are; a delay or rate then shows up as large scatter and low coherence  | On noise-dominated or already calibrated data the two give the same picture")
+        self._hint_twin       = _hint("<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, one scan where it is not  | <b>Off</b>: no windows  | <b>Scan</b> or a length: each scan, or pieces of that length; never across a gap  | Longer windows are steadier but blur changes in time; on the plot they show as blocks")
+        self._hint_cwin       = _hint("<b>Channel window</b> \u2014 how many channels each Phase RMS / Coherence value is measured within  | <b>Off</b>: the whole band where frequency is not a plot axis, single channels where it is  | A number: blocks of that many channels  | Needed, with a time window or alone, to see these quantities on a Time \u00d7 Channel waterfall")
+        self._hint_ant_mode   = _hint("<b>Which baselines the ticked antennas select</b>  | <b>Either end</b>: every baseline with a ticked antenna at one end \u2014 one antenna against all the others  | <b>Both ends</b>: only baselines between ticked antennas \u2014 tick all and untick one to exclude it, or tick a few for a sub-array  | Ticked baselines override both")
+        self._hint_s_twin     = _hint("<b>Time window (scatter)</b> \u2014 the stretch of time each Phase RMS / Coherence point is measured within  | <b>Auto</b>: one integration when X is Time, otherwise one scan  | <b>Off</b>: single integrations when X is Time, otherwise the whole selected time range  | <b>Scan</b> or a length: as given  | Short windows of noisy data give scattered, low-reading values")
+        self._hint_s_cwin     = _hint("<b>Channel window (scatter)</b> \u2014 how many channels each Phase RMS / Coherence point is measured within  | <b>Off</b>: single channels when X is Frequency or Channel, otherwise the whole band  | A number: blocks of that many channels")
 
         return column(
             self._status_row,
@@ -8432,5 +8546,12 @@ if (x != null && !isNaN(x)) {
             self._hint_spw_text,
             self._hint_antenna_text,
             self._hint_baseline_text,
+            self._hint_averaging,
+            self._hint_detrend,
+            self._hint_twin,
+            self._hint_cwin,
+            self._hint_ant_mode,
+            self._hint_s_twin,
+            self._hint_s_cwin,
             sizing_mode="stretch_width",
         )

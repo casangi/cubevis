@@ -177,9 +177,39 @@ def _lag_ladder(n: int) -> list:
     return lags
 
 
+#: Fewer samples than this cannot show a slope at all.
+_SLOPE_MIN_SAMPLES = 4
+
+#: Calibration of _slope_threshold (see there).
+_SLOPE_THRESHOLD_C = 3.0
+
+
+def _slope_threshold(n):
+    """How well *n* unit phasors must line up, after a slope has been
+    searched for and removed, for that slope to be believed.
+
+    Returns the minimum mean resultant length ``|mean(unit phasors)|``.
+    For pure noise searched over slopes the resultant length peaks near
+    ``sqrt(ln(n) / n)``; the constant puts the bar above almost all of
+    that.  Chosen from measurements (see the HRS H2 note, "Conditional
+    slope removal"): it must reject noise at every window length while
+    still accepting real slopes under realistic noise -- at 45 deg of
+    phase noise the resultant length is 0.73, which clears the bar from
+    about 12 samples up.
+    """
+    n = np.maximum(np.asarray(n, dtype=np.float64), 1.0)
+    return np.minimum(np.sqrt((np.log(n) + _SLOPE_THRESHOLD_C) / n), 0.98)
+
+
 def _remove_slope_np(u: np.ndarray, axis: int, k: np.ndarray,
-                     core: tuple) -> np.ndarray:
-    """Remove, per cell, the linear phase slope of *u* along *axis*.
+                     core: tuple) -> tuple:
+    """Remove, per cell, the linear phase slope of *u* along *axis* --
+    where there is one.
+
+    Returns ``(u_out, accepted)``: the samples with the slope removed in
+    the cells where it was believed (unchanged elsewhere), and a boolean
+    array, shaped like a cell with the core axes kept as length 1,
+    saying where that was (``None`` if no slope could be searched for).
 
     *u* is complex with NaN for unusable samples; *core* are the axes a
     cell is reduced over (*axis* is one of them); *k* is the position of
@@ -231,7 +261,8 @@ def _remove_slope_np(u: np.ndarray, axis: int, k: np.ndarray,
         step = np.where(np.isfinite(step), step, 0.0)   # no usable pair
         slope = step if slope is None else slope + step
     if slope is None:
-        return u
+        return u, None
+    u_in = u
     u = u * np.exp(-1j * slope * kb)
 
     mean = np.nanmean(u, axis=core, keepdims=True)
@@ -243,7 +274,27 @@ def _remove_slope_np(u: np.ndarray, axis: int, k: np.ndarray,
     var = np.nanmean(kk * kk, axis=core, keepdims=True) - k_mean * k_mean
     fine = np.where(var > 0, cov / np.where(var > 0, var, 1.0), 0.0)
     fine = np.where(np.isfinite(fine), fine, 0.0)
-    return u * np.exp(-1j * fine * kb)
+    u = u * np.exp(-1j * fine * kb)
+
+    # --- is the slope real? -------------------------------------------
+    # The search above always returns *a* slope, and on samples that are
+    # mostly noise it returns whichever one happens to line the noise up
+    # best -- then removing it throws away scatter that was real.  That
+    # bias is large for short windows: pure noise, which should read
+    # ~104 deg, read 37 deg for 3 samples, 67 for 10, 80 for 20 and 91
+    # for 50 (measured 2026-10-06; found on TW Hya, Phase RMS against
+    # Channel, where each window is the handful of integrations in a
+    # scan).  So the slope is kept only where the data show one: where
+    # the phasors, once the slope is out, line up better than noise
+    # searched the same way would (_slope_threshold).  Elsewhere the
+    # samples are returned untouched, and the caller does not count a
+    # fitted slope against the degrees of freedom.
+    amp = np.abs(u)
+    unit = np.where(amp > 0, u / np.where(amp > 0, amp, 1.0), np.nan)
+    n = np.sum(~np.isnan(unit), axis=core, keepdims=True)
+    r = np.abs(np.nanmean(unit, axis=core, keepdims=True))
+    accept = (n >= _SLOPE_MIN_SAMPLES) & (r >= _slope_threshold(n))
+    return np.where(accept, u, u_in), accept
 
 
 def _cell_sums(z: np.ndarray, n_core: int, want_rms: bool,
@@ -270,11 +321,14 @@ def _cell_sums(z: np.ndarray, n_core: int, want_rms: bool,
         u = np.where(amp > 0, z / np.where(amp > 0, amp, 1.0), np.nan)
     else:
         u = z
-    n_fit = 1                # parameters fitted per window: the mean phase
+    # Parameters fitted per window: the mean phase, plus one for each
+    # slope that was actually removed (per cell -- see _remove_slope_np).
+    n_fit = np.ones(z.shape[:z.ndim - n_core], dtype=np.int64)
     for pos, k in slopes:
         if u.shape[z.ndim - n_core + pos] >= 3:
-            u = _remove_slope_np(u, z.ndim - n_core + pos, k, core)
-            n_fit += 1       # ... plus one slope
+            u, accepted = _remove_slope_np(u, z.ndim - n_core + pos, k, core)
+            if accepted is not None:
+                n_fit = n_fit + accepted.reshape(n_fit.shape)
     n = np.sum(~np.isnan(u), axis=core)
     mean = np.nanmean(u, axis=core, keepdims=True)
     if not want_rms:
@@ -763,3 +817,24 @@ def paint_phase_stat(vis: xr.DataArray, flag: xr.DataArray, quantity: Axis,
     # Broadcast over any dimension that stayed per-sample, so the result
     # has the input's full shape.
     return out.broadcast_like(vis).transpose(*vis.dims)
+
+
+def describe_scatter_stat(spec: ScatterStatSpec) -> str:
+    """Short text for a scatter title: slope handling and the window.
+
+    ``"slope removed, per scan x whole band"``, ``"slope kept, 60 s x
+    16 ch"``.  The per-sample side of a window is not mentioned.
+    """
+    parts = []
+    if spec.time == "scan":
+        parts.append("per scan")
+    elif spec.time == "all":
+        parts.append("whole time range")
+    elif spec.time != "sample":
+        parts.append(f"{spec.time:g} s")
+    if spec.chan == "all":
+        parts.append("whole band")
+    elif spec.chan != "sample":
+        parts.append(f"{spec.chan} ch")
+    note = "slope removed" if spec.detrend else "slope kept"
+    return f"{note}, {' x '.join(parts)}" if parts else note

@@ -381,11 +381,13 @@ def test_sidebar_has_no_leftover_height_override(plotter):
 
 def test_no_checklist_datatables_remain(plotter, document):
     from bokeh.models import DataTable
-    # the permanent SPW table is the only DataTable left in the app
-    assert len([m for m in document.models if isinstance(m, DataTable)]) == 1
+    # the SPW, antenna and baseline selection tables are the only
+    # DataTables in the app -- the colormap checklists are CheckboxGroups
+    tables = {m for m in document.models if isinstance(m, DataTable)}
+    assert tables == {plotter._spw_table, plotter._antenna_table,
+                      plotter._baseline_table}
     for sid in ("A", "B"):
         assert plotter._panel_axis_widgets[sid]["scatter"]["cmap_tables"] == []
-
 
 def test_checklist_values_ride_in_tags_and_default_fully_checked(plotter):
     from bokeh.models import CheckboxGroup

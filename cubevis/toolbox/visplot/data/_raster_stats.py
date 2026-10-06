@@ -517,7 +517,28 @@ def _split(start: int, stop: int, size: int) -> list:
     return out
 
 
-def time_blocks(coord: xr.DataArray, window) -> Optional[list]:
+def _label_runs(labels) -> list:
+    """Contiguous runs of equal values in *labels* as ``(start, stop)``."""
+    labels = np.asarray(labels)
+    n = labels.size
+    if n == 0:
+        return []
+    breaks = np.nonzero(labels[1:] != labels[:-1])[0] + 1
+    edges = [0, *breaks.tolist(), n]
+    return [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
+
+
+def _scan_labels(vis: xr.DataArray):
+    """The scan each integration belongs to, if the data say: the values
+    of a ``scan_name`` / ``scan_number`` coordinate along time, else
+    ``None``."""
+    for name in ("scan_name", "scan_number"):
+        if name in vis.coords and vis.coords[name].dims == ("time",):
+            return np.asarray(vis.coords[name].values)
+    return None
+
+
+def time_blocks(coord: xr.DataArray, window, scan=None) -> Optional[list]:
     """Windows along a time coordinate for a *resolved* window setting.
 
     ``"off"``   one window, the whole axis (``None`` is returned when the
@@ -526,15 +547,25 @@ def time_blocks(coord: xr.DataArray, window) -> Optional[list]:
     ``"scan"``  one window per contiguous run;
     seconds     each run cut into windows of that length.
 
-    Windows never span a gap.
+    Windows never span a scan boundary.  *scan* is the scan label of
+    each integration (``_scan_labels``); when given, a scan is a run of
+    equal labels -- the data's own scans.  Without it a scan is a
+    contiguous run of integrations, split wherever two are more than
+    1.5 median steps apart.  The labels are preferred because the gap
+    rule is only a guess: on TW Hya (2026-10-06) it cut scans into
+    pieces of two or three integrations, which showed as Phase RMS
+    values piled up to 130 deg.
     """
     n = int(coord.size)
     if window == "off":
         return [(0, n)]
-    k = _step_index(coord)
-    if k is None:                       # too short / not numeric
-        return [(0, n)]
-    runs = _runs(k)
+    if scan is not None and len(scan) == n:
+        runs = _label_runs(scan)
+    else:
+        k = _step_index(coord)
+        if k is None:                   # too short / not numeric
+            return [(0, n)]
+        runs = _runs(k)
     if window == "scan":
         return runs
     vals = np.asarray(coord.values)
@@ -685,7 +716,7 @@ def reduce_phase_stat(
         n = int(vis.sizes[dim])
         k = _step_index(vis.coords[dim]) if dim in vis.coords else None
         if dim == "time":
-            blocks = (time_blocks(vis.coords[dim], win)
+            blocks = (time_blocks(vis.coords[dim], win, _scan_labels(vis))
                       if dim in vis.coords else [(0, n)])
         else:
             blocks = chan_blocks(n, win)
@@ -802,7 +833,7 @@ def paint_phase_stat(vis: xr.DataArray, flag: xr.DataArray, quantity: Axis,
         if win == "all":
             blocks = [(0, n)]
         elif dim == "time":
-            blocks = (time_blocks(vis.coords[dim], win)
+            blocks = (time_blocks(vis.coords[dim], win, _scan_labels(vis))
                       if dim in vis.coords else [(0, n)])
         else:
             blocks = chan_blocks(n, win)

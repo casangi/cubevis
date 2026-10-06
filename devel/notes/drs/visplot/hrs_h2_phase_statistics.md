@@ -234,6 +234,36 @@ No special widget class is needed: `VisibilityPlotter._attach_hint(widget,
 name)` attaches `self._hint_<name>` to any Bokeh widget, and adding help
 to another control is one hint Div in `_build_status_bar` plus one call.
 
+## Browser session 2026-10-06 (Darrell): four findings
+
+1. **Status-area help did not appear for the dropdowns.** My claim that
+   no special widget was needed was wrong. Only cubevis's `EvTextInput`
+   turns DOM mouse-enter / mouse-leave into the `MouseEnter` /
+   `MouseLeave` model events the help listens for (checked in the bundled
+   `cubevisjs.min.js`); a stock `Select`, `DataTable`, `CheckboxGroup` or
+   `RadioButtonGroup` never emits them. So `_attach_hint` is inert on
+   those, as `_focus_blur` has always been for the Field dropdown and the
+   SPW table. Interim: the same text is shown through Bokeh's own
+   `description` tooltip (a "?" beside the control's title) on the seven
+   dropdowns; the antenna switch has no help yet. Proper fix, in
+   cubevisjs: have a wrapper view (`Tip`, or a small new one) trigger the
+   two model events, as `EvTextInput`'s view does; the Python wiring is
+   already in place and would then work unchanged.
+2. **Phase RMS vs Channel piled up to 130 deg.** Values that high need
+   windows of two or three samples, so the gap rule was cutting scans into
+   pieces. A scan is now a run of equal `scan_name` (or `scan_number`)
+   labels when the data carry them; the gap rule is the fallback.
+   Not re-checked on TW Hya.
+3. **Baseline x Correlation raster failed** with a numpy ufunc error. The
+   option has been in the axis lists since the first commit but the
+   backend reduces one polarization at a time, so there is no correlation
+   dimension to plot. It now says so ("Correlation is not available as a
+   raster axis yet"). Not implemented.
+4. **Black text on the dark sidebar** ("Changes apply when you press
+   Plot", and the notes under the Antenna and Baseline tables): plain Div
+   text had no colour rule in the shared widget stylesheet. Added to the
+   dark and light sheets.
+
 ## Cost
 
 A numpy kernel applied block by block through `xr.apply_ufunc`, lazy on
@@ -271,7 +301,7 @@ channels.
 
 ## Verified
 
-- `test_raster_phase_stats.py`: 297 passed (conditional slope removal,
+- `test_raster_phase_stats.py`: 308 passed (conditional slope removal,
   scatter settings, y label, titles and help wiring added), both backends, including the
   scatter form through the real backends and a real plotter on simulated
   data (90 of them for windows and pooled baselines: painted back, pooled, never across a gap, auto, flags,

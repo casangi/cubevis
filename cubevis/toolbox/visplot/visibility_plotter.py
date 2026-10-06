@@ -447,6 +447,11 @@ _MORE_BELOW_JS = r"""
 
 _DARK_WIDGET_CSS = """
 :host { --bokeh-base-font: system-ui, sans-serif; }
+/* Plain text in a Div that carries this sheet (notes such as "Changes
+   apply when you press Plot", "None ticked = all antennas").  Without
+   a rule it stays the browser default -- black on the dark sidebar
+   (2026-10-06).  The light sheet sets its own. */
+.bk-clearfix { color: #a6adc8; }
 .bk-input {
     background:   #313244 !important;
     color:        #cdd6f4 !important;
@@ -490,6 +495,7 @@ label {
 # match _DARK_WIDGET_CSS's style.
 _LIGHT_WIDGET_CSS = """
 :host { }
+.bk-clearfix { color: #444444; }
 .bk-input {
     background:   #ffffff !important;
     color:        #222222 !important;
@@ -4216,9 +4222,9 @@ for (const dt of other.tools) {
         pointer is over *widget*, exactly as the sidebar's own inputs do
         (see ``_focus_blur`` in ``_build_sidebar``): the status row is
         hidden and the hint shown on MouseEnter, and the reverse on
-        MouseLeave.  Works on any Bokeh widget -- the Field dropdown and
-        the SPW table are plain ``Select`` / ``DataTable`` -- so no
-        special widget class is needed.
+        MouseLeave.  See the CORRECTION in the body: on stock Bokeh
+        widgets that mechanism is inert today, and the text is shown
+        through the widget's ``description`` tooltip instead.
 
         Returns False, and does nothing, if the hint or the status row
         does not exist yet (a panel built before the status bar), so a
@@ -4229,6 +4235,27 @@ for (const dt of other.tools) {
         row = getattr(self, "_status_row", None)
         if hint is None or row is None:
             return False
+        # CORRECTION (2026-10-06, found in the browser): the status-area
+        # part below only fires for cubevis's EvTextInput, whose view is
+        # the one thing that turns DOM mouseenter / mouseleave into the
+        # MouseEnter / MouseLeave model events these callbacks listen
+        # for.  A stock Bokeh Select, DataTable, CheckboxGroup or
+        # RadioButtonGroup never emits them -- so this wiring is inert
+        # on those today (as _focus_blur's has always been for the Field
+        # dropdown and the SPW table), and becomes live the day their
+        # view, or a wrapper such as Tip, triggers the two events.
+        #
+        # Until then the same text is offered through Bokeh's own
+        # ``description`` tooltip (the "?" beside the control's title),
+        # which needs nothing from cubevisjs.  Only input widgets have
+        # one; a RadioButtonGroup gets nothing.
+        try:
+            if "description" in widget.properties() and widget.description is None:
+                widget.description = Tooltip(
+                    content=BokehHTML(hint.text.replace("  | ", "<br>")),
+                    position="right")
+        except Exception as exc:        # help must never break the GUI
+            log.debug("_attach_hint: no description tooltip for %r: %s", name, exc)
         args = {"hint": hint, "status_row": row}
         widget.js_on_event(MouseEnter, CustomJS(
             args=args, code="status_row.visible = false; hint.visible = true;"))

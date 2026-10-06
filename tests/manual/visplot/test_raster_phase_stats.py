@@ -52,7 +52,8 @@ from cubevis.toolbox.visplot.axes import Axis
 from cubevis.toolbox.visplot.data._raster_stats import (
     STAT_QUANTITIES, _lag_ladder, _runs, _split, _step_index, chan_blocks,
     describe_windows, normalize_chan_window, normalize_time_window,
-    ScatterStatSpec, _slope_threshold, describe_scatter_stat,
+    ScatterStatSpec, _label_runs, _scan_labels, _slope_threshold,
+    describe_scatter_stat,
     paint_phase_stat, reduce_phase_stat, resolve_time_window,
     scatter_stat_spec, time_blocks,
 )
@@ -1488,3 +1489,82 @@ class TestStatusAreaHelp:
     def test_missing_hint_is_harmless(self, sim_plotter):
         from bokeh.models import Select
         assert sim_plotter._attach_hint(Select(), "no_such_hint") is False
+
+
+# ---------------------------------------------------------------------------
+# 14. Fixes from the 2026-10-06 browser session
+# ---------------------------------------------------------------------------
+
+class TestScansFromTheData:
+    """A scan is what the data label as one, when they do.  The gap rule
+    cut TW Hya's scans into pieces of two or three integrations."""
+
+    def test_label_runs(self):
+        assert _label_runs(["4", "4", "7", "7", "7", "4"]) == [(0, 2), (2, 5), (5, 6)]
+        assert _label_runs([]) == []
+
+    def test_labels_beat_the_gap_rule(self):
+        # Uneven sampling inside one scan: the gap rule splits it, the
+        # labels do not.
+        t = np.array([0.0, 6, 12, 30, 36, 42, 60, 66, 100, 106]) + 5e9
+        scan = np.array(["1"] * 8 + ["2"] * 2)
+        c = xr.DataArray(t, dims=("time",))
+        assert len(time_blocks(c, "scan")) > 2
+        assert time_blocks(c, "scan", scan) == [(0, 8), (8, 10)]
+        # Seconds windows are cut inside the labelled scans.
+        assert all(b <= 8 or a >= 8 for a, b in time_blocks(c, 20.0, scan))
+
+    def test_scan_labels_found_on_the_array(self):
+        ds = _dataset(_phasor(_noisy((6, 1, 8), 5.0)))
+        ds = ds.assign_coords(scan_name=("time", ["1", "1", "1", "2", "2", "2"]))
+        v = ds["VISIBILITY"].sel(polarization="XX")
+        assert list(_scan_labels(v)) == ["1", "1", "1", "2", "2", "2"]
+        assert _scan_labels(v.drop_vars("scan_name")) is None
+
+    def test_statistic_uses_labelled_scans(self, backend_name):
+        # Two labelled scans with uneven sampling inside each; 10 and 30
+        # deg of noise.  With the labels each scan is one window.
+        rng = np.random.default_rng(70)
+        t = np.cumsum(rng.choice([6.0, 6.0, 15.0], 60)) + 5e9
+        sig = np.repeat([10.0, 30.0], 30)
+        ph = rng.normal(0, 1, (60, 1, 32)) * sig[:, None, None]
+        ds = _dataset(_phasor(ph), time=t).assign_coords(
+            scan_name=("time", np.repeat(["3", "5"], 30)))
+        out = _raster(backend_name, ds, *WF, Axis.PHASE_RMS, time_window="scan")
+        assert np.allclose(out[:30], out[0]) and np.allclose(out[30:], out[30])
+        assert out[:30].mean() == pytest.approx(10.0, rel=0.08)
+        assert out[30:].mean() == pytest.approx(30.0, rel=0.08)
+
+
+def test_correlation_raster_axis_says_it_is_unavailable(backend_name):
+    # It used to die on the coordinate range with a numpy ufunc error.
+    ds = _dataset(_phasor(_noisy((4, 2, 8), 5.0)))
+    with pytest.raises(NotImplementedError, match="Correlation is not available"):
+        BACKENDS[backend_name]()._raster_2d(
+            ds, Axis.BASELINE, Axis.CORRELATION, Axis.AMPLITUDE, "XX")
+
+
+def test_coord_extent():
+    from cubevis.toolbox.visplot.data._raster_merge import coord_extent
+    assert coord_extent(np.array([3.0, 1.0, 2.0])) == (1.0, 3.0)
+    assert coord_extent(np.array(["XX", "XY", "YY"])) == (0.0, 2.0)
+    assert coord_extent(np.array([])) == (0.0, 0.0)
+
+
+def test_select_controls_carry_a_description_tooltip(sim_plotter):
+    # Stock Bokeh widgets do not emit the events the status-area help
+    # listens for, so their help is (also) a "?" tooltip.
+    from bokeh.models import Tooltip
+    vp = sim_plotter
+    r = vp._panel_axis_widgets["A"]["raster"]
+    for key in ("avg_sel", "detrend_sel", "twin_sel", "cwin_sel"):
+        assert isinstance(r[key].description, Tooltip)
+    html = r["avg_sel"].description.content.html
+    html = html if isinstance(html, str) else "".join(str(h) for h in html)
+    assert "Vector" in html and " | " not in html
+
+
+def test_plain_div_text_is_themed():
+    from cubevis.toolbox.visplot import visibility_plotter as vp
+    assert ".bk-clearfix { color:" in vp._DARK_WIDGET_CSS
+    assert ".bk-clearfix { color:" in vp._LIGHT_WIDGET_CSS

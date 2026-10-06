@@ -84,7 +84,7 @@ from .reader import (
     _PartitionScanLookup,
 )
 from . import _scatter_render
-from ._raster_merge import merge_raster_partitions
+from ._raster_merge import coord_extent, merge_raster_partitions
 from ._spw_identity import (
     build_ambiguous_spw_map, make_disambiguating_ident,
 )
@@ -1711,10 +1711,10 @@ class MSv2Backend(XArrayReader):
             # Capture full coordinate extents before decimation
             if x_name in ds.coords:
                 xv = ds.coords[x_name].values
-                all_x_vals.extend([float(xv.min()), float(xv.max())])
+                all_x_vals.extend(coord_extent(xv))
             if y_name in ds.coords:
                 yv = ds.coords[y_name].values
-                all_y_vals.extend([float(yv.min()), float(yv.max())])
+                all_y_vals.extend(coord_extent(yv))
 
             if "frequency" in ds.coords:
                 freq_coords.append(np.asarray(ds.coords["frequency"].values))
@@ -1880,6 +1880,16 @@ class MSv2Backend(XArrayReader):
         chan_window="off",
     ) -> Optional[xr.DataArray]:
         """Reduce a single partition to a 2D DataArray for raster mode."""
+        if Axis.CORRELATION in (y_dim, x_dim):
+            # Offered in the raster axis lists but never implemented:
+            # everything below reduces ONE polarization, so there is no
+            # correlation dimension left to put on an axis.  It used to
+            # fail on the coordinate range instead ("ufunc 'minimum' did
+            # not contain a loop..."); say what is actually wrong.
+            raise NotImplementedError(
+                "Correlation is not available as a raster axis yet. "
+                "Choose Baseline, Time, Channel or Frequency (use the "
+                "Correlation checkboxes to pick which is shown).")
         vis  = self._resolve_vis(ds)
         flag = self._flag_mask(ds)
         eit  = ds.get("EFFECTIVE_INTEGRATION_TIME")  # (time, baseline_id) or None

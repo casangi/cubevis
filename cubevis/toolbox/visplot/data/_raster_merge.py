@@ -92,3 +92,23 @@ def merge_raster_partitions(
         coords={y_name: y_union, x_name: x_union},
         attrs=dict(parts[0].attrs),
     )
+
+
+def coord_extent(values) -> tuple:
+    """``(lo, hi)`` of a raster axis coordinate, as floats.
+
+    Numeric coordinates: their min and max.  Anything else (the
+    Correlation axis is strings -- "XX", "YY"): positions, 0 .. n-1.
+    ``query_raster`` used to call ``float(values.min())`` directly, which
+    raises for strings ("ufunc 'minimum' did not contain a loop..."), so
+    a raster with Correlation on an axis failed outright (2026-10-06).
+    """
+    arr = np.asarray(values)
+    if arr.size == 0:
+        return (0.0, 0.0)
+    if np.issubdtype(arr.dtype, np.number) or np.issubdtype(arr.dtype, np.bool_):
+        return (float(arr.min()), float(arr.max()))
+    if np.issubdtype(arr.dtype, np.datetime64):
+        sec = arr.astype("datetime64[ns]").astype(np.int64) / 1e9
+        return (float(sec.min()), float(sec.max()))
+    return (0.0, float(arr.size - 1))

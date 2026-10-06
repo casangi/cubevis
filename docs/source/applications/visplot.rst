@@ -302,6 +302,11 @@ Sidebar
   a window set, the two quantities are also available on a Time vs
   Channel waterfall, where the selected baselines are measured one by
   one and combined.
+* **Scatter Y axis** — also offers *Phase RMS* and *Coherence*. Against
+  Time each point is one baseline's scatter across the band in one
+  integration; against Frequency or Channel, one baseline's scatter over
+  a scan in one channel; against UV distance, one baseline's scatter
+  over a scan.
 * **Scatter axis controls** — X axis, plus one or more overplotted
   layers (quantity, correlation, color, opacity) for the scatter panel
 * **Colormap controls** — scaling (default: histogram-equalized) and

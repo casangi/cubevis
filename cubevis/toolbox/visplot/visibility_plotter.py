@@ -379,6 +379,11 @@ _SCATTER_Y_OPTIONS  = [("AMPLITUDE", "Amplitude"),
                        ("IMAGINARY", "Imaginary"),
                        ("U",         "U"),
                        ("V",         "V"),
+                       # HRS H2 slice 3 (2026-10): the statistic of the
+                       # window each sample falls in, per baseline; the
+                       # x axis decides the window (scatter_stat_spec).
+                       ("PHASE_RMS", "Phase RMS"),
+                       ("COHERENCE", "Coherence"),
                        # Part 6 Slice 1 (2026-09): falls through this
                        # existing dropdown with no new UI mechanism, per
                        # the design doc §7.6/§7.7 -- the whole point of
@@ -4159,6 +4164,13 @@ for (const dt of other.tools) {
             freq_range  = self._freq_range,
             antenna_names = antenna_names,
             baselines   = baselines,
+            # Phase RMS / Coherence settings (2026-10).  Raster panels
+            # overwrite these with their own, per panel, at query time;
+            # scatter panels have no controls of their own yet and use
+            # these -- the constructor's values.
+            detrend     = getattr(self, "_detrend", True),
+            stat_time_window = getattr(self, "_stat_time_window", "auto"),
+            stat_chan_window = getattr(self, "_stat_chan_window", "off"),
             cache_generation = getattr(self, "_cache_generation", 0),
         ) if not hasattr(self, "_flags") else self._flags.stamp_selection(SelectionSpec(
             field_names = [field_name] if field_name else None,
@@ -4169,6 +4181,13 @@ for (const dt of other.tools) {
             freq_range  = self._freq_range,
             antenna_names = antenna_names,
             baselines   = baselines,
+            # Phase RMS / Coherence settings (2026-10).  Raster panels
+            # overwrite these with their own, per panel, at query time;
+            # scatter panels have no controls of their own yet and use
+            # these -- the constructor's values.
+            detrend     = getattr(self, "_detrend", True),
+            stat_time_window = getattr(self, "_stat_time_window", "auto"),
+            stat_chan_window = getattr(self, "_stat_chan_window", "off"),
             cache_generation = getattr(self, "_cache_generation", 0),
         ))
 

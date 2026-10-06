@@ -72,6 +72,10 @@ straddle +/-180 degrees, and amplitude cannot show coherent averages.
 
 ### H2. Windowed statistics: phase rms, coherence, difference from running mean (L)
 
+*Status 2026-10-06: slice 3 adds the two quantities to the scatter panel
+(phase rms vs time, frequency, UV distance), windows chosen by the x axis;
+scatter GUI controls and presets remain.*
+
 *Status 2026-10-05: slices 1 and 2 implemented -- `PHASE_RMS` and
 `COHERENCE` as raster quantities with per-panel slope removal, and
 time / channel windows (painted back on displayed axes, pooled on reduced
@@ -220,3 +224,4 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-05 | `9ab33e0` | H2 slice 1 confirmed in the browser by Darrell. Fix: a replotted panel's cursor readout is reset to its placeholder (it kept the previous plot's values until the next mouse move) |
 | 2026-10-05 | `452ed8f` | H2 slice 2: statistic windows (`stat_time_window`, `stat_chan_window`); Phase RMS / Coherence now work on the waterfall; Baseline x Channel pools per scan by default |
 | 2026-10-05 | `452ed8f` | H3 (part): Antenna and Baseline checkbox tables replace the antenna text box; Either end / Both ends switch; tick-from-text boxes for SPW, Antenna, Baseline; Baseline Prev/Next. Simulated-MS testing of real backends and a headless plotter is now possible in the sandbox (xarray-ms simulator). Open: `equalize_histogram` float32 crash, reported not fixed |
+| 2026-10-06 | `ec5809d` | Darrell committed H2 slice 2 + H3 selection tables and fixed `test_info_block_integration` (it counted DataTables; a real-MS test my sandbox skips). H2 slice 3: Phase RMS / Coherence as scatter Y quantities |

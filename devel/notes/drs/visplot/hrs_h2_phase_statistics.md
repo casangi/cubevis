@@ -1,4 +1,4 @@
-# HRS H2: phase rms and coherence (slices 1-2: raster quantities, windows)
+# HRS H2: phase rms and coherence (slices 1-3: raster quantities, windows, scatter)
 
 *2026-10-05. Built against `main` at `aba8829`; in `main` as of `9ab33e0`. Plan:
 `hrs_visplot_plan.md` (milestone H2). Background:
@@ -131,6 +131,41 @@ API: `stat_time_window=`, `stat_chan_window=` on `VisibilityPlotter`,
 `visplot()`, `VisibilityRaster` and `update_axes`; carried on
 `SelectionSpec` like `detrend`.
 
+## Scatter (slice 3, 2026-10-06, against `ec5809d`)
+
+*Phase RMS* and *Coherence* are now also in the scatter panel's Y list
+(`scatter_y="PHASE_RMS"`). This is the requirement's literal form: phase
+rms plotted against time, or against frequency.
+
+A scatter has no undisplayed dimension to take the statistic over, so the
+x axis decides the window, using the same two settings as the rasters:
+
+| X axis | Time window | Channel window | One point per |
+|---|---|---|---|
+| Time | each integration | the whole band | baseline, integration |
+| Frequency / Channel | each scan | each channel | baseline, channel, scan |
+| UV distance, U, V | each scan | the whole band | baseline, scan |
+
+Those are what the defaults (time Auto, channels Off) resolve to; an
+explicit window is used as given, so "phase rms vs time in 60 s windows"
+is `stat_time_window=60` with x = Time. Baselines are never mixed: each
+has its own value. Phase RMS against UV distance is the standard array
+phase-stability plot (scatter rising with baseline length is atmosphere;
+one antenna standing out is equipment).
+
+How it is built: every sample carries the statistic of the window it
+falls in (`paint_phase_stat`), so the existing per-sample scatter
+pipeline (binning, hover, flag views, colouring by axis) plots it
+unchanged. Samples sharing a window land on the same point. "Phase rms vs
+time" in a scatter equals the Baseline x Time raster, one point per cell;
+a test checks that.
+
+**No scatter gear-tab controls yet.** Slope removal and the two windows
+for a scatter come from the constructor / task arguments (`detrend`,
+`stat_time_window`, `stat_chan_window`) and cannot be changed from the
+GUI; raster panels keep their own per-panel controls. The scatter's title
+does not yet say which window was used.
+
 ## Cost
 
 A numpy kernel applied block by block through `xr.apply_ufunc`, lazy on
@@ -162,13 +197,14 @@ channels.
    is the first selected SPW's. True of every quantity on that view.
 2. **Windows are blocks, not sliding.** Values step at window edges.
 3. **Gap-based scans** (above).
-4. **Raster only.** The collapsed line plots (rms vs time, vs frequency),
-   rms vs baseline length, and presets are slice 3.
+4. **Scatter windows are not adjustable in the GUI** (above), and there
+   are no presets for these views yet.
 
 ## Verified
 
-- `test_raster_phase_stats.py`: 221 passed, both backends (90 of them
-  for windows and pooled baselines: painted back, pooled, never across a gap, auto, flags,
+- `test_raster_phase_stats.py`: 253 passed, both backends, including the
+  scatter form through the real backends and a real plotter on simulated
+  data (90 of them for windows and pooled baselines: painted back, pooled, never across a gap, auto, flags,
   chunking, parity, panel and title). Slice 1: known answers,
   wrap, slope removal (steep delays, rate, scan gap, descending frequency,
   datetime64 time, per-cell slopes), flags and padding, too-few-samples,
@@ -205,6 +241,7 @@ read about 100 deg, i.e. noise per sample.
 
 ## Next slices
 
-- 3: collapsed scatter views (rms vs time, vs frequency, vs baseline
-  length) and presets.
-- 4: difference-from-running-mean displays (AMP V DIFF, PHASE DIFF).
+- 4: scatter gear-tab controls for slope and windows; the window in the
+  scatter title; presets (toolbar buttons) for phase rms vs time, vs
+  frequency and vs UV distance.
+- 5: difference-from-running-mean displays (AMP V DIFF, PHASE DIFF).

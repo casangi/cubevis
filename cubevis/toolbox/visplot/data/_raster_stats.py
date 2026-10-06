@@ -520,6 +520,56 @@ def describe_windows(time_window, chan_window, time_displayed: bool,
     return " x ".join(parts)
 
 
+def _apply_kernel(vis, flag, quantity, pool, other, axes, axis_dims,
+                  out_dims) -> xr.DataArray:
+    """Run ``_phase_stat_kernel`` over *vis*, lazily.
+
+    Shared by ``reduce_phase_stat`` (rasters) and ``paint_phase_stat``
+    (scatter): masks flagged samples, rechunks so each block holds whole
+    windows but stays under ``_MAX_BLOCK_SAMPLES``, and restores the
+    input's dimension order on the way out.
+    """
+    core = list(pool) + list(other) + list(axis_dims)
+    z = vis.where(~flag)
+
+    # Keep kernel blocks to a sane size: the core dimensions must be whole
+    # in each block, so limit the batch dimensions instead.
+    if getattr(z, "chunks", None) is not None:
+        per_cell = int(np.prod([z.sizes[d] for d in core]))
+        budget = max(1, _MAX_BLOCK_SAMPLES // max(1, per_cell))
+        rechunk = {}
+        for d in z.dims:
+            if d in core:
+                continue
+            size = max(1, min(int(z.sizes[d]), budget))
+            rechunk[d] = size
+            budget = max(1, budget // size)
+        if rechunk:
+            z = z.chunk(rechunk)
+
+    with warnings.catch_warnings():
+        # While building the graph dask infers the output's meta by
+        # casting the complex input's meta to float64, and numpy warns
+        # that the imaginary part is discarded.  Nothing is discarded:
+        # the kernel returns real values.  (Passing meta explicitly is
+        # not possible through apply_ufunc alongside output_dtypes.)
+        warnings.filterwarnings(
+            "ignore", message="Casting complex values to real")
+        out = xr.apply_ufunc(
+            _phase_stat_kernel, z,
+            input_core_dims=[core],
+            output_core_dims=[out_dims],
+            kwargs=dict(n_pool=len(pool), n_other=len(other),
+                        want_rms=(quantity == Axis.PHASE_RMS),
+                        axes=tuple(axes)),
+            dask="parallelized",
+            output_dtypes=[np.float64],
+            dask_gufunc_kwargs=dict(allow_rechunk=True),
+        )
+    # apply_ufunc puts output core dims last; restore the input's order.
+    return out.transpose(*[d for d in vis.dims if d in out.dims])
+
+
 def reduce_phase_stat(
     vis: xr.DataArray,
     flag: xr.DataArray,
@@ -606,41 +656,110 @@ def reduce_phase_stat(
             "reduce_phase_stat: nothing to take a statistic over (no "
             "reduced dimension and no window along a displayed one)")
 
-    z = vis.where(~flag)
+    return _apply_kernel(vis, flag, quantity, pool, other, axes, axis_dims,
+                         out_dims)
 
-    # Keep kernel blocks to a sane size: the core dimensions must be whole
-    # in each block, so limit the batch dimensions instead.
-    if getattr(z, "chunks", None) is not None:
-        per_cell = int(np.prod([z.sizes[d] for d in core]))
-        budget = max(1, _MAX_BLOCK_SAMPLES // max(1, per_cell))
-        rechunk = {}
-        for d in z.dims:
-            if d in core:
-                continue
-            size = max(1, min(int(z.sizes[d]), budget))
-            rechunk[d] = size
-            budget = max(1, budget // size)
-        if rechunk:
-            z = z.chunk(rechunk)
 
-    with warnings.catch_warnings():
-        # While building the graph dask infers the output's meta by
-        # casting the complex input's meta to float64, and numpy warns
-        # that the imaginary part is discarded.  Nothing is discarded:
-        # the kernel returns real values.  (Passing meta explicitly is
-        # not possible through apply_ufunc alongside output_dtypes.)
-        warnings.filterwarnings(
-            "ignore", message="Casting complex values to real")
-        out = xr.apply_ufunc(
-            _phase_stat_kernel, z,
-            input_core_dims=[core],
-            output_core_dims=[out_dims],
-            kwargs=dict(n_pool=len(pool), n_other=len(other),
-                        want_rms=(quantity == Axis.PHASE_RMS),
-                        axes=tuple(axes)),
-            dask="parallelized",
-            output_dtypes=[np.float64],
-            dask_gufunc_kwargs=dict(allow_rechunk=True),
-        )
-    # apply_ufunc puts output core dims last; restore the input's order.
-    return out.transpose(*[d for d in vis.dims if d in out.dims])
+# ---------------------------------------------------------------------------
+# Scatter: the statistic as a per-sample quantity
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ScatterStatSpec:
+    """How a scatter plot's Phase RMS / Coherence is windowed, resolved
+    for one x axis (see ``scatter_stat_spec``).
+
+    ``time`` is ``"sample"`` (each integration on its own), ``"all"``
+    (the whole selected range as one window), ``"scan"``, or seconds.
+    ``chan`` is ``"sample"``, ``"all"``, or a channel count.
+    """
+    time: object
+    chan: object
+    detrend: bool = True
+
+
+def scatter_stat_spec(xaxis: Axis, time_window="auto", chan_window="off",
+                      detrend: bool = True) -> ScatterStatSpec:
+    """Windows for a scatter plot of Phase RMS / Coherence against *xaxis*.
+
+    A scatter has no "undisplayed dimension" to take the statistic over,
+    so the x axis decides, with the same two settings the rasters use:
+
+    =====================  =======================  ====================
+    x axis                 time                     channels
+    =====================  =======================  ====================
+    Time                   each integration         the whole band
+    Frequency / Channel    each scan                each channel
+    anything else          each scan                the whole band
+    =====================  =======================  ====================
+
+    That is what ``"auto"`` time and ``"off"`` channels (the defaults)
+    resolve to.  ``"off"`` means "no sub-windows": single samples along
+    the x axis's own dimension, the whole extent along the other.  An
+    explicit ``"scan"`` / seconds / channel count is used as given, on
+    either axis -- so "phase rms vs time in 60 s windows" is
+    ``time_window=60`` with x = Time.
+
+    The result is one value per baseline per window, which is what gets
+    plotted: "phase rms vs time" is one point per baseline per
+    integration (the scatter over the band), "vs frequency" one per
+    baseline per channel per scan (the scatter over the scan), and "vs
+    UV distance" one per baseline per scan.
+    """
+    tw = normalize_time_window(time_window)
+    cw = normalize_chan_window(chan_window)
+    x_is_time = xaxis == Axis.TIME
+    x_is_chan = xaxis in (Axis.FREQUENCY, Axis.CHANNEL)
+    if tw == "auto":
+        tw = "off" if x_is_time else "scan"
+    if tw == "off":
+        tw = "sample" if x_is_time else "all"
+    if cw == "off":
+        cw = "sample" if x_is_chan else "all"
+    return ScatterStatSpec(time=tw, chan=cw, detrend=bool(detrend))
+
+
+def paint_phase_stat(vis: xr.DataArray, flag: xr.DataArray, quantity: Axis,
+                     spec: ScatterStatSpec) -> xr.DataArray:
+    """Phase RMS (deg) or Coherence as a per-sample array shaped like *vis*.
+
+    Every sample carries the statistic of the window it belongs to
+    (*spec*), taken separately for each baseline -- so the existing
+    per-sample scatter machinery (binning, hover, flags, colouring by
+    axis) plots it without knowing it is an aggregate.  Samples that
+    share a window share a value and land on the same point (or, along
+    an x axis that varies within the window, the same horizontal run).
+
+    *vis* is one polarization, with ``time`` and ``frequency``
+    dimensions.  Flagged samples are excluded from the statistic.  Lazy
+    if the inputs are.
+    """
+    if quantity not in STAT_QUANTITIES:
+        raise ValueError(f"paint_phase_stat: unsupported quantity {quantity}")
+    axes, axis_dims = [], []
+    for dim, win in (("time", spec.time), ("frequency", spec.chan)):
+        if dim not in vis.dims or win == "sample":
+            continue
+        n = int(vis.sizes[dim])
+        k = _step_index(vis.coords[dim]) if dim in vis.coords else None
+        if win == "all":
+            blocks = [(0, n)]
+        elif dim == "time":
+            blocks = (time_blocks(vis.coords[dim], win)
+                      if dim in vis.coords else [(0, n)])
+        else:
+            blocks = chan_blocks(n, win)
+        axes.append((k, blocks, True, bool(spec.detrend)))
+        axis_dims.append(dim)
+    if not axes:
+        raise ValueError(
+            "paint_phase_stat: nothing to take a statistic over (single "
+            "samples along both time and frequency)")
+    out = _apply_kernel(vis, flag, quantity, [], [], axes, axis_dims,
+                        list(axis_dims))
+    # Broadcast over any dimension that stayed per-sample, so the result
+    # has the input's full shape.
+    return out.broadcast_like(vis).transpose(*vis.dims)

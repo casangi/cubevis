@@ -90,7 +90,9 @@ from ._spw_identity import (
 )
 from ._raster_average import reduce_amp_phase
 from ._baseline_meta import baselines_to_meta, collect_baselines
-from ._raster_stats import STAT_QUANTITIES, reduce_phase_stat
+from ._raster_stats import (
+    STAT_QUANTITIES, paint_phase_stat, reduce_phase_stat, scatter_stat_spec,
+)
 from ..selection import DEFAULT_AVERAGING
 from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
@@ -1223,6 +1225,12 @@ class MSv2Backend(XArrayReader):
             frames = self._query_partition_scatter(
                 ds, xaxis, yaxes, use_fused=use_fused, use_parallel=use_parallel,
                 scan_lookup=scan_lookup,
+                # How a Phase RMS / Coherence layer is windowed for this
+                # x axis (HRS H2 slice 3); unused by other quantities.
+                stat=scatter_stat_spec(
+                    xaxis, getattr(selection, "stat_time_window", "auto"),
+                    getattr(selection, "stat_chan_window", "off"),
+                    getattr(selection, "detrend", True)),
             )
             for key, df in frames.items():
                 if df is not None and len(df) > 0:
@@ -1256,6 +1264,7 @@ class MSv2Backend(XArrayReader):
         use_fused: bool,
         use_parallel: bool,
         scan_lookup: Optional[_PartitionScanLookup] = None,
+        stat=None,
     ) -> dict[tuple[Axis, str], pd.DataFrame]:
         """Build scatter DataFrames for a single partition.
 
@@ -1307,7 +1316,12 @@ class MSv2Backend(XArrayReader):
                     vis, flag, Axis.IMAGINARY, pol, ds,
                 )
             else:
-                lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, axis, pol, ds)
+                # stat= only for the quantities that need it: tests (and
+                # any subclass) replace _lazy_quantity with functions of
+                # the original signature.
+                _kw = {"stat": stat} if axis in STAT_QUANTITIES else {}
+                lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, axis, pol, ds,
+                                                          **_kw)
 
         # x-axis lazy array — broadcast to match a representative y shape
         template = next(iter(lazy_y.values()))
@@ -1528,6 +1542,7 @@ class MSv2Backend(XArrayReader):
         axis: Axis,
         pol: str,
         ds: Optional[xr.Dataset] = None,
+        stat=None,
     ) -> xr.DataArray:
         """Return a lazy DataArray for the requested axis and polarization.
 
@@ -1548,6 +1563,19 @@ class MSv2Backend(XArrayReader):
         """
         vis_pol  = vis.sel(polarization=pol)
         flag_pol = flag.sel(polarization=pol)
+
+        if axis in STAT_QUANTITIES:
+            # HRS H2 slice 3 (2026-10): Phase RMS / Coherence as a
+            # scatter quantity.  Not a per-sample function of the
+            # visibility: each sample carries the statistic of the
+            # window it falls in (per baseline), which the caller
+            # resolved from the x axis into ``stat``.  NaN at flagged
+            # positions, like every other quantity here.
+            if stat is None:
+                raise ValueError(
+                    f"Axis.{axis.name} needs stat= (a ScatterStatSpec); "
+                    f"the caller resolves it from the x axis.")
+            return paint_phase_stat(vis_pol, flag_pol, axis, stat).where(~flag_pol)
 
         if axis in (Axis.U, Axis.V):
             # Geometry-derived, not visibility-derived: the same value
@@ -2221,7 +2249,15 @@ class MSv2Backend(XArrayReader):
 
             for (yaxis, pol) in local_keys:
                 key = (yaxis, pol)
-                lazy_y = self._lazy_quantity(vis, flag, yaxis, pol, ds)
+                # stat= only for the quantities that need it: tests (and
+                # any subclass) replace _lazy_quantity with functions of
+                # the original signature.
+                _kw = ({"stat": scatter_stat_spec(
+                            x_axis, getattr(selection, "stat_time_window", "auto"),
+                            getattr(selection, "stat_chan_window", "off"),
+                            getattr(selection, "detrend", True))}
+                       if yaxis in STAT_QUANTITIES else {})
+                lazy_y = self._lazy_quantity(vis, flag, yaxis, pol, ds, **_kw)
                 lazy_x = self._lazy_x_axis(ds, x_axis, lazy_y)
                 mask = ((lazy_x >= x0) & (lazy_x <= x1) &
                         (lazy_y >= y0) & (lazy_y <= y1))

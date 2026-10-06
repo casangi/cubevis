@@ -120,7 +120,9 @@ from . import _scatter_render
 from ._raster_merge import merge_raster_partitions
 from ._raster_average import reduce_amp_phase
 from ._baseline_meta import baselines_to_meta, collect_baselines
-from ._raster_stats import STAT_QUANTITIES, reduce_phase_stat
+from ._raster_stats import (
+    STAT_QUANTITIES, paint_phase_stat, reduce_phase_stat, scatter_stat_spec,
+)
 from ..selection import DEFAULT_AVERAGING
 from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
@@ -1251,10 +1253,17 @@ class MSv4Backend(XArrayReader):
         use_fused    = HAS_DASK and total_samples >= _THRESH_FUSED
         use_parallel = HAS_DASK and total_samples >= _THRESH_PAR
 
+        # How a Phase RMS / Coherence layer is windowed for this x axis
+        # (HRS H2 slice 3); unused by other quantities.
+        _stat = scatter_stat_spec(
+            xaxis, getattr(selection, "stat_time_window", "auto"),
+            getattr(selection, "stat_chan_window", "off"),
+            getattr(selection, "detrend", True))
+
         if use_fused and len(selected) > 1 and _raw_view() != "none":
             # OPT-B: collect ALL lazy arrays across ALL partitions, compute once
             return self._query_all_partitions_scatter_fused(
-                selected, xaxis, yaxes
+                selected, xaxis, yaxes, stat=_stat,
             )
         else:
             # Per-partition path (serial, or single partition)
@@ -1269,6 +1278,7 @@ class MSv4Backend(XArrayReader):
                     use_fused=fused_part,
                     use_parallel=use_parallel,
                     scan_lookup=scan_lookup,
+                    stat=_stat,
                 )
                 for key, df in frames.items():
                     if df is not None and len(df) > 0:
@@ -1289,6 +1299,7 @@ class MSv4Backend(XArrayReader):
         selected: list[tuple[xr.Dataset, Optional[_PartitionScanLookup]]],
         xaxis: Axis,
         yaxes: list[tuple[Axis, str]],
+        stat=None,
     ) -> dict[tuple[Axis, str], pd.DataFrame]:
         """Materialise all partition scatter data with one ``dask.compute()``.
 
@@ -1378,7 +1389,9 @@ class MSv4Backend(XArrayReader):
                     all_lazy.append(self._lazy_quantity(vis, flag, Axis.IMAGINARY, pol))
                     layout.append((p_idx, "zscore_imag", key))
                 else:
-                    lazy_y = self._lazy_quantity(vis, flag, axis, pol)
+                    # stat= only where needed: see _query_partition_scatter.
+                    _kw = {"stat": stat} if axis in STAT_QUANTITIES else {}
+                    lazy_y = self._lazy_quantity(vis, flag, axis, pol, **_kw)
                     all_lazy.append(lazy_y)
                     layout.append((p_idx, "y", key))
             # x — use a representative *locally-present* y to get the
@@ -1388,7 +1401,8 @@ class MSv4Backend(XArrayReader):
             # that method's own NotImplementedError) -- REAL stands in
             # for it here, same shape as either part.
             template_axis, template_pol = yaxes_local[0]
-            if template_axis == Axis.Z_SCORE:
+            if template_axis == Axis.Z_SCORE or template_axis in STAT_QUANTITIES:
+                # Only the shape matters for the template.
                 template_axis = Axis.REAL
             template = self._lazy_quantity(vis, flag, template_axis, template_pol)
             all_lazy.append(self._lazy_x_axis(ds, xaxis, template))
@@ -1548,6 +1562,7 @@ class MSv4Backend(XArrayReader):
         use_fused: bool,
         use_parallel: bool,
         scan_lookup: Optional[_PartitionScanLookup] = None,
+        stat=None,
     ) -> dict[tuple[Axis, str], pd.DataFrame]:
         """Build scatter DataFrames for a single partition.
 
@@ -1590,7 +1605,12 @@ class MSv4Backend(XArrayReader):
                     vis, flag, Axis.IMAGINARY, pol,
                 )
             else:
-                lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, axis, pol)
+                # stat= only for the quantities that need it: tests (and
+                # any subclass) replace _lazy_quantity with functions of
+                # the original signature.
+                _kw = {"stat": stat} if axis in STAT_QUANTITIES else {}
+                lazy_y[(axis, pol)] = self._lazy_quantity(vis, flag, axis, pol,
+                                                          **_kw)
 
         template = next(iter(lazy_y.values()))
         lazy_x   = self._lazy_x_axis(ds, xaxis, template)
@@ -1773,10 +1793,20 @@ class MSv4Backend(XArrayReader):
         flag: xr.DataArray,
         axis: Axis,
         pol: str,
+        stat=None,
     ) -> xr.DataArray:
         """Return a lazy DataArray for the requested axis and polarization."""
         vis_pol  = vis.sel(polarization=pol)
         flag_pol = flag.sel(polarization=pol)
+
+        if axis in STAT_QUANTITIES:
+            # HRS H2 slice 3 (2026-10): Phase RMS / Coherence as a
+            # scatter quantity -- see MSv2Backend._lazy_quantity.
+            if stat is None:
+                raise ValueError(
+                    f"Axis.{axis.name} needs stat= (a ScatterStatSpec); "
+                    f"the caller resolves it from the x axis.")
+            return paint_phase_stat(vis_pol, flag_pol, axis, stat).where(~flag_pol)
 
         if axis == Axis.AMPLITUDE:
             q = xr.DataArray(
@@ -2383,7 +2413,15 @@ class MSv4Backend(XArrayReader):
 
             for (yaxis, pol) in local_keys:
                 key = (yaxis, pol)
-                lazy_y = self._lazy_quantity(vis, flag, yaxis, pol)
+                # stat= only for the quantities that need it: tests (and
+                # any subclass) replace _lazy_quantity with functions of
+                # the original signature.
+                _kw = ({"stat": scatter_stat_spec(
+                            x_axis, getattr(selection, "stat_time_window", "auto"),
+                            getattr(selection, "stat_chan_window", "off"),
+                            getattr(selection, "detrend", True))}
+                       if yaxis in STAT_QUANTITIES else {})
+                lazy_y = self._lazy_quantity(vis, flag, yaxis, pol, **_kw)
                 lazy_x = self._lazy_x_axis(ds, x_axis, lazy_y)
                 mask = ((lazy_x >= x0) & (lazy_x <= x1) &
                         (lazy_y >= y0) & (lazy_y <= y1))

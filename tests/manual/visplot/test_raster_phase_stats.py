@@ -31,7 +31,11 @@ What is pinned here:
   windows are pooled, each about its own mean phase; windows never span
   a gap between scans; "auto" means off where time is displayed and
   per-scan where it is reduced; the single-baseline waterfall works once
-  a window is given.
+  a window is given;
+* scatter (slice 3): the statistic as a per-sample quantity -- every
+  sample carries its window's value, per baseline, with the window
+  chosen by the x axis; through the real backends and a real plotter on
+  simulated data.
 
 All synthetic -- no real MS/PS needed for any test in this file.
 """
@@ -48,7 +52,8 @@ from cubevis.toolbox.visplot.axes import Axis
 from cubevis.toolbox.visplot.data._raster_stats import (
     STAT_QUANTITIES, _lag_ladder, _runs, _split, _step_index, chan_blocks,
     describe_windows, normalize_chan_window, normalize_time_window,
-    reduce_phase_stat, resolve_time_window, time_blocks,
+    ScatterStatSpec, paint_phase_stat, reduce_phase_stat,
+    resolve_time_window, scatter_stat_spec, time_blocks,
 )
 from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
 from cubevis.toolbox.visplot.data.msv4_backend import MSv4Backend
@@ -577,8 +582,9 @@ class TestPlumbing:
         from cubevis.toolbox.visplot import visibility_plotter as vp
         names = [n for n, _ in vp._RASTER_QTY_OPTIONS]
         assert "PHASE_RMS" in names and "COHERENCE" in names
-        # Raster only: a scatter of per-sample values has no window.
-        assert "PHASE_RMS" not in [n for n, _ in vp._SCATTER_Y_OPTIONS]
+        # Scatter too, since slice 3 (the x axis decides the window).
+        ynames = [n for n, _ in vp._SCATTER_Y_OPTIONS]
+        assert "PHASE_RMS" in ynames and "COHERENCE" in ynames
         sig = inspect.signature(vp.VisibilityPlotter.__init__)
         assert sig.parameters["detrend"].default is True
 
@@ -1025,3 +1031,243 @@ class TestBaselinesArePooled:
                       time_window="scan")
         assert out[:40].mean() == pytest.approx(10.0, rel=0.06)
         assert out[40:80].mean() == pytest.approx(30.0, rel=0.06)
+
+
+# ---------------------------------------------------------------------------
+# 11. Scatter (slice 3): the statistic painted onto every sample
+# ---------------------------------------------------------------------------
+
+class TestScatterStatSpec:
+
+    @pytest.mark.parametrize("x, want", [
+        (Axis.TIME,          ("sample", "all")),
+        (Axis.FREQUENCY,     ("scan", "sample")),
+        (Axis.CHANNEL,       ("scan", "sample")),
+        (Axis.UVDIST,        ("scan", "all")),
+        (Axis.UVDIST_LAMBDA, ("scan", "all")),
+        (Axis.U,             ("scan", "all")),
+    ])
+    def test_defaults_follow_the_x_axis(self, x, want):
+        s = scatter_stat_spec(x)
+        assert (s.time, s.chan) == want and s.detrend is True
+
+    def test_off_means_no_sub_windows(self):
+        # Single samples along the x axis's own dimension, the whole
+        # extent along the other.
+        assert scatter_stat_spec(Axis.TIME, "off", "off").time == "sample"
+        assert scatter_stat_spec(Axis.CHANNEL, "off", "off").time == "all"
+        assert scatter_stat_spec(Axis.CHANNEL, "off", "off").chan == "sample"
+        assert scatter_stat_spec(Axis.UVDIST, "off", "off") == \
+            ScatterStatSpec("all", "all", True)
+
+    def test_explicit_windows_are_used_as_given(self):
+        s = scatter_stat_spec(Axis.TIME, 60, 16, detrend=False)
+        assert s == ScatterStatSpec(60.0, 16, False)
+        assert scatter_stat_spec(Axis.CHANNEL, "scan", 8).chan == 8
+
+    def test_spec_is_hashable(self):
+        assert len({scatter_stat_spec(Axis.TIME), scatter_stat_spec(Axis.TIME)}) == 1
+
+
+def _vis_flag(vis, flag=None, time=None):
+    ds = _dataset(vis, flag, time=time)
+    return (ds["VISIBILITY"].sel(polarization="XX"),
+            ds["FLAG"].sel(polarization="XX"))
+
+
+class TestPaintPhaseStat:
+
+    def test_vs_time_one_value_per_baseline_per_integration(self):
+        rng = np.random.default_rng(50)
+        ph = _noisy((12, 3, 128), 10.0, seed=50) + rng.uniform(-180, 180, (12, 3, 1))
+        v, f = _vis_flag(_phasor(ph))
+        out = paint_phase_stat(v, f, Axis.PHASE_RMS, scatter_stat_spec(Axis.TIME))
+        assert out.dims == v.dims and out.shape == v.shape
+        vals = out.compute().values
+        assert np.allclose(vals, vals[:, :, :1])            # same across the band
+        assert len(np.unique(vals[:, :, 0].round(9))) == 36  # differs per (t, bl)
+        assert vals.mean() == pytest.approx(10.0, rel=0.04)
+
+    def test_matches_the_raster_reduction(self):
+        # "Phase rms vs time" in a scatter is the Baseline x Time raster,
+        # one point per cell.
+        ph = _noisy((10, 4, 64), 15.0, seed=51)
+        v, f = _vis_flag(_phasor(ph))
+        painted = paint_phase_stat(v, f, Axis.PHASE_RMS,
+                                   scatter_stat_spec(Axis.TIME)).compute().values
+        raster = reduce_phase_stat(v, f, Axis.PHASE_RMS, ["frequency"]).compute().values
+        assert np.allclose(painted[:, :, 0], raster, rtol=1e-9)
+
+    def test_vs_channel_one_value_per_baseline_per_channel_per_scan(self):
+        vis, t = _three_scans(nb=2)
+        v, f = _vis_flag(vis, time=t)
+        out = paint_phase_stat(v, f, Axis.PHASE_RMS,
+                               scatter_stat_spec(Axis.CHANNEL)).compute().values
+        assert out.shape == (120, 2, 64)
+        assert np.allclose(out[:40], out[0])               # constant within a scan
+        assert out[:40].mean() == pytest.approx(10.0, rel=0.06)
+        assert out[40:80].mean() == pytest.approx(30.0, rel=0.06)
+
+    def test_vs_uvdist_one_value_per_baseline_per_scan(self):
+        vis, t = _three_scans(nb=3)
+        v, f = _vis_flag(vis, time=t)
+        out = paint_phase_stat(v, f, Axis.COHERENCE,
+                               scatter_stat_spec(Axis.UVDIST)).compute().values
+        assert len(np.unique(out[:40].round(9))) == 3       # 3 baselines, scan 1
+        assert out[:40].mean() == pytest.approx(np.exp(-np.deg2rad(10) ** 2 / 2), rel=0.01)
+
+    def test_baselines_are_never_mixed(self):
+        # One noisy baseline must not raise its neighbours' values.
+        rng = np.random.default_rng(52)
+        sig = np.array([5.0, 40.0, 5.0])[None, :, None]
+        ph = rng.normal(0, 1, (20, 3, 128)) * sig
+        v, f = _vis_flag(_phasor(ph))
+        out = paint_phase_stat(v, f, Axis.PHASE_RMS,
+                               scatter_stat_spec(Axis.TIME)).compute().values
+        assert out[:, 0].mean() == pytest.approx(5.0, rel=0.06)
+        assert out[:, 1].mean() == pytest.approx(40.0, rel=0.06)
+
+    def test_time_windows_in_seconds(self):
+        vis, t = _three_scans(nb=1)
+        v, f = _vis_flag(vis, time=t)
+        out = paint_phase_stat(v, f, Axis.PHASE_RMS,
+                               scatter_stat_spec(Axis.TIME, 20, "off")).compute().values
+        assert np.allclose(out[:10], out[0]) and not np.isclose(out[0, 0, 0], out[10, 0, 0])
+
+    def test_flagged_samples_do_not_contribute(self):
+        ph = _noisy((8, 2, 64), 10.0, seed=53)
+        vis = _phasor(ph)
+        flag = np.zeros(vis.shape, dtype=bool)
+        vis[:, :, :8] = 77.0
+        flag[:, :, :8] = True
+        v, f = _vis_flag(vis, flag)
+        out = paint_phase_stat(v, f, Axis.PHASE_RMS,
+                               scatter_stat_spec(Axis.TIME)).compute().values
+        assert out.mean() == pytest.approx(10.0, rel=0.08)
+
+    def test_lazy_and_chunk_independent(self):
+        ph = _noisy((12, 3, 32), 10.0, seed=54)
+        spec = scatter_stat_spec(Axis.CHANNEL)
+        ref = None
+        for chunks in [None, (12, 3, 32, 1), (5, 1, 7, 1)]:
+            ds = _dataset(_phasor(ph), chunks=chunks)
+            out = paint_phase_stat(ds["VISIBILITY"].sel(polarization="XX"),
+                                   ds["FLAG"].sel(polarization="XX"),
+                                   Axis.PHASE_RMS, spec)
+            if chunks is not None:
+                assert isinstance(out.data, da.Array)
+            vals = np.asarray(out.compute().values)
+            ref = vals if ref is None else ref
+            assert np.allclose(vals, ref, rtol=1e-9)
+
+    def test_rejects_nothing_to_measure_and_other_quantities(self):
+        v, f = _vis_flag(_phasor(_noisy((4, 1, 4), 5.0)))
+        with pytest.raises(ValueError):
+            paint_phase_stat(v, f, Axis.PHASE_RMS, ScatterStatSpec("sample", "sample"))
+        with pytest.raises(ValueError):
+            paint_phase_stat(v, f, Axis.AMPLITUDE, scatter_stat_spec(Axis.TIME))
+
+
+class TestLazyQuantityScatter:
+
+    def test_backends_agree_and_mask_flags(self, backend_name):
+        ph = _noisy((8, 2, 32), 10.0, seed=55)
+        vis = _phasor(ph)
+        flag = np.zeros(vis.shape, dtype=bool)
+        flag[2, 1, 5] = True
+        ds = _dataset(vis, flag)
+        b = BACKENDS[backend_name]()
+        q = b._lazy_quantity(ds["VISIBILITY"], ds["FLAG"], Axis.PHASE_RMS, "XX",
+                             stat=scatter_stat_spec(Axis.TIME))
+        vals = q.compute().values
+        assert vals.shape == (8, 2, 32)
+        assert np.isnan(vals[2, 1, 5]) and np.isfinite(np.delete(vals.ravel(), 2 * 64 + 32 + 5)).all()
+        other = BACKENDS["msv4" if backend_name == "msv2" else "msv2"]()
+        q2 = other._lazy_quantity(ds["VISIBILITY"], ds["FLAG"], Axis.PHASE_RMS, "XX",
+                                  stat=scatter_stat_spec(Axis.TIME))
+        assert np.allclose(vals, q2.compute().values, equal_nan=True)
+
+    def test_needs_a_spec(self, backend_name):
+        ds = _dataset(_phasor(_noisy((4, 1, 8), 5.0)))
+        with pytest.raises(ValueError, match="stat="):
+            BACKENDS[backend_name]()._lazy_quantity(
+                ds["VISIBILITY"], ds["FLAG"], Axis.COHERENCE, "XX")
+
+
+# --- real backends and a real plotter, on simulated data -------------------
+
+def _sim_transform(desc, data):
+    ddid = int(desc.DATA_DESC_ID.item())
+    rng = np.random.default_rng(2000 + ddid * 17 + int(desc.chunk_id))
+    dims, vis = data["DATA"]
+    # 10 deg of phase noise across the band; a random phase per row.
+    ph = (np.deg2rad(rng.normal(0, 10.0, vis.shape))
+          + rng.uniform(-3, 3, (vis.shape[0],) + (1,) * (vis.ndim - 1)))
+    amp = 1.0 + 0.1 * rng.standard_normal(vis.shape)
+    data["DATA"] = (dims, (amp * np.exp(1j * ph)).astype(np.complex64))
+    fdims, _ = data["FLAG"]
+    data["FLAG"] = (fdims, np.zeros(vis.shape, dtype=bool))
+    return data
+
+
+@pytest.fixture(scope="module")
+def sim_paths(tmp_path_factory):
+    sim = pytest.importorskip("xarray_ms.testing.simulator")
+    root = tmp_path_factory.mktemp("statscatter")
+    ms = str(root / "s.ms")
+    sim.MSStructureSimulator(
+        ntime=24, nantenna=5, auto_corrs=False,
+        data_description=[(64, ["XX", "YY"])],
+        simulate_data=True, transform_data=_sim_transform).simulate_ms(ms)
+    ps = str(root / "s.ps.zarr")
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        xr.open_datatree(ms, engine="xarray-ms:msv2",
+                         partition_schema=["FIELD_ID"]).to_zarr(ps, mode="w", compute=True)
+    return {"msv2": dict(ms=ms), "msv4": dict(ps=ps)}
+
+
+@pytest.mark.parametrize("fmt", ["msv2", "msv4"])
+@pytest.mark.parametrize("x, y, check", [
+    ("TIME", "PHASE_RMS", lambda lo, hi: 5.0 < lo < 10.0 < hi < 16.0),
+    ("TIME", "COHERENCE", lambda lo, hi: 0.95 < lo <= hi <= 1.0),
+    # The simulated phase jumps at random between integrations, so a
+    # per-scan window reads large scatter and low coherence: correct.
+    ("CHANNEL", "PHASE_RMS", lambda lo, hi: lo > 50.0 and hi < 125.0),
+    ("UVDIST", "COHERENCE", lambda lo, hi: 0.0 <= lo and hi < 0.7),
+])
+def test_scatter_through_a_real_plotter(sim_paths, fmt, x, y, check):
+    import warnings
+    warnings.filterwarnings("ignore")
+    from cubevis.toolbox.visplot import VisibilityPlotter
+    vp = VisibilityPlotter(layout="side", correlation="XX", scatter_x=x,
+                           scatter_y=y, **sim_paths[fmt])
+    try:
+        sc = next(s.scatter for s in vp._slots if s.kind == "scatter")
+        lo, hi = (float(v) for v in sc._y_range)
+        assert check(lo, hi), (lo, hi)
+        assert Axis[y].label in sc.figure.title.text
+    finally:
+        vp.close()
+
+
+@pytest.mark.parametrize("fmt", ["msv2", "msv4"])
+def test_constructor_settings_reach_the_scatter(sim_paths, fmt):
+    # No scatter gear-tab controls yet: the constructor's values apply.
+    import warnings
+    warnings.filterwarnings("ignore")
+    from cubevis.toolbox.visplot import VisibilityPlotter
+    rng = {}
+    for label, kw in (("band", {}), ("8ch", dict(stat_chan_window=8))):
+        vp = VisibilityPlotter(layout="side", correlation="XX", scatter_x="TIME",
+                               scatter_y="PHASE_RMS", **kw, **sim_paths[fmt])
+        try:
+            sel = vp._build_selection()
+            assert sel.stat_chan_window == kw.get("stat_chan_window", "off")
+            sc = next(s.scatter for s in vp._slots if s.kind == "scatter")
+            rng[label] = tuple(float(v) for v in sc._y_range)
+        finally:
+            vp.close()
+    # 8-channel windows scatter more than the whole 64-channel band.
+    assert rng["8ch"][1] - rng["8ch"][0] > rng["band"][1] - rng["band"][0]

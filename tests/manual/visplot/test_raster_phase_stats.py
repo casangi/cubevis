@@ -1500,13 +1500,45 @@ class TestStatusAreaHelp:
                    (vp._baseline_table, vp._hint_antenna),
                    (vp._spw_table, vp._hint_spw),
                    (vp._corr_cbg, vp._hint_corr)]
+        def inside(layout, target):
+            # Layout containment only (children / child) -- not
+            # references(), which also follows CustomJS arguments and so
+            # reaches nearly every widget from any button.
+            if layout is target:
+                return True
+            kids = list(getattr(layout, "children", []) or [])
+            if getattr(layout, "child", None) is not None:
+                kids.append(layout.child)
+            return any(inside(k, target) for k in kids
+                       if not isinstance(k, (tuple, str)))
+
+        def wrapper_of(control):
+            # Wrapped directly, or inside a wrapped group (heading row
+            # and table together).
+            if control.id in w:
+                return w[control.id]
+            for m in w.values():
+                if inside(m.child, control):
+                    return m
+            return None
         for control, hint in expect:
-            assert control.id in w, f"{type(control).__name__} is not wrapped"
-            assert self._has_hint(w[control.id], hint)
+            wrap = wrapper_of(control)
+            assert wrap is not None, f"{type(control).__name__} is not wrapped"
+            assert self._has_hint(wrap, hint)
+        # The label / heading row is inside the same region as its table
+        # (help showed over the table but not over "SPW" or "Baseline").
+        for table, row in ((vp._spw_table, vp._spw_iter.row),
+                           (vp._antenna_table, vp._antenna_iter.row),
+                           (vp._baseline_table, vp._baseline_iter.row)):
+            assert inside(wrapper_of(table).child, row)
+        # ...but the text boxes are not: they have their own hints.
+        for table, box in ((vp._spw_table, vp._spw_text),
+                           (vp._antenna_table, vp._antenna_text),
+                           (vp._baseline_table, vp._baseline_text)):
+            assert not inside(wrapper_of(table).child, box)
         # Field: the wrapper encloses the title and the dropdown together.
-        field = [m for m in w.values()
-                 if vp._field_select in m.child.references()]
-        assert field and self._has_hint(field[0], vp._hint_field)
+        field = wrapper_of(vp._field_select)
+        assert field is not None and self._has_hint(field, vp._hint_field)
 
     def test_the_selects_are_still_what_the_plot_code_reads(self, sim_plotter):
         # Wrapping must not change which models the Plot request reads.

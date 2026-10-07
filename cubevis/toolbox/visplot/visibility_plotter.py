@@ -5326,13 +5326,8 @@ for (let i = 0; i < cols.length; i++) {
         self._spw_next_btn = self._spw_iter.next_btn
         self._spw_text = self._tick_text_input("id, name, a~b, !id", dark)
         self._spw_select = column(
-            # Heading row and table inside ONE hover region (2026-10-06):
-            # with only the table wrapped, the help did not show over
-            # the "SPW" label and its buttons.  The text box below stays
-            # outside -- it has its own hint.
-            self._hover(column(self._spw_iter.row, self._spw_table,
-                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
-                        "spw"),
+            self._spw_iter.row,
+            self._hover(self._spw_table, "spw"),
             self._spw_text,
             self._spw_overflow_note,
             width=_SIDEBAR_WIDTH,
@@ -5542,9 +5537,8 @@ for (let i = 0; i < cols.length; i++) {
             "name, number, a~b, !name", dark)
         _focus_blur(self._antenna_text, self._hint_antenna_text)
         antenna_col = column(
-            self._hover(column(self._antenna_iter.row, self._antenna_table,
-                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
-                        "antenna"),
+            self._antenna_iter.row,
+            self._hover(self._antenna_table, "antenna"),
             self._antenna_text,
             self._hover(self._antenna_mode, "ant_mode"),
             self._antenna_note,
@@ -5595,9 +5589,8 @@ for (let i = 0; i < cols.length; i++) {
             "A&B, number, a~b, !number", dark)
         _focus_blur(self._baseline_text, self._hint_baseline_text)
         baseline_col = column(
-            self._hover(column(self._baseline_iter.row, self._baseline_table,
-                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
-                        "antenna"),
+            self._baseline_iter.row,
+            self._hover(self._baseline_table, "antenna"),
             self._baseline_text,
             self._baseline_note,
             width=_SIDEBAR_WIDTH,
@@ -5670,9 +5663,7 @@ for (let i = 0; i < cols.length; i++) {
             path_div,
             _section("Data"),
             self._col_select, self._hover(field_col, "field"), self._spw_select,
-            self._hover(column(corr_label, self._corr_cbg,
-                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
-                        "corr"),
+            corr_label, self._hover(self._corr_cbg, "corr"),
             scan_inp, antenna_col, baseline_col, time_inp, uv_inp,
             # "Axes" header removed (Group 3 piece 2, 2026-07-31) along
             # with self._raster_axis_section/_scatter_axis_section that

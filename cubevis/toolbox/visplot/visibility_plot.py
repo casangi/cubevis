@@ -1271,16 +1271,29 @@ class VisibilityPlot(Model):
         # passing against the shared string.
         self._fig.yaxis.formatter = CustomJSTickFormatter(
             args={"state": self._state_source,
-                  "axis_key": "y_is_time", "t0_key": "full_y0",
-                  "scale_key": "y_scale"},
+                  "axis_key": "y_is_time", "t0_key": "y_t0",
+                  "scale_key": "y_scale", "cat_key": "y_cat"},
             code=TICK_FORMATTER_JS,
         )
         self._fig.xaxis.formatter = CustomJSTickFormatter(
             args={"state": self._state_source,
-                  "axis_key": "x_is_time", "t0_key": "full_x0",
-                  "scale_key": "x_scale"},
+                  "axis_key": "x_is_time", "t0_key": "x_t0",
+                  "scale_key": "x_scale", "cat_key": "x_cat"},
             code=TICK_FORMATTER_JS,
         )
+        # An axis drawn in whole positions (a raster's Baseline axis) has
+        # labels only at whole numbers: keep its ticks there.  The Plot
+        # response handler (cvIntegerTicks) does the same when the axes
+        # change later.
+        try:
+            spec = self._panel_spec()
+            for axes, ticks in ((self._fig.xaxis, spec.x_ticks),
+                                (self._fig.yaxis, spec.y_ticks)):
+                for ax in axes:
+                    if hasattr(ax.ticker, "min_interval"):
+                        ax.ticker.min_interval = 1 if ticks else 0
+        except Exception:
+            log.debug("could not set tick spacing", exc_info=True)
 
         # Info widgets: cursor readout, categorical legend, colorbar.
         #
@@ -1957,8 +1970,15 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
 
         label = info.label
         if info.axis is Axis.TIME:
-            origin = (self._y_range[0] if info is self._y_info
-                      else self._x_range[0])
+            # Where the axis counts elapsed time from: a raster's first
+            # cell centre (its range starts half a cell earlier), else
+            # the low end of the range.
+            if info is self._y_info:
+                origin = getattr(self, "_y_origin", None)
+                origin = self._y_range[0] if origin is None else origin
+            else:
+                origin = getattr(self, "_x_origin", None)
+                origin = self._x_range[0] if origin is None else origin
             return f"<b>{label}:</b> {format_tick(float(value), True, origin)}"
         scaled, unit = si_scale(float(value), info.unit)
         text = f"{scaled:.6g}" if not unit else f"{scaled:.6g} {unit}"
@@ -2015,6 +2035,10 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
             if len(pairs) > 3:
                 bl_str += f" (+{len(pairs)-3})"
             parts.append(f"<b>BL:</b> {bl_str}")
+        bl_len = info.get("baseline_length_m")
+        if bl_len is not None:
+            from .raster_grid import format_length
+            parts.append(f"<b>Length:</b> {format_length(bl_len)}")
 
         n = info.get("n_scatter_samples")
         if n is not None:

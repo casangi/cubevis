@@ -329,6 +329,32 @@ class PanelSpec:
     theme:      str           = "dark"
     x_unit:     str           = ""
     y_unit:     str           = ""
+    # Added 2026-10-07 (raster axes drawn to their cells' edges).
+    #
+    # x_origin / y_origin: where an elapsed-time axis counts from.  None
+    # means the low end of the range, which is what it always was; a
+    # raster sets it to its first cell's CENTRE, because its range now
+    # starts half a cell earlier and "0.0 s" belongs on the first
+    # integration, as on the scatter panel beside it.
+    #
+    # x_ticks / y_ticks: for an axis drawn in whole positions (a raster's
+    # Baseline axis), the text of the tick at each position; None for an
+    # ordinary numeric axis.  See tick_format.format_tick.
+    x_origin:   Optional[float] = None
+    y_origin:   Optional[float] = None
+    x_ticks:    Optional[tuple] = None
+    y_ticks:    Optional[tuple] = None
+
+    def axis_origin(self, axis: str = "x") -> float:
+        """Origin of elapsed-time labels on one axis."""
+        o = self.x_origin if axis == "x" else self.y_origin
+        if o is not None:
+            return float(o)
+        return float((self.x_range if axis == "x" else self.y_range)[0])
+
+    def axis_ticks(self, axis: str = "x") -> Optional[tuple]:
+        """Per-position tick text for one axis, or ``None``."""
+        return self.x_ticks if axis == "x" else self.y_ticks
 
     # ------------------------------------------------------------------
     # Bokeh interop
@@ -399,6 +425,14 @@ class PanelSpec:
             # extent, so a pan or zoom never changes the axis units.
             "x_scale":   [self.axis_scale("x")[0]],
             "y_scale":   [self.axis_scale("y")[0]],
+            # Added deliberately, 2026-10-07: the tick formatter's time
+            # origin (no longer always full_x0 / full_y0) and, for an
+            # axis drawn in positions, the label of each position
+            # (None otherwise).  Read by tick_format.TICK_FORMATTER_JS.
+            "x_t0":      [self.axis_origin("x")],
+            "y_t0":      [self.axis_origin("y")],
+            "x_cat":     [list(self.x_ticks) if self.x_ticks is not None else None],
+            "y_cat":     [list(self.y_ticks) if self.y_ticks is not None else None],
         }
 
         if self.kind == "scatter":

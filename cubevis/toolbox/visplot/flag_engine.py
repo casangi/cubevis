@@ -71,6 +71,7 @@ import xarray as xr
 
 from .axes import Axis
 from .flag_filters import BUILTIN_FILTERS, ALL, FlagFilter, zscore_values
+from .raster_grid import overlapping, positions_of
 from .flag_model import (
     BlockCoords, FlagCounts, FlagDelta, SampleBlock, SpwChannels, SpwKey,
     ValueRange, _match_sorted, _region_axis_masks, fold_deltas, FREQ_RTOL,
@@ -229,24 +230,35 @@ def apply_pending(backend, ds, base: xr.DataArray, deltas) -> xr.DataArray:
 
 def _overlap(coords: np.ndarray, lo: float, hi: float,
              half: Optional[float] = None) -> np.ndarray:
-    """Cells (centred on *coords*) overlapping ``[lo, hi]``."""
-    c = np.asarray(coords, dtype=np.float64)
-    lo, hi = min(lo, hi), max(lo, hi)
-    if c.size == 0:
-        return np.zeros(0, dtype=bool)
-    if half is not None:
-        clo, chi = c - half, c + half
-    elif c.size == 1:
-        clo = chi = c
-    else:
-        order = np.argsort(c, kind="stable")
-        cs = c[order]
-        mids = (cs[1:] + cs[:-1]) / 2.0
-        lo_s = np.concatenate([[cs[0] - (mids[0] - cs[0])], mids])
-        hi_s = np.concatenate([mids, [cs[-1] + (cs[-1] - mids[-1])]])
-        clo = np.empty_like(c); chi = np.empty_like(c)
-        clo[order] = lo_s; chi[order] = hi_s
-    return (chi >= lo) & (clo <= hi)
+    """Cells (centred on *coords*) overlapping ``[lo, hi]``.
+
+    The cells are ``raster_grid.cell_edges`` -- the same ones the raster
+    image is drawn with -- so a box selects what it visibly encloses.  In
+    particular a cell beside a gap (between scans, between spectral
+    windows) does not reach into the gap, and a box drawn only over the
+    blank gap selects nothing.  (Until 2026-10-07 each cell reached
+    halfway to its neighbour, however far away that was.)
+    """
+    return overlapping(coords, lo, hi, half)
+
+
+def _baseline_positions(ids: np.ndarray, order) -> np.ndarray:
+    """Where each baseline id sits on the displayed Baseline axis.
+
+    *order* is the request's ``baseline_order``: the baseline ids in
+    display order (``raster_grid.BaselineAxis.ids``), position = index.
+    A baseline that is not displayed gets NaN, which no box can select.
+    Without *order* (an older caller, or an axis that shows the ids
+    themselves) the id is the position.
+    """
+    ids = np.asarray(ids)
+    if not np.issubdtype(ids.dtype, np.number):
+        ids = np.arange(ids.size)
+    if order is None:
+        return ids.astype(np.float64)
+    pos = positions_of(order, ids).astype(np.float64)
+    pos[pos < 0] = np.nan
+    return pos
 
 
 def _raster_axis_index(axis: Axis) -> int:
@@ -258,15 +270,17 @@ def _bad_axis(axis):
     raise ValueError(f"raster flagging on axis {axis.name} is not supported")
 
 
-def _raster_axis_values(axis: Axis, bc: BlockCoords, ds, backend) -> np.ndarray:
-    """A partition's coordinate values along a raster axis, in plot units."""
+def _raster_axis_values(axis: Axis, bc: BlockCoords, ds, backend,
+                        baseline_order=None) -> np.ndarray:
+    """A partition's coordinate values along a raster axis, in plot units.
+
+    For Baseline the plot unit is the *position* on the displayed axis
+    (see ``_baseline_positions``); NaN marks a baseline not displayed.
+    """
     if axis == Axis.TIME:
         return np.asarray(bc.times, dtype=np.float64)
     if axis == Axis.BASELINE:
-        ids = np.asarray(ds.coords[_bdim(backend)].values)
-        if not np.issubdtype(ids.dtype, np.number):
-            ids = np.arange(ids.size)
-        return ids.astype(np.float64)
+        return _baseline_positions(ds.coords[_bdim(backend)].values, baseline_order)
     if axis == Axis.FREQUENCY:
         return np.asarray(bc.freqs, dtype=np.float64)
     if axis == Axis.CHANNEL:
@@ -274,15 +288,14 @@ def _raster_axis_values(axis: Axis, bc: BlockCoords, ds, backend) -> np.ndarray:
     _bad_axis(axis)
 
 
-def _raster_axis_mask(axis: Axis, bc: BlockCoords, ds, backend, lo, hi):
+def _raster_axis_mask(axis: Axis, bc: BlockCoords, ds, backend, lo, hi,
+                      baseline_order=None):
     """(canonical axis index, mask) for one raster axis."""
     if axis == Axis.TIME:
         return 0, _overlap(bc.times, lo, hi)
     if axis == Axis.BASELINE:
-        ids = np.asarray(ds.coords[_bdim(backend)].values)
-        if not np.issubdtype(ids.dtype, np.number):
-            ids = np.arange(ids.size)
-        return 1, _overlap(ids.astype(np.float64), lo, hi, half=0.5)
+        pos = _baseline_positions(ds.coords[_bdim(backend)].values, baseline_order)
+        return 1, _overlap(pos, lo, hi, half=0.5) & np.isfinite(pos)
     if axis == Axis.FREQUENCY:
         return 2, _overlap(bc.freqs, lo, hi)
     if axis == Axis.CHANNEL:
@@ -444,10 +457,15 @@ def evaluate_request(backend, req: dict) -> dict:
         # the box -- per-partition spacing would widen cells wherever
         # partitions interleave (e.g. two windows with different channels).
         pol = req.get("polarization")
+        # The Baseline axis is drawn in positions, not baseline ids: the
+        # panel sends the ids in display order (HRS H3/H4, 2026-10-07).
+        bl_order = req.get("baseline_order")
         chosen = {}
         for ax, lo, hi in ((x_axis, x0, x1), (y_axis, y0, y1)):
-            vals = [_raster_axis_values(ax, bc, ds, backend) for ds, bc in visited]
+            vals = [_raster_axis_values(ax, bc, ds, backend, bl_order)
+                    for ds, bc in visited]
             union = np.unique(np.concatenate(vals)) if vals else np.zeros(0)
+            union = union[np.isfinite(union)]
             half = 0.5 if ax in (Axis.BASELINE, Axis.CHANNEL) else None
             chosen[ax] = union[_overlap(union, lo, hi, half=half)]
         for ds, bc in visited:
@@ -457,7 +475,7 @@ def evaluate_request(backend, req: dict) -> dict:
             axes = [np.ones(n, dtype=bool) for n in bc.shape[:3]] + [mp]
             for ax in (x_axis, y_axis):
                 i = _raster_axis_index(ax)
-                v = _raster_axis_values(ax, bc, ds, backend)
+                v = _raster_axis_values(ax, bc, ds, backend, bl_order)
                 sel_v = chosen[ax]
                 if ax in (Axis.TIME, Axis.FREQUENCY):
                     m = _match_sorted(v, sel_v, atol=1e-6 if ax == Axis.TIME else 0.0,

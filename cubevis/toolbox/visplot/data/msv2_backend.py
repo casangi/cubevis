@@ -2446,6 +2446,7 @@ class MSv2Backend(XArrayReader):
             spws=spw_infos,
             baselines_with_data=(tuple(sorted(with_data))
                                  if with_data is not None else None),
+            baseline_lengths=self._baseline_lengths(baseline_antennas),
         )
 
     # ------------------------------------------------------------------ #

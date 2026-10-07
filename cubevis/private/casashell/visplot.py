@@ -68,6 +68,7 @@ def _visplot_t(
         correlation: str = '',
         datacolumn: str = 'data',
         averaging: str = 'vector',
+        baseline_order: str = 'number',
         detrend: bool = True,
         stat_time_window = 'auto',
         stat_chan_window = 'off',
@@ -111,6 +112,7 @@ def _visplot_t(
         correlation = correlation,
         datacolumn = datacolumn,
         averaging = averaging,
+        baseline_order = baseline_order,
         detrend = detrend,
         stat_time_window = stat_time_window,
         stat_chan_window = stat_chan_window,
@@ -207,6 +209,14 @@ class _visplot:
         circular mean).  Initial value for every raster panel; each
         panel's own "Averaging" control (raster gear tab) changes it
         independently afterwards.
+    baseline_order : str
+        How a raster orders its Baseline axis: ``"number"`` (default; by
+        baseline number, as the sidebar's Baseline table lists them) or
+        ``"length"`` (shortest first, from the antenna positions; the
+        ticks then read the length).  Either way the baselines with data
+        are drawn side by side with no holes.  Initial value for every
+        raster panel; each panel's "Baseline order" control changes it
+        afterwards.
     detrend : bool
         For the Phase RMS and Coherence raster quantities: remove a
         linear phase slope (residual delay along frequency, residual
@@ -350,6 +360,7 @@ class _visplot:
         'correlation': 'Comma-separated correlation labels (``"XX,YY"``).',
         'datacolumn': 'Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.',
         'averaging': 'How raster cells combine the samples they cover: ``"vector"`` (default; average the complex visibility, then take Amplitude / Phase -- Amplitude drops where samples are incoherent) or ``"scalar"`` (Amplitude is the mean of the amplitudes, Phase the circular mean).',
+        'baseline_order': 'How a raster orders its Baseline axis: ``"number"`` (default; by baseline number, as the sidebar\'s Baseline table lists them) or ``"length"`` (shortest first, from the antenna positions; the ticks then read the length).',
         'detrend': 'For the Phase RMS and Coherence raster quantities: remove a linear phase slope (residual delay along frequency, residual rate along time) before the statistic is taken (default ``True``).',
         'stat_time_window': 'Time window the Phase RMS / Coherence statistic is taken within: ``"auto"`` (default), ``"off"``, ``"scan"``, or a number of seconds.',
         'stat_chan_window': 'Channel window for the same statistic: ``"off"`` (default) or a number of channels.',
@@ -394,6 +405,7 @@ class _visplot:
         'correlation': '',
         'datacolumn': 'data',
         'averaging': 'vector',
+        'baseline_order': 'number',
         'detrend': True,
         'stat_time_window': 'auto',
         'stat_chan_window': 'off',
@@ -473,6 +485,7 @@ class _visplot:
             'correlation': 'str',
             'datacolumn': 'str',
             'averaging': 'str',
+            'baseline_order': 'str',
             'detrend': 'bool',
             'stat_time_window': '',
             'stat_chan_window': '',
@@ -783,6 +796,21 @@ class _visplot:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
         self.__do_inp_output(
             '%-23.23s = %s%-23s%s' % ('averaging', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __baseline_order_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('baseline_order', self._arg_default['baseline_order'])
+        default = self._arg_default['baseline_order']
+        desc    = self._arg_description.get('baseline_order', '')
+        if self.__validate_('baseline_order', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('baseline_order', pre, self.__to_string_(value), post),
             desc, fmt,
         )
 
@@ -1209,6 +1237,7 @@ class _visplot:
         if 'correlation' in glb: del glb['correlation']
         if 'datacolumn' in glb: del glb['datacolumn']
         if 'averaging' in glb: del glb['averaging']
+        if 'baseline_order' in glb: del glb['baseline_order']
         if 'detrend' in glb: del glb['detrend']
         if 'stat_time_window' in glb: del glb['stat_time_window']
         if 'stat_chan_window' in glb: del glb['stat_chan_window']
@@ -1253,6 +1282,7 @@ class _visplot:
         self.__correlation_inp()
         self.__datacolumn_inp()
         self.__averaging_inp()
+        self.__baseline_order_inp()
         self.__detrend_inp()
         self.__stat_time_window_inp()
         self.__stat_chan_window_inp()
@@ -1321,6 +1351,7 @@ class _visplot:
         _invocation_parameters['correlation'] = glb.get('correlation', self._arg_default['correlation'])
         _invocation_parameters['datacolumn'] = glb.get('datacolumn', self._arg_default['datacolumn'])
         _invocation_parameters['averaging'] = glb.get('averaging', self._arg_default['averaging'])
+        _invocation_parameters['baseline_order'] = glb.get('baseline_order', self._arg_default['baseline_order'])
         _invocation_parameters['detrend'] = glb.get('detrend', self._arg_default['detrend'])
         _invocation_parameters['stat_time_window'] = glb.get('stat_time_window', self._arg_default['stat_time_window'])
         _invocation_parameters['stat_chan_window'] = glb.get('stat_chan_window', self._arg_default['stat_chan_window'])
@@ -1381,6 +1412,7 @@ class _visplot:
             correlation = _UNSET,
             datacolumn = _UNSET,
             averaging = _UNSET,
+            baseline_order = _UNSET,
             detrend = _UNSET,
             stat_time_window = _UNSET,
             stat_chan_window = _UNSET,
@@ -1434,6 +1466,7 @@ class _visplot:
             correlation,
             datacolumn,
             averaging,
+            baseline_order,
             detrend,
             stat_time_window,
             stat_chan_window,
@@ -1506,6 +1539,9 @@ class _visplot:
             _invocation_parameters['averaging'] = \
                 averaging if averaging is not _UNSET \
                 else glb.get('averaging', self._arg_default['averaging'])
+            _invocation_parameters['baseline_order'] = \
+                baseline_order if baseline_order is not _UNSET \
+                else glb.get('baseline_order', self._arg_default['baseline_order'])
             _invocation_parameters['detrend'] = \
                 detrend if detrend is not _UNSET \
                 else glb.get('detrend', self._arg_default['detrend'])
@@ -1615,6 +1651,8 @@ class _visplot:
                 glb.get('datacolumn', self._arg_default['datacolumn'])
             _invocation_parameters['averaging'] = \
                 glb.get('averaging', self._arg_default['averaging'])
+            _invocation_parameters['baseline_order'] = \
+                glb.get('baseline_order', self._arg_default['baseline_order'])
             _invocation_parameters['detrend'] = \
                 glb.get('detrend', self._arg_default['detrend'])
             _invocation_parameters['stat_time_window'] = \
@@ -1702,6 +1740,7 @@ class _visplot:
                     'correlation=' + repr(_invocation_parameters['correlation']),
                     'datacolumn=' + repr(_invocation_parameters['datacolumn']),
                     'averaging=' + repr(_invocation_parameters['averaging']),
+                    'baseline_order=' + repr(_invocation_parameters['baseline_order']),
                     'detrend=' + repr(_invocation_parameters['detrend']),
                     'stat_time_window=' + repr(_invocation_parameters['stat_time_window']),
                     'stat_chan_window=' + repr(_invocation_parameters['stat_chan_window']),
@@ -1745,6 +1784,7 @@ class _visplot:
                 correlation = _invocation_parameters['correlation'],
                 datacolumn = _invocation_parameters['datacolumn'],
                 averaging = _invocation_parameters['averaging'],
+                baseline_order = _invocation_parameters['baseline_order'],
                 detrend = _invocation_parameters['detrend'],
                 stat_time_window = _invocation_parameters['stat_time_window'],
                 stat_chan_window = _invocation_parameters['stat_chan_window'],

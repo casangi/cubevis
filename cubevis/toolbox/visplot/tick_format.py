@@ -59,6 +59,14 @@ from typing import Optional
 # in a plain function and run it under node; TICK_FORMATTER_JS below adds
 # the Bokeh-specific preamble.
 _JS_CORE = r"""
+if (typeof labels !== 'undefined' && labels) {
+    // An axis drawn in whole positions (a raster's Baseline axis): the
+    // tick at position i reads labels[i]; a tick between positions, or
+    // beyond the last, reads nothing.
+    const i = Math.round(tick);
+    if (Math.abs(tick - i) > 1e-6 || i < 0 || i >= labels.length) return '';
+    return String(labels[i]);
+}
 if (!is_time) {
     // Scale is fixed from the full extent and supplied by _state_source,
     // so a pan or zoom never changes the axis units mid-interaction.
@@ -96,12 +104,16 @@ return sign + m + 'm ' + s.toString().padStart(2, '0') + 's';
 """
 
 # The CustomJSTickFormatter body.  Requires args={"state": <source>,
-# "axis_key": "x_is_time"|"y_is_time", "t0_key": "full_x0"|"full_y0",
-# "scale_key": "x_scale"|"y_scale"}.
+# "axis_key": "x_is_time"|"y_is_time", "t0_key": "x_t0"|"y_t0",
+# "scale_key": "x_scale"|"y_scale", "cat_key": "x_cat"|"y_cat"}.
+# All four columns come from PanelSpec.to_state_data(); ``cat_key`` holds
+# null for an ordinary numeric axis.
 TICK_FORMATTER_JS = """
 const is_time = state.data[axis_key][0];
 const t0      = state.data[t0_key][0];
 const scale   = (state.data[scale_key] || [1])[0];
+const labels  = (typeof cat_key !== 'undefined' && state.data[cat_key])
+                ? state.data[cat_key][0] : null;
 """ + _JS_CORE
 
 
@@ -142,6 +154,11 @@ def _js_round(x: float) -> int:
     return math.floor(x + 0.5)
 
 
+def _js_round_signed(x: float) -> int:
+    """``Math.round`` for any finite *x*: ties toward +infinity."""
+    return int(math.floor(x + 0.5))
+
+
 def _trim_zeros(s: str) -> str:
     """Strip trailing fractional zeros, then a bare trailing point.
 
@@ -154,11 +171,16 @@ def _trim_zeros(s: str) -> str:
 
 
 def format_tick(tick: float, is_time: bool, t0: float = 0.0,
-                scale: float = 1.0) -> str:
+                scale: float = 1.0, labels=None) -> str:
     """Format one axis tick, matching the browser byte for byte.
 
     Parameters
     ----------
+    labels : sequence of str, optional
+        For an axis drawn in whole positions (a raster's Baseline axis):
+        the text of the tick at each position.  A tick between
+        positions, or outside them, is empty.  Takes precedence over
+        everything else.
     tick : float
         The tick value in data units.
     is_time : bool
@@ -177,6 +199,11 @@ def format_tick(tick: float, is_time: bool, t0: float = 0.0,
     str
         e.g. ``"1234.5678"``, ``"42.5 s"``, ``"2m 05s"``, ``"-1m 30s"``.
     """
+    if labels:
+        i = _js_round_signed(tick)
+        if abs(tick - i) > 1e-6 or i < 0 or i >= len(labels):
+            return ""
+        return str(labels[i])
     if not is_time:
         if scale and scale > 0 and scale != 1.0:
             tick = tick / scale
@@ -270,7 +297,8 @@ def si_scale(value: float, unit: str) -> tuple[float, str]:
     return value, unit
 
 
-def mpl_formatter(is_time: bool, t0: float = 0.0, scale: float = 1.0):
+def mpl_formatter(is_time: bool, t0: float = 0.0, scale: float = 1.0,
+                  labels=None):
     """Return a ``matplotlib.ticker.FuncFormatter`` wrapping *format_tick*.
 
     matplotlib is imported lazily: this module is imported by
@@ -278,7 +306,8 @@ def mpl_formatter(is_time: bool, t0: float = 0.0, scale: float = 1.0):
     that has no matplotlib.
     """
     from matplotlib.ticker import FuncFormatter
-    return FuncFormatter(lambda v, _pos: format_tick(v, is_time, t0, scale))
+    return FuncFormatter(
+        lambda v, _pos: format_tick(v, is_time, t0, scale, labels))
 
 
 # ---------------------------------------------------------------------------

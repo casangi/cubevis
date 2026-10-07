@@ -191,6 +191,13 @@ Task arguments (preview)
        incoherent; ``"scalar"`` averages the amplitudes themselves.
        Sets the initial value for every raster panel; each panel's
        gear tab has its own *Averaging* control.
+   * - ``baseline_order``
+     - str
+     - How a raster lays out its Baseline axis: ``"number"`` (default),
+       in the order of the sidebar's Baseline table, or ``"length"``,
+       shortest first, with the ticks reading the length. Initial value
+       for every raster panel; each panel's gear tab has its own
+       *Baseline order* control.
    * - ``detrend``
      - bool
      - For the *Phase RMS* and *Coherence* raster quantities: remove a
@@ -318,6 +325,17 @@ Sidebar
   a window set, the two quantities are also available on a Time vs
   Channel waterfall, where the selected baselines are measured one by
   one and combined.
+
+  Raster cells are drawn where their coordinates are. A gap in time
+  (between scans) or in frequency (between spectral windows) is left
+  blank, and the cursor readout says so there. A Baseline axis shows
+  the baselines that have
+  data side by side, in number order or, with *Baseline order* set to
+  *By length*, shortest first with the ticks reading the length. Sorted
+  by length, trouble that grows along the axis is about distance
+  (atmosphere, a resolved source); trouble in scattered columns is
+  about particular antennas. The readout names the baseline and gives
+  its length either way.
 
   *Amp V Diff* and *Phase Diff* show how far each sample is from the
   mean of the other samples in the same time window (one scan unless the

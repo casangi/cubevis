@@ -210,6 +210,7 @@ class _Stub:
     from cubevis.toolbox.visplot.visibility_raster import VisibilityRaster as _VR
     _shade_cmap = _VR._shade_cmap
     _resample = _VR._resample
+    _axis_half = staticmethod(_VR._axis_half)
 
     def __init__(self, quantity):
         self._quantity = quantity
@@ -229,35 +230,36 @@ class TestPhaseShading:
                             coords={"y": np.arange(a.shape[0], dtype=float),
                                     "x": np.arange(a.shape[1], dtype=float)})
 
+    # 2026-10-07: _resample no longer goes through datashader's
+    # Canvas.raster (which spaced rows and columns evenly whatever their
+    # coordinates); it takes the aggregate, the data range and the pixel
+    # size.  See raster_grid and test_raster_grid.
+
     def test_downsampling_across_the_wrap_is_a_circular_mean(self):
-        import datashader as ds
         # Columns alternate +179 / -179; four columns per pixel.
         row = np.tile([179.0, -179.0], 32)
         agg = self._agg(np.tile(row, (8, 1)))
-        cvs = ds.Canvas(plot_width=16, plot_height=8,
-                        x_range=(0, 63), y_range=(0, 7))
-        plain = cvs.raster(agg, interpolate="linear").values
-        safe = _Stub(Axis.PHASE)._resample(cvs, agg, "linear").values
+        plain = _Stub(Axis.AMPLITUDE)._resample(
+            agg, (-0.5, 63.5), (-0.5, 7.5), 16, 8).values
+        safe = _Stub(Axis.PHASE)._resample(
+            agg, (-0.5, 63.5), (-0.5, 7.5), 16, 8).values
         assert np.nanmax(np.abs(plain)) < 90          # the bug: reads ~0
         assert np.nanmin(np.abs(safe)) > 178.9        # 180, either sign
 
-    def test_other_quantities_are_resampled_as_before(self):
-        import datashader as ds
-        agg = self._agg(np.arange(64.0).reshape(8, 8))
-        cvs = ds.Canvas(plot_width=4, plot_height=4,
-                        x_range=(0, 7), y_range=(0, 7))
-        a = cvs.raster(agg, interpolate="linear").values
-        b = _Stub(Axis.AMPLITUDE)._resample(cvs, agg, "linear").values
-        assert np.array_equal(a, b, equal_nan=True)
+    def test_other_quantities_are_the_mean_of_the_cells_in_a_pixel(self):
+        a = np.arange(64.0).reshape(8, 8)
+        agg = self._agg(a)
+        b = _Stub(Axis.AMPLITUDE)._resample(
+            agg, (-0.5, 7.5), (-0.5, 7.5), 4, 4).values
+        want = a.reshape(4, 2, 4, 2).mean(axis=(1, 3))
+        assert np.array_equal(b, want)
 
     def test_values_and_blanks_survive(self):
-        import datashader as ds
         a = np.full((6, 6), 45.0)
         a[2, 3] = np.nan
         agg = self._agg(a)
-        cvs = ds.Canvas(plot_width=6, plot_height=6,
-                        x_range=(0, 5), y_range=(0, 5))
-        out = _Stub(Axis.PHASE)._resample(cvs, agg, "nearest").values
+        out = _Stub(Axis.PHASE)._resample(
+            agg, (-0.5, 5.5), (-0.5, 5.5), 6, 6).values
         assert np.isnan(out).sum() == 1
         assert np.allclose(out[np.isfinite(out)], 45.0)
 

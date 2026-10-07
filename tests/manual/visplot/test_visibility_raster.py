@@ -1093,11 +1093,24 @@ class TestStateSource:
             f"Missing keys: {required - set(d.keys())}"
         )
 
+    @staticmethod
+    def _typical_cells(vr, dim, rng):
+        """How many typical cells the axis range holds (2026-10-07):
+        what agg_n_x / agg_n_y report.  Equal to the number of cells on
+        an axis without gaps; larger on one with gaps (time between
+        scans), where range / number-of-cells is not a cell's size."""
+        from cubevis.toolbox.visplot import raster_grid as rg
+        lo, hi = rg.cell_edges(vr.agg.coords[dim].values, vr._axis_half(dim))
+        return max(1, int(round((rng[1] - rng[0]) / np.median(hi - lo))))
+
     def test_state_source_agg_shape_matches(self):
         vr = _make_vr(self.backend, self.sel)
         d  = vr._state_source.data
+        # Baseline axis: no gaps, so exactly the number of columns.
         assert d["agg_n_x"][0] == vr.agg.shape[1]
-        assert d["agg_n_y"][0] == vr.agg.shape[0]
+        # Time axis: gapped on this data set.
+        assert d["agg_n_y"][0] == self._typical_cells(vr, vr.agg.dims[0], vr._y_range)
+        assert d["agg_n_y"][0] >= vr.agg.shape[0]
 
     def test_state_source_ranges_match(self):
         vr = _make_vr(self.backend, self.sel)
@@ -1128,9 +1141,10 @@ class TestStateSource:
         vr.rerender(new_selection=new_sel)
         # _state_source should reflect the new agg shape
         new_n_y = vr._state_source.data["agg_n_y"][0]
-        assert new_n_y == vr.agg.shape[0], (
+        assert new_n_y == self._typical_cells(vr, vr.agg.dims[0], vr._y_range), (
             "_state_source agg_n_y not updated after rerender"
         )
+        assert vr._state_source.data["agg_n_x"][0] == vr.agg.shape[1]
 
 
 class TestUpdateAxes:

@@ -104,6 +104,7 @@ from cubevis import exe
 
 from .axes import Axis
 from .selection import SelectionSpec, normalize_averaging
+from .raster_grid import normalize_baseline_order
 from .data._raster_stats import normalize_chan_window, normalize_time_window
 from . import antenna_baseline_select as _abs
 from .antenna_baseline_select import SELECTION_PAYLOAD_JS as _SELECTION_PAYLOAD_JS
@@ -197,6 +198,7 @@ _STATIC_HINTS = {
     "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall, best with one baseline ticked  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | Y and X must differ; Correlation is not available yet",
     "r_qty": "<b>Raster quantity</b> \u2014 what the colour shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
     "scaling": "<b>Colour scaling</b> \u2014 how values are spread over the colours; changes the picture, never the data  | <b>eq_hist</b> uses every colour equally and shows faint structure, but distances between colours mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap",
+    "border": "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out; the baselines that have data are drawn side by side either way  | <b>By number</b>: in the order of the Baseline table; baselines to one antenna sit together  | <b>By length</b>: shortest first, and the ticks read the length. Trouble that grows along the axis is then about distance (atmosphere, a source that is resolved); trouble in scattered columns is about particular antennas  | The cursor readout names the baseline and its length in both",
     "info": "<b>Info block</b> \u2014 which facts about this panel are listed in the block left of the plots (selection, axes, averaging, counts)  | Tick what you want to see there; it does not change the plot",
     # ---- scatter gear tab
     "s_x": "<b>Scatter X axis</b>  | <b>UV Distance</b>: baseline length; in wavelengths to compare across frequency  | <b>Time</b>: stability through the observation  | <b>Frequency / Channel</b>: the spectrum  | <b>U / V</b>: with V or U as Y, the uv coverage  | For Phase RMS and Coherence, X also decides what one point is (see the window controls)",
@@ -1935,6 +1937,14 @@ class VisibilityPlotter:
         circular mean).  Initial value for every raster panel; each
         panel's own "Averaging" control (raster gear tab) changes it
         independently afterwards.
+    baseline_order : str
+        How a raster orders its Baseline axis: ``"number"`` (default; by
+        baseline number, as the sidebar's Baseline table lists them) or
+        ``"length"`` (shortest first, from the antenna positions; the
+        ticks then read the length).  Either way the baselines with data
+        are drawn side by side with no holes.  Initial value for every
+        raster panel; each panel's "Baseline order" control changes it
+        afterwards.
     detrend : bool
         For the Phase RMS and Coherence raster quantities: remove a
         linear phase slope (residual delay along frequency, residual
@@ -2080,6 +2090,7 @@ class VisibilityPlotter:
         # verbatim into the generated task layers, where that name does
         # not exist.  test_raster_averaging pins the two together.
         averaging:        str           = "vector",
+        baseline_order:   str           = "number",
         detrend:          bool          = True,
         stat_time_window                = "auto",
         stat_chan_window                = "off",
@@ -2128,6 +2139,7 @@ class VisibilityPlotter:
             kernel_name=kernel_name, field=field, spw=spw, antenna=antenna, scan=scan,
             timerange=timerange, uvrange=uvrange, correlation=correlation,
             datacolumn=datacolumn, averaging=averaging, detrend=detrend,
+            baseline_order=baseline_order,
             stat_time_window=stat_time_window,
             stat_chan_window=stat_chan_window,
             layout=layout, kind=kind, preset=preset,
@@ -2231,6 +2243,7 @@ class VisibilityPlotter:
         *,
         ms, ps, backend, remote_endpoint, kernel_name, field, spw, antenna, scan,
         timerange, uvrange, correlation, datacolumn, averaging, detrend,
+        baseline_order,
         stat_time_window, stat_chan_window,
         layout, kind, preset,
         raster_y, raster_x, raster_qty, scatter_x, scatter_y,
@@ -2284,6 +2297,9 @@ class VisibilityPlotter:
         # from that slot's raster gear tab).  Validated here so a typo
         # fails at construction, not as a silently-defaulted plot.
         self._averaging     = normalize_averaging(averaging)
+        # HRS H3/H4 (2026-10-07): order of a raster's Baseline axis,
+        # "number" | "length".  Initial value; per panel afterwards.
+        self._baseline_order = normalize_baseline_order(baseline_order)
         # HRS H2 (2026-10): Phase RMS / Coherence slope removal.  Same
         # arrangement: initial value here, per panel afterwards.
         self._detrend       = bool(detrend)
@@ -2668,6 +2684,7 @@ class VisibilityPlotter:
             x_dim         = self._raster_x,
             quantity      = self._raster_qty,
             averaging     = self._averaging,
+            baseline_order = self._baseline_order,
             detrend       = self._detrend,
             stat_time_window = self._stat_time_window,
             stat_chan_window = self._stat_chan_window,
@@ -2730,6 +2747,7 @@ class VisibilityPlotter:
             x_dim         = self._raster_x,
             quantity      = self._raster_qty,
             averaging     = self._averaging,
+            baseline_order = self._baseline_order,
             detrend       = self._detrend,
             stat_time_window = self._stat_time_window,
             stat_chan_window = self._stat_chan_window,
@@ -3820,6 +3838,16 @@ for (const dt of other.tools) {
                     log.warning("_handle_plot: unknown averaging %r for "
                                 "panel %s", panel_msg.get("averaging"), slot.id)
                     avg = panel.averaging
+                # Order of this slot's Baseline axis (HRS H3/H4).
+                # Absent or unrecognised: keep what the panel has.
+                try:
+                    border = (normalize_baseline_order(panel_msg["baseline_order"])
+                              if panel_msg.get("baseline_order")
+                              else panel.baseline_order)
+                except ValueError:
+                    log.warning("_handle_plot: unknown baseline order %r for "
+                                "panel %s", panel_msg.get("baseline_order"), slot.id)
+                    border = panel.baseline_order
                 # Slope removal for this slot's Phase RMS / Coherence
                 # (HRS H2).  Sent as "remove" | "keep"; absent = unchanged.
                 det = panel_msg.get("detrend")
@@ -3878,6 +3906,7 @@ for (const dt of other.tools) {
                     # slot's requested mode against the mode its raster
                     # last rendered with.
                     avg != panel.averaging or
+                    border != panel.baseline_order or
                     det != panel.detrend or
                     twin != panel.stat_time_window or
                     cwin != panel.stat_chan_window or
@@ -3923,6 +3952,7 @@ for (const dt of other.tools) {
                                 quantity     = qty,
                                 polarization = first_pol,
                                 averaging    = avg,
+                                baseline_order = border,
                                 detrend      = det,
                                 stat_time_window = twin,
                                 stat_chan_window = cwin,
@@ -4894,6 +4924,13 @@ html, body { height: 100%; margin: 0; }
             options=[("vector", "Vector"), ("scalar", "Scalar")],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+        # Baseline order (HRS H3/H4, 2026-10-07): how this slot's raster
+        # lays out a Baseline axis.  Per slot, read at Plot-press time.
+        rb_sel = Select(
+            title="Baseline order", value=slot.raster.baseline_order,
+            options=[("number", "By number"), ("length", "By length")],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
         # Slope removal (HRS H2, 2026-10) for Phase RMS / Coherence:
         # take out the residual delay / rate before measuring scatter,
         # or leave it in to see it.  Same arrangement as ra_sel: per
@@ -4931,6 +4968,7 @@ html, body { height: 100%; margin: 0; }
         # stay in the widgets dict below (they are what the Plot code
         # reads and the theme restyles).
         ra_box = self._hover(ra_sel, "averaging")
+        rb_box = self._hover(rb_sel, "border")
         rd_box = self._hover(rd_sel, "detrend")
         rt_box = self._hover(rt_sel, "twin")
         rc_box = self._hover(rc_sel, "cwin")
@@ -4976,7 +5014,7 @@ conflict_div.text = conflict ? msg : '';
             self._hover(column(ry_sel, rx_sel, width=_SIDEBAR_WIDTH),
                         "r_axes"),
             self._hover(rq_sel, "r_qty"),
-            ra_box, rd_box, rt_box, rc_box,
+            ra_box, rb_box, rd_box, rt_box, rc_box,
             conflict_div,
             self._hover(raster_cmap, "scaling"),
             self._hover(info_sel.column, "info"),
@@ -4985,6 +5023,7 @@ conflict_div.text = conflict ? msg : '';
             "y_sel": ry_sel, "x_sel": rx_sel, "q_sel": rq_sel,
             "avg_sel": ra_sel, "detrend_sel": rd_sel,
             "twin_sel": rt_sel, "cwin_sel": rc_sel,
+            "border_sel": rb_sel,
             "info_selectors": info_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
@@ -5418,8 +5457,13 @@ for (let i = 0; i < cols.length; i++) {
         self._spw_next_btn = self._spw_iter.next_btn
         self._spw_text = self._tick_text_input("id, name, a~b, !id", dark)
         self._spw_select = column(
-            self._spw_iter.row,
-            self._hover(self._spw_table, "spw"),
+            # Heading row and table inside ONE hover region (2026-10-06):
+            # with only the table wrapped, the help did not show over
+            # the "SPW" label and its buttons.  The text box below stays
+            # outside -- it has its own hint.
+            self._hover(column(self._spw_iter.row, self._spw_table,
+                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
+                        "spw"),
             self._spw_text,
             self._spw_overflow_note,
             width=_SIDEBAR_WIDTH,
@@ -5629,8 +5673,9 @@ for (let i = 0; i < cols.length; i++) {
             "name, number, a~b, !name", dark)
         _focus_blur(self._antenna_text, self._hint_antenna_text)
         antenna_col = column(
-            self._antenna_iter.row,
-            self._hover(self._antenna_table, "antenna"),
+            self._hover(column(self._antenna_iter.row, self._antenna_table,
+                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
+                        "antenna"),
             self._antenna_text,
             self._hover(self._antenna_mode, "ant_mode"),
             self._antenna_note,
@@ -5681,8 +5726,9 @@ for (let i = 0; i < cols.length; i++) {
             "A&B, number, a~b, !number", dark)
         _focus_blur(self._baseline_text, self._hint_baseline_text)
         baseline_col = column(
-            self._baseline_iter.row,
-            self._hover(self._baseline_table, "antenna"),
+            self._hover(column(self._baseline_iter.row, self._baseline_table,
+                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
+                        "antenna"),
             self._baseline_text,
             self._baseline_note,
             width=_SIDEBAR_WIDTH,
@@ -5756,7 +5802,9 @@ for (let i = 0; i < cols.length; i++) {
             _section("Data"),
             self._hover(self._col_select, "col"),
             self._hover(field_col, "field"), self._spw_select,
-            corr_label, self._hover(self._corr_cbg, "corr"),
+            self._hover(column(corr_label, self._corr_cbg,
+                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
+                        "corr"),
             scan_inp, antenna_col, baseline_col, time_inp, uv_inp,
             # "Axes" header removed (Group 3 piece 2, 2026-07-31) along
             # with self._raster_axis_section/_scatter_axis_section that
@@ -6983,11 +7031,12 @@ function doPlot(reload) {
 
     function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel,
                                 colorize_handles, ra_sel, rd_sel, rt_sel, rc_sel,
-                                sd_sel, st_sel, sc_sel) {
+                                rb_sel, sd_sel, st_sel, sc_sel) {
         if (kind_switch.active === 0) {
             return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value,
                     averaging: ra_sel.value, detrend: rd_sel.value,
-                    twin: rt_sel.value, cwin: rc_sel.value};
+                    twin: rt_sel.value, cwin: rc_sel.value,
+                    baseline_order: rb_sel ? rb_sel.value : null};
         } else {
             return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value,
                      colorize: buildColorizeArray(colorize_handles),
@@ -7027,12 +7076,12 @@ function doPlot(reload) {
     panels[panel0_id] = buildPanelPayload(
         panel0_kind_switch, panel0_ry_sel, panel0_rx_sel, panel0_rq_sel,
         panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles, panel0_ra_sel,
-        panel0_rd_sel, panel0_rt_sel, panel0_rc_sel,
+        panel0_rd_sel, panel0_rt_sel, panel0_rc_sel, panel0_rb_sel,
         panel0_sd_sel, panel0_st_sel, panel0_sc_sel);
     panels[panel1_id] = buildPanelPayload(
         panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
         panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles, panel1_ra_sel,
-        panel1_rd_sel, panel1_rt_sel, panel1_rc_sel,
+        panel1_rd_sel, panel1_rt_sel, panel1_rc_sel, panel1_rb_sel,
         panel1_sd_sel, panel1_st_sel, panel1_sc_sel);
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
@@ -7179,6 +7228,32 @@ function doPlot(reload) {
         // ran, silently stale after any axis change.
         if (p0 && p0.state != null) { p0_state.data = p0.state; }
         if (p1 && p1.state != null) { p1_state.data = p1.state; }
+
+        // An axis drawn in whole positions (a raster's Baseline axis:
+        // the state's x_cat / y_cat hold its tick texts) has labels
+        // only at whole numbers, so keep its ticks there once zoomed
+        // in; every other axis is left free.  Python sets the same
+        // thing when the figure is built (VisibilityPlot._build); this
+        // keeps it right when the axes change afterwards.
+        function cvIntegerTicks(fig, state) {
+            try {
+                const d = state.data;
+                const apply = (axes, cat) => {
+                    for (const a of (axes || [])) {
+                        const t = a ? a.ticker : null;
+                        if (!t || t.min_interval === undefined) continue;
+                        const want = (cat && cat[0]) ? 1 : 0;
+                        if (t.min_interval !== want) t.min_interval = want;
+                    }
+                };
+                apply([...(fig.below || []), ...(fig.above || [])], d['x_cat']);
+                apply([...(fig.left || []), ...(fig.right || [])], d['y_cat']);
+            } catch (e) {
+                console.warn('[visplot] cvIntegerTicks failed', e);
+            }
+        }
+        if (p0 && p0.state != null) { cvIntegerTicks(p0_fig, p0_state); }
+        if (p1 && p1.state != null) { cvIntegerTicks(p1_fig, p1_state); }
 
         // Update panel 0's figure + axes — whichever kind actually
         // rendered this round (p0_fig/p0_img), not a fixed one.
@@ -7531,6 +7606,7 @@ function doPlot(reload) {
             "panel0_rd_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["detrend_sel"],
             "panel0_rt_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["twin_sel"],
             "panel0_rc_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["cwin_sel"],
+            "panel0_rb_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["border_sel"],
             "panel0_sx_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["x_sel"],
             "panel0_sy_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["y_sel"],
             "panel0_sd_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["detrend_sel"],
@@ -7552,6 +7628,7 @@ function doPlot(reload) {
             "panel1_rd_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["detrend_sel"],
             "panel1_rt_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["twin_sel"],
             "panel1_rc_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["cwin_sel"],
+            "panel1_rb_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["border_sel"],
             "panel1_sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
             "panel1_sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
             "panel1_sd_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["detrend_sel"],
@@ -8181,7 +8258,8 @@ doPlot();
                 if kind == "raster":
                     _all_axis_widgets += [w["y_sel"], w["x_sel"], w["q_sel"],
                                           w["avg_sel"], w["detrend_sel"],
-                                          w["twin_sel"], w["cwin_sel"]]
+                                          w["twin_sel"], w["cwin_sel"],
+                                          w["border_sel"]]
                 else:
                     _all_axis_widgets += [w["x_sel"], w["y_sel"],
                                           w["detrend_sel"], w["twin_sel"],

@@ -783,6 +783,13 @@ class IdentityTables:
     # touching.  A tuple (not a set) so it survives the same generic wire
     # serialization as ``scans``.
     baselines_with_data: Optional[tuple] = None
+    # HRS H3/H4 (2026-10-07): length in metres of each baseline in
+    # ``baseline_antennas`` (baseline_id -> float), from the antenna
+    # positions; ``None`` when the data carry no positions.  Lets a raster
+    # order its Baseline axis by length (``raster_grid.BaselineAxis``)
+    # without a second round trip.  A baseline whose antennas have no
+    # position is simply absent from the dict.
+    baseline_lengths: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -866,50 +873,33 @@ class _PartitionScanLookup:
 # geometry with the same defects; see the 2026-08 probe-miss notes in
 # VisibilityScatter._handle_probe.
 
-def _cell_bounds(coords: np.ndarray, idx: int) -> tuple[float, float]:
+def _cell_bounds(coords: np.ndarray, idx: int,
+                 half: Optional[float] = None) -> tuple[float, float]:
     """Data-space ``(lo, hi)`` bounds of cell *idx* in *coords*.
 
-    Uses **local** neighbour spacing rather than a global
-    ``(c[-1] - c[0]) / (N - 1)`` average.
+    The rule is ``raster_grid.cell_edges`` -- the same one the image is
+    drawn with and the flag engine selects with, so the readout, the
+    picture and a flag box cannot disagree about where a cell is.  In
+    short: a cell's width comes from its nearer neighbour, so on a
+    gapped axis (``time`` between scans, ``frequency`` between spectral
+    windows) a cell does not reach into the gap, and the field / scan /
+    antenna lookup does not sweep in rows from the neighbouring scan.
 
-    The global-average form is exact for a Datashader canvas agg, whose
-    bins are uniform by construction, but it is wrong for a raw MS
-    coordinate axis, which routinely is not:
-
-    * ``time`` has large gaps between scans — an average half-width
-      derived across those gaps makes every cell's window many times
-      wider than the actual integration spacing, so the field/scan/
-      antenna metadata lookup in ``probe_raster_pixel`` sweeps in rows
-      belonging to *neighbouring scans* and reports them as though they
-      were under the cursor.
-    * ``frequency`` is non-uniform across concatenated spectral windows
-      for the same reason.
-
-    Local spacing degrades gracefully: on a uniform axis it reproduces
-    the global answer exactly, and on a gapped axis it keeps each cell's
-    window tied to its own neighbours.  Handles descending coordinate
-    arrays and the degenerate single-element case.
+    History: a global ``(c[-1] - c[0]) / (N - 1)`` average came first
+    (wrong across gaps), then half the distance to each neighbour
+    (2026-08; right inside a run, but the cell beside a gap reached
+    halfway across it).  *half* gives an index axis (Baseline position)
+    its fixed half-width.  Handles the single-element case (zero width
+    unless *half* is given).
     """
+    from ..raster_grid import cell_edges
     n = len(coords)
     if n == 0:
         raise IndexError("empty coordinate array")
     if not (0 <= idx < n):
         raise IndexError(f"index {idx} out of range for {n} coordinates")
-
-    centre = float(coords[idx])
-    if n == 1:
-        return centre, centre
-
-    if idx > 0:
-        half_lo = abs(centre - float(coords[idx - 1])) / 2.0
-    else:
-        half_lo = abs(float(coords[1]) - centre) / 2.0
-    if idx < n - 1:
-        half_hi = abs(float(coords[idx + 1]) - centre) / 2.0
-    else:
-        half_hi = abs(centre - float(coords[n - 2])) / 2.0
-
-    return centre - half_lo, centre + half_hi
+    lo, hi = cell_edges(coords, half)
+    return float(lo[idx]), float(hi[idx])
 
 
 def _widen_if_degenerate(
@@ -2046,6 +2036,62 @@ class XArrayReader(abc.ABC):
         self._baseline_tab = result
         return result
 
+    def antenna_positions(self) -> dict:
+        """``{antenna_name: (x, y, z)}`` in metres, from the store's antenna
+        sub-tables; empty when it has none.  Read once and cached.
+
+        Both formats attach an ``antenna_xds`` node (``ANTENNA_POSITION``
+        over ``antenna_name``) to each visibility partition.  Positions
+        are taken from every such node, first seen wins: partitions of
+        one observation agree, and an antenna present in only some of
+        them is still found.
+        """
+        cached = getattr(self, "_antenna_pos", None)
+        if cached is not None:
+            return cached
+        out: dict = {}
+        dt = getattr(self, "_datatree", None)
+        try:
+            nodes = list(dt.subtree) if dt is not None else []
+        except Exception:
+            nodes = []
+        for node in nodes:
+            try:
+                ds = node.ds
+                if ("ANTENNA_POSITION" not in ds.data_vars
+                        or "antenna_name" not in ds.coords):
+                    continue
+                pos = ds["ANTENNA_POSITION"]
+                other = [d for d in pos.dims if d != "antenna_name"]
+                if len(other) != 1:
+                    continue
+                vals = np.asarray(pos.transpose("antenna_name", other[0]).values,
+                                  dtype=np.float64)
+                names = np.asarray(ds.coords["antenna_name"].values).astype(str)
+                for name, xyz in zip(names, vals):
+                    if name not in out and xyz.size >= 3 and np.isfinite(xyz[:3]).all():
+                        out[str(name)] = (float(xyz[0]), float(xyz[1]), float(xyz[2]))
+            except Exception:
+                log.debug("antenna_positions: node skipped", exc_info=True)
+        self._antenna_pos = out
+        return out
+
+    def _baseline_lengths(self, baseline_antennas: dict) -> Optional[dict]:
+        """``{baseline_id: metres}`` for *baseline_antennas*
+        (``baseline_id -> (ant1, ant2)``), or ``None`` without positions."""
+        pos = self.antenna_positions()
+        if not pos:
+            return None
+        out = {}
+        for bid, (a1, a2) in baseline_antennas.items():
+            p1, p2 = pos.get(str(a1)), pos.get(str(a2))
+            if p1 is None or p2 is None:
+                continue
+            d = float(np.linalg.norm(np.subtract(p1, p2)))
+            if np.isfinite(d):
+                out[int(bid)] = d
+        return out
+
     def _identity_categoricals(
         self,
         scan_lookup: Optional[_PartitionScanLookup],
@@ -2191,6 +2237,7 @@ class XArrayReader(abc.ABC):
         self._scan_lookup_cache = {}
         self._antenna_lookup = None
         self._cv_spw_table = None
+        self._antenna_pos = None
         self._clear_frame_cache()
 
     # ------------------------------------------------------------------ #

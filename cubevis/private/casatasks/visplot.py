@@ -58,6 +58,7 @@ def _validate_params(
         correlation,
         datacolumn,
         averaging,
+        baseline_order,
         detrend,
         stat_time_window,
         stat_chan_window,
@@ -102,6 +103,7 @@ def _validate_params(
         'correlation': 'str',
         'datacolumn': 'str',
         'averaging': 'str',
+        'baseline_order': 'str',
         'detrend': 'bool',
         'stat_time_window': '',
         'stat_chan_window': '',
@@ -204,6 +206,7 @@ def _validate_params(
     _check('correlation', correlation, _type_map['correlation'])
     _check('datacolumn', datacolumn, _type_map['datacolumn'])
     _check('averaging', averaging, _type_map['averaging'])
+    _check('baseline_order', baseline_order, _type_map['baseline_order'])
     _check('detrend', detrend, _type_map['detrend'])
     _check('stat_time_window', stat_time_window, _type_map['stat_time_window'])
     _check('stat_chan_window', stat_chan_window, _type_map['stat_chan_window'])
@@ -248,6 +251,7 @@ def _visplot_t(
         correlation: str = '',
         datacolumn: str = 'data',
         averaging: str = 'vector',
+        baseline_order: str = 'number',
         detrend: bool = True,
         stat_time_window = 'auto',
         stat_chan_window = 'off',
@@ -291,6 +295,7 @@ def _visplot_t(
         correlation = correlation,
         datacolumn = datacolumn,
         averaging = averaging,
+        baseline_order = baseline_order,
         detrend = detrend,
         stat_time_window = stat_time_window,
         stat_chan_window = stat_chan_window,
@@ -391,6 +396,14 @@ class _visplot:
         circular mean).  Initial value for every raster panel; each
         panel's own "Averaging" control (raster gear tab) changes it
         independently afterwards.
+    baseline_order : str
+        How a raster orders its Baseline axis: ``"number"`` (default; by
+        baseline number, as the sidebar's Baseline table lists them) or
+        ``"length"`` (shortest first, from the antenna positions; the
+        ticks then read the length).  Either way the baselines with data
+        are drawn side by side with no holes.  Initial value for every
+        raster panel; each panel's "Baseline order" control changes it
+        afterwards.
     detrend : bool
         For the Phase RMS and Coherence raster quantities: remove a
         linear phase slope (residual delay along frequency, residual
@@ -534,6 +547,7 @@ class _visplot:
             correlation: str = '',
             datacolumn: str = 'data',
             averaging: str = 'vector',
+            baseline_order: str = 'number',
             detrend: bool = True,
             stat_time_window = 'auto',
             stat_chan_window = 'off',
@@ -590,6 +604,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             correlation = correlation,
             datacolumn = datacolumn,
             averaging = averaging,
+            baseline_order = baseline_order,
             detrend = detrend,
             stat_time_window = stat_time_window,
             stat_chan_window = stat_chan_window,
@@ -634,6 +649,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'correlation=' + repr(correlation),
                 'datacolumn=' + repr(datacolumn),
                 'averaging=' + repr(averaging),
+                'baseline_order=' + repr(baseline_order),
                 'detrend=' + repr(detrend),
                 'stat_time_window=' + repr(stat_time_window),
                 'stat_chan_window=' + repr(stat_chan_window),
@@ -679,6 +695,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 correlation = correlation,
                 datacolumn = datacolumn,
                 averaging = averaging,
+                baseline_order = baseline_order,
                 detrend = detrend,
                 stat_time_window = stat_time_window,
                 stat_chan_window = stat_chan_window,

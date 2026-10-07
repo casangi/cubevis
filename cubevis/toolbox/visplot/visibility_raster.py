@@ -10,11 +10,15 @@ tool, and pan/zoom rerender trigger.
 Raster-specific additions
 --------------------------
 * ``query_raster`` backend call → 2D float64 agg
-* Two-level pan/zoom: Level-1 Datashader ``Canvas.raster()`` resample
-  (fast, no backend query) vs Level-2 backend re-query when zoomed past
-  agg resolution and ``is_decimated=True``
-* ``interpolate='nearest'`` when upsampling (canvas pixel < one agg cell)
-  to show crisp block boundaries rather than bilinear blur
+* Two-level pan/zoom: Level-1 resample of the cached agg (fast, no
+  backend query) vs Level-2 backend re-query when zoomed past agg
+  resolution and ``is_decimated=True``
+* Cells are drawn where their coordinates say they are
+  (``raster_grid``): gaps in time or frequency are blank, a Baseline
+  axis shows the baselines side by side in number or length order, and
+  a cell larger than a pixel is drawn with its true value, never
+  interpolated.  The same cell rule serves the cursor readout, flag
+  boxes and flag overlays
 * ``_state_source`` extra fields: ``agg_n_x``, ``agg_n_y`` for the 1:1
   zoom button
 * ``update_axes(quantity=, polarization=)`` extends the base signature
@@ -46,6 +50,8 @@ from .visibility_plot import (
 from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
 from .data.reader import _agg_value, _cell_bounds, channel_range_to_freq
+from . import raster_grid as _rg
+from .raster_grid import BaselineAxis, normalize_baseline_order
 from .axes import Axis
 from . import palettes as _palettes
 from .selection import normalize_averaging
@@ -206,9 +212,22 @@ class VisibilityRaster(VisibilityPlot):
         detrend: bool = True,
         stat_time_window="auto",
         stat_chan_window="off",
+        baseline_order: Optional[str] = None,
         **kwargs,
     ) -> None:
         self._quantity     = quantity
+        # HRS H3/H4 (2026-10-07): how THIS raster orders a displayed
+        # Baseline axis -- "number" | "length" -- and the mapping from
+        # positions along that axis to baseline numbers that the last
+        # render built (None when no Baseline axis is displayed).  See
+        # raster_grid.BaselineAxis.
+        self._baseline_order = normalize_baseline_order(baseline_order)
+        self._bl_axis: Optional[BaselineAxis] = None
+        # Where elapsed-time labels count from: the first cell's centre,
+        # which is not the axis range's low end now that the range runs
+        # to the cells' edges (None until the first render).
+        self._x_origin: Optional[float] = None
+        self._y_origin: Optional[float] = None
         # HRS H1 (2026-10): how THIS raster's cells combine the samples
         # they cover -- "vector" | "scalar" (None = DEFAULT_AVERAGING).
         # Per panel, so two rasters can show the same selection averaged
@@ -329,6 +348,18 @@ class VisibilityRaster(VisibilityPlot):
         ``update_axes(stat_chan_window=...)``."""
         return self._stat_chan_window
 
+    @property
+    def baseline_order(self) -> str:
+        """How this raster orders a displayed Baseline axis: ``"number"``
+        or ``"length"``.  Change it with ``update_axes(baseline_order=...)``."""
+        return self._baseline_order
+
+    @property
+    def baseline_axis(self) -> Optional[BaselineAxis]:
+        """The displayed Baseline axis (positions to baseline numbers), or
+        ``None`` when neither axis is Baseline or nothing is drawn yet."""
+        return self._bl_axis
+
     def update_axes(
         self,
         y_dim: Optional["Axis"]  = None,
@@ -340,6 +371,7 @@ class VisibilityRaster(VisibilityPlot):
         detrend: Optional[bool] = None,
         stat_time_window=None,
         stat_chan_window=None,
+        baseline_order: Optional[str] = None,
     ) -> None:
         """Change axes, quantity, polarization or averaging and re-render
         in place.
@@ -351,6 +383,10 @@ class VisibilityRaster(VisibilityPlot):
         either as it is.
         """
         changed = False
+        if baseline_order is not None:
+            bo = normalize_baseline_order(baseline_order)
+            if bo != self._baseline_order:
+                self._baseline_order = bo;  changed = True
         if detrend is not None and bool(detrend) != self._detrend:
             self._detrend = bool(detrend);  changed = True
         # Windows: None leaves the setting alone (so "auto" has to be
@@ -448,26 +484,143 @@ class VisibilityRaster(VisibilityPlot):
             return list(_palettes.cyclic_cmap())
         return self._cmap
 
-    def _resample(self, cvs, agg, interpolate):
-        """``cvs.raster(agg)``, made safe for Phase (HRS H1b).
+    # ------------------------------------------------------------------
+    # Where the cells are (raster_grid)
+    # ------------------------------------------------------------------
 
-        Zoomed out, several cells land on one screen pixel and Datashader
-        averages them; zoomed in with ``"linear"``, it interpolates
-        between them.  Either is an arithmetic mean of degrees, and the
-        mean of +179 and -179 is 0: the opposite direction.  For Phase
-        the unit vector (cos, sin) is resampled instead and the angle
-        taken afterwards, which is the circular mean.  A pixel whose
-        cells cancel exactly has no direction and is left blank.
+    @staticmethod
+    def _axis_half(dim_name: str) -> Optional[float]:
+        """Fixed half-width of a cell along *dim_name*, or ``None`` when
+        the width comes from the coordinate spacing.  A Baseline axis is
+        drawn in whole positions (see ``_place_baselines``)."""
+        return BaselineAxis.HALF if dim_name == "baseline_id" else None
+
+    def _place_baselines(self, agg, primary: bool = False):
+        """Put *agg*'s baseline dimension, if it has one, in display
+        positions.
+
+        The backend returns a Baseline axis labelled with baseline
+        numbers: whichever survive the selection, so an arbitrary subset
+        with holes.  Here the baselines that have data are laid side by
+        side at positions 0, 1, 2 ... in this panel's order (number or
+        length) and the dimension's coordinate becomes the position.
+        Everything that has to name a baseline afterwards goes back
+        through ``self._bl_axis``.
+
+        *primary* is the panel's own aggregate: it decides the mapping.
+        Anything else (a flag overlay) is laid out on the mapping already
+        decided, so the two cannot differ.
         """
-        if self._quantity != Axis.PHASE:
-            return cvs.raster(agg, interpolate=interpolate)
-        rad = np.deg2rad(agg)
-        c = cvs.raster(np.cos(rad), interpolate=interpolate)
-        s = cvs.raster(np.sin(rad), interpolate=interpolate)
-        with np.errstate(invalid="ignore"):
-            deg = np.rad2deg(np.arctan2(s.values, c.values))
-            deg = np.where(np.hypot(s.values, c.values) > 1e-9, deg, np.nan)
-        return c.copy(data=deg)
+        if agg is None or "baseline_id" not in getattr(agg, "dims", ()):
+            if primary:
+                self._bl_axis = None
+            return agg
+        ids = np.asarray(agg.coords["baseline_id"].values)
+        if primary:
+            tables = getattr(self, "_identity_tables", None)
+            names = {}
+            for bid, pair in (getattr(tables, "baseline_antennas", None) or {}).items():
+                try:
+                    names[int(bid)] = f"{pair[0]}&{pair[1]}"
+                except Exception:
+                    pass
+            lengths = getattr(tables, "baseline_lengths", None) or {}
+            lengths = {int(k): v for k, v in lengths.items()}
+            present = [int(i) for i in ids.tolist()]
+            # xarray-ms lays the baseline dimension out as the full
+            # antenna-pair grid, observed or not (see
+            # IdentityTables.baselines_with_data): leave out the pairs
+            # with no rows rather than drawing them as blank columns.
+            with_data = getattr(tables, "baselines_with_data", None)
+            if with_data is not None:
+                have = {int(b) for b in with_data}
+                kept = [i for i in present if i in have]
+                if kept:
+                    present = kept
+            self._bl_axis = BaselineAxis.build(
+                present, self._baseline_order, lengths, names)
+        axis = self._bl_axis
+        if axis is None:
+            return agg
+        pos = axis.positions_of(ids)
+        keep = np.flatnonzero(pos >= 0)
+        out = agg.isel(baseline_id=keep)
+        out = out.assign_coords(baseline_id=pos[keep].astype(np.float64))
+        return out.sortby("baseline_id")
+
+    def _grid_extent(self, agg, x_range, y_range):
+        """Axis ranges that show every cell of *agg* whole.
+
+        The backend reports the first and last cell *centres* (of the
+        undecimated data).  The image is drawn out to the cells' edges,
+        so that the first and last rows and columns are not cut in half
+        and an axis with a single baseline can be drawn at all.
+        """
+        out = []
+        for dim, (b0, b1) in ((agg.dims[1], x_range), (agg.dims[0], y_range)):
+            ext = _rg.extent(agg.coords[dim].values, self._axis_half(dim))
+            if ext is None or ext[0] == ext[1]:
+                out.append((float(b0), float(b1)))
+            elif dim == "baseline_id":
+                out.append(ext)
+            else:
+                out.append((min(ext[0], float(b0)), max(ext[1], float(b1))))
+        return out[0], out[1]
+
+    def _drawable(self, agg, x_range, y_range) -> bool:
+        return (agg is not None and agg.ndim == 2
+                and agg.shape[0] >= 1 and agg.shape[1] >= 1
+                and x_range[0] != x_range[1] and y_range[0] != y_range[1])
+
+    def _resample(self, agg, x_range, y_range, width=None, height=None):
+        """Draw *agg* into this panel's pixels for a data range.
+
+        Every cell is drawn where its coordinate says it is
+        (``raster_grid.resample``): a gap between scans or spectral
+        windows is blank, a cell bigger than a pixel is drawn with its
+        true value (no interpolation: adjacent baselines are not
+        neighbours and a gap is not data), and where several cells share
+        a pixel it shows their mean.
+
+        Phase (HRS H1b) is averaged as a direction: the unit vector
+        (cos, sin) is drawn and the angle taken afterwards, because the
+        arithmetic mean of +179 and -179 degrees is 0, the opposite
+        direction.  A pixel whose cells cancel exactly has no direction
+        and is left blank.
+
+        Returns a ``DataArray`` over pixel centres, row 0 at the low end
+        of *y_range*, as ``datashader.Canvas.raster`` did.
+        """
+        import xarray as xr
+        width = int(self._width if width is None else width)
+        height = int(self._height if height is None else height)
+        y_name, x_name = agg.dims
+        yc = np.asarray(agg.coords[y_name].values, dtype=np.float64)
+        xc = np.asarray(agg.coords[x_name].values, dtype=np.float64)
+        kw = dict(y_half=self._axis_half(y_name), x_half=self._axis_half(x_name))
+
+        def draw(values):
+            return _rg.resample(values, yc, xc, x_range, y_range,
+                                width, height, **kw)
+
+        vals = np.asarray(agg.values, dtype=np.float64)
+        if self._quantity == Axis.PHASE:
+            rad = np.deg2rad(vals)
+            c, s_ = draw(np.cos(rad)), draw(np.sin(rad))
+            with np.errstate(invalid="ignore"):
+                img = np.rad2deg(np.arctan2(s_, c))
+                img = np.where(np.hypot(s_, c) > 1e-9, img, np.nan)
+        else:
+            img = draw(vals)
+
+        def centres(lo, hi, n):
+            e = np.linspace(float(lo), float(hi), n + 1)
+            return (e[:-1] + e[1:]) / 2.0
+
+        return xr.DataArray(
+            img, dims=[y_name, x_name],
+            coords={y_name: centres(y_range[0], y_range[1], height),
+                    x_name: centres(x_range[0], x_range[1], width)})
 
     def _reshade(self) -> None:
         """Re-shade the cached agg at the current viewport.
@@ -1145,8 +1298,25 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         draw a framed cell with a note instead of a black rectangle.
         """
         agg = self._agg
-        n_x = agg.shape[1] if agg is not None and agg.ndim == 2 else 1
-        n_y = agg.shape[0] if agg is not None and agg.ndim == 2 else 1
+        # Grid resolution "at full extent": what the 1:1 zoom and the
+        # export's cell size divide the range by.  On an axis with gaps
+        # that is NOT the number of cells -- 410 integrations of 6 s
+        # spread over 94 minutes would give 13.8 s per "cell" -- so it
+        # is the number of typical cells the range would hold.
+        n_x = n_y = 1
+        if agg is not None and agg.ndim == 2:
+            n_y, n_x = agg.shape
+            for which, dim, rng_ in (("x", agg.dims[1], self._x_range),
+                                     ("y", agg.dims[0], self._y_range)):
+                lo, hi = _rg.cell_edges(agg.coords[dim].values,
+                                        self._axis_half(dim))
+                w = np.median(hi - lo) if lo.size else 0.0
+                if w > 0 and rng_[1] > rng_[0]:
+                    n = max(1, int(round((rng_[1] - rng_[0]) / w)))
+                    if which == "x":
+                        n_x = n
+                    else:
+                        n_y = n
         x_is_time, y_is_time = self._axis_flags()
 
         band = ColorBand(
@@ -1169,11 +1339,23 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             reason = "not rendered yet"
         status, note = ("empty", reason) if reason else ("ok", None)
 
+        # A Baseline axis is drawn in positions; its ticks read the
+        # baseline number, or the length when ordered by length.
+        x_is_bl = y_is_bl = False
+        bl_ticks = None
+        if agg is not None and agg.ndim == 2 and self._bl_axis is not None:
+            y_is_bl = agg.dims[0] == "baseline_id"
+            x_is_bl = agg.dims[1] == "baseline_id"
+            if x_is_bl or y_is_bl:
+                bl_ticks = self._bl_axis.tick_labels()
+        bl_suffix = (" (by length)" if self._bl_axis is not None
+                     and self._bl_axis.order == "length" else "")
+
         return PanelSpec(
             kind       = "raster",
             title      = self._effective_title(),
-            x_label    = self.x_label,
-            y_label    = self.y_label,
+            x_label    = self.x_label + (bl_suffix if x_is_bl else ""),
+            y_label    = self.y_label + (bl_suffix if y_is_bl else ""),
             x_range    = (float(self._x_range[0]), float(self._x_range[1])),
             y_range    = (float(self._y_range[0]), float(self._y_range[1])),
             x_is_time  = x_is_time,
@@ -1187,6 +1369,10 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             theme      = self._theme_hint(),
             x_unit     = self._x_info.unit,
             y_unit     = self._y_info.unit,
+            x_origin   = self._x_origin,
+            y_origin   = self._y_origin,
+            x_ticks    = bl_ticks if x_is_bl else None,
+            y_ticks    = bl_ticks if y_is_bl else None,
         )
 
     def _bands_with_mappings(self, spec, viewport=None):
@@ -1337,6 +1523,12 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             # since there's nothing to warm for a panel that isn't
             # even shown yet.
             self._ensure_identity_tables(polarization=self._polarization)
+            # Elapsed-time labels count from the first cell's centre.
+            self._x_origin, self._y_origin = float(x_range[0]), float(y_range[0])
+            # Baselines side by side in this panel's order, then ranges
+            # that reach the cells' edges (see raster_grid).
+            agg = self._place_baselines(agg, primary=True)
+            x_range, y_range = self._grid_extent(agg, x_range, y_range)
 
         self._agg          = agg
         self._overlay_budget = budget
@@ -1362,7 +1554,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         # duplicated the logic and could not distinguish `defer` at all.
         if defer:
             self._degenerate_reason = "not rendered yet"
-        elif agg.shape[0] < 2 or agg.shape[1] < 2:
+        elif agg.shape[0] < 1 or agg.shape[1] < 1:
             self._degenerate_reason = (
                 f"aggregation too small to draw ({agg.shape[1]}x"
                 f"{agg.shape[0]} cells)")
@@ -1384,18 +1576,9 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                       self._degenerate_reason)
             img32 = np.zeros((self._height, self._width), dtype=np.uint32)
         else:
-            # Same resample rule as _shade_viewport.  Previously this
-            # call was bare, taking Datashader's "linear" default, so
-            # the initial full-extent view was interpolated while every
-            # post-zoom view was not.  See _resample_method.
-            interpolate = self._resample_method(agg, (x0, x1), (y0, y1))
-            cvs    = ds.Canvas(
-                plot_width  = self._width,
-                plot_height = self._height,
-                x_range     = (x0, x1),
-                y_range     = (y0, y1),
-            )
-            ds_agg = self._resample(cvs, agg, interpolate)
+            # Same drawing rule as _shade_viewport: cells at their true
+            # coordinates (see _resample).
+            ds_agg = self._resample(agg, (x0, x1), (y0, y1))
             shaded = self._shade_agg(ds_agg)
             img32  = _img_to_uint32(shaded)
             self._apply_flag_overlays(img32, (x0, x1), (y0, y1))
@@ -1420,7 +1603,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
     ) -> dict:
         """Two-level pan/zoom: Level-1 Datashader resample or Level-2 re-query."""
         agg = self._agg
-        if agg is not None and agg.shape[0] >= 2 and agg.shape[1] >= 2:
+        if agg is not None and agg.shape[0] >= 1 and agg.shape[1] >= 1:
             agg_cell_w = (self._x_range[1] - self._x_range[0]) / agg.shape[1]
             agg_cell_h = (self._y_range[1] - self._y_range[0]) / agg.shape[0]
             needs_requery = (
@@ -1467,8 +1650,12 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
 
         px, py = self._data_to_pixel(x, y)
         if px is None:
+            # Inside the plot but in no cell: a gap between scans or
+            # spectral windows.  Say so, rather than reporting the
+            # nearest cell as though the cursor were on it.
             return self._probe_envelope(
-                "out_of_range", "<i>out of range</i>", x=x, y=y,
+                "no_data", "<i>no data here (a gap in the data)</i>",
+                x=x, y=y,
             )
         try:
             info  = self._probe_raster_pixel_local(px, py)
@@ -1540,18 +1727,31 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         y_coords = agg.coords[y_dim_name].values
         x_centre = float(x_coords[gx])
         y_centre = float(y_coords[gy])
-        x_range  = _cell_bounds(x_coords, gx)
-        y_range  = _cell_bounds(y_coords, gy)
+        x_range  = _cell_bounds(x_coords, gx, self._axis_half(x_dim_name))
+        y_range  = _cell_bounds(y_coords, gy, self._axis_half(y_dim_name))
 
         t_range = bl_range = freq_range = None
         if x_dim_name == "time":
             t_range = x_range
         elif y_dim_name == "time":
             t_range = y_range
-        if x_dim_name == "baseline_id":
-            bl_range = x_range
-        elif y_dim_name == "baseline_id":
-            bl_range = y_range
+        # A Baseline axis is in display positions: name the baseline
+        # through the panel's mapping (an exact id, not a range of ids,
+        # which would be meaningless in length order).
+        bl_ids = None
+        bl_pos = (x_centre if x_dim_name == "baseline_id"
+                  else y_centre if y_dim_name == "baseline_id" else None)
+        bl_number = bl_length = None
+        if bl_pos is not None:
+            axis = self._bl_axis
+            if axis is not None and axis.id_at(bl_pos) is not None:
+                i = int(np.floor(bl_pos + axis.HALF))
+                bl_number = axis.ids[i]
+                bl_ids = [bl_number]
+                if i < len(axis.lengths) and np.isfinite(axis.lengths[i]):
+                    bl_length = float(axis.lengths[i])
+            else:
+                bl_range = x_range if x_dim_name == "baseline_id" else y_range
         if x_dim_name == "frequency":
             freq_range = x_range
         elif y_dim_name == "frequency":
@@ -1567,9 +1767,18 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 freq_range = inv
 
         identity = self._match_identity(
-            t_range=t_range, bl_range=bl_range, freq_range=freq_range,
+            t_range=t_range, bl_range=bl_range, bl_ids=bl_ids,
+            freq_range=freq_range,
             polarization=self._polarization,
         )
+
+        # The readout names the baseline by its number (the one the
+        # sidebar's Baseline table shows), not by where it is drawn.
+        if bl_number is not None:
+            if x_dim_name == "baseline_id":
+                x_centre = float(bl_number)
+            else:
+                y_centre = float(bl_number)
 
         return {
             "value":    value,
@@ -1577,6 +1786,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             "y_range":  y_range,
             "x_centre": x_centre,
             "y_centre": y_centre,
+            "baseline_length_m": bl_length,
             **identity,
         }
 
@@ -1739,55 +1949,25 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         x_range: tuple[float, float],
         y_range: tuple[float, float],
     ) -> str:
-        """Datashader upsample method for rendering *agg* into *x/y_range*.
+        """Whether drawing *agg* into *x/y_range* upsamples or downsamples.
 
         Returns ``"nearest"`` when either display axis is being
-        **upsampled** — that is, when one agg cell spans more than one
-        screen pixel — and ``"linear"`` otherwise.
+        **upsampled** -- one agg cell spans more than one screen pixel --
+        and ``"linear"`` otherwise, or the constructor's
+        ``raster_interpolate`` if that was forced.
 
-        Why this matters, and why it is shared
-        --------------------------------------
-        ``Canvas.raster()`` defaults to ``upsample_method="linear"``.
-        Linear interpolation presumes both axes are continua, and on a
-        visibility raster neither is:
-
-        * ``baseline_id`` is a categorical index.  Adjacent IDs are not
-          physically adjacent baselines, so a value interpolated between
-          baseline 40 and 41 corresponds to no baseline at all.
-        * ``time`` has inter-scan gaps.  Interpolating across one invents
-          data spanning minutes during which nothing was observed.  (The
-          same non-uniformity that produced the ``_cell_bounds`` defect
-          in the probe path.)
-
-        It also dilutes exactly the features this tool exists to find.
-        A single bad integration at amplitude 90 against a background of
-        10 renders at 82.1 (8.8% low) at a 2.5x upsample ratio and 85.9
-        (4.6% low) at 5x -- and the loss is *worst* at low ratios, where
-        screen pixels straddle sample points rather than landing near
-        them.  Ratios of 2-5x are the common regime for a few hundred
-        timestamps on a 500 px panel.  A marginal outlier diluted below
-        visual threshold in the full-extent view is one the astronomer
-        never zooms in on.
-
-        Finally, ``_data_to_pixel`` maps hover coordinates to the **agg
-        grid**, so the probe reports true cell values while a linearly
-        interpolated image shows fabricated intermediate ones.  On a
-        smoothed gradient the displayed colour varies while every probe
-        returns the same number, and the probe is the one that is right.
-
-        This was previously computed only in ``_shade_viewport``;
-        ``_render`` called ``cvs.raster(agg)`` bare and so took the
-        ``"linear"`` default.  Since the initial full-extent view is
-        routinely upsampling in time (a few tens of timestamps stretched
-        over ~500 screen rows), the first image the user saw was
-        interpolated and every image after the first zoom was not.
-        Extracted here so the two paths cannot diverge again.
-
-        Note that the test is an ``or`` across axes: if *either* axis
-        upsamples, ``"nearest"`` is used for both.  Datashader takes a
-        single upsample method for the whole resample, and preserving
-        true sample values is the safer failure direction for a tool
-        whose purpose is spotting bad data.
+        Kept for callers that ask which regime a view is in.  **The
+        image itself no longer depends on it** (2026-10-07): ``_resample``
+        always draws an upsampled cell with its true value and a
+        downsampled pixel as the mean of its cells, which is what
+        ``"nearest"`` and ``"linear"`` meant in those two regimes.  What
+        is gone is linear *interpolation* between cells, which was only
+        ever reachable by forcing ``raster_interpolate="linear"`` and was
+        wrong for this display: adjacent baselines are not neighbours,
+        a gap between scans is not data, and a single bad integration at
+        amplitude 90 against a background of 10 rendered at 82.1 at a
+        2.5x upsample.  ``raster_interpolate`` is still accepted so
+        existing calls do not fail.
         """
         if self._raster_interpolate != "auto":
             return self._raster_interpolate
@@ -1812,24 +1992,10 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         x0, x1 = x_range
         y0, y1 = y_range
 
-        if (
-            agg is None
-            or agg.shape[0] < 2
-            or agg.shape[1] < 2
-            or x0 == x1
-            or y0 == y1
-        ):
+        if not self._drawable(agg, (x0, x1), (y0, y1)):
             return np.zeros((self._height, self._width), dtype=np.uint32)
 
-        interpolate = self._resample_method(agg, x_range, y_range)
-
-        cvs    = ds.Canvas(
-            plot_width  = self._width,
-            plot_height = self._height,
-            x_range     = (x0, x1),
-            y_range     = (y0, y1),
-        )
-        ds_agg = self._resample(cvs, agg, interpolate)
+        ds_agg = self._resample(agg, (x0, x1), (y0, y1))
         shaded = self._shade_agg(ds_agg)
         return self._apply_flag_overlays(_img_to_uint32(shaded), (x0, x1), (y0, y1))
 
@@ -1859,6 +2025,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 if main is not None and oagg.ndim > 2:
                     extra = [d for d in oagg.dims if d not in main.dims]
                     oagg = oagg.min(dim=extra, skipna=True).transpose(*main.dims)
+                # On the positions the image itself was laid out in.
+                oagg = self._place_baselines(oagg)
                 out.append((rgba, oagg))
             except Exception:
                 log.debug("flag overlay query failed", exc_info=True)
@@ -1874,16 +2042,22 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
     def _apply_flag_overlays(self, img32, x_range, y_range):
         """Paint the overlays over *img32* for the viewport (in place)."""
         for rgba, oagg in getattr(self, "_overlay_aggs", ()) or ():
-            if oagg is None or oagg.shape[0] < 2 or oagg.shape[1] < 2:
+            if oagg is None or oagg.ndim != 2 or oagg.shape[0] < 1 or oagg.shape[1] < 1:
                 continue
             try:
-                cvs = ds.Canvas(plot_width=img32.shape[1], plot_height=img32.shape[0],
-                                x_range=tuple(x_range), y_range=tuple(y_range))
-                # "min" keeps a cell containing any changed sample visible
-                # when several cells fall in one pixel.
-                v = np.asarray(cvs.raster(oagg, interpolate="nearest", agg="min").values)
+                # A cell is painted when its fraction is below 1.  "any"
+                # keeps a cell containing a changed sample visible when
+                # several cells fall in one pixel; cells are placed by
+                # the same rule as the image (raster_grid).
+                ov = np.asarray(oagg.values, dtype=np.float64)
                 with np.errstate(invalid="ignore"):
-                    mask = np.isfinite(v) & (v < 1.0 - 1e-9)
+                    hit = (np.isfinite(ov) & (ov < 1.0 - 1e-9)).astype(np.float64)
+                y_name, x_name = oagg.dims
+                mask = _rg.resample(
+                    hit, oagg.coords[y_name].values, oagg.coords[x_name].values,
+                    tuple(x_range), tuple(y_range), img32.shape[1], img32.shape[0],
+                    y_half=self._axis_half(y_name), x_half=self._axis_half(x_name),
+                    how="any") > 0
                 _composite_flag_mask(img32, mask, rgba)
             except Exception:
                 log.debug("flag overlay composite failed", exc_info=True)
@@ -1892,7 +2066,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
     def _data_to_pixel(
         self, x: float, y: float
     ) -> tuple[Optional[int], Optional[int]]:
-        """Map data-space (x, y) to agg grid indices (px, py)."""
+        """Map data-space (x, y) to agg grid indices (px, py), or
+        ``(None, None)`` when the point is in a gap between cells."""
         if self._agg is None:
             return None, None
         agg        = self._agg
@@ -1904,10 +2079,22 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         y_coords = agg.coords[y_dim_name].values
         if len(x_coords) == 0 or len(y_coords) == 0:
             return None, None
-        px = int(np.argmin(np.abs(x_coords - x)))
-        py = int(np.argmin(np.abs(y_coords - y)))
-        h, w = agg.shape
-        return max(0, min(px, w - 1)), max(0, min(py, h - 1))
+        # The cell that contains the point -- not the nearest centre,
+        # which in a gap is a cell the cursor is not on.  A point beyond
+        # either end of an axis still clips to the end cell, as it
+        # always has (callers range-check first).
+        def find(coords, v, half):
+            ext = _rg.extent(coords, half)
+            if v <= ext[0]:
+                return int(np.argmin(coords))
+            if v >= ext[1]:
+                return int(np.argmax(coords))
+            return _rg.locate(coords, v, half)
+        px = find(x_coords, x, self._axis_half(x_dim_name))
+        py = find(y_coords, y, self._axis_half(y_dim_name))
+        if px < 0 or py < 0:
+            return None, None
+        return px, py
 
     def _register_extra_comm_handlers(self) -> None:
         self._comm.register(self._msg_update_axes, self._handle_update_axes_raster)

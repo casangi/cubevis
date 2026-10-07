@@ -104,6 +104,13 @@ One reduction framework, several quantities.
 
 ### H3. Baseline iteration and ordering (M)
 
+*Status 2026-10-07 (second session): complete. The Time x Baseline
+raster orders its baselines by number or by length (per panel,
+`baseline_order`), through one position-to-baseline mapping used by the
+image, ticks, readout, flag boxes and overlays. The same work fixed the
+image not lining up with its axes on any axis with gaps; see
+`hrs_h4_raster_axes.md`.*
+
 *Status 2026-10-07: phase waterfall preset, cyclic Phase colormap and H1b
 delivered. Not done: sorting the Time x Baseline raster by length. The
 baseline axis is the numeric `baseline_id` everywhere (raster coordinate,
@@ -130,6 +137,14 @@ colormap, and H1b.*
   sorted order matches lengths computed from antenna positions.
 
 ### H4. All-baseline Time x Frequency raster (FTFLG view) (M)
+
+*Status 2026-10-07: the view itself already works (Time x Channel with
+no baseline ticked reduces over the selected baselines, and a flag box
+there applies to all of them). Remaining: how baselines are combined
+(the panel's Vector default adds different baselines coherently, which
+suits only a calibrated point source; a survey for interference wants
+the mean or the maximum of the per-baseline amplitudes), a preset, and
+stating "N baselines" before commit.*
 
 - Allow baseline to be a reduced dimension for Time x Frequency / Channel.
   Reduction choices: vector mean, scalar mean, and max (max finds RFI on a
@@ -241,3 +256,4 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-06 | `75faa2b` | Status-area help made real for non-text controls: new `EvHover` wrapper model (Python + TypeScript), cubevisjs bundle rebuilt, `description` tooltips removed. Phase RMS vs Channel on TW Hya now shows the expected two populations (Darrell's screenshot) |
 | 2026-10-07 | `dc58f0e` | Housekeeping before the next slice. Fixed: `equalize_histogram` crash on a narrow float32 range (cast to float64); TS4113 in `visibility_raster.ts` (`static override __name__`; type-only, rebuilt bundle differs only in minifier variable names, so the committed bundles are kept). Long default titles now wrap to two lines in a smaller font. Still open, by choice: Correlation as a raster axis (not implemented, says so); multi-SPW Baseline x Time shows the first SPW; H1b phase-safe display resample |
 | 2026-10-07 | `4869088` | Combined slice closing H2 and most of H3: presets `phaserms-time/-freq/-uvdist` and `phase-waterfall` (toolbar buttons now built from a table); `AMP_VDIFF` / `PHASE_DIFF` raster quantities; Phase drawn with a cyclic colormap on fixed linear -180..180 and resampled as a circular mean (H1b); status-area help for the remaining gear-tab controls, the data column and the whole toolbar (toolbar tooltips removed). Fixed on the way: `np.histogram` crash on constant-amplitude data at three more sites; colour bar tick "-4.22e-15" shown as 0. Not done: baseline-length ordering (moved to H4/H5, see H3). Two-line title artefact not reproduced headlessly (Bokeh 3.10, Chromium). Handoff note: `hrs_handoff_2026-10-07.md` |
+| 2026-10-07 | `693c99c` | Second session. Found: the raster image was drawn with rows and columns evenly spaced (Datashader) while ticks, readout and flag boxes used real coordinates, so they disagreed on any axis with gaps (time between scans; a Baseline axis after an antenna selection). Fixed with one cell rule (`raster_grid.py`) used by image, readout, flag engine and overlays; gaps are drawn blank. Baseline axis now in positions with no holes, ordered by number or length (`baseline_order`, closes H3). Restored the `dc58f0e` hover-region change lost in `693c99c`. Found, not fixed: zoom re-query of a decimated raster (Channel axis raises; zooming back out leaves a blank plot). Note: `hrs_h4_raster_axes.md` |

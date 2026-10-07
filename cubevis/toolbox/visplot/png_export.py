@@ -298,11 +298,17 @@ def _style_axes(ax, theme: Theme, spec: Optional[PanelSpec],
         # not the viewport's -- so a zoomed export keeps the same tick
         # vocabulary as the unzoomed one, exactly as the browser does.
         ax.xaxis.set_major_formatter(
-            mpl_formatter(src.x_is_time, src.x_range[0],
-                          src.axis_scale("x")[0]))
+            mpl_formatter(src.x_is_time, src.axis_origin("x"),
+                          src.axis_scale("x")[0], src.axis_ticks("x")))
         ax.yaxis.set_major_formatter(
-            mpl_formatter(src.y_is_time, src.y_range[0],
-                          src.axis_scale("y")[0]))
+            mpl_formatter(src.y_is_time, src.axis_origin("y"),
+                          src.axis_scale("y")[0], src.axis_ticks("y")))
+        # An axis drawn in whole positions has labels only at integers.
+        from matplotlib.ticker import MaxNLocator
+        if src.axis_ticks("x"):
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=8, integer=True))
+        if src.axis_ticks("y"):
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=8, integer=True))
     ax.grid(True, color=theme.grid, linewidth=0.5, alpha=0.6)
     ax.set_axisbelow(True)
 

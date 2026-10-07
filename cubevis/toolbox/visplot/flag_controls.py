@@ -266,8 +266,22 @@ class FlagController:
             req.update(x_axis=x_ax.name, y_axis=y_ax.name,
                        polarization=getattr(panel, "_polarization", None),
                        quantity=getattr(getattr(panel, "_quantity", None), "name", None))
-            prov = (f"raster box {x_ax.name} {_rng(x_ax, req['x0'], req['x1'])} x "
-                    f"{y_ax.name} {_rng(y_ax, req['y0'], req['y1'])} "
+            # A raster's Baseline axis is drawn in positions (side by
+            # side, in number or length order), not baseline numbers.
+            # The engine needs the same mapping to resolve the box; the
+            # record names the baselines, since a position means nothing
+            # once the plot is gone.
+            bl_axis = getattr(panel, "_bl_axis", None)
+            if bl_axis is not None and Axis.BASELINE in (x_ax, y_ax):
+                req["baseline_order"] = [int(i) for i in bl_axis.ids]
+
+            def _span(ax, a, b):
+                if ax == Axis.BASELINE and bl_axis is not None:
+                    return _baseline_span(bl_axis, a, b)
+                return _rng(ax, a, b)
+
+            prov = (f"raster box {x_ax.name} {_span(x_ax, req['x0'], req['x1'])} x "
+                    f"{y_ax.name} {_span(y_ax, req['y0'], req['y1'])} "
                     f"({req['polarization']})")
         else:
             layers = scatter_layer_entries(panel)
@@ -1505,6 +1519,25 @@ def _region_details(d) -> str:
 # ---------------------------------------------------------------------- #
 
 _MJD_UNIX = 40587.0 * 86400.0
+
+
+def _baseline_span(bl_axis, a, b) -> str:
+    """The baselines a box covers along a displayed Baseline axis, for a
+    provenance string: ``[#3 DA41&DA45]`` or ``[#3 DA41&DA45 .. #71
+    DA44&DV23, 12 baselines by length]``."""
+    lo, hi = min(float(a), float(b)), max(float(a), float(b))
+    ids = bl_axis.ids_in(lo, hi)
+    if not ids:
+        return "[none]"
+    names = dict(zip(bl_axis.ids, bl_axis.names))
+
+    def one(i):
+        n = names.get(i, "")
+        return f"#{i} {n}".strip()
+    if len(ids) == 1:
+        return f"[{one(ids[0])}]"
+    return (f"[{one(ids[0])} .. {one(ids[-1])}, {len(ids)} baselines"
+            f" by {bl_axis.order}]")
 
 
 def _rng(axis, a, b) -> str:

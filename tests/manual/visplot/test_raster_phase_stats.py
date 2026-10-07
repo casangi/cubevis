@@ -1451,29 +1451,90 @@ class TestScatterPanelSettings:
 
 
 class TestStatusAreaHelp:
+    """Help in the status area for controls that are not text inputs.
 
-    def _has_hint(self, widget, hint):
+    Stock Bokeh widgets emit no MouseEnter / MouseLeave, so each such
+    control sits inside an ``EvHover`` wrapper (cubevis.bokeh.models)
+    that does, and the help is wired to the wrapper.  What can be
+    checked without a browser: the wrapper is in the layout around the
+    right control, and its two callbacks show and hide the right Div.
+    That the browser-side EvHover view fires the events is in the
+    rebuilt cubevisjs bundle and needs a browser.
+    """
+
+    @staticmethod
+    def _wrappers(vp):
+        from cubevis.bokeh.models import EvHover
+        found = {}
+        for root in (vp._sidebar_col,):
+            for m in root.references():
+                if isinstance(m, EvHover):
+                    found[m.child.id] = m
+        return found
+
+    def _has_hint(self, wrap, hint):
         from bokeh.events import MouseEnter, MouseLeave
-        enter = widget.js_event_callbacks.get(MouseEnter.event_name, [])
-        leave = widget.js_event_callbacks.get(MouseLeave.event_name, [])
+        enter = wrap.js_event_callbacks.get(MouseEnter.event_name, [])
+        leave = wrap.js_event_callbacks.get(MouseLeave.event_name, [])
         return (any(cb.args.get("hint") is hint and "hint.visible = true" in cb.code
                     for cb in enter)
                 and any(cb.args.get("hint") is hint and "hint.visible = false" in cb.code
                         for cb in leave))
 
-    def test_gear_tab_controls_have_help(self, sim_plotter):
+    def test_every_non_text_control_with_help_is_wrapped(self, sim_plotter):
         vp = sim_plotter
+        w = self._wrappers(vp)
+        expect = []
         for slot in vp._slots:
             r = vp._panel_axis_widgets[slot.id]["raster"]
             s = vp._panel_axis_widgets[slot.id]["scatter"]
-            assert self._has_hint(r["avg_sel"], vp._hint_averaging)
-            assert self._has_hint(r["detrend_sel"], vp._hint_detrend)
-            assert self._has_hint(r["twin_sel"], vp._hint_twin)
-            assert self._has_hint(r["cwin_sel"], vp._hint_cwin)
-            assert self._has_hint(s["detrend_sel"], vp._hint_detrend)
-            assert self._has_hint(s["twin_sel"], vp._hint_s_twin)
-            assert self._has_hint(s["cwin_sel"], vp._hint_s_cwin)
-        assert self._has_hint(vp._antenna_mode, vp._hint_ant_mode)
+            expect += [(r["avg_sel"], vp._hint_averaging),
+                       (r["detrend_sel"], vp._hint_detrend),
+                       (r["twin_sel"], vp._hint_twin),
+                       (r["cwin_sel"], vp._hint_cwin),
+                       (s["detrend_sel"], vp._hint_detrend),
+                       (s["twin_sel"], vp._hint_s_twin),
+                       (s["cwin_sel"], vp._hint_s_cwin)]
+        expect += [(vp._antenna_mode, vp._hint_ant_mode),
+                   (vp._antenna_table, vp._hint_antenna),
+                   (vp._baseline_table, vp._hint_antenna),
+                   (vp._spw_table, vp._hint_spw),
+                   (vp._corr_cbg, vp._hint_corr)]
+        for control, hint in expect:
+            assert control.id in w, f"{type(control).__name__} is not wrapped"
+            assert self._has_hint(w[control.id], hint)
+        # Field: the wrapper encloses the title and the dropdown together.
+        field = [m for m in w.values()
+                 if vp._field_select in m.child.references()]
+        assert field and self._has_hint(field[0], vp._hint_field)
+
+    def test_the_selects_are_still_what_the_plot_code_reads(self, sim_plotter):
+        # Wrapping must not change which models the Plot request reads.
+        from bokeh.models import Select
+        vp = sim_plotter
+        a = vp._plot_js_args
+        for key in ("panel0_ra_sel", "panel0_rd_sel", "panel0_sd_sel", "panel1_st_sel"):
+            assert isinstance(a[key], Select)
+        assert a["ant_mode"] is vp._antenna_mode
+
+    def test_one_kind_of_help_only(self, sim_plotter):
+        # No Bokeh "?" description tooltips alongside the status-area
+        # help: two kinds of help in one application read as a defect.
+        vp = sim_plotter
+        for slot in vp._slots:
+            for kind in ("raster", "scatter"):
+                for key, wdg in vp._panel_axis_widgets[slot.id][kind].items():
+                    if key.endswith("_sel") and hasattr(wdg, "description"):
+                        assert wdg.description is None, key
+
+    def test_showing_one_hint_hides_the_others(self, sim_plotter):
+        from bokeh.events import MouseEnter
+        vp = sim_plotter
+        wrap = next(iter(self._wrappers(vp).values()))
+        cb = wrap.js_event_callbacks[MouseEnter.event_name][0]
+        assert "for (const h of all_hints)" in cb.code
+        assert set(h.id for h in cb.args["all_hints"]) == set(h.id for h in vp._hint_divs())
+        assert len(vp._hint_divs()) >= 14
 
     def test_help_text_says_something_and_starts_hidden(self, sim_plotter):
         vp = sim_plotter
@@ -1486,9 +1547,37 @@ class TestStatusAreaHelp:
             assert hint.visible is False and len(hint.text) > 80
             assert all(w in hint.text for w in words)
 
-    def test_missing_hint_is_harmless(self, sim_plotter):
+    def test_missing_hint_leaves_the_widget_unwrapped(self, sim_plotter):
         from bokeh.models import Select
-        assert sim_plotter._attach_hint(Select(), "no_such_hint") is False
+        sel = Select()
+        assert sim_plotter._hover(sel, "no_such_hint") is sel
+
+
+def test_ev_hover_model():
+    from bokeh.models import Select, Div
+    from bokeh.layouts import column
+    from cubevis.bokeh.models import EvHover
+    sel = Select()
+    assert EvHover(sel).child is sel
+    assert EvHover(child=column(Div(), sel), width=200).width == 200
+    with pytest.raises(ValueError):
+        EvHover()
+    with pytest.raises(ValueError):
+        EvHover(sel, child=sel)
+    assert EvHover.__module__ == "cubevis.bokeh.models._ev_hover"
+
+
+def test_ev_hover_is_in_every_shipped_bundle():
+    # The browser side of EvHover must be in the bundle for every
+    # supported Bokeh version, or the page fails to build its models.
+    import pathlib, cubevis
+    js = pathlib.Path(cubevis.__file__).parent / "__js__"
+    bundles = sorted(js.glob("bokeh-*/cubevisjs.min.js"))
+    assert len(bundles) >= 5
+    for b in bundles:
+        text = b.read_text()
+        assert "cubevis.bokeh.models._ev_hover" in text, b
+        assert "cubevis.bokeh.models._ev_text_input" in text, b
 
 
 # ---------------------------------------------------------------------------
@@ -1549,19 +1638,6 @@ def test_coord_extent():
     assert coord_extent(np.array([3.0, 1.0, 2.0])) == (1.0, 3.0)
     assert coord_extent(np.array(["XX", "XY", "YY"])) == (0.0, 2.0)
     assert coord_extent(np.array([])) == (0.0, 0.0)
-
-
-def test_select_controls_carry_a_description_tooltip(sim_plotter):
-    # Stock Bokeh widgets do not emit the events the status-area help
-    # listens for, so their help is (also) a "?" tooltip.
-    from bokeh.models import Tooltip
-    vp = sim_plotter
-    r = vp._panel_axis_widgets["A"]["raster"]
-    for key in ("avg_sel", "detrend_sel", "twin_sel", "cwin_sel"):
-        assert isinstance(r[key].description, Tooltip)
-    html = r["avg_sel"].description.content.html
-    html = html if isinstance(html, str) else "".join(str(h) for h in html)
-    assert "Vector" in html and " | " not in html
 
 
 def test_plain_div_text_is_themed():

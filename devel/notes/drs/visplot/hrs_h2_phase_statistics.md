@@ -239,16 +239,27 @@ to another control is one hint Div in `_build_status_bar` plus one call.
 1. **Status-area help did not appear for the dropdowns.** My claim that
    no special widget was needed was wrong. Only cubevis's `EvTextInput`
    turns DOM mouse-enter / mouse-leave into the `MouseEnter` /
-   `MouseLeave` model events the help listens for (checked in the bundled
-   `cubevisjs.min.js`); a stock `Select`, `DataTable`, `CheckboxGroup` or
-   `RadioButtonGroup` never emits them. So `_attach_hint` is inert on
-   those, as `_focus_blur` has always been for the Field dropdown and the
-   SPW table. Interim: the same text is shown through Bokeh's own
-   `description` tooltip (a "?" beside the control's title) on the seven
-   dropdowns; the antenna switch has no help yet. Proper fix, in
-   cubevisjs: have a wrapper view (`Tip`, or a small new one) trigger the
-   two model events, as `EvTextInput`'s view does; the Python wiring is
-   already in place and would then work unchanged.
+   `MouseLeave` model events the help listens for; a stock `Select`,
+   `DataTable`, `CheckboxGroup` or `RadioButtonGroup` never emits them.
+   So the help was inert on those, as `_focus_blur` had always been for
+   the Field dropdown and the SPW table. My first answer, a Bokeh
+   `description` tooltip, put a second kind of help in the application
+   and was removed.
+   **Fix:** a new wrapper model, `EvHover` (`cubevis/bokeh/models/
+   _ev_hover.py`, `cubevisjs/src/bokeh/models/ev_hover.ts`): it holds one
+   child and triggers the two events when the pointer crosses it, with
+   `Tip`'s layout handling and no tooltip. `VisibilityPlotter._hover(
+   widget, name)` wraps a control and wires `_hint_<name>`; the wrapper
+   goes in the layout, the control itself stays what the Plot code reads.
+   Wrapped now: raster Averaging, Phase slope, Time window, Channel
+   window; the scatter's three; the Either end / Both ends switch; the
+   Antenna, Baseline and SPW tables; Correlation; and Field (title and
+   dropdown together). Showing one hint hides the others.
+   The cubevisjs bundle was rebuilt (`bokeh build`, Bokeh 3.10.0) and, as
+   with the previous bundle, the same file placed in all five
+   `__js__/bokeh-3.x` directories. The build reports one existing type
+   error, `visibility_raster.ts:63` (`static override __name__`), which
+   does not stop the output. **The browser side is untested here.**
 2. **Phase RMS vs Channel piled up to 130 deg.** Values that high need
    windows of two or three samples, so the gap rule was cutting scans into
    pieces. A scan is now a run of equal `scan_name` (or `scan_number`)
@@ -301,7 +312,7 @@ channels.
 
 ## Verified
 
-- `test_raster_phase_stats.py`: 308 passed (conditional slope removal,
+- `test_raster_phase_stats.py`: 313 passed (conditional slope removal,
   scatter settings, y label, titles and help wiring added), both backends, including the
   scatter form through the real backends and a real plotter on simulated
   data (90 of them for windows and pooled baselines: painted back, pooled, never across a gap, auto, flags,

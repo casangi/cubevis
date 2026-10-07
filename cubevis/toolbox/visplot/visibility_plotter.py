@@ -96,7 +96,7 @@ from bokeh.models import (
 )
 
 from cubevis.bokeh import BokehInit
-from cubevis.bokeh.models import BokehAppContext, Showable, EvTextInput, Tip
+from cubevis.bokeh.models import BokehAppContext, Showable, EvTextInput, EvHover, Tip
 from bokeh.models import Tooltip
 from bokeh.models.dom import HTML as BokehHTML
 from cubevis.bokeh.transport import CommMgr
@@ -4217,51 +4217,46 @@ for (const dt of other.tools) {
             cache_generation = getattr(self, "_cache_generation", 0),
         ))
 
-    def _attach_hint(self, widget, name: str) -> bool:
-        """Show the status-area help ``self._hint_<name>`` while the
-        pointer is over *widget*, exactly as the sidebar's own inputs do
-        (see ``_focus_blur`` in ``_build_sidebar``): the status row is
-        hidden and the hint shown on MouseEnter, and the reverse on
-        MouseLeave.  See the CORRECTION in the body: on stock Bokeh
-        widgets that mechanism is inert today, and the text is shown
-        through the widget's ``description`` tooltip instead.
+    def _hint_divs(self) -> list:
+        """Every status-area help Div (the ``_hint_*`` attributes)."""
+        return [v for k, v in vars(self).items()
+                if k.startswith("_hint_") and isinstance(v, Div)]
 
-        Returns False, and does nothing, if the hint or the status row
-        does not exist yet (a panel built before the status bar), so a
-        missing hint can never break building the GUI; a test checks
-        the ones that are expected are attached.
+    def _hover(self, widget, name: str):
+        """Wrap *widget* so the status-area help ``self._hint_<name>``
+        shows while the pointer is over it; returns what to put in the
+        layout in the widget's place.
+
+        The wrapper is an ``EvHover`` (cubevis.bokeh.models), which
+        reports the pointer entering and leaving it -- something stock
+        Bokeh widgets do not do, which is why, before 2026-10-06, only
+        the ``EvTextInput`` boxes showed help and the wiring on the
+        Field dropdown and the SPW table never fired.  A Bokeh input
+        widget's title is part of the widget, so wrapping a ``Select``
+        covers its title and its dropdown; for a control whose title is
+        a separate Div, wrap the column that holds both.
+
+        Showing one hint hides the others, so help is never doubled up
+        when the pointer moves straight from one control to the next.
+        If the hint or the status row does not exist, the widget is
+        returned unwrapped: missing help must never break the GUI (a
+        test checks the expected ones are present).
         """
         hint = getattr(self, f"_hint_{name}", None)
         row = getattr(self, "_status_row", None)
         if hint is None or row is None:
-            return False
-        # CORRECTION (2026-10-06, found in the browser): the status-area
-        # part below only fires for cubevis's EvTextInput, whose view is
-        # the one thing that turns DOM mouseenter / mouseleave into the
-        # MouseEnter / MouseLeave model events these callbacks listen
-        # for.  A stock Bokeh Select, DataTable, CheckboxGroup or
-        # RadioButtonGroup never emits them -- so this wiring is inert
-        # on those today (as _focus_blur's has always been for the Field
-        # dropdown and the SPW table), and becomes live the day their
-        # view, or a wrapper such as Tip, triggers the two events.
-        #
-        # Until then the same text is offered through Bokeh's own
-        # ``description`` tooltip (the "?" beside the control's title),
-        # which needs nothing from cubevisjs.  Only input widgets have
-        # one; a RadioButtonGroup gets nothing.
-        try:
-            if "description" in widget.properties() and widget.description is None:
-                widget.description = Tooltip(
-                    content=BokehHTML(hint.text.replace("  | ", "<br>")),
-                    position="right")
-        except Exception as exc:        # help must never break the GUI
-            log.debug("_attach_hint: no description tooltip for %r: %s", name, exc)
-        args = {"hint": hint, "status_row": row}
-        widget.js_on_event(MouseEnter, CustomJS(
-            args=args, code="status_row.visible = false; hint.visible = true;"))
-        widget.js_on_event(MouseLeave, CustomJS(
-            args=args, code="hint.visible = false; status_row.visible = true;"))
-        return True
+            return widget
+        kw = {}
+        if getattr(widget, "width", None) is not None:
+            kw["width"] = widget.width
+        wrap = EvHover(child=widget, **kw)
+        args = {"hint": hint, "status_row": row, "all_hints": self._hint_divs()}
+        wrap.js_on_event(MouseEnter, CustomJS(args=args, code=(
+            "for (const h of all_hints) { if (h !== hint) h.visible = false; } "
+            "status_row.visible = false; hint.visible = true;")))
+        wrap.js_on_event(MouseLeave, CustomJS(args=args, code=(
+            "hint.visible = false; status_row.visible = true;")))
+        return wrap
 
     def _tick_text_input(self, placeholder: str, dark):
         """A one-line "tick from text" box for a selection table.
@@ -4842,10 +4837,13 @@ html, body { height: 100%; margin: 0; }
         )
         # Help in the status area while the pointer is over a control
         # (2026-10-06), the same mechanism the sidebar's inputs use.
-        self._attach_hint(ra_sel, "averaging")
-        self._attach_hint(rd_sel, "detrend")
-        self._attach_hint(rt_sel, "twin")
-        self._attach_hint(rc_sel, "cwin")
+        # The wrapped forms go in the layout; the Selects themselves
+        # stay in the widgets dict below (they are what the Plot code
+        # reads and the theme restyles).
+        ra_box = self._hover(ra_sel, "averaging")
+        rd_box = self._hover(rd_sel, "detrend")
+        rt_box = self._hover(rt_sel, "twin")
+        rc_box = self._hover(rc_sel, "cwin")
 
         # Per-slot Y/X conflict indicator — an inline Div scoped to this
         # panel, not the shared self._notify_div the old single global
@@ -4885,7 +4883,7 @@ conflict_div.text = conflict ? msg : '';
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Raster ──</span>", width=_SIDEBAR_WIDTH),
-            ry_sel, rx_sel, rq_sel, ra_sel, rd_sel, rt_sel, rc_sel,
+            ry_sel, rx_sel, rq_sel, ra_box, rd_box, rt_box, rc_box,
             conflict_div,
             raster_cmap,
             info_sel.column,
@@ -4997,9 +4995,9 @@ conflict_div.text = conflict ? msg : '';
             options=_window_options(_STAT_CHAN_WINDOW_OPTIONS, _s_cw, "ch"),
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
-        self._attach_hint(sd_sel, "detrend")
-        self._attach_hint(st_sel, "s_twin")
-        self._attach_hint(sc_sel, "s_cwin")
+        sd_box = self._hover(sd_sel, "detrend")
+        st_box = self._hover(st_sel, "s_twin")
+        sc_box = self._hover(sc_sel, "s_cwin")
 
         layers = slot.scatter.layers
         cmap_widgets: list = []
@@ -5058,7 +5056,7 @@ for (let i = 0; i < cols.length; i++) {
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Scatter ──</span>", width=_SIDEBAR_WIDTH),
-            sx_sel, sy_sel, sd_sel, st_sel, sc_sel,
+            sx_sel, sy_sel, sd_box, st_box, sc_box,
             *extra_children,
             info_sel.column,
         )
@@ -5326,7 +5324,7 @@ for (let i = 0; i < cols.length; i++) {
         self._spw_text = self._tick_text_input("id, name, a~b, !id", dark)
         self._spw_select = column(
             self._spw_iter.row,
-            self._spw_table,
+            self._hover(self._spw_table, "spw"),
             self._spw_text,
             self._spw_overflow_note,
             width=_SIDEBAR_WIDTH,
@@ -5507,7 +5505,6 @@ for (let i = 0; i < cols.length; i++) {
             stylesheets     = [dark, self._table_css_dark],
             sizing_mode     = "fixed",
         )
-        _focus_blur(self._antenna_table, self._hint_antenna)
         antenna_heading = _section("Antenna", width=_IterButtons.LABEL_WIDTH,
                                    margin=(0, 0, 0, 0))
         self._antenna_iter = _IterButtons(
@@ -5533,15 +5530,14 @@ for (let i = 0; i < cols.length; i++) {
             width=_SIDEBAR_WIDTH,
             stylesheets=[dark],
         )
-        self._attach_hint(self._antenna_mode, "ant_mode")
         self._antenna_text = self._tick_text_input(
             "name, number, a~b, !name", dark)
         _focus_blur(self._antenna_text, self._hint_antenna_text)
         antenna_col = column(
             self._antenna_iter.row,
-            self._antenna_table,
+            self._hover(self._antenna_table, "antenna"),
             self._antenna_text,
-            self._antenna_mode,
+            self._hover(self._antenna_mode, "ant_mode"),
             self._antenna_note,
             width=_SIDEBAR_WIDTH,
             margin=(0, 0, 10, 0),
@@ -5569,7 +5565,6 @@ for (let i = 0; i < cols.length; i++) {
             stylesheets     = [dark, self._table_css_dark],
             sizing_mode     = "fixed",
         )
-        _focus_blur(self._baseline_table, self._hint_antenna)
         baseline_heading = _section("Baseline", width=_IterButtons.LABEL_WIDTH,
                                     margin=(0, 0, 0, 0))
         self._baseline_iter = _IterButtons(
@@ -5592,7 +5587,7 @@ for (let i = 0; i < cols.length; i++) {
         _focus_blur(self._baseline_text, self._hint_baseline_text)
         baseline_col = column(
             self._baseline_iter.row,
-            self._baseline_table,
+            self._hover(self._baseline_table, "antenna"),
             self._baseline_text,
             self._baseline_note,
             width=_SIDEBAR_WIDTH,
@@ -5602,13 +5597,13 @@ for (let i = 0; i < cols.length; i++) {
         )
 
         # Wire focus/blur on the already-created select/checkbox widgets too
-        _focus_blur(self._field_select, self._hint_field)
+        # Field, SPW table and Correlation: wrapped with _hover() where
+        # they are placed in the layout (2026-10-06).  _focus_blur on
+        # them never fired -- stock widgets emit no MouseEnter.
         # The table, not the column wrapper: _focus_blur attaches
         # MouseEnter/MouseLeave, which a layout container does not
         # emit, and the hint would silently never appear.
-        _focus_blur(self._spw_table,    self._hint_spw)
         _focus_blur(self._spw_text,     self._hint_spw_text)
-        _focus_blur(self._corr_cbg,     self._hint_corr)
 
         # ---- Global raster/scatter axis sections removed (Group 3 piece
         # 2, added 2026-07-31). This sidebar section used to build
@@ -5664,8 +5659,8 @@ for (let i = 0; i < cols.length; i++) {
         self._sidebar_col = column(
             path_div,
             _section("Data"),
-            self._col_select, field_col, self._spw_select,
-            corr_label, self._corr_cbg,
+            self._col_select, self._hover(field_col, "field"), self._spw_select,
+            corr_label, self._hover(self._corr_cbg, "corr"),
             scan_inp, antenna_col, baseline_col, time_inp, uv_inp,
             # "Axes" header removed (Group 3 piece 2, 2026-07-31) along
             # with self._raster_axis_section/_scatter_axis_section that
@@ -8552,7 +8547,7 @@ if (x != null && !isNaN(x)) {
         self._hint_baseline_text = _hint("")
         # Controls in the gear tabs and the antenna switch (2026-10-06):
         # what each one does and when to use it.  Fixed text, so filled
-        # here; attached to the widgets by _attach_hint().
+        # here; attached to the controls by _hover().
         self._hint_averaging  = _hint("<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities, then take amplitude / phase. Amplitude drops where samples do not line up (noise, uncalibrated phase, a delay across the averaged channels). What AIPS and plotms do  | <b>Scalar</b>: average the amplitudes themselves; shows signal plus noise level, no loss from decorrelation  | Vector next to Scalar on two panels shows where coherence is lost")
         self._hint_detrend    = _hint("<b>Phase slope</b> \u2014 for Phase RMS and Coherence  | <b>Remove</b>: take out a linear phase slope (a delay across frequency, a rate in time) before measuring the scatter, wherever the data clearly show one. Use for data that are not yet fringe-fitted  | <b>Keep</b>: measure the data as they are; a delay or rate then shows up as large scatter and low coherence  | On noise-dominated or already calibrated data the two give the same picture")
         self._hint_twin       = _hint("<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, one scan where it is not  | <b>Off</b>: no windows  | <b>Scan</b> or a length: each scan, or pieces of that length; never across a gap  | Longer windows are steadier but blur changes in time; on the plot they show as blocks")

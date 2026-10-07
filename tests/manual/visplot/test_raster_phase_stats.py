@@ -1676,3 +1676,89 @@ def test_plain_div_text_is_themed():
     from cubevis.toolbox.visplot import visibility_plotter as vp
     assert ".bk-clearfix { color:" in vp._DARK_WIDGET_CSS
     assert ".bk-clearfix { color:" in vp._LIGHT_WIDGET_CSS
+
+
+# ---------------------------------------------------------------------------
+# 15. Long titles on two lines; unrelated fixes (2026-10-07)
+# ---------------------------------------------------------------------------
+
+class TestTwoLineTitles:
+
+    def test_short_titles_are_untouched(self):
+        from cubevis.toolbox.visplot.visibility_plot import wrap_title, title_font_size
+        t = "Amplitude (vector)  [Time vs Baseline]  pol=XX"
+        assert wrap_title(t) == t and title_font_size(t) == "13px"
+        assert wrap_title("") == "" and wrap_title(None) is None
+
+    def test_long_scatter_title_breaks_before_the_settings(self):
+        from cubevis.toolbox.visplot.visibility_plot import wrap_title, title_font_size
+        t = ("Phase RMS XX, Phase RMS YY  vs  UV Distance  "
+             "(slope removed, per scan x whole band)")
+        w = wrap_title(t)
+        assert w.split("\n") == ["Phase RMS XX, Phase RMS YY  vs  UV Distance",
+                                 "(slope removed, per scan x whole band)"]
+        assert title_font_size(w) == "11px"
+
+    def test_long_raster_title_keeps_axes_together(self):
+        from cubevis.toolbox.visplot.visibility_plot import wrap_title
+        t = "Phase RMS (slope removed, 60 s x 16 ch)  [Time vs Channel]  pol=XX"
+        a, b = wrap_title(t).split("\n")
+        assert a == "Phase RMS (slope removed, 60 s x 16 ch)"
+        assert b == "[Time vs Channel]  pol=XX"
+
+    def test_never_breaks_right_after_vs_or_twice(self):
+        from cubevis.toolbox.visplot.visibility_plot import wrap_title
+        w = wrap_title("A" * 40 + "  vs  " + "B" * 40)
+        assert not w.split("\n")[0].endswith("vs")
+        assert wrap_title(w) == w                      # already two lines
+        assert wrap_title("X" * 200) == "X" * 200      # nowhere to break
+
+    def test_panels_use_it_but_custom_titles_do_not(self):
+        r = _WinReader()
+        pytest.importorskip("datashader")
+        from cubevis.toolbox.visplot.visibility_raster import VisibilityRaster
+        vr = VisibilityRaster(r, SelectionSpec(), Axis.TIME, Axis.CHANNEL,
+                              quantity=Axis.PHASE_RMS, stat_time_window=60,
+                              stat_chan_window=16)
+        assert "\n" in vr._effective_title()
+        assert vr.figure.title.text_font_size == "11px"
+        long_custom = "My own title " * 8
+        vr2 = VisibilityRaster(r, SelectionSpec(), Axis.TIME, Axis.CHANNEL,
+                               quantity=Axis.PHASE_RMS, title=long_custom)
+        assert vr2._effective_title() == long_custom
+
+    def test_scatter_title_through_the_plotter(self, sim_plotter):
+        import asyncio
+        vp = sim_plotter
+        msg = _scatter_msg(vp, x="UVDIST")
+        msg["correlation"] = "XX"
+        resp = asyncio.run(vp._handle_plot(msg))
+        title = resp["panels"]["B"]["title"]
+        assert title.endswith("(slope removed, per scan x whole band)")
+        # One polarization: short enough for one line.
+        assert ("\n" in title) == (len(title.replace("\n", "  ")) > 64)
+
+    def test_response_handler_sets_the_size_for_both_panels(self):
+        import inspect
+        from cubevis.toolbox.visplot import visibility_plotter as vpm
+        src = inspect.getsource(vpm)
+        for n in (0, 1):
+            assert f"p{n}_fig.title.text_font_size =" in src
+        assert '"title_size_two":' in src and "String.fromCharCode(10)" in src
+
+
+def test_equalize_histogram_survives_a_narrow_float32_range():
+    # Values within ~0.8% of each other (not identical) in float32 used
+    # to raise "Too many bins for data range" and take the render down.
+    from cubevis.toolbox.visplot.colormap_scaling import equalize_histogram
+    rng = np.random.default_rng(80)
+    for spread in (1e-2, 1e-3, 1e-4, 1e-6, 0.0):
+        v = (1.0 + spread * rng.random(2000)).astype(np.float32)
+        out = equalize_histogram(v)
+        assert out.shape == v.shape and np.isfinite(out).all()
+        assert out.min() >= 0.0 and out.max() <= 1.0
+    # ...and ordinary data map the same way as before.
+    v = rng.random(5000).astype(np.float32)
+    out = equalize_histogram(v)
+    order = np.argsort(v)
+    assert np.all(np.diff(out[order]) >= -1e-12)

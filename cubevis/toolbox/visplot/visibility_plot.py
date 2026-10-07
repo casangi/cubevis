@@ -406,6 +406,53 @@ def _axis_label(axis: "Axis") -> str:
 # Base class
 # ---------------------------------------------------------------------------
 
+#: A default panel title longer than this is put on two lines.
+TITLE_WRAP_CHARS = 64
+#: Title font size on one line (Bokeh's own default) and on two.
+TITLE_FONT_SIZE = "13px"
+TITLE_FONT_SIZE_TWO_LINE = "11px"
+
+
+def wrap_title(text: str, limit: int = TITLE_WRAP_CHARS) -> str:
+    """Put a long default title on two lines.
+
+    Default titles are built from parts joined by two spaces -- "Phase
+    RMS XX, Phase RMS YY  vs  UV Distance  (slope removed, per scan x
+    whole band)" -- and with the statistic's settings in them they no
+    longer fit above a side-by-side panel (the end was cut off,
+    2026-10-06).  A title longer than *limit* is broken at whichever of
+    those joins leaves the two lines most nearly equal; one that has no
+    join, or already contains a line break, is returned as it is.  The
+    caller shows a two-line title in ``TITLE_FONT_SIZE_TWO_LINE``.
+    """
+    if not text or len(text) <= limit or "\n" in text:
+        return text
+    best = None
+    start = 0
+    while True:
+        j = text.find("  ", start)
+        if j < 0:
+            break
+        left, right = text[:j].rstrip(), text[j:].lstrip()
+        if left and right:
+            # "vs" belongs with what follows it.
+            if left.endswith(" vs") or left == "vs":
+                pass
+            else:
+                score = max(len(left), len(right))
+                if best is None or score < best[0]:
+                    best = (score, left, right)
+        start = j + 2
+    if best is None:
+        return text
+    return f"{best[1]}\n{best[2]}"
+
+
+def title_font_size(text: str) -> str:
+    """The font size for a panel title: smaller when it has two lines."""
+    return TITLE_FONT_SIZE_TWO_LINE if text and "\n" in text else TITLE_FONT_SIZE
+
+
 CURSOR_PLACEHOLDER_HTML = "<i>Hover over the plot to inspect a pixel</i>"
 """What a panel's cursor readout shows before anything has been probed.
 
@@ -1207,6 +1254,10 @@ class VisibilityPlot(Model):
         # Client-side only (bokeh.models.Toolbar.autohide) — no server
         # round-trip, no JS beyond what Bokeh already generates for it.
         self._fig.toolbar.autohide = self._compact_toolbar
+        # A long default title comes back from _effective_title() on two
+        # lines (wrap_title); show those a little smaller.
+        if self._fig.title is not None:
+            self._fig.title.text_font_size = title_font_size(self._fig.title.text)
 
         # Subclass adds its glyphs (image_rgba, scatter, etc.)
         self._build_glyphs()

@@ -41,7 +41,7 @@ from bokeh.models import ColumnDataSource
 import dataclasses
 from .visibility_plot import _composite_flag_mask
 from .visibility_plot import (
-    VisibilityPlot, _img_to_uint32, _json_num,
+    VisibilityPlot, _img_to_uint32, _json_num, wrap_title,
 )
 from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
@@ -409,7 +409,9 @@ class VisibilityRaster(VisibilityPlot):
         return "visibility raster"
 
     def _effective_title(self) -> str:
-        return self._title or _auto_title(
+        # A long default title goes on two lines (wrap_title); a title
+        # the caller supplied is left exactly as given.
+        return self._title or wrap_title(_auto_title(
             self._quantity, self._y_info.label, self._x_info.label,
             self._polarization, self._averaging, self._detrend,
             describe_windows(
@@ -417,7 +419,7 @@ class VisibilityRaster(VisibilityPlot):
                 time_displayed=Axis.TIME in (self._y_dim, self._x_dim),
                 chan_displayed=any(a in (self._y_dim, self._x_dim)
                                    for a in (Axis.CHANNEL, Axis.FREQUENCY))),
-        )
+        ))
 
     def set_cmap(self, cmap) -> None:
         """Swap the colormap and re-shade from the cached agg.

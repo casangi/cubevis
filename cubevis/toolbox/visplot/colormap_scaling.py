@@ -214,6 +214,15 @@ def equalize_histogram(
     if ref_finite.size == 0:
         return values  # nothing to equalize against; pass through
 
+    # float64 for the histogram (2026-10-07).  In float32, values that
+    # differ by less than about 0.8% without being identical cannot be
+    # split into 65536 distinct bin edges, and np.histogram raises "Too
+    # many bins for data range" -- which took down the whole render.
+    # Met on unit-amplitude synthetic data; a model column of nearly
+    # constant amplitude would do the same.  float64 has the resolution
+    # to spare, and the result is float64 below in any case.
+    ref_finite = np.asarray(ref_finite, dtype=np.float64)
+
     hist, bin_edges = np.histogram(ref_finite, bins=nbins)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
     keep = hist > 0

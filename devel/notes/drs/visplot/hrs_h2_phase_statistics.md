@@ -282,6 +282,23 @@ to another control is one hint Div in `_build_status_bar` plus one call.
    text had no colour rule in the shared widget stylesheet. Added to the
    dark and light sheets.
 
+## Titles on two lines (2026-10-07)
+
+With the statistic's settings in it, a default title no longer fitted
+above a side-by-side panel. A default title longer than 64 characters is
+now broken at whichever of its double-space joins leaves the two lines
+most nearly equal (never straight after "vs"), and shown at 11px instead
+of 13px:
+
+    Phase RMS XX, Phase RMS YY  vs  UV Distance
+    (slope removed, per scan x whole band)
+
+`visibility_plot.wrap_title` / `title_font_size`; applied in both panels'
+`_effective_title` and, for the font size, at figure creation and in the
+plot-response handler. A title supplied by the caller is never wrapped.
+**Not seen in a browser:** that Bokeh draws the line break in a plot title
+is my understanding of Bokeh 3, not something tested here.
+
 ## Cost
 
 A numpy kernel applied block by block through `xr.apply_ufunc`, lazy on
@@ -319,7 +336,7 @@ channels.
 
 ## Verified
 
-- `test_raster_phase_stats.py`: 313 passed (conditional slope removal,
+- `test_raster_phase_stats.py`: 322 passed (conditional slope removal,
   scatter settings, y label, titles and help wiring added), both backends, including the
   scatter form through the real backends and a real plotter on simulated
   data (90 of them for windows and pooled baselines: painted back, pooled, never across a gap, auto, flags,

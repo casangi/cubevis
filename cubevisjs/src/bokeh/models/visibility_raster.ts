@@ -60,7 +60,11 @@ export interface VisibilityRaster extends VisibilityRaster.Attrs {}
 export class VisibilityRaster extends Model {
   declare properties: VisibilityRaster.Props
 
-  static override __name__ = "VisibilityRaster"
+  // No 'override': Model does not declare a static __name__ in the
+  // Bokeh typings this is built against, and tsc reported TS4113 on
+  // every build (the output was still written).  noImplicitOverride is
+  // not set, so plain 'static' is valid either way.
+  static __name__ = "VisibilityRaster"
 
   static {
     this.define<VisibilityRaster.Props>(({String, Int, Bool}) => ({

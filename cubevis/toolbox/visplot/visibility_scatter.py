@@ -68,7 +68,7 @@ from bokeh.models import ColumnDataSource
 import dataclasses
 from .visibility_plot import _composite_flag_mask
 from .visibility_plot import (
-    VisibilityPlot, _img_to_uint32, _json_num,
+    VisibilityPlot, _img_to_uint32, _json_num, wrap_title,
 )
 from .panel_spec import ColorBand, PanelSpec, CATEGORY_PRIORITY_CAPTIONS
 from . import colormap_scaling as _cms
@@ -1441,7 +1441,8 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 title = f"{title}  ({describe_scatter_stat(self.stat_spec())})"
             except Exception:           # a title must never break a render
                 pass
-        return title
+        # Long default titles go on two lines (see wrap_title).
+        return wrap_title(title)
 
     def _panel_spec(self) -> PanelSpec:
         """Describe this scatter: one colour band per ScatterLayer.

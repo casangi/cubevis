@@ -369,6 +369,13 @@ class FlagController:
         s = f"{n:,} sample{'s' if n != 1 else ''}"
         if c.n_selected and c.n_selected != n:
             s += f" of {c.n_selected:,} selected"
+        # How many baselines it reaches (HRS H4): a box on a plot without
+        # a Baseline axis -- the all-baseline waterfall -- flags every
+        # selected baseline, and that should be plain before it is
+        # accepted or committed, not discovered afterwards.
+        nb = len(c.by_baseline or {})
+        if nb > 1:
+            s += f" on {nb:,} baselines"
         return s
 
     # ================================================================== #

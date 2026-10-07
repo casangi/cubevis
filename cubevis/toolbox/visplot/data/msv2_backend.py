@@ -88,13 +88,15 @@ from ._raster_merge import coord_extent, merge_raster_partitions
 from ._spw_identity import (
     build_ambiguous_spw_map, make_disambiguating_ident,
 )
-from ._raster_average import reduce_amp_phase
+from ._raster_average import (
+    reduce_amp_phase_baselines, reduce_plain_baselines,
+)
 from ._baseline_meta import baselines_to_meta, collect_baselines
 from ._raster_diff import DIFF_QUANTITIES, diff_from_window_mean
 from ._raster_stats import (
     STAT_QUANTITIES, paint_phase_stat, reduce_phase_stat, scatter_stat_spec,
 )
-from ..selection import DEFAULT_AVERAGING
+from ..selection import DEFAULT_AVERAGING, DEFAULT_BASELINE_COMBINE
 from ..axes import Axis, AxisInfo, AxisType
 from ..selection import SelectionSpec
 
@@ -1722,6 +1724,9 @@ class MSv2Backend(XArrayReader):
 
             arr = self._raster_2d(ds, y_dim, x_dim, quantity, polarization,
                                   averaging=getattr(selection, "averaging", DEFAULT_AVERAGING),
+                                  baseline_combine=getattr(
+                                      selection, "baseline_combine",
+                                      DEFAULT_BASELINE_COMBINE),
                                   detrend=getattr(selection, "detrend", True),
                                   time_window=getattr(selection, "stat_time_window", "auto"),
                                   chan_window=getattr(selection, "stat_chan_window", "off"))
@@ -1877,6 +1882,7 @@ class MSv2Backend(XArrayReader):
         polarization: Optional[str],
         averaging: str = DEFAULT_AVERAGING,
         detrend: bool = True,
+        baseline_combine: str = DEFAULT_BASELINE_COMBINE,
         time_window="auto",
         chan_window="off",
     ) -> Optional[xr.DataArray]:
@@ -2054,12 +2060,20 @@ class MSv2Backend(XArrayReader):
                 # (Amplitude = mean |V|, Phase = circular mean).  The
                 # per-sample ``q`` built above is only what is shown
                 # when there is nothing to reduce.  See _raster_average.
-                q = reduce_amp_phase(vis_pol, flag_pol, quantity,
-                                     reduce_dims, averaging)
+                # HRS H4 (2026-10-07): where the cell covers several
+                # baselines, ``averaging`` applies within each and
+                # ``baseline_combine`` says how they are then combined
+                # (mean / max / coherent).
+                q = reduce_amp_phase_baselines(
+                    vis_pol, flag_pol, quantity, reduce_dims, averaging,
+                    baseline_combine)
             elif quantity in STAT_QUANTITIES:
                 pass        # reduced below, together with any windows
             else:
-                q = q.mean(dim=reduce_dims, skipna=True)
+                # Mean; or, for the DIFF magnitudes with
+                # baseline_combine="max", the largest baseline.
+                q = reduce_plain_baselines(q, quantity, reduce_dims,
+                                           baseline_combine)
 
         if quantity in STAT_QUANTITIES:
             # HRS H2: Phase RMS / Coherence.  Outside ``if reduce_dims``

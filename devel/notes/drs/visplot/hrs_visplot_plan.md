@@ -138,6 +138,11 @@ colormap, and H1b.*
 
 ### H4. All-baseline Time x Frequency raster (FTFLG view) (M)
 
+*Status 2026-10-07 (later): complete. `baseline_combine` = mean (default)
+/ max / coherent per raster panel, with status-area help; the title
+names it; "All-BL" preset; flag messages state the number of baselines.
+See `hrs_h4_baseline_combine.md`.*
+
 *Status 2026-10-07: the view itself already works (Time x Channel with
 no baseline ticked reduces over the selected baselines, and a flag box
 there applies to all of them). Remaining: how baselines are combined
@@ -257,3 +262,4 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-07 | `dc58f0e` | Housekeeping before the next slice. Fixed: `equalize_histogram` crash on a narrow float32 range (cast to float64); TS4113 in `visibility_raster.ts` (`static override __name__`; type-only, rebuilt bundle differs only in minifier variable names, so the committed bundles are kept). Long default titles now wrap to two lines in a smaller font. Still open, by choice: Correlation as a raster axis (not implemented, says so); multi-SPW Baseline x Time shows the first SPW; H1b phase-safe display resample |
 | 2026-10-07 | `4869088` | Combined slice closing H2 and most of H3: presets `phaserms-time/-freq/-uvdist` and `phase-waterfall` (toolbar buttons now built from a table); `AMP_VDIFF` / `PHASE_DIFF` raster quantities; Phase drawn with a cyclic colormap on fixed linear -180..180 and resampled as a circular mean (H1b); status-area help for the remaining gear-tab controls, the data column and the whole toolbar (toolbar tooltips removed). Fixed on the way: `np.histogram` crash on constant-amplitude data at three more sites; colour bar tick "-4.22e-15" shown as 0. Not done: baseline-length ordering (moved to H4/H5, see H3). Two-line title artefact not reproduced headlessly (Bokeh 3.10, Chromium). Handoff note: `hrs_handoff_2026-10-07.md` |
 | 2026-10-07 | `693c99c` | Second session. Found: the raster image was drawn with rows and columns evenly spaced (Datashader) while ticks, readout and flag boxes used real coordinates, so they disagreed on any axis with gaps (time between scans; a Baseline axis after an antenna selection). Fixed with one cell rule (`raster_grid.py`) used by image, readout, flag engine and overlays; gaps are drawn blank. Baseline axis now in positions with no holes, ordered by number or length (`baseline_order`, closes H3). Restored the `dc58f0e` hover-region change lost in `693c99c`. Found, not fixed: zoom re-query of a decimated raster (Channel axis raises; zooming back out leaves a blank plot). Note: `hrs_h4_raster_axes.md` |
+| 2026-10-07 | `fa052b4` | Slice 1 committed by Darrell. H4 completed: `baseline_combine` (mean / max / coherent) for rasters whose cells cover several baselines, default mean (was in effect coherent: all-baseline amplitudes are larger than before); "All-BL" preset (`waterfall-all`); flag messages say "on N baselines". Agreed with Darrell: real time with blank gaps stays (raster / scatter consistency is the point of one application); scatter keeps "where" on X and "what" on Y, with Amplitude / Phase / Real / Imaginary to be added to the X list under H6. Next: the decimated-raster zoom path, then H5. Note: `hrs_h4_baseline_combine.md` |

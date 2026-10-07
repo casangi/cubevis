@@ -59,6 +59,7 @@ def _validate_params(
         datacolumn,
         averaging,
         baseline_order,
+        baseline_combine,
         detrend,
         stat_time_window,
         stat_chan_window,
@@ -104,6 +105,7 @@ def _validate_params(
         'datacolumn': 'str',
         'averaging': 'str',
         'baseline_order': 'str',
+        'baseline_combine': 'str',
         'detrend': 'bool',
         'stat_time_window': '',
         'stat_chan_window': '',
@@ -207,6 +209,7 @@ def _validate_params(
     _check('datacolumn', datacolumn, _type_map['datacolumn'])
     _check('averaging', averaging, _type_map['averaging'])
     _check('baseline_order', baseline_order, _type_map['baseline_order'])
+    _check('baseline_combine', baseline_combine, _type_map['baseline_combine'])
     _check('detrend', detrend, _type_map['detrend'])
     _check('stat_time_window', stat_time_window, _type_map['stat_time_window'])
     _check('stat_chan_window', stat_chan_window, _type_map['stat_chan_window'])
@@ -252,6 +255,7 @@ def _visplot_t(
         datacolumn: str = 'data',
         averaging: str = 'vector',
         baseline_order: str = 'number',
+        baseline_combine: str = 'mean',
         detrend: bool = True,
         stat_time_window = 'auto',
         stat_chan_window = 'off',
@@ -296,6 +300,7 @@ def _visplot_t(
         datacolumn = datacolumn,
         averaging = averaging,
         baseline_order = baseline_order,
+        baseline_combine = baseline_combine,
         detrend = detrend,
         stat_time_window = stat_time_window,
         stat_chan_window = stat_chan_window,
@@ -396,6 +401,17 @@ class _visplot:
         circular mean).  Initial value for every raster panel; each
         panel's own "Averaging" control (raster gear tab) changes it
         independently afterwards.
+    baseline_combine : str
+        How a raster cell that covers several baselines combines them
+        (only where Baseline is not a plot axis, e.g. Time x Channel
+        with no single baseline ticked): ``"mean"`` (default; the mean
+        of the baselines' amplitudes), ``"max"`` (the largest, so
+        interference on a few baselines is not diluted by the rest) or
+        ``"coherent"`` (the baselines' visibilities are added before the
+        amplitude is taken; for a calibrated point source).
+        ``averaging`` applies to the samples within each baseline.
+        Initial value for every raster panel; each panel's "Baselines
+        combined" control changes it afterwards.
     baseline_order : str
         How a raster orders its Baseline axis: ``"number"`` (default; by
         baseline number, as the sidebar's Baseline table lists them) or
@@ -440,7 +456,8 @@ class _visplot:
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
         ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
-        ``"phaserms-uvdist"``, ``"phase-waterfall"``, or ``None``.
+        ``"phaserms-uvdist"``, ``"phase-waterfall"``,
+        ``"waterfall-all"``, or ``None``.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
@@ -548,6 +565,7 @@ class _visplot:
             datacolumn: str = 'data',
             averaging: str = 'vector',
             baseline_order: str = 'number',
+            baseline_combine: str = 'mean',
             detrend: bool = True,
             stat_time_window = 'auto',
             stat_chan_window = 'off',
@@ -605,6 +623,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             datacolumn = datacolumn,
             averaging = averaging,
             baseline_order = baseline_order,
+            baseline_combine = baseline_combine,
             detrend = detrend,
             stat_time_window = stat_time_window,
             stat_chan_window = stat_chan_window,
@@ -650,6 +669,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'datacolumn=' + repr(datacolumn),
                 'averaging=' + repr(averaging),
                 'baseline_order=' + repr(baseline_order),
+                'baseline_combine=' + repr(baseline_combine),
                 'detrend=' + repr(detrend),
                 'stat_time_window=' + repr(stat_time_window),
                 'stat_chan_window=' + repr(stat_chan_window),
@@ -696,6 +716,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 datacolumn = datacolumn,
                 averaging = averaging,
                 baseline_order = baseline_order,
+                baseline_combine = baseline_combine,
                 detrend = detrend,
                 stat_time_window = stat_time_window,
                 stat_chan_window = stat_chan_window,

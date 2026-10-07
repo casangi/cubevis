@@ -42,6 +42,38 @@ the backends' ``_raster_2d``) refers to this name.
 """
 
 
+BASELINE_COMBINES = ("mean", "max", "coherent")
+"""Valid values of ``SelectionSpec.baseline_combine``."""
+
+DEFAULT_BASELINE_COMBINE = "mean"
+"""How a raster cell that covers several baselines combines them when
+nothing else is said (HRS H4, 2026-10-07).
+
+``"mean"`` because different baselines measure different things: their
+phases agree only on a calibrated point source at the phase centre, so
+adding them coherently (which is what the cell averaging did before this
+option existed) shows mostly cancellation -- on the TW Hya test data an
+all-baseline Time x Channel amplitude read 1.4 where the baselines'
+amplitudes average 11.  A survey for interference over all baselines,
+the AIPS FTFLG view, wants the amplitudes combined.  Literal in
+``VisibilityPlotter.__init__`` for the same reason as the averaging
+default; ``test_baseline_combine`` pins the two together.
+"""
+
+
+def normalize_baseline_combine(value) -> str:
+    """Return *value* as a member of ``BASELINE_COMBINES``; ``None`` /
+    empty means ``DEFAULT_BASELINE_COMBINE``."""
+    if value is None or value == "":
+        return DEFAULT_BASELINE_COMBINE
+    v = str(value).strip().lower()
+    v = {"maximum": "max", "average": "mean", "vector": "coherent"}.get(v, v)
+    if v not in BASELINE_COMBINES:
+        raise ValueError(
+            f"baseline_combine must be one of {BASELINE_COMBINES}; got {value!r}")
+    return v
+
+
 def normalize_averaging(value) -> str:
     """Return *value* as a member of ``AVERAGING_MODES``.
 
@@ -186,6 +218,39 @@ class SelectionSpec:
     ``normalize_averaging`` to validate.
     """
 
+    baseline_combine: str = DEFAULT_BASELINE_COMBINE
+    """How a raster cell that covers several baselines combines them
+    (HRS H4, 2026-10-07).  Only matters where Baseline is *not* a plot
+    axis and more than one baseline is selected: the all-baseline Time x
+    Channel waterfall (the AIPS FTFLG view), or Time x Channel for one
+    antenna's baselines.
+
+    ``averaging`` says how the samples *of one baseline* in a cell are
+    averaged (over the times or channels the cell covers).  This says
+    what is then done with the baselines:
+
+    * ``"mean"`` (default) -- Amplitude: the mean of the baselines'
+      amplitudes.  Phase: the mean direction of the baselines' phases
+      (each baseline counted equally).
+    * ``"max"`` -- the largest of the baselines' values, for Amplitude,
+      Amp V Diff and Phase Diff.  Interference on a few baselines stays
+      visible instead of being diluted by the clean ones.  Phase, Real
+      and Imaginary have no meaningful maximum and are combined as for
+      ``"mean"``.
+    * ``"coherent"`` -- the baselines' visibilities are added before
+      amplitude or phase is taken, exactly as the samples within a
+      baseline are under ``averaging``.  Right for a calibrated point
+      source at the phase centre (all baselines then agree and noise
+      averages down); otherwise the baselines largely cancel.  This is
+      what every such raster showed before the option existed.
+
+    Real and Imaginary are linear, so mean and coherent are the same
+    thing.  Phase RMS and Coherence always measure each baseline by
+    itself and pool the results; Z-Score is always the maximum; Flag is
+    always the fraction.  Transport, per raster panel, like
+    ``averaging``.  Use ``normalize_baseline_combine`` to validate.
+    """
+
     detrend: bool = True
     """Remove a linear phase slope before a Phase RMS / Coherence raster
     statistic is taken (HRS H2, 2026-10).
@@ -302,6 +367,7 @@ class SelectionSpec:
             correlation=list(self.correlation) if self.correlation is not None else None,
             data_column=self.data_column,
             averaging=self.averaging,
+            baseline_combine=self.baseline_combine,
             detrend=self.detrend,
             stat_time_window=self.stat_time_window,
             stat_chan_window=self.stat_chan_window,

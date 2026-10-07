@@ -54,7 +54,8 @@ from . import raster_grid as _rg
 from .raster_grid import BaselineAxis, normalize_baseline_order
 from .axes import Axis
 from . import palettes as _palettes
-from .selection import normalize_averaging
+from .selection import normalize_averaging, normalize_baseline_combine
+from .data._raster_average import combines_baselines
 from .data._raster_diff import DIFF_QUANTITIES, describe_diff_window
 from .data._raster_stats import (
     describe_windows, normalize_chan_window, normalize_time_window,
@@ -100,9 +101,14 @@ _DEFAULT_CMAP = [
 _DEFAULT_SCALING = "eq_hist"
 
 
+_COMBINE_WORDS = {"mean": "mean of baselines", "max": "max of baselines",
+                  "coherent": "baselines added coherently"}
+
+
 def _auto_title(quantity: "Axis", y_label: str, x_label: str,
                 polarization: str, averaging: Optional[str] = None,
-                detrend: Optional[bool] = None, windows: str = "") -> str:
+                detrend: Optional[bool] = None, windows: str = "",
+                baselines: str = "") -> str:
     """Compose the default panel title.
 
     Takes *resolved* axis names, not ``Axis`` members: a title reading
@@ -122,8 +128,13 @@ def _auto_title(quantity: "Axis", y_label: str, x_label: str,
     titled as before.
     """
     q_label = quantity.label
-    if averaging and quantity in (Axis.AMPLITUDE, Axis.PHASE):
-        q_label = f"{q_label} ({averaging})"
+    # *baselines* (HRS H4): how the baselines a cell covers were
+    # combined, given only when the cell does cover several and the
+    # quantity depends on it -- "Amplitude (vector, max of baselines)".
+    if quantity in (Axis.AMPLITUDE, Axis.PHASE):
+        notes = [n for n in (averaging, baselines) if n]
+        if notes:
+            q_label = f"{q_label} ({', '.join(notes)})"
     # Phase RMS / Coherence (HRS H2): say whether the slope was removed,
     # for the same reason -- it changes the picture completely on data
     # with a residual delay, and nothing else on the plot shows it.
@@ -135,8 +146,8 @@ def _auto_title(quantity: "Axis", y_label: str, x_label: str,
             note = f"{note}, {windows}"
         q_label = f"{q_label} ({note})"
     # Difference from the window mean: the window is the whole point.
-    if quantity in DIFF_QUANTITIES and windows:
-        q_label = f"{q_label} ({windows})"
+    if quantity in DIFF_QUANTITIES and (windows or baselines):
+        q_label = f"{q_label} ({', '.join(x for x in (windows, baselines) if x)})"
     return (
         f"{q_label}  "
         f"[{y_label} vs {x_label}]"
@@ -213,9 +224,15 @@ class VisibilityRaster(VisibilityPlot):
         stat_time_window="auto",
         stat_chan_window="off",
         baseline_order: Optional[str] = None,
+        baseline_combine: Optional[str] = None,
         **kwargs,
     ) -> None:
         self._quantity     = quantity
+        # HRS H4 (2026-10-07): how THIS raster combines the baselines a
+        # cell covers when Baseline is not one of its axes -- "mean" |
+        # "max" | "coherent".  Per panel, stamped onto a copy of the
+        # selection at query time, exactly like averaging.
+        self._baseline_combine = normalize_baseline_combine(baseline_combine)
         # HRS H3/H4 (2026-10-07): how THIS raster orders a displayed
         # Baseline axis -- "number" | "length" -- and the mapping from
         # positions along that axis to baseline numbers that the last
@@ -355,6 +372,47 @@ class VisibilityRaster(VisibilityPlot):
         return self._baseline_order
 
     @property
+    def baseline_combine(self) -> str:
+        """How this raster combines several baselines in one cell:
+        ``"mean"``, ``"max"`` or ``"coherent"``.  Change it with
+        ``update_axes(baseline_combine=...)``."""
+        return self._baseline_combine
+
+    def _baselines_note(self) -> str:
+        """Words for the title when the cells cover several baselines and
+        the quantity depends on how they are combined; else ``""``."""
+        if Axis.BASELINE in (self._y_dim, self._x_dim):
+            return ""
+        if not combines_baselines(self._quantity, ("baseline_id",),
+                                  self._baseline_combine):
+            return ""
+        if self._baseline_combine == "max" and self._quantity == Axis.PHASE:
+            return _COMBINE_WORDS["mean"]       # no maximum of a direction
+        # Amp V Diff / Phase Diff: the mean over everything is what they
+        # always were (and coherent is the same thing); only Maximum is
+        # worth naming.
+        if self._quantity in DIFF_QUANTITIES and self._baseline_combine != "max":
+            return ""
+        n = self.n_baselines_combined
+        if n is not None and n < 2:
+            return ""
+        return _COMBINE_WORDS[self._baseline_combine]
+
+    @property
+    def n_baselines_combined(self) -> Optional[int]:
+        """How many baselines each cell of this raster covers, when
+        Baseline is not one of its axes (those with data in the current
+        selection); ``None`` when Baseline is an axis or it is unknown."""
+        if Axis.BASELINE in (self._y_dim, self._x_dim):
+            return None
+        tables = getattr(self, "_identity_tables", None)
+        with_data = getattr(tables, "baselines_with_data", None)
+        if with_data is not None:
+            return len(with_data)
+        pairs = getattr(tables, "baseline_antennas", None)
+        return len(pairs) if pairs else None
+
+    @property
     def baseline_axis(self) -> Optional[BaselineAxis]:
         """The displayed Baseline axis (positions to baseline numbers), or
         ``None`` when neither axis is Baseline or nothing is drawn yet."""
@@ -372,6 +430,7 @@ class VisibilityRaster(VisibilityPlot):
         stat_time_window=None,
         stat_chan_window=None,
         baseline_order: Optional[str] = None,
+        baseline_combine: Optional[str] = None,
     ) -> None:
         """Change axes, quantity, polarization or averaging and re-render
         in place.
@@ -383,6 +442,10 @@ class VisibilityRaster(VisibilityPlot):
         either as it is.
         """
         changed = False
+        if baseline_combine is not None:
+            bc = normalize_baseline_combine(baseline_combine)
+            if bc != self._baseline_combine:
+                self._baseline_combine = bc;  changed = True
         if baseline_order is not None:
             bo = normalize_baseline_order(baseline_order)
             if bo != self._baseline_order:
@@ -452,9 +515,21 @@ class VisibilityRaster(VisibilityPlot):
     def _effective_title(self) -> str:
         # A long default title goes on two lines (wrap_title); a title
         # the caller supplied is left exactly as given.
+        baselines = self._baselines_note()
+        # Where the baselines are combined by mean or max and nothing
+        # else is reduced (Time x Channel), each baseline contributes
+        # one sample per cell, so there is nothing for "vector" or
+        # "scalar" to describe: leave it out of the title.
+        shown = {self._y_dim, self._x_dim}
+        only_baselines = (
+            Axis.TIME in shown
+            and bool(shown & {Axis.CHANNEL, Axis.FREQUENCY}))
+        averaging = self._averaging
+        if baselines and only_baselines and self._baseline_combine != "coherent":
+            averaging = None
         return self._title or wrap_title(_auto_title(
             self._quantity, self._y_info.label, self._x_info.label,
-            self._polarization, self._averaging, self._detrend,
+            self._polarization, averaging, self._detrend,
             describe_diff_window(self._stat_time_window)
             if self._quantity in DIFF_QUANTITIES else
             describe_windows(
@@ -462,6 +537,7 @@ class VisibilityRaster(VisibilityPlot):
                 time_displayed=Axis.TIME in (self._y_dim, self._x_dim),
                 chan_displayed=any(a in (self._y_dim, self._x_dim)
                                    for a in (Axis.CHANNEL, Axis.FREQUENCY))),
+            baselines,
         ))
 
     def set_cmap(self, cmap) -> None:
@@ -1503,6 +1579,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 # selection (shared with the other panels) is untouched.
                 selection    = dataclasses.replace(
                     selection, averaging=self._averaging,
+                    baseline_combine=self._baseline_combine,
                     detrend=self._detrend,
                     stat_time_window=self._stat_time_window,
                     stat_chan_window=self._stat_chan_window),

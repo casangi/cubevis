@@ -191,6 +191,17 @@ Task arguments (preview)
        incoherent; ``"scalar"`` averages the amplitudes themselves.
        Sets the initial value for every raster panel; each panel's
        gear tab has its own *Averaging* control.
+   * - ``baseline_combine``
+     - str
+     - How a raster cell that covers several baselines combines them
+       (where Baseline is not a plot axis, e.g. Time vs Channel with no
+       single baseline ticked): ``"mean"`` (default) of the baselines'
+       amplitudes, ``"max"`` (the largest, so interference on a few
+       baselines is not diluted), or ``"coherent"`` (the visibilities
+       are added first; for a calibrated point source). ``averaging``
+       applies to the samples within each baseline. Initial value for
+       every raster panel; each panel's gear tab has its own *Baselines
+       combined* control.
    * - ``baseline_order``
      - str
      - How a raster lays out its Baseline axis: ``"number"`` (default),
@@ -228,7 +239,8 @@ Task arguments (preview)
      - str, optional
      - Named axis preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
        ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
-       ``"phaserms-uvdist"`` or ``"phase-waterfall"``. Corresponds to
+       ``"phaserms-uvdist"``, ``"phase-waterfall"`` or
+       ``"waterfall-all"``. Corresponds to
        the toolbar preset buttons.
    * - ``time_range``
      - tuple/list of 2 floats, optional
@@ -293,6 +305,10 @@ Toolbar
     scatter
   * *radplot* — the same raster, Amplitude vs UV Distance scatter
   * *Waterfall* — Time vs Channel amplitude, panels one above the other
+  * *All-BL* — the same axes with every selected baseline in one image
+    and each cell showing the largest amplitude among them (the AIPS
+    FTFLG view), with Amplitude vs Channel below: a quick survey for
+    interference
   * *Z-Score* — Baseline vs Time coloured by Z-Score, to spot outliers
   * *φrms·t*, *φrms·ν*, *φrms·uv* — Phase RMS against time, against
     frequency (channel) and against UV distance. The raster shows which
@@ -325,6 +341,14 @@ Sidebar
   a window set, the two quantities are also available on a Time vs
   Channel waterfall, where the selected baselines are measured one by
   one and combined.
+
+  Where Baseline is not one of the raster's axes and several baselines
+  are selected, each cell covers all of them. *Averaging* then applies
+  to the samples of each baseline, and *Baselines combined* says what
+  is done with the baselines: *Mean* (of their amplitudes), *Maximum*
+  (the largest; a problem on a few baselines stays visible) or
+  *Coherent* (added as complex numbers first, which is only meaningful
+  for a calibrated point source). The title names the choice.
 
   Raster cells are drawn where their coordinates are. A gap in time
   (between scans) or in frequency (between spectral windows) is left

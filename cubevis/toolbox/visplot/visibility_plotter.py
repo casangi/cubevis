@@ -103,7 +103,9 @@ from cubevis.bokeh.transport import CommMgr
 from cubevis import exe
 
 from .axes import Axis
-from .selection import SelectionSpec, normalize_averaging
+from .selection import (
+    SelectionSpec, normalize_averaging, normalize_baseline_combine,
+)
 from .raster_grid import normalize_baseline_order
 from .data._raster_stats import normalize_chan_window, normalize_time_window
 from . import antenna_baseline_select as _abs
@@ -195,9 +197,10 @@ _SIDEBAR_WIDTH_COL = 268    # column width including padding
 _STATIC_HINTS = {
     "col": "<b>Data column</b> \u2014 which visibilities are plotted  | <b>DATA</b>: as observed  | <b>CORRECTED_DATA</b>: after calibration has been applied  | <b>MODEL_DATA</b>: what the calibration model predicts  | Only the columns this dataset has are listed",
     # ---- raster gear tab
-    "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall, best with one baseline ticked  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | Y and X must differ; Correlation is not available yet",
+    "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | Y and X must differ; Correlation is not available yet",
     "r_qty": "<b>Raster quantity</b> \u2014 what the colour shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
     "scaling": "<b>Colour scaling</b> \u2014 how values are spread over the colours; changes the picture, never the data  | <b>eq_hist</b> uses every colour equally and shows faint structure, but distances between colours mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap",
+    "bcombine": "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines: any raster without Baseline on an axis, such as Time \u00d7 Channel with no single baseline ticked. Averaging (above) applies to the samples of each baseline; this is what happens to the baselines  | <b>Mean</b>: the average of the baselines\u2019 amplitudes. The general picture of the selected baselines; a problem on a few of them is diluted  | <b>Maximum</b>: the largest baseline at each cell. Interference or a bad antenna shows even if only one baseline has it; then tick baselines to find which  | <b>Coherent</b>: the baselines are added as complex numbers first. Only for a calibrated point source, where all baselines agree and noise averages down; on anything else they cancel and the plot reads low  | Applies to Amplitude, Phase (Mean and Maximum both give the mean direction), Amp V Diff and Phase Diff. A flag box on such a plot flags every selected baseline",
     "border": "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out; the baselines that have data are drawn side by side either way  | <b>By number</b>: in the order of the Baseline table; baselines to one antenna sit together  | <b>By length</b>: shortest first, and the ticks read the length. Trouble that grows along the axis is then about distance (atmosphere, a source that is resolved); trouble in scattered columns is about particular antennas  | The cursor readout names the baseline and its length in both",
     "info": "<b>Info block</b> \u2014 which facts about this panel are listed in the block left of the plots (selection, axes, averaging, counts)  | Tick what you want to see there; it does not change the plot",
     # ---- scatter gear tab
@@ -282,6 +285,27 @@ _PRESETS = {
         Axis.TIME,     Axis.PHASE,
         "over",
     ),
+    # HRS H4 (2026-10-07): the AIPS FTFLG view -- every selected
+    # baseline in one Time x Channel image, to look for interference
+    # common to many of them.  The button also sets "Baselines
+    # combined" to Maximum (see _PRESET_SETS), so a few bad baselines
+    # are not averaged away; constructor-time preset= sets axes only,
+    # like "zscore" (pass baseline_combine="max" with it).  The scatter
+    # is the same data against channel, where narrow-band interference
+    # stands up from the band.
+    "waterfall-all": (
+        Axis.TIME,     Axis.CHANNEL, Axis.AMPLITUDE,
+        Axis.CHANNEL,  Axis.AMPLITUDE,
+        "over",
+    ),
+}
+
+# Gear-tab controls a preset button sets besides the axes, so that it
+# gives the same view whatever was tried before it:
+# preset -> ((widget argument name, value), ...).
+_PRESET_SETS = {
+    "waterfall":     (("panel0_rm_sel", "mean"),),
+    "waterfall-all": (("panel0_rm_sel", "max"),),
 }
 
 # Presets that also put the Phase RMS / Coherence controls back to their
@@ -298,7 +322,7 @@ _PRESET_BUTTONS = (
     ("radplot", "radplot", 70,
      "<b>radplot</b> \u2014 amplitude against baseline length  | Raster: Baseline \u00d7 Time, Amplitude  | Scatter: Amplitude vs UV Distance  | Flat for a point source; falls with length for a resolved one"),
     ("waterfall", "Waterfall", 78,
-     "<b>Waterfall</b> \u2014 Time \u00d7 Channel amplitude, one panel above the other  | Scatter: Amplitude vs Time  | Shows interference: narrow in frequency, or short in time  | Tick one baseline (or step through them) to see it by itself"),
+     "<b>Waterfall</b> \u2014 Time \u00d7 Channel amplitude, one panel above the other  | Scatter: Amplitude vs Time  | Shows interference: narrow in frequency, or short in time  | Tick one baseline (or step through them) to see it by itself; with several, the cell is the mean of their amplitudes (Baselines combined is set to Mean)"),
     ("zscore", "Z-Score", 70,
      "<b>Z-Score</b> \u2014 how unusual each sample is for its own baseline  | Raster: Baseline \u00d7 Time coloured by Z-Score, to spot an outlier baseline at a glance  | Scatter: Amplitude vs Time, coloured the same way, to confirm what is there"),
     ("phaserms-time", "\u03c6rms\u00b7t", 62,
@@ -309,6 +333,8 @@ _PRESET_BUTTONS = (
      "<b>Phase RMS vs UV Distance</b> \u2014 does phase stability get worse on longer baselines?  | Raster: Baseline \u00d7 Time, Phase RMS  | Scatter: one point per baseline and scan against baseline length  | A rise with length is the atmosphere; one high baseline is an antenna. Slope and window controls are reset"),
     ("phase-waterfall", "\u03c6 Wfall", 68,
      "<b>Phase waterfall</b> \u2014 Time \u00d7 Channel phase in a cyclic colormap (\u2212180\u00b0 and +180\u00b0 are the same colour)  | Scatter: Phase vs Time  | Stripes across frequency are a delay; stripes in time are a rate; uniform colour is calibrated  | Tick one baseline, or step through them"),
+    ("waterfall-all", "All-BL", 62,
+     "<b>All-baseline waterfall</b> \u2014 Time \u00d7 Channel with every selected baseline in one image, like AIPS FTFLG  | Each cell shows the largest amplitude among the baselines (Baselines combined is set to Maximum)  | Scatter: Amplitude vs Channel  | A quick survey for interference: one picture instead of one per baseline. A flag box here flags <b>every selected baseline</b>, and the message says how many  | What looks bad here may be on only a few baselines: tick antennas or baselines to find which before flagging them all"),
 )
 
 
@@ -1937,6 +1963,17 @@ class VisibilityPlotter:
         circular mean).  Initial value for every raster panel; each
         panel's own "Averaging" control (raster gear tab) changes it
         independently afterwards.
+    baseline_combine : str
+        How a raster cell that covers several baselines combines them
+        (only where Baseline is not a plot axis, e.g. Time x Channel
+        with no single baseline ticked): ``"mean"`` (default; the mean
+        of the baselines' amplitudes), ``"max"`` (the largest, so
+        interference on a few baselines is not diluted by the rest) or
+        ``"coherent"`` (the baselines' visibilities are added before the
+        amplitude is taken; for a calibrated point source).
+        ``averaging`` applies to the samples within each baseline.
+        Initial value for every raster panel; each panel's "Baselines
+        combined" control changes it afterwards.
     baseline_order : str
         How a raster orders its Baseline axis: ``"number"`` (default; by
         baseline number, as the sidebar's Baseline table lists them) or
@@ -1981,7 +2018,8 @@ class VisibilityPlotter:
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
         ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
-        ``"phaserms-uvdist"``, ``"phase-waterfall"``, or ``None``.
+        ``"phaserms-uvdist"``, ``"phase-waterfall"``,
+        ``"waterfall-all"``, or ``None``.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
@@ -2091,6 +2129,9 @@ class VisibilityPlotter:
         # not exist.  test_raster_averaging pins the two together.
         averaging:        str           = "vector",
         baseline_order:   str           = "number",
+        # Literal for sync_layers, like averaging; test_baseline_combine
+        # pins it to selection.DEFAULT_BASELINE_COMBINE.
+        baseline_combine: str           = "mean",
         detrend:          bool          = True,
         stat_time_window                = "auto",
         stat_chan_window                = "off",
@@ -2140,6 +2181,7 @@ class VisibilityPlotter:
             timerange=timerange, uvrange=uvrange, correlation=correlation,
             datacolumn=datacolumn, averaging=averaging, detrend=detrend,
             baseline_order=baseline_order,
+            baseline_combine=baseline_combine,
             stat_time_window=stat_time_window,
             stat_chan_window=stat_chan_window,
             layout=layout, kind=kind, preset=preset,
@@ -2243,7 +2285,7 @@ class VisibilityPlotter:
         *,
         ms, ps, backend, remote_endpoint, kernel_name, field, spw, antenna, scan,
         timerange, uvrange, correlation, datacolumn, averaging, detrend,
-        baseline_order,
+        baseline_order, baseline_combine,
         stat_time_window, stat_chan_window,
         layout, kind, preset,
         raster_y, raster_x, raster_qty, scatter_x, scatter_y,
@@ -2300,6 +2342,9 @@ class VisibilityPlotter:
         # HRS H3/H4 (2026-10-07): order of a raster's Baseline axis,
         # "number" | "length".  Initial value; per panel afterwards.
         self._baseline_order = normalize_baseline_order(baseline_order)
+        # HRS H4: how a cell combines several baselines.  Initial value;
+        # per panel afterwards.
+        self._baseline_combine = normalize_baseline_combine(baseline_combine)
         # HRS H2 (2026-10): Phase RMS / Coherence slope removal.  Same
         # arrangement: initial value here, per panel afterwards.
         self._detrend       = bool(detrend)
@@ -2685,6 +2730,7 @@ class VisibilityPlotter:
             quantity      = self._raster_qty,
             averaging     = self._averaging,
             baseline_order = self._baseline_order,
+            baseline_combine = self._baseline_combine,
             detrend       = self._detrend,
             stat_time_window = self._stat_time_window,
             stat_chan_window = self._stat_chan_window,
@@ -2748,6 +2794,7 @@ class VisibilityPlotter:
             quantity      = self._raster_qty,
             averaging     = self._averaging,
             baseline_order = self._baseline_order,
+            baseline_combine = self._baseline_combine,
             detrend       = self._detrend,
             stat_time_window = self._stat_time_window,
             stat_chan_window = self._stat_chan_window,
@@ -3848,6 +3895,16 @@ for (const dt of other.tools) {
                     log.warning("_handle_plot: unknown baseline order %r for "
                                 "panel %s", panel_msg.get("baseline_order"), slot.id)
                     border = panel.baseline_order
+                # How this slot combines several baselines in a cell
+                # (HRS H4).  Absent or unrecognised: keep what it has.
+                try:
+                    bcomb = (normalize_baseline_combine(panel_msg["baseline_combine"])
+                             if panel_msg.get("baseline_combine")
+                             else panel.baseline_combine)
+                except ValueError:
+                    log.warning("_handle_plot: unknown baseline_combine %r for "
+                                "panel %s", panel_msg.get("baseline_combine"), slot.id)
+                    bcomb = panel.baseline_combine
                 # Slope removal for this slot's Phase RMS / Coherence
                 # (HRS H2).  Sent as "remove" | "keep"; absent = unchanged.
                 det = panel_msg.get("detrend")
@@ -3907,6 +3964,7 @@ for (const dt of other.tools) {
                     # last rendered with.
                     avg != panel.averaging or
                     border != panel.baseline_order or
+                    bcomb != panel.baseline_combine or
                     det != panel.detrend or
                     twin != panel.stat_time_window or
                     cwin != panel.stat_chan_window or
@@ -3953,6 +4011,7 @@ for (const dt of other.tools) {
                                 polarization = first_pol,
                                 averaging    = avg,
                                 baseline_order = border,
+                                baseline_combine = bcomb,
                                 detrend      = det,
                                 stat_time_window = twin,
                                 stat_chan_window = cwin,
@@ -4931,6 +4990,15 @@ html, body { height: 100%; margin: 0; }
             options=[("number", "By number"), ("length", "By length")],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+        # Baselines combined (HRS H4, 2026-10-07): what a cell does
+        # with several baselines when Baseline is not a plot axis.  Per
+        # slot, read at Plot-press time.
+        rm_sel = Select(
+            title="Baselines combined", value=slot.raster.baseline_combine,
+            options=[("mean", "Mean"), ("max", "Maximum"),
+                     ("coherent", "Coherent")],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
         # Slope removal (HRS H2, 2026-10) for Phase RMS / Coherence:
         # take out the residual delay / rate before measuring scatter,
         # or leave it in to see it.  Same arrangement as ra_sel: per
@@ -4969,6 +5037,7 @@ html, body { height: 100%; margin: 0; }
         # reads and the theme restyles).
         ra_box = self._hover(ra_sel, "averaging")
         rb_box = self._hover(rb_sel, "border")
+        rm_box = self._hover(rm_sel, "bcombine")
         rd_box = self._hover(rd_sel, "detrend")
         rt_box = self._hover(rt_sel, "twin")
         rc_box = self._hover(rc_sel, "cwin")
@@ -5014,7 +5083,7 @@ conflict_div.text = conflict ? msg : '';
             self._hover(column(ry_sel, rx_sel, width=_SIDEBAR_WIDTH),
                         "r_axes"),
             self._hover(rq_sel, "r_qty"),
-            ra_box, rb_box, rd_box, rt_box, rc_box,
+            ra_box, rm_box, rb_box, rd_box, rt_box, rc_box,
             conflict_div,
             self._hover(raster_cmap, "scaling"),
             self._hover(info_sel.column, "info"),
@@ -5023,7 +5092,7 @@ conflict_div.text = conflict ? msg : '';
             "y_sel": ry_sel, "x_sel": rx_sel, "q_sel": rq_sel,
             "avg_sel": ra_sel, "detrend_sel": rd_sel,
             "twin_sel": rt_sel, "cwin_sel": rc_sel,
-            "border_sel": rb_sel,
+            "border_sel": rb_sel, "bcombine_sel": rm_sel,
             "info_selectors": info_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
@@ -7031,12 +7100,13 @@ function doPlot(reload) {
 
     function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel,
                                 colorize_handles, ra_sel, rd_sel, rt_sel, rc_sel,
-                                rb_sel, sd_sel, st_sel, sc_sel) {
+                                rb_sel, rm_sel, sd_sel, st_sel, sc_sel) {
         if (kind_switch.active === 0) {
             return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value,
                     averaging: ra_sel.value, detrend: rd_sel.value,
                     twin: rt_sel.value, cwin: rc_sel.value,
-                    baseline_order: rb_sel ? rb_sel.value : null};
+                    baseline_order: rb_sel ? rb_sel.value : null,
+                    baseline_combine: rm_sel ? rm_sel.value : null};
         } else {
             return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value,
                      colorize: buildColorizeArray(colorize_handles),
@@ -7076,12 +7146,12 @@ function doPlot(reload) {
     panels[panel0_id] = buildPanelPayload(
         panel0_kind_switch, panel0_ry_sel, panel0_rx_sel, panel0_rq_sel,
         panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles, panel0_ra_sel,
-        panel0_rd_sel, panel0_rt_sel, panel0_rc_sel, panel0_rb_sel,
+        panel0_rd_sel, panel0_rt_sel, panel0_rc_sel, panel0_rb_sel, panel0_rm_sel,
         panel0_sd_sel, panel0_st_sel, panel0_sc_sel);
     panels[panel1_id] = buildPanelPayload(
         panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
         panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles, panel1_ra_sel,
-        panel1_rd_sel, panel1_rt_sel, panel1_rc_sel, panel1_rb_sel,
+        panel1_rd_sel, panel1_rt_sel, panel1_rc_sel, panel1_rb_sel, panel1_rm_sel,
         panel1_sd_sel, panel1_st_sel, panel1_sc_sel);
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
@@ -7607,6 +7677,7 @@ function doPlot(reload) {
             "panel0_rt_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["twin_sel"],
             "panel0_rc_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["cwin_sel"],
             "panel0_rb_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["border_sel"],
+            "panel0_rm_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["bcombine_sel"],
             "panel0_sx_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["x_sel"],
             "panel0_sy_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["y_sel"],
             "panel0_sd_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["detrend_sel"],
@@ -7629,6 +7700,7 @@ function doPlot(reload) {
             "panel1_rt_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["twin_sel"],
             "panel1_rc_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["cwin_sel"],
             "panel1_rb_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["border_sel"],
+            "panel1_rm_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["bcombine_sel"],
             "panel1_sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
             "panel1_sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
             "panel1_sd_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["detrend_sel"],
@@ -8144,6 +8216,9 @@ try {
                                  ("panel1_sd_sel", "remove"),
                                  ("panel1_st_sel", "auto"),
                                  ("panel1_sc_sel", "off")))
+            stat_reset_js += "".join(
+                f"try {{ {w}.value = '{v}'; }} catch(e) {{}}\n"
+                for w, v in _PRESET_SETS.get(preset_name, ()))
 
             return CustomJS(
                 args=args,
@@ -8259,7 +8334,8 @@ doPlot();
                     _all_axis_widgets += [w["y_sel"], w["x_sel"], w["q_sel"],
                                           w["avg_sel"], w["detrend_sel"],
                                           w["twin_sel"], w["cwin_sel"],
-                                          w["border_sel"]]
+                                          w["border_sel"],
+                                          w["bcombine_sel"]]
                 else:
                     _all_axis_widgets += [w["x_sel"], w["y_sel"],
                                           w["detrend_sel"], w["twin_sel"],

@@ -109,3 +109,115 @@ def reduce_amp_phase(
         return np.hypot(a, b)
     # arctan2(NaN, NaN) is NaN, so empty cells stay NaN.
     return np.arctan2(b, a) * _RAD2DEG
+
+
+# ---------------------------------------------------------------------- #
+# Several baselines in one cell (HRS H4, 2026-10-07)                       #
+# ---------------------------------------------------------------------- #
+
+BASELINE_DIM = "baseline_id"
+
+MAX_QUANTITIES = (Axis.AMPLITUDE, Axis.AMP_VDIFF, Axis.PHASE_DIFF)
+"""Quantities for which "the largest of the baselines' values" means
+something: all are magnitudes (zero is "nothing there")."""
+
+
+def combines_baselines(quantity: Axis, reduce_dims: Sequence[str],
+                       baseline_combine: str) -> bool:
+    """Whether *baseline_combine* changes how *quantity* is reduced over
+    *reduce_dims* -- i.e. whether a title or a readout should name it."""
+    if BASELINE_DIM not in reduce_dims:
+        return False
+    if quantity in (Axis.AMPLITUDE, Axis.PHASE):
+        return True
+    return quantity in MAX_QUANTITIES
+
+
+def reduce_amp_phase_baselines(
+    vis: xr.DataArray,
+    flag: xr.DataArray,
+    quantity: Axis,
+    reduce_dims: Sequence[str],
+    averaging: str = "vector",
+    baseline_combine: str = "mean",
+) -> xr.DataArray:
+    """Reduce *vis* to Amplitude or Phase where the cell may cover
+    several baselines.
+
+    Two steps, because they are different questions.  The samples of ONE
+    baseline in the cell (the times or channels reduced away) are
+    averaged by *averaging*, as :func:`reduce_amp_phase` does.  The
+    baselines are then combined by *baseline_combine* -- see
+    ``SelectionSpec.baseline_combine``.  With ``"coherent"``, or when
+    baseline is not among *reduce_dims*, this is :func:`reduce_amp_phase`
+    over everything, unchanged.
+
+    Lazy if the inputs are; sums and one max only.
+    """
+    reduce_dims = list(reduce_dims)
+    if baseline_combine not in ("mean", "max", "coherent"):
+        raise ValueError(
+            f"baseline_combine must be 'mean', 'max' or 'coherent'; "
+            f"got {baseline_combine!r}")
+    if baseline_combine == "coherent" or BASELINE_DIM not in reduce_dims:
+        return reduce_amp_phase(vis, flag, quantity, reduce_dims, averaging)
+    if quantity not in (Axis.AMPLITUDE, Axis.PHASE):
+        raise ValueError(
+            f"reduce_amp_phase_baselines: unsupported quantity {quantity}")
+    if averaging not in ("scalar", "vector"):
+        raise ValueError(
+            f"averaging must be 'scalar' or 'vector'; got {averaging!r}")
+    inner = [d for d in reduce_dims if d != BASELINE_DIM]
+
+    good = ~flag
+    re = vis.real.where(good)
+    im = vis.imag.where(good)
+
+    if quantity == Axis.AMPLITUDE:
+        per = (reduce_amp_phase(vis, flag, Axis.AMPLITUDE, inner, averaging)
+               if inner else np.hypot(re, im))
+        if baseline_combine == "max":
+            return per.max(dim=BASELINE_DIM, skipna=True)
+        return per.mean(dim=BASELINE_DIM, skipna=True)
+
+    # Phase: each baseline's direction, then the mean direction of the
+    # baselines, every baseline counted equally.  ("max" has no meaning
+    # for a direction and is combined the same way.)
+    if inner:
+        if averaging == "vector":
+            a = re.mean(dim=inner, skipna=True)
+            b = im.mean(dim=inner, skipna=True)
+        else:
+            amp = np.hypot(re, im)
+            amp = amp.where(amp > 0)
+            a = (re / amp).mean(dim=inner, skipna=True)
+            b = (im / amp).mean(dim=inner, skipna=True)
+    else:
+        a, b = re, im
+    mag = np.hypot(a, b)
+    mag = mag.where(mag > 0)
+    ua = (a / mag).mean(dim=BASELINE_DIM, skipna=True)
+    ub = (b / mag).mean(dim=BASELINE_DIM, skipna=True)
+    return np.arctan2(ub, ua) * _RAD2DEG
+
+
+def reduce_plain_baselines(
+    q: xr.DataArray,
+    quantity: Axis,
+    reduce_dims: Sequence[str],
+    baseline_combine: str = "mean",
+) -> xr.DataArray:
+    """Reduce a per-sample quantity *q* (Real, Imaginary, Amp V Diff,
+    Phase Diff) over *reduce_dims*.
+
+    The mean over everything, as it always was -- except that with
+    ``baseline_combine="max"`` the magnitudes in ``MAX_QUANTITIES`` are
+    averaged within each baseline and the largest baseline is shown.
+    """
+    reduce_dims = list(reduce_dims)
+    if (baseline_combine == "max" and quantity in MAX_QUANTITIES
+            and BASELINE_DIM in reduce_dims):
+        inner = [d for d in reduce_dims if d != BASELINE_DIM]
+        per = q.mean(dim=inner, skipna=True) if inner else q
+        return per.max(dim=BASELINE_DIM, skipna=True)
+    return q.mean(dim=reduce_dims, skipna=True)

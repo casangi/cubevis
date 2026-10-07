@@ -187,6 +187,30 @@ _SPW_HDR_H        = 28    # SPW table header height (px)
 _SPW_MAX_ROWS     = 10    # rows shown before the table scrolls
 _SIDEBAR_WIDTH_COL = 268    # column width including padding
 
+# Status-area help with fixed text: name -> HTML, created as
+# ``self._hint_<name>`` in _build_status_bar and attached with _hover().
+# " | " separates the points; keep each to what the control does and
+# when one would use it.
+_STATIC_HINTS = {
+    "col": "<b>Data column</b> \u2014 which visibilities are plotted  | <b>DATA</b>: as observed  | <b>CORRECTED_DATA</b>: after calibration has been applied  | <b>MODEL_DATA</b>: what the calibration model predicts  | Only the columns this dataset has are listed",
+    # ---- raster gear tab
+    "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall, best with one baseline ticked  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | Y and X must differ; Correlation is not available yet",
+    "r_qty": "<b>Raster quantity</b> \u2014 what the colour shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
+    "scaling": "<b>Colour scaling</b> \u2014 how values are spread over the colours; changes the picture, never the data  | <b>eq_hist</b> uses every colour equally and shows faint structure, but distances between colours mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap",
+    "info": "<b>Info block</b> \u2014 which facts about this panel are listed in the block left of the plots (selection, axes, averaging, counts)  | Tick what you want to see there; it does not change the plot",
+    # ---- scatter gear tab
+    "s_x": "<b>Scatter X axis</b>  | <b>UV Distance</b>: baseline length; in wavelengths to compare across frequency  | <b>Time</b>: stability through the observation  | <b>Frequency / Channel</b>: the spectrum  | <b>U / V</b>: with V or U as Y, the uv coverage  | For Phase RMS and Coherence, X also decides what one point is (see the window controls)",
+    "s_y": "<b>Scatter Y axis</b> \u2014 the value plotted for every sample  | <b>Amplitude / Phase / Real / Imaginary</b>: one point per visibility, drawn as density  | <b>Phase RMS / Coherence</b>: one point per window (per integration, channel or scan, depending on X)  | <b>Z-Score</b>: how unusual each sample is for its baseline",
+    "colorize": "<b>Layer colouring</b> \u2014 each ticked correlation is a layer with its own colours  | <b>Continuous</b>: density of points; scaling works as for the raster  | <b>Categorical</b>: colour by antenna, baseline, field, scan or SPW; tick which values to show  | <b>Statistical</b>: colour by Z-Score so outliers stand out  | <b>Layer</b> chooses which layer the controls below apply to",
+    # ---- toolbar
+    "tb_sidebar": "<b>\u27e8 / \u27e9</b> \u2014 hide or show the configuration panel on the left, to give the plots the full width",
+    "tb_plot": "<b>Plot</b> \u2014 draw both panels with everything as now set in the panel on the left  | Selections, axes, quantities and window settings take effect only when this is pressed; colour scaling applies at once  | Pending flags are kept",
+    "tb_reload": "<b>Reload</b> \u2014 read the data again and redraw  | Use after something else has changed the data on disk  | Discards pending (unapplied) flags",
+    "tb_layout": "<b>Layout</b> \u2014 one panel, or both: side by side or one above the other  | Side by side suits Baseline \u00d7 Time; one above the other gives a waterfall the full width",
+    "tb_export": "<b>Export PNG</b> \u2014 write the current view (both panels, titles, axes, colour bars) to a PNG file where Python is running  | The path is reported in the status line",
+    "tb_theme": "<b>Dark / Light</b> \u2014 switch the background  | The colormaps change with it so faint points stay visible; exported PNGs follow",
+}
+
 # Preset definitions: (raster_y, raster_x, raster_qty, scatter_x, scatter_y, layout)
 _PRESETS = {
     "vplot": (
@@ -227,7 +251,63 @@ _PRESETS = {
         Axis.TIME,     Axis.AMPLITUDE,
         "side",
     ),
+    # HRS H2 (2026-10-07): the three phase-stability views.  In each the
+    # raster shows WHERE (which baseline, when or at which channel) and
+    # the scatter shows HOW MUCH, every baseline overlaid.
+    "phaserms-time": (
+        # Raster cell: scatter across the band in one integration.
+        Axis.BASELINE, Axis.TIME,    Axis.PHASE_RMS,
+        Axis.TIME,     Axis.PHASE_RMS,
+        "side",
+    ),
+    "phaserms-freq": (
+        # Raster cell: scatter in time within each scan, per channel.
+        Axis.BASELINE, Axis.CHANNEL, Axis.PHASE_RMS,
+        Axis.CHANNEL,  Axis.PHASE_RMS,
+        "side",
+    ),
+    "phaserms-uvdist": (
+        # Scatter: one point per baseline and scan against baseline
+        # length -- does stability fall off with length?
+        Axis.BASELINE, Axis.TIME,    Axis.PHASE_RMS,
+        Axis.UVDIST,   Axis.PHASE_RMS,
+        "side",
+    ),
+    # HRS H3: the waterfall in phase (cyclic colormap, see
+    # VisibilityRaster._shade_cmap), for one baseline at a time.
+    "phase-waterfall": (
+        Axis.TIME,     Axis.CHANNEL, Axis.PHASE,
+        Axis.TIME,     Axis.PHASE,
+        "over",
+    ),
 }
+
+# Presets that also put the Phase RMS / Coherence controls back to their
+# defaults (slope removed, automatic windows), in both gear tabs, so the
+# button always gives the same view whatever was tried before it.
+_PRESETS_RESET_STAT = ("phaserms-time", "phaserms-freq", "phaserms-uvdist")
+
+# Toolbar buttons, in order: (preset name, label, button width, help).
+# The help is shown in the status area while the pointer is over the
+# button (see VisibilityPlotter._hover).
+_PRESET_BUTTONS = (
+    ("vplot", "vplot", 60,
+     "<b>vplot</b> \u2014 amplitude against time, like AIPS VPLOT  | Raster: Baseline \u00d7 Time, Amplitude  | Scatter: Amplitude vs Time  | A first look at a whole observation: dropouts, bad scans, bad baselines"),
+    ("radplot", "radplot", 70,
+     "<b>radplot</b> \u2014 amplitude against baseline length  | Raster: Baseline \u00d7 Time, Amplitude  | Scatter: Amplitude vs UV Distance  | Flat for a point source; falls with length for a resolved one"),
+    ("waterfall", "Waterfall", 78,
+     "<b>Waterfall</b> \u2014 Time \u00d7 Channel amplitude, one panel above the other  | Scatter: Amplitude vs Time  | Shows interference: narrow in frequency, or short in time  | Tick one baseline (or step through them) to see it by itself"),
+    ("zscore", "Z-Score", 70,
+     "<b>Z-Score</b> \u2014 how unusual each sample is for its own baseline  | Raster: Baseline \u00d7 Time coloured by Z-Score, to spot an outlier baseline at a glance  | Scatter: Amplitude vs Time, coloured the same way, to confirm what is there"),
+    ("phaserms-time", "\u03c6rms\u00b7t", 62,
+     "<b>Phase RMS vs Time</b> \u2014 how steady the phase is, and when  | Raster: Baseline \u00d7 Time, phase scatter across the band in each integration  | Scatter: the same values against time, all baselines  | Low and flat is good; a rise shows when the phase became unstable. Slope and window controls are reset"),
+    ("phaserms-freq", "\u03c6rms\u00b7\u03bd", 62,
+     "<b>Phase RMS vs Frequency</b> \u2014 how steady the phase is across the band  | Raster: Baseline \u00d7 Channel, phase scatter in time within each scan  | Scatter: the same against channel  | Shows bad channels and band edges. Slope and window controls are reset"),
+    ("phaserms-uvdist", "\u03c6rms\u00b7uv", 66,
+     "<b>Phase RMS vs UV Distance</b> \u2014 does phase stability get worse on longer baselines?  | Raster: Baseline \u00d7 Time, Phase RMS  | Scatter: one point per baseline and scan against baseline length  | A rise with length is the atmosphere; one high baseline is an antenna. Slope and window controls are reset"),
+    ("phase-waterfall", "\u03c6 Wfall", 68,
+     "<b>Phase waterfall</b> \u2014 Time \u00d7 Channel phase in a cyclic colormap (\u2212180\u00b0 and +180\u00b0 are the same colour)  | Scatter: Phase vs Time  | Stripes across frequency are a delay; stripes in time are a rate; uniform colour is calibrated  | Tick one baseline, or step through them"),
+)
 
 
 def _normalize_layout_kind(layout, kind):
@@ -333,6 +413,11 @@ _RASTER_QTY_OPTIONS = [("AMPLITUDE", "Amplitude"),
                        # Raster only -- see data/_raster_stats.py.
                        ("PHASE_RMS", "Phase RMS"),
                        ("COHERENCE", "Coherence"),
+                       # HRS H2 (2026-10-07): difference from the mean
+                       # of the other samples in the same time window.
+                       # Raster only -- see data/_raster_diff.py.
+                       ("AMP_VDIFF",  "Amp V Diff"),
+                       ("PHASE_DIFF", "Phase Diff"),
                        ("FLAG",      "Flag"),
                        # Part 6 (2026-09): falls through this existing
                        # dropdown with no new UI mechanism -- same
@@ -1885,7 +1970,8 @@ class VisibilityPlotter:
         position; the other always takes the complementary kind.
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
-        ``"zscore"``, or ``None``.
+        ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
+        ``"phaserms-uvdist"``, ``"phase-waterfall"``, or ``None``.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
@@ -2211,7 +2297,8 @@ class VisibilityPlotter:
         # _build_panels' slot-kind assignment below) ever needs to know
         # the shortcut exists. See _normalize_layout_kind.
         self._layout, self._kind = _normalize_layout_kind(layout, kind)
-        self._preset        = preset.lower() if preset else None
+        self._preset        = (preset.lower().replace("_", "-")
+                               if preset else None)
         self._time_range    = time_range
         self._freq_range    = freq_range
         self._uvdist_range  = uvdist_range
@@ -4825,7 +4912,7 @@ html, body { height: 100%; margin: 0; }
         # channels, and such a value is added to the list so the Select
         # can show it.
         rt_sel = Select(
-            title="Time window (RMS / Coherence)",
+            title="Time window (RMS / Coherence / Diff)",
             value=_window_value(slot.raster.stat_time_window),
             options=_window_options(_STAT_TIME_WINDOW_OPTIONS,
                                     slot.raster.stat_time_window, "s"),
@@ -4886,10 +4973,13 @@ conflict_div.text = conflict ? msg : '';
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Raster ──</span>", width=_SIDEBAR_WIDTH),
-            ry_sel, rx_sel, rq_sel, ra_box, rd_box, rt_box, rc_box,
+            self._hover(column(ry_sel, rx_sel, width=_SIDEBAR_WIDTH),
+                        "r_axes"),
+            self._hover(rq_sel, "r_qty"),
+            ra_box, rd_box, rt_box, rc_box,
             conflict_div,
-            raster_cmap,
-            info_sel.column,
+            self._hover(raster_cmap, "scaling"),
+            self._hover(info_sel.column, "info"),
         )
         widgets = {
             "y_sel": ry_sel, "x_sel": rx_sel, "q_sel": rq_sel,
@@ -5059,9 +5149,11 @@ for (let i = 0; i < cols.length; i++) {
         panel = column(
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Scatter ──</span>", width=_SIDEBAR_WIDTH),
-            sx_sel, sy_sel, sd_box, st_box, sc_box,
-            *extra_children,
-            info_sel.column,
+            self._hover(sx_sel, "s_x"), self._hover(sy_sel, "s_y"),
+            sd_box, st_box, sc_box,
+            self._hover(column(*extra_children, width=_SIDEBAR_WIDTH),
+                        "colorize"),
+            self._hover(info_sel.column, "info"),
         )
         widgets = {
             "x_sel": sx_sel, "y_sel": sy_sel,
@@ -5326,13 +5418,8 @@ for (let i = 0; i < cols.length; i++) {
         self._spw_next_btn = self._spw_iter.next_btn
         self._spw_text = self._tick_text_input("id, name, a~b, !id", dark)
         self._spw_select = column(
-            # Heading row and table inside ONE hover region (2026-10-06):
-            # with only the table wrapped, the help did not show over
-            # the "SPW" label and its buttons.  The text box below stays
-            # outside -- it has its own hint.
-            self._hover(column(self._spw_iter.row, self._spw_table,
-                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
-                        "spw"),
+            self._spw_iter.row,
+            self._hover(self._spw_table, "spw"),
             self._spw_text,
             self._spw_overflow_note,
             width=_SIDEBAR_WIDTH,
@@ -5542,9 +5629,8 @@ for (let i = 0; i < cols.length; i++) {
             "name, number, a~b, !name", dark)
         _focus_blur(self._antenna_text, self._hint_antenna_text)
         antenna_col = column(
-            self._hover(column(self._antenna_iter.row, self._antenna_table,
-                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
-                        "antenna"),
+            self._antenna_iter.row,
+            self._hover(self._antenna_table, "antenna"),
             self._antenna_text,
             self._hover(self._antenna_mode, "ant_mode"),
             self._antenna_note,
@@ -5595,9 +5681,8 @@ for (let i = 0; i < cols.length; i++) {
             "A&B, number, a~b, !number", dark)
         _focus_blur(self._baseline_text, self._hint_baseline_text)
         baseline_col = column(
-            self._hover(column(self._baseline_iter.row, self._baseline_table,
-                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
-                        "antenna"),
+            self._baseline_iter.row,
+            self._hover(self._baseline_table, "antenna"),
             self._baseline_text,
             self._baseline_note,
             width=_SIDEBAR_WIDTH,
@@ -5669,10 +5754,9 @@ for (let i = 0; i < cols.length; i++) {
         self._sidebar_col = column(
             path_div,
             _section("Data"),
-            self._col_select, self._hover(field_col, "field"), self._spw_select,
-            self._hover(column(corr_label, self._corr_cbg,
-                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
-                        "corr"),
+            self._hover(self._col_select, "col"),
+            self._hover(field_col, "field"), self._spw_select,
+            corr_label, self._hover(self._corr_cbg, "corr"),
             scan_inp, antenna_col, baseline_col, time_inp, uv_inp,
             # "Axes" header removed (Group 3 piece 2, 2026-07-31) along
             # with self._raster_axis_section/_scatter_axis_section that
@@ -7895,10 +7979,12 @@ if (!one) {
         self._layout_js = layout_js
 
         # ---- Preset buttons ----------------------------------------------- #
-        vplot_btn     = Button(label="vplot",     button_type="default", width=70)
-        radplot_btn   = Button(label="radplot",   button_type="default", width=70)
-        waterfall_btn = Button(label="Waterfall", button_type="default", width=80)
-        zscore_btn    = Button(label="Z-Score",   button_type="default", width=75)
+        # One button per _PRESET_BUTTONS entry (2026-10-07: a table, now
+        # that there are eight).  Narrow, so the row still fits.
+        preset_btns = {
+            name: Button(label=label, button_type="default", width=width)
+            for name, label, width, _help in _PRESET_BUTTONS
+        }
 
         def _preset_js(preset_name: str) -> CustomJS:
             ry, rx, rq, sx, sy, pl = _PRESETS[preset_name]
@@ -7966,6 +8052,22 @@ try {
 } catch(e) { console.warn('preset colorize-mode sync failed:', e); }
 """
 
+            # The phase-rms presets also reset the slope / window controls
+            # of both gear tabs (see _PRESETS_RESET_STAT).  One statement
+            # per try: a Select whose tab was never opened throws on a
+            # value change (see the axis selects below) and must not
+            # stop the others being set.
+            stat_reset_js = ""
+            if preset_name in _PRESETS_RESET_STAT:
+                stat_reset_js = "".join(
+                    f"try {{ {w}.value = '{v}'; }} catch(e) {{}}\n"
+                    for w, v in (("panel0_rd_sel", "remove"),
+                                 ("panel0_rt_sel", "auto"),
+                                 ("panel0_rc_sel", "off"),
+                                 ("panel1_sd_sel", "remove"),
+                                 ("panel1_st_sel", "auto"),
+                                 ("panel1_sc_sel", "off")))
+
             return CustomJS(
                 args=args,
                 code=self._do_plot_js + colorize_mode_js + f"""
@@ -8016,6 +8118,7 @@ try {{
     panel1_sx_sel.value = '{sx.name}';
     panel1_sy_sel.value = '{sy.name}';
 }} catch(e) {{ console.warn('preset axis-select sync failed:', e); }}
+{stat_reset_js}
 
 const over = (active_layout === 2);
 side_container.visible = !over;
@@ -8032,16 +8135,12 @@ doPlot();
 """,
             )
 
-        self._preset_js_objects = [
-            _preset_js("vplot"),
-            _preset_js("radplot"),
-            _preset_js("waterfall"),
-            _preset_js("zscore"),
-        ]
-        vplot_btn.js_on_click(self._preset_js_objects[0])
-        radplot_btn.js_on_click(self._preset_js_objects[1])
-        waterfall_btn.js_on_click(self._preset_js_objects[2])
-        zscore_btn.js_on_click(self._preset_js_objects[3])
+        self._preset_js_objects = []
+        self._preset_buttons = preset_btns
+        for name, btn in preset_btns.items():
+            js = _preset_js(name)
+            self._preset_js_objects.append(js)
+            btn.js_on_click(js)
 
         # ---- Dark / Light mode toggle ------------------------------------- #
         # The toggle's initial state must follow the constructor's
@@ -8131,19 +8230,7 @@ doPlot();
                 # into an inline HTML <span style=...> inside .text
                 # itself, which no property-based recolor mechanism can
                 # reach at all — it has to be regenerated, not restyled).
-                "hint_divs":    [self._hint_field, self._hint_spw,
-                                 self._hint_corr, self._hint_scan,
-                                 self._hint_antenna, self._hint_time,
-                                 self._hint_uvrange, self._hint_spw_text,
-                                 self._hint_antenna_text,
-                                 self._hint_baseline_text,
-                                 self._hint_averaging,
-                                 self._hint_detrend,
-                                 self._hint_twin,
-                                 self._hint_cwin,
-                                 self._hint_ant_mode,
-                                 self._hint_s_twin,
-                                 self._hint_s_cwin],
+                "hint_divs":    self._hint_divs(),
                 "path_div":         self._path_div,
                 "source_basename":  os.path.basename(self._source_path),
                 # _spw_table, not _spw_select: the latter is now a column
@@ -8279,25 +8366,23 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             return Div(text="&nbsp;|&nbsp;", width=14,
                        styles={"line-height": "32px", "color": "#45475a"})
 
+        # Help for every toolbar control goes to the status area, like
+        # the sidebar's (2026-10-07; these were Bokeh tooltips, a second
+        # kind of help in one application).
         return row(
-            Tip(sidebar_toggle_btn,
-                tooltip=self._tt("Show / hide the plot configuration panel", "right")),
+            self._hover(sidebar_toggle_btn, "tb_sidebar"),
             _sep(),
-            Tip(plot_btn,   tooltip=self._tt("Replot both panels using the current configuration")),
-            Tip(reload_btn, tooltip=self._tt("Reload data and replot (clears any pending flags)")),
+            self._hover(plot_btn,   "tb_plot"),
+            self._hover(reload_btn, "tb_reload"),
             _sep(),
-            Tip(layout_rbg, tooltip=self._tt("Show one panel, or both side by side / one above the other")),
+            self._hover(layout_rbg, "tb_layout"),
             _sep(),
-            Tip(vplot_btn,     tooltip=self._tt("Preset: Baseline vs Time (raster) + Amplitude vs Time (scatter)")),
-            Tip(radplot_btn,   tooltip=self._tt("Preset: Baseline vs Time (raster) + Amplitude vs UV Distance (scatter)")),
-            Tip(waterfall_btn, tooltip=self._tt("Preset: Amplitude vs Channel waterfall (over/under layout)")),
-            Tip(zscore_btn,    tooltip=self._tt("Preset: Baseline vs Time raster colored by Z-Score, to spot an outlier baseline at a glance, alongside an Amplitude vs Time scatter to confirm what's there")),
+            *[self._hover(btn, f"preset_{name}")
+              for name, btn in preset_btns.items()],
             _sep(),
-            Tip(export_btn, tooltip=self._tt(
-                "Write the current view to a PNG (server-side; the path is "
-                "reported below the plots)")),
+            self._hover(export_btn, "tb_export"),
             _sep(),
-            Tip(dark_btn, tooltip=self._tt("Toggle between dark and light background")),
+            self._hover(dark_btn, "tb_theme"),
         )
 
     # ---------------------------------------------------------------------- #
@@ -8578,30 +8663,24 @@ if (x != null && !isNaN(x)) {
         # here; attached to the controls by _hover().
         self._hint_averaging  = _hint("<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities, then take amplitude / phase. Amplitude drops where samples do not line up (noise, uncalibrated phase, a delay across the averaged channels). What AIPS and plotms do  | <b>Scalar</b>: average the amplitudes themselves; shows signal plus noise level, no loss from decorrelation  | Vector next to Scalar on two panels shows where coherence is lost")
         self._hint_detrend    = _hint("<b>Phase slope</b> \u2014 for Phase RMS and Coherence  | <b>Remove</b>: take out a linear phase slope (a delay across frequency, a rate in time) before measuring the scatter, wherever the data clearly show one. Use for data that are not yet fringe-fitted  | <b>Keep</b>: measure the data as they are; a delay or rate then shows up as large scatter and low coherence  | On noise-dominated or already calibrated data the two give the same picture")
-        self._hint_twin       = _hint("<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, one scan where it is not  | <b>Off</b>: no windows  | <b>Scan</b> or a length: each scan, or pieces of that length; never across a gap  | Longer windows are steadier but blur changes in time; on the plot they show as blocks")
+        self._hint_twin       = _hint("<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, one scan where it is not  | <b>Off</b>: no windows  | <b>Scan</b> or a length: each scan, or pieces of that length; never across a gap  | For <b>Amp V Diff / Phase Diff</b> it is the stretch the reference mean is taken over (Auto and Off mean one scan)  | Longer windows are steadier but blur changes in time; on the plot they show as blocks")
         self._hint_cwin       = _hint("<b>Channel window</b> \u2014 how many channels each Phase RMS / Coherence value is measured within  | <b>Off</b>: the whole band where frequency is not a plot axis, single channels where it is  | A number: blocks of that many channels  | Needed, with a time window or alone, to see these quantities on a Time \u00d7 Channel waterfall")
         self._hint_ant_mode   = _hint("<b>Which baselines the ticked antennas select</b>  | <b>Either end</b>: every baseline with a ticked antenna at one end \u2014 one antenna against all the others  | <b>Both ends</b>: only baselines between ticked antennas \u2014 tick all and untick one to exclude it, or tick a few for a sub-array  | Ticked baselines override both")
         self._hint_s_twin     = _hint("<b>Time window (scatter)</b> \u2014 the stretch of time each Phase RMS / Coherence point is measured within  | <b>Auto</b>: one integration when X is Time, otherwise one scan  | <b>Off</b>: single integrations when X is Time, otherwise the whole selected time range  | <b>Scan</b> or a length: as given  | Short windows of noisy data give scattered, low-reading values")
         self._hint_s_cwin     = _hint("<b>Channel window (scatter)</b> \u2014 how many channels each Phase RMS / Coherence point is measured within  | <b>Off</b>: single channels when X is Frequency or Channel, otherwise the whole band  | A number: blocks of that many channels")
 
-        return column(
+        # Fixed-text help for the gear tabs and the toolbar.
+        for name, text in _STATIC_HINTS.items():
+            setattr(self, f"_hint_{name}", _hint(text))
+        # ...and one per preset button.  Every hint is created HERE,
+        # before any control is wrapped by _hover(): each wrapper is
+        # given the full list of hints to hide when it shows its own.
+        for name, _label, _width, text in _PRESET_BUTTONS:
+            setattr(self, f"_hint_preset_{name}", _hint(text))
+
+        self._status_col = column(
             self._status_row,
-            self._hint_field,
-            self._hint_spw,
-            self._hint_corr,
-            self._hint_scan,
-            self._hint_antenna,
-            self._hint_time,
-            self._hint_uvrange,
-            self._hint_spw_text,
-            self._hint_antenna_text,
-            self._hint_baseline_text,
-            self._hint_averaging,
-            self._hint_detrend,
-            self._hint_twin,
-            self._hint_cwin,
-            self._hint_ant_mode,
-            self._hint_s_twin,
-            self._hint_s_cwin,
+            *self._hint_divs(),
             sizing_mode="stretch_width",
         )
+        return self._status_col

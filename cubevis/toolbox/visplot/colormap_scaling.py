@@ -299,6 +299,9 @@ def build_equalize_curve(
     way ``equalize_histogram`` treats an all-NaN/degenerate reference:
     pass the input through unchanged (see ``apply_equalize_curve``).
     """
+    # float64 for the same reason as in equalize_histogram: a narrow
+    # float32 range has too few distinct values for the bin edges.
+    reference = np.asarray(reference, dtype=np.float64)
     ref_finite = reference[np.isfinite(reference)]
     if ref_finite.size == 0:
         return None

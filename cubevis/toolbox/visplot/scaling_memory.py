@@ -26,11 +26,10 @@ quantity from ``self._quantity``.  The panel therefore tracks a separate
 ``_scaling_owner``: the quantity the live settings currently belong to.  All
 switching logic keys on that, never on ``self._quantity``.
 
-Only Z-Score has a special default today.  ``_QUANTITY_DEFAULTS`` is the one
-place to give another quantity its own first-visit default (e.g. a cyclic
-linear range for Phase); it was deliberately left empty for Phase/Flag because
-changing what they look like is a visual decision for the user, not a side
-effect of this change.
+Z-Score and Phase have special defaults.  ``_QUANTITY_DEFAULTS`` is the one
+place to give a quantity its own first-visit default.  Phase got a linear
+-180..180 degree range with the cyclic colormap (HRS H3, 2026-10-07); Flag
+is left alone.
 
 The unit here (:class:`RasterScalingUnit`) is the first concrete citizen of the
 save/restore framework; see ``VIEW_STATE_DESIGN.md``.
@@ -89,8 +88,18 @@ def _zscore_default(base: ScalingSettings) -> ScalingSettings:
                    vmax=None, auto_cutoff=True)
 
 
+def _phase_default(base: ScalingSettings) -> ScalingSettings:
+    # Phase is drawn with a cyclic colormap (palettes.cyclic_cmap), which
+    # only means anything if the full circle maps onto the full ramp:
+    # linear, fixed at -180..180 degrees.  Histogram equalization would
+    # stretch the circle unevenly, and an automatic range would put the
+    # seam wherever the data happened to end.
+    return replace(base, scaling="linear", vmin=-180.0, vmax=180.0)
+
+
 _QUANTITY_DEFAULTS: Dict[str, Callable[[ScalingSettings], ScalingSettings]] = {
     Axis.Z_SCORE.name: _zscore_default,
+    Axis.PHASE.name: _phase_default,
 }
 
 

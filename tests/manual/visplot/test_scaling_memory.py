@@ -57,12 +57,17 @@ class TestDefaults:
         s = default_scaling_settings(Axis.Z_SCORE)
         assert (s.scaling, s.vmin, s.vmax, s.auto_cutoff) == ("threshold", 3.5, None, True)
 
-    @pytest.mark.parametrize("q", [Axis.AMPLITUDE, Axis.PHASE, Axis.REAL,
+    @pytest.mark.parametrize("q", [Axis.AMPLITUDE, Axis.REAL,
                                    Axis.IMAGINARY, Axis.FLAG])
     def test_every_other_quantity_gets_the_class_default(self, q):
-        """Deliberate: changing how Phase/Flag look is a visual decision, not
-        a side effect. _QUANTITY_DEFAULTS is where to do it later."""
         assert default_scaling_settings(q) == ScalingSettings()
+
+    def test_phase_is_linear_over_the_full_circle(self):
+        """HRS H3 (2026-10-07): Phase is drawn with a cyclic colormap,
+        which needs the whole circle on the whole ramp."""
+        s = default_scaling_settings(Axis.PHASE)
+        assert (s.scaling, s.vmin, s.vmax) == ("linear", -180.0, 180.0)
+        assert not s.auto_cutoff
 
     def test_the_panels_own_alpha_and_gamma_are_kept(self):
         s = default_scaling_settings(Axis.Z_SCORE, alpha=42.0, gamma=2.0)

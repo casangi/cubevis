@@ -219,8 +219,10 @@ Task arguments (preview)
        panel layout (also togglable live in the GUI).
    * - ``preset``
      - str, optional
-     - Named axis preset: ``"vplot"``, ``"radplot"``, or
-       ``"waterfall"``. Corresponds to the toolbar preset buttons.
+     - Named axis preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
+       ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
+       ``"phaserms-uvdist"`` or ``"phase-waterfall"``. Corresponds to
+       the toolbar preset buttons.
    * - ``time_range``
      - tuple/list of 2 floats, optional
      - ``(start, end)`` as MJD floats — a numeric plot-range hint,
@@ -278,8 +280,22 @@ Toolbar
 * **⟨ Sidebar** — collapse/expand the control sidebar
 * Display mode — Both / Raster only / Scatter only
 * Layout — Side by Side / Over Under
-* Presets — quick axis presets (e.g. amp-vs-time style, amp-vs-uvdist
-  style, waterfall)
+* Presets — one button each; a preset sets both panels and plots:
+
+  * *vplot* — Baseline vs Time amplitude raster, Amplitude vs Time
+    scatter
+  * *radplot* — the same raster, Amplitude vs UV Distance scatter
+  * *Waterfall* — Time vs Channel amplitude, panels one above the other
+  * *Z-Score* — Baseline vs Time coloured by Z-Score, to spot outliers
+  * *φrms·t*, *φrms·ν*, *φrms·uv* — Phase RMS against time, against
+    frequency (channel) and against UV distance. The raster shows which
+    baseline and when (or at which channel); the scatter shows the same
+    values for all baselines. These three also put the *Phase slope*
+    and window controls back to their defaults
+  * *φ Wfall* — Time vs Channel phase waterfall
+
+* Help — holding the pointer over any toolbar or sidebar control shows
+  what it does in the status area at the bottom
 * Pan / Zoom / Reset (shared across both panels when both are shown)
 * Box Select — draws a selection region on either panel (currently
   feeds only the disabled flagging path — see the warning at the top
@@ -302,6 +318,17 @@ Sidebar
   a window set, the two quantities are also available on a Time vs
   Channel waterfall, where the selected baselines are measured one by
   one and combined.
+
+  *Amp V Diff* and *Phase Diff* show how far each sample is from the
+  mean of the other samples in the same time window (one scan unless the
+  *Time window* control gives a length): the amplitude of the vector
+  difference, and the absolute phase difference in degrees. Anything
+  steady subtracts out, so short-lived changes (an interference burst,
+  a phase jump, one bad integration) stand out. Raster only.
+
+  *Phase* is drawn in a cyclic colormap on a fixed -180 to 180 degree
+  linear scale, so the wrap between -180 and +180 is not an edge in the
+  image.
 * **Scatter Y axis** — also offers *Phase RMS* and *Coherence*. Against
   Time each point is one baseline's scatter across the band in one
   integration; against Frequency or Channel, one baseline's scatter over

@@ -358,7 +358,12 @@ def colorbar_html(bands: Iterable[Any], *, max_stops: int = 24,
         if len(picks) < 2:
             continue
         try:
-            vals = [_fmt(v) for v in b.mapping.ticks(n_ticks)]
+            raw = [float(v) for v in b.mapping.ticks(n_ticks)]
+            # A tick that is zero but for rounding (the middle of
+            # -180..180 came out as -4.22e-15) is shown as 0.
+            span = max(raw) - min(raw) if raw else 0.0
+            raw = [0.0 if abs(v) < 1e-9 * span else v for v in raw]
+            vals = [_fmt(v) for v in raw]
         except Exception:                       # a mapping we cannot invert
             vals = [_fmt(getattr(b.mapping, "vmin", None)),
                     _fmt(getattr(b.mapping, "vmax", None))]

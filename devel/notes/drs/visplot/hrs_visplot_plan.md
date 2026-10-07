@@ -72,6 +72,9 @@ straddle +/-180 degrees, and amplitude cannot show coherent averages.
 
 ### H2. Windowed statistics: phase rms, coherence, difference from running mean (L)
 
+*Status 2026-10-07: complete. Presets and the DIFF quantities
+(`AMP_VDIFF`, `PHASE_DIFF`, raster only) delivered.*
+
 *Status 2026-10-06: slice 3 adds the two quantities to the scatter panel
 (phase rms vs time, frequency, UV distance), windows chosen by the x axis;
 scatter GUI controls and presets remain.*
@@ -100,6 +103,14 @@ One reduction framework, several quantities.
   samples excluded; parity.
 
 ### H3. Baseline iteration and ordering (M)
+
+*Status 2026-10-07: phase waterfall preset, cyclic Phase colormap and H1b
+delivered. Not done: sorting the Time x Baseline raster by length. The
+baseline axis is the numeric `baseline_id` everywhere (raster coordinate,
+tick labels, cursor probe, flag regions and their half-cell snapping in
+`flag_engine.py`, flag overlays), so a display order that differs from id
+order has to be introduced as one mapping used by all of them. Do it with
+H4/H5, which touch the same code.*
 
 *Status 2026-10-05: baseline selection and iteration delivered, with
 antenna / baseline tables and "tick from text" boxes (also for SPW); see
@@ -229,3 +240,4 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-06 | `ec5809d` | Second browser round: scans taken from the data's scan labels; clear message for Correlation as a raster axis (not implemented); dark-mode colour for plain sidebar text; status-area help found inert on stock Bokeh widgets (needs a cubevisjs change), `description` tooltips as interim |
 | 2026-10-06 | `75faa2b` | Status-area help made real for non-text controls: new `EvHover` wrapper model (Python + TypeScript), cubevisjs bundle rebuilt, `description` tooltips removed. Phase RMS vs Channel on TW Hya now shows the expected two populations (Darrell's screenshot) |
 | 2026-10-07 | `dc58f0e` | Housekeeping before the next slice. Fixed: `equalize_histogram` crash on a narrow float32 range (cast to float64); TS4113 in `visibility_raster.ts` (`static override __name__`; type-only, rebuilt bundle differs only in minifier variable names, so the committed bundles are kept). Long default titles now wrap to two lines in a smaller font. Still open, by choice: Correlation as a raster axis (not implemented, says so); multi-SPW Baseline x Time shows the first SPW; H1b phase-safe display resample |
+| 2026-10-07 | `4869088` | Combined slice closing H2 and most of H3: presets `phaserms-time/-freq/-uvdist` and `phase-waterfall` (toolbar buttons now built from a table); `AMP_VDIFF` / `PHASE_DIFF` raster quantities; Phase drawn with a cyclic colormap on fixed linear -180..180 and resampled as a circular mean (H1b); status-area help for the remaining gear-tab controls, the data column and the whole toolbar (toolbar tooltips removed). Fixed on the way: `np.histogram` crash on constant-amplitude data at three more sites; colour bar tick "-4.22e-15" shown as 0. Not done: baseline-length ordering (moved to H4/H5, see H3). Two-line title artefact not reproduced headlessly (Bokeh 3.10, Chromium). Handoff note: `hrs_handoff_2026-10-07.md` |

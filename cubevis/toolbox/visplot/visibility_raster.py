@@ -47,7 +47,9 @@ from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
 from .data.reader import _agg_value, _cell_bounds, channel_range_to_freq
 from .axes import Axis
+from . import palettes as _palettes
 from .selection import normalize_averaging
+from .data._raster_diff import DIFF_QUANTITIES, describe_diff_window
 from .data._raster_stats import (
     describe_windows, normalize_chan_window, normalize_time_window,
 )
@@ -126,6 +128,9 @@ def _auto_title(quantity: "Axis", y_label: str, x_label: str,
         if windows:
             note = f"{note}, {windows}"
         q_label = f"{q_label} ({note})"
+    # Difference from the window mean: the window is the whole point.
+    if quantity in DIFF_QUANTITIES and windows:
+        q_label = f"{q_label} ({windows})"
     return (
         f"{q_label}  "
         f"[{y_label} vs {x_label}]"
@@ -414,6 +419,8 @@ class VisibilityRaster(VisibilityPlot):
         return self._title or wrap_title(_auto_title(
             self._quantity, self._y_info.label, self._x_info.label,
             self._polarization, self._averaging, self._detrend,
+            describe_diff_window(self._stat_time_window)
+            if self._quantity in DIFF_QUANTITIES else
             describe_windows(
                 self._stat_time_window, self._stat_chan_window,
                 time_displayed=Axis.TIME in (self._y_dim, self._x_dim),
@@ -430,6 +437,37 @@ class VisibilityRaster(VisibilityPlot):
         """
         self._cmap = list(cmap)
         self._reshade()
+
+    def _shade_cmap(self):
+        """The ramp the image is shaded with: the panel's colormap, except
+        for Phase, which is an angle and gets the cyclic ramp so the
+        +/-180 degree wrap is not drawn as an edge (HRS H3).  The
+        panel's own colormap is kept and comes back with the next
+        quantity."""
+        if self._quantity == Axis.PHASE:
+            return list(_palettes.cyclic_cmap())
+        return self._cmap
+
+    def _resample(self, cvs, agg, interpolate):
+        """``cvs.raster(agg)``, made safe for Phase (HRS H1b).
+
+        Zoomed out, several cells land on one screen pixel and Datashader
+        averages them; zoomed in with ``"linear"``, it interpolates
+        between them.  Either is an arithmetic mean of degrees, and the
+        mean of +179 and -179 is 0: the opposite direction.  For Phase
+        the unit vector (cos, sin) is resampled instead and the angle
+        taken afterwards, which is the circular mean.  A pixel whose
+        cells cancel exactly has no direction and is left blank.
+        """
+        if self._quantity != Axis.PHASE:
+            return cvs.raster(agg, interpolate=interpolate)
+        rad = np.deg2rad(agg)
+        c = cvs.raster(np.cos(rad), interpolate=interpolate)
+        s = cvs.raster(np.sin(rad), interpolate=interpolate)
+        with np.errstate(invalid="ignore"):
+            deg = np.rad2deg(np.arctan2(s.values, c.values))
+            deg = np.where(np.hypot(s.values, c.values) > 1e-9, deg, np.nan)
+        return c.copy(data=deg)
 
     def _reshade(self) -> None:
         """Re-shade the cached agg at the current viewport.
@@ -493,9 +531,15 @@ class VisibilityRaster(VisibilityPlot):
         # quantity by the time a new one is first visited).
         self._scaling_alpha_default = self._scaling_alpha
         self._scaling_gamma_default = self._scaling_gamma
-        if self._quantity == Axis.Z_SCORE and self._scaling == _DEFAULT_SCALING:
+        # ...and likewise a panel born as PHASE (fixed linear -180..180 for
+        # the cyclic colormap), unless the caller also gave a range.
+        _special = (self._quantity == Axis.Z_SCORE
+                    or (self._quantity == Axis.PHASE
+                        and self._scaling_vmin is None
+                        and self._scaling_vmax is None))
+        if _special and self._scaling == _DEFAULT_SCALING:
             self._load_scaling_settings(default_scaling_settings(
-                Axis.Z_SCORE, self._scaling_alpha_default, self._scaling_gamma_default))
+                self._quantity, self._scaling_alpha_default, self._scaling_gamma_default))
 
     def _switch_scaling_owner(self, new_quantity) -> None:
         """Store the live settings under their current owner, then load
@@ -677,6 +721,8 @@ class VisibilityRaster(VisibilityPlot):
         finite = self._agg.values[np.isfinite(self._agg.values)]
         if finite.size == 0:
             return np.array([]), np.array([])
+        # float64: see colormap_scaling.equalize_histogram.
+        finite = finite.astype(np.float64)
         counts, edges = np.histogram(finite, bins=bins)
         return counts, edges
 
@@ -1105,7 +1151,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
 
         band = ColorBand(
             label         = self._quantity.label,
-            cmap          = tuple(self._cmap),
+            cmap          = tuple(self._shade_cmap()),
             scaling       = self._scaling,
             scaling_alpha = self._scaling_alpha,
             scaling_gamma = self._scaling_gamma,
@@ -1349,7 +1395,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 x_range     = (x0, x1),
                 y_range     = (y0, y1),
             )
-            ds_agg = cvs.raster(agg, interpolate=interpolate)
+            ds_agg = self._resample(cvs, agg, interpolate)
             shaded = self._shade_agg(ds_agg)
             img32  = _img_to_uint32(shaded)
             self._apply_flag_overlays(img32, (x0, x1), (y0, y1))
@@ -1633,7 +1679,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
 
         if self._scaling in _cms.DATASHADER_HOW:
             shade_kw = dict(
-                cmap=self._cmap,
+                cmap=self._shade_cmap(),
                 how=_cms.DATASHADER_HOW[self._scaling],
             )
             if vmin is not None and vmax is not None:
@@ -1674,7 +1720,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 ds_agg.values, reference=reference,
             )
             scaled_agg = ds_agg.copy(data=transformed)
-            return tf.shade(scaled_agg, cmap=self._cmap, how="linear", span=[0.0, 1.0])
+            return tf.shade(scaled_agg, cmap=self._shade_cmap(), how="linear", span=[0.0, 1.0])
 
         transformed = _cms.apply_explicit_scaling(
             ds_agg.values,
@@ -1685,7 +1731,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             vmax=vmax,
         )
         scaled_agg = ds_agg.copy(data=transformed)
-        return tf.shade(scaled_agg, cmap=self._cmap, how="linear", span=[0.0, 1.0])
+        return tf.shade(scaled_agg, cmap=self._shade_cmap(), how="linear", span=[0.0, 1.0])
 
     def _resample_method(
         self,
@@ -1783,7 +1829,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             x_range     = (x0, x1),
             y_range     = (y0, y1),
         )
-        ds_agg = cvs.raster(agg, interpolate=interpolate)
+        ds_agg = self._resample(cvs, agg, interpolate)
         shaded = self._shade_agg(ds_agg)
         return self._apply_flag_overlays(_img_to_uint32(shaded), (x0, x1), (y0, y1))
 

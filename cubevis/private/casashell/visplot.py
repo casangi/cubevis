@@ -242,7 +242,8 @@ class _visplot:
         position; the other always takes the complementary kind.
     preset : str | None
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
-        ``"zscore"``, or ``None``.
+        ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
+        ``"phaserms-uvdist"``, ``"phase-waterfall"``, or ``None``.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over

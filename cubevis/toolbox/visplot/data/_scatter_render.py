@@ -981,7 +981,11 @@ def render_layer(
 
         hist_counts = hist_edges = None
         ref_for_hist = eq_reference if eq_reference is not None else agg.values
-        ref_finite = np.asarray(ref_for_hist)
+        # float64: a narrow float32 range cannot be cut into 254 distinct
+        # bin edges and np.histogram raises ("Too many bins for data
+        # range") -- seen on data of constant amplitude.  Same fix as
+        # colormap_scaling.equalize_histogram.
+        ref_finite = np.asarray(ref_for_hist, dtype=np.float64)
         ref_finite = ref_finite[np.isfinite(ref_finite)]
         if ref_finite.size:
             hist_counts, hist_edges = np.histogram(ref_finite, bins=254)

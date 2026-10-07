@@ -125,6 +125,10 @@ class TestPerQuantityMemory:
         r = _bare_raster(Axis.AMPLITUDE, initial_scaling="eq_hist",
                          initial_vmin=8.1, initial_vmax=30.5)
         r.update_axes(quantity=Axis.PHASE)
+        # Phase's own first-visit default (2026-10-07: linear over the
+        # full circle, for the cyclic colormap) -- not Amplitude's range.
+        assert _live(r) == ("linear", -180.0, 180.0)
+        r.update_axes(quantity=Axis.REAL)
         assert _live(r) == ("eq_hist", None, None)
 
     def test_alpha_and_gamma_are_remembered_too(self):
@@ -209,7 +213,7 @@ class TestRealPlotterCallPattern:
 
     def test_other_quantity_round_trip_via_the_plotter(self):
         r = _bare_raster(Axis.AMPLITUDE, initial_scaling="sqrt", initial_vmin=1.0)
-        _plotter_style_update(r, quantity=Axis.PHASE)
+        _plotter_style_update(r, quantity=Axis.REAL)
         assert _live(r) == ("eq_hist", None, None)
         _plotter_style_update(r, quantity=Axis.AMPLITUDE)
         assert _live(r) == ("sqrt", 1.0, None)

@@ -259,14 +259,7 @@ to another control is one hint Div in `_build_status_bar` plus one call.
    with the previous bundle, the same file placed in all five
    `__js__/bokeh-3.x` directories. The build reports one existing type
    error, `visibility_raster.ts:63` (`static override __name__`), which
-   does not stop the output.
-   **Confirmed in the browser (Darrell, 2026-10-06):** the page loads,
-   the layout is unchanged, and Field shows its help over the title and
-   the dropdown. The SPW / Antenna / Baseline help did not show over
-   their headings, because only the table was wrapped; the heading row
-   and the table are now one hover region each (the text box under them
-   keeps its own hint), and Correlation's label is in with its
-   checkboxes.
+   does not stop the output. **The browser side is untested here.**
 2. **Phase RMS vs Channel piled up to 130 deg.** Values that high need
    windows of two or three samples, so the gap rule was cutting scans into
    pieces. A scan is now a run of equal `scan_name` (or `scan_number`)
@@ -374,9 +367,39 @@ read about 100 deg, i.e. noise per sample.
 - Windows on real data: whether gap-based scans match the MS's scans on
   TW Hya, and how the blocky waterfall reads in practice.
 
-## Next slices
+## Final slice (2026-10-07): presets and DIFF quantities
 
-- Presets (toolbar buttons) for phase rms vs time, vs frequency and vs UV
-  distance.
-- Status-area help for the remaining gear-tab and toolbar controls.
-- Difference-from-running-mean displays (AMP V DIFF, PHASE DIFF).
+Presets `phaserms-time`, `phaserms-freq`, `phaserms-uvdist` (toolbar
+buttons and `preset=`; underscores accepted). Each pairs a Phase RMS
+raster with the Phase RMS scatter and resets slope removal and both
+windows, in both gear tabs, to their defaults.
+
+`AMP_VDIFF` and `PHASE_DIFF` raster quantities, in
+`data/_raster_diff.py`. Choices made, all in that module's docstring:
+
+- The reference is the vector mean of the *other* samples in the window
+  (leave-one-out), per baseline, channel and polarization, along time.
+  Including the sample biases every value low by 1 - 1/n and lets a
+  strong outlier hide by pulling the mean toward itself.
+- The window is the raster's *Time window* control; Auto and Off both
+  mean one scan. Blocks, not a sliding buffer (AIPS uses a rolling
+  buffer centred on the sample).
+- Reduced to the displayed axes with a plain mean.
+- Known property: where a window has no coherent mean (pure noise, or a
+  phase that winds through a full turn inside the window), `PHASE_DIFF`
+  reads above 90 deg rather than at 90, because the leave-one-out
+  reference of a set that sums to about zero points away from each
+  sample. Such data have no reference phase to differ from; `PHASE_RMS`
+  is the quantity for them.
+- Raster only. A scatter form would need the painted-back machinery of
+  `paint_phase_stat`; not requested.
+
+Verified: `test_hrs_presets_diff_phase.py` (56 tests): known answers,
+leave-one-out, wrap, scans, seconds windows, flags, lone samples,
+chunking, both backends through a real plotter on simulated data.
+Not verified: real data; nothing was seen in a real session (the GUI
+was rendered headlessly as a static page, without a Python connection).
+
+## Remaining after H2
+
+Nothing planned. Possible later: sliding windows; DIFF as scatter Y.

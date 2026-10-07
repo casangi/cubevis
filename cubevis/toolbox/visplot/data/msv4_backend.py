@@ -120,6 +120,7 @@ from . import _scatter_render
 from ._raster_merge import coord_extent, merge_raster_partitions
 from ._raster_average import reduce_amp_phase
 from ._baseline_meta import baselines_to_meta, collect_baselines
+from ._raster_diff import DIFF_QUANTITIES, diff_from_window_mean
 from ._raster_stats import (
     STAT_QUANTITIES, paint_phase_stat, reduce_phase_stat, scatter_stat_spec,
 )
@@ -2140,6 +2141,12 @@ class MSv4Backend(XArrayReader):
             # (one sample per cell) the placeholder is what is returned:
             # a scatter of one sample is undefined, and NaN says so.
             q = (vis_pol.real * np.nan).where(~flag_pol)
+        elif quantity in DIFF_QUANTITIES:
+            # HRS H2 (2026-10-07): difference from the mean of the other
+            # samples in the same time window, per sample; reduced below
+            # with a plain mean like Real/Imaginary.  See _raster_diff.
+            q = diff_from_window_mean(vis_pol, flag_pol, quantity,
+                                      time_window)
         elif quantity == Axis.REAL:
             q = vis_pol.real.where(~flag_pol)
         elif quantity == Axis.IMAGINARY:
@@ -2184,7 +2191,7 @@ class MSv4Backend(XArrayReader):
             raise NotImplementedError(
                 f"Raster quantity {quantity.name} not supported. "
                 f"Use AMPLITUDE, PHASE, REAL, IMAGINARY, PHASE_RMS, "
-                f"COHERENCE, Z_SCORE, or FLAG."
+                f"COHERENCE, AMP_VDIFF, PHASE_DIFF, Z_SCORE, or FLAG."
             )
 
         reduce_dims = [d for d in q.dims if d not in (y_name, x_name)]

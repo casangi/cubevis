@@ -154,6 +154,36 @@ _CATEGORICAL: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# ---------------------------------------------------------------------------
+# Cyclic colormap -- for Phase
+# ---------------------------------------------------------------------------
+#
+# Phase is an angle: -180 and +180 degrees are the same direction, so the
+# two ends of its colormap must be the same colour, or a phase drifting
+# through the wrap shows as a hard edge that is not in the data.  A
+# sequential ramp (plasma) puts its two most different colours there.
+#
+# These are 25 samples of cmocean's ``phase`` map (Thyng et al. 2016,
+# Oceanography 29(3); MIT licence), which is cyclic AND of constant
+# lightness.  Constant lightness matters twice over: no phase value looks
+# more important than another, and none comes near either background, so
+# one ramp serves both themes and needs no ``condition()`` trimming
+# (which would break the cycle by cutting an end off).
+_CYCLIC_PHASE: tuple[str, ...] = (
+    "#a8780d", "#b66e1e", "#c46230", "#cf5643", "#d74957", "#dd3973",
+    "#df2a93", "#da25b3", "#d02fd0", "#c041e5", "#ae52f0", "#9863f4",
+    "#7d73f0", "#637fe6", "#4589d3", "#2c90bc", "#1e93a8", "#149692",
+    "#0c987c", "#159a63", "#359943", "#5e9420", "#7d8b10", "#95820d",
+    "#a8780d",
+)
+
+
+def cyclic_cmap() -> tuple[str, ...]:
+    """Cyclic ramp for an angle (Phase): first and last colour equal.
+    The same in both themes; never conditioned."""
+    return _CYCLIC_PHASE
+
+
 # Theme defaults.  ``theme`` selects these; an explicit ``raster_cmap`` or
 # ``scatter_cmap`` overrides, and once overridden the theme stops driving
 # that role for the session (see VisibilityPlotter's sticky-override

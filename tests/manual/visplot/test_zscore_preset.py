@@ -235,19 +235,35 @@ class TestPresetJsSubstitution:
 # ---------------------------------------------------------------------------
 
 class TestZscoreButtonWiring:
-    def test_button_is_constructed(self):
-        assert re.search(r'zscore_btn\s*=\s*Button\(', _SRC)
+    """2026-10-07: the preset buttons are built from the
+    ``_PRESET_BUTTONS`` table (there are eight now), each wired to its
+    own ``_preset_js(name)`` and given status-area help instead of a
+    tooltip.  Same facts as before, checked against the table."""
 
-    def test_button_is_wired_to_a_preset_js_object(self):
-        assert "zscore_btn.js_on_click(self._preset_js_objects[3])" in _SRC
+    @staticmethod
+    def _buttons():
+        start = _SRC.index("_PRESET_BUTTONS = (")
+        end = _SRC.index("\n)\n", start) + 3
+        ns = {}
+        exec(_SRC[start:end], ns)
+        return ns["_PRESET_BUTTONS"]
 
-    def test_preset_js_objects_list_includes_zscore_in_position_3(self):
-        start = _SRC.index("self._preset_js_objects = [")
-        end = _SRC.index("]", start) + 1
-        block = _SRC[start:end]
-        entries = [l.strip().rstrip(",") for l in block.splitlines()[1:-1]]
-        assert entries[3] == '_preset_js("zscore")', entries
+    def test_button_is_in_the_table(self):
+        names = [b[0] for b in self._buttons()]
+        assert "zscore" in names
+        assert names[:4] == ["vplot", "radplot", "waterfall", "zscore"]
 
-    def test_button_appears_in_the_toolbar_row_with_a_tooltip(self):
-        assert re.search(r"Tip\(zscore_btn,\s*tooltip=", _SRC)
+    def test_every_button_names_a_preset(self, presets):
+        for name, label, width, text in self._buttons():
+            assert name in presets, name
+            assert label and width > 0 and text.startswith("<b>")
 
+    def test_buttons_are_built_and_wired_from_the_table(self):
+        assert "for name, label, width, _help in _PRESET_BUTTONS" in _SRC
+        assert re.search(r"js = _preset_js\(name\)\s+"
+                         r"self\._preset_js_objects\.append\(js\)\s+"
+                         r"btn\.js_on_click\(js\)", _SRC)
+
+    def test_button_appears_in_the_toolbar_row_with_status_help(self):
+        assert 'setattr(self, f"_hint_preset_{name}", _hint(text))' in _SRC
+        assert re.search(r'self\._hover\(btn, f"preset_\{name\}"\)', _SRC)

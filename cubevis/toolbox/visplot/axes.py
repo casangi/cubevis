@@ -153,8 +153,13 @@ class Axis(Enum):
     AMPLITUDE = ("Amplitude", "", AxisType.DERIVED)
     """abs(VISIBILITY) — computed from the complex visibility column."""
 
-    PHASE = ("Phase", "rad", AxisType.DERIVED)
-    """angle(VISIBILITY) in radians."""
+    PHASE = ("Phase", "deg", AxisType.DERIVED)
+    """angle(VISIBILITY) in degrees, (-180, 180].
+
+    The unit said "rad" until 2026-10-07 while both backends have always
+    produced degrees (``_lazy_quantity`` and ``_raster_2d`` multiply by
+    180/pi), so a scatter's axis read "Phase [rad]" over values of
+    +/-150."""
 
     REAL = ("Real", "", AxisType.DERIVED)
     """Real part of the complex visibility."""
@@ -184,6 +189,16 @@ class Axis(Enum):
     Carries the same information as ``PHASE_RMS`` and takes the same
     *detrend* option.  See ``data/_raster_stats.py``.
     """
+
+    AMP_VDIFF = ("Amp V Diff", "", AxisType.DERIVED)
+    """Amplitude of the vector difference between a sample and the
+    vector mean of the other samples in its time window.  Raster only.
+    See ``data/_raster_diff.py``."""
+
+    PHASE_DIFF = ("Phase Diff", "deg", AxisType.DERIVED)
+    """Absolute phase difference (0-180 degrees) between a sample and
+    the vector mean of the other samples in its time window.  Raster
+    only.  See ``data/_raster_diff.py``."""
 
     Z_SCORE = ("Z-Score", "", AxisType.DERIVED)
     """Robust, rflag-style statistical deviation score (Part 6, 2026-09).

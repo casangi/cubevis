@@ -259,14 +259,7 @@ to another control is one hint Div in `_build_status_bar` plus one call.
    with the previous bundle, the same file placed in all five
    `__js__/bokeh-3.x` directories. The build reports one existing type
    error, `visibility_raster.ts:63` (`static override __name__`), which
-   does not stop the output.
-   **Confirmed in the browser (Darrell, 2026-10-06):** the page loads,
-   the layout is unchanged, and Field shows its help over the title and
-   the dropdown. The SPW / Antenna / Baseline help did not show over
-   their headings, because only the table was wrapped; the heading row
-   and the table are now one hover region each (the text box under them
-   keeps its own hint), and Correlation's label is in with its
-   checkboxes.
+   does not stop the output. **The browser side is untested here.**
 2. **Phase RMS vs Channel piled up to 130 deg.** Values that high need
    windows of two or three samples, so the gap rule was cutting scans into
    pieces. A scan is now a run of equal `scan_name` (or `scan_number`)

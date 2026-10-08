@@ -42,7 +42,7 @@ the backends' ``_raster_2d``) refers to this name.
 """
 
 
-BASELINE_COMBINES = ("mean", "max", "coherent")
+BASELINE_COMBINES = ("mean", "median", "max", "coherent")
 """Valid values of ``SelectionSpec.baseline_combine``."""
 
 DEFAULT_BASELINE_COMBINE = "mean"
@@ -232,6 +232,12 @@ class SelectionSpec:
     * ``"mean"`` (default) -- Amplitude: the mean of the baselines'
       amplitudes.  Phase: the mean direction of the baselines' phases
       (each baseline counted equally).
+    * ``"median"`` -- the middle of the baselines' values, for the same
+      quantities as ``"max"``.  The opposite question: what most
+      baselines share, unmoved by a few bad ones.  Seen beside
+      ``"max"`` it says whether a feature is on a few baselines (in max
+      only: find and flag those) or on most (in both).  Costs a sort
+      where the others are running sums.
     * ``"max"`` -- the largest of the baselines' values, for Amplitude,
       Amp V Diff and Phase Diff.  Interference on a few baselines stays
       visible instead of being diluted by the clean ones.  Phase, Real

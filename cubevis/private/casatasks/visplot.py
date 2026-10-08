@@ -405,8 +405,10 @@ class _visplot:
         How a raster cell that covers several baselines combines them
         (only where Baseline is not a plot axis, e.g. Time x Channel
         with no single baseline ticked): ``"mean"`` (default; the mean
-        of the baselines' amplitudes), ``"max"`` (the largest, so
-        interference on a few baselines is not diluted by the rest) or
+        of the baselines' amplitudes), ``"median"`` (the middle one:
+        what most baselines share, whatever a few bad ones do),
+        ``"max"`` (the largest, so interference on a few baselines is
+        not diluted by the rest) or
         ``"coherent"`` (the baselines' visibilities are added before the
         amplitude is taken; for a calibrated point source).
         ``averaging`` applies to the samples within each baseline.

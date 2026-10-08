@@ -33,6 +33,7 @@ there applies to all of them), but two things were wrong for that use:
   | Choice | Cell shows | Use |
   |---|---|---|
   | **Mean** (default) | the average of the baselines' amplitudes | the general picture; a problem on a few baselines is diluted |
+  | **Median** (added later the same day, on `50b414f`) | the middle baseline | what most baselines share, unmoved by a few bad ones. In Maximum but not in Median: on a few baselines, find and flag those. In both: on most of them |
   | **Maximum** | the largest baseline | interference or a bad antenna shows even if one baseline has it |
   | **Coherent** | amplitude of the baselines added as complex numbers | a calibrated point source only: baselines agree and noise averages down |
 
@@ -60,6 +61,10 @@ Coherent. Amplitudes on such plots are larger than before (TW Hya: 11.3
 against 1.4). `baseline_combine="coherent"` gives the old picture.
 
 ## What each quantity does
+
+Median behaves as Maximum does in this table (the middle baseline
+instead of the largest, for the same quantities), and like Maximum
+falls back to the mean direction for Phase.
 
 | Quantity | Mean | Maximum | Coherent |
 |---|---|---|---|
@@ -124,6 +129,17 @@ reduced).
   script errors, the All-BL button is in the toolbar, the title reads
   "Amplitude (max of baselines)", each raster gear tab has the control.
 
+## Median (added on `50b414f`)
+
+`reduce_amp_phase_baselines` / `reduce_plain_baselines` take
+`"median"`; a dask-backed array is rechunked to one chunk along
+baseline for it (the other dimensions keep theirs). On TW Hya, all
+baselines, Time x Channel: 3.8 to 5.1 s against 1.8 to 2.1 s for Mean;
+values 10.54 against 11.31, identical on both backends. The "All-NaN
+slice" warning numpy raises for a cell flagged on every baseline is
+silenced at compute time in both backends, as it already was for
+Z-Score. `test_baseline_combine.py` is now 73 tests.
+
 ## Not verified
 
 In a browser with a kernel: that the control replots, that its help
@@ -133,7 +149,12 @@ assignment is wrapped in `try`, as for the other presets).
 
 ## Not built
 
-- Median across baselines (robust, but needs a sort; the reductions so
-  far are streaming sums).
+- Scatter across baselines (rms, or rms / mean, as AIPS TVFLG has
+  along time): where the baselines disagree, whatever the level.
+  Cheap; better as a quantity than as a fourth combining mode, once H5
+  and H6 are in. Considered and left out: minimum (a dead baseline
+  always wins), sum (mean with a scale that moves with the selection),
+  weighted mean (needs weights that can be trusted), percentiles (a
+  softer maximum with a number to choose).
 - A count of baselines in the title.
 - The same choice for scatter (H6, with the averaging controls).

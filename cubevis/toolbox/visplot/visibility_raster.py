@@ -49,7 +49,10 @@ from .visibility_plot import (
 )
 from .panel_spec import ColorBand, PanelSpec
 from . import colormap_scaling as _cms
-from .data.reader import _agg_value, _cell_bounds, channel_range_to_freq
+from .data.reader import (
+    CHANNEL_AXIS_ATTR, CHANNEL_REF_ATTR,
+    _agg_value, _cell_bounds, channel_range_to_freq,
+)
 from . import raster_grid as _rg
 from .raster_grid import BaselineAxis, normalize_baseline_order
 from .axes import Axis
@@ -102,6 +105,7 @@ _DEFAULT_SCALING = "eq_hist"
 
 
 _COMBINE_WORDS = {"mean": "mean of baselines", "max": "max of baselines",
+                  "median": "median of baselines",
                   "coherent": "baselines added coherently"}
 
 
@@ -153,6 +157,39 @@ def _auto_title(quantity: "Axis", y_label: str, x_label: str,
         f"[{y_label} vs {x_label}]"
         f"  pol={polarization}"
     )
+
+
+@dataclasses.dataclass
+class _Detail:
+    """A second, finer aggregate for part of a decimated raster.
+
+    ``VisibilityRaster._agg`` always holds the aggregate of the whole
+    selection.  When that had to be decimated and the user zooms in past
+    its resolution, the zoomed region is queried again and kept here.
+    The full aggregate is never replaced, so zooming back out, colour
+    scaling, the colour bar, the axis ranges and the time origin all go
+    on working from the whole selection.  See ``_ensure_detail``.
+    """
+    agg:          object            # DataArray, in the full raster's coordinates
+    x_extent:     tuple             # the data range that was asked for
+    y_extent:     tuple
+    is_decimated: bool
+    overlays:     list              # [(rgba, flag-fraction DataArray), ...]
+
+
+_DETAIL_OVERSCAN = 0.5
+"""A detail query covers the viewport plus this fraction of its width on
+each side, so a small pan is served from what is already held."""
+
+_DETAIL_ZOOM = 0.4
+"""A (further) detail query is worth making only when the viewport is
+narrower than this fraction of what is held along an axis that can be
+narrowed.  Below 0.5 on purpose: a fresh detail holds twice the
+viewport (the overscan), so the viewport it was made for must not ask
+for another."""
+
+_DETAIL_BUDGET = 4
+"""A detail query may hold this many times ``max_cells``."""
 
 
 class VisibilityRaster(VisibilityPlot):
@@ -284,6 +321,11 @@ class VisibilityRaster(VisibilityPlot):
         # Raster-specific state (set by _render)
         self._agg:          Optional["xr.DataArray"] = None
         self._is_decimated: bool                     = False
+        # Finer aggregate for the zoomed region of a decimated raster,
+        # and whether the image currently shown was drawn from it (the
+        # cursor readout follows the image).  See _Detail.
+        self._detail:    Optional[_Detail] = None
+        self._detail_on: bool              = False
 
         # Upsample method for Canvas.raster().  "auto" (default) picks
         # "nearest" whenever either axis is upsampling and "linear"
@@ -386,12 +428,14 @@ class VisibilityRaster(VisibilityPlot):
         if not combines_baselines(self._quantity, ("baseline_id",),
                                   self._baseline_combine):
             return ""
-        if self._baseline_combine == "max" and self._quantity == Axis.PHASE:
-            return _COMBINE_WORDS["mean"]       # no maximum of a direction
+        if (self._baseline_combine in ("max", "median")
+                and self._quantity == Axis.PHASE):
+            return _COMBINE_WORDS["mean"]       # no max / median of a direction
         # Amp V Diff / Phase Diff: the mean over everything is what they
         # always were (and coherent is the same thing); only Maximum is
         # worth naming.
-        if self._quantity in DIFF_QUANTITIES and self._baseline_combine != "max":
+        if (self._quantity in DIFF_QUANTITIES
+                and self._baseline_combine not in ("max", "median")):
             return ""
         n = self.n_baselines_combined
         if n is not None and n < 2:
@@ -1608,6 +1652,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             x_range, y_range = self._grid_extent(agg, x_range, y_range)
 
         self._agg          = agg
+        self._detail, self._detail_on = None, False
         self._overlay_budget = budget
         self._overlay_aggs = [] if defer else self._query_flag_overlays(selection, budget)
         # Before any shading below reads _scaling_vmin.
@@ -1678,41 +1723,260 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
     def _do_viewport_rerender(
         self, x0: float, x1: float, y0: float, y1: float
     ) -> dict:
-        """Two-level pan/zoom: Level-1 Datashader resample or Level-2 re-query."""
-        agg = self._agg
-        if agg is not None and agg.shape[0] >= 1 and agg.shape[1] >= 1:
-            agg_cell_w = (self._x_range[1] - self._x_range[0]) / agg.shape[1]
-            agg_cell_h = (self._y_range[1] - self._y_range[0]) / agg.shape[0]
-            needs_requery = (
-                self._is_decimated
-                and (x1 - x0) / self._width  < agg_cell_w
-                and (y1 - y0) / self._height < agg_cell_h
-            )
-        else:
-            needs_requery = False
+        """Pan / zoom: draw the requested viewport.
 
-        if needs_requery:
-            log.debug("_do_viewport_rerender: Level-2 re-query")
-            sub_sel = self._viewport_selection((x0, x1), (y0, y1))
-            self._render(sub_sel, max_cells=self._max_cells * 4)
-            img32 = self._shade_viewport(self._x_range, self._y_range)
-            out_x0, out_x1 = self._x_range
-            out_y0, out_y1 = self._y_range
-            # The re-query re-cached at the new extent, so the panel is
-            # once again showing all of what it holds.
-            self._current_viewport = None
-        else:
-            log.debug("_do_viewport_rerender: Level-1 resample")
-            img32 = self._shade_viewport((x0, x1), (y0, y1))
-            out_x0, out_x1 = x0, x1
-            out_y0, out_y1 = y0, y1
-            self._current_viewport = (x0, x1, y0, y1)
+        Level 1: resample what is held (no backend query).  Level 2,
+        only for a raster that had to be decimated: when the viewport is
+        finer than what is held, query that region again at higher
+        resolution and keep it *beside* the full aggregate
+        (``_ensure_detail``).  Always answers with the viewport that was
+        asked for.
 
+        Until 2026-10-07 level 2 re-rendered the panel on the zoomed
+        selection, replacing the full aggregate: zooming back out showed
+        the zoomed region alone on a blank plot, the readout's time
+        origin moved while the axis kept the old one, and on a Channel
+        axis the query raised (channel numbers were used as Hz).
+        """
+        try:
+            self._ensure_detail(x0, x1, y0, y1)
+        except Exception:
+            # A failed detail query must not cost the user the picture:
+            # the full aggregate still draws, just coarsely.
+            log.warning("raster detail query failed; drawing from the "
+                        "full aggregate", exc_info=True)
+            self._detail = None
+        img32 = self._shade_viewport((x0, x1), (y0, y1))
+        self._current_viewport = (x0, x1, y0, y1)
         return {
             "image": img32,
-            "x0": out_x0, "x1": out_x1,
-            "y0": out_y0, "y1": out_y1,
+            "x0": x0, "x1": x1,
+            "y0": y0, "y1": y1,
         }
+
+    # ------------------------------------------------------------------
+    # Level 2: detail for the zoomed region of a decimated raster
+    # ------------------------------------------------------------------
+
+    _NARROWABLE = ("time", "frequency")
+    """Dimensions a detail query can gain resolution along.  Baseline is
+    not one: its axis is laid out from the full aggregate and a zoom
+    does not add baselines to it (the detail is asked for the baselines
+    already on the axis, see ``_detail_selection``)."""
+
+    def _typical_cell(self, agg, dim: str) -> float:
+        lo, hi = _rg.cell_edges(agg.coords[dim].values, self._axis_half(dim))
+        return float(np.median(hi - lo)) if lo.size else 0.0
+
+    def _finer_than(self, agg, extent_x, extent_y, x0, x1, y0, y1) -> bool:
+        """Whether a viewport asks for more than *agg* (held over
+        *extent_x* by *extent_y*) can show, in a way a narrower query
+        could supply: along a narrowable axis, pixels smaller than the
+        cells, and a viewport well inside what is held."""
+        if agg is None or agg.ndim != 2 or agg.shape[0] < 1 or agg.shape[1] < 1:
+            return False
+        for dim, (v0, v1), ext, npx in (
+                (agg.dims[1], (x0, x1), extent_x, self._width),
+                (agg.dims[0], (y0, y1), extent_y, self._height)):
+            if dim not in self._NARROWABLE:
+                continue
+            span, held = abs(v1 - v0), abs(ext[1] - ext[0])
+            if span <= 0 or held <= 0 or span >= _DETAIL_ZOOM * held:
+                continue
+            if span / max(npx, 1) < self._typical_cell(agg, dim):
+                return True
+        return False
+
+    @staticmethod
+    def _within(extent, v0, v1) -> bool:
+        lo, hi = min(extent), max(extent)
+        tol = 1e-9 * max(abs(lo), abs(hi), 1.0)
+        return lo - tol <= min(v0, v1) and max(v0, v1) <= hi + tol
+
+    def _detail_serves(self, x0, x1, y0, y1) -> bool:
+        """Whether the held detail covers this viewport and is fine
+        enough for it (or as fine as the data get)."""
+        d = self._detail
+        if d is None:
+            return False
+        if not (self._within(d.x_extent, x0, x1) and self._within(d.y_extent, y0, y1)):
+            return False
+        return not (d.is_decimated and self._finer_than(
+            d.agg, d.x_extent, d.y_extent, x0, x1, y0, y1))
+
+    _DETAIL_QUANTITIES = (Axis.AMPLITUDE, Axis.PHASE, Axis.REAL,
+                          Axis.IMAGINARY, Axis.FLAG)
+    """Quantities a detail query is made for: those whose cell value
+    depends only on the samples in the cell.  The others are computed
+    against more than the cell -- Z-Score against the baseline's whole
+    selection, Phase RMS / Coherence and the Diff quantities within
+    time windows (scans) -- so a query narrowed to the viewport would
+    give different numbers from the picture it replaces, worst at its
+    edges.  They stay on the full aggregate when zoomed (coarse, but
+    the same numbers) until the narrowing learns to respect those
+    windows."""
+
+    def _ensure_detail(self, x0, x1, y0, y1) -> None:
+        """Hold a detail aggregate for this viewport if one is needed."""
+        if self._quantity not in self._DETAIL_QUANTITIES:
+            return
+        if not self._is_decimated or not self._finer_than(
+                self._agg, self._x_range, self._y_range, x0, x1, y0, y1):
+            return                       # the full aggregate is enough
+        if self._detail_serves(x0, x1, y0, y1):
+            return
+        t0 = time.perf_counter()
+        self._detail = self._query_detail(x0, x1, y0, y1)
+        d = self._detail
+        log.debug("raster detail query: %s (%.3fs)",
+                  None if d is None else (d.agg.shape, d.is_decimated),
+                  time.perf_counter() - t0)
+
+    def _detail_selection(self, x_ext, y_ext):
+        """This panel's selection narrowed to a data range, or ``None``
+        if neither axis can be narrowed.
+
+        Time is narrowed by ``time_range``.  A frequency axis is
+        narrowed by ``freq_range`` -- unless the selection already
+        carries a ``channel_range``, which takes precedence over
+        ``freq_range`` in the backends: then a Channel axis narrows that
+        instead, and a Frequency axis is left alone.  A Channel axis is
+        in channel numbers of the *selection*, converted through the
+        full aggregate's reference frequencies; passing the numbers as
+        Hz, as was done before, matches nothing.
+        """
+        full = self._agg
+        sel = self._selection.copy()
+        narrowed = False
+        chan_axis = full.attrs.get(CHANNEL_AXIS_ATTR) if hasattr(full, "attrs") else None
+        for which, dim, (lo, hi) in (("x", full.dims[1], x_ext),
+                                     ("y", full.dims[0], y_ext)):
+            lo, hi = min(lo, hi), max(lo, hi)
+            if dim == "time":
+                if sel.time_range is not None:
+                    lo, hi = max(lo, min(sel.time_range)), min(hi, max(sel.time_range))
+                sel.time_range = (lo, hi)
+                narrowed = True
+            elif dim == "frequency" and chan_axis == which:
+                ref = np.asarray(full.attrs[CHANNEL_REF_ATTR], dtype=np.float64)
+                if ref.size == 0:
+                    continue
+                i_lo = int(np.clip(np.floor(lo + 0.5), 0, ref.size - 1))
+                i_hi = int(np.clip(np.ceil(hi - 0.5), 0, ref.size - 1))
+                if sel.channel_range is not None:
+                    c0 = int(sel.channel_range[0])
+                    sel.channel_range = (c0 + i_lo, c0 + i_hi + 1)
+                else:
+                    step = (np.min(np.abs(np.diff(ref))) if ref.size > 1 else 0.0)
+                    f = (ref[i_lo], ref[i_hi])
+                    f_lo, f_hi = min(f) - 0.25 * step, max(f) + 0.25 * step
+                    if sel.freq_range is not None:
+                        f_lo = max(f_lo, min(sel.freq_range))
+                        f_hi = min(f_hi, max(sel.freq_range))
+                    sel.freq_range = (float(f_lo), float(f_hi))
+                narrowed = True
+            elif dim == "frequency" and sel.channel_range is None:
+                if sel.freq_range is not None:
+                    lo, hi = max(lo, min(sel.freq_range)), min(hi, max(sel.freq_range))
+                sel.freq_range = (lo, hi)
+                narrowed = True
+            elif dim == "baseline_id" and self._bl_axis is not None:
+                # Ask for exactly the baselines drawn in this stretch of
+                # the axis.  Not counted as narrowing (it adds no
+                # resolution by itself), but without it a raster that
+                # was strided along Baseline as well would get back a
+                # different subset of baselines -- striding again from
+                # the first -- and none of them might be on the axis.
+                tables = getattr(self, "_identity_tables", None)
+                pairs = getattr(tables, "baseline_antennas", None) or {}
+                want = [pairs.get(int(i)) for i in self._bl_axis.ids_in(lo, hi)]
+                want = [tuple(p) for p in want if p is not None]
+                if want:
+                    sel.baselines = want
+        return sel if narrowed else None
+
+    def _to_full_coordinates(self, agg):
+        """Put a detail aggregate on the full raster's axes, or ``None``
+        if it cannot be.
+
+        A Channel axis comes back numbered from 0 within the narrowed
+        selection; renumber it to the full selection's channels (through
+        the frequencies both carry).  A Baseline axis is laid out on the
+        positions the full raster already uses.
+        """
+        full = self._agg
+        chan_axis = full.attrs.get(CHANNEL_AXIS_ATTR) if hasattr(full, "attrs") else None
+        if chan_axis is not None:
+            if agg.attrs.get(CHANNEL_AXIS_ATTR) != chan_axis:
+                return None              # one is in channels, the other in Hz
+            dim = agg.dims[1] if chan_axis == "x" else agg.dims[0]
+            full_ref = np.asarray(full.attrs[CHANNEL_REF_ATTR], dtype=np.float64)
+            sub_ref = np.asarray(agg.attrs[CHANNEL_REF_ATTR], dtype=np.float64)
+            idx = np.asarray(agg.coords[dim].values).astype(np.int64)
+            if full_ref.size == 0 or idx.size == 0 or idx.max() >= sub_ref.size:
+                return None
+            order = np.argsort(full_ref, kind="stable")
+            f = sub_ref[idx]
+            k = np.clip(np.searchsorted(full_ref[order], f), 0, full_ref.size - 1)
+            left = np.clip(k - 1, 0, full_ref.size - 1)
+            use_left = np.abs(full_ref[order][left] - f) < np.abs(full_ref[order][k] - f)
+            new = order[np.where(use_left, left, k)]
+            attrs = dict(agg.attrs)
+            attrs[CHANNEL_REF_ATTR] = full_ref
+            agg = agg.assign_coords({dim: new.astype(np.int64)})
+            agg.attrs = attrs
+            agg = agg.sortby(dim)
+        elif hasattr(agg, "attrs") and agg.attrs.get(CHANNEL_AXIS_ATTR) is not None:
+            return None
+        return self._place_baselines(agg)
+
+    def _query_detail(self, x0, x1, y0, y1) -> Optional[_Detail]:
+        """Query the viewport (plus an overscan margin) at higher
+        resolution.  ``None`` when it cannot be narrowed or holds no
+        data; the full aggregate then draws it."""
+        def padded(v0, v1, full):
+            lo, hi = min(v0, v1), max(v0, v1)
+            pad = _DETAIL_OVERSCAN * (hi - lo)
+            return (max(lo - pad, min(full)), min(hi + pad, max(full)))
+        x_ext = padded(x0, x1, self._x_range)
+        y_ext = padded(y0, y1, self._y_range)
+        sel = self._detail_selection(x_ext, y_ext)
+        if sel is None:
+            return None
+        budget = self._max_cells * _DETAIL_BUDGET
+        agg, _xr, _yr, is_decimated = self._backend.query_raster(
+            y_dim        = self._y_dim,
+            x_dim        = self._x_dim,
+            quantity     = self._quantity,
+            selection    = dataclasses.replace(
+                sel, averaging=self._averaging,
+                baseline_combine=self._baseline_combine,
+                detrend=self._detrend,
+                stat_time_window=self._stat_time_window,
+                stat_chan_window=self._stat_chan_window),
+            polarization = self._polarization,
+            max_cells    = budget,
+        )
+        if (agg is None or agg.ndim != 2 or tuple(agg.dims) != tuple(self._agg.dims)
+                or not np.isfinite(agg.values).any()):
+            return None
+        agg = self._to_full_coordinates(agg)
+        if agg is None or agg.shape[0] < 1 or agg.shape[1] < 1:
+            return None
+        overlays = []
+        for rgba, oagg in self._query_flag_overlays(sel, budget, place=False):
+            oagg = self._to_full_coordinates(oagg)
+            if oagg is not None:
+                overlays.append((rgba, oagg))
+        return _Detail(agg=agg, x_extent=x_ext, y_extent=y_ext,
+                       is_decimated=bool(is_decimated), overlays=overlays)
+
+    def _shown_agg(self):
+        """The aggregate the image now on screen was drawn from: what
+        the cursor readout has to read."""
+        if self._detail_on and self._detail is not None:
+            return self._detail.agg
+        return self._agg
 
     def _handle_probe(self, message: dict) -> dict:
         x = float(message.get("x", 0.0))
@@ -1741,7 +2005,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 log.info(
                     "[probe raster] x=%.9g y=%.9g -> (%d,%d) shape=%s "
                     "value=%r x_range=%r y_range=%r",
-                    x, y, px, py, self._agg.shape,
+                    x, y, px, py, self._shown_agg().shape,
                     info.get("value"), info.get("x_range"),
                     info.get("y_range"),
                 )
@@ -1787,7 +2051,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         never part of the wire-cost problem this whole redesign
         addressed) -- only the identity half is new here.
         """
-        agg = self._agg
+        agg = self._shown_agg()
         if agg is None or agg.ndim != 2:
             raise ValueError("no cached aggregation to probe")
         h, w = agg.shape
@@ -2064,23 +2328,30 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         x_range: tuple[float, float],
         y_range: tuple[float, float],
     ) -> np.ndarray:
-        """Resample cached agg; use nearest-neighbour when upsampling."""
-        agg = self._agg
+        """Draw a viewport from what is held: the detail aggregate when
+        it covers the viewport and is fine enough for it, otherwise the
+        full one.  Colours are anchored to the full aggregate either
+        way (``_shade_agg``), so they do not shift between the two."""
         x0, x1 = x_range
         y0, y1 = y_range
+        agg, overlays = self._agg, None
+        self._detail_on = self._detail_serves(x0, x1, y0, y1)
+        if self._detail_on:
+            agg, overlays = self._detail.agg, self._detail.overlays
 
         if not self._drawable(agg, (x0, x1), (y0, y1)):
             return np.zeros((self._height, self._width), dtype=np.uint32)
 
         ds_agg = self._resample(agg, (x0, x1), (y0, y1))
         shaded = self._shade_agg(ds_agg)
-        return self._apply_flag_overlays(_img_to_uint32(shaded), (x0, x1), (y0, y1))
+        return self._apply_flag_overlays(_img_to_uint32(shaded), (x0, x1), (y0, y1),
+                                         overlays=overlays)
 
     # ------------------------------------------------------------------ #
     # FlagDB v2 overlays                                                   #
     # ------------------------------------------------------------------ #
 
-    def _query_flag_overlays(self, selection, budget) -> list:
+    def _query_flag_overlays(self, selection, budget, place: bool = True) -> list:
         """One Flag-fraction aggregate per overlay view.
 
         In the ``pending``/``proposal`` views only the samples whose state
@@ -2102,8 +2373,11 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 if main is not None and oagg.ndim > 2:
                     extra = [d for d in oagg.dims if d not in main.dims]
                     oagg = oagg.min(dim=extra, skipna=True).transpose(*main.dims)
-                # On the positions the image itself was laid out in.
-                oagg = self._place_baselines(oagg)
+                # On the positions the image itself was laid out in
+                # (a detail query does its own placing, with the
+                # channel renumbering: place=False).
+                if place:
+                    oagg = self._place_baselines(oagg)
                 out.append((rgba, oagg))
             except Exception:
                 log.debug("flag overlay query failed", exc_info=True)
@@ -2115,10 +2389,16 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             return
         self._overlay_aggs = self._query_flag_overlays(
             sel, getattr(self, "_overlay_budget", None))
+        # A held detail carries overlays of its own, now out of date;
+        # the next viewport draw queries it again if it is needed.
+        self._detail, self._detail_on = None, False
 
-    def _apply_flag_overlays(self, img32, x_range, y_range):
-        """Paint the overlays over *img32* for the viewport (in place)."""
-        for rgba, oagg in getattr(self, "_overlay_aggs", ()) or ():
+    def _apply_flag_overlays(self, img32, x_range, y_range, overlays=None):
+        """Paint the overlays over *img32* for the viewport (in place):
+        the full aggregate's, or *overlays* (a detail's)."""
+        if overlays is None:
+            overlays = getattr(self, "_overlay_aggs", ()) or ()
+        for rgba, oagg in overlays:
             if oagg is None or oagg.ndim != 2 or oagg.shape[0] < 1 or oagg.shape[1] < 1:
                 continue
             try:
@@ -2147,7 +2427,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         ``(None, None)`` when the point is in a gap between cells."""
         if self._agg is None:
             return None, None
-        agg        = self._agg
+        agg        = self._shown_agg()
         y_dim_name = agg.dims[0]
         x_dim_name = agg.dims[1]
         if x_dim_name not in agg.coords or y_dim_name not in agg.coords:

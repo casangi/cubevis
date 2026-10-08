@@ -217,6 +217,8 @@ present at `693c99c`:
    elapsed-time origin also moves to the zoomed region while the axis
    keeps the old one.
 
+*Both fixed later the same day: `hrs_raster_zoom.md`.*
+
 These need the two-level zoom reworked (keep the full aggregate, hold
 the detail separately) and deserve their own slice with tests on a
 large simulated data set.

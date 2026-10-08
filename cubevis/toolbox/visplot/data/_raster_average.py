@@ -133,6 +133,21 @@ def combines_baselines(quantity: Axis, reduce_dims: Sequence[str],
     return quantity in MAX_QUANTITIES
 
 
+def _median_over_baselines(per: xr.DataArray) -> xr.DataArray:
+    """Median of *per* over the baseline dimension, ignoring NaN.
+
+    A median needs every baseline of a cell in one block, so a
+    dask-backed array is rechunked to a single chunk along baseline
+    (the other dimensions keep their chunks, so memory per block is one
+    block's worth of all baselines).  An all-NaN cell stays NaN; the
+    "All-NaN slice" warning numpy raises for it at compute time is not
+    an error here and callers may see it.
+    """
+    if getattr(per, "chunks", None) is not None:
+        per = per.chunk({BASELINE_DIM: -1})
+    return per.median(dim=BASELINE_DIM, skipna=True)
+
+
 def reduce_amp_phase_baselines(
     vis: xr.DataArray,
     flag: xr.DataArray,
@@ -155,10 +170,10 @@ def reduce_amp_phase_baselines(
     Lazy if the inputs are; sums and one max only.
     """
     reduce_dims = list(reduce_dims)
-    if baseline_combine not in ("mean", "max", "coherent"):
+    if baseline_combine not in ("mean", "median", "max", "coherent"):
         raise ValueError(
-            f"baseline_combine must be 'mean', 'max' or 'coherent'; "
-            f"got {baseline_combine!r}")
+            f"baseline_combine must be 'mean', 'median', 'max' or "
+            f"'coherent'; got {baseline_combine!r}")
     if baseline_combine == "coherent" or BASELINE_DIM not in reduce_dims:
         return reduce_amp_phase(vis, flag, quantity, reduce_dims, averaging)
     if quantity not in (Axis.AMPLITUDE, Axis.PHASE):
@@ -178,11 +193,13 @@ def reduce_amp_phase_baselines(
                if inner else np.hypot(re, im))
         if baseline_combine == "max":
             return per.max(dim=BASELINE_DIM, skipna=True)
+        if baseline_combine == "median":
+            return _median_over_baselines(per)
         return per.mean(dim=BASELINE_DIM, skipna=True)
 
     # Phase: each baseline's direction, then the mean direction of the
-    # baselines, every baseline counted equally.  ("max" has no meaning
-    # for a direction and is combined the same way.)
+    # baselines, every baseline counted equally.  ("max" and "median"
+    # have no meaning for a direction and are combined the same way.)
     if inner:
         if averaging == "vector":
             a = re.mean(dim=inner, skipna=True)
@@ -211,13 +228,16 @@ def reduce_plain_baselines(
     Phase Diff) over *reduce_dims*.
 
     The mean over everything, as it always was -- except that with
-    ``baseline_combine="max"`` the magnitudes in ``MAX_QUANTITIES`` are
-    averaged within each baseline and the largest baseline is shown.
+    ``baseline_combine="max"`` or ``"median"`` the magnitudes in
+    ``MAX_QUANTITIES`` are averaged within each baseline and the largest
+    (or middle) baseline is shown.
     """
     reduce_dims = list(reduce_dims)
-    if (baseline_combine == "max" and quantity in MAX_QUANTITIES
+    if (baseline_combine in ("max", "median") and quantity in MAX_QUANTITIES
             and BASELINE_DIM in reduce_dims):
         inner = [d for d in reduce_dims if d != BASELINE_DIM]
         per = q.mean(dim=inner, skipna=True) if inner else q
+        if baseline_combine == "median":
+            return _median_over_baselines(per)
         return per.max(dim=BASELINE_DIM, skipna=True)
     return q.mean(dim=reduce_dims, skipna=True)

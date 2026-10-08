@@ -200,7 +200,7 @@ _STATIC_HINTS = {
     "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | Y and X must differ; Correlation is not available yet",
     "r_qty": "<b>Raster quantity</b> \u2014 what the colour shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
     "scaling": "<b>Colour scaling</b> \u2014 how values are spread over the colours; changes the picture, never the data  | <b>eq_hist</b> uses every colour equally and shows faint structure, but distances between colours mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap",
-    "bcombine": "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines: any raster without Baseline on an axis, such as Time \u00d7 Channel with no single baseline ticked. Averaging (above) applies to the samples of each baseline; this is what happens to the baselines  | <b>Mean</b>: the average of the baselines\u2019 amplitudes. The general picture of the selected baselines; a problem on a few of them is diluted  | <b>Maximum</b>: the largest baseline at each cell. Interference or a bad antenna shows even if only one baseline has it; then tick baselines to find which  | <b>Coherent</b>: the baselines are added as complex numbers first. Only for a calibrated point source, where all baselines agree and noise averages down; on anything else they cancel and the plot reads low  | Applies to Amplitude, Phase (Mean and Maximum both give the mean direction), Amp V Diff and Phase Diff. A flag box on such a plot flags every selected baseline",
+    "bcombine": "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines: any raster without Baseline on an axis, such as Time \u00d7 Channel with no single baseline ticked. Averaging (above) applies to the samples of each baseline; this is what happens to the baselines  | <b>Mean</b>: the average of the baselines\u2019 amplitudes. The general picture of the selected baselines; a problem on a few of them is diluted  | <b>Median</b>: the middle baseline at each cell: what most baselines share, unmoved by a few bad ones. A feature that shows in Maximum but not in Median is on a few baselines (find and flag those); one in both is on most of them  | <b>Maximum</b>: the largest baseline at each cell. Interference or a bad antenna shows even if only one baseline has it; then tick baselines to find which  | <b>Coherent</b>: the baselines are added as complex numbers first. Only for a calibrated point source, where all baselines agree and noise averages down; on anything else they cancel and the plot reads low  | Applies to Amplitude, Phase (Mean, Median and Maximum all give the mean direction), Amp V Diff and Phase Diff. A flag box on such a plot flags every selected baseline",
     "border": "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out; the baselines that have data are drawn side by side either way  | <b>By number</b>: in the order of the Baseline table; baselines to one antenna sit together  | <b>By length</b>: shortest first, and the ticks read the length. Trouble that grows along the axis is then about distance (atmosphere, a source that is resolved); trouble in scattered columns is about particular antennas  | The cursor readout names the baseline and its length in both",
     "info": "<b>Info block</b> \u2014 which facts about this panel are listed in the block left of the plots (selection, axes, averaging, counts)  | Tick what you want to see there; it does not change the plot",
     # ---- scatter gear tab
@@ -1967,8 +1967,10 @@ class VisibilityPlotter:
         How a raster cell that covers several baselines combines them
         (only where Baseline is not a plot axis, e.g. Time x Channel
         with no single baseline ticked): ``"mean"`` (default; the mean
-        of the baselines' amplitudes), ``"max"`` (the largest, so
-        interference on a few baselines is not diluted by the rest) or
+        of the baselines' amplitudes), ``"median"`` (the middle one:
+        what most baselines share, whatever a few bad ones do),
+        ``"max"`` (the largest, so interference on a few baselines is
+        not diluted by the rest) or
         ``"coherent"`` (the baselines' visibilities are added before the
         amplitude is taken; for a calibrated point source).
         ``averaging`` applies to the samples within each baseline.
@@ -4995,8 +4997,8 @@ html, body { height: 100%; margin: 0; }
         # slot, read at Plot-press time.
         rm_sel = Select(
             title="Baselines combined", value=slot.raster.baseline_combine,
-            options=[("mean", "Mean"), ("max", "Maximum"),
-                     ("coherent", "Coherent")],
+            options=[("mean", "Mean"), ("median", "Median"),
+                     ("max", "Maximum"), ("coherent", "Coherent")],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
         # Slope removal (HRS H2, 2026-10) for Phase RMS / Coherence:

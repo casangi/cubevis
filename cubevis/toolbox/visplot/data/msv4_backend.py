@@ -1915,6 +1915,8 @@ class MSv4Backend(XArrayReader):
         freq_coords: list = []
         # Per-partition count of samples reduced per Z_SCORE cell.
         zscore_n_list: list = []
+        # Whether any partition was strided to fit max_cells.
+        any_partition_decimated = False
 
         for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
@@ -1945,7 +1947,8 @@ class MSv4Backend(XArrayReader):
                 _n = arr.attrs.get('zscore_n_reduced')
                 if _n is not None:
                     zscore_n_list.append(int(_n))
-                arr, _ = _decimate_agg(arr, y_name, x_name, max_cells)
+                arr, _dec = _decimate_agg(arr, y_name, x_name, max_cells)
+                any_partition_decimated = any_partition_decimated or _dec
                 lazy_arrs.append(arr)
 
         if not lazy_arrs:
@@ -1971,7 +1974,11 @@ class MSv4Backend(XArrayReader):
         # does). Covers both the fused dask.compute() and the per-array
         # fallback below, since either can be taken depending on
         # partition count.
-        if quantity == Axis.Z_SCORE:
+        # ...and a median over baselines (HRS H4), which meets the same
+        # all-NaN slices (a cell flagged on every baseline) and is equally
+        # right to leave them NaN.
+        if (quantity == Axis.Z_SCORE or getattr(
+                selection, "baseline_combine", None) == "median"):
             with warnings.catch_warnings():
                 warnings.filterwarnings(
                     "ignore", message="All-NaN slice encountered",
@@ -2023,6 +2030,12 @@ class MSv4Backend(XArrayReader):
                 y_range = (0.0, 1.0)
 
         agg, is_decimated = _decimate_agg(agg, y_name, x_name, max_cells)
+        # A partition strided in the loop above is decimation too.  Only
+        # this final pass was reported until 2026-10-07, so a store with
+        # one partition (or whose partitions each fitted after their own
+        # striding) came back "not decimated" however much had been left
+        # out, and the raster never asked for detail on zooming in.
+        is_decimated = bool(is_decimated or any_partition_decimated)
         # Relabel the frequency axis as a channel index when asked, and
         # when a channel index is actually well defined.  Done *after*
         # the final decimation so the indices are true positions in the
@@ -2224,7 +2237,7 @@ class MSv4Backend(XArrayReader):
                 # HRS H4 (2026-10-07): where the cell covers several
                 # baselines, ``averaging`` applies within each and
                 # ``baseline_combine`` says how they are then combined
-                # (mean / max / coherent).
+                # (mean / median / max / coherent).
                 q = reduce_amp_phase_baselines(
                     vis_pol, flag_pol, quantity, reduce_dims, averaging,
                     baseline_combine)

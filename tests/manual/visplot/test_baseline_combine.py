@@ -54,7 +54,7 @@ warnings.filterwarnings("ignore")
 class TestOption:
 
     def test_names_and_default(self):
-        assert sel_mod.BASELINE_COMBINES == ("mean", "max", "coherent")
+        assert sel_mod.BASELINE_COMBINES == ("mean", "median", "max", "coherent")
         assert sel_mod.DEFAULT_BASELINE_COMBINE == "mean"
         assert SelectionSpec().baseline_combine == "mean"
 
@@ -62,9 +62,10 @@ class TestOption:
         n = sel_mod.normalize_baseline_combine
         assert n(None) == "mean" and n("") == "mean"
         assert n(" Max ") == "max" and n("Maximum") == "max"
+        assert n("Median") == "median"
         assert n("coherent") == "coherent" and n("vector") == "coherent"
         with pytest.raises(ValueError, match="baseline_combine"):
-            n("median")
+            n("minimum")
 
     def test_copy_keeps_it_and_it_is_not_a_row_constraint(self):
         s = SelectionSpec(baseline_combine="max")
@@ -104,6 +105,12 @@ def _nanmean(a, axis):
         return np.nanmean(a, axis=axis)
 
 
+def _nanmedian(a, axis):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return np.nanmedian(a, axis=axis)
+
+
 def _nanmax(a, axis):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -123,6 +130,9 @@ class TestReductions:
             got = ra.reduce_amp_phase_baselines(
                 vis, flag, Axis.AMPLITUDE, ["baseline_id"], avg, "max").values
             assert np.allclose(got, _nanmax(amp, 1), equal_nan=True)
+            got = ra.reduce_amp_phase_baselines(
+                vis, flag, Axis.AMPLITUDE, ["baseline_id"], avg, "median").values
+            assert np.allclose(got, _nanmedian(amp, 1), equal_nan=True)
         got = ra.reduce_amp_phase_baselines(
             vis, flag, Axis.AMPLITUDE, ["baseline_id"], "vector", "coherent").values
         assert np.allclose(got, np.abs(_nanmean(v, 1)), equal_nan=True)
@@ -135,7 +145,8 @@ class TestReductions:
         per_sca = _nanmean(np.abs(v), 2)
         rd = ["baseline_id", "frequency"]
         for avg, per in (("vector", per_vec), ("scalar", per_sca)):
-            for comb, fn in (("mean", _nanmean), ("max", _nanmax)):
+            for comb, fn in (("mean", _nanmean), ("max", _nanmax),
+                             ("median", _nanmedian)):
                 got = ra.reduce_amp_phase_baselines(
                     vis, flag, Axis.AMPLITUDE, rd, avg, comb).values
                 assert np.allclose(got, fn(per, 1), equal_nan=True), (avg, comb)
@@ -152,7 +163,7 @@ class TestReductions:
 
     def test_without_baselines_to_combine_nothing_changes(self, dask):
         vis, flag, _v = _cube(dask=dask)
-        for comb in ("mean", "max", "coherent"):
+        for comb in ("mean", "median", "max", "coherent"):
             a = ra.reduce_amp_phase_baselines(
                 vis, flag, Axis.AMPLITUDE, ["frequency"], "vector", comb).values
             b = ra.reduce_amp_phase(vis, flag, Axis.AMPLITUDE, ["frequency"], "vector").values
@@ -162,7 +173,7 @@ class TestReductions:
         vis, flag, v = _cube(dask=dask)
         unit = v / np.abs(v)
         want = np.degrees(np.angle(_nanmean(unit, 1)))
-        for comb in ("mean", "max"):                    # no maximum of a direction
+        for comb in ("mean", "max", "median"):          # no max / median of a direction
             got = ra.reduce_amp_phase_baselines(
                 vis, flag, Axis.PHASE, ["baseline_id"], "vector", comb).values
             assert np.allclose(got, want, equal_nan=True)
@@ -188,10 +199,26 @@ class TestReductions:
         vis, flag, _v = _cube(dask=dask)
         flag = flag.copy()
         flag.loc[dict(time=1, frequency=2)] = True
-        for comb in ("mean", "max"):
-            got = ra.reduce_amp_phase_baselines(
-                vis, flag, Axis.AMPLITUDE, ["baseline_id"], "vector", comb).values
+        for comb in ("mean", "max", "median"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")           # numpy: All-NaN slice
+                got = ra.reduce_amp_phase_baselines(
+                    vis, flag, Axis.AMPLITUDE, ["baseline_id"], "vector", comb).values
             assert np.isnan(got[1, 2]) and np.isfinite(got[0, 0])
+
+    def test_median_ignores_a_few_bad_baselines(self, dask):
+        # 9 quiet baselines and one 100 times louder: the mean moves a
+        # lot, the maximum is the loud one, the median does not notice.
+        v = np.ones((3, 10, 4), dtype=complex)
+        v[:, 7, :] = 100.0
+        vis = xr.DataArray(v, dims=("time", "baseline_id", "frequency"))
+        flag = xr.zeros_like(vis, dtype=bool)
+        if dask:
+            vis, flag = vis.chunk({"baseline_id": 3}), flag.chunk({"baseline_id": 3})
+        r = lambda c: ra.reduce_amp_phase_baselines(
+            vis, flag, Axis.AMPLITUDE, ["baseline_id"], "vector", c).values
+        assert np.allclose(r("median"), 1.0)
+        assert np.allclose(r("mean"), 10.9) and np.allclose(r("max"), 100.0)
 
     def test_plain_quantities(self, dask):
         vis, flag, v = _cube(dask=dask)
@@ -200,6 +227,8 @@ class TestReductions:
         per = _nanmean(np.abs(v), 2)
         got = ra.reduce_plain_baselines(q, Axis.AMP_VDIFF, rd, "max").values
         assert np.allclose(got, _nanmax(per, 1), equal_nan=True)
+        got = ra.reduce_plain_baselines(q, Axis.AMP_VDIFF, rd, "median").values
+        assert np.allclose(got, _nanmedian(per, 1), equal_nan=True)
         for comb in ("mean", "coherent"):
             got = ra.reduce_plain_baselines(q, Axis.AMP_VDIFF, rd, comb).values
             assert np.allclose(got, _nanmean(np.abs(v), (1, 2)), equal_nan=True)
@@ -212,7 +241,7 @@ class TestReductions:
         vis, flag, _v = _cube(dask=dask)
         with pytest.raises(ValueError, match="baseline_combine"):
             ra.reduce_amp_phase_baselines(vis, flag, Axis.AMPLITUDE,
-                                          ["baseline_id"], "vector", "median")
+                                          ["baseline_id"], "vector", "minimum")
         with pytest.raises(ValueError, match="averaging"):
             ra.reduce_amp_phase_baselines(vis, flag, Axis.AMPLITUDE,
                                           ["baseline_id"], "rms", "mean")
@@ -323,6 +352,13 @@ class TestRealBackends:
         assert np.allclose(got, _nanmax(per, 0), equal_nan=True, rtol=1e-5)
         assert (got >= _q(backend, baseline_combine="mean").values - 1e-6).all()
 
+    def test_median_is_the_middle_per_baseline_waterfall(self, backend):
+        per = self._per_baseline(backend)
+        got = _q(backend, baseline_combine="median").values
+        assert np.allclose(got, _nanmedian(per, 0), equal_nan=True, rtol=1e-5)
+        mx = _q(backend, baseline_combine="max").values
+        assert (got <= mx + 1e-6).all()
+
     def test_coherent_cancels_where_baselines_disagree(self, backend):
         coh = _q(backend, baseline_combine="coherent").values
         mean = _q(backend, baseline_combine="mean").values
@@ -342,7 +378,7 @@ class TestRealBackends:
     def test_one_baseline_selected_is_that_baseline_in_every_mode(self, backend):
         b = backend.metadata()["baselines"][3]
         ref = _q(backend, baselines=[(b[1], b[2])], baseline_combine="mean").values
-        for comb in ("max", "coherent"):
+        for comb in ("median", "max", "coherent"):
             got = _q(backend, baselines=[(b[1], b[2])], baseline_combine=comb).values
             assert np.allclose(got, ref, equal_nan=True, rtol=1e-6)
 
@@ -362,7 +398,7 @@ class TestRealBackends:
         a, b = _open("msv2", sim_ms, sim_ps), _open("msv4", sim_ms, sim_ps)
         try:
             for q in (Axis.AMPLITUDE, Axis.PHASE, Axis.AMP_VDIFF):
-                for comb in ("mean", "max", "coherent"):
+                for comb in ("mean", "median", "max", "coherent"):
                     x = _q(a, q, baseline_combine=comb).values
                     y = _q(b, q, baseline_combine=comb).values
                     assert np.allclose(x, y, equal_nan=True, rtol=1e-5, atol=1e-5), (q, comb)
@@ -398,7 +434,7 @@ class TestRealRaster:
     def test_default(self, backend):
         assert _raster(backend).baseline_combine == "mean"
         with pytest.raises(ValueError):
-            _raster(backend, baseline_combine="median")
+            _raster(backend, baseline_combine="minimum")
 
     def test_update_axes_requeries(self, backend):
         vr = _raster(backend)
@@ -413,6 +449,11 @@ class TestRealRaster:
         t = lambda **kw: _raster(backend, **kw)._effective_title().replace("\n", " ")
         assert t().startswith("Amplitude (mean of baselines)  [Time vs Channel]")
         assert t(baseline_combine="max").startswith("Amplitude (max of baselines)")
+        assert t(baseline_combine="median").startswith("Amplitude (median of baselines)")
+        assert t(quantity=Axis.PHASE, baseline_combine="median").startswith(
+            "Phase (mean of baselines)")
+        assert "median of baselines" in t(quantity=Axis.PHASE_DIFF,
+                                          baseline_combine="median")
         assert t(baseline_combine="coherent").startswith(
             "Amplitude (vector, baselines added coherently)")
         assert t(baseline_combine="coherent", averaging="scalar").startswith(
@@ -491,19 +532,19 @@ class TestRealPlotter:
             assert slot.raster.baseline_combine == "max"
             sel = plotter._panel_axis_widgets[slot.id]["raster"]["bcombine_sel"]
             assert sel.title == "Baselines combined" and sel.value == "max"
-            assert [o[0] for o in sel.options] == ["mean", "max", "coherent"]
+            assert [o[0] for o in sel.options] == ["mean", "median", "max", "coherent"]
 
     def test_bad_value_fails_at_construction(self, sim_ms):
         from cubevis.toolbox.visplot import VisibilityPlotter
         with pytest.raises(ValueError, match="baseline_combine"):
-            VisibilityPlotter(ms=sim_ms, baseline_combine="median")
+            VisibilityPlotter(ms=sim_ms, baseline_combine="minimum")
 
     def test_control_has_help_in_the_status_area(self, plotter):
         from cubevis.bokeh.models import EvHover
         hint = plotter._hint_bcombine
         text = hint.text
         assert text.startswith("<b>Baselines combined</b>")
-        for word in ("<b>Mean</b>", "<b>Maximum</b>", "<b>Coherent</b>",
+        for word in ("<b>Mean</b>", "<b>Median</b>", "<b>Maximum</b>", "<b>Coherent</b>",
                      "every selected baseline"):
             assert word in text
         assert hint in plotter._hint_divs()
@@ -558,7 +599,7 @@ class TestRealPlotter:
             del msg["panels"]["A"]["baseline_combine"]         # an older client
             _run(vp._handle_plot(msg))
             assert r.baseline_combine == "mean" and not seen
-            msg["panels"]["A"]["baseline_combine"] = "median"  # junk: kept, not fatal
+            msg["panels"]["A"]["baseline_combine"] = "minimum" # junk: kept, not fatal
             resp = _run(vp._handle_plot(msg))
             assert resp.get("status") != "error" and r.baseline_combine == "mean"
         finally:

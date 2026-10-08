@@ -196,7 +196,8 @@ Task arguments (preview)
      - How a raster cell that covers several baselines combines them
        (where Baseline is not a plot axis, e.g. Time vs Channel with no
        single baseline ticked): ``"mean"`` (default) of the baselines'
-       amplitudes, ``"max"`` (the largest, so interference on a few
+       amplitudes, ``"median"`` (what most baselines share, unmoved
+       by a few bad ones), ``"max"`` (the largest, so interference on a few
        baselines is not diluted), or ``"coherent"`` (the visibilities
        are added first; for a calibrated point source). ``averaging``
        applies to the samples within each baseline. Initial value for
@@ -345,7 +346,9 @@ Sidebar
   Where Baseline is not one of the raster's axes and several baselines
   are selected, each cell covers all of them. *Averaging* then applies
   to the samples of each baseline, and *Baselines combined* says what
-  is done with the baselines: *Mean* (of their amplitudes), *Maximum*
+  is done with the baselines: *Mean* (of their amplitudes), *Median*
+  (what most of them share; a feature in *Maximum* but not in *Median*
+  is on only a few baselines), *Maximum*
   (the largest; a problem on a few baselines stays visible) or
   *Coherent* (added as complex numbers first, which is only meaningful
   for a calibrated point source). The title names the choice.

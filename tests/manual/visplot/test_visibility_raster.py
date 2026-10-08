@@ -1862,8 +1862,11 @@ class TestDecimation:
             "Level-1 rerender must not replace the agg"
         )
 
-    def test_level2_rerender_replaces_agg_when_decimated(self):
-        """When decimated and zoomed past agg resolution, must re-query backend."""
+    def test_level2_rerender_holds_detail_beside_the_agg_when_decimated(self):
+        """When decimated and zoomed past agg resolution, must re-query
+        the backend -- and keep the full agg (2026-10-07: the re-query
+        used to REPLACE it, so zooming back out showed only the zoomed
+        region on a blank plot; see test_raster_zoom.py)."""
         # Force decimation with a tiny budget
         vr = _make_vr(self.backend, self.sel, max_cells=100)
         assert vr._is_decimated, "max_cells=100 must produce a decimated agg"
@@ -1874,7 +1877,10 @@ class TestDecimation:
         agg_cell_w = (vr._x_range[1] - vr._x_range[0]) / w
         agg_cell_h = (vr._y_range[1] - vr._y_range[0]) / h
         x_mid = (vr._x_range[0] + vr._x_range[1]) / 2
-        y_mid = (vr._y_range[0] + vr._y_range[1]) / 2
+        # On a row that exists: the middle of the time RANGE of this
+        # data set can fall in a gap between scans, where there is
+        # nothing to query.
+        y_mid = float(old_agg.coords[old_agg.dims[0]].values[h // 2])
 
         # Viewport covers half an agg cell — definitely below agg resolution
         vr._handle_rerender({
@@ -1883,9 +1889,14 @@ class TestDecimation:
             "y0": y_mid - agg_cell_h * 0.25,
             "y1": y_mid + agg_cell_h * 0.25,
         })
-        assert vr.agg is not old_agg, (
-            "Level-2 rerender must replace the agg with a higher-resolution sub-query"
+        assert vr.agg is old_agg, "the full agg must survive a Level-2 re-query"
+        assert vr._detail is not None and vr._detail_on, (
+            "Level-2 rerender must hold a higher-resolution sub-query"
         )
+        n_t = vr._detail.agg.sizes[old_agg.dims[0]]
+        t = old_agg.coords[old_agg.dims[0]].values
+        lo, hi = vr._detail.y_extent
+        assert n_t > ((t >= lo) & (t <= hi)).sum(), "detail is no finer than the agg"
 
     def test_level2_rerender_response_image_valid(self):
         """Level-2 rerender must return a valid uint32 image."""

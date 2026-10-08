@@ -208,6 +208,15 @@ _STATIC_HINTS = {
     "s_y": "<b>Scatter Y axis</b> \u2014 the value plotted for every sample  | <b>Amplitude / Phase / Real / Imaginary</b>: one point per visibility, drawn as density  | <b>Phase RMS / Coherence</b>: one point per window (per integration, channel or scan, depending on X)  | <b>Z-Score</b>: how unusual each sample is for its baseline",
     "colorize": "<b>Layer colouring</b> \u2014 each ticked correlation is a layer with its own colours  | <b>Continuous</b>: density of points; scaling works as for the raster  | <b>Categorical</b>: colour by antenna, baseline, field, scan or SPW; tick which values to show  | <b>Statistical</b>: colour by Z-Score so outliers stand out  | <b>Layer</b> chooses which layer the controls below apply to",
     # ---- toolbar
+    # ---- Flagging panel (HRS H5, 2026-10-07)
+    "flag_filter": "<b>Filter</b> \u2014 which of the samples inside a drawn box are flagged  | <b>All selected</b>: every sample in the box  | The others take only the samples that meet a condition, so a generous box can be drawn round a bad stretch and only the bad samples in it go  | The condition and its settings are described under the list",
+    "flag_preview": "<b>Preview each proposal</b> \u2014 show what a box would flag (how many samples, on which baselines, antennas, windows and scans) and paint those samples on the plots before anything is recorded; then accept or reject  | Worth having on while the Flag reaches settings are wider than the box",
+    "flag_reach": "<b>Flag reaches</b> \u2014 how far each flag (or unflag) goes beyond the box that is drawn. The settings stay until changed; the line underneath turns amber while any is wider than the box  | <b>Baselines</b>: <i>As drawn</i>; or all baselines <i>to the antenna they share</i> (drag across two or more baselines of the bad antenna; refused if they do not share exactly one); or all <i>to every antenna drawn</i>; or <i>all baselines</i>  | <b>All channels</b>: the drawn time range over the whole band (a bad integration)  | <b>All selected spectral windows</b>: the same channels and times in every selected window  | <b>Whole scan</b>: every integration of the scans the box touches  | <b>All fields</b>: only matters on a plot without a Time axis  | <b>All correlations</b>: not just the one plotted  | Baselines, windows, scans and fields are extended for a raster box with the All selected filter; other boxes say so  | For one box only, without changing these: hold <b>Shift</b> while dragging for the full height of the plot, <b>Alt</b> (or Ctrl) for the full width",
+    "flag_reason": "<b>Reason</b> \u2014 a few words on why, stored with every flag made from now on until the text is changed  | Shown in Describe pending flags, saved in the JSON, and written as the reason in exported flagdata commands, so flags can later be listed or undone by reason  | Leave empty for none",
+    "flag_display": "<b>Pending flags on the plots</b>  | <b>Hide flagged</b>: flagged samples disappear and colour scales and statistics are recomputed without them \u2014 flag, then look again  | <b>Show in colour</b>: the data stay as on disk and the samples the pending flags change are painted in the chosen colour, to see what has been marked",
+    "flag_shown": "<b>Show flagged data</b> \u2014 also draw samples that are flagged now, on disk or pending, in the chosen colour  | Needed to unflag: an Unflag box can only take what is drawn",
+    "flag_undo": "<b>Undo / Redo / Clear</b> \u2014 step back through the pending flags one box at a time, forward again, or drop them all  | Nothing here touches the data on disk",
+    "flag_report": "<b>Describe pending flags</b> \u2014 open a page listing every pending flag in order: what it covers, how far it reached, its filter, its reason and how many samples it changes",
     "tb_sidebar": "<b>\u27e8 / \u27e9</b> \u2014 hide or show the configuration panel on the left, to give the plots the full width",
     "tb_plot": "<b>Plot</b> \u2014 draw both panels with everything as now set in the panel on the left  | Selections, axes, quantities and window settings take effect only when this is pressed; colour scaling applies at once  | Pending flags are kept",
     "tb_reload": "<b>Reload</b> \u2014 read the data again and redraw  | Use after something else has changed the data on disk  | Discards pending (unapplied) flags",
@@ -2063,6 +2072,19 @@ class VisibilityPlotter:
         the default) or ``"color"`` (drawn in ``flag_color``).
     flag_color : str
         Colour for pending flags when ``flag_display="color"``.
+    flag_reach : str
+        How far a flag box reaches beyond what is drawn, as the "Flag
+        reaches" controls start: a comma-separated list of
+        ``shared-antenna`` (all baselines to the antenna the drawn
+        baselines share), ``antennas`` (all baselines to every antenna
+        of the drawn baselines), ``all-baselines``, ``channels``,
+        ``spw`` (all selected spectral windows), ``scan`` (the whole
+        scan), ``fields``, ``correlations``.  Empty (the default):
+        flags cover what is drawn.
+    flag_reason : str
+        Text stored with each flag made from now on (why it was
+        flagged); shown in the report, saved in the JSON, written as
+        ``reason=`` in exported flagdata commands.
     flag_show_flagged : bool
         Also draw data that are currently flagged (on disk or pending) in
         ``flag_flagged_color``, so an Unflag box can select them.  Off by
@@ -2162,6 +2184,8 @@ class VisibilityPlotter:
         flag_color:       str            = "#ff00ff",
         flag_show_flagged: bool          = False,
         flag_flagged_color: str          = "#7f849c",
+        flag_reach:       str            = "",
+        flag_reason:      str            = "",
         frame_cache_mb:   Optional[float] = None,
     ) -> None:
         """Construct the plotter.
@@ -2205,7 +2229,8 @@ class VisibilityPlotter:
         self._flags           = FlagController(
             self, filters=flag_filters, preview=flag_preview,
             display=flag_display, color=flag_color,
-            show_flagged=flag_show_flagged, flagged_color=flag_flagged_color)
+            show_flagged=flag_show_flagged, flagged_color=flag_flagged_color,
+            reach=flag_reach, reason=flag_reason)
         self._flag_db         = self._flags.db
         # Part 6: bumped by Reload; carried to the backend in the
         # SelectionSpec so its frame cache re-reads instead of reusing.
@@ -5890,7 +5915,8 @@ for (let i = 0; i < cols.length; i++) {
             *([self._flags.build_widgets(self._pipe["flag"], self._ids["flag"],
                                          section=_section("Flagging"),
                                          width=_SIDEBAR_WIDTH,
-                                         stylesheet=self._dark)]
+                                         stylesheet=self._dark,
+                                         hover=self._hover)]
               if self._enable_flagging else []),
             self._gear_tabs,
             width       = _SIDEBAR_WIDTH_COL,
@@ -8828,6 +8854,13 @@ if (x != null && !isNaN(x)) {
         # Fixed-text help for the gear tabs and the toolbar.
         for name, text in _STATIC_HINTS.items():
             setattr(self, f"_hint_{name}", _hint(text))
+        # Flagging panel (2026-10-07): one per filter, from the filter's
+        # own description and parameter help, and the export choices,
+        # which depend on what this data set can be written with.
+        if self._enable_flagging:
+            for name, text in self._flags.filter_hints().items():
+                setattr(self, f"_hint_{name}", _hint(text))
+            self._hint_flag_export = _hint(self._flags.export_hint())
         # ...and one per preset button.  Every hint is created HERE,
         # before any control is wrapped by _hover(): each wrapper is
         # given the full list of hints to hide when it shows its own.

@@ -67,6 +67,63 @@ DISPLAY_MODES = ("hide", "color")
 DEFAULT_FLAGGED_COLOR = "#7f849c"   # grey: flagged data shown for unflagging
 
 
+# "Flag reaches" > Baselines: value -> label (HRS H5, 2026-10-07).
+REACH_BASELINES = {
+    "drawn":    "As drawn",
+    "shared":   "All to the antenna they share",
+    "antennas": "All to every antenna drawn",
+    "all":      "All baselines",
+}
+# ...and in a sentence ("Each box also takes: ...").
+REACH_BASELINE_WORDS = {
+    "shared":   "all baselines to the antenna the drawn ones share",
+    "antennas": "all baselines to every antenna drawn",
+    "all":      "all baselines",
+}
+REACH_WARN_COLOR = "#f9a825"      # amber: readable on dark and light
+REACH_QUIET_COLOR = "#8c8fa1"
+REASON_MAX = 80
+
+
+# ``flag_reach="..."`` words (constructor / task argument) -> setting.
+_REACH_WORDS = {
+    "shared-antenna": ("baselines", "shared"),
+    "antennas":       ("baselines", "antennas"),
+    "all-baselines":  ("baselines", "all"),
+    "channels":       ("channels", True),
+    "spw":            ("spw", True),
+    "scan":           ("scan", True),
+    "fields":         ("field", True),
+    "correlations":   ("correlations", True),
+}
+
+
+def parse_reach(text) -> dict:
+    """``flag_reach`` as given to the constructor -> ``set_reach`` mapping.
+
+    A comma-separated list of the words in ``_REACH_WORDS`` (empty: as
+    drawn), or a mapping, which is passed through.
+    """
+    if not text:
+        return {}
+    if isinstance(text, Mapping):
+        return dict(text)
+    out = {}
+    for word in str(text).replace(";", ",").split(","):
+        w = word.strip().lower().replace("_", "-").replace(" ", "-")
+        if not w:
+            continue
+        if w not in _REACH_WORDS:
+            raise ValueError(f"flag_reach: unknown word {word.strip()!r}; "
+                             f"known: {', '.join(_REACH_WORDS)}")
+        k, v = _REACH_WORDS[w]
+        if k == "baselines" and "baselines" in out and out[k] != v:
+            raise ValueError("flag_reach: give one of shared-antenna, antennas, "
+                             "all-baselines")
+        out[k] = v
+    return out
+
+
 @dataclass
 class Proposal:
     """A resolved flag request awaiting acceptance (not in the DB)."""
@@ -75,6 +132,7 @@ class Proposal:
     warnings: list
     kind: str
     db_version: int
+    reach: tuple = ()       # what the box was widened to, in words (H5)
     proposal_id: str = dc_field(default_factory=lambda: uuid.uuid4().hex)
     created: float = dc_field(default_factory=time.time)
 
@@ -109,7 +167,8 @@ class FlagController:
     def __init__(self, plotter, *, filters: Optional[Mapping[str, Any]] = None,
                  preview: bool = False, display: str = "hide",
                  color: str = DEFAULT_PENDING_COLOR, show_flagged: bool = False,
-                 flagged_color: str = DEFAULT_FLAGGED_COLOR) -> None:
+                 flagged_color: str = DEFAULT_FLAGGED_COLOR,
+                 reach: Optional[Mapping[str, Any]] = None, reason: str = "") -> None:
         if display not in DISPLAY_MODES:
             raise ValueError(f"flag_display must be one of {DISPLAY_MODES}; got {display!r}")
         self._plotter = plotter
@@ -124,6 +183,15 @@ class FlagController:
         self.flagged_color = flagged_color or DEFAULT_FLAGGED_COLOR
         self.extend_corr = False
         self.extend_chan = False
+        # "Flag reaches" (HRS H5): how far beyond the drawn box a flag
+        # goes.  Stays as set until changed, like AIPS's scope switches;
+        # everything starts at "as drawn".  Channels and correlations
+        # are the two extend_* switches above, the rest is ``scope``
+        # (resolved by flag_engine.widen_region when a box is proposed).
+        self.scope = {"baselines": "drawn", "spw": False, "scan": False, "field": False}
+        self.reason = ""
+        self.set_reach(parse_reach(reach))
+        self.set_reason(reason)
         self.proposal: Optional[Proposal] = None
         self._commit_pending: Optional[dict] = None
         self._restore_pending: Optional[dict] = None
@@ -242,6 +310,61 @@ class FlagController:
     def _filter(self) -> FlagFilter:
         return self.registry.get(self.filter_name)
 
+    # ------------------------------------------------------------------ #
+    # Flag reaches / reason                                                #
+    # ------------------------------------------------------------------ #
+    def set_reach(self, reach: Optional[Mapping[str, Any]]) -> None:
+        """Set how far a flag reaches beyond the drawn box.
+
+        *reach* maps any of ``baselines`` (one of ``REACH_BASELINES``),
+        ``channels``, ``correlations``, ``spw``, ``scan``, ``field``
+        (booleans) to its value; keys left out keep their setting.
+        """
+        for k, v in dict(reach or {}).items():
+            if k == "baselines":
+                v = str(v).lower()
+                if v not in REACH_BASELINES:
+                    raise ValueError(f"flag_reach['baselines'] must be one of "
+                                     f"{tuple(REACH_BASELINES)}; got {v!r}")
+                self.scope["baselines"] = v
+            elif k == "channels":
+                self.extend_chan = bool(v)
+            elif k == "correlations":
+                self.extend_corr = bool(v)
+            elif k in ("spw", "scan", "field"):
+                self.scope[k] = bool(v)
+            else:
+                raise ValueError(f"flag_reach: unknown key {k!r}; known: baselines, "
+                                 f"channels, correlations, spw, scan, field")
+
+    def set_reason(self, reason) -> None:
+        # One line, no quotes: it goes into flagdata's reason='...' and
+        # into one row of a report.
+        r = " ".join(str(reason or "").split())
+        self.reason = r.replace("'", "").replace('"', "")[:REASON_MAX]
+
+    def reach_words(self) -> list:
+        """The settings wider than "as drawn", in words (empty if none)."""
+        out = []
+        b = self.scope["baselines"]
+        if b != "drawn":
+            out.append(REACH_BASELINE_WORDS[b])
+        for on, text in ((self.extend_chan, "all channels"),
+                         (self.scope["spw"], "all selected spectral windows"),
+                         (self.scope["scan"], "the whole scan"),
+                         (self.scope["field"], "all fields"),
+                         (self.extend_corr, "all correlations")):
+            if on:
+                out.append(text)
+        return out
+
+    def reach_text(self) -> str:
+        """The line under the "Flag reaches" controls."""
+        w = self.reach_words()
+        if not w:
+            return "Flags cover what is drawn."
+        return "⚠ Each box also takes: " + html.escape("; ".join(w)) + "."
+
     def build_request(self, panel, kind: str, msg: dict, flag: bool) -> dict:
         """The engine request for a box drawn on *panel* (raster or scatter)."""
         f = self._filter()
@@ -255,6 +378,8 @@ class FlagController:
             "filter": {"name": f.name, "params": params},
             "filter_obj": f,
             "extend": {"extend_corr": self.extend_corr, "extend_chan": self.extend_chan},
+            "scope": dict(self.scope),
+            "reason": self.reason,
             "source": f"{kind}_box_{'flag' if flag else 'unflag'}",
             "data_column": getattr(sel, "data_column", ""),
         }
@@ -289,6 +414,13 @@ class FlagController:
             prov = (f"scatter box {x_ax.name} {_rng(x_ax, req['x0'], req['x1'])} x "
                     f"{_rng(None, req['y0'], req['y1'])} on "
                     + ", ".join(f"{l['y_axis']}({l['polarization']})" for l in layers))
+        # Shift / Alt held while drawing: the tool stretched the box to
+        # the plot's edges; say so, since the numbers alone do not.
+        span = str(msg.get("span") or "")
+        if span:
+            prov += {"y": " [Shift: full height of the view]",
+                     "x": " [Alt: full width of the view]",
+                     "xy": " [Shift+Alt: the whole view]"}.get(span, "")
         req["provenance"] = [prov]
         req["comment"] = prov
         return req
@@ -299,7 +431,8 @@ class FlagController:
         d = result.get("delta")
         delta = FlagDelta.from_dict(d) if isinstance(d, dict) else d
         return Proposal(delta=delta, counts=counts, warnings=list(result.get("warnings") or ()),
-                        kind=req.get("kind", ""), db_version=self.db.version)
+                        kind=req.get("kind", ""), db_version=self.db.version,
+                        reach=tuple(result.get("reach") or ()))
 
     async def handle_box(self, msg: dict, kind: str, panel) -> dict:
         t0 = time.perf_counter()
@@ -376,6 +509,15 @@ class FlagController:
         nb = len(c.by_baseline or {})
         if nb > 1:
             s += f" on {nb:,} baselines"
+        # What the box was widened to (HRS H5), in words, in the same
+        # sentence as the count it explains.
+        d = prop.delta
+        words = list(getattr(prop, "reach", ()) or ())
+        if d is not None:
+            words += [w for on, w in ((d.extend_chan, "all channels"),
+                                      (d.extend_corr, "all correlations")) if on]
+        if words:
+            s += " \u2014 reaching " + html.escape("; ".join(words))
         return s
 
     # ================================================================== #
@@ -459,6 +601,11 @@ class FlagController:
             self.extend_corr = bool(msg["extend_corr"])
         if "extend_chan" in msg:
             self.extend_chan = bool(msg["extend_chan"])
+        if isinstance(msg.get("reach"), dict):
+            self.set_reach({k: v for k, v in msg["reach"].items()
+                            if k in ("baselines", "spw", "scan", "field")})
+        if "reason" in msg:
+            self.set_reason(msg["reason"])
         data_changed = False
         if "display" in msg and msg["display"] in DISPLAY_MODES and msg["display"] != self.display:
             self.display = msg["display"]
@@ -564,9 +711,11 @@ class FlagController:
             t0 = time_to_datetime(c.time_span[0], d.time_format).strftime("%Y-%m-%d %H:%M:%S")
             t1 = time_to_datetime(c.time_span[1], d.time_format).strftime("%H:%M:%S")
             rows.append(("Time", f"{t0} – {t1} UTC ({c.n_times} integrations)"))
-        if d.extend_corr or d.extend_chan:
-            rows.append(("Extend", ", ".join(x for x, on in (("all correlations", d.extend_corr),
-                                                              ("all channels", d.extend_chan)) if on)))
+        reach = list(prop.reach) + [x for x, on in (("all channels", d.extend_chan),
+                                                    ("all correlations", d.extend_corr)) if on]
+        rows.append(("Reaches", html.escape("; ".join(reach)) if reach else "as drawn"))
+        if d.reason:
+            rows.append(("Reason", html.escape(d.reason)))
         rows.append(("Provenance", html.escape(" → ".join(d.provenance))))
         if prop.warnings:
             rows.append(("Notes", html.escape("; ".join(prop.warnings))))
@@ -1029,9 +1178,8 @@ class FlagController:
                 if self.show_flagged else "off"),
             row("Current filter", esc(f.label) + (" " + esc(str(self.filter_params.get(f.name)))
                                                   if self.filter_params.get(f.name) else "")),
-            row("Extend", ", ".join(x for x, on in (("all correlations", self.extend_corr),
-                                                    ("all channels", self.extend_chan)) if on)
-                or "none"),
+            row("Flag reaches (now set)", esc("; ".join(self.reach_words()) or "as drawn")),
+            row("Reason (now set)", esc(self.reason) or "—"),
             row("Committed to disk", "no -- pending flags live only in this session until "
                                      "written (Export / commit → Write flags) or saved "
                                      "as JSON"),
@@ -1041,6 +1189,7 @@ class FlagController:
             parts.append("<p>No pending flag operations.</p>")
         for d in deltas:
             rows = [row("Action", esc(d.verb)),
+                    *([row("Reason", esc(d.reason))] if d.reason else []),
                     row("Representation", "explicit samples (frozen when proposed)"
                         if d.is_sample_set else "coordinate region"),
                     row("Samples (as proposed)", f"{d.n_samples:,}" if d.n_samples is not None
@@ -1104,14 +1253,24 @@ class FlagController:
     # ================================================================== #
 
     def build_widgets(self, comm, msg_id: str, section=None, width: int = 260,
-                      stylesheet=None):
+                      stylesheet=None, hover=None):
         """Flag section of the sidebar.  Returns a ``column``.
 
         *stylesheet* is a factory returning the sidebar's themed
         ``InlineStyleSheet`` (``VisibilityPlotter._dark``); every widget gets
         its own copy as ``stylesheets[0]`` so the Light/Dark toggle can
         restyle it like the rest of the sidebar (``themed_widgets()``).
+
+        *hover* is ``VisibilityPlotter._hover``: ``hover(widget, name)``
+        returns the widget wrapped so that the status-area help
+        ``_hint_<name>`` shows while the pointer is over it.  All help
+        here goes that way (2026-10-07); no widget carries a tooltip.
+        The names are the ``flag_*`` keys of the plotter's static hints
+        plus ``flagf_<filter>`` per filter (``filter_hints()``).
         """
+        if hover is None:
+            def hover(widget, _name):
+                return widget
         from bokeh.layouts import column, row
         from bokeh.models import (Button, Checkbox, ColorPicker, CustomJS, Div,
                                   NumericInput, RadioButtonGroup, Select)
@@ -1142,16 +1301,38 @@ class FlagController:
                 else:
                     continue
                 w.tags = [spec.name, spec.kind]
-                if spec.help and "description" in w.properties():
-                    w.description = spec.help      # (Checkbox has no tooltip)
                 ws.append(w)
             param_widgets[n] = ws
             desc = Div(text=f"<span style='color:#a6adc8;font-size:11px'>"
                             f"{html.escape(f.description)}</span>", width=width)
-            param_cols[n] = column(desc, *ws, visible=(n == self.filter_name))
+            # The block and its help region are one thing to show and
+            # hide: the wrapper (or the bare column without hover).
+            param_cols[n] = hover(column(desc, *ws, width=width), f"flagf_{n}")
+            param_cols[n].visible = (n == self.filter_name)
         preview_cb = Checkbox(label="Preview each proposal", active=self.preview)
-        ext_corr = Checkbox(label="Extend to all correlations", active=self.extend_corr)
-        ext_chan = Checkbox(label="Extend to all channels", active=self.extend_chan)
+        # ---- Flag reaches (HRS H5) ----------------------------------- #
+        from bokeh.models import TextInput
+        reach_head = Div(text="<b>Flag reaches</b>", width=width,
+                         styles={"font-size": "12px", "margin-top": "4px",
+                                 "color": "#a6adc8"})
+        reach_bl = Select(title="Baselines", value=self.scope["baselines"], width=width,
+                          options=list(REACH_BASELINES.items()))
+        ext_chan = Checkbox(label="All channels", active=self.extend_chan)
+        reach_spw = Checkbox(label="All selected spectral windows", active=self.scope["spw"])
+        reach_scan = Checkbox(label="Whole scan", active=self.scope["scan"])
+        reach_field = Checkbox(label="All fields", active=self.scope["field"])
+        ext_corr = Checkbox(label="All correlations", active=self.extend_corr)
+        wide = bool(self.reach_words())
+        reach_note = Div(text=self.reach_text(), width=width,
+                         styles={"font-size": "11px",
+                                 "color": REACH_WARN_COLOR if wide else REACH_QUIET_COLOR})
+        reason_in = TextInput(title="Reason (stored with each flag)", value=self.reason,
+                              placeholder="e.g. RFI, antenna off source", width=width,
+                              max_length=REASON_MAX)
+        self._widgets.update(reach_bl=reach_bl, ext_chan=ext_chan, ext_corr=ext_corr,
+                             reach_spw=reach_spw, reach_scan=reach_scan,
+                             reach_field=reach_field, reach_note=reach_note,
+                             reason=reason_in, preview=preview_cb, filter=filt_sel)
         display = RadioButtonGroup(labels=["Hide flagged", "Show in colour"],
                                    active=DISPLAY_MODES.index(self.display), width=width)
         color = ColorPicker(title="Pending colour", color=self.color, width=width)
@@ -1164,17 +1345,8 @@ class FlagController:
         btns = {k: Button(label=l, width=width // 3 - 4, button_type="default")
                 for k, l in (("undo", "Undo"), ("redo", "Redo"), ("clear", "Clear"))}
         report_btn = Button(label="Describe pending flags", width=width)
-        from bokeh.models import TextInput
-        caps = self.capabilities()
         exp_sel = Select(title="Export / commit", value="json", width=width,
                          options=self.export_options())
-        exp_sel.description = (
-            "Write flags to the MS / PS: exact, verified, with a backup"
-            + ("" if caps.get("write") else " (unavailable: " + (caps.get("write_reason") or "")
-               + ")")
-            + (". 'Write flags with CASA flagdata' is a CASA-like alternative: CASA may "
-               "apply large or scattered selections incompletely -- prefer the default for "
-               "many points; the result is verified either way." if caps.get("casa") else ""))
         exp_path = TextInput(title="File (optional; required to load / restore)",
                              placeholder="default: <data name>.<kind>.<date-time>.<ext>",
                              width=width)
@@ -1188,15 +1360,24 @@ class FlagController:
         cfg_js = CustomJS(args=dict(comm=comm, msg_id=msg_id, filt_sel=filt_sel,
                                     param_widgets=param_widgets, param_cols=param_cols,
                                     preview_cb=preview_cb, ext_corr=ext_corr,
-                                    ext_chan=ext_chan, display=display, color=color,
+                                    ext_chan=ext_chan, reach_bl=reach_bl,
+                                    reach_spw=reach_spw, reach_scan=reach_scan,
+                                    reach_field=reach_field, reach_note=reach_note,
+                                    reason_in=reason_in,
+                                    reach_labels=dict(REACH_BASELINE_WORDS),
+                                    reach_warn=REACH_WARN_COLOR,
+                                    reach_quiet=REACH_QUIET_COLOR,
+                                    display=display, color=color,
                                     show_flagged=show_flagged, flagged_color=flagged_color,
                                     **self._response_args()),
                           code=_CV_SET_BUSY_JS + _FLAG_RESPONSE_JS + _CONFIG_JS)
-        for w in [filt_sel, preview_cb, ext_corr, ext_chan, display, color,
+        for w in [filt_sel, preview_cb, ext_corr, ext_chan, reach_bl, reach_spw,
+                  reach_scan, reach_field, reason_in, display, color,
                   show_flagged, flagged_color] + \
                  [w for ws in param_widgets.values() for w in ws]:
             prop = {"Select": "value", "NumericInput": "value", "Checkbox": "active",
-                    "RadioButtonGroup": "active", "ColorPicker": "color"}[type(w).__name__]
+                    "RadioButtonGroup": "active", "ColorPicker": "color",
+                    "TextInput": "value"}[type(w).__name__]
             w.js_on_change(prop, cfg_js)
         exp_go.js_on_click(CustomJS(args=dict(comm=comm, msg_id=msg_id, exp_sel=exp_sel,
                                               exp_path=exp_path, exp_backups=exp_backups,
@@ -1217,7 +1398,8 @@ class FlagController:
                                                   **self._response_args()),
                                         code=_CV_SET_BUSY_JS + _FLAG_RESPONSE_JS + _REPORT_JS))
         self._widgets.update(info=info)
-        themed = ([filt_sel, preview_cb, ext_corr, ext_chan, display, color, show_flagged,
+        themed = ([filt_sel, preview_cb, ext_corr, ext_chan, reach_bl, reach_spw,
+                   reach_scan, reach_field, reason_in, display, color, show_flagged,
                    flagged_color, exp_sel, exp_backups, exp_path, exp_go,
                    report_btn] + list(btns.values())
                   + [w for ws in param_widgets.values() for w in ws])
@@ -1225,11 +1407,56 @@ class FlagController:
             for w in themed:
                 w.stylesheets = [stylesheet()] + list(w.stylesheets or [])
         self._themed = themed
+        # One hover region per subject, so the help does not flicker
+        # while the pointer moves between the parts of one group.
         kids = ([section] if section is not None else []) + [
-            filt_sel, *param_cols.values(), preview_cb, ext_corr, ext_chan,
-            display, color, show_flagged, flagged_color, row(*btns.values()),
-            exp_sel, exp_backups, exp_path, exp_go, report_btn, info]
+            hover(filt_sel, "flag_filter"),
+            *param_cols.values(),
+            hover(preview_cb, "flag_preview"),
+            hover(column(reach_head, reach_bl, ext_chan, reach_spw, reach_scan,
+                         reach_field, ext_corr, reach_note, width=width), "flag_reach"),
+            hover(reason_in, "flag_reason"),
+            hover(column(display, color, width=width), "flag_display"),
+            hover(column(show_flagged, flagged_color, width=width), "flag_shown"),
+            hover(row(*btns.values(), width=width), "flag_undo"),
+            hover(column(exp_sel, exp_backups, exp_path, exp_go, width=width), "flag_export"),
+            hover(report_btn, "flag_report"), info]
         return column(*kids, width=width)
+
+    def filter_hints(self) -> dict:
+        """Status-area help per filter: ``{"flagf_<name>": html}``.
+
+        What the filter picks out of a box and what each of its
+        parameters does (the text that used to be tooltips).
+        """
+        out = {}
+        esc = html.escape
+        for n in self.registry.names():
+            f = self.registry.get(n)
+            pts = [f"<b>{esc(f.label)}</b> \u2014 {esc(f.description)}"]
+            for spec in f.params:
+                if spec.gui and spec.help:
+                    pts.append(f"<b>{esc(spec.label or spec.name)}</b>: {esc(spec.help)}")
+            out[f"flagf_{n}"] = "  | ".join(pts)
+        return out
+
+    def export_hint(self) -> str:
+        """Status-area help for the Export / commit group."""
+        caps = self.capabilities()
+        pts = ["<b>Export / commit</b> \u2014 what to do with the pending flags; nothing "
+               "is written until <b>Go</b>",
+               "<b>Save as JSON</b>: the flags as a file that can be loaded again here, "
+               "with their reasons",
+               "<b>Write flags</b> to the MS / PS: exact, checked afterwards, with a backup"
+               + ("" if caps.get("write") else
+                  " (unavailable: " + html.escape(caps.get("write_reason") or "") + ")")]
+        if caps.get("casa"):
+            pts.append("<b>Write flags with CASA flagdata</b>: the CASA route; CASA may apply "
+                       "large or scattered selections incompletely, so prefer Write flags "
+                       "for many points. The result is checked either way")
+        pts.append("<b>File</b>: where to write, or what to load or restore; empty takes a "
+                   "name made from the data name and the time")
+        return "  | ".join(pts)
 
     def themed_widgets(self) -> list:
         """Widgets the Light/Dark toggle must restyle (``stylesheets[0]``)."""
@@ -1381,10 +1608,28 @@ for (const w of (param_widgets[name] || [])) {
     if (kind === 'bool') params[pname] = !!w.active;
     else if (w.value !== null && w.value !== undefined && w.value !== '') params[pname] = w.value;
 }
+// The line under "Flag reaches": plain when every setting is "as drawn",
+// a warning when any is wider (the settings stay until changed, so the
+// user must be able to see at a glance that the next box is not just a box).
+{
+    const wide = [];
+    if (reach_bl.value !== 'drawn') wide.push(String(reach_labels[reach_bl.value] || ''));
+    if (ext_chan.active) wide.push('all channels');
+    if (reach_spw.active) wide.push('all selected spectral windows');
+    if (reach_scan.active) wide.push('the whole scan');
+    if (reach_field.active) wide.push('all fields');
+    if (ext_corr.active) wide.push('all correlations');
+    reach_note.text = wide.length ? '\u26a0 Each box also takes: ' + wide.join('; ') + '.'
+                                  : 'Flags cover what is drawn.';
+    reach_note.styles = {...reach_note.styles, color: wide.length ? reach_warn : reach_quiet};
+}
 window.__cvSetBusy(true);
 comm.send(msg_id, {action: 'config', filter: name, params: params,
                    preview: !!preview_cb.active, extend_corr: !!ext_corr.active,
                    extend_chan: !!ext_chan.active,
+                   reach: {baselines: reach_bl.value, spw: !!reach_spw.active,
+                           scan: !!reach_scan.active, field: !!reach_field.active},
+                   reason: reason_in.value || '',
                    display: display.active === 1 ? 'color' : 'hide',
                    color: color.color, show_flagged: !!show_flagged.active,
                    flagged_color: flagged_color.color},

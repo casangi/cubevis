@@ -36,6 +36,7 @@ import sys
 
 from itertools import groupby, chain
 from socket import socket
+import socket as _socket_module   # the exception classes; `socket` above is the class
 from os import path as __path
 from ._ResourceManager import _ResourceManager
 from ._logging import get_logger, LazySummarize
@@ -248,8 +249,8 @@ def have_network():
             return False
         except (urllib.error.ContentTooShortError,
                 urllib.error.URLError,
-                socket.timeout,
-                socket.gaierror,  # DNS resolution errors
+                _socket_module.timeout,
+                _socket_module.gaierror,  # DNS resolution errors
                 OSError) as e:
             return False
         except Exception:

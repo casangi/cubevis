@@ -436,6 +436,12 @@ class FlagDelta:
     created:    float = dc_field(default_factory=_time.time)
     source:     str = ""
     comment:    str = ""
+    # Why the user flagged this (HRS H5, 2026-10-07): free text set in the
+    # Flagging panel and stored with each operation, as AIPS's SET REASON
+    # does.  Shown in the pending-flags report, saved in the JSON, and
+    # used as the flagdata "reason" on CASA export.  ``comment`` stays
+    # what it was: the machine-written description of the box.
+    reason:     str = ""
     provenance: tuple = ()
     data_column: str = ""
     n_samples:  Optional[int] = None    # samples touched when proposed
@@ -527,6 +533,7 @@ class FlagDelta:
             "filter": self.filter.to_dict() if self.filter else None,
             "delta_id": self.delta_id, "seq": self.seq, "created": self.created,
             "source": self.source, "comment": self.comment,
+            "reason": self.reason,
             "provenance": list(self.provenance), "data_column": self.data_column,
             "n_samples": self.n_samples,
         }
@@ -563,6 +570,7 @@ class FlagDelta:
             delta_id=d.get("delta_id") or uuid.uuid4().hex,
             seq=int(d.get("seq", 0)), created=float(d.get("created", _time.time())),
             source=d.get("source", ""), comment=d.get("comment", ""),
+            reason=d.get("reason", "") or "",
             provenance=tuple(d.get("provenance", ())),
             data_column=d.get("data_column", ""),
             n_samples=d.get("n_samples"),

@@ -17,8 +17,17 @@
   filters passed as `VisibilityPlotter(flag_filters={name: callable})`.
   Parameters get controls automatically.
 * **Pending flags** live in a FlagDB with Undo / Redo / Clear; an optional
-  **preview** (accept / reject) per proposal; *Extend to all correlations /
-  channels*.
+  **preview** (accept / reject) per proposal.
+* **Flag reaches** (2026-10-07): how far each box goes beyond what is
+  drawn -- all baselines of the antenna the drawn baselines share, of
+  every antenna drawn, or all baselines; all channels; all selected
+  spectral windows; the whole scan; all fields; all correlations. The
+  settings persist (an amber line says so while any is on) and are
+  resolved into the flag record when a box is proposed
+  (`flag_engine.widen_region`). Shift / Alt (or Ctrl) held while
+  dragging stretch one box to the full height / width of the view. A
+  **Reason** is stored with each flag. See
+  `devel/notes/drs/visplot/hrs_h5_flag_reach.md`.
 * **Display**: *Hide flagged* (draws what a fresh open of the committed data
   would draw) or *Show in colour* (on-disk flags hidden, pending ones painted
   in the pending colour); *Show flagged data (to unflag)* paints everything

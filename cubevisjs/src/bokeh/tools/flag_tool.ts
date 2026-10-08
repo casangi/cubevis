@@ -55,20 +55,54 @@ export class FlagToolView extends DragToolView {
     this.model.overlay.visible = false
   }
 
+  // Which way the box is stretched to the edges of the plot, from the
+  // keys held RIGHT NOW (HRS H5, 2026-10-07):
+  //   Shift        -> full height: the dragged X range, all of Y shown
+  //   Alt or Ctrl  -> full width:  the dragged Y range, all of X shown
+  // Nothing is latched: the keys act only while they are down, for this
+  // one box, and the dashed box shows the result before the button is
+  // let go.  "All shown" is the plot's current view, not the whole data
+  // set, so the box never covers anything that is off screen.  Ctrl is
+  // accepted beside Alt because several Linux window managers keep
+  // Alt+drag for moving the window and never deliver it to the page.
+  private _span_of(ev: PanEvent): "" | "x" | "y" | "xy" {
+    const m = (ev as any).modifiers ?? {}
+    const tall = !!m.shift
+    const wide = !!m.alt || !!m.ctrl
+    return tall && wide ? "xy" : tall ? "y" : wide ? "x" : ""
+  }
+
+  private _span: "" | "x" | "y" | "xy" = ""
+
   override _pan(ev: PanEvent): void {
     const moved = Math.hypot(ev.sx - this._start_sx, ev.sy - this._start_sy)
     if (!this._dragging && moved < DRAG_THRESHOLD_PX) return
     this._dragging = true
+    this._draw_box(ev)
+  }
 
+  private _draw_box(ev: PanEvent): void {
     const sx0 = px_from_sx(this.plot_view, this._start_sx)
     const sy0 = py_from_sy(this.plot_view, this._start_sy)
     const sx1 = px_from_sx(this.plot_view, ev.sx)
     const sy1 = py_from_sy(this.plot_view, ev.sy)
 
-    const x0 = dx_from_px(this.plot_view, sx0)
-    const x1 = dx_from_px(this.plot_view, sx1)
-    const y0 = dy_from_py(this.plot_view, sy0)
-    const y1 = dy_from_py(this.plot_view, sy1)
+    let x0 = dx_from_px(this.plot_view, sx0)
+    let x1 = dx_from_px(this.plot_view, sx1)
+    let y0 = dy_from_py(this.plot_view, sy0)
+    let y1 = dy_from_py(this.plot_view, sy1)
+
+    const span = this._span_of(ev)
+    this._span = span
+    const {x_range, y_range} = this.plot_view.model
+    if (span == "x" || span == "xy") {
+      x0 = x_range.start as number
+      x1 = x_range.end as number
+    }
+    if (span == "y" || span == "xy") {
+      y0 = y_range.start as number
+      y1 = y_range.end as number
+    }
 
     const ov = this.model.overlay
     ov.left    = Math.min(x0, x1)
@@ -97,6 +131,10 @@ export class FlagToolView extends DragToolView {
     }
 
     this._dragging = false
+    // The keys as they are at release decide (a key pressed or let go
+    // without moving the pointer sends no pan event of its own).
+    this._draw_box(ev)
+    const span = this._span
     const {left, right, bottom, top} = ov
     ov.visible = false
 
@@ -119,7 +157,7 @@ export class FlagToolView extends DragToolView {
     // status bar, mirroring how doPlot's resp.status_text already works.
     comm.send(msg_id, {
       x0: left, x1: right, y0: bottom, y1: top,
-      flag, panel, at_pixel_res,
+      flag, panel, at_pixel_res, span,
       tool: flag ? "flag_box" : "unflag_box",
     }, (resp: any) => {
       if (typeof set_busy === "function") set_busy(false)

@@ -96,6 +96,8 @@ def _visplot_t(
         flag_color: str = '#ff00ff',
         flag_show_flagged: bool = False,
         flag_flagged_color: str = '#7f849c',
+        flag_reach: str = '',
+        flag_reason: str = '',
         frame_cache_mb: Optional[float] = None,
 ):
     _app = VisibilityPlotter(
@@ -141,6 +143,8 @@ def _visplot_t(
         flag_color = flag_color,
         flag_show_flagged = flag_show_flagged,
         flag_flagged_color = flag_flagged_color,
+        flag_reach = flag_reach,
+        flag_reason = flag_reason,
         frame_cache_mb = frame_cache_mb,
         # layer-supplied arguments
         remote_endpoint = None,
@@ -311,6 +315,19 @@ class _visplot:
         the default) or ``"color"`` (drawn in ``flag_color``).
     flag_color : str
         Colour for pending flags when ``flag_display="color"``.
+    flag_reach : str
+        How far a flag box reaches beyond what is drawn, as the "Flag
+        reaches" controls start: a comma-separated list of
+        ``shared-antenna`` (all baselines to the antenna the drawn
+        baselines share), ``antennas`` (all baselines to every antenna
+        of the drawn baselines), ``all-baselines``, ``channels``,
+        ``spw`` (all selected spectral windows), ``scan`` (the whole
+        scan), ``fields``, ``correlations``.  Empty (the default):
+        flags cover what is drawn.
+    flag_reason : str
+        Text stored with each flag made from now on (why it was
+        flagged); shown in the report, saved in the JSON, written as
+        ``reason=`` in exported flagdata commands.
     flag_show_flagged : bool
         Also draw data that are currently flagged (on disk or pending) in
         ``flag_flagged_color``, so an Unflag box can select them.  Off by
@@ -404,6 +421,8 @@ class _visplot:
         'flag_color': 'Colour for pending flags when ``flag_display="color"``.',
         'flag_show_flagged': 'Also draw data that are currently flagged (on disk or pending) in ``flag_flagged_color``, so an Unflag box can select them.',
         'flag_flagged_color': 'Colour for flagged data when ``flag_show_flagged`` is on.',
+        'flag_reach': 'How far a flag box reaches beyond what is drawn, as the "Flag reaches" controls start: a comma-separated list of ``shared-antenna`` (all baselines to the antenna the drawn baselines share), ``antennas`` (all baselines to every antenna of the drawn baselines), ``all-baselines``, ``channels``, ``spw`` (all selected spectral windows), ``scan`` (the whole scan), ``fields``, ``correlations``.',
+        'flag_reason': 'Text stored with each flag made from now on (why it was flagged); shown in the report, saved in the JSON, written as ``reason=`` in exported flagdata commands.',
         'frame_cache_mb': 'Budget (MiB) of the cache of scatter frames -- the decoded samples a scatter panel draws, flags and probes.',
     }
 
@@ -450,6 +469,8 @@ class _visplot:
         'flag_color': '#ff00ff',
         'flag_show_flagged': False,
         'flag_flagged_color': '#7f849c',
+        'flag_reach': '',
+        'flag_reason': '',
         'frame_cache_mb': None,
     }
 
@@ -531,6 +552,8 @@ class _visplot:
             'flag_color': 'str',
             'flag_show_flagged': 'bool',
             'flag_flagged_color': 'str',
+            'flag_reach': 'str',
+            'flag_reason': 'str',
             'frame_cache_mb': 'Optional[float]',
         }
         ann = _type_map.get(name, '')
@@ -1238,6 +1261,36 @@ class _visplot:
             desc, fmt,
         )
 
+    def __flag_reach_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('flag_reach', self._arg_default['flag_reach'])
+        default = self._arg_default['flag_reach']
+        desc    = self._arg_description.get('flag_reach', '')
+        if self.__validate_('flag_reach', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('flag_reach', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __flag_reason_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('flag_reason', self._arg_default['flag_reason'])
+        default = self._arg_default['flag_reason']
+        desc    = self._arg_description.get('flag_reason', '')
+        if self.__validate_('flag_reason', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('flag_reason', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     def __frame_cache_mb_inp(self):
         glb     = self.__globals_()
         value   = glb.get('frame_cache_mb', self._arg_default['frame_cache_mb'])
@@ -1299,6 +1352,8 @@ class _visplot:
         if 'flag_color' in glb: del glb['flag_color']
         if 'flag_show_flagged' in glb: del glb['flag_show_flagged']
         if 'flag_flagged_color' in glb: del glb['flag_flagged_color']
+        if 'flag_reach' in glb: del glb['flag_reach']
+        if 'flag_reason' in glb: del glb['flag_reason']
         if 'frame_cache_mb' in glb: del glb['frame_cache_mb']
 
     #--------- inp function -------------------------------------------------------
@@ -1344,6 +1399,8 @@ class _visplot:
         self.__flag_color_inp()
         self.__flag_show_flagged_inp()
         self.__flag_flagged_color_inp()
+        self.__flag_reach_inp()
+        self.__flag_reason_inp()
         self.__frame_cache_mb_inp()
 
     #--------- tget function ------------------------------------------------------
@@ -1415,6 +1472,8 @@ class _visplot:
         _invocation_parameters['flag_color'] = glb.get('flag_color', self._arg_default['flag_color'])
         _invocation_parameters['flag_show_flagged'] = glb.get('flag_show_flagged', self._arg_default['flag_show_flagged'])
         _invocation_parameters['flag_flagged_color'] = glb.get('flag_flagged_color', self._arg_default['flag_flagged_color'])
+        _invocation_parameters['flag_reach'] = glb.get('flag_reach', self._arg_default['flag_reach'])
+        _invocation_parameters['flag_reason'] = glb.get('flag_reason', self._arg_default['flag_reason'])
         _invocation_parameters['frame_cache_mb'] = glb.get('frame_cache_mb', self._arg_default['frame_cache_mb'])
 
         try:
@@ -1477,6 +1536,8 @@ class _visplot:
             flag_color = _UNSET,
             flag_show_flagged = _UNSET,
             flag_flagged_color = _UNSET,
+            flag_reach = _UNSET,
+            flag_reason = _UNSET,
             frame_cache_mb = _UNSET,
     ):
         def noobj(s):
@@ -1532,6 +1593,8 @@ class _visplot:
             flag_color,
             flag_show_flagged,
             flag_flagged_color,
+            flag_reach,
+            flag_reason,
             frame_cache_mb,
         ]
 
@@ -1662,6 +1725,12 @@ class _visplot:
             _invocation_parameters['flag_flagged_color'] = \
                 flag_flagged_color if flag_flagged_color is not _UNSET \
                 else glb.get('flag_flagged_color', self._arg_default['flag_flagged_color'])
+            _invocation_parameters['flag_reach'] = \
+                flag_reach if flag_reach is not _UNSET \
+                else glb.get('flag_reach', self._arg_default['flag_reach'])
+            _invocation_parameters['flag_reason'] = \
+                flag_reason if flag_reason is not _UNSET \
+                else glb.get('flag_reason', self._arg_default['flag_reason'])
             _invocation_parameters['frame_cache_mb'] = \
                 frame_cache_mb if frame_cache_mb is not _UNSET \
                 else glb.get('frame_cache_mb', self._arg_default['frame_cache_mb'])
@@ -1749,6 +1818,10 @@ class _visplot:
                 glb.get('flag_show_flagged', self._arg_default['flag_show_flagged'])
             _invocation_parameters['flag_flagged_color'] = \
                 glb.get('flag_flagged_color', self._arg_default['flag_flagged_color'])
+            _invocation_parameters['flag_reach'] = \
+                glb.get('flag_reach', self._arg_default['flag_reach'])
+            _invocation_parameters['flag_reason'] = \
+                glb.get('flag_reason', self._arg_default['flag_reason'])
             _invocation_parameters['frame_cache_mb'] = \
                 glb.get('frame_cache_mb', self._arg_default['frame_cache_mb'])
 
@@ -1812,6 +1885,8 @@ class _visplot:
                     'flag_color=' + repr(_invocation_parameters['flag_color']),
                     'flag_show_flagged=' + repr(_invocation_parameters['flag_show_flagged']),
                     'flag_flagged_color=' + repr(_invocation_parameters['flag_flagged_color']),
+                    'flag_reach=' + repr(_invocation_parameters['flag_reach']),
+                    'flag_reason=' + repr(_invocation_parameters['flag_reason']),
                     'frame_cache_mb=' + repr(_invocation_parameters['frame_cache_mb']),
                 ],
             )
@@ -1857,6 +1932,8 @@ class _visplot:
                 flag_color = _invocation_parameters['flag_color'],
                 flag_show_flagged = _invocation_parameters['flag_show_flagged'],
                 flag_flagged_color = _invocation_parameters['flag_flagged_color'],
+                flag_reach = _invocation_parameters['flag_reach'],
+                flag_reason = _invocation_parameters['flag_reason'],
                 frame_cache_mb = _invocation_parameters['frame_cache_mb'],
             )
         except Exception as exc:

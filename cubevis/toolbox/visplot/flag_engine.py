@@ -63,6 +63,7 @@ Package location
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from typing import Any, Optional
 
@@ -502,14 +503,38 @@ def evaluate_request(backend, req: dict) -> dict:
         delta = _region_delta(backend, parts, req, sel, x_axis, y_axis, flag, extend,
                               data_column)
         if delta is not None:
+            # "Flag reaches" (HRS H5): widen the verified region to the
+            # scope asked for.  Refused (ScopeError) rather than guessed
+            # when the scope is ambiguous for this box.
+            try:
+                delta, reach = widen_region(backend, delta, parts, req.get("scope"), sel)
+            except ScopeError as exc:
+                return {"delta": None, "counts": FlagCounts().to_dict(),
+                        "warnings": [str(exc)]}
             counts = FlagCounts()
-            for ds, bc, axes in parts:
-                counts = counts.merge(_region_counts(backend, ds, bc, axes, flag))
+            if reach:
+                # The box no longer says what is touched: count the
+                # widened region on the whole store.
+                counts = region_counts_everywhere(backend, delta, flag)
+                delta = dataclasses.replace(
+                    delta, provenance=tuple(delta.provenance)
+                    + ("reaches: " + "; ".join(reach),))
+            else:
+                for ds, bc, axes in parts:
+                    counts = counts.merge(_region_counts(backend, ds, bc, axes, flag))
             delta = _with_n(delta, counts.n_changed)
             return {"delta": delta.to_dict(json_safe=False), "counts": counts.to_dict(),
-                    "warnings": warnings}
+                    "warnings": warnings, "reach": list(reach)}
         warnings.append("box is not expressible as a coordinate region; "
                         "stored as explicit samples")
+
+    # Baselines / spectral windows / scans / fields can only be widened
+    # for a coordinate region.  Say so rather than silently not doing it.
+    if scope_is_wide(req.get("scope")):
+        warnings.append(
+            "'Flag reaches' was applied for channels and correlations only: "
+            "baselines, spectral windows, scans and fields are extended for "
+            "a raster box with the 'All selected' filter")
 
     # ---------------- sample path ------------------------------------- #
     stats = None
@@ -785,6 +810,182 @@ def _raster_dim(axis: Optional[Axis]) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------- #
+# Flag reaches: widening a region (HRS H5, 2026-10-07)                     #
+# ---------------------------------------------------------------------- #
+#
+# AIPS's flag editors have scope switches that apply to the commands that
+# follow: this baseline / all baselines to an antenna / all baselines;
+# this channel / all channels; this IF / all IFs; this source / all
+# sources.  Here the same idea is a ``scope`` dict on the request:
+#
+#     {"baselines": "drawn" | "shared" | "antennas" | "all",
+#      "spw": bool, "scan": bool, "field": bool}
+#
+# (Channels and correlations were already there as ``extend_chan`` /
+# ``extend_corr``.)  The scope is resolved HERE, when the flag is
+# proposed, into the region's own explicit fields -- antenna names, scan
+# names, channel ranges per window -- rather than kept as a switch that
+# is interpreted later.  The record then says exactly what it addresses,
+# the report and the CASA export need no new cases, and a flag saved
+# today means the same thing when loaded tomorrow under another
+# selection.
+
+BASELINE_SCOPES = ("drawn", "shared", "antennas", "all")
+
+
+class ScopeError(ValueError):
+    """The requested scope is ambiguous for this box; the message is for
+    the user and says what to do instead."""
+
+
+def normalize_scope(scope) -> dict:
+    """A request's ``scope`` with every key present and valid."""
+    scope = dict(scope or {})
+    b = str(scope.get("baselines") or "drawn").lower()
+    if b not in BASELINE_SCOPES:
+        raise ValueError(f"scope['baselines'] must be one of {BASELINE_SCOPES}; got {b!r}")
+    return {"baselines": b, "spw": bool(scope.get("spw")),
+            "scan": bool(scope.get("scan")), "field": bool(scope.get("field"))}
+
+
+def scope_is_wide(scope) -> bool:
+    s = normalize_scope(scope)
+    return s["baselines"] != "drawn" or s["spw"] or s["scan"] or s["field"]
+
+
+def _names(items, limit=6) -> str:
+    items = [str(i) for i in items]
+    if len(items) <= limit:
+        return ", ".join(items)
+    return ", ".join(items[:limit]) + f" (+{len(items) - limit})"
+
+
+def _selected_spw_keys(backend, sel) -> list:
+    keys = []
+    for raw in backend._iter_visibility_partitions(sel):
+        key, _ch = spw_key_of(backend, raw)
+        if key is not None and not any(k.matches(key) for k in keys):
+            keys.append(key)
+    return keys
+
+
+def widen_region(backend, delta: FlagDelta, parts, scope, sel):
+    """``(delta, reach)``: *delta* widened to *scope*, and the words that
+    say how (empty when nothing was widened).
+
+    *parts* are the box's partitions with their axis masks, as
+    ``_region_delta`` used them: they say which baselines, scans and
+    channels were actually drawn.  Raises :class:`ScopeError` when the
+    scope cannot be applied to this box without guessing.
+    """
+    scope = normalize_scope(scope)
+    reach: list = []
+    kw: dict = {}
+
+    # ---- baselines ---------------------------------------------------- #
+    if scope["baselines"] != "drawn":
+        pairs = []
+        for _ds, bc, a in parts:
+            for i in np.flatnonzero(a[1]):
+                p = (str(bc.ant1[i]), str(bc.ant2[i]))
+                if p not in pairs:
+                    pairs.append(p)
+        if scope["baselines"] == "all":
+            kw.update(baseline_ids=None, antenna_names=None)
+            reach.append("all baselines")
+        elif scope["baselines"] == "antennas":
+            ants = sorted({x for p in pairs for x in p})
+            kw.update(baseline_ids=None, antenna_names=tuple(ants))
+            reach.append("all baselines to " + _names(ants))
+        else:                                       # "shared"
+            common = set(pairs[0]) if pairs else set()
+            for p in pairs[1:]:
+                common &= set(p)
+            if len(pairs) == 1 and pairs[0][0] != pairs[0][1]:
+                a, b = pairs[0]
+                raise ScopeError(
+                    f"the box covers one baseline, {a}&{b}, which has two "
+                    f"antennas: draw across two or more baselines that share "
+                    f"the antenna meant, or set Baselines to 'All to every "
+                    f"antenna drawn' to take both")
+            if len(common) != 1:
+                raise ScopeError(
+                    f"the {len(pairs)} baselines in the box do not share "
+                    f"exactly one antenna: draw a narrower box, or set "
+                    f"Baselines to 'All to every antenna drawn'")
+            ant = next(iter(common))
+            kw.update(baseline_ids=None, antenna_names=(ant,))
+            reach.append(f"all baselines to {ant}")
+
+    # ---- spectral windows --------------------------------------------- #
+    if scope["spw"]:
+        keys = _selected_spw_keys(backend, sel)
+        if len(keys) > 1:
+            lo = hi = None
+            if delta.spw_channels is not None:
+                lo = min(int(sc.chan_lo) for sc in delta.spw_channels)
+                hi = max(int(sc.chan_hi) for sc in delta.spw_channels)
+            elif delta.freq_range is not None:
+                # A Frequency axis: the same channel NUMBERS in every
+                # window, taken from the window(s) the box was drawn in.
+                f0, f1 = delta.freq_range
+                for key, raw in spw_table(backend):
+                    if delta.spw is not None and not any(k.matches(key) for k in delta.spw):
+                        continue
+                    tol = FREQ_RTOL * np.maximum(np.abs(raw), 1.0)
+                    idx = np.flatnonzero((raw >= f0 - tol) & (raw <= f1 + tol))
+                    if idx.size:
+                        lo = int(idx.min()) if lo is None else min(lo, int(idx.min()))
+                        hi = int(idx.max()) if hi is None else max(hi, int(idx.max()))
+            if lo is not None and not delta.extend_chan:
+                kw.update(spw=None, freq_range=None, spw_channels=tuple(
+                    SpwChannels(k, lo, min(hi, int(k.n_chan) - 1))
+                    for k in keys if lo <= int(k.n_chan) - 1))
+                reach.append(f"channels {lo}\u2013{hi} of all {len(keys)} "
+                             f"selected spectral windows" if lo != hi else
+                             f"channel {lo} of all {len(keys)} selected spectral windows")
+            else:
+                kw.update(spw=tuple(keys), freq_range=None, spw_channels=None)
+                reach.append(f"all {len(keys)} selected spectral windows")
+
+    # ---- whole scan ---------------------------------------------------- #
+    if scope["scan"]:
+        scans = []
+        for _ds, bc, a in parts:
+            if bc.scans is None:
+                continue
+            for s in np.unique(np.asarray(bc.scans)[a[0]].astype(str)):
+                if s not in scans:
+                    scans.append(str(s))
+        if scans:
+            kw.update(scan_names=tuple(scans), extend_scan=True)
+            reach.append(("whole scan " if len(scans) == 1 else "whole scans ")
+                         + _names(scans))
+
+    # ---- all fields ---------------------------------------------------- #
+    if scope["field"] and delta.field_names is not None:
+        kw.update(field_names=None)
+        reach.append("all fields")
+
+    if not reach:
+        return delta, []
+    return dataclasses.replace(delta, **kw), reach
+
+
+def region_counts_everywhere(backend, delta: FlagDelta, flag: bool) -> FlagCounts:
+    """Counts for a region *delta* over every partition of the store
+    (not only the plotted selection: a widened region reaches beyond it)."""
+    counts = FlagCounts()
+    for raw in backend._iter_visibility_partitions(None):
+        bc = block_coords(backend, raw)
+        axes = _region_axis_masks(delta, bc)
+        if axes is None or not all(a.any() for a in axes):
+            continue
+        counts = counts.merge(_region_counts(backend, raw, bc, axes, flag))
+    return counts
+
+
+# ---------------------------------------------------------------------- #
 # Raster region                                                            #
 # ---------------------------------------------------------------------- #
 
@@ -846,6 +1047,7 @@ def _region_delta(backend, parts, req, sel, x_axis, y_axis, flag, extend, data_c
 
     delta = FlagDelta(flag=flag, time_format=time_format(parts[0][0]),
                       source=req.get("source", ""), comment=req.get("comment", ""),
+                      reason=req.get("reason", "") or "",
                       provenance=tuple(req.get("provenance") or ()),
                       data_column=data_column,
                       **{k: v for k, v in extend.items() if k.startswith("extend_")},

@@ -86,6 +86,8 @@ def _validate_params(
         flag_color,
         flag_show_flagged,
         flag_flagged_color,
+        flag_reach,
+        flag_reason,
         frame_cache_mb,
 ):
     import re as _re
@@ -132,6 +134,8 @@ def _validate_params(
         'flag_color': 'str',
         'flag_show_flagged': 'bool',
         'flag_flagged_color': 'str',
+        'flag_reach': 'str',
+        'flag_reason': 'str',
         'frame_cache_mb': 'Optional[float]',
     }
 
@@ -236,6 +240,8 @@ def _validate_params(
     _check('flag_color', flag_color, _type_map['flag_color'])
     _check('flag_show_flagged', flag_show_flagged, _type_map['flag_show_flagged'])
     _check('flag_flagged_color', flag_flagged_color, _type_map['flag_flagged_color'])
+    _check('flag_reach', flag_reach, _type_map['flag_reach'])
+    _check('flag_reason', flag_reason, _type_map['flag_reason'])
     _check('frame_cache_mb', frame_cache_mb, _type_map['frame_cache_mb'])
 
 
@@ -282,6 +288,8 @@ def _visplot_t(
         flag_color: str = '#ff00ff',
         flag_show_flagged: bool = False,
         flag_flagged_color: str = '#7f849c',
+        flag_reach: str = '',
+        flag_reason: str = '',
         frame_cache_mb: Optional[float] = None,
 ):
     _app = VisibilityPlotter(
@@ -327,6 +335,8 @@ def _visplot_t(
         flag_color = flag_color,
         flag_show_flagged = flag_show_flagged,
         flag_flagged_color = flag_flagged_color,
+        flag_reach = flag_reach,
+        flag_reason = flag_reason,
         frame_cache_mb = frame_cache_mb,
         # layer-supplied arguments
         remote_endpoint = None,
@@ -501,6 +511,19 @@ class _visplot:
         the default) or ``"color"`` (drawn in ``flag_color``).
     flag_color : str
         Colour for pending flags when ``flag_display="color"``.
+    flag_reach : str
+        How far a flag box reaches beyond what is drawn, as the "Flag
+        reaches" controls start: a comma-separated list of
+        ``shared-antenna`` (all baselines to the antenna the drawn
+        baselines share), ``antennas`` (all baselines to every antenna
+        of the drawn baselines), ``all-baselines``, ``channels``,
+        ``spw`` (all selected spectral windows), ``scan`` (the whole
+        scan), ``fields``, ``correlations``.  Empty (the default):
+        flags cover what is drawn.
+    flag_reason : str
+        Text stored with each flag made from now on (why it was
+        flagged); shown in the report, saved in the JSON, written as
+        ``reason=`` in exported flagdata commands.
     flag_show_flagged : bool
         Also draw data that are currently flagged (on disk or pending) in
         ``flag_flagged_color``, so an Unflag box can select them.  Off by
@@ -594,6 +617,8 @@ class _visplot:
             flag_color: str = '#ff00ff',
             flag_show_flagged: bool = False,
             flag_flagged_color: str = '#7f849c',
+            flag_reach: str = '',
+            flag_reason: str = '',
             frame_cache_mb: Optional[float] = None,
     )  -> None:
         """Construct the plotter.
@@ -652,6 +677,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             flag_color = flag_color,
             flag_show_flagged = flag_show_flagged,
             flag_flagged_color = flag_flagged_color,
+            flag_reach = flag_reach,
+            flag_reason = flag_reason,
             frame_cache_mb = frame_cache_mb,
         )
         _logging_state_ = _start_log(
@@ -698,6 +725,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'flag_color=' + repr(flag_color),
                 'flag_show_flagged=' + repr(flag_show_flagged),
                 'flag_flagged_color=' + repr(flag_flagged_color),
+                'flag_reach=' + repr(flag_reach),
+                'flag_reason=' + repr(flag_reason),
                 'frame_cache_mb=' + repr(frame_cache_mb),
             ],
         )
@@ -745,6 +774,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 flag_color = flag_color,
                 flag_show_flagged = flag_show_flagged,
                 flag_flagged_color = flag_flagged_color,
+                flag_reach = flag_reach,
+                flag_reason = flag_reason,
                 frame_cache_mb = frame_cache_mb,
             )
         except Exception as exc:

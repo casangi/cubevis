@@ -162,7 +162,7 @@ def _line(fields: dict) -> str:
 
 
 def region_lines(d: FlagDelta, spw_ids: Optional[Mapping] = None,
-                 reason: str = "") -> list:
+                 reason: str = "", own_reason: bool = True) -> list:
     """``flagdata`` lines for a *region* delta (usually exactly one)."""
     base = {"mode": _mode(d)}
     if d.extend_scan and d.scan_names:
@@ -207,6 +207,10 @@ def region_lines(d: FlagDelta, spw_ids: Optional[Mapping] = None,
             spw_terms.append("*:" + _freq_spec(d.freq_range[0], d.freq_range[1], 0.0))
     if spw_terms:
         base["spw"] = ",".join(spw_terms)
+    # The user's own reason for this flag (HRS H5) wins over the
+    # caller's blanket one.
+    if own_reason:
+        reason = getattr(d, "reason", "") or reason
     if reason:
         base["reason"] = reason
     return [_line(base)]
@@ -228,7 +232,7 @@ MAX_TIMES_PER_LINE = 200
 
 
 def sample_lines(d: FlagDelta, spw_ids: Optional[Mapping] = None,
-                 reason: str = "") -> list:
+                 reason: str = "", own_reason: bool = True) -> list:
     """Materialized ``flagdata`` lines for a sample-set delta -- exact.
 
     Each command selects a cross product (times x baselines x channels x
@@ -247,6 +251,8 @@ def sample_lines(d: FlagDelta, spw_ids: Optional[Mapping] = None,
     The number of commands is then set by the structure of the selection,
     not by the number of samples (one command per sample before).
     """
+    if own_reason:
+        reason = getattr(d, "reason", "") or reason
     out = []
     for blk in d.samples:
         grid = blk.dense()
@@ -312,12 +318,17 @@ def _delta_spws(d: FlagDelta) -> list:
 
 def to_flagdata_lines(deltas: Iterable[FlagDelta], *, spw_ids: Optional[Mapping] = None,
                       reason: str = "", comments: bool = True,
-                      all_spws: Optional[Iterable[SpwKey]] = None) -> list:
+                      all_spws: Optional[Iterable[SpwKey]] = None,
+                      delta_reasons: bool = True) -> list:
     """All deltas as ordered ``flagdata`` list-mode lines.
 
     *spw_ids* optionally maps ``SpwKey`` (or ``str(SpwKey.ident)``) to the
     numeric CASA SPW id.  With ``comments=True`` each delta is preceded by a
     ``#`` line describing it (``flagdata`` list files accept comments).
+
+    Each delta's own ``reason`` (what the user typed in the Flagging
+    panel) is written as ``reason='...'`` unless *delta_reasons* is
+    false; it takes precedence over the blanket *reason*.
     """
     deltas = list(deltas)
     lines = []
@@ -344,9 +355,9 @@ def to_flagdata_lines(deltas: Iterable[FlagDelta], *, spw_ids: Optional[Mapping]
                 desc.append(" -> ".join(d.provenance))
             lines.append("# " + "; ".join(desc))
         if d.is_sample_set:
-            lines.extend(sample_lines(d, spw_ids, reason))
+            lines.extend(sample_lines(d, spw_ids, reason, delta_reasons))
         else:
-            lines.extend(region_lines(d, spw_ids, reason))
+            lines.extend(region_lines(d, spw_ids, reason, delta_reasons))
     return lines
 
 
@@ -375,7 +386,11 @@ def commit_msv2_casa(backend, deltas, version_name: Optional[str] = None,
     spw_ids = backend.spw_casa_ids()
     expected = fc._expected_changes(backend, deltas)
     n_expected = int(sum(int(((e != b) & v).sum()) for _s, _bda, b, e, v, _i in expected))
-    commands = [(d, to_flagdata_lines([d], spw_ids=spw_ids, comments=False)) for d in deltas]
+    # Without the users' reasons: they select nothing, and this path
+    # stays the command set that was verified against CASA.  They are in
+    # the exported command file, the JSON and the report.
+    commands = [(d, to_flagdata_lines([d], spw_ids=spw_ids, comments=False,
+                                      delta_reasons=False)) for d in deltas]
     report = {"format": "msv2", "method": "casa", "version_name": None, "backup": None,
               "operations": len(deltas), "expected_changes": n_expected,
               "commands": int(sum(len(c) for _d, c in commands)), "flagdata_calls": 0,

@@ -1490,11 +1490,19 @@ comm.send('{msg_probe}', {{x: x, y: y}}, function(resp) {{
 // single shared timer let one panel's re-render cancel another's when two
 // figures change together (e.g. both refreshed after a flag operation).
 window._cvRerenderTimers = window._cvRerenderTimers || {{}};
+// Busy starts when the debounce timer is ARMED, not when it fires, and is
+// counted once per armed timer (re-arming only restarts it). A change that
+// arrives while a Plot response is being applied therefore holds the busy
+// state through the debounce and the re-render, however long the browser
+// takes between the two; previously only a fixed 450 ms bridge covered that
+// gap, and on a slower machine the cursor went idle before an averaged
+// scatter's re-render had drawn (2026-10-09).
 if (window._cvRerenderTimers['{msg_rerender}']) clearTimeout(window._cvRerenderTimers['{msg_rerender}']);
+else window.__cvSetBusy(true);
 window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
+    window._cvRerenderTimers['{msg_rerender}'] = null;
     const x0 = x_range.start, x1 = x_range.end;
     const y0 = y_range.start, y1 = y_range.end;
-    window.__cvSetBusy(true);
     comm.send('{msg_rerender}',
         {{x0: x0, x1: x1, y0: y0, y1: y1}},
         function(resp) {{

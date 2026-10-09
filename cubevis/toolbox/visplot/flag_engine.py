@@ -419,7 +419,14 @@ def evaluate_request(backend, req: dict) -> dict:
     y0, y1 = sorted((float(req["y0"]), float(req["y1"])))
     y_axis = _axis(req["y_axis"]) if req.get("y_axis") else None
 
-    params = resolve_auto_params(params, kind, req.get("quantity"))
+    quantity = req.get("quantity")
+    if kind != "raster":
+        # A scatter panel shows its layers' Y axis; Value range needs one.
+        ys = {str(l.get("y_axis")) for l in (req.get("layers") or ())}
+        quantity = ys.pop() if len(ys) == 1 else None
+        if fobj.name == "value_range" and quantity is None:
+            raise ValueError("Value range needs the scatter layers to show one quantity")
+    params = resolve_auto_params(params, kind, quantity)
     if kind == "raster" and fobj.name == "zscore":
         reduced = [d for d in ("time", "baseline_id", "frequency")
                    if d not in {_raster_dim(x_axis), _raster_dim(y_axis)}]
@@ -789,6 +796,8 @@ def resolve_auto_params(params: dict, kind: str, quantity: Optional[str]) -> dic
     and reported per cell; the scatter Z-Score over the whole selection, per
     sample."""
     params = dict(params)
+    if "quantity" in params and quantity:
+        params["quantity"] = str(quantity).upper()
     if params.get("reference") == "auto":
         params["reference"] = "spw" if kind == "raster" else "selection"
     if params.get("granularity") == "auto":

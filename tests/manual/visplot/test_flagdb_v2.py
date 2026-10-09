@@ -229,8 +229,10 @@ def test_registry_rejects_builtin_names_and_wraps_callables():
 def test_param_specs_describe_for_gui():
     d = ff.AMPLITUDE_RANGE.describe()
     assert [p["name"] for p in d["params"]] == ["low", "high", "mode"]
+    # The reference population is chosen automatically and is no longer a
+    # control (HRS H5 slice 2, 2026-10-09: at most two settings a filter).
     assert [p["name"] for p in ff.ZSCORE.describe()["params"] if p["gui"]] == \
-        ["cutoff", "granularity", "reference"]
+        ["cutoff", "granularity"]
 
 
 # ====================================================================== #

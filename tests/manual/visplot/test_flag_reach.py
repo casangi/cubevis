@@ -706,7 +706,7 @@ class TestGui:
             assert key in vp._hint_flag_reach.text
 
     def test_each_filter_has_its_own_help(self, vp):
-        for n in vp._flags.registry.names():
+        for n in vp._flags.registry.gui_names():
             h = getattr(vp, f"_hint_flagf_{n}")
             f = vp._flags.registry.get(n)
             assert f.label in h.text.replace("&amp;", "&")

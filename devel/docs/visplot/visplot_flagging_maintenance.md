@@ -12,10 +12,16 @@
 * **Flag / Unflag boxes** on raster and scatter panels (FlagTool, red / white
   flag icons) and an **InfoTool box** that reports exactly what a Flag or
   Unflag box with the same corners would address.
-* **Filters** (Flagging panel): *All selected (immediate)* (AIPS style),
-  Amplitude range, Z-Score, Amplitude MAD, Phase deviation, plus user Python
-  filters passed as `VisibilityPlotter(flag_filters={name: callable})`.
-  Parameters get controls automatically.
+* **Filters** (Flagging panel, curated 2026-10-09): *All selected
+  (immediate)* (AIPS style), Value range (on the quantity the panel
+  shows), Outlier from neighbours (running median along time or channel),
+  Z-Score, Amplitude outlier (MAD), Phase deviation, Grow around flags,
+  plus user Python filters passed as
+  `VisibilityPlotter(flag_filters={name: callable})`. Parameters get
+  controls automatically (at most two per built-in filter; the reference
+  population is automatic). *Amplitude range* remains for scripts and
+  saved records but is not listed. See
+  `devel/notes/drs/visplot/hrs_h5_filters.md`.
 * **Pending flags** live in a FlagDB with Undo / Redo / Clear; an optional
   **preview** (accept / reject) per proposal.
 * **Flag reaches** (2026-10-07): how far each box goes beyond what is

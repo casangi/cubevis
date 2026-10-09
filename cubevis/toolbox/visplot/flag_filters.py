@@ -36,6 +36,13 @@ change (unflagged ones for *flag*, flagged ones for *unflag*).  A filter
 therefore never needs to look at ``flag`` itself, but may (for example to
 exclude already-flagged samples from its own statistics).
 
+The Flagging panel lists a curated set (``FlagFilter.gui``; 2026-10-09,
+HRS H5 slice 2): All selected, Value range (on the quantity the panel
+shows), Outlier from neighbours (running median along time or channel),
+Z-Score, Amplitude outlier (MAD), Phase deviation, Grow around flags --
+each with at most two controls.  The reference population is chosen
+automatically ("auto") and is no longer a control.
+
 Scope
 -----
 ``scope="local"``
@@ -184,6 +191,10 @@ class FlagFilter:
     prepare_fn:  Optional[Callable] = None
     builtin:     bool = False
     code_hash:   str = ""
+    # Listed in the Flagging panel.  False keeps a filter usable from
+    # Python and in saved records but out of the curated list (HRS H5
+    # slice 2: "Amplitude range" gave way to "Value range").
+    gui:         bool = True
 
     def __post_init__(self):
         if self.scope not in ("local", "reference"):
@@ -485,11 +496,227 @@ def _phase_mask(ds, stats, max_deg, reference, **_):
 
 _REFERENCE_PARAM = ParamSpec(
     "reference", "choice", "auto", "Reference population",
-    choices=("auto", "selection", "spw"),
+    choices=("auto", "selection", "spw"), gui=False,
     help="'auto': match the panel being flagged. 'selection': per baseline and "
          "correlation over the whole current data selection (as the scatter "
          "Z-Score colouring); 'spw': per spectral window as well (as the raster "
          "Z-Score).")
+
+# ---------------------------------------------------------------------- #
+# Value range on the displayed quantity (HRS H5 slice 2, 2026-10-09)       #
+# ---------------------------------------------------------------------- #
+#
+# AIPS's clip, CASA's flagdata mode='clip': flag samples whose value lies
+# in a range.  It works on the quantity the panel shows, so the numbers
+# typed are the numbers on the colour bar or the axis.  Either bound may
+# be left empty: "Low" alone flags everything at or above it, "High"
+# alone everything at or below it.
+
+VALUE_RANGE_QUANTITIES = {
+    "AMPLITUDE": ("amp", "Amplitude"),
+    "PHASE":     ("phase", "Phase (deg)"),
+    "REAL":      ("real", "Real"),
+    "IMAGINARY": ("imag", "Imaginary"),
+}
+
+
+def _value_range_mask(ds, low=None, high=None, quantity="AMPLITUDE", **_):
+    q = str(quantity or "AMPLITUDE").upper()
+    if q not in VALUE_RANGE_QUANTITIES:
+        raise ValueError(
+            "Value range works on a panel showing Amplitude, Phase, Real or "
+            f"Imaginary; this one shows {q.replace('_', ' ').title()}")
+    v = np.asarray(ds[VALUE_RANGE_QUANTITIES[q][0]].values, dtype=np.float64)
+    m = np.isfinite(v)
+    with np.errstate(invalid="ignore"):
+        if low is not None:
+            m &= v >= float(low)
+        if high is not None:
+            m &= v <= float(high)
+    return m
+
+
+# ---------------------------------------------------------------------- #
+# Filters judged against neighbouring samples (HRS H5 slice 2)             #
+# ---------------------------------------------------------------------- #
+#
+# Both need samples OUTSIDE the box: a spike at the box's edge is judged
+# against the samples next to it, and a sample next to a flagged one may
+# be just outside.  They are therefore "reference" filters: prepare()
+# receives the whole current selection for the baselines and
+# correlations the box touches and works out the answer on that grid;
+# mask() looks the box's samples up in it.  Runs are cut at scan
+# boundaries -- neighbours across a scan change are other conditions,
+# often another source.
+
+RUNNING_WINDOW = 9          # samples in the running median (odd)
+NEAR_MIN = 3                # fewer unflagged neighbours than this: no verdict
+
+
+def _segments(ds, along: str) -> list:
+    """Index runs along *along* that may be treated as neighbours."""
+    if along == "frequency":
+        return [np.arange(ds.sizes["frequency"])]
+    n = ds.sizes["time"]
+    if "scan_name" not in ds.coords or n == 0:
+        return [np.arange(n)]
+    scans = np.asarray(ds["scan_name"].values).astype(str)
+    cut = np.flatnonzero(scans[1:] != scans[:-1]) + 1
+    return np.split(np.arange(n), cut)
+
+
+def _grid_key(ds, ib, ip):
+    a1 = str(ds["baseline_antenna1_name"].values[ib])
+    a2 = str(ds["baseline_antenna2_name"].values[ib])
+    pol = str(ds["polarization"].values[ip])
+    spw = ds.attrs.get("spw")
+    return (a1, a2, pol, None if spw is None else (str(spw.ident), spw.n_chan, spw.freq_min))
+
+
+def _grid_prepare(refs, verdict):
+    """``{key: [(times, freqs, bool grid[time, freq]), ...]}`` from
+    *verdict(ds, ib, ip) -> bool grid*, one entry per reference block."""
+    out: dict = {}
+    for ds in refs:
+        t = np.asarray(ds["time"].values, dtype=np.float64)
+        f = np.asarray(ds["frequency"].values, dtype=np.float64)
+        ot, of = np.argsort(t, kind="stable"), np.argsort(f, kind="stable")
+        for ib in range(ds.sizes["baseline_id"]):
+            for ip in range(ds.sizes["polarization"]):
+                g = verdict(ds, ib, ip)
+                if g is None or not g.any():
+                    continue
+                out.setdefault(_grid_key(ds, ib, ip), []).append(
+                    (t[ot], f[of], g[np.ix_(ot, of)]))
+    return out
+
+
+def _grid_mask(ds, stats):
+    from .flag_model import TIME_TOL, FREQ_RTOL, _match_sorted
+    out = np.zeros(ds["vis"].shape, dtype=bool)
+    t = np.asarray(ds["time"].values, dtype=np.float64)
+    f = np.asarray(ds["frequency"].values, dtype=np.float64)
+    for ib in range(ds.sizes["baseline_id"]):
+        for ip in range(ds.sizes["polarization"]):
+            for rt, rf, g in stats.get(_grid_key(ds, ib, ip), ()):
+                ti = _match_sorted(t, rt, atol=TIME_TOL)
+                fi = _match_sorted(f, rf, rtol=FREQ_RTOL)
+                okt, okf = np.flatnonzero(ti >= 0), np.flatnonzero(fi >= 0)
+                if okt.size and okf.size:
+                    out[np.ix_(okt, [ib], okf, [ip])] |= g[np.ix_(ti[okt], fi[okf])][:, None, :, None]
+    return out
+
+
+def _running_median(a: np.ndarray, axis: int, width: int) -> np.ndarray:
+    """For every sample, the NaN-ignoring median of its neighbours along
+    *axis*: the *width* samples centred on it, the sample itself left out.
+    Near the ends of the run the window is moved inward, keeping *width*
+    samples, instead of being cut short.  NaN where fewer than NEAR_MIN
+    neighbours are usable.
+
+    The sample is left out because, in its own window, it is often the
+    median: its residual is then zero and the scatter measured from the
+    residuals reads low (by a third for 9 samples), so ordinary noise
+    crossed the cutoff.  A window cut short at a scan edge, or one made
+    up by reflection, also scatters more than an inner one and sent edge
+    samples over the cutoff; the shifted window does not.  It is off
+    centre by up to width/2 samples, which matters only if the level
+    changes by a noise rms within that many integrations or channels.
+    """
+    x = np.moveaxis(np.asarray(a, dtype=np.float64), axis, 0)
+    n = x.shape[0]
+    if n == 0:
+        return np.moveaxis(x.copy(), 0, axis)
+    w = min(int(width), n)
+    start = np.clip(np.arange(n) - w // 2, 0, n - w)
+    idx = start[:, None] + np.arange(w)[None, :]                 # (n, w)
+    win = x[idx]                                                 # (n, w, ...)
+    self_ = idx == np.arange(n)[:, None]
+    win = np.where(self_.reshape(self_.shape + (1,) * (x.ndim - 1)), np.nan, win)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        med = np.nanmedian(win, axis=1)
+    cnt = np.sum(np.isfinite(win), axis=1)
+    out = np.where(cnt >= NEAR_MIN, med, np.nan)
+    return np.moveaxis(out, 0, axis)
+
+
+def _outlier_prepare(refs, along="time", nsigma=5.0, **_):
+    ax = "time" if along == "time" else "frequency"
+
+    def verdict(ds, ib, ip):
+        amp = np.asarray(ds["amp"].values[:, ib, :, ip], dtype=np.float64)
+        use = ~np.asarray(ds["flag"].values[:, ib, :, ip], dtype=bool)
+        a = np.where(use, amp, np.nan)
+        if np.sum(use) < NEAR_MIN:
+            return None
+        resid = np.full(a.shape, np.nan)
+        axis = 0 if ax == "time" else 1
+        for seg in _segments(ds, ax):
+            part = np.take(a, seg, axis=axis)
+            med = _running_median(part, axis, RUNNING_WINDOW)
+            if axis == 0:
+                resid[seg, :] = part - med
+            else:
+                resid[:, seg] = part - med
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            sig = _MAD_TO_SIGMA * np.nanmedian(np.abs(resid))
+            level = np.nanmedian(np.abs(a))
+        if not np.isfinite(sig):
+            return None
+        # Noise-free (simulated) data have a zero scatter: judge against a
+        # tiny fraction of the level instead of dividing by zero.
+        sig = max(float(sig), 1e-6 * float(level) if np.isfinite(level) else 0.0, 1e-30)
+        with np.errstate(invalid="ignore"):
+            return np.abs(resid) > float(nsigma) * sig
+    return _grid_prepare(refs, verdict)
+
+
+def _outlier_mask(ds, stats, **_):
+    return _grid_mask(ds, stats)
+
+
+def _grow_prepare(refs, along="both", width=1, **_):
+    width = max(1, int(width))
+
+    def dilate(fl, axis, segs):
+        out = np.zeros_like(fl)
+        for seg in segs:
+            part = np.take(fl, seg, axis=axis)
+            acc = np.zeros_like(part)
+            n = part.shape[axis]
+            for k in range(1, width + 1):
+                if k >= n:
+                    break
+                sl_a = [slice(None)] * 2; sl_b = [slice(None)] * 2
+                sl_a[axis] = slice(k, None); sl_b[axis] = slice(None, -k)
+                acc[tuple(sl_a)] |= part[tuple(sl_b)]      # flagged k before
+                acc[tuple(sl_b)] |= part[tuple(sl_a)]      # flagged k after
+            if axis == 0:
+                out[seg, :] = acc
+            else:
+                out[:, seg] = acc
+        return out
+
+    def verdict(ds, ib, ip):
+        fl = np.asarray(ds["flag"].values[:, ib, :, ip], dtype=bool).copy()
+        valid = np.asarray(ds["valid"].values[:, ib], dtype=bool)
+        fl[~valid, :] = False                 # padding is not "flagged data"
+        if not fl.any():
+            return None
+        near = np.zeros_like(fl)
+        if along in ("time", "both"):
+            near |= dilate(fl, 0, _segments(ds, "time"))
+        if along in ("channel", "both"):
+            near |= dilate(fl, 1, _segments(ds, "frequency"))
+        return near & ~fl & valid[:, None]
+    return _grid_prepare(refs, verdict)
+
+
+def _grow_mask(ds, stats, **_):
+    return _grid_mask(ds, stats)
+
 
 BUILTIN_FILTERS: dict = {}
 
@@ -502,15 +729,42 @@ def _register_builtin(f: FlagFilter) -> FlagFilter:
 
 ALL = _register_builtin(FlagFilter(
     "all", _all_mask, label="All selected (immediate)",
-    description="Every selected sample: AIPS-style immediate flagging."))
+    description="Every sample in the box: AIPS-style immediate flagging. The other "
+                "filters take only some of the samples in the box, so a generous box "
+                "can be drawn round a bad stretch."))
 
-AMPLITUDE_RANGE = _register_builtin(FlagFilter(
-    "amplitude_range", _amp_range_mask,
-    params=(ParamSpec("low", "float", 0.0, "Low", min=0.0),
-            ParamSpec("high", "float", 1.0e30, "High", min=0.0),
-            ParamSpec("mode", "choice", "inside", "Match", choices=("inside", "outside"))),
-    label="Amplitude range",
-    description="Samples whose amplitude is inside (or outside) [low, high]."))
+VALUE_RANGE = _register_builtin(FlagFilter(
+    "value_range", _value_range_mask,
+    params=(ParamSpec("low", "float", None, "Low",
+                      help="Flag samples at or above this value; empty for no lower "
+                           "bound. In the units of the colour bar or axis."),
+            ParamSpec("high", "float", None, "High",
+                      help="Flag samples at or below this value; empty for no upper "
+                           "bound. Low and High together: the samples between them."),
+            ParamSpec("quantity", "choice", "AMPLITUDE", "Quantity", gui=False,
+                      choices=tuple(VALUE_RANGE_QUANTITIES))),
+    label="Value range",
+    description="Samples whose value \u2014 of the quantity the panel shows: Amplitude, "
+                "Phase, Real or Imaginary \u2014 lies in the range. For dropouts (High "
+                "only) and strong interference (Low only); CASA's clip."))
+
+OUTLIER = _register_builtin(FlagFilter(
+    "outlier", _outlier_mask, scope="reference", prepare_fn=_outlier_prepare,
+    params=(ParamSpec("along", "choice", "time", "Compare along",
+                      choices=("time", "channel"),
+                      help="time: each sample against the integrations before and "
+                           "after it (spikes in time, brief interference); channel: "
+                           "against the neighbouring channels (narrow-band "
+                           "interference, a bad channel)."),
+            ParamSpec("nsigma", "float", 5.0, "Cutoff (sigma)", min=0.0,
+                      help="How far from its neighbours a sample must be, in robust "
+                           "standard deviations of the baseline's scatter about them. "
+                           "Lower takes more.")),
+    label="Outlier from neighbours",
+    description="Amplitudes far from the running median of the "
+                f"{RUNNING_WINDOW} samples around them, per baseline and correlation, "
+                "within each scan. Finds spikes that a smooth change in gain or a "
+                "bandpass does not explain; CASA's tfcrop / AIPS's FLAGR in spirit."))
 
 ZSCORE = _register_builtin(FlagFilter(
     "zscore", _zscore_mask, scope="reference", prepare_fn=_zscore_prepare,
@@ -526,21 +780,50 @@ ZSCORE = _register_builtin(FlagFilter(
             ParamSpec("cell_dims", "any", ("frequency",), "Cell dimensions", gui=False)),
     label="Z-Score above cutoff",
     description="Robust per-baseline joint (real, imag) Z-Score, as the Z-Score "
-                "colouring computes it."))
+                "colouring computes it: what the Z-Score view shows bright."))
 
 AMPLITUDE_MAD = _register_builtin(FlagFilter(
     "amplitude_mad", _mad_mask, scope="reference", prepare_fn=_mad_prepare,
-    params=(ParamSpec("nsigma", "float", 5.0, "Sigma", min=0.0),
+    params=(ParamSpec("nsigma", "float", 5.0, "Sigma", min=0.0,
+                      help="How far from the baseline's median amplitude, in robust "
+                           "standard deviations."),
             _REFERENCE_PARAM),
     label="Amplitude outlier (MAD)",
-    description="|amp - median| / (1.4826 MAD) above nsigma, per baseline."))
+    description="|amp - median| / (1.4826 MAD) above the cutoff, per baseline over the "
+                "whole selection: a baseline's samples that are off its usual level."))
 
 PHASE_DEVIATION = _register_builtin(FlagFilter(
     "phase_deviation", _phase_mask, scope="reference", prepare_fn=_phase_prepare,
-    params=(ParamSpec("max_deg", "float", 45.0, "Max deviation (deg)", min=0.0, max=180.0),
+    params=(ParamSpec("max_deg", "float", 45.0, "Max deviation (deg)", min=0.0, max=180.0,
+                      help="Phases further than this from the baseline's median "
+                           "direction are taken."),
             _REFERENCE_PARAM),
     label="Phase deviation",
-    description="Phase further than max_deg from the per-baseline median direction."))
+    description="Phase further than the limit from the per-baseline median direction. "
+                "For a calibrator, where phases should agree."))
+
+GROW = _register_builtin(FlagFilter(
+    "grow", _grow_mask, scope="reference", prepare_fn=_grow_prepare,
+    params=(ParamSpec("along", "choice", "both", "Grow along",
+                      choices=("time", "channel", "both"),
+                      help="time: the integrations before and after a flagged sample; "
+                           "channel: the channels either side; both: either."),
+            ParamSpec("width", "int", 1, "Samples", min=1, max=50,
+                      help="How many samples either side of a flagged one are taken.")),
+    label="Grow around flags",
+    description="Unflagged samples next to flagged ones (on disk or pending). "
+                "Interference has weaker edges that a cutoff misses: flag the core "
+                "with another filter, then draw a box with this one; CASA's extend."))
+
+AMPLITUDE_RANGE = _register_builtin(FlagFilter(
+    "amplitude_range", _amp_range_mask,
+    params=(ParamSpec("low", "float", 0.0, "Low", min=0.0),
+            ParamSpec("high", "float", 1.0e30, "High", min=0.0),
+            ParamSpec("mode", "choice", "inside", "Match", choices=("inside", "outside"))),
+    label="Amplitude range",
+    description="Samples whose amplitude is inside (or outside) [low, high]. "
+                "Superseded in the panel by Value range; kept for scripts and "
+                "saved records.", gui=False))
 
 
 # ======================================================================
@@ -583,6 +866,11 @@ class FilterRegistry:
 
     def names(self) -> list:
         return list(self._filters)
+
+    def gui_names(self) -> list:
+        """The filters the Flagging panel lists: the curated built-ins in
+        their intended order, then the user's."""
+        return [n for n, f in self._filters.items() if f.gui]
 
     def user_names(self) -> list:
         return [n for n, f in self._filters.items() if not f.builtin]

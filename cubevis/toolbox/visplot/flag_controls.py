@@ -1330,7 +1330,7 @@ class FlagController:
         from bokeh.layouts import column, row
         from bokeh.models import (Button, Checkbox, ColorPicker, CustomJS, Div,
                                   NumericInput, RadioButtonGroup, Select)
-        names = self.registry.names()
+        names = self.registry.gui_names()
         filt_sel = Select(title="Filter", value=self.filter_name, width=width,
                           options=[(n, self.registry.get(n).label
                                     + ("" if self.registry.get(n).builtin
@@ -1490,7 +1490,7 @@ class FlagController:
         """
         out = {}
         esc = html.escape
-        for n in self.registry.names():
+        for n in self.registry.gui_names():
             f = self.registry.get(n)
             pts = [f"<b>{esc(f.label)}</b> \u2014 {esc(f.description)}"]
             for spec in f.params:

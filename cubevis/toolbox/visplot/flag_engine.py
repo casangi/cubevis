@@ -438,6 +438,14 @@ def evaluate_request(backend, req: dict) -> dict:
     # from the MS (the MS path below re-read the whole selection: ~0.4 s on
     # zuul06 for TW Hya, 2026-09-30).  Used for the identity filter on
     # non-Z-Score layers; anything else takes the general path below.
+    # Averaged scatter points (HRS H6): a box takes the samples behind the
+    # points it encloses.  Only the cached-frame path knows which samples
+    # those are, so the filters that read the data themselves are refused
+    # rather than applied to samples the user does not see.
+    averaged = (kind == "scatter" and _scatter_averaged(sel, req.get("layers") or ()))
+    if averaged and (not fobj.is_identity or req.get("force_ms")):
+        raise ValueError("on an averaged scatter only the All selected filter can be "
+                         "used: switch averaging off to flag with another filter")
     if (kind == "scatter" and fobj.is_identity and not req.get("force_ms")
             and not any(_axis(l["y_axis"]) == Axis.Z_SCORE for l in (req.get("layers") or ()))):
         import time as _t
@@ -449,6 +457,9 @@ def evaluate_request(backend, req: dict) -> dict:
                  _t.perf_counter() - _t0)
         if fast is not None:
             return fast
+        if averaged:
+            raise ValueError("the averaged points could not be traced back to their "
+                             "samples; switch averaging off to flag this plot")
 
     parts = []           # per partition: (ds, bc, box4d or axis masks)
     visited = []
@@ -711,6 +722,29 @@ def _scatter_box_from_frames(backend, req, flag, sel, x_axis, xr_, yr_, extend, 
         df = frames.get(key)
         if df is None or not len(df):
             continue
+        got = (backend.averaged_view(x_axis, key, sel, "effective" if flag else "flagged")
+               if hasattr(backend, "averaged_view") else None)
+        if got is not None:
+            # Averaged points (HRS H6): the box picks points; the samples
+            # behind them -- those of this flag view -- are taken.
+            avg, rows, codes = got
+            x = avg["x"].to_numpy(dtype=np.float64)
+            y = avg["y"].to_numpy(dtype=np.float64)
+            with np.errstate(invalid="ignore"):
+                pm = (np.isfinite(x) & np.isfinite(y) & (x >= xr_[0]) & (x <= xr_[1])
+                      & (y >= yr_[0]) & (y <= yr_[1]))
+            hide_axis, hide_vals = lyr.get("hide_axis"), lyr.get("hide_values")
+            if hide_axis and hide_vals:
+                col = COLORIZE_AXIS_COLUMNS.get(_axis(hide_axis))
+                if col is None or col not in avg.columns:
+                    return None
+                pm &= ~avg[col].astype(str).isin([str(v) for v in hide_vals]).to_numpy()
+            take = rows[pm[codes]]
+            if take.size:
+                pieces.append((df.iloc[take][["time", "frequency", "__spw", "__chan",
+                                              "baseline_antenna1_name", "baseline_antenna2_name"]
+                                             + [c for c in ("scan_name",) if c in df.columns]], key[1]))
+            continue
         _tk0 = _t.perf_counter()
         shown = frame_keep_mask(backend, df, key[1], "effective")     # True = unflagged
         _tk += _t.perf_counter() - _tk0
@@ -788,6 +822,14 @@ def _scatter_box_from_frames(backend, req, flag, sel, x_axis, xr_, yr_, extend, 
     delta, counts = _recount_if_extended(backend, delta, counts, flag)
     return {"delta": delta.to_dict(json_safe=False), "counts": counts.to_dict(),
             "warnings": [NOT_WIDENED] if scope_is_wide(req.get("scope")) else []}
+
+
+def _scatter_averaged(sel, layers) -> bool:
+    """Does this scatter draw averaged points for any of *layers*?"""
+    from .data._scatter_average import scatter_average_of, averages
+    if scatter_average_of(sel) is None:
+        return False
+    return any(averages(_axis(l["y_axis"])) for l in layers)
 
 
 def resolve_auto_params(params: dict, kind: str, quantity: Optional[str]) -> dict:

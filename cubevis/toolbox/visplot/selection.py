@@ -302,6 +302,22 @@ class SelectionSpec:
     pooled where it is reduced.
     """
 
+    avg_time: object = "off"
+    """Scatter averaging over time (HRS H6, 2026-10-09): ``"off"``
+    (default: every sample is a point), ``"scan"`` or a number of
+    seconds.  Per baseline and correlation; a window never spans two
+    scans.  Like ``averaging``, this is stamped on by the scatter panel
+    that asks (``VisibilityScatter``), not shared GUI state, and raw
+    scatter frames do not depend on it (it is left out of their cache
+    key): averaging is done on the cached samples.  See
+    ``data._scatter_average``.
+    """
+
+    avg_chan: object = "off"
+    """Scatter averaging over channels: ``"off"`` (default), a number of
+    channels (>= 2), or ``"all"`` (each spectral window to one point).
+    See ``avg_time``."""
+
     cache_generation: int = 0
     """Data-freshness token -- NOT a constraint on which rows are selected.
 
@@ -377,6 +393,8 @@ class SelectionSpec:
             detrend=self.detrend,
             stat_time_window=self.stat_time_window,
             stat_chan_window=self.stat_chan_window,
+            avg_time=self.avg_time,
+            avg_chan=self.avg_chan,
             cache_generation=self.cache_generation,
             pending_version=self.pending_version,
             flag_view=self.flag_view,

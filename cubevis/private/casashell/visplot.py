@@ -73,6 +73,8 @@ def _visplot_t(
         detrend: bool = True,
         stat_time_window = 'auto',
         stat_chan_window = 'off',
+        scatter_avg_time = 'off',
+        scatter_avg_chan = 'off',
         layout: str = 'side',
         kind: Optional[str] = None,
         preset: Optional[str] = None,
@@ -120,6 +122,8 @@ def _visplot_t(
         detrend = detrend,
         stat_time_window = stat_time_window,
         stat_chan_window = stat_chan_window,
+        scatter_avg_time = scatter_avg_time,
+        scatter_avg_chan = scatter_avg_chan,
         layout = layout,
         kind = kind,
         preset = preset,
@@ -212,9 +216,10 @@ class _visplot:
         (default; average the complex visibility, then take Amplitude /
         Phase -- Amplitude drops where samples are incoherent) or
         ``"scalar"`` (Amplitude is the mean of the amplitudes, Phase the
-        circular mean).  Initial value for every raster panel; each
-        panel's own "Averaging" control (raster gear tab) changes it
-        independently afterwards.
+        circular mean).  Initial value for every raster panel, and for
+        every scatter panel when it averages (``scatter_avg_time`` /
+        ``scatter_avg_chan``); each panel's own "Averaging" control
+        changes it independently afterwards.
     baseline_combine : str
         How a raster cell that covers several baselines combines them
         (only where Baseline is not a plot axis, e.g. Time x Channel
@@ -255,6 +260,19 @@ class _visplot:
     stat_chan_window : str or int
         Channel window for the same statistic: ``"off"`` (default) or a
         number of channels.  Same rules as ``stat_time_window``.
+    scatter_avg_time : str or float
+        Scatter points averaged over time, per baseline and correlation:
+        ``"off"`` (default, every sample a point), ``"scan"``, or a
+        number of seconds (windows from the start of each scan, never
+        across a scan boundary).  For a spectrum per scan (with X
+        Frequency or Channel).  Amplitude, Phase, Real and Imaginary
+        only.  Initial value for every scatter panel; each panel's "Average
+        over time" control changes it afterwards.
+    scatter_avg_chan : str or int
+        Scatter points averaged over channels: ``"off"`` (default), a
+        number of channels, or ``"all"`` (one point per spectral window).
+        For a time series (with X Time).  Same rules as
+        ``scatter_avg_time``.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -398,6 +416,8 @@ class _visplot:
         'detrend': 'For the Phase RMS and Coherence raster quantities: remove a linear phase slope (residual delay along frequency, residual rate along time) before the statistic is taken (default ``True``).',
         'stat_time_window': 'Time window the Phase RMS / Coherence statistic is taken within: ``"auto"`` (default), ``"off"``, ``"scan"``, or a number of seconds.',
         'stat_chan_window': 'Channel window for the same statistic: ``"off"`` (default) or a number of channels.',
+        'scatter_avg_time': 'Scatter points averaged over time, per baseline and correlation: ``"off"`` (default, every sample a point), ``"scan"``, or a number of seconds (windows from the start of each scan, never across a scan boundary).',
+        'scatter_avg_chan': 'Scatter points averaged over channels: ``"off"`` (default), a number of channels, or ``"all"`` (one point per spectral window).',
         'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), or ``"over"`` (both panels, one above the other).',
         'kind': 'Which panel kind leads: ``"raster"`` (default when omitted) or ``"scatter"``.',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
@@ -446,6 +466,8 @@ class _visplot:
         'detrend': True,
         'stat_time_window': 'auto',
         'stat_chan_window': 'off',
+        'scatter_avg_time': 'off',
+        'scatter_avg_chan': 'off',
         'layout': 'side',
         'kind': None,
         'preset': None,
@@ -529,6 +551,8 @@ class _visplot:
             'detrend': 'bool',
             'stat_time_window': '',
             'stat_chan_window': '',
+            'scatter_avg_time': '',
+            'scatter_avg_chan': '',
             'layout': 'str',
             'kind': 'Optional[str]',
             'preset': 'Optional[str]',
@@ -913,6 +937,36 @@ class _visplot:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
         self.__do_inp_output(
             '%-23.23s = %s%-23s%s' % ('stat_chan_window', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __scatter_avg_time_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('scatter_avg_time', self._arg_default['scatter_avg_time'])
+        default = self._arg_default['scatter_avg_time']
+        desc    = self._arg_description.get('scatter_avg_time', '')
+        if self.__validate_('scatter_avg_time', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('scatter_avg_time', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __scatter_avg_chan_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('scatter_avg_chan', self._arg_default['scatter_avg_chan'])
+        default = self._arg_default['scatter_avg_chan']
+        desc    = self._arg_description.get('scatter_avg_chan', '')
+        if self.__validate_('scatter_avg_chan', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('scatter_avg_chan', pre, self.__to_string_(value), post),
             desc, fmt,
         )
 
@@ -1329,6 +1383,8 @@ class _visplot:
         if 'detrend' in glb: del glb['detrend']
         if 'stat_time_window' in glb: del glb['stat_time_window']
         if 'stat_chan_window' in glb: del glb['stat_chan_window']
+        if 'scatter_avg_time' in glb: del glb['scatter_avg_time']
+        if 'scatter_avg_chan' in glb: del glb['scatter_avg_chan']
         if 'layout' in glb: del glb['layout']
         if 'kind' in glb: del glb['kind']
         if 'preset' in glb: del glb['preset']
@@ -1377,6 +1433,8 @@ class _visplot:
         self.__detrend_inp()
         self.__stat_time_window_inp()
         self.__stat_chan_window_inp()
+        self.__scatter_avg_time_inp()
+        self.__scatter_avg_chan_inp()
         self.__layout_inp()
         self.__kind_inp()
         self.__preset_inp()
@@ -1449,6 +1507,8 @@ class _visplot:
         _invocation_parameters['detrend'] = glb.get('detrend', self._arg_default['detrend'])
         _invocation_parameters['stat_time_window'] = glb.get('stat_time_window', self._arg_default['stat_time_window'])
         _invocation_parameters['stat_chan_window'] = glb.get('stat_chan_window', self._arg_default['stat_chan_window'])
+        _invocation_parameters['scatter_avg_time'] = glb.get('scatter_avg_time', self._arg_default['scatter_avg_time'])
+        _invocation_parameters['scatter_avg_chan'] = glb.get('scatter_avg_chan', self._arg_default['scatter_avg_chan'])
         _invocation_parameters['layout'] = glb.get('layout', self._arg_default['layout'])
         _invocation_parameters['kind'] = glb.get('kind', self._arg_default['kind'])
         _invocation_parameters['preset'] = glb.get('preset', self._arg_default['preset'])
@@ -1513,6 +1573,8 @@ class _visplot:
             detrend = _UNSET,
             stat_time_window = _UNSET,
             stat_chan_window = _UNSET,
+            scatter_avg_time = _UNSET,
+            scatter_avg_chan = _UNSET,
             layout = _UNSET,
             kind = _UNSET,
             preset = _UNSET,
@@ -1570,6 +1632,8 @@ class _visplot:
             detrend,
             stat_time_window,
             stat_chan_window,
+            scatter_avg_time,
+            scatter_avg_chan,
             layout,
             kind,
             preset,
@@ -1656,6 +1720,12 @@ class _visplot:
             _invocation_parameters['stat_chan_window'] = \
                 stat_chan_window if stat_chan_window is not _UNSET \
                 else glb.get('stat_chan_window', self._arg_default['stat_chan_window'])
+            _invocation_parameters['scatter_avg_time'] = \
+                scatter_avg_time if scatter_avg_time is not _UNSET \
+                else glb.get('scatter_avg_time', self._arg_default['scatter_avg_time'])
+            _invocation_parameters['scatter_avg_chan'] = \
+                scatter_avg_chan if scatter_avg_chan is not _UNSET \
+                else glb.get('scatter_avg_chan', self._arg_default['scatter_avg_chan'])
             _invocation_parameters['layout'] = \
                 layout if layout is not _UNSET \
                 else glb.get('layout', self._arg_default['layout'])
@@ -1772,6 +1842,10 @@ class _visplot:
                 glb.get('stat_time_window', self._arg_default['stat_time_window'])
             _invocation_parameters['stat_chan_window'] = \
                 glb.get('stat_chan_window', self._arg_default['stat_chan_window'])
+            _invocation_parameters['scatter_avg_time'] = \
+                glb.get('scatter_avg_time', self._arg_default['scatter_avg_time'])
+            _invocation_parameters['scatter_avg_chan'] = \
+                glb.get('scatter_avg_chan', self._arg_default['scatter_avg_chan'])
             _invocation_parameters['layout'] = \
                 glb.get('layout', self._arg_default['layout'])
             _invocation_parameters['kind'] = \
@@ -1862,6 +1936,8 @@ class _visplot:
                     'detrend=' + repr(_invocation_parameters['detrend']),
                     'stat_time_window=' + repr(_invocation_parameters['stat_time_window']),
                     'stat_chan_window=' + repr(_invocation_parameters['stat_chan_window']),
+                    'scatter_avg_time=' + repr(_invocation_parameters['scatter_avg_time']),
+                    'scatter_avg_chan=' + repr(_invocation_parameters['scatter_avg_chan']),
                     'layout=' + repr(_invocation_parameters['layout']),
                     'kind=' + repr(_invocation_parameters['kind']),
                     'preset=' + repr(_invocation_parameters['preset']),
@@ -1909,6 +1985,8 @@ class _visplot:
                 detrend = _invocation_parameters['detrend'],
                 stat_time_window = _invocation_parameters['stat_time_window'],
                 stat_chan_window = _invocation_parameters['stat_chan_window'],
+                scatter_avg_time = _invocation_parameters['scatter_avg_time'],
+                scatter_avg_chan = _invocation_parameters['scatter_avg_chan'],
                 layout = _invocation_parameters['layout'],
                 kind = _invocation_parameters['kind'],
                 preset = _invocation_parameters['preset'],

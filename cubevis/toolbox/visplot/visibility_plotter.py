@@ -108,6 +108,7 @@ from .selection import (
 )
 from .raster_grid import normalize_baseline_order
 from .data._raster_stats import normalize_chan_window, normalize_time_window
+from .data._scatter_average import normalize_avg_chan, normalize_avg_time
 from . import antenna_baseline_select as _abs
 from .antenna_baseline_select import SELECTION_PAYLOAD_JS as _SELECTION_PAYLOAD_JS
 from .visibility_raster import VisibilityRaster
@@ -211,6 +212,7 @@ _STATIC_HINTS = {
     "s_y": "<b>Scatter Y axis</b> \u2014 the value plotted for every sample  | <b>Amplitude / Phase / Real / Imaginary</b>: one point per visibility, drawn as density  | <b>Phase RMS / Coherence</b>: one point per window (per integration, channel or scan, depending on X)  | <b>Z-Score</b>: how unusual each sample is for its baseline",
     "colorize": "<b>Layer colouring</b> \u2014 each ticked correlation is a layer with its own colours  | <b>Continuous</b>: density of points; scaling works as for the raster  | <b>Categorical</b>: colour by antenna, baseline, field, scan or SPW; tick which values to show  | <b>Statistical</b>: colour by Z-Score so outliers stand out  | <b>Layer</b> chooses which layer the controls below apply to",
     # ---- toolbar
+    "s_avg": "<b>Averaging (scatter)</b> \u2014 one point per baseline and correlation for each stretch of time and block of channels, instead of one per sample: what a spectrum or a time series needs  | <b>Average over time</b>: <i>Off</i> (every integration), <i>Scan</i> (a spectrum per scan, with X Frequency or Channel), or a length (from the start of each scan, never across a scan boundary)  | <b>Average over channels</b>: <i>Off</i>, a number of channels, or <i>All</i> (one point per spectral window: a time series, with X Time)  | <b>Vector</b>: average the complex visibilities, then take amplitude and phase; amplitude drops where the samples do not add up (noise, an uncalibrated phase, a delay across the averaged channels)  | <b>Scalar</b>: average the amplitudes  | Amplitude, Phase, Real and Imaginary only; flagged samples are left out; a flag box takes every sample behind the points it encloses",
     # ---- Flagging panel (HRS H5, 2026-10-07)
     "flag_filter": "<b>Filter</b> \u2014 which of the samples inside a drawn box are flagged  | <b>All selected</b>: every sample in the box  | The others take only the samples that meet a condition, so a generous box can be drawn round a bad stretch and only the bad samples in it go  | The condition and its settings are described under the list",
     "flag_preview": "<b>Preview each proposal</b> \u2014 show what a box would flag (how many samples, on which baselines, antennas, windows and scans) and paint those samples on the plots before anything is recorded; then accept or reject  | Worth having on while the Flag reaches settings are wider than the box",
@@ -474,6 +476,41 @@ _STAT_TIME_WINDOW_OPTIONS = [("auto", "Auto"), ("off", "Off"),
                              ("10", "10 s"), ("30", "30 s"), ("60", "1 min"),
                              ("120", "2 min"), ("300", "5 min"),
                              ("600", "10 min")]
+# Follow an X-axis pan / zoom from one panel to the other on screen while
+# both plot the same X (see _build_plot_area).  cb_obj is the Range that
+# changed.  A re-entrancy guard keeps the copy from echoing back.
+_X_SYNC_JS = r"""
+if (window.__cvXSync) return;
+const src = entries.find(e => e.fig.x_range === cb_obj);
+if (!src || !src.layout.visible) return;
+const lab = (src.state.data['x_label'] || [null])[0];
+if (lab == null) return;
+const a = cb_obj.start, b = cb_obj.end;
+if (!(isFinite(a) && isFinite(b))) return;
+window.__cvXSync = true;
+try {
+    for (const e of entries) {
+        if (e === src || !e.layout.visible) continue;
+        if ((e.state.data['x_label'] || [null])[0] !== lab) continue;
+        const r = e.fig.x_range;
+        if (r === cb_obj) continue;
+        if (r.start !== a || r.end !== b) r.setv({start: a, end: b});
+    }
+} finally {
+    window.__cvXSync = false;
+}
+"""
+
+# Scatter averaging (HRS H6).  Values go over the wire and into
+# normalize_avg_time / normalize_avg_chan.
+_SCATTER_AVG_TIME_OPTIONS = [("off", "Off"), ("scan", "Scan"),
+                             ("10", "10 s"), ("30", "30 s"), ("60", "1 min"),
+                             ("120", "2 min"), ("300", "5 min"),
+                             ("600", "10 min")]
+_SCATTER_AVG_CHAN_OPTIONS = [("off", "Off"), ("2", "2 ch"), ("4", "4 ch"),
+                             ("8", "8 ch"), ("16", "16 ch"), ("32", "32 ch"),
+                             ("64", "64 ch"), ("128", "128 ch"),
+                             ("256", "256 ch"), ("all", "All")]
 _STAT_CHAN_WINDOW_OPTIONS = [("off", "Off"), ("4", "4 ch"), ("8", "8 ch"),
                              ("16", "16 ch"), ("32", "32 ch"),
                              ("64", "64 ch"), ("128", "128 ch"),
@@ -1972,9 +2009,10 @@ class VisibilityPlotter:
         (default; average the complex visibility, then take Amplitude /
         Phase -- Amplitude drops where samples are incoherent) or
         ``"scalar"`` (Amplitude is the mean of the amplitudes, Phase the
-        circular mean).  Initial value for every raster panel; each
-        panel's own "Averaging" control (raster gear tab) changes it
-        independently afterwards.
+        circular mean).  Initial value for every raster panel, and for
+        every scatter panel when it averages (``scatter_avg_time`` /
+        ``scatter_avg_chan``); each panel's own "Averaging" control
+        changes it independently afterwards.
     baseline_combine : str
         How a raster cell that covers several baselines combines them
         (only where Baseline is not a plot axis, e.g. Time x Channel
@@ -2015,6 +2053,19 @@ class VisibilityPlotter:
     stat_chan_window : str or int
         Channel window for the same statistic: ``"off"`` (default) or a
         number of channels.  Same rules as ``stat_time_window``.
+    scatter_avg_time : str or float
+        Scatter points averaged over time, per baseline and correlation:
+        ``"off"`` (default, every sample a point), ``"scan"``, or a
+        number of seconds (windows from the start of each scan, never
+        across a scan boundary).  For a spectrum per scan (with X
+        Frequency or Channel).  Amplitude, Phase, Real and Imaginary
+        only.  Initial value for every scatter panel; each panel's "Average
+        over time" control changes it afterwards.
+    scatter_avg_chan : str or int
+        Scatter points averaged over channels: ``"off"`` (default), a
+        number of channels, or ``"all"`` (one point per spectral window).
+        For a time series (with X Time).  Same rules as
+        ``scatter_avg_time``.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -2162,6 +2213,8 @@ class VisibilityPlotter:
         detrend:          bool          = True,
         stat_time_window                = "auto",
         stat_chan_window                = "off",
+        scatter_avg_time                = "off",
+        scatter_avg_chan                = "off",
         layout:           str           = "side",
         kind:             Optional[str] = None,
         preset:           Optional[str] = None,
@@ -2213,6 +2266,8 @@ class VisibilityPlotter:
             baseline_combine=baseline_combine,
             stat_time_window=stat_time_window,
             stat_chan_window=stat_chan_window,
+            scatter_avg_time=scatter_avg_time,
+            scatter_avg_chan=scatter_avg_chan,
             layout=layout, kind=kind, preset=preset,
             raster_y=raster_y, raster_x=raster_x, raster_qty=raster_qty,
             scatter_x=scatter_x, scatter_y=scatter_y,
@@ -2317,6 +2372,7 @@ class VisibilityPlotter:
         timerange, uvrange, correlation, datacolumn, averaging, detrend,
         baseline_order, baseline_combine,
         stat_time_window, stat_chan_window,
+        scatter_avg_time, scatter_avg_chan,
         layout, kind, preset,
         raster_y, raster_x, raster_qty, scatter_x, scatter_y,
         time_range, freq_range, uvdist_range, enable_flagging,
@@ -2382,6 +2438,9 @@ class VisibilityPlotter:
         # panel afterwards.  Validated now so a typo fails here.
         self._stat_time_window = normalize_time_window(stat_time_window)
         self._stat_chan_window = normalize_chan_window(stat_chan_window)
+        # HRS H6: scatter averaging; initial value here, per panel after.
+        self._scatter_avg_time = normalize_avg_time(scatter_avg_time)
+        self._scatter_avg_chan = normalize_avg_chan(scatter_avg_chan)
         # layout="raster"/"scatter" is sugar for layout="one", kind=X --
         # resolved once here, before either attribute is set, so nothing
         # downstream (the layout radio, layout_js, export/preset JS,
@@ -2796,6 +2855,9 @@ class VisibilityPlotter:
             defer_initial_render = (_slot_a_kind != "scatter"),
             headless             = self._headless,
             layer_cmaps          = scatter_ramps,
+            avg_time             = self._scatter_avg_time,
+            avg_chan             = self._scatter_avg_chan,
+            averaging            = self._averaging,
         )
 
         _slot_b_scatter = VisibilityScatter(
@@ -2813,6 +2875,9 @@ class VisibilityPlotter:
             defer_initial_render = (_slot_b_kind != "scatter"),
             headless             = self._headless,
             layer_cmaps          = scatter_ramps,
+            avg_time             = self._scatter_avg_time,
+            avg_chan             = self._scatter_avg_chan,
+            averaging            = self._averaging,
         )
         # Slot B's raster mirrors slot A's raster defaults — same reasoning
         # as slot A's scatter above.
@@ -4188,6 +4253,17 @@ for (const dt of other.tools) {
                 except ValueError as exc:
                     log.warning("_handle_plot: %s (panel %s)", exc, slot.id)
                     s_twin, s_cwin = panel._stat_time_window, panel._stat_chan_window
+                # This scatter's averaging (HRS H6).  Absent: keep.
+                try:
+                    s_at = (normalize_avg_time(panel_msg["avg_time"])
+                            if panel_msg.get("avg_time") else panel._avg_time)
+                    s_ac = (normalize_avg_chan(panel_msg["avg_chan"])
+                            if panel_msg.get("avg_chan") else panel._avg_chan)
+                    s_am = (normalize_averaging(panel_msg["averaging"])
+                            if panel_msg.get("averaging") else panel._averaging)
+                except ValueError as exc:
+                    log.warning("_handle_plot: %s (panel %s)", exc, slot.id)
+                    s_at, s_ac, s_am = panel._avg_time, panel._avg_chan, panel._averaging
 
                 never_rendered = (not panel._layers or
                                   all(img is None for img in panel._layer_images))
@@ -4217,7 +4293,10 @@ for (const dt of other.tools) {
                     # (2026-10): a change re-renders, like the raster's.
                     s_det != panel._detrend or
                     s_twin != panel._stat_time_window or
-                    s_cwin != panel._stat_chan_window
+                    s_cwin != panel._stat_chan_window or
+                    s_at != panel._avg_time or
+                    s_ac != panel._avg_chan or
+                    s_am != panel._averaging
                 )
                 try:
                     if axes_changed:
@@ -4236,7 +4315,8 @@ for (const dt of other.tools) {
                             await asyncio.to_thread(
                                 panel.update_axes, x_dim=x, layers=layers,
                                 detrend=s_det, stat_time_window=s_twin,
-                                stat_chan_window=s_cwin)
+                                stat_chan_window=s_cwin, avg_time=s_at,
+                                avg_chan=s_ac, averaging=s_am)
                         # POST-2026-09: _layer_aggs is permanently
                         # [None] * n now (vestigial -- see
                         # ScatterRenderResult's docstring in
@@ -5235,6 +5315,30 @@ conflict_div.text = conflict ? msg : '';
         sd_box = self._hover(sd_sel, "detrend")
         st_box = self._hover(st_sel, "s_twin")
         sc_box = self._hover(sc_sel, "s_cwin")
+        # Averaging of THIS scatter (HRS H6, 2026-10-09): over time, over
+        # channels, vector or scalar.  Same per-slot arrangement.
+        _s_at = self._scatter_avg_time if _sc._avg_time is None else _sc._avg_time
+        _s_ac = self._scatter_avg_chan if _sc._avg_chan is None else _sc._avg_chan
+        _s_am = self._averaging if _sc._averaging is None else _sc._averaging
+        sat_sel = Select(
+            title="Average over time",
+            value=_window_value(_s_at),
+            options=_window_options(_SCATTER_AVG_TIME_OPTIONS, _s_at, "s"),
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        sac_sel = Select(
+            title="Average over channels",
+            value=_window_value(_s_ac),
+            options=_window_options(_SCATTER_AVG_CHAN_OPTIONS, _s_ac, "ch"),
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        sam_sel = Select(
+            title="Averaging",
+            value=_s_am,
+            options=[("vector", "Vector"), ("scalar", "Scalar")],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        savg_box = self._hover(column(sat_sel, sac_sel, sam_sel, width=_SIDEBAR_WIDTH), "s_avg")
 
         layers = slot.scatter.layers
         cmap_widgets: list = []
@@ -5294,6 +5398,7 @@ for (let i = 0; i < cols.length; i++) {
             Div(text="<span style='color:#89b4fa;font-weight:bold'>"
                      "── Scatter ──</span>", width=_SIDEBAR_WIDTH),
             self._hover(sx_sel, "s_x"), self._hover(sy_sel, "s_y"),
+            savg_box,
             sd_box, st_box, sc_box,
             self._hover(column(*extra_children, width=_SIDEBAR_WIDTH),
                         "colorize"),
@@ -5302,6 +5407,7 @@ for (let i = 0; i < cols.length; i++) {
         widgets = {
             "x_sel": sx_sel, "y_sel": sy_sel,
             "detrend_sel": sd_sel, "twin_sel": st_sel, "cwin_sel": sc_sel,
+            "avg_time_sel": sat_sel, "avg_chan_sel": sac_sel, "avg_mode_sel": sam_sel,
             "info_selectors": info_sel,
             "layer_select": layer_select, "layer_columns": layer_columns,
             "cmap_widgets": cmap_widgets,
@@ -7146,7 +7252,8 @@ function doPlot(reload) {
 
     function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel,
                                 colorize_handles, ra_sel, rd_sel, rt_sel, rc_sel,
-                                rb_sel, rm_sel, sd_sel, st_sel, sc_sel) {
+                                rb_sel, rm_sel, sat_sel, sac_sel, sam_sel,
+                                sd_sel, st_sel, sc_sel) {
         if (kind_switch.active === 0) {
             return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value,
                     averaging: ra_sel.value, detrend: rd_sel.value,
@@ -7156,7 +7263,10 @@ function doPlot(reload) {
         } else {
             return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value,
                      colorize: buildColorizeArray(colorize_handles),
-                     detrend: sd_sel.value, twin: st_sel.value, cwin: sc_sel.value};
+                     detrend: sd_sel.value, twin: st_sel.value, cwin: sc_sel.value,
+                     avg_time: sat_sel ? sat_sel.value : null,
+                     avg_chan: sac_sel ? sac_sel.value : null,
+                     averaging: sam_sel ? sam_sel.value : null};
         }
     }
     function rasterConflict(kind_switch, ry_sel, rx_sel) {
@@ -7193,11 +7303,13 @@ function doPlot(reload) {
         panel0_kind_switch, panel0_ry_sel, panel0_rx_sel, panel0_rq_sel,
         panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles, panel0_ra_sel,
         panel0_rd_sel, panel0_rt_sel, panel0_rc_sel, panel0_rb_sel, panel0_rm_sel,
+        panel0_sat_sel, panel0_sac_sel, panel0_sam_sel,
         panel0_sd_sel, panel0_st_sel, panel0_sc_sel);
     panels[panel1_id] = buildPanelPayload(
         panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
         panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles, panel1_ra_sel,
         panel1_rd_sel, panel1_rt_sel, panel1_rc_sel, panel1_rb_sel, panel1_rm_sel,
+        panel1_sat_sel, panel1_sac_sel, panel1_sam_sel,
         panel1_sd_sel, panel1_st_sel, panel1_sc_sel);
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
@@ -7729,6 +7841,9 @@ function doPlot(reload) {
             "panel0_sd_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["detrend_sel"],
             "panel0_st_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["twin_sel"],
             "panel0_sc_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["cwin_sel"],
+            "panel0_sat_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["avg_time_sel"],
+            "panel0_sac_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["avg_chan_sel"],
+            "panel0_sam_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["avg_mode_sel"],
             # Part 5 (2026-09): one entry per scatter layer, in the
             # same order as _make_scatter_layers()/pols -- see
             # colorize_controls()'s own returned handles dict. doPlot()
@@ -7752,6 +7867,9 @@ function doPlot(reload) {
             "panel1_sd_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["detrend_sel"],
             "panel1_st_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["twin_sel"],
             "panel1_sc_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["cwin_sel"],
+            "panel1_sat_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["avg_time_sel"],
+            "panel1_sac_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["avg_chan_sel"],
+            "panel1_sam_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["avg_mode_sel"],
             "panel1_colorize_handles": self._panel_axis_widgets[self._slots[1].id]["scatter"]["colorize_handles"],
             # Group 3 piece 3, Chunk 2 (added 2026-07-31): both kinds'
             # figure/image-source/state-source/layout per slot, replacing
@@ -8591,8 +8709,22 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
 
     def _build_plot_area(self):
         """Build both layout containers with linked cursor spans."""
-        if self._raster_x == self._scatter_x:
-            self._scatter.figure.x_range = self._raster.figure.x_range
+        # Pan / zoom along X follows from one panel to the other while
+        # both show the same X quantity (2026-10-09).  This used to be a
+        # shared Range model, set here when the constructor's raster and
+        # scatter X axes were equal -- and kept after either axis was
+        # changed with Plot: setting the scatter's X to Time then set the
+        # raster's Channel axis to time values, and the raster went
+        # blank.  Now the link is checked on every change: only between
+        # the panels on screen, only while their X axes carry the same
+        # label (quantity and units).
+        _x_sync = CustomJS(
+            args={"entries": [{"fig": pn.figure, "state": pn._state_source,
+                               "layout": pn.layout} for pn in self._all_panels]},
+            code=_X_SYNC_JS)
+        for pn in self._all_panels:
+            pn.figure.x_range.js_on_change("start", _x_sync)
+            pn.figure.x_range.js_on_change("end", _x_sync)
 
         # Group 3 piece 3, Chunk 2 (added 2026-07-31): both layout
         # objects (raster and scatter) for BOTH slots are now children of

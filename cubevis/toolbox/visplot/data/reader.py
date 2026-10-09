@@ -1471,6 +1471,11 @@ def _Axis_Z_SCORE():
     return Axis.Z_SCORE
 
 
+#: Selection fields a raw scatter frame does not depend on: they are
+#: applied to the cached rows (flag view, scatter averaging).
+_NOT_IN_RAW_KEY = ("flag_view", "avg_time", "avg_chan", "averaging")
+
+
 def _selection_fingerprint(selection) -> Optional[tuple]:
     """Hashable identity of everything in *selection* that decides which rows
     are read -- every field EXCEPT ``cache_generation``, which is a freshness
@@ -2588,8 +2593,11 @@ class XArrayReader(abc.ABC):
         sel_fp = _selection_fingerprint(selection)
         if cache.max_bytes <= 0 or sel_fp is None:
             return None
+        # Raw frames depend neither on the flag view nor on how the
+        # scatter averages them (HRS H6): those are applied to the cached
+        # rows, so changing them re-reads nothing.
         sel_fp = tuple(kv for kv in sel_fp
-                       if not (isinstance(kv, tuple) and kv and kv[0] == "flag_view"))
+                       if not (isinstance(kv, tuple) and kv and kv[0] in _NOT_IN_RAW_KEY))
         gen = ("raw", int(getattr(selection, "cache_generation", 0) or 0))
         token = self._frame_token()
 
@@ -2640,8 +2648,10 @@ class XArrayReader(abc.ABC):
         raw = self._raw_frames(xaxis, yaxes, selection, cache=cache)
         if raw is None:
             return None
+        from ._scatter_average import scatter_average_of, averages
+        avg = scatter_average_of(selection)
         memo = self.__dict__.setdefault("_cv_view_memo", {})
-        state = (view, int(getattr(selection, "pending_version", 0) or 0), gen, sel_fp, xaxis)
+        state = (view, int(getattr(selection, "pending_version", 0) or 0), gen, sel_fp, xaxis, avg)
         out: dict = {}
         for k in yaxes:
             if k not in raw:
@@ -2651,6 +2661,16 @@ class XArrayReader(abc.ABC):
                 out[k] = hit[2]
                 continue
             df = raw[k]
+            if avg is not None and averages(k[0]) and len(df) and "__disk_flag" in df.columns:
+                got = self.averaged_view(xaxis, k, selection, view, cache=cache)
+                if got is not None:
+                    df = got[0].drop(columns=[c for c in RAW_HELPER_COLUMNS if c in got[0].columns])
+                    ext = _frame_extent(df)
+                    if ext is not None:
+                        df.attrs["extent"] = ext
+                    memo[k] = (state, raw[k], df)
+                    out[k] = df
+                    continue
             if len(df) and "__disk_flag" in df.columns:
                 keep = frame_keep_mask(self, df, k[1], view)
                 df = df.loc[keep].drop(columns=[c for c in RAW_HELPER_COLUMNS if c in df.columns])
@@ -2666,6 +2686,40 @@ class XArrayReader(abc.ABC):
             out[k] = df
         return {k: out[k].copy(deep=False) for k in yaxes if k in out}
 
+
+    def averaged_view(self, xaxis, key, selection, view, cache=None):
+        """Averaged scatter points (HRS H6) for layer *key* = ``(y_axis,
+        pol)`` in flag *view*: ``(avg_df, rows, codes)``, where *avg_df*
+        has one row per point (helper columns kept), *rows* are the
+        positions in the raw frame of the samples averaged, and *codes*
+        the point each of them went into.  ``None`` when this cannot be
+        done (no averaging asked for, a quantity that is not averaged, no
+        raw frames, or frames that do not line up); the caller then draws
+        or flags the samples themselves.
+        """
+        from ._scatter_average import (scatter_average_of, averages, aligned,
+                                       group_rows, average_frame)
+        from ..flag_engine import frame_keep_mask
+        spec = scatter_average_of(selection)
+        if spec is None or not averages(key[0]):
+            return None
+        pol = key[1]
+        need = [key, (Axis.REAL, pol), (Axis.IMAGINARY, pol)]
+        raw = self._raw_frames(xaxis, need, selection, cache=cache)
+        if raw is None or any(k not in raw for k in need):
+            return None
+        base, rr, ri = raw[key], raw[need[1]], raw[need[2]]
+        if not (aligned(base, rr) and aligned(base, ri)):
+            log.warning("scatter averaging: the frames of %s do not line up; "
+                        "drawing samples instead", pol)
+            return None
+        keep = frame_keep_mask(self, base, pol, view)
+        rows = np.flatnonzero(keep)
+        sub = base.iloc[rows]
+        codes = group_rows(sub, spec)
+        avg = average_frame(key[0], sub, rr["y"].to_numpy(np.float64)[rows],
+                            ri["y"].to_numpy(np.float64)[rows], codes, spec)
+        return avg, rows, codes
 
     # ------------------------------------------------------------------ #
     # Metadata                                                             #

@@ -83,6 +83,9 @@ from .data.reader import (ScatterLayerSpec, ScatterLayerReference, CATEGORY_PRIO
 # require. See _do_viewport_rerender/_can_resample_locally/
 # _resample_and_composite below for how these are used.
 from .data import _scatter_render as _sr
+from .data._scatter_average import (normalize_avg_time, normalize_avg_chan,
+                                    scatter_average_of, averages as _averages)
+from .selection import normalize_averaging
 from .data._raster_stats import (
     STAT_QUANTITIES, describe_scatter_stat, normalize_chan_window,
     normalize_time_window, scatter_stat_spec,
@@ -417,6 +420,9 @@ class VisibilityScatter(VisibilityPlot):
         detrend: Optional[bool] = None,
         stat_time_window=None,
         stat_chan_window=None,
+        avg_time=None,
+        avg_chan=None,
+        averaging=None,
         **kwargs,
     ) -> None:
         # HRS H2 slice 4 (2026-10): this scatter's own Phase RMS /
@@ -430,6 +436,11 @@ class VisibilityScatter(VisibilityPlot):
                                   else normalize_time_window(stat_time_window))
         self._stat_chan_window = (None if stat_chan_window is None
                                   else normalize_chan_window(stat_chan_window))
+        # HRS H6 (2026-10-09): this scatter's averaging -- over time, over
+        # channels, vector or scalar.  None: the selection's (off).
+        self._avg_time = None if avg_time is None else normalize_avg_time(avg_time)
+        self._avg_chan = None if avg_chan is None else normalize_avg_chan(avg_chan)
+        self._averaging = None if averaging is None else normalize_averaging(averaging)
         if not layers:
             raise ValueError("VisibilityScatter: layers must be non-empty")
 
@@ -1316,7 +1327,18 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             over["stat_time_window"] = self._stat_time_window
         if self._stat_chan_window is not None:
             over["stat_chan_window"] = self._stat_chan_window
+        # Averaging (HRS H6) is this panel's too.
+        if self._avg_time is not None:
+            over["avg_time"] = self._avg_time
+        if self._avg_chan is not None:
+            over["avg_chan"] = self._avg_chan
+        if self._averaging is not None:
+            over["averaging"] = self._averaging
         return dataclasses.replace(selection, **over) if over else selection
+
+    def scatter_average(self):
+        """This scatter's averaging (``ScatterAverage``), or ``None``."""
+        return scatter_average_of(self._with_stat_settings(self._selection))
 
     def stat_spec(self):
         """How this scatter's Phase RMS / Coherence layers are windowed
@@ -1334,6 +1356,9 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         detrend: Optional[bool] = None,
         stat_time_window=None,
         stat_chan_window=None,
+        avg_time=None,
+        avg_chan=None,
+        averaging=None,
     ) -> None:
         """Change the x-axis or layer list and re-render.
 
@@ -1395,6 +1420,19 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             cw = normalize_chan_window(stat_chan_window)
             if cw != self._stat_chan_window:
                 self._stat_chan_window = cw;  changed = True
+        # Averaging (HRS H6): None leaves each as it is.
+        if avg_time is not None:
+            at = normalize_avg_time(avg_time)
+            if at != self._avg_time:
+                self._avg_time = at;  changed = True
+        if avg_chan is not None:
+            ac = normalize_avg_chan(avg_chan)
+            if ac != self._avg_chan:
+                self._avg_chan = ac;  changed = True
+        if averaging is not None:
+            am = normalize_averaging(averaging)
+            if am != self._averaging:
+                self._averaging = am;  changed = True
         # The base class labels the y axis from _y_dim, which was set
         # once, from the first layer, at construction -- so after the Y
         # quantity was changed here the axis went on saying what it said
@@ -1441,6 +1479,13 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
                 title = f"{title}  ({describe_scatter_stat(self.stat_spec())})"
             except Exception:           # a title must never break a render
                 pass
+        # Averaged points (HRS H6): say so, and how.
+        try:
+            avg = self.scatter_average()
+            if avg is not None and any(_averages(lyr.y_axis) for lyr in self._layers):
+                title = f"{title}  ({avg.describe()})"
+        except Exception:
+            pass
         # Long default titles go on two lines (see wrap_title).
         return wrap_title(title)
 

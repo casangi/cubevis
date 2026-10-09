@@ -63,6 +63,8 @@ def _validate_params(
         detrend,
         stat_time_window,
         stat_chan_window,
+        scatter_avg_time,
+        scatter_avg_chan,
         layout,
         kind,
         preset,
@@ -111,6 +113,8 @@ def _validate_params(
         'detrend': 'bool',
         'stat_time_window': '',
         'stat_chan_window': '',
+        'scatter_avg_time': '',
+        'scatter_avg_chan': '',
         'layout': 'str',
         'kind': 'Optional[str]',
         'preset': 'Optional[str]',
@@ -217,6 +221,8 @@ def _validate_params(
     _check('detrend', detrend, _type_map['detrend'])
     _check('stat_time_window', stat_time_window, _type_map['stat_time_window'])
     _check('stat_chan_window', stat_chan_window, _type_map['stat_chan_window'])
+    _check('scatter_avg_time', scatter_avg_time, _type_map['scatter_avg_time'])
+    _check('scatter_avg_chan', scatter_avg_chan, _type_map['scatter_avg_chan'])
     _check('layout', layout, _type_map['layout'])
     _check('kind', kind, _type_map['kind'])
     _check('preset', preset, _type_map['preset'])
@@ -265,6 +271,8 @@ def _visplot_t(
         detrend: bool = True,
         stat_time_window = 'auto',
         stat_chan_window = 'off',
+        scatter_avg_time = 'off',
+        scatter_avg_chan = 'off',
         layout: str = 'side',
         kind: Optional[str] = None,
         preset: Optional[str] = None,
@@ -312,6 +320,8 @@ def _visplot_t(
         detrend = detrend,
         stat_time_window = stat_time_window,
         stat_chan_window = stat_chan_window,
+        scatter_avg_time = scatter_avg_time,
+        scatter_avg_chan = scatter_avg_chan,
         layout = layout,
         kind = kind,
         preset = preset,
@@ -408,9 +418,10 @@ class _visplot:
         (default; average the complex visibility, then take Amplitude /
         Phase -- Amplitude drops where samples are incoherent) or
         ``"scalar"`` (Amplitude is the mean of the amplitudes, Phase the
-        circular mean).  Initial value for every raster panel; each
-        panel's own "Averaging" control (raster gear tab) changes it
-        independently afterwards.
+        circular mean).  Initial value for every raster panel, and for
+        every scatter panel when it averages (``scatter_avg_time`` /
+        ``scatter_avg_chan``); each panel's own "Averaging" control
+        changes it independently afterwards.
     baseline_combine : str
         How a raster cell that covers several baselines combines them
         (only where Baseline is not a plot axis, e.g. Time x Channel
@@ -451,6 +462,19 @@ class _visplot:
     stat_chan_window : str or int
         Channel window for the same statistic: ``"off"`` (default) or a
         number of channels.  Same rules as ``stat_time_window``.
+    scatter_avg_time : str or float
+        Scatter points averaged over time, per baseline and correlation:
+        ``"off"`` (default, every sample a point), ``"scan"``, or a
+        number of seconds (windows from the start of each scan, never
+        across a scan boundary).  For a spectrum per scan (with X
+        Frequency or Channel).  Amplitude, Phase, Real and Imaginary
+        only.  Initial value for every scatter panel; each panel's "Average
+        over time" control changes it afterwards.
+    scatter_avg_chan : str or int
+        Scatter points averaged over channels: ``"off"`` (default), a
+        number of channels, or ``"all"`` (one point per spectral window).
+        For a time series (with X Time).  Same rules as
+        ``scatter_avg_time``.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
         panels, side by side), or ``"over"`` (both panels, one above
@@ -594,6 +618,8 @@ class _visplot:
             detrend: bool = True,
             stat_time_window = 'auto',
             stat_chan_window = 'off',
+            scatter_avg_time = 'off',
+            scatter_avg_chan = 'off',
             layout: str = 'side',
             kind: Optional[str] = None,
             preset: Optional[str] = None,
@@ -654,6 +680,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             detrend = detrend,
             stat_time_window = stat_time_window,
             stat_chan_window = stat_chan_window,
+            scatter_avg_time = scatter_avg_time,
+            scatter_avg_chan = scatter_avg_chan,
             layout = layout,
             kind = kind,
             preset = preset,
@@ -702,6 +730,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'detrend=' + repr(detrend),
                 'stat_time_window=' + repr(stat_time_window),
                 'stat_chan_window=' + repr(stat_chan_window),
+                'scatter_avg_time=' + repr(scatter_avg_time),
+                'scatter_avg_chan=' + repr(scatter_avg_chan),
                 'layout=' + repr(layout),
                 'kind=' + repr(kind),
                 'preset=' + repr(preset),
@@ -751,6 +781,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 detrend = detrend,
                 stat_time_window = stat_time_window,
                 stat_chan_window = stat_chan_window,
+                scatter_avg_time = scatter_avg_time,
+                scatter_avg_chan = scatter_avg_chan,
                 layout = layout,
                 kind = kind,
                 preset = preset,

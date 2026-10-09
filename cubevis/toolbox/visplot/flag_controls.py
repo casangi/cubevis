@@ -372,6 +372,11 @@ class FlagController:
         params = dict(self.filter_params.get(f.name, {}))
         sel = panel._selection if getattr(panel, "_selection", None) is not None \
             else self._plotter._build_selection()
+        # The panel's own settings, as it draws (scatter: averaging and
+        # the Phase RMS windows, HRS H6): a box is resolved against what
+        # is on the screen.
+        if hasattr(panel, "_with_stat_settings"):
+            sel = panel._with_stat_settings(sel)
         req = {
             "flag": flag, "selection": sel, "kind": kind,
             "x0": float(msg.get("x0", 0.0)), "x1": float(msg.get("x1", 0.0)),

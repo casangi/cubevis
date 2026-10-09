@@ -512,13 +512,14 @@ def evaluate_request(backend, req: dict) -> dict:
                 return {"delta": None, "counts": FlagCounts().to_dict(),
                         "warnings": [str(exc)]}
             counts = FlagCounts()
-            if reach:
+            if reach or delta.extend_chan or delta.extend_corr:
                 # The box no longer says what is touched: count the
                 # widened region on the whole store.
                 counts = region_counts_everywhere(backend, delta, flag)
-                delta = dataclasses.replace(
-                    delta, provenance=tuple(delta.provenance)
-                    + ("reaches: " + "; ".join(reach),))
+                if reach:
+                    delta = dataclasses.replace(
+                        delta, provenance=tuple(delta.provenance)
+                        + ("reaches: " + "; ".join(reach),))
             else:
                 for ds, bc, axes in parts:
                     counts = counts.merge(_region_counts(backend, ds, bc, axes, flag))
@@ -595,6 +596,7 @@ def evaluate_request(backend, req: dict) -> dict:
         provenance=tuple(prov), data_column=data_column, n_samples=counts.n_matched,
         **{k: v for k, v in extend.items() if k in ("extend_corr", "extend_chan")},
     )
+    delta, counts = _recount_if_extended(backend, delta, counts, flag)
     return {"delta": delta.to_dict(json_safe=False), "counts": counts.to_dict(),
             "warnings": warnings}
 
@@ -776,6 +778,7 @@ def _scatter_box_from_frames(backend, req, flag, sel, x_axis, xr_, yr_, extend, 
         data_column=data_column, n_samples=counts.n_matched,
         **{k: v for k, v in extend.items() if k in ("extend_corr", "extend_chan")},
     )
+    delta, counts = _recount_if_extended(backend, delta, counts, flag)
     return {"delta": delta.to_dict(json_safe=False), "counts": counts.to_dict(),
             "warnings": [NOT_WIDENED] if scope_is_wide(req.get("scope")) else []}
 
@@ -978,16 +981,46 @@ def widen_region(backend, delta: FlagDelta, parts, scope, sel):
 
 
 def region_counts_everywhere(backend, delta: FlagDelta, flag: bool) -> FlagCounts:
-    """Counts for a region *delta* over every partition of the store
-    (not only the plotted selection: a widened region reaches beyond it)."""
+    """Counts for *delta* -- a region or a sample set, with its extend
+    options -- over every partition of the store: what accepting it
+    really changes.
+
+    Needed wherever the record reaches beyond what the box drew: a
+    widened region (Flag reaches), and All channels / All correlations
+    on any box.  Counting the box alone under-reported those (2026-10-09:
+    a scatter box with All channels said 180 samples and flagged
+    61,440).  Only the part of each partition the delta touches is read.
+    """
+    from .flag_model import delta_mask
     counts = FlagCounts()
     for raw in backend._iter_visibility_partitions(None):
         bc = block_coords(backend, raw)
-        axes = _region_axis_masks(delta, bc)
-        if axes is None or not all(a.any() for a in axes):
+        m = delta_mask(delta, bc)
+        if m is None or not m.any():
             continue
-        counts = counts.merge(_region_counts(backend, raw, bc, axes, flag))
+        keep = [np.flatnonzero(m.any(axis=tuple(a for a in range(4) if a != ax)))
+                for ax in range(4)]
+        sub = _isel_canon(backend, raw, *keep)
+        mm = m[np.ix_(*keep)]
+        eff = np.asarray(backend._flag_mask(sub).transpose(*_canon(backend)).values, bool)
+        valid = valid_mask(backend, sub)
+        v4 = np.ones(eff.shape, bool) if valid is None else np.broadcast_to(
+            valid[:, :, None, None], eff.shape)
+        sel = mm & v4
+        changed = sel & (~eff if flag else eff)
+        counts = counts.merge(FlagCounts.from_mask(changed, bc.sub(*keep),
+                                                   n_selected=int(sel.sum()),
+                                                   n_changed=int(changed.sum())))
     return counts
+
+
+def _recount_if_extended(backend, delta: FlagDelta, counts: FlagCounts, flag: bool):
+    """``(delta, counts)``: for a box with All channels / All correlations,
+    the counts of what it really changes (the box's own counts otherwise)."""
+    if not (delta.extend_chan or delta.extend_corr):
+        return delta, counts
+    counts = region_counts_everywhere(backend, delta, flag)
+    return _with_n(delta, counts.n_changed), counts
 
 
 # ---------------------------------------------------------------------- #

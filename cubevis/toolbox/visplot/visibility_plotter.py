@@ -219,7 +219,7 @@ _STATIC_HINTS = {
     "flag_report": "<b>Describe pending flags</b> \u2014 open a page listing every pending flag in order: what it covers, how far it reached, its filter, its reason and how many samples it changes",
     "tb_sidebar": "<b>\u27e8 / \u27e9</b> \u2014 hide or show the configuration panel on the left, to give the plots the full width",
     "tb_plot": "<b>Plot</b> \u2014 draw both panels with everything as now set in the panel on the left  | Selections, axes, quantities and window settings take effect only when this is pressed; colour scaling applies at once  | Pending flags are kept",
-    "tb_reload": "<b>Reload</b> \u2014 read the data again and redraw  | Use after something else has changed the data on disk  | Discards pending (unapplied) flags",
+    "tb_reload": "<b>Reload</b> \u2014 read the data again and redraw  | Use after something else has changed the data on disk  | <span style=\"color:#f38ba8\"><b>Discards pending (unapplied) flags</b></span>",
     "tb_layout": "<b>Layout</b> \u2014 one panel, or both: side by side or one above the other  | Side by side suits Baseline \u00d7 Time; one above the other gives a waterfall the full width",
     "tb_export": "<b>Export PNG</b> \u2014 write the current view (both panels, titles, axes, colour bars) to a PNG file where Python is running  | The path is reported in the status line",
     "tb_theme": "<b>Dark / Light</b> \u2014 switch the background  | The colormaps change with it so faint points stay visible; exported PNGs follow",

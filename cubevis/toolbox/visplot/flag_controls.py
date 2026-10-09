@@ -885,6 +885,48 @@ class FlagController:
             n += 1
         return n
 
+    def list_flag_files(self) -> list:
+        """Flag files (``Save flags as JSON``) that can be loaded here,
+        newest first: ``[{"path", "modified", "operations", "source",
+        "this_data"}]``.
+
+        Looks where a save puts them by default -- the working directory
+        -- and next to the data (when the data are on this machine).
+        A file is one when its first line is a visplot flags header;
+        those saved from the data now open come first.
+        """
+        from .flag_db import JSONL_FORMAT
+        import glob
+        import json as _json
+        src = getattr(self._plotter, "_source_path", "") or ""
+        here = os.path.basename(os.path.normpath(src)) if src else ""
+        dirs = [os.getcwd()]
+        d = os.path.dirname(os.path.abspath(os.path.normpath(src))) if src else ""
+        if d and os.path.isdir(d) and d not in dirs:
+            dirs.append(d)
+        found, seen = [], set()
+        for dname in dirs:
+            for path in glob.glob(os.path.join(dname, "*.jsonl")):
+                real = os.path.realpath(path)
+                if real in seen:
+                    continue
+                seen.add(real)
+                try:
+                    with open(path) as fh:
+                        first = fh.readline()
+                        hdr = _json.loads(first) if first.strip() else {}
+                        if not isinstance(hdr, dict) or hdr.get("format") != JSONL_FORMAT:
+                            continue
+                        ops = sum(1 for line in fh if line.strip())
+                    origin = os.path.basename(os.path.normpath(hdr.get("source") or ""))
+                    found.append({"path": path, "modified": os.path.getmtime(path),
+                                  "operations": ops, "source": origin,
+                                  "this_data": bool(here) and origin == here})
+                except Exception:
+                    continue                     # unreadable or not ours
+        found.sort(key=lambda e: (not e["this_data"], -e["modified"]))
+        return found
+
     def _default_path(self, suffix: str) -> str:
         """``<data name>.<kind>.<YYYYmmdd-HHMMSS>.<ext>`` -- unique per export
         (to the second) and sortable, so a later export never replaces an
@@ -929,6 +971,19 @@ class FlagController:
             n = self.load_jsonl(path)
             return self.response(f"Loaded {n} pending operation(s) from {html.escape(path)}",
                                  NOTIFY_OK)
+        if kind == "list_json":
+            found = await asyncio.to_thread(self.list_flag_files)
+            out = self.response("" if found else
+                                "No flag files found in the working directory or next "
+                                "to the data; type a path in the file box.",
+                                NOTIFY_OK, refresh=False)
+            out["backups"] = [
+                [e["path"], f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(e['modified']))}"
+                            f" · {e['operations']} op(s) · {os.path.basename(e['path'])}"
+                            + ("" if e["this_data"] else
+                               f" (saved from {e['source'] or 'other data'})")]
+                for e in found]
+            return out
         if kind == "list_backups":
             fn = getattr(self.reader, "list_flag_backups", None)
             found = (await asyncio.to_thread(fn)) if fn else []
@@ -1458,6 +1513,8 @@ class FlagController:
             pts.append("<b>Write flags with CASA flagdata</b>: the CASA route; CASA may apply "
                        "large or scattered selections incompletely, so prefer Write flags "
                        "for many points. The result is checked either way")
+        pts.append("<b>Load flags from JSON</b>: the flag files saved in the working "
+                   "directory or next to the data are listed, this data's first")
         pts.append("<b>File</b>: where to write, or what to load or restore; empty takes a "
                    "name made from the data name and the time")
         return "  | ".join(pts)
@@ -1858,14 +1915,22 @@ def _title_with_times(d) -> str:
     return re.sub(r"TIME \[([-+0-9.eE]+), ([-+0-9.eE]+)\]", repl, text)
 
 _BACKUP_LIST_JS = r"""
-if (exp_sel.value !== 'restore') {
+// "Restore" lists the commit backups next to the data; "Load flags from
+// JSON" lists the saved flag files (working directory and next to the
+// data, those of this data first).  Picking one fills the file box,
+// which still takes any typed path.
+const listing = {restore: ['list_backups', 'Existing backups (newest first)', '(no backups found)'],
+                 load: ['list_json', 'Flag files found (this data first, newest first)',
+                        '(no flag files found)']}[exp_sel.value];
+if (!listing) {
     exp_backups.visible = false;
 } else {
     window.__cvSetBusy(true);
-    comm.send(msg_id, {action: 'export', kind: 'list_backups', path: ''}, (resp) => {
+    exp_backups.title = listing[1];
+    comm.send(msg_id, {action: 'export', kind: listing[0], path: ''}, (resp) => {
         window.__cvSetBusy(false);
         const items = (resp && resp.backups) || [];
-        exp_backups.options = items.length ? items : [['', '(no backups found)']];
+        exp_backups.options = items.length ? items : [['', listing[2]]];
         exp_backups.value = items.length ? items[0][0] : '';
         if (items.length) exp_path.value = items[0][0];
         exp_backups.visible = true;

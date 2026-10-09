@@ -107,6 +107,16 @@ and unflag boxes alike.
   is now switched off (`UIGestures.press_threshold`, restored when no
   flag tool is active; nothing in visplot uses press). Checked live:
   pauses of 0.5 s and 2 s before moving now draw the box.
+- *Scatter preview painted far more than was flagged* (2026-10-09, All
+  channels on, Phase RMS vs Channel). The preview was right; the count
+  was wrong. A box with All channels or All correlations really flags
+  every channel (correlation) of the samples it takes, but the message,
+  the proposal and the record counted the box's own samples: 180 said,
+  61,440 flagged on TW Hya 3c279. On a dense plot the extra samples
+  thin the cloud everywhere, so after accepting only the hole in the
+  box shows. Counts now come from the record itself
+  (`region_counts_everywhere`, any delta with its extend options) on
+  raster and scatter boxes; checked against the flags themselves.
 - A scatter box dropped the reason and did not say that baselines /
   windows / scans / fields were not widened. Both fixed.
 

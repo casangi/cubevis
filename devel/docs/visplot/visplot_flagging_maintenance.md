@@ -28,7 +28,8 @@
   meanwhile. Shift / Alt (Option) held while dragging stretch one box to
   the full height / width of the view (a key held as the drag starts
   counts for the whole drag); Esc drops the box being drawn.
-  A **Reason** is stored with each flag. See
+  A **Reason** is stored with each flag. *Load flags from JSON* lists the
+  flag files in the working directory and next to the data. See
   `devel/notes/drs/visplot/hrs_h5_flag_reach.md`.
 * **Display**: *Hide flagged* (draws what a fresh open of the committed data
   would draw) or *Show in colour* (on-disk flags hidden, pending ones painted

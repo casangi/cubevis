@@ -377,6 +377,27 @@ class TestReach:
         assert resp["notify_text"].startswith("✓ Unflagged"), resp["notify_text"]
         assert _pending(vp) == {}
 
+    def test_count_includes_all_channels_and_correlations(self, plotter):
+        # The box's own samples were counted; what it really changed with
+        # All channels / All correlations was far more (2026-10-09).
+        vp = plotter
+        for kind in ("raster", "scatter"):
+            for reach in ({"channels": True}, {"correlations": True},
+                          {"channels": True, "correlations": True}):
+                vp.flag_db.clear(record=False)
+                _reset(vp, **reach)
+                if kind == "raster":
+                    _box(vp, vp._slots[0].raster, 2, 2, 4, 4)
+                else:
+                    sc = vp._slots[1].scatter
+                    fg = sc._fig
+                    msg = dict(x0=fg.x_range.start, x1=fg.x_range.end, y0=fg.y_range.start,
+                               y1=fg.y_range.start + 0.2 * (fg.y_range.end - fg.y_range.start),
+                               flag=True)
+                    _run(vp._handle_box_select(msg, "scatter", sc))
+                d = vp.flag_db.deltas()[-1]
+                assert d.n_samples == sum(_pending(vp).values()), (kind, reach)
+
     def test_reason_is_stored_and_reported(self, plotter):
         vp = plotter
         r = _reset(vp)
@@ -621,6 +642,26 @@ class TestGui:
         # taller than the window was cut and the next one drawn over it.
         for child in vp._sidebar_col.children:
             assert (child.styles or {}).get("max-height") == "none", type(child).__name__
+
+    def test_saved_flag_files_are_listed_for_loading(self, vp, tmp_path, monkeypatch):
+        import json, time as _t
+        monkeypatch.chdir(tmp_path)
+        f = vp._flags
+        mine = f.export(str(tmp_path / "a.flags.jsonl"))
+        _t.sleep(0.05)
+        other = tmp_path / "b.flags.jsonl"
+        other.write_text(json.dumps({"format": "cubevis.visplot.flagdb", "version": 2,
+                                     "source": "/x/other.ms"}) + "\n")
+        (tmp_path / "c.jsonl").write_text('{"something": "else"}\n')
+        (tmp_path / "d.jsonl").write_text("not json\n")
+        got = f.list_flag_files()
+        names = [os.path.basename(e["path"]) for e in got]
+        assert names == ["a.flags.jsonl", "b.flags.jsonl"]      # this data first
+        assert got[0]["this_data"] and not got[1]["this_data"]
+        assert got[1]["source"] == "other.ms" and got[1]["operations"] == 0
+        resp = _run(f._export_action({"kind": "list_json", "path": ""}))
+        assert [r[0] for r in resp["backups"]] == [e["path"] for e in got]
+        assert "(saved from other.ms)" in resp["backups"][1][1]
 
     def test_bad_reach_fails_at_construction(self, sim_ms):
         from cubevis.toolbox.visplot import VisibilityPlotter

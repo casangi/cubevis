@@ -24,9 +24,10 @@
   spectral windows; the whole scan; all fields; all correlations. The
   settings persist (an amber line says so while any is on) and are
   resolved into the flag record when a box is proposed
-  (`flag_engine.widen_region`). Shift / Alt (or Ctrl) held while
-  dragging stretch one box to the full height / width of the view. A
-  **Reason** is stored with each flag. See
+  (`flag_engine.widen_region`); the drag box is outlined in amber
+  meanwhile. Shift / Alt (Option) held while dragging stretch one box to
+  the full height / width of the view; Esc drops the box being drawn.
+  A **Reason** is stored with each flag. See
   `devel/notes/drs/visplot/hrs_h5_flag_reach.md`.
 * **Display**: *Hide flagged* (draws what a fresh open of the committed data
   would draw) or *Show in colour* (on-disk flags hidden, pending ones painted

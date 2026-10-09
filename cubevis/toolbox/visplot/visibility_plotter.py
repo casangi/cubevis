@@ -211,7 +211,7 @@ _STATIC_HINTS = {
     # ---- Flagging panel (HRS H5, 2026-10-07)
     "flag_filter": "<b>Filter</b> \u2014 which of the samples inside a drawn box are flagged  | <b>All selected</b>: every sample in the box  | The others take only the samples that meet a condition, so a generous box can be drawn round a bad stretch and only the bad samples in it go  | The condition and its settings are described under the list",
     "flag_preview": "<b>Preview each proposal</b> \u2014 show what a box would flag (how many samples, on which baselines, antennas, windows and scans) and paint those samples on the plots before anything is recorded; then accept or reject  | Worth having on while the Flag reaches settings are wider than the box",
-    "flag_reach": "<b>Flag reaches</b> \u2014 how far each flag (or unflag) goes beyond the box that is drawn. The settings stay until changed; the line underneath turns amber while any is wider than the box  | <b>Baselines</b>: <i>As drawn</i>; or all baselines <i>to the antenna they share</i> (drag across two or more baselines of the bad antenna; refused if they do not share exactly one); or all <i>to every antenna drawn</i>; or <i>all baselines</i>  | <b>All channels</b>: the drawn time range over the whole band (a bad integration)  | <b>All selected spectral windows</b>: the same channels and times in every selected window  | <b>Whole scan</b>: every integration of the scans the box touches  | <b>All fields</b>: only matters on a plot without a Time axis  | <b>All correlations</b>: not just the one plotted  | Baselines, windows, scans and fields are extended for a raster box with the All selected filter; other boxes say so  | For one box only, without changing these: hold <b>Shift</b> while dragging for the full height of the plot, <b>Alt</b> (or Ctrl) for the full width",
+    "flag_reach": "<b>Flag reaches</b> \u2014 how far each flag (or unflag) goes beyond the box that is drawn. The settings stay until changed; the line underneath turns amber while any is wider than the box  | <b>Baselines</b>: <i>As drawn</i>; or all baselines <i>to the antenna they share</i> (drag across two or more baselines of the bad antenna; refused if they do not share exactly one); or all <i>to every antenna drawn</i>; or <i>all baselines</i>  | <b>All channels</b>: the drawn time range over the whole band (a bad integration)  | <b>All selected spectral windows</b>: the same channels and times in every selected window  | <b>Whole scan</b>: every integration of the scans the box touches  | <b>All fields</b>: only matters on a plot without a Time axis  | <b>All correlations</b>: not just the one plotted  | Baselines, windows, scans and fields are extended for a raster box with the All selected filter; other boxes say so  | While any is wider, the box is outlined in amber as it is drawn  | For one box only, without changing these: hold <b>Shift</b> while dragging for the full height of the plot as shown, <b>Alt</b> (<b>Option</b> on a Mac) for the full width; <b>Esc</b> before letting go drops the box",
     "flag_reason": "<b>Reason</b> \u2014 a few words on why, stored with every flag made from now on until the text is changed  | Shown in Describe pending flags, saved in the JSON, and written as the reason in exported flagdata commands, so flags can later be listed or undone by reason  | Leave empty for none",
     "flag_display": "<b>Pending flags on the plots</b>  | <b>Hide flagged</b>: flagged samples disappear and colour scales and statistics are recomputed without them \u2014 flag, then look again  | <b>Show in colour</b>: the data stay as on disk and the samples the pending flags change are painted in the chosen colour, to see what has been marked",
     "flag_shown": "<b>Show flagged data</b> \u2014 also draw samples that are flagged now, on disk or pending, in the chosen colour  | Needed to unflag: an Unflag box can only take what is drawn",
@@ -4714,6 +4714,12 @@ html, body { height: 100%; margin: 0; }
                 if tool is not None:
                     tool.notify_div = self._notify_div
                     tool.status_div = self._status_div
+        # The Flagging panel outlines the drag box in amber while "Flag
+        # reaches" goes beyond it; it needs every tool to tell them.
+        self._flags.flag_tools = [
+            t for panel in self._all_panels
+            for t in (getattr(panel, "_flag_tool", None), getattr(panel, "_unflag_tool", None))
+            if t is not None]
 
         sidebar_col, toggle_btn  = self._build_sidebar()
         # FlagDB v2: one CustomJS applies every flag response (texts,
@@ -5944,6 +5950,15 @@ for (let i = 0; i < cols.length; i++) {
                 # its own overflow-y here.
             },
         )
+        # Every section keeps its own height (2026-10-08).  Bokeh's
+        # layout stylesheet caps each child of a column at
+        # ``max-height: 100%``; in a sidebar that scrolls, a section
+        # taller than the window (the Flagging panel, or an open gear
+        # tab) was cut to the window's height and the next section drawn
+        # over the rest of it -- seen on a laptop as the gear tabs on top
+        # of the export controls.  The sidebar scrolls instead.
+        for child in self._sidebar_col.children:
+            child.styles = {**dict(child.styles or {}), "max-height": "none"}
 
 
         # ---- Collapse toggle button --------------------------------------- #

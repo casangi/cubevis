@@ -531,10 +531,7 @@ def evaluate_request(backend, req: dict) -> dict:
     # Baselines / spectral windows / scans / fields can only be widened
     # for a coordinate region.  Say so rather than silently not doing it.
     if scope_is_wide(req.get("scope")):
-        warnings.append(
-            "'Flag reaches' was applied for channels and correlations only: "
-            "baselines, spectral windows, scans and fields are extended for "
-            "a raster box with the 'All selected' filter")
+        warnings.append(NOT_WIDENED)
 
     # ---------------- sample path ------------------------------------- #
     stats = None
@@ -594,6 +591,7 @@ def evaluate_request(backend, req: dict) -> dict:
         samples=tuple(blocks), value_ranges=tuple(value_ranges),
         filter=None if fobj.is_identity else fobj.record(params),
         correlation=None, source=req.get("source", ""), comment=req.get("comment", ""),
+        reason=req.get("reason", "") or "",
         provenance=tuple(prov), data_column=data_column, n_samples=counts.n_matched,
         **{k: v for k, v in extend.items() if k in ("extend_corr", "extend_chan")},
     )
@@ -773,12 +771,13 @@ def _scatter_box_from_frames(backend, req, flag, sel, x_axis, xr_, yr_, extend, 
     delta = FlagDelta(
         flag=flag, time_format=tfmt, samples=tuple(blocks), value_ranges=tuple(value_ranges),
         filter=None, correlation=None, source=req.get("source", ""),
-        comment=req.get("comment", ""), provenance=tuple(req.get("provenance") or ()),
+        comment=req.get("comment", ""), reason=req.get("reason", "") or "",
+        provenance=tuple(req.get("provenance") or ()),
         data_column=data_column, n_samples=counts.n_matched,
         **{k: v for k, v in extend.items() if k in ("extend_corr", "extend_chan")},
     )
     return {"delta": delta.to_dict(json_safe=False), "counts": counts.to_dict(),
-            "warnings": []}
+            "warnings": [NOT_WIDENED] if scope_is_wide(req.get("scope")) else []}
 
 
 def resolve_auto_params(params: dict, kind: str, quantity: Optional[str]) -> dict:
@@ -831,6 +830,12 @@ def _raster_dim(axis: Optional[Axis]) -> Optional[str]:
 # selection.
 
 BASELINE_SCOPES = ("drawn", "shared", "antennas", "all")
+
+# Said after a box whose samples could not be widened (a scatter box, or
+# a filter other than "All selected").
+NOT_WIDENED = ("'Flag reaches' was applied for channels and correlations only: "
+               "baselines, spectral windows, scans and fields are extended for "
+               "a raster box with the 'All selected' filter")
 
 
 class ScopeError(ValueError):

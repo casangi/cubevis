@@ -56,44 +56,93 @@ export class FlagToolView extends DragToolView {
   }
 
   // Which way the box is stretched to the edges of the plot, from the
-  // keys held RIGHT NOW (HRS H5, 2026-10-07):
-  //   Shift        -> full height: the dragged X range, all of Y shown
-  //   Alt or Ctrl  -> full width:  the dragged Y range, all of X shown
+  // keys held RIGHT NOW (HRS H5, 2026-10-07 / 08):
+  //   Shift          -> full height: the dragged X range, all of Y shown
+  //   Alt (Option)   -> full width:  the dragged Y range, all of X shown
   // Nothing is latched: the keys act only while they are down, for this
-  // one box, and the dashed box shows the result before the button is
-  // let go.  "All shown" is the plot's current view, not the whole data
-  // set, so the box never covers anything that is off screen.  Ctrl is
-  // accepted beside Alt because several Linux window managers keep
-  // Alt+drag for moving the window and never deliver it to the page.
-  private _span_of(ev: PanEvent): "" | "x" | "y" | "xy" {
-    const m = (ev as any).modifiers ?? {}
-    const tall = !!m.shift
-    const wide = !!m.alt || !!m.ctrl
-    return tall && wide ? "xy" : tall ? "y" : wide ? "x" : ""
+  // one box.  "All shown" is the plot's current view, not the whole data
+  // set, so the box never covers anything that is off screen.
+  //
+  // What is SENT is the box last DRAWN (2026-10-08): on macOS the
+  // pointer-up that ends a Shift / Option drag can arrive without its
+  // modifier keys, and recomputing the box from it sent the small box
+  // while the full-height one was on screen.  Keys pressed or let go
+  // without moving the pointer redraw the box from the keyboard events.
+  //
+  // Escape while dragging drops the box: nothing is sent.
+  //
+  // Ctrl is NOT used: on macOS Ctrl+click is the secondary click and
+  // opens the plot's context menu.
+  private _shift = false
+  private _alt = false
+  private _last_sx = 0
+  private _last_sy = 0
+  private _cancelled = false
+  private _on_key: ((e: KeyboardEvent) => void) | null = null
+
+  private _span(): "" | "x" | "y" | "xy" {
+    return this._shift && this._alt ? "xy" : this._shift ? "y" : this._alt ? "x" : ""
   }
 
-  private _span: "" | "x" | "y" | "xy" = ""
+  private _listen_keys(on: boolean): void {
+    if (on && this._on_key == null) {
+      this._on_key = (e: KeyboardEvent) => {
+        if (!this._dragging) return
+        if (e.key === "Escape") {
+          this._cancelled = true
+          this.model.overlay.visible = false
+          e.preventDefault()
+          return
+        }
+        if (e.key === "Shift" || e.key === "Alt") {
+          this._shift = e.shiftKey
+          this._alt = e.altKey
+          if (!this._cancelled) this._draw_box()
+        }
+      }
+      window.addEventListener("keydown", this._on_key, true)
+      window.addEventListener("keyup", this._on_key, true)
+    } else if (!on && this._on_key != null) {
+      window.removeEventListener("keydown", this._on_key, true)
+      window.removeEventListener("keyup", this._on_key, true)
+      this._on_key = null
+    }
+  }
+
+  override remove(): void {
+    this._listen_keys(false)
+    super.remove()
+  }
 
   override _pan(ev: PanEvent): void {
     const moved = Math.hypot(ev.sx - this._start_sx, ev.sy - this._start_sy)
     if (!this._dragging && moved < DRAG_THRESHOLD_PX) return
-    this._dragging = true
-    this._draw_box(ev)
+    if (!this._dragging) {
+      this._dragging = true
+      this._cancelled = false
+      this._listen_keys(true)
+    }
+    if (this._cancelled) return
+    const m = (ev as any).modifiers ?? {}
+    this._shift = !!m.shift
+    this._alt = !!m.alt
+    this._last_sx = ev.sx
+    this._last_sy = ev.sy
+    this._draw_box()
   }
 
-  private _draw_box(ev: PanEvent): void {
+  private _draw_box(): void {
     const sx0 = px_from_sx(this.plot_view, this._start_sx)
     const sy0 = py_from_sy(this.plot_view, this._start_sy)
-    const sx1 = px_from_sx(this.plot_view, ev.sx)
-    const sy1 = py_from_sy(this.plot_view, ev.sy)
+    const sx1 = px_from_sx(this.plot_view, this._last_sx)
+    const sy1 = py_from_sy(this.plot_view, this._last_sy)
 
     let x0 = dx_from_px(this.plot_view, sx0)
     let x1 = dx_from_px(this.plot_view, sx1)
     let y0 = dy_from_py(this.plot_view, sy0)
     let y1 = dy_from_py(this.plot_view, sy1)
 
-    const span = this._span_of(ev)
-    this._span = span
+    const span = this._span()
     const {x_range, y_range} = this.plot_view.model
     if (span == "x" || span == "xy") {
       x0 = x_range.start as number
@@ -112,6 +161,12 @@ export class FlagToolView extends DragToolView {
     // Flag vs. unflag reads visually distinct even mid-drag, before the
     // toolbar-button colour swap (which lives outside this view).
     ov.fill_color = this.model.flag ? "#f38ba8" : "#a6e3a1"
+    // An amber, solid outline while "Flag reaches" goes beyond the box
+    // (set from the Flagging panel): the box drawn is not all it takes.
+    const wide = this.model.reach_wide
+    ov.line_color = wide ? "#f9a825" : (this.model.flag ? "#f38ba8" : "#a6e3a1")
+    ov.line_dash = wide ? [] : [4, 4]
+    ov.line_width = wide ? 3 : 2
     ov.visible = true
   }
 
@@ -131,12 +186,14 @@ export class FlagToolView extends DragToolView {
     }
 
     this._dragging = false
-    // The keys as they are at release decide (a key pressed or let go
-    // without moving the pointer sends no pan event of its own).
-    this._draw_box(ev)
-    const span = this._span
+    this._listen_keys(false)
+    const span = this._span()
     const {left, right, bottom, top} = ov
     ov.visible = false
+    if (this._cancelled) {
+      this._cancelled = false
+      return
+    }
 
     if (left == null || right == null || bottom == null || top == null) return
     if (!isFinite(left as number) || !isFinite(right as number)) return
@@ -382,6 +439,7 @@ export namespace FlagTool {
     notify_div:    p.Property<any>
     status_div:    p.Property<any>
     response_callback: p.Property<Callback | null>
+    reach_wide:    p.Property<boolean>
   }
 }
 
@@ -426,6 +484,7 @@ export class FlagTool extends DragTool {
       notify_div:    [ Nullable(Any), null ],
       status_div:    [ Nullable(Any), null ],
       response_callback: [ Nullable(Ref(Callback)), null ],
+      reach_wide:    [ Boolean, false ],
     }))
   }
 

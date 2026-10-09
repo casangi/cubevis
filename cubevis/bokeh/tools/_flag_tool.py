@@ -185,6 +185,13 @@ class FlagTool(DragTool):
     """)
 
 
+    reach_wide = Bool(default=False, help="""
+    True while the Flagging panel's "Flag reaches" settings go beyond the
+    drawn box: the box is then outlined in amber, solid, so the user sees
+    while drawing that it takes more than it covers.  Set from the panel's
+    controls (browser) and at start-up (Python).
+    """)
+
     at_pixel_res = Bool(default=False, help="""
     True once the figure's viewport is zoomed to (or past) one screen
     pixel per aggregation cell. Recomputed client-side on every x_range /

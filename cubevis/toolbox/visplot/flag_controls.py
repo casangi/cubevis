@@ -190,6 +190,7 @@ class FlagController:
         # (resolved by flag_engine.widen_region when a box is proposed).
         self.scope = {"baselines": "drawn", "spw": False, "scan": False, "field": False}
         self.reason = ""
+        self.flag_tools: list = []      # FlagTools to outline in amber (set by the plotter)
         self.set_reach(parse_reach(reach))
         self.set_reason(reason)
         self.proposal: Optional[Proposal] = None
@@ -1323,6 +1324,8 @@ class FlagController:
         reach_field = Checkbox(label="All fields", active=self.scope["field"])
         ext_corr = Checkbox(label="All correlations", active=self.extend_corr)
         wide = bool(self.reach_words())
+        for t in self.flag_tools:
+            t.reach_wide = wide
         reach_note = Div(text=self.reach_text(), width=width,
                          styles={"font-size": "11px",
                                  "color": REACH_WARN_COLOR if wide else REACH_QUIET_COLOR})
@@ -1367,6 +1370,7 @@ class FlagController:
                                     reach_labels=dict(REACH_BASELINE_WORDS),
                                     reach_warn=REACH_WARN_COLOR,
                                     reach_quiet=REACH_QUIET_COLOR,
+                                    flag_tools=list(self.flag_tools),
                                     display=display, color=color,
                                     show_flagged=show_flagged, flagged_color=flagged_color,
                                     **self._response_args()),
@@ -1622,6 +1626,7 @@ for (const w of (param_widgets[name] || [])) {
     reach_note.text = wide.length ? '\u26a0 Each box also takes: ' + wide.join('; ') + '.'
                                   : 'Flags cover what is drawn.';
     reach_note.styles = {...reach_note.styles, color: wide.length ? reach_warn : reach_quiet};
+    for (const t of flag_tools) t.reach_wide = wide.length > 0;
 }
 window.__cvSetBusy(true);
 comm.send(msg_id, {action: 'config', filter: name, params: params,

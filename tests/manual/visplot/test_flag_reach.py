@@ -400,6 +400,22 @@ class TestReach:
         _box(vp, r, 2, 2, 0, 0)
         assert "full" not in vp.flag_db.deltas()[-1].comment
 
+    def test_scatter_box_keeps_the_reason_and_says_what_was_not_widened(self, plotter):
+        vp = plotter
+        _reset(vp, scan=True)
+        vp._flags.set_reason("scatter RFI")
+        sc = vp._slots[1].scatter
+        f = sc._fig
+        msg = dict(x0=f.x_range.start, x1=f.x_range.end, y0=f.y_range.start,
+                   y1=f.y_range.end, flag=True)
+        resp = _run(vp._handle_box_select(msg, "scatter", sc))
+        assert resp["notify_text"].startswith("✓"), resp["notify_text"]
+        assert "channels and correlations only" in resp["notify_text"]
+        assert vp.flag_db.deltas()[-1].reason == "scatter RFI"
+        _reset(vp)
+        resp = _run(vp._handle_box_select(msg, "scatter", sc))
+        assert "only" not in resp["notify_text"]
+
     def test_preview_dialog_says_how_far(self, plotter):
         vp = plotter
         r = _reset(vp, baselines="all")
@@ -585,6 +601,27 @@ class TestGui:
         assert w["reach_note"].text.startswith("⚠ Each box also takes: ")
         assert w["reach_note"].styles["color"] == "#f9a825"
 
+    def test_flag_tools_are_outlined_when_the_reach_is_wide(self, vp, sim_ms):
+        tools = vp._flags.flag_tools
+        assert len(tools) >= 4 and all(t.reach_wide for t in tools)
+        js = vp._flags._widgets["reach_bl"].js_property_callbacks["change:value"][0]
+        assert list(js.args["flag_tools"]) == tools
+        assert "t.reach_wide = wide.length > 0" in js.code
+        from cubevis.toolbox.visplot import VisibilityPlotter
+        plain = VisibilityPlotter(ms=sim_ms)
+        try:
+            plain._build_layout()
+            assert plain._flags.flag_tools and not any(
+                t.reach_wide for t in plain._flags.flag_tools)
+        finally:
+            plain.close()
+
+    def test_no_sidebar_section_is_cut_to_the_window(self, vp):
+        # Bokeh caps each child of a column at max-height 100%; a section
+        # taller than the window was cut and the next one drawn over it.
+        for child in vp._sidebar_col.children:
+            assert (child.styles or {}).get("max-height") == "none", type(child).__name__
+
     def test_bad_reach_fails_at_construction(self, sim_ms):
         from cubevis.toolbox.visplot import VisibilityPlotter
         with pytest.raises(ValueError):
@@ -650,8 +687,16 @@ class TestFlagTool:
         if not os.path.exists(src):
             pytest.skip("TypeScript source not present")
         s = open(src).read()
-        assert "m.shift" in s and "m.alt" in s and "m.ctrl" in s
+        assert "m.shift" in s and "m.alt" in s
+        # Ctrl+click is the secondary click on macOS: not a modifier here
+        assert "m.ctrl" not in s and "ctrlKey" not in s
+        # the box sent is the one last drawn, not one recomputed from the
+        # pointer-up event (which can lack its modifiers on macOS)
+        end = s[s.index("override _pan_end"):s.index("comm.send(msg_id")]
+        assert "_draw_box" not in end and "this._cancelled" in end
+        assert '"Escape"' in s
         assert "flag, panel, at_pixel_res, span," in s
+        assert "reach_wide" in s
 
     def test_every_shipped_bundle_has_it(self):
         import cubevis
@@ -662,3 +707,4 @@ class TestFlagTool:
         assert len(texts) == 1, "the bundles differ"
         t = texts.pop()
         assert "at_pixel_res" in t and "span" in t and ".shift" in t
+        assert "reach_wide" in t and "Escape" in t

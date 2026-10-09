@@ -40,11 +40,16 @@ and unflag boxes alike.
   it per flag ("reaches: ..." in Provenance) and the current settings.
 - **Shift / Alt while dragging** (for one box, nothing to switch back):
   Shift stretches the box to the full height of the plot as now shown,
-  Alt to the full width; both, the whole view. The dashed box shows it
-  while dragging. Ctrl does the same as Alt, because several Linux
-  window managers keep Alt+drag for moving windows and the page never
-  sees it. "As now shown" is deliberate: the box never covers anything
-  off screen. To take everything regardless of zoom, use the controls.
+  Alt (Option on a Mac) to the full width; both, the whole view. The
+  dashed box shows it while dragging, and pressing or letting go of a
+  key without moving the pointer redraws it. What is sent is the box
+  last drawn. "As now shown" is deliberate: the box never covers
+  anything off screen. To take everything regardless of zoom, use the
+  controls.
+- **Esc** before letting go of the button drops the box; nothing is sent.
+- **Amber outline**: while any Flag reaches setting is wider than the
+  box, the box being drawn is outlined in solid amber instead of the
+  dashed flag / unflag colour.
 - **Reason**: a text box. Its text is stored with every flag made from
   then on, shown in the report and the preview, saved in the JSON, and
   written as `reason='...'` in exported flagdata commands (one line, at
@@ -57,6 +62,27 @@ and unflag boxes alike.
 - Constructor / task arguments: `flag_reach` (comma-separated words:
   `shared-antenna`, `antennas`, `all-baselines`, `channels`, `spw`,
   `scan`, `fields`, `correlations`; empty = as drawn) and `flag_reason`.
+
+## Corrected after Darrell's first test (2026-10-08, macOS)
+
+- *Shift / Option boxes on a scatter flagged only the dragged box* while
+  the stretched one was drawn. The tool recomputed the box at release
+  from the pointer-up event; on macOS that event can arrive without its
+  modifier keys. It now sends the box last drawn, and follows the keys
+  through keyboard events while dragging. (Not reproducible in Chromium
+  on Linux, where the release carries the keys; the new code does not
+  depend on them.)
+- *Ctrl+drag opened the context menu* on macOS (Ctrl+click is the
+  secondary click). Ctrl is no longer a modifier; on Linux desktops that
+  keep Alt+drag for moving windows, the Flag reaches controls remain.
+- *The gear tabs were drawn over the export controls* in a window
+  shorter than the sidebar's content. Bokeh caps each child of a column
+  at `max-height: 100%`; the Flagging panel, taller since this slice,
+  was cut to the window's height and the next section drawn over the
+  rest. Each sidebar section now keeps its own height and the sidebar
+  scrolls. (Latent before: any section taller than the window.)
+- A scatter box dropped the reason and did not say that baselines /
+  windows / scans / fields were not widened. Both fixed.
 
 ## Limits
 
@@ -126,9 +152,13 @@ classes come from the `socket` module.
   - reason in records, report, preview and flagdata lines;
   - the controls, their start-up values from the constructor, every
     Flagging control wrapped for status-area help, none with a tooltip.
-- Headless Chromium on the built bundle: dragging with nothing, Shift,
-  Alt and Ctrl held gives a free box, full height, full width, full
-  width.
+- Live, in headless Chromium against a running plotter (the task's own
+  websocket server; `BROWSER` set to record the page URL): on both
+  panels, a free box, Shift, Alt, Shift pressed after moving, and Esc
+  send exactly the box drawn (or nothing for Esc); a Shift box on the
+  scatter flags its whole column; the amber outline follows the
+  controls; with a 700-pixel window the opened gear tab sits below the
+  export controls.
 - `scripts/sync_layers --check` clean after regeneration.
 
 ## Not verified

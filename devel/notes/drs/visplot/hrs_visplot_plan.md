@@ -34,6 +34,9 @@ available, so these are working decisions, to be revisited when users test.
 
 ## 2. Status against the requirement at `3b5eb82`
 
+*This table is the starting point of 2026-10-02. Current state is the
+"State" line under each milestone in section 3.*
+
 | Requirement | State | Remaining |
 |---|---|---|
 | Faster / more reliable than plotms | Two-level rendering, frame cache, remote path exist. Large-data flagging performance work is listed in `devel/docs/visplot/visplot_flagging_follow_on.md` | Comparison deferred. Reliability work continues under H8 |
@@ -54,8 +57,10 @@ weeks of sessions.
 
 ### H1. Vector averaging in raster reductions (M)
 
-*Status 2026-10-03: implemented against `7bc261c`; details and open
-items in `hrs_h1_raster_averaging.md`.*
+*State 2026-10-09: **done.** Vector / scalar per raster panel, default
+vector; confirmed in the browser. H1b (phase-safe display resample) done,
+tests only. Note: `hrs_h1_raster_averaging.md`.*
+
 
 Today a raster cell is the arithmetic mean of per-sample amplitude and of
 per-sample phase in degrees. Phase cells are therefore wrong when samples
@@ -71,6 +76,14 @@ straddle +/-180 degrees, and amplitude cannot show coherent averages.
   noise-only data gives vector amplitude well below scalar; MSv2 == MSv4.
 
 ### H2. Windowed statistics: phase rms, coherence, difference from running mean (L)
+
+*State 2026-10-09: **done.** Phase RMS, Coherence (raster and scatter),
+windows, conditional slope removal, AMP_VDIFF / PHASE_DIFF, presets;
+confirmed in the browser on TW Hya except the presets and DIFF quantities
+(tests and headless render only). Known: short noisy windows read
+somewhat low in Phase RMS; PHASE_DIFF reads above 90 deg where a window has
+no coherent mean. Note: `hrs_h2_phase_statistics.md`.*
+
 
 *Status 2026-10-07: complete. Presets and the DIFF quantities
 (`AMP_VDIFF`, `PHASE_DIFF`, raster only) delivered.*
@@ -103,6 +116,13 @@ One reduction framework, several quantities.
   samples excluded; parity.
 
 ### H3. Baseline iteration and ordering (M)
+
+*State 2026-10-09: **done.** Antenna / Baseline / SPW tables, Either /
+Both ends, Prev / Next, ordering by number or length (`baseline_order`),
+phase waterfall with cyclic colormap. Known: the Baseline table does not
+narrow to the ticked antennas. Notes: `hrs_h3_antenna_baseline_selection.md`,
+`hrs_h4_raster_axes.md`.*
+
 
 *Status 2026-10-07 (second session): complete. The Time x Baseline
 raster orders its baselines by number or by length (per panel,
@@ -138,6 +158,13 @@ colormap, and H1b.*
 
 ### H4. All-baseline Time x Frequency raster (FTFLG view) (M)
 
+*State 2026-10-09: **done.** One cell rule for image, readout, flags
+(`raster_grid.py`); `baseline_combine` (mean / median / max / coherent);
+All-BL preset; zoom of a decimated raster keeps the full aggregate.
+Known: multi-SPW Baseline x Time shows the first SPW only. Notes:
+`hrs_h4_raster_axes.md`, `hrs_h4_baseline_combine.md`, `hrs_raster_zoom.md`.*
+
+
 *Status 2026-10-07 (later): complete. `baseline_combine` = mean (default)
 / max / coherent per raster panel, with status-area help; the title
 names it; "All-BL" preset; flag messages state the number of baselines.
@@ -161,6 +188,15 @@ stating "N baselines" before commit.*
 
 ### H5. Flag scope and selection conveniences (M-L)
 
+*State 2026-10-09: **done.** Slice 1, Flag reaches (baselines, channels,
+spws, scan, fields, correlations), Shift / Option full-height / full-width
+boxes, Esc, reasons; slice 2, curated filters (Value range, Outlier from
+neighbours, Grow). Confirmed by Darrell on macOS. Not done, by choice:
+click-a-line selection (held keys cover it); scatter boxes honouring
+Flag reaches (only if users ask for it). Notes: `hrs_h5_flag_reach.md`,
+`hrs_h5_filters.md`.*
+
+
 - Extend options added to the Flagging panel: all baselines to an antenna
   of the boxed baseline(s); all baselines; all SPWs; whole scan; all
   fields. (`extend_spw` and `extend_scan` already exist in the model.)
@@ -175,6 +211,15 @@ stating "N baselines" before commit.*
 
 ### H6. Averaged line plots for commissioning (M-L)
 
+*State 2026-10-09: **slice 1 done** (scatter averaging over time /
+channels, vector or scalar, flagging behind averaged points, conditional
+pan / zoom X link); confirmed by Darrell except one open bug: the busy
+cursor ends before an averaged scatter finishes drawing (attempted fix in
+`ca927cc` did not cure it; see section 7). **Slice 2 next:** Spectrum and
+Time series presets, autocorrelations, presets with baseline / antenna
+iteration. Note: `hrs_h6_scatter_average.md`.*
+
+
 - Time and channel averaging controls for scatter (vector or scalar).
 - Presets: spectrum (amplitude and phase vs frequency, scan-averaged, per
   baseline, SPWs across the x axis) and time series (amplitude and phase vs
@@ -185,10 +230,18 @@ stating "N baselines" before commit.*
 
 ### H7. Antenna x antenna matrix (S-M)
 
+*State 2026-10-09: not started.*
+
+
 - Raster of ANTENNA1 x ANTENNA2 with any raster quantity, reduced over time
   and frequency. Lowest priority of the interactive items.
 
 ### H8. Static output and hardening (M, ongoing)
+
+*State 2026-10-09: not started. Plot summary dialog design agreed
+(below). The live / headless browser harness used for checks is now in
+`devel/tools/visplot_headless/`.*
+
 
 - Static (PNG at least) output for each view above, from the task
   interface without a browser where possible; see `task-hardcopy-output.md`
@@ -272,3 +325,19 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-09 | `3d04908` | H5 slice 2: curated flag filters, at most two settings each. New: Value range on the quantity the panel shows (replaces Amplitude range in the list; `amplitude_range` kept for scripts and records), Outlier from neighbours (running median of 9 along time within a scan, or along channel; sample left out of its own window), Grow around flags (time / channel / both). Reference population no longer a control (always auto). User filters unchanged. Note: `hrs_h5_filters.md` |
 | 2026-10-09 | `3d04908` | Slice 2 corrected after Darrell's test (delivered again with it; not yet pushed): the status / help area has a fixed height, so help shown on hover no longer shrinks the sidebar (the bottom of the sidebar, Describe pending flags, could not be reached). Raster and scatter Outlier counts differ only by correlation (raster XX; scatter XX and YY): same 11,786 XX samples. Note: `hrs_h5_filters.md` |
 | 2026-10-09 | `84ae4bb` | H5 committed by Darrell. H6 slice 1: scatter averaging over time (off / scan / seconds) and channels (off / N / all), vector or scalar, per panel; Amplitude, Phase, Real, Imaginary; done on the cached samples (no re-read); flag box takes the samples behind averaged points; other filters refused there. `scatter_avg_time`, `scatter_avg_chan` arguments. Fixed on the way: raster and scatter shared one X Range for good when built with the same X axis (changing the scatter's X blanked the raster); now a conditional pan/zoom link. Next: slice 2, Spectrum / Time series presets and autocorrelations. Note: `hrs_h6_scatter_average.md` |
+| 2026-10-09 | `13dc470` | H6 slice 1 committed by Darrell (`test_scatter_average.py` missed from the commit; re-sent). Busy cursor ended before an averaged scatter finished: the viewport redraw after Plot was covered only by a fixed 450 ms bridge, so busy is now counted from the moment a redraw is scheduled. Headless check shows busy held to the final image |
+| 2026-10-09 | `ca927cc` | Busy fix committed; Darrell reports it did not cure the problem on his machine. Leading suspect: the 30 s give-up in `__cvSetBusy` (section 7). Carried to the next session. Housekeeping: per-milestone state lines; section 7, performance and compute pain points; the live / headless browser harness committed as `devel/tools/visplot_headless/`. Handoff: `hrs_handoff_2026-10-09.md` |
+
+## 7. Performance and compute pain points
+
+A running list: things seen to be slow or memory-hungry, with what is
+known. Measured in the cloud sandbox (8 GB) unless stated; add to it as
+items are found, and strike through (with the commit) when dealt with.
+
+| Seen | Where | What is known |
+|---|---|---|
+| 2026-10-09 | Averaged scatter, viewport redraw | After Plot with averaging (TW Hya, field 3c279, X Channel, scan average) the Plot request takes ~5.8 s and the viewport redraw that follows takes a further ~1.5 s (`visplot timing: Scatter redraw`). Likely the averaging is recomputed for the redraw: `averaged_view` (`data/reader.py`) is not memoised itself. Not verified |
+| 2026-10-09 | Busy cursor, long Plot | `window.__cvSetBusy` gives up after `GIVE_UP_MS = 30000` (`visibility_plot.py`) and goes idle even if the Plot response has not arrived. A Plot over 30 s (larger data, averaging) would show exactly "busy ends before the plot does". Leading suspect for the open H6 bug; check how long Darrell's Plot takes |
+| 2026-10-08 | Full plotter, TW Hya all fields | Runs out of memory in 8 GB; use `field=3c279`, or engine-level calls |
+| 2026-10-08 | Test suite | Whole suite in one process runs out of memory with the TW Hya MS present; `devel/tools/visplot_headless/runtests.sh` runs a file per process. Even so, four files run out of memory on their own: `test_colorize_by_axis_part5d_legend_status`, `test_frame_cache`, `test_info_block_integration`, `test_visibility_scatter` |
+| (earlier) | Large-data flagging | Items carried in `devel/docs/visplot/visplot_flagging_follow_on.md` |

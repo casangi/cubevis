@@ -189,6 +189,9 @@ _SPW_ROW_H        = 24    # SPW table row height (px)
 _SPW_HDR_H        = 28    # SPW table header height (px)
 _SPW_MAX_ROWS     = 10    # rows shown before the table scrolls
 _SIDEBAR_WIDTH_COL = 268    # column width including padding
+# Height of the status / help area at the bottom of the window: five lines
+# of help text at 12 px.  Fixed, so showing help never moves anything.
+_STATUS_HEIGHT     = 96
 
 # Status-area help with fixed text: name -> HTML, created as
 # ``self._hint_<name>`` in _build_status_bar and attached with _hover().
@@ -8882,9 +8885,21 @@ if (x != null && !isNaN(x)) {
         for name, _label, _width, text in _PRESET_BUTTONS:
             setattr(self, f"_hint_preset_{name}", _hint(text))
 
+        # A fixed height (2026-10-09).  The help shown on hover is longer
+        # than the status lines it replaces, and a growing status area
+        # shrank the sidebar and the plots above it: hovering a control
+        # near the bottom of the sidebar pushed that control out from
+        # under the pointer, the help vanished, everything moved back --
+        # the bottom of the sidebar could not be reached.  Now nothing
+        # above moves; a help text longer than the area scrolls inside it.
+        for d in self._hint_divs():
+            d.styles = {**dict(d.styles or {}), "max-height": f"{_STATUS_HEIGHT}px",
+                        "overflow-y": "auto"}
         self._status_col = column(
             self._status_row,
             *self._hint_divs(),
             sizing_mode="stretch_width",
+            height=_STATUS_HEIGHT,
+            styles={"overflow": "hidden", "background": "#181825"},
         )
         return self._status_col

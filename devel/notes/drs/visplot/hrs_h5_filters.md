@@ -73,6 +73,23 @@ Grow: flagged samples (on disk or pending; padding excluded) dilated by
 the chosen number of samples along time (within a scan), channel, or
 both; the unflagged ones reached are taken.
 
+## Corrected after Darrell's first test (2026-10-09)
+
+- *Describe pending flags could not be reached.* Hovering a control
+  near the bottom of the sidebar showed its help in the status area,
+  which then grew, shrank the sidebar above it and pushed that control
+  out from under the pointer; the help vanished, everything moved back.
+  Reproduced live (sidebar 722 px high, 688 px while the Export help
+  showed). The status / help area now has a fixed height
+  (`_STATUS_HEIGHT`, five lines of help) and a longer help text scrolls
+  inside it; nothing above moves. The plots lose about 30 px of height
+  for it.
+- *A whole-raster and a whole-scatter Outlier box gave different
+  counts* (11,786 and 18,748). Not a fault: the raster shows one
+  correlation (XX) and the scatter both. Checked on all fields of TW Hya
+  in the engine: the two take exactly the same 11,786 XX samples; the
+  scatter's other 6,962 are YY.
+
 ## Verified
 
 - `tests/manual/visplot/test_flag_filters_curated.py`, 32 tests:

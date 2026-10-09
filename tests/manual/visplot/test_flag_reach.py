@@ -663,6 +663,16 @@ class TestGui:
         assert [r[0] for r in resp["backups"]] == [e["path"] for e in got]
         assert "(saved from other.ms)" in resp["backups"][1][1]
 
+    def test_help_never_changes_the_height_of_the_status_area(self, vp):
+        # A growing help text shrank the sidebar above it, pushed the
+        # hovered control out from under the pointer, and the bottom of
+        # the sidebar could not be reached (2026-10-09).
+        from cubevis.toolbox.visplot.visibility_plotter import _STATUS_HEIGHT
+        assert vp._status_col.height == _STATUS_HEIGHT
+        for d in vp._hint_divs():
+            assert d.styles.get("max-height") == f"{_STATUS_HEIGHT}px"
+            assert d.styles.get("overflow-y") == "auto"
+
     def test_bad_reach_fails_at_construction(self, sim_ms):
         from cubevis.toolbox.visplot import VisibilityPlotter
         with pytest.raises(ValueError):

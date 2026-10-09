@@ -695,6 +695,11 @@ class TestFlagTool:
         end = s[s.index("override _pan_end"):s.index("comm.send(msg_id")]
         assert "_draw_box" not in end and "this._cancelled" in end
         assert '"Escape"' in s
+        # a key held as the drag starts counts for the whole drag: no
+        # keyup handling may shrink the box, and the page-wide key state
+        # is consulted (a key pressed before the button, focus elsewhere)
+        assert 'addEventListener("keyup", this._on_key' not in s
+        assert "HELD.shift" in s and "this._shift = this._shift ||" in s
         assert "flag, panel, at_pixel_res, span," in s
         assert "reach_wide" in s
 

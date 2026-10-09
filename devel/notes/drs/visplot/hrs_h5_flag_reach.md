@@ -40,10 +40,12 @@ and unflag boxes alike.
   it per flag ("reaches: ..." in Provenance) and the current settings.
 - **Shift / Alt while dragging** (for one box, nothing to switch back):
   Shift stretches the box to the full height of the plot as now shown,
-  Alt (Option on a Mac) to the full width; both, the whole view. The
-  dashed box shows it while dragging, and pressing or letting go of a
-  key without moving the pointer redraws it. What is sent is the box
-  last drawn. "As now shown" is deliberate: the box never covers
+  Alt (Option on a Mac) to the full width; both, the whole view. A key
+  held as the drag starts, or pressed during it, counts for the whole
+  drag even if it is let go before the button (2026-10-08, second
+  correction: people let go of both at about the same moment). The
+  dashed box shows it while dragging; what is sent is the box last
+  drawn. "As now shown" is deliberate: the box never covers
   anything off screen. To take everything regardless of zoom, use the
   controls.
 - **Esc** before letting go of the button drops the box; nothing is sent.
@@ -81,6 +83,21 @@ and unflag boxes alike.
   was cut to the window's height and the next section drawn over the
   rest. Each sidebar section now keeps its own height and the sidebar
   scrolls. (Latent before: any section taller than the window.)
+- *Second test (2026-10-08 evening): a Shift box sometimes flagged only
+  the dragged part, and later Shift sometimes drew nothing.* The first
+  correction followed the keys exactly, so letting go of Shift a moment
+  before the button shrank the box at the last instant (the overlay
+  vanishes at release, so it was never seen). Keys are now latched for
+  the drag. Their state is taken from the pan events and from every key
+  and pointer event on the page (`HELD` in `flag_tool.ts`), so a key
+  pressed before the button, or while focus is in the Reason box, is
+  seen. `casalib.hotkeys` was considered: it keeps the same state but
+  stops updating it while focus is in a text box or list (its default
+  filter). A drag that "drew nothing" is most likely one started while
+  the page was busy redrawing after the previous flag: the "Working..."
+  overlay takes the pointer until the redraw ends, by design. Reproduced
+  live: drags started within ~2 s of a flag on the simulated data were
+  lost that way; with the redraw finished every combination works.
 - A scatter box dropped the reason and did not say that baselines /
   windows / scans / fields were not widened. Both fixed.
 
@@ -154,8 +171,10 @@ classes come from the `socket` module.
     Flagging control wrapped for status-area help, none with a tooltip.
 - Live, in headless Chromium against a running plotter (the task's own
   websocket server; `BROWSER` set to record the page URL): on both
-  panels, a free box, Shift, Alt, Shift pressed after moving, and Esc
-  send exactly the box drawn (or nothing for Esc); a Shift box on the
+  panels, a free box; Shift held, Shift let go before the button, Alt
+  let go before the button, Shift pressed and let go mid-drag, Shift
+  with focus in the Reason box, Shift+Alt, Esc, and a plain box after
+  each, send the expected box (or nothing for Esc); a Shift box on the
   scatter flags its whole column; the amber outline follows the
   controls; with a 700-pixel window the opened gear tab sits below the
   export controls.

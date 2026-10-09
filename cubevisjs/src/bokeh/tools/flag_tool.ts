@@ -17,6 +17,26 @@ const DRAG_THRESHOLD_PX = 3
 const PIXEL_RES_TOLERANCE = 1.01
 
 
+// Shift / Alt as last seen anywhere on the page: every key and pointer
+// event carries the state of both, so this stays right whichever element
+// has focus.  Cleared when the window loses focus (a key let go in
+// another window is never seen here).  One set of listeners for all
+// flag tools on the page.
+const HELD = {shift: false, alt: false}
+let held_tracked = false
+
+function track_held_keys(): void {
+  if (held_tracked) return
+  held_tracked = true
+  const update = (e: KeyboardEvent | PointerEvent) => {
+    HELD.shift = e.shiftKey
+    HELD.alt = e.altKey
+  }
+  for (const type of ["keydown", "keyup", "pointerdown", "pointermove"])
+    window.addEventListener(type, update as EventListener, true)
+  window.addEventListener("blur", () => { HELD.shift = false; HELD.alt = false })
+}
+
 export class FlagToolView extends DragToolView {
   declare model: FlagTool
 
@@ -26,6 +46,7 @@ export class FlagToolView extends DragToolView {
 
   override connect_signals(): void {
     super.connect_signals()
+    track_held_keys()
     // Keep at_pixel_res current across *any* pan/zoom of this figure, not
     // just clicks on this tool — e.g. the standard box-zoom tool or wheel
     // zoom can also bring the view to/past 1:1.
@@ -52,24 +73,36 @@ export class FlagToolView extends DragToolView {
     this._start_sx = ev.sx
     this._start_sy = ev.sy
     this._dragging = false
+    this._cancelled = false
+    // The keys held when the drag starts (or pressed at any time during
+    // it) decide the box for the whole drag: see _latch().
+    this._shift = false
+    this._alt = false
+    this._latch(ev)
     this.model.overlay.visible = false
   }
 
-  // Which way the box is stretched to the edges of the plot, from the
-  // keys held RIGHT NOW (HRS H5, 2026-10-07 / 08):
+  // Which way the box is stretched to the edges of the plot (HRS H5,
+  // 2026-10-07 / 08):
   //   Shift          -> full height: the dragged X range, all of Y shown
   //   Alt (Option)   -> full width:  the dragged Y range, all of X shown
-  // Nothing is latched: the keys act only while they are down, for this
-  // one box.  "All shown" is the plot's current view, not the whole data
-  // set, so the box never covers anything that is off screen.
+  // "All shown" is the plot's current view, not the whole data set, so
+  // the box never covers anything that is off screen.
   //
-  // What is SENT is the box last DRAWN (2026-10-08): on macOS the
-  // pointer-up that ends a Shift / Option drag can arrive without its
-  // modifier keys, and recomputing the box from it sent the small box
-  // while the full-height one was on screen.  Keys pressed or let go
-  // without moving the pointer redraw the box from the keyboard events.
+  // A key held when the drag starts, or pressed at any time during it,
+  // applies to the rest of that drag; letting go of it first changes
+  // nothing (people let go of the key and the button at about the same
+  // moment, and on macOS the key often goes first).  To get a plain box
+  // after all, Esc drops the box and the drag can be started again.
   //
-  // Escape while dragging drops the box: nothing is sent.
+  // The key state is read from every source there is, because none of
+  // them is reliable alone in every browser: the pan event's own
+  // modifiers, and HELD below (kept from every key and pointer event on
+  // the page).  casalib.hotkeys keeps similar state but stops updating it
+  // while focus is in a text box or list (its default filter), which is
+  // where focus is after typing a Reason or choosing a setting.
+  //
+  // What is SENT is the box last DRAWN.
   //
   // Ctrl is NOT used: on macOS Ctrl+click is the secondary click and
   // opens the plot's context menu.
@@ -84,27 +117,32 @@ export class FlagToolView extends DragToolView {
     return this._shift && this._alt ? "xy" : this._shift ? "y" : this._alt ? "x" : ""
   }
 
+  // Latch: once on during a drag, on until the drag ends.
+  private _latch(ev?: PanEvent): void {
+    const m = ((ev as any)?.modifiers ?? {}) as {shift?: boolean, alt?: boolean}
+    this._shift = this._shift || !!m.shift || HELD.shift
+    this._alt = this._alt || !!m.alt || HELD.alt
+  }
+
   private _listen_keys(on: boolean): void {
     if (on && this._on_key == null) {
       this._on_key = (e: KeyboardEvent) => {
-        if (!this._dragging) return
+        if (!this._dragging || this._cancelled) return
         if (e.key === "Escape") {
           this._cancelled = true
           this.model.overlay.visible = false
           e.preventDefault()
           return
         }
-        if (e.key === "Shift" || e.key === "Alt") {
-          this._shift = e.shiftKey
-          this._alt = e.altKey
-          if (!this._cancelled) this._draw_box()
+        if (e.type === "keydown" && (e.key === "Shift" || e.key === "Alt")) {
+          this._shift = this._shift || e.shiftKey
+          this._alt = this._alt || e.altKey
+          this._draw_box()
         }
       }
       window.addEventListener("keydown", this._on_key, true)
-      window.addEventListener("keyup", this._on_key, true)
     } else if (!on && this._on_key != null) {
       window.removeEventListener("keydown", this._on_key, true)
-      window.removeEventListener("keyup", this._on_key, true)
       this._on_key = null
     }
   }
@@ -119,13 +157,10 @@ export class FlagToolView extends DragToolView {
     if (!this._dragging && moved < DRAG_THRESHOLD_PX) return
     if (!this._dragging) {
       this._dragging = true
-      this._cancelled = false
       this._listen_keys(true)
     }
     if (this._cancelled) return
-    const m = (ev as any).modifiers ?? {}
-    this._shift = !!m.shift
-    this._alt = !!m.alt
+    this._latch(ev)
     this._last_sx = ev.sx
     this._last_sy = ev.sy
     this._draw_box()

@@ -26,7 +26,8 @@
   resolved into the flag record when a box is proposed
   (`flag_engine.widen_region`); the drag box is outlined in amber
   meanwhile. Shift / Alt (Option) held while dragging stretch one box to
-  the full height / width of the view; Esc drops the box being drawn.
+  the full height / width of the view (a key held as the drag starts
+  counts for the whole drag); Esc drops the box being drawn.
   A **Reason** is stored with each flag. See
   `devel/notes/drs/visplot/hrs_h5_flag_reach.md`.
 * **Display**: *Hide flagged* (draws what a fresh open of the committed data

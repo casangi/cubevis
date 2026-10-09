@@ -700,6 +700,9 @@ class TestFlagTool:
         # is consulted (a key pressed before the button, focus elsewhere)
         assert 'addEventListener("keyup", this._on_key' not in s
         assert "HELD.shift" in s and "this._shift = this._shift ||" in s
+        # a press held still before moving must not lose the box: Bokeh's
+        # press gesture is switched off while a flag tool is active
+        assert "press_threshold" in s and "note_active(this.model.id" in s
         assert "flag, panel, at_pixel_res, span," in s
         assert "reach_wide" in s
 

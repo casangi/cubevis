@@ -98,6 +98,15 @@ and unflag boxes alike.
   overlay takes the pointer until the redraw ends, by design. Reproduced
   live: drags started within ~2 s of a flag on the simulated data were
   lost that way; with the redraw finished every combination works.
+- *A box started in a gap drew nothing, until one box had been drawn in
+  data* (2026-10-09). Not about gaps: Bokeh turns a press held still for
+  more than 300 ms into a "press" gesture, after which movement is not a
+  drag, so no box starts. Aiming at the edge of a gap invites exactly
+  that pause. Reproduced live on TW Hya (0.5 s still: no box, in data or
+  in a gap; 0.2 s: box). While a flag tool is active the press gesture
+  is now switched off (`UIGestures.press_threshold`, restored when no
+  flag tool is active; nothing in visplot uses press). Checked live:
+  pauses of 0.5 s and 2 s before moving now draw the box.
 - A scatter box dropped the reason and did not say that baselines /
   windows / scans / fields were not widened. Both fixed.
 

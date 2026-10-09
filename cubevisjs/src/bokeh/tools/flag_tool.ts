@@ -6,6 +6,7 @@ import {DragTool, DragToolView} from "./drag_tool"
 import {px_from_sx, py_from_sy, dx_from_px, dy_from_py} from "../util/find"
 import {Comm} from "../transport/comm_mgr"
 import {Callback} from "@bokehjs/models/callbacks/callback"
+import {UIGestures} from "@bokehjs/core/ui_gestures"
 
 // Screen-pixel movement below this threshold counts as a "click" (zoom to
 // 1:1) rather than a drag (rubber-band box).
@@ -37,6 +38,24 @@ function track_held_keys(): void {
   window.addEventListener("blur", () => { HELD.shift = false; HELD.alt = false })
 }
 
+// Bokeh turns a press held still for more than 300 ms into a "press"
+// gesture, and movement after that is not a drag: the box never starts
+// (2026-10-09, Darrell: a box aimed carefully at the edge of a gap, held
+// a moment before moving, drew nothing).  While a flag tool is the
+// active drag tool the press gesture is effectively switched off, so a
+// pause before moving does not matter.  Nothing in visplot uses press
+// (in Bokeh it serves the touch editing tools); the old value is put
+// back when no flag tool is active.
+const PRESS_DEFAULT = (UIGestures as any).press_threshold as number
+const PRESS_NEVER = 2 ** 31 - 1      // the largest setTimeout delay (~24 days)
+const ACTIVE_FLAG_TOOLS = new Set<string>()
+
+function note_active(id: string, active: boolean): void {
+  if (active) ACTIVE_FLAG_TOOLS.add(id)
+  else ACTIVE_FLAG_TOOLS.delete(id)
+  ;(UIGestures as any).press_threshold = ACTIVE_FLAG_TOOLS.size > 0 ? PRESS_NEVER : PRESS_DEFAULT
+}
+
 export class FlagToolView extends DragToolView {
   declare model: FlagTool
 
@@ -47,6 +66,8 @@ export class FlagToolView extends DragToolView {
   override connect_signals(): void {
     super.connect_signals()
     track_held_keys()
+    note_active(this.model.id, this.model.active)
+    this.connect(this.model.properties.active.change, () => note_active(this.model.id, this.model.active))
     // Keep at_pixel_res current across *any* pan/zoom of this figure, not
     // just clicks on this tool — e.g. the standard box-zoom tool or wheel
     // zoom can also bring the view to/past 1:1.
@@ -148,6 +169,7 @@ export class FlagToolView extends DragToolView {
   }
 
   override remove(): void {
+    note_active(this.model.id, false)
     this._listen_keys(false)
     super.remove()
   }

@@ -314,6 +314,21 @@ _PRESETS = {
     ),
 }
 
+# HRS H6 slice 2 (2026-10-09): the commissioning line plots.  Both panels
+# are scatters, one above the other with the same X: Amplitude in slot A
+# (top), Phase in slot B (bottom), averaged so each baseline gives one
+# readable curve -- AIPS POSSM / plotms "amp, phase vs frequency" for the
+# spectrum, AIPS VPLOT / plotms "vs time, channels averaged" for the time
+# series.  One baseline at a time (tick one, or step with Baseline Prev /
+# Next) is how they are meant to be read.
+#   preset -> (scatter X, "Average over time", "Average over channels")
+_PAIR_PRESETS = {
+    "spectrum":   (Axis.FREQUENCY, "scan", "off"),
+    "timeseries": (Axis.TIME,      "off",  "all"),
+}
+#: The Y axes of the two panels of a _PAIR_PRESETS view, slot A then B.
+_PAIR_PRESET_Y = (Axis.AMPLITUDE, Axis.PHASE)
+
 # Gear-tab controls a preset button sets besides the axes, so that it
 # gives the same view whatever was tried before it:
 # preset -> ((widget argument name, value), ...).
@@ -349,6 +364,10 @@ _PRESET_BUTTONS = (
      "<b>Phase waterfall</b> \u2014 Time \u00d7 Channel phase in a cyclic colormap (\u2212180\u00b0 and +180\u00b0 are the same colour)  | Scatter: Phase vs Time  | Stripes across frequency are a delay; stripes in time are a rate; uniform colour is calibrated  | Tick one baseline, or step through them"),
     ("waterfall-all", "All-BL", 62,
      "<b>All-baseline waterfall</b> \u2014 Time \u00d7 Channel with every selected baseline in one image, like AIPS FTFLG  | Each cell shows the largest amplitude among the baselines (Baselines combined is set to Maximum)  | Scatter: Amplitude vs Channel  | A quick survey for interference: one picture instead of one per baseline. A flag box here flags <b>every selected baseline</b>, and the message says how many  | What looks bad here may be on only a few baselines: tick antennas or baselines to find which before flagging them all"),
+    ("spectrum", "Spectrum", 74,
+     "<b>Spectrum</b> \u2014 amplitude above phase against frequency, each scan averaged, like AIPS POSSM  | Both panels are scatter plots, one above the other  | Read one baseline at a time: tick one, or step with Baseline \u25c0 \u25b6 (or Antenna \u25c0 \u25b6 for every baseline to one antenna)  | Shows the bandpass shape, edge channels, and a phase slope across the band (a delay)  | Average over time is set to Scan; change it in either panel's gear tab"),
+    ("timeseries", "Time series", 84,
+     "<b>Time series</b> \u2014 amplitude above phase against time, all channels averaged, like AIPS VPLOT  | Both panels are scatter plots, one above the other  | Read one baseline at a time: tick one, or step with Baseline \u25c0 \u25b6 (or Antenna \u25c0 \u25b6)  | Shows phase drifts and jumps, amplitude dropouts, and how steady the gains are scan to scan  | Average over channels is set to All; change it in either panel's gear tab"),
 )
 
 
@@ -2084,7 +2103,12 @@ class VisibilityPlotter:
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
         ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
         ``"phaserms-uvdist"``, ``"phase-waterfall"``,
-        ``"waterfall-all"``, or ``None``.
+        ``"waterfall-all"``, ``"spectrum"``, ``"timeseries"``, or
+        ``None``.  ``"spectrum"`` and ``"timeseries"`` show two scatter
+        panels, Amplitude over Phase, against Frequency (each scan
+        averaged) or Time (all channels averaged); they set ``layout``
+        to ``"over"`` and supply ``scatter_avg_time`` /
+        ``scatter_avg_chan`` where those are left at ``"off"``.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
@@ -2582,6 +2606,21 @@ class VisibilityPlotter:
             _resolved_scatter_x, _resolved_scatter_y                    = sx, sy
             self._layout                                                = pl
 
+        # HRS H6 slice 2: both panels scatter (see _PAIR_PRESETS).  Slot
+        # A leads, so kind is "scatter"; _build_panels makes slot B a
+        # scatter too, of Phase.  The preset's averaging applies only
+        # where the argument was left at its default ("off").
+        self._pair_preset = self._preset in _PAIR_PRESETS
+        if self._pair_preset:
+            sx, at, ac = _PAIR_PRESETS[self._preset]
+            _resolved_scatter_x = sx
+            _resolved_scatter_y = _PAIR_PRESET_Y[0]
+            self._layout, self._kind = "over", "scatter"
+            if self._scatter_avg_time == "off":
+                self._scatter_avg_time = normalize_avg_time(at)
+            if self._scatter_avg_chan == "off":
+                self._scatter_avg_chan = normalize_avg_chan(ac)
+
         # Explicit raster_y=/raster_x=/etc. arguments take precedence
         # over preset (which takes precedence over the hardcoded
         # default above). Validated against the same per-role OPTIONS
@@ -2802,8 +2841,14 @@ class VisibilityPlotter:
         # render below -- needed no changes, since none of them assumed
         # "A is raster" specifically, only "A's kind is whatever
         # _slot_a_kind says".
+        # HRS H6 slice 2: a Spectrum / Time series preset has two scatters
+        # (one expression each: test_layout_kind_shortcut lifts them).
         _slot_a_kind = self._kind
-        _slot_b_kind = "scatter" if self._kind == "raster" else "raster"
+        _slot_b_kind = ("scatter" if (self._kind == "raster"
+                                      or getattr(self, "_pair_preset", False))
+                        else "raster")
+        _slot_b_scatter_y = (_PAIR_PRESET_Y[1] if getattr(self, "_pair_preset", False)
+                             else self._scatter_y)
 
         from .remote_reduction_context import RemoteReductionContext, DEFAULT_REMOTE_MAX_CELLS
         _raster_max_cells = (
@@ -2865,7 +2910,7 @@ class VisibilityPlotter:
             selection     = self._selection,
             x_axis        = self._scatter_x,
             layers        = _make_scatter_layers(
-                self._scatter_y, pols, cmaps=scatter_ramps),
+                _slot_b_scatter_y, pols, cmaps=scatter_ramps),
             width         = self._plot_width,
             height        = self._plot_height,
             comm_mgr      = self._comm_mgr,
@@ -3896,6 +3941,15 @@ for (const dt of other.tools) {
         # lifetime; a repeated switch back to an already-rendered kind
         # correctly reuses the cached render with no recompute at all,
         # via the same axes-changed check.
+        # Each panel renders at its figure's current size (2026-10-09; see
+        # VisibilityPlot.set_pixel_size), set before anything renders.
+        for slot in self._slots:
+            panel_msg = panels_msg.get(slot.id) or {}
+            _kind = panel_msg.get("kind") or slot.kind
+            if _kind in ("raster", "scatter"):
+                getattr(slot, _kind).set_pixel_size(panel_msg.get("w"),
+                                                    panel_msg.get("h"))
+
         switched_kind_this_round = set()
         for slot in self._slots:
             panel_msg = panels_msg.get(slot.id)
@@ -5278,8 +5332,12 @@ conflict_div.text = conflict ? msg : '';
             options=[(k, v) for k, v in _SCATTER_X_OPTIONS],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+        # The panel's own Y (two scatters can differ: Spectrum / Time
+        # series presets, HRS H6 slice 2).
+        _sy0 = (slot.scatter.layers[0].y_axis.name
+                if slot.scatter.layers else self._scatter_y.name)
         sy_sel = Select(
-            title="Scatter Y axis", value=self._scatter_y.name,
+            title="Scatter Y axis", value=_sy0,
             options=[(k, v) for k, v in _SCATTER_Y_OPTIONS],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
@@ -7165,10 +7223,10 @@ function switchToTab(target_tab, gear_tabs, sidebar, toggle_btn) {
 //
 // The safety timer is stored globally and cancelled by every call, so a
 // timer left over from an earlier press can never cut a later press's
-// busy state short (the previous, unstored setTimeout could).  30 s is
-// only the give-up point for a response that never arrives (connection
-// lost for good); a long render that overruns it merely gets the UI back
-// early, exactly as before.
+// busy state short (the previous, unstored setTimeout could).  It gives
+// up only when no request is still awaiting a reply that can arrive (see
+// the watchdog in _CV_SET_BUSY_JS, visibility_plot.py), so a long render
+// keeps the busy state to the end (2026-10-09; previously a fixed 30 s).
 function cvSetBusy(on) {
     // The overlay/cursor logic itself now lives in the shared,
     // idempotent window.__cvSetBusy (see visibility_plot.py's
@@ -7311,6 +7369,16 @@ function doPlot(reload) {
         panel1_rd_sel, panel1_rt_sel, panel1_rc_sel, panel1_rb_sel, panel1_rm_sel,
         panel1_sat_sel, panel1_sac_sel, panel1_sam_sel,
         panel1_sd_sel, panel1_st_sel, panel1_sc_sel);
+
+    // Each panel renders at its figure's current size (2026-10-09).
+    [[panels[panel0_id], panel0_raster_fig, panel0_scatter_fig],
+     [panels[panel1_id], panel1_raster_fig, panel1_scatter_fig]].forEach(function(e) {
+        const f = e[0].kind === 'raster' ? e[1] : e[2];
+        // The plot frame, which the image fills; its size as it will be
+        // once this Plot's layout change (if any) has been laid out is not
+        // known yet, so a redraw follows a resize (visibility_plot.py).
+        if (f && f.inner_width > 0 && f.inner_height > 0) { e[0].w = f.inner_width; e[0].h = f.inner_height; }
+    });
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
 
@@ -8451,10 +8519,67 @@ doPlot();
 """,
             )
 
+        def _pair_preset_js(preset_name: str) -> CustomJS:
+            # HRS H6 slice 2: both positions scatter, Over / Under, the
+            # same X; Amplitude on top (slot A), Phase below (slot B); the
+            # preset's averaging in both gear tabs.  The selection is left
+            # as it is: the views are read one baseline at a time, with
+            # the Baseline / Antenna Prev / Next buttons.
+            sx, at, ac = _PAIR_PRESETS[preset_name]
+            y0, y1 = _PAIR_PRESET_Y
+            args = {
+                **self._plot_js_args,
+                "layout_rbg":          layout_rbg,
+                "pos0_raster_layout":  _pos0_slot.raster.layout,
+                "pos0_scatter_layout": _pos0_slot.scatter.layout,
+                "pos0_scatter_fig":    _pos0_slot.scatter.figure,
+                "pos1_raster_layout":  _pos1_slot.raster.layout,
+                "pos1_scatter_layout": _pos1_slot.scatter.layout,
+                "pos1_scatter_fig":    _pos1_slot.scatter.figure,
+                "side_container":  None,
+                "over_container":  None,
+                "full_w":          full_w,
+                "over_h":          over_h,
+            }
+            # One statement per try, as in _preset_js: a Select in a gear
+            # tab that was never opened throws on a value change.
+            sets = "".join(
+                f"try {{ {w}.value = '{v}'; }} catch(e) {{}}\n"
+                for w, v in (("panel0_sx_sel", sx.name), ("panel0_sy_sel", y0.name),
+                             ("panel1_sx_sel", sx.name), ("panel1_sy_sel", y1.name),
+                             ("panel0_sat_sel", at), ("panel0_sac_sel", ac),
+                             ("panel1_sat_sel", at), ("panel1_sac_sel", ac)))
+            return CustomJS(
+                args=args,
+                code=self._do_plot_js + f"""
+// A Statistical (Z-Score) colouring left by the Z-Score preset goes back
+// to Continuous, as for every other preset; Categorical is left alone.
+try {{
+    panel0_colorize_handles.concat(panel1_colorize_handles).forEach(function(h) {{
+        if (h.mode_group.active === 2) {{ h.mode_group.active = 0; }}
+    }});
+}} catch(e) {{ console.warn('preset colorize-mode sync failed:', e); }}
+layout_rbg.active = 2;
+pos0_raster_layout.visible  = false;
+pos0_scatter_layout.visible = true;
+pos1_raster_layout.visible  = false;
+pos1_scatter_layout.visible = true;
+panel0_kind_switch.active = 1;
+panel1_kind_switch.active = 1;
+{sets}
+side_container.visible = false;
+over_container.visible = true;
+pos0_scatter_fig.width  = full_w;  pos1_scatter_fig.width  = full_w;
+pos0_scatter_fig.height = over_h;  pos1_scatter_fig.height = over_h;
+doPlot();
+""",
+            )
+
         self._preset_js_objects = []
         self._preset_buttons = preset_btns
         for name, btn in preset_btns.items():
-            js = _preset_js(name)
+            js = (_pair_preset_js(name) if name in _PAIR_PRESETS
+                  else _preset_js(name))
             self._preset_js_objects.append(js)
             btn.js_on_click(js)
 
@@ -8701,6 +8826,10 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             self._hover(export_btn, "tb_export"),
             _sep(),
             self._hover(dark_btn, "tb_theme"),
+            # A window too narrow for the whole row (a laptop, with the
+            # Spectrum / Time series presets added, 2026-10-09) wraps it
+            # onto a second line instead of cutting off its end.
+            styles={"flex-wrap": "wrap"},
         )
 
     # ---------------------------------------------------------------------- #

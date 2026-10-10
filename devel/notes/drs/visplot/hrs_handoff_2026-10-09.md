@@ -1,7 +1,8 @@
 # HRS visplot: handoff, 2026-10-09
 
 For whoever (person or Claude session) picks up the HRS work on `visplot`
-next. Replaces `hrs_handoff_2026-10-07.md`. Everything needed is in this
+next. Replaces `hrs_handoff_2026-10-07.md`. Updated at the end of the
+third session (same day): state, next steps and practical notes below. Everything needed is in this
 directory and in `devel/tools/visplot_headless/`; this note says where,
 what state things are in, and what was learned the hard way.
 
@@ -11,7 +12,7 @@ what state things are in, and what was learned the hard way.
 |---|---|
 | `hrs_requirements.md` | The requirement (CASR-385) |
 | `hrs_visplot_plan.md` | The plan, H1 to H8. Each milestone has a dated **State** line; section 6 is the dated tracking table; section 7 is the running list of performance and compute pain points |
-| `hrs_h6_scatter_average.md` | The milestone in progress |
+| `hrs_h6_scatter_average.md`, `hrs_h6_scatter_presets.md` | H6 slices 1 and 2 (the latter also covers the busy-indicator watchdog, autocorrelations, render size, sparse points) |
 | `hrs_h5_flag_reach.md`, `hrs_h5_filters.md` | Flag reaches and the curated filters; most of the flag-tool browser lessons are here |
 | `devel/tools/visplot_headless/README.md` | How to run a live plotter in headless Chromium and drive it |
 
@@ -20,8 +21,8 @@ are reference for those areas.
 
 ## State
 
-`main` at `ca927cc`, plus the housekeeping delivery of 2026-10-09 (plan
-state lines, section 7, `devel/tools/visplot_headless/`, this note).
+`main` at `7c026d8` (housekeeping committed), plus the third session's
+delivery: H6 slice 2 and the busy fix, not yet tested by Darrell.
 
 | Item | State |
 |---|---|
@@ -30,31 +31,23 @@ state lines, section 7, `devel/tools/visplot_headless/`, this note).
 | H3 selection tables, baseline stepping and ordering | Done |
 | H4 all-baseline waterfall, `baseline_combine`, decimated zoom | Done |
 | H5 Flag reaches, Shift / Option boxes, curated filters | Done; confirmed by Darrell on macOS |
-| H6 slice 1, scatter averaging | Done and confirmed, **except the busy-cursor bug below** |
-| H6 slice 2 | **Next** |
+| H6 slice 1, scatter averaging | Done and confirmed |
+| Busy indicator ending early | Fixed (watchdog); awaiting Darrell's macOS test |
+| H6 slice 2, Spectrum / Time series, autocorrelations | Delivered; awaiting Darrell's test |
 | H7 antenna x antenna matrix | Not started |
 | H8 plot summary dialog, static output, user guide | Not started; dialog design agreed (plan, H8) |
 
 ## Next, in order
 
-1. **Busy cursor ends before an averaged scatter finishes** (Darrell,
-   macOS). `ca927cc` made the viewport-redraw debounce count as busy from
-   the moment it is scheduled; the headless timeline
-   (`examples/busy_timeline.py`) then shows busy held to the final image
-   on TW Hya / 3c279, yet Darrell still sees it end early. Leading
-   suspect: `GIVE_UP_MS = 30000` in `_CV_SET_BUSY_JS`
-   (`visibility_plot.py`) forces idle after 30 s whatever is still in
-   flight. Ask how long his Plot takes and on what data. If that is it,
-   the give-up should apply to a request that has had no reply (per
-   request, reset by progress), not to the whole busy period. Second
-   suspect: the redraw after Plot recomputes the averaging (plan,
-   section 7).
-2. **H6 slice 2.** Spectrum preset (Amplitude above Phase vs Frequency,
-   scan averaged) and Time series preset (Amplitude above Phase vs Time,
-   all channels averaged): both panels scatter, Over / Under layout,
-   averaging set by the preset. Confirm autocorrelations can be selected
-   and plotted. Presets must work with baseline and antenna iteration
-   (Prev / Next). Exit (plan): averaged values match numpy.
+1. **Darrell's test of the third-session delivery.** Things to look at:
+   busy held to the end of a long Plot; Spectrum / Time series buttons
+   with Baseline and Antenna ◀ ▶; points in Over / Under (now square, and
+   larger when sparse); the toolbar on his laptop screen (it wraps below
+   about 1600 px); autocorrelations if he has an MS with them (TW Hya has
+   none).
+2. **Ask:** does the Baseline table listing pairs with no data (empty
+   plots while stepping) matter for HRS data? If so, narrow the tables or
+   the stepping to baselines with rows (`hrs_h6_scatter_presets.md`, 7).
 3. H7, then H8 (plot summary dialog first), then Correlation as a raster
    axis (offered in the axis lists; says "not implemented").
 
@@ -69,7 +62,8 @@ state lines, section 7, `devel/tools/visplot_headless/`, this note).
 
 ## Known open issues
 
-- Busy cursor (above).
+- Baseline table / Prev / Next include antenna pairs with no data (above).
+- Autocorrelations are detected from the first and last 100k rows only.
 - Multi-SPW Baseline x Time shows the first SPW only.
 - The Baseline table does not narrow to the ticked antennas.
 - Two-line title: a clipped fragment above it after a replot (seen once
@@ -106,12 +100,25 @@ state lines, section 7, `devel/tools/visplot_headless/`, this note).
   `test_info_block_integration`, `test_visibility_scatter`), 4 setup
   errors in `test_zscore_colorization`, and five files that collect no
   tests (rc=5). Compare the summary before and after a change.
+- **Environment (cloud sandbox):** `pip install -e '.[visplot,notebook]'
+  pytest pytest-timeout jupyter_client ipykernel`; without
+  `jupyter_client` the remote test files fail at import (that was the
+  third session's first baseline: ignore those rows or install it).
+- **Slow replies:** `SLOW_PLOT=<s>` delays every Plot reply in the live
+  harness; `VW` sets the browser width.
 - **Live GUI checks:** `devel/tools/visplot_headless/live.sh`. Use
   `field=3c279` on TW Hya (all fields runs out of memory). Use real
   Playwright mouse / keyboard; synthetic DOM events miss Bokeh's gestures.
-- cubevisjs: TypeScript in `cubevisjs/src/bokeh`; `bokeh build` in
-  `cubevisjs`; copy `dist/cubevisjs.min.js` to all five
-  `cubevis/__js__/bokeh-3.{6..10}/`.
+- cubevisjs: TypeScript in `cubevisjs/src/bokeh`; `npm ci` then `bokeh
+  build` in `cubevisjs`; copy `dist/cubevisjs.min.js` to all five
+  `cubevis/__js__/bokeh-3.{6..10}/`. The build reproduces the committed
+  bundle byte for byte, so a diff there is only your change. **It does
+  not fail on type errors**: a method added to the wrong class (two
+  classes in `comm_mgr.ts` have `setSharedState`) compiled and shipped;
+  check the result in the page (`Object.getOwnPropertyNames(...)`).
+- Panels render at the size the browser sends (`set_pixel_size`), so
+  headless checks of image shapes need a Plot or redraw message with
+  `w` / `h`; constructed panels keep `plot_width` / `plot_height`.
 - `_do_plot_js` and its JS string constants stay bare module-level names
   (`test_checkbox_guard.py` resolves them by AST); a test pins the
   substring `panel1_sd_sel, panel1_st_sel, panel1_sc_sel);`.

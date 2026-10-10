@@ -117,6 +117,51 @@ _C_MS = 299_792_458.0
 
 
 
+#: Rows read from each end of the main table to find autocorrelations.
+_AUTO_PROBE_ROWS = 100_000
+
+
+def has_autocorrelations(path: str, probe_rows: int = _AUTO_PROBE_ROWS) -> bool:
+    """Whether the MSv2 at *path* holds autocorrelations (ANTENNA1 ==
+    ANTENNA2), judged from the first and last *probe_rows* rows.
+
+    xarray-ms leaves autocorrelations out unless asked (``auto_corrs``,
+    default False), and asked for them on data without any it adds an
+    empty baseline per antenna.  So ask exactly when they are there
+    (HRS H6, 2026-10-09).  Correlators write the autocorrelations with
+    every integration, so the ends of the table are enough; reading the
+    whole of ANTENNA1 / ANTENNA2 of a large MS takes tens of seconds.
+    Any failure answers False (the previous behaviour).
+    """
+    try:
+        import numpy as _np
+        from arcae.lib.arrow_tables import Table
+        t = Table.from_filename(path)
+        try:
+            n = int(t.nrow())
+            k = max(1, int(probe_rows))
+            spans = [(0, min(n, k))]
+            if n > k:
+                spans.append((max(k, n - k), n))
+            for lo, hi in spans:
+                if hi <= lo:
+                    continue
+                idx = (_np.arange(lo, hi),)
+                a1 = _np.asarray(t.getcol("ANTENNA1", index=idx))
+                a2 = _np.asarray(t.getcol("ANTENNA2", index=idx))
+                if bool(_np.any(a1 == a2)):
+                    return True
+            return False
+        finally:
+            try:
+                t.close()
+            except Exception:
+                pass
+    except Exception:
+        log.debug("has_autocorrelations(%r) failed", path, exc_info=True)
+        return False
+
+
 def _raw_view() -> str:
     from . import reader as _rd
     return _rd._FLAG_VIEW.get()
@@ -195,11 +240,17 @@ class MSv2Backend(XArrayReader):
             log.debug("MSv2Backend: opening %s (column=%s)",
                       self._path, self._data_column)
             try:
+                self._has_autos = has_autocorrelations(self._path)
                 self._datatree = xr.open_datatree(
                     self._path,
                     engine=_XARRAY_MS_ENGINE,
                     partition_schema=self._partition_schema,
                     chunks=self._chunks,
+                    # Autocorrelations are left out by xarray-ms unless
+                    # asked for; ask when the MS has them (see
+                    # has_autocorrelations), so they can be selected and
+                    # plotted (HRS H6 slice 2).
+                    auto_corrs=self._has_autos,
                     # Note: xarray-ms 0.5.x does not expose a column= kwarg
                     # at the open_datatree level.  DATA/CORRECTED_DATA/MODEL
                     # selection is handled by _resolve_vis() which probes

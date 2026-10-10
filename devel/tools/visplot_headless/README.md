@@ -25,7 +25,7 @@ still works for layout only; it has no kernel, so Plot does nothing.
 | `live.sh` | `live.sh <steps.py> <out-prefix> [key=value ...]`: start the server, run the steps, stop the server. `key=value` go to `VisibilityPlotter` (`ms=`, `field=`, `kind=`, `scatter_x=`, `layout=`, ...) |
 | `serve.py` | The server: `VisibilityPlotter(headless=False, enable_flagging=True, ...)` under `exe.Context(SYNC)`. Output in `serve.log`, including the `visplot timing:` lines |
 | `record_url.sh` | Used as `$BROWSER`; writes the page URL to `url.txt` |
-| `drive.py` | Opens the URL (1700 x `VH` px, 8 s settle) and `exec`s the steps file with `pg` (the page), `out`, `FIND`, `os`, `json`, `time`. Prints console errors / warnings, plus lines containing `SHOWLOG` |
+| `drive.py` | Opens the URL (`VW` x `VH` px, default 1700 x 1100, 8 s settle) and `exec`s the steps file with `pg` (the page), `out`, `FIND`, `os`, `json`, `time`. Prints console errors / warnings, plus lines containing `SHOWLOG` |
 | `find.js` | `pg.evaluate(FIND, None)`: visible flag-tool figures with their screen boxes, panel name, tool and figure ids |
 | `runtests.sh` | `runtests.sh <outdir> [glob]`: the visplot tests, one file per process (the whole suite in one process runs out of memory with the TW Hya MS). `MS` / `PS` env vars name the MSv2 / MSv4 data. Compare `summary.txt` before and after |
 
@@ -46,6 +46,11 @@ still works for layout only; it has no kernel, so Plot does nothing.
   Synthetic events miss Bokeh's gesture handling; use the real ones.
 
 ## Practical
+
+- `SLOW_PLOT=<seconds>` in the environment of `live.sh` delays every Plot
+  reply by that much, e.g. to check that the busy indicator holds through a
+  plot longer than 30 s (`SLOW_PLOT=45 WAIT=60000 DRIVE_TIMEOUT=200
+  ./live.sh examples/busy_timeline.py ...`).
 
 - Long runs: start with `setsid nohup ... & disown` and poll for a marker;
   a plain long `sleep` in a tool call has been seen to return early.

@@ -240,9 +240,9 @@ Task arguments (preview)
      - str, optional
      - Named axis preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
        ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
-       ``"phaserms-uvdist"``, ``"phase-waterfall"`` or
-       ``"waterfall-all"``. Corresponds to
-       the toolbar preset buttons.
+       ``"phaserms-uvdist"``, ``"phase-waterfall"``,
+       ``"waterfall-all"``, ``"spectrum"`` or ``"timeseries"``.
+       Corresponds to the toolbar preset buttons.
    * - ``time_range``
      - tuple/list of 2 floats, optional
      - ``(start, end)`` as MJD floats — a numeric plot-range hint,
@@ -317,6 +317,13 @@ Toolbar
     values for all baselines. These three also put the *Phase slope*
     and window controls back to their defaults
   * *φ Wfall* — Time vs Channel phase waterfall
+  * *Spectrum* — two scatter panels, Amplitude above Phase against
+    frequency, each scan averaged (AIPS POSSM): the bandpass shape, edge
+    channels and a phase slope across the band. Read one baseline at a
+    time: tick one, or step with Baseline ◀ ▶
+  * *Time series* — the same pair against time, all channels averaged
+    (AIPS VPLOT): phase drifts and jumps, amplitude dropouts. Read one
+    baseline at a time, as for *Spectrum*
 
 * Help — holding the pointer over any toolbar or sidebar control shows
   what it does in the status area at the bottom

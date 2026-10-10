@@ -318,8 +318,9 @@ class TestPresetTable:
 
     def test_every_preset_has_exactly_one_button(self):
         from cubevis.toolbox.visplot.visibility_plotter import (
-            _PRESETS, _PRESET_BUTTONS, _PRESETS_RESET_STAT)
-        assert [b[0] for b in _PRESET_BUTTONS] == list(_PRESETS)
+            _PRESETS, _PRESET_BUTTONS, _PRESETS_RESET_STAT, _PAIR_PRESETS)
+        # raster + scatter presets, then the two-scatter ones (HRS H6 slice 2)
+        assert [b[0] for b in _PRESET_BUTTONS] == list(_PRESETS) + list(_PAIR_PRESETS)
         assert set(_PRESETS_RESET_STAT) < set(_PRESETS)
 
     def test_options_exist_for_everything_a_preset_sets(self):
@@ -400,12 +401,13 @@ class TestOnAPlotter:
 
     def test_preset_buttons_and_their_js(self, sim_paths, fmt):
         from cubevis.toolbox.visplot.visibility_plotter import (
-            _PRESETS, _PRESETS_RESET_STAT)
+            _PRESETS, _PRESETS_RESET_STAT, _PAIR_PRESETS)
         vp = _plotter(sim_paths, fmt, layout="side")
         try:
             vp._build_layout()
-            assert list(vp._preset_buttons) == list(_PRESETS)
-            for (name, btn), js in zip(vp._preset_buttons.items(),
+            assert list(vp._preset_buttons) == list(_PRESETS) + list(_PAIR_PRESETS)
+            # (the two-scatter presets' JS: test_scatter_presets.py)
+            for (name, btn), js in zip(list(vp._preset_buttons.items())[:len(_PRESETS)],
                                        vp._preset_js_objects):
                 ry, rx, rq, sx, sy, _ = _PRESETS[name]
                 assert f"panel0_rq_sel.value = '{rq.name}'" in js.code

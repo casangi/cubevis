@@ -212,6 +212,49 @@ _LAYER_CMAPS = [
 # ScatterLayer dataclass
 # ---------------------------------------------------------------------------
 
+#: Sparse scatter images (HRS H6 slice 2, 2026-10-09).  An averaged
+#: spectrum of one baseline is a few thousand points on a canvas of a few
+#: hundred thousand pixels: each point is one canvas bin, one or two screen
+#: pixels, and hard to see.  Below this occupied fraction, and while a bin
+#: is smaller than SPARSE_MIN_PX screen pixels, each point is grown into
+#: its empty neighbours (3 x 3 bins), as plotms's "autoscaling" symbol
+#: draws larger points when there are few.  Display only: the hover
+#: readout, flag boxes and the data are unchanged.
+SPARSE_FILL   = 0.02
+SPARSE_MIN_PX = 3.0
+
+
+def spread_sparse(img32: np.ndarray, px_per_bin: float) -> bool:
+    """Grow the points of a sparse ARGB *img32* in place (see SPARSE_FILL).
+
+    An empty pixel takes the colour of a non-empty neighbour (edge
+    neighbours before corner ones); drawn pixels keep their own colour.
+    Returns True if the image was changed.
+    """
+    if img32 is None or img32.ndim != 2 or img32.size == 0:
+        return False
+    if px_per_bin >= SPARSE_MIN_PX:
+        return False
+    drawn = (img32 >> np.uint32(24)) > 0
+    n = int(drawn.sum())
+    if n == 0 or n >= SPARSE_FILL * img32.size:
+        return False
+    src = img32.copy()
+    empty = ~drawn
+    h, w = img32.shape
+    for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0),
+                   (1, 1), (1, -1), (-1, 1), (-1, -1)):
+        # shifted[y, x] = src[y - dy, x - dx]
+        shifted = np.zeros_like(src)
+        ys = slice(max(dy, 0), h + min(dy, 0)); yd = slice(max(-dy, 0), h + min(-dy, 0))
+        xs = slice(max(dx, 0), w + min(dx, 0)); xd = slice(max(-dx, 0), w + min(-dx, 0))
+        shifted[ys, xs] = src[yd, xd]
+        fill = empty & ((shifted >> np.uint32(24)) > 0)
+        img32[fill] = shifted[fill]
+        empty &= ~fill
+    return True
+
+
 @dataclass
 class ScatterLayer:
     """Specification for one scatter plot layer.
@@ -1862,6 +1905,13 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             "y0": y0, "y1": y1,
         }
 
+    def _pixel_size_changed(self) -> None:
+        """The figure's size changed: the cached per-layer references
+        were binned for the old canvas, and a Level-1 resample of them
+        would draw at the old shape.  Dropping them makes the next draw
+        a Level-2 query at the new size (2026-10-09)."""
+        self._layer_reference = [None] * len(self._layers)
+
     def _can_resample_locally(
         self, x0: float, x1: float, y0: float, y1: float,
     ) -> bool:
@@ -3086,6 +3136,11 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         x0, x1 = x_range
         y0, y1 = y_range
         self._apply_flag_overlays(img32, x_range, y_range)
+        try:
+            if img32 is not None and img32.ndim == 2 and img32.shape[1] > 0:
+                spread_sparse(img32, float(self._width) / img32.shape[1])
+        except Exception:                                   # display only
+            log.debug("spread_sparse failed", exc_info=True)
         new_data = {
             "image": [img32],
             "x":     [x0],

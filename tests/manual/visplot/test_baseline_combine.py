@@ -612,7 +612,10 @@ class TestRealPlotter:
             Axis.TIME, Axis.CHANNEL, Axis.AMPLITUDE,
             Axis.CHANNEL, Axis.AMPLITUDE, "over")
         names = [b[0] for b in vpm._PRESET_BUTTONS]
-        assert names == list(vpm._PRESETS) and "waterfall-all" in names
+        # the raster + scatter presets, then (HRS H6 slice 2) the two
+        # with both panels scatter
+        assert names == list(vpm._PRESETS) + list(vpm._PAIR_PRESETS)
+        assert "waterfall-all" in names
         hint = getattr(plotter, "_hint_preset_waterfall-all")
         assert hint.text.startswith("<b>All-baseline waterfall</b>")
         assert "every selected baseline" in hint.text

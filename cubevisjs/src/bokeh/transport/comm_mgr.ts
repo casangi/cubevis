@@ -135,6 +135,14 @@ export class CommMgr extends Model {
     initialize(): void {
         super.initialize()
 
+        // Page-wide registry of live managers (2026-10-09). The busy
+        // indicator (visplot's window.__cvSetBusy) asks it whether any
+        // request is still awaiting a reply before it gives up on a busy
+        // period; see inFlight() and canReply().
+        const w = window as any
+        w.__cvCommMgrs = w.__cvCommMgrs || []
+        if (w.__cvCommMgrs.indexOf(this) < 0) w.__cvCommMgrs.push(this)
+
         try {
 
             // Initialize transport based on properties
@@ -848,6 +856,28 @@ private sendImmediate(
         }
     }
 
+    /**
+     * Requests that have not had a reply yet: sent and awaiting one, or
+     * queued (behind another request on the same comm, or for replay after
+     * a reconnection). Used by the busy indicator to tell a long-running
+     * request (keep showing busy) from a busy state nobody will clear.
+     */
+    inFlight(): number {
+        let n = this.pendingRequests.size
+        for (const q of this.sendQueue.values()) n += q.length
+        return n
+    }
+
+    /**
+     * True while replies to in-flight requests can still arrive: connected,
+     * or connecting / reconnecting automatically. False once shut down, or
+     * after reconnection has paused (ERROR) until the tab regains focus or
+     * the network returns.
+     */
+    canReply(): boolean {
+        return this.state === AppState.RUNNING || this.state === AppState.INITIALIZING
+    }
+
     setSharedState(key: string, value: any): void {
         this.sharedState.set(key, value)
         console.debug(`Shared state set: ${key}`)
@@ -882,6 +912,12 @@ private sendImmediate(
         this.comms.clear()
         
         this.state = AppState.STOPPED
+
+        const w = window as any
+        if (Array.isArray(w.__cvCommMgrs)) {
+            const i = w.__cvCommMgrs.indexOf(this)
+            if (i >= 0) w.__cvCommMgrs.splice(i, 1)
+        }
     }
 
     private generateId(): string {

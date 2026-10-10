@@ -158,8 +158,8 @@ def slot_kind_exprs():
     return _lift_slot_kind_exprs()
 
 
-def _eval_slot_kinds(exprs, kind):
-    fake_self = types.SimpleNamespace(_kind=kind)
+def _eval_slot_kinds(exprs, kind, **extra):
+    fake_self = types.SimpleNamespace(_kind=kind, **extra)
     ns = {"self": fake_self}
     return (eval(exprs["_slot_a_kind"], {}, ns),
             eval(exprs["_slot_b_kind"], {}, ns))
@@ -180,3 +180,10 @@ class TestSlotKindWiring:
     def test_slots_are_always_complementary(self, slot_kind_exprs, kind):
         a, b = _eval_slot_kinds(slot_kind_exprs, kind)
         assert {a, b} == {"raster", "scatter"}
+
+    def test_pair_preset_gives_two_scatters(self, slot_kind_exprs):
+        """The one exception (HRS H6 slice 2): preset="spectrum" /
+        "timeseries" resolve kind to "scatter" and make slot B a scatter
+        too (see test_scatter_presets.py)."""
+        assert _eval_slot_kinds(slot_kind_exprs, "scatter",
+                                _pair_preset=True) == ("scatter", "scatter")

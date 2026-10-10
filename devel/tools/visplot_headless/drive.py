@@ -8,7 +8,7 @@ The steps file is exec()'d with these names in scope:
     FIND  the JS of find.js: pg.evaluate(FIND, None) lists the visible
           flag-tool figures with their screen boxes
     os, json, time
-Environment: VH viewport height (default 1100; width is 1700),
+Environment: VW / VH viewport width / height (default 1700 / 1100),
 LOGLEN console line length (300), SHOWLOG substring of console lines to
 print in addition to errors and warnings.
 """
@@ -20,7 +20,8 @@ url, out = sys.argv[1], sys.argv[2]
 FIND = open(os.path.join(HERE, "find.js")).read()
 with sync_playwright() as p:
     b = p.chromium.launch()
-    pg = b.new_page(viewport={"width": 1700, "height": int(os.environ.get("VH", "1100"))})
+    pg = b.new_page(viewport={"width": int(os.environ.get("VW", "1700")),
+                              "height": int(os.environ.get("VH", "1100"))})
     msgs = []
     pg.on("console", lambda m: msgs.append(m.type + ": " + m.text[:int(os.environ.get("LOGLEN", "300"))]))
     pg.on("pageerror", lambda e: msgs.append("PAGEERROR: " + str(e)[:400]))

@@ -193,10 +193,38 @@ window.__cvSetBusy = window.__cvSetBusy || function(on) {
     } catch (e) { /* keep the viewport fallback */ }
     ov.style.cssText = 'position:fixed;z-index:2147483647;'
                      + 'background:transparent;cursor:progress;' + where;
-    window.__cvBusyTimer = setTimeout(function() {
+    // Give-up watchdog (2026-10-09). Busy is abandoned only when nothing
+    // can still clear it -- not after a fixed time.  A plain 30 s timer
+    // cut a long averaged scatter's busy state short while Python was
+    // still working on it.  After GIVE_UP_MS, and then every CHECK_MS, it
+    // asks the page's CommMgr(s) (window.__cvCommMgrs, cubevisjs) whether a
+    // request is still awaiting a reply that can arrive -- connected or
+    // reconnecting; in-flight requests are replayed after a reconnection.
+    // If so, busy stays.  Busy with no such request means a reply that was
+    // never going to clear it (a response callback that threw, transport
+    // shut down, reconnection paused): give up.  Without the registry (an
+    // older cubevisjs bundle) it gives up at GIVE_UP_MS as before.
+    const CHECK_MS = 5000;
+    const awaitingReply = function() {
+        const mgrs = window.__cvCommMgrs;
+        if (!mgrs || !mgrs.length) return false;
+        for (let i = 0; i < mgrs.length; i++) {
+            try { if (mgrs[i].canReply() && mgrs[i].inFlight() > 0) return true; }
+            catch (e) { /* an incompatible manager does not hold busy */ }
+        }
+        return false;
+    };
+    const watchdog = function() {
+        window.__cvBusyTimer = null;
+        if ((window.__cvBusyN || 0) <= 0) return;
+        if (awaitingReply()) {
+            window.__cvBusyTimer = setTimeout(watchdog, CHECK_MS);
+            return;
+        }
         window.__cvBusyN = 1;                    // give up: clear everything
         window.__cvSetBusy(false);
-    }, GIVE_UP_MS);
+    };
+    window.__cvBusyTimer = setTimeout(watchdog, GIVE_UP_MS);
 };
 
 // Stuck-drag safety net (2026-09, reported bug: pan tool re-activates on
@@ -1484,6 +1512,7 @@ comm.send('{msg_probe}', {{x: x, y: y}}, function(resp) {{
                 "comm":         comm,
                 "x_range":      self._fig.x_range,
                 "y_range":      self._fig.y_range,
+                "fig":          self._fig,
             },
             code=_CV_SET_BUSY_JS + f"""
 // One debounce timer PER FIGURE (keyed by this figure's message id): a
@@ -1497,14 +1526,43 @@ window._cvRerenderTimers = window._cvRerenderTimers || {{}};
 // takes between the two; previously only a fixed 450 ms bridge covered that
 // gap, and on a slower machine the cursor went idle before an averaged
 // scatter's re-render had drawn (2026-10-09).
-if (window._cvRerenderTimers['{msg_rerender}']) clearTimeout(window._cvRerenderTimers['{msg_rerender}']);
-else window.__cvSetBusy(true);
+//
+// The figure's size changing (layout Side / Over, a preset, the sidebar
+// toggle) triggers this too, and every request carries the figure's size:
+// the panel renders at the size it is drawn at.  It rendered at its
+// construction size, so a scatter in Over / Under was drawn with bins
+// twice as wide and half as tall as the screen pixels (2026-10-09).  A
+// redraw asked for by a size change alone is skipped while the figure is
+// not on screen (the other kind in a slot, the other layout).
+window._cvRerenderRange = window._cvRerenderRange || {{}};
+const _sizeOnly = (cb_obj === fig);
+if (window._cvRerenderTimers['{msg_rerender}']) {{
+    clearTimeout(window._cvRerenderTimers['{msg_rerender}']);
+    if (!_sizeOnly) window._cvRerenderRange['{msg_rerender}'] = true;
+}} else {{
+    window._cvRerenderRange['{msg_rerender}'] = !_sizeOnly;
+    window.__cvSetBusy(true);
+}}
 window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
     window._cvRerenderTimers['{msg_rerender}'] = null;
+    const sizeOnly = !window._cvRerenderRange['{msg_rerender}'];
+    window._cvRerenderRange['{msg_rerender}'] = false;
+    if (sizeOnly) {{
+        let shown = true;
+        try {{
+            const v = Bokeh.index.find_one_by_id(fig.id);
+            shown = !!(v && v.el && v.el.isConnected && v.el.getClientRects().length > 0);
+        }} catch (e) {{ /* keep: redraw */ }}
+        if (!shown) {{ window.__cvSetBusy(false); return; }}
+    }}
     const x0 = x_range.start, x1 = x_range.end;
     const y0 = y_range.start, y1 = y_range.end;
     comm.send('{msg_rerender}',
-        {{x0: x0, x1: x1, y0: y0, y1: y1}},
+        {{x0: x0, x1: x1, y0: y0, y1: y1,
+          // the plot frame, which the image fills (the figure less its axes)
+          w: fig.inner_width > 0 ? fig.inner_width : fig.width,
+          h: fig.inner_height > 0 ? fig.inner_height : fig.height,
+          size_only: sizeOnly}},
         function(resp) {{
             // Clear busy only after the new image has been PAINTED: two
             // animation frames after the data change (the first frame runs
@@ -1531,6 +1589,8 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
         )
         self._fig.x_range.js_on_change("end", rerender_js)
         self._fig.y_range.js_on_change("end", rerender_js)
+        self._fig.js_on_change("width", rerender_js)
+        self._fig.js_on_change("height", rerender_js)
 
     # ------------------------------------------------------------------
     # Internal: axes-changed p2j handler (pre-wired at page-load)
@@ -1596,8 +1656,31 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
         panel's state."""
         return await asyncio.to_thread(self._handle_rerender, message)
 
+    def set_pixel_size(self, width, height) -> bool:
+        """Render at *width* x *height* screen pixels from now on: the
+        figure's current size, sent by the browser with every Plot and
+        redraw request (2026-10-09).  Returns True if the size changed.
+        Values that are missing or implausibly small are ignored."""
+        try:
+            w, h = int(width), int(height)
+        except (TypeError, ValueError):
+            return False
+        if w < 10 or h < 10 or (w, h) == (self._width, self._height):
+            return False
+        self._width, self._height = w, h
+        self._pixel_size_changed()
+        return True
+
+    def _pixel_size_changed(self) -> None:
+        """Hook: drop whatever was drawn for the previous pixel size
+        (nothing by default)."""
+        return None
+
     def _handle_rerender(self, message: dict) -> dict:
         """Route pan/zoom rerender to subclass ``_do_viewport_rerender``."""
+        resized = self.set_pixel_size(message.get("w"), message.get("h"))
+        if message.get("size_only") and not resized:
+            return {}          # the figure is the size it was drawn at
         x0 = float(message["x0"])
         x1 = float(message["x1"])
         y0 = float(message["y0"])

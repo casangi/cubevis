@@ -21,6 +21,16 @@ for a in sys.argv[1:]:
     if v in ("True", "False"):
         v = v == "True"
     kw[k] = v
+# SLOW_PLOT=<seconds>: delay every Plot reply, to check behaviour (e.g. the
+# busy indicator) when a plot takes longer than the browser's own timers.
+_slow = float(os.environ.get("SLOW_PLOT", "0") or 0)
+if _slow > 0:
+    import asyncio
+    _orig_plot = VisibilityPlotter._handle_plot
+    async def _slow_plot(self, msg, context=None):
+        await asyncio.sleep(_slow)
+        return await _orig_plot(self, msg, context=context)
+    VisibilityPlotter._handle_plot = _slow_plot
 app = VisibilityPlotter(headless=False, enable_flagging=True, **kw)
 ctx = exe.Context(exe.Mode.SYNC)
 ui, task = app(ctx, uuid4())

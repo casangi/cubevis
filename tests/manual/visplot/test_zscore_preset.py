@@ -254,13 +254,19 @@ class TestZscoreButtonWiring:
         assert names[:4] == ["vplot", "radplot", "waterfall", "zscore"]
 
     def test_every_button_names_a_preset(self, presets):
+        # HRS H6 slice 2: the two-scatter presets have a table of their own
+        start = _SRC.index("_PAIR_PRESETS = {")
+        end = _SRC.index("\n}\n", start) + 3
+        ns = {"Axis": Axis}
+        exec(_SRC[start:end], ns)
         for name, label, width, text in self._buttons():
-            assert name in presets, name
+            assert name in presets or name in ns["_PAIR_PRESETS"], name
             assert label and width > 0 and text.startswith("<b>")
 
     def test_buttons_are_built_and_wired_from_the_table(self):
         assert "for name, label, width, _help in _PRESET_BUTTONS" in _SRC
-        assert re.search(r"js = _preset_js\(name\)\s+"
+        assert re.search(r"js = \(_pair_preset_js\(name\) if name in _PAIR_PRESETS\s+"
+                         r"else _preset_js\(name\)\)\s+"
                          r"self\._preset_js_objects\.append\(js\)\s+"
                          r"btn\.js_on_click\(js\)", _SRC)
 

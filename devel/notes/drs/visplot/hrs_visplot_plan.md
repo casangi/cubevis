@@ -213,11 +213,13 @@ Flag reaches (only if users ask for it). Notes: `hrs_h5_flag_reach.md`,
 
 *State 2026-10-09: **slice 1 done** (scatter averaging over time /
 channels, vector or scalar, flagging behind averaged points, conditional
-pan / zoom X link); confirmed by Darrell except one open bug: the busy
-cursor ends before an averaged scatter finishes drawing (attempted fix in
-`ca927cc` did not cure it; see section 7). **Slice 2 next:** Spectrum and
-Time series presets, autocorrelations, presets with baseline / antenna
-iteration. Note: `hrs_h6_scatter_average.md`.*
+pan / zoom X link). **Slice 2 delivered, awaiting Darrell's test:**
+Spectrum and Time series presets (both panels scatter, Amplitude over
+Phase), autocorrelations read from MSv2 (they were silently dropped),
+presets with Baseline / Antenna Prev / Next; panels now render at their
+figure's size; sparse points drawn larger; busy indicator held for as
+long as a reply is awaited (the slice 1 bug). Notes:
+`hrs_h6_scatter_average.md`, `hrs_h6_scatter_presets.md`.*
 
 
 - Time and channel averaging controls for scatter (vector or scalar).
@@ -326,7 +328,8 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-09 | `3d04908` | Slice 2 corrected after Darrell's test (delivered again with it; not yet pushed): the status / help area has a fixed height, so help shown on hover no longer shrinks the sidebar (the bottom of the sidebar, Describe pending flags, could not be reached). Raster and scatter Outlier counts differ only by correlation (raster XX; scatter XX and YY): same 11,786 XX samples. Note: `hrs_h5_filters.md` |
 | 2026-10-09 | `84ae4bb` | H5 committed by Darrell. H6 slice 1: scatter averaging over time (off / scan / seconds) and channels (off / N / all), vector or scalar, per panel; Amplitude, Phase, Real, Imaginary; done on the cached samples (no re-read); flag box takes the samples behind averaged points; other filters refused there. `scatter_avg_time`, `scatter_avg_chan` arguments. Fixed on the way: raster and scatter shared one X Range for good when built with the same X axis (changing the scatter's X blanked the raster); now a conditional pan/zoom link. Next: slice 2, Spectrum / Time series presets and autocorrelations. Note: `hrs_h6_scatter_average.md` |
 | 2026-10-09 | `13dc470` | H6 slice 1 committed by Darrell (`test_scatter_average.py` missed from the commit; re-sent). Busy cursor ended before an averaged scatter finished: the viewport redraw after Plot was covered only by a fixed 450 ms bridge, so busy is now counted from the moment a redraw is scheduled. Headless check shows busy held to the final image |
-| 2026-10-09 | `ca927cc` | Busy fix committed; Darrell reports it did not cure the problem on his machine. Leading suspect: the 30 s give-up in `__cvSetBusy` (section 7). Carried to the next session. Housekeeping: per-milestone state lines; section 7, performance and compute pain points; the live / headless browser harness committed as `devel/tools/visplot_headless/`. Handoff: `hrs_handoff_2026-10-09.md` |
+| 2026-10-09 | `ca927cc` | Busy fix committed; Darrell reports it did not cure the problem on his machine. Leading suspect: the 30 s give-up in `__cvSetBusy` (section 7). Carried to the next session.
+| 2026-10-09 | `7c026d8` | Third session. Busy: the fixed 30 s give-up replaced by a watchdog that keeps busy while any CommMgr request awaits a reply (cubevisjs `inFlight()` / `canReply()`; reproduced and checked with `SLOW_PLOT=40`). H6 slice 2: Spectrum / Time series presets; autocorrelations opened from MSv2 when present (`has_autocorrelations`; xarray-ms drops them by default); panels render at the figure's frame size (was the construction size: Over / Under scatters drawn with flat 2:1 bins); `spread_sparse` for sparse scatters; toolbar row wraps on narrow windows. Harness: `SLOW_PLOT`, `VW`. Note: `hrs_h6_scatter_presets.md` | Housekeeping: per-milestone state lines; section 7, performance and compute pain points; the live / headless browser harness committed as `devel/tools/visplot_headless/`. Handoff: `hrs_handoff_2026-10-09.md` |
 
 ## 7. Performance and compute pain points
 
@@ -336,8 +339,10 @@ items are found, and strike through (with the commit) when dealt with.
 
 | Seen | Where | What is known |
 |---|---|---|
-| 2026-10-09 | Averaged scatter, viewport redraw | After Plot with averaging (TW Hya, field 3c279, X Channel, scan average) the Plot request takes ~5.8 s and the viewport redraw that follows takes a further ~1.5 s (`visplot timing: Scatter redraw`). Likely the averaging is recomputed for the redraw: `averaged_view` (`data/reader.py`) is not memoised itself. Not verified |
-| 2026-10-09 | Busy cursor, long Plot | `window.__cvSetBusy` gives up after `GIVE_UP_MS = 30000` (`visibility_plot.py`) and goes idle even if the Plot response has not arrived. A Plot over 30 s (larger data, averaging) would show exactly "busy ends before the plot does". Leading suspect for the open H6 bug; check how long Darrell's Plot takes |
+| 2026-10-09 | Averaged scatter, viewport redraw | After Plot with averaging (TW Hya, field 3c279, X Channel, scan average) the Plot request takes ~5.8 s and the viewport redraw that follows takes a further ~1.5 s (`visplot timing: Scatter redraw`). Likely the averaging is recomputed for the redraw: `averaged_view` (`data/reader.py`) is not memoised itself. Not verified. **Measured 2026-10-09 (third session):** steady-state redraws of that scatter take 0.08 to 0.18 s; the first Level-1 (local resample) redraw in a process costs ~3 s of numba compilation of datashader's `resample_2d`, once. So it is a first-use cost, not the averaging. Warming the resampler at start-up would hide it, if it is noticed |
+| ~~2026-10-09~~ | ~~Busy cursor, long Plot~~ | ~~`window.__cvSetBusy` gives up after `GIVE_UP_MS = 30000`~~. Confirmed (40 s Plot headless: idle at 30 s); replaced by a watchdog that holds busy while a reply is awaited (third session, base `7c026d8`) |
+| 2026-10-09 | Redraw on resize | A panel now redraws when its figure changes size (layout switch, preset, sidebar toggle), at the new size: ~0.1 s for an averaged scatter on TW Hya 3c279 (a scatter's references are dropped, so it is a Level-2 query from the frame cache). Hidden figures and unchanged sizes are skipped |
+| 2026-10-09 | Baselines without data | The Baseline table and Prev / Next include antenna pairs with no rows; on TW Hya 3c279 about 50 empty plots before the first with data. Narrowing needs a per-selection "which baselines have rows" pass; see `hrs_h6_scatter_presets.md`, section 7 |
 | 2026-10-08 | Full plotter, TW Hya all fields | Runs out of memory in 8 GB; use `field=3c279`, or engine-level calls |
 | 2026-10-08 | Test suite | Whole suite in one process runs out of memory with the TW Hya MS present; `devel/tools/visplot_headless/runtests.sh` runs a file per process. Even so, four files run out of memory on their own: `test_colorize_by_axis_part5d_legend_status`, `test_frame_cache`, `test_info_block_integration`, `test_visibility_scatter` |
 | (earlier) | Large-data flagging | Items carried in `devel/docs/visplot/visplot_flagging_follow_on.md` |

@@ -291,7 +291,12 @@ class _visplot:
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
         ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
         ``"phaserms-uvdist"``, ``"phase-waterfall"``,
-        ``"waterfall-all"``, or ``None``.
+        ``"waterfall-all"``, ``"spectrum"``, ``"timeseries"``, or
+        ``None``.  ``"spectrum"`` and ``"timeseries"`` show two scatter
+        panels, Amplitude over Phase, against Frequency (each scan
+        averaged) or Time (all channels averaged); they set ``layout``
+        to ``"over"`` and supply ``scatter_avg_time`` /
+        ``scatter_avg_chan`` where those are left at ``"off"``.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over

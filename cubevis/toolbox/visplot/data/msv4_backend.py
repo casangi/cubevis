@@ -821,6 +821,11 @@ class MSv4Backend(XArrayReader):
           directly — it is an explicit per-antenna selection, not a baseline
           filter.
         """
+        # UV range (HRS A1): the reference frequency is the window's own
+        # centre, taken before any channel selection narrows it.
+        uv_ref = (self._uv_ref_frequency(ds)
+                  if getattr(sel, "uv_range", None) else None)
+
         # --- time dimension ---
         time_mask = None
 
@@ -906,6 +911,13 @@ class MSv4Backend(XArrayReader):
                 ant_set = set(sel.antenna_names)
                 bl_mask = np.isin(ant1, list(ant_set)) | np.isin(ant2, list(ant_set))
                 ds = ds.isel(baseline_id=bl_mask)
+
+        # --- autocorrelations (HRS, 2026-10-11) ---
+        ds = self._apply_autocorr(ds, sel)
+
+        # --- UV range (HRS A1): rows outside are made to look absent ---
+        if uv_ref is not None or getattr(sel, "uv_range", None):
+            ds = self._apply_uv_range(ds, sel.uv_range, uv_ref)
 
         return ds
 

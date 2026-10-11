@@ -525,7 +525,15 @@ def evaluate_request(backend, req: dict) -> dict:
                 "warnings": ["the box contains no data in the current selection"]}
 
     # ---------------- region fast path (raster, identity filter) -------- #
-    if kind == "raster" and fobj.is_identity and not req.get("force_samples"):
+    # A UV range (HRS A1) selects rows by a value, not by coordinates: a
+    # coordinate region would also reach the rows it leaves out, so the
+    # box is stored as the samples it addresses.
+    uv_sel = bool(getattr(sel, "uv_range", None))
+    if uv_sel and kind == "raster":
+        warnings.append("UV range in use: the box is stored as the samples "
+                        "inside the UV range")
+    if (kind == "raster" and fobj.is_identity and not req.get("force_samples")
+            and not uv_sel):
         delta = _region_delta(backend, parts, req, sel, x_axis, y_axis, flag, extend,
                               data_column)
         if delta is not None:

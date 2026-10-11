@@ -1466,6 +1466,24 @@ def _freeze(v):
     return v
 
 
+#: Set (per thread) while a finalizer runs: cleanup must not block.
+_FINALIZING = threading.local()
+
+
+class finalizing:
+    """``with finalizing(): obj.close()`` -- inside, cleanup that would wait
+    for a lock (the frame cache's) skips instead.  For ``__del__``."""
+
+    def __enter__(self):
+        self._prev = getattr(_FINALIZING, "on", False)
+        _FINALIZING.on = True
+        return self
+
+    def __exit__(self, *exc):
+        _FINALIZING.on = self._prev
+        return False
+
+
 def _Axis_Z_SCORE():
     from ..axes import Axis
     return Axis.Z_SCORE
@@ -1689,6 +1707,120 @@ class XArrayReader(abc.ABC):
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
     # ------------------------------------------------------------------ #
+
+    # ------------------------------------------------------------------ #
+    # UV range (HRS A1, 2026-10-11) -- shared by both backends'           #
+    # _apply_selection                                                     #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _apply_autocorr(ds, sel):
+        """Drop (``"exclude"``) or keep only (``"only"``) the baselines from
+        an antenna to itself, per ``sel.autocorr``.  Under ``"exclude"`` an
+        autocorrelation named in ``sel.baselines`` stays.  Shared by both
+        backends' ``_apply_selection``."""
+        mode = getattr(sel, "autocorr", None)
+        if mode not in ("exclude", "only"):
+            return ds
+        if not ("baseline_antenna1_name" in ds.coords
+                and "baseline_antenna2_name" in ds.coords):
+            return ds
+        a1 = np.asarray(ds.coords["baseline_antenna1_name"].values).astype(str)
+        a2 = np.asarray(ds.coords["baseline_antenna2_name"].values).astype(str)
+        auto = a1 == a2
+        if mode == "only":
+            keep = auto
+        else:
+            keep = ~auto
+            named = {(str(x), str(y)) for x, y in (sel.baselines or ())}
+            if named:
+                keep |= auto & np.array([(x, y) in named for x, y in zip(a1, a2)],
+                                        dtype=bool)
+        if keep.all():
+            return ds
+        bdim = ds.coords["baseline_antenna1_name"].dims[0]
+        return ds.isel({bdim: keep})
+
+    @staticmethod
+    def _uv_ref_frequency(ds) -> Optional[float]:
+        """Centre frequency (Hz) of *ds*'s spectral window, the frequency
+        a UV range in wavelengths is measured at; ``None`` if unknown."""
+        try:
+            f = np.asarray(ds.coords["frequency"].values, dtype=np.float64)
+            f = f[np.isfinite(f)]
+            return float(0.5 * (f.min() + f.max())) if f.size else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _apply_uv_range(ds, uv_range, ref_freq: Optional[float]):
+        """Make the rows of *ds* whose UV distance is outside *uv_range*
+        look like rows the data do not have.
+
+        A row is one baseline at one time, and its UV distance is one
+        number, so the selection is by row -- as CASA's ``uvrange`` is.
+        xarray-ms (and Processing Sets made from it) represent an absent
+        row as NaN visibilities, weights, UVW and effective integration
+        time with every flag set; out-of-range rows are given exactly
+        that, lazily.  Everything downstream then leaves them out the way
+        it already leaves out absent rows: plots and statistics (NaN),
+        the flag evaluator (``flag_engine.valid_mask``: such samples are
+        never changed by a flag), and baseline stepping
+        (``baselines_with_rows``: finite UVW).
+
+        ``uv_range`` is ``[[lo, hi, unit], ...]`` (see
+        ``SelectionSpec.uv_range``).  Without UVW, or without a frequency
+        for a range in wavelengths, nothing can be decided and *ds* is
+        returned unchanged (logged).
+        """
+        if not uv_range or "UVW" not in ds.data_vars:
+            if uv_range:
+                log.warning("uv_range ignored: no UVW in this data")
+            return ds
+        uvw = ds["UVW"]
+        lab = next((d for d in uvw.dims if d not in ("time",)
+                    and d in ds.coords and ds.coords[d].size == 3), None)
+        if lab is None:
+            log.warning("uv_range ignored: cannot find the UVW component axis")
+            return ds
+        u = uvw.isel({lab: 0})
+        v = uvw.isel({lab: 1})
+        dist = np.sqrt(u * u + v * v)              # metres, (time, baseline)
+        keep = None
+        for lo, hi, unit in uv_range:
+            x = dist
+            if unit == "lambda":
+                if not ref_freq:
+                    log.warning("uv_range in wavelengths ignored: no frequency")
+                    return ds
+                x = dist * (ref_freq / 299_792_458.0)
+            m = xr.ones_like(x, dtype=bool)
+            if lo is not None:
+                m = m & (x >= float(lo))
+            if hi is not None:
+                m = m & (x <= float(hi))
+            keep = m if keep is None else (keep | m)
+        # NaN distance (an absent row) is already absent: leave it.
+        drop = ~keep & np.isfinite(dist)
+        bdims = set(dist.dims)
+        out = {}
+        for name, var in ds.data_vars.items():
+            if not bdims.issubset(var.dims):
+                continue
+            if var.dtype.kind in "fc":
+                out[name] = var.where(~drop)
+            elif var.dtype.kind in "biu" and name.upper().startswith("FLAG"):
+                # DataArray.where, not xr.where: it keeps the variable's
+                # and its coordinates' attrs (the spectral window name
+                # lives on the frequency coordinate's attrs).
+                out[name] = var.where(~drop, 1).astype(var.dtype)
+        if not out:
+            return ds
+        res = ds.assign(out)
+        for c in ds.coords:                      # belt and braces
+            if res.coords[c].attrs != ds.coords[c].attrs:
+                res.coords[c].attrs = dict(ds.coords[c].attrs)
+        return res
 
     @abc.abstractmethod
     def open(self) -> None:
@@ -2421,7 +2553,8 @@ class XArrayReader(abc.ABC):
         """
         import dataclasses
         sel = selection if selection is not None else SelectionSpec()
-        key = repr((sel.field_names, sel.scan, sel.spw, sel.time_range))
+        key = repr((sel.field_names, sel.scan, sel.spw, sel.time_range,
+                    getattr(sel, "uv_range", None), getattr(sel, "autocorr", None)))
         cache = self.__dict__.setdefault("_bl_rows_cache", {})
         if key in cache:
             return cache[key]
@@ -2607,11 +2740,21 @@ class XArrayReader(abc.ABC):
         return stats
 
     def _clear_frame_cache(self) -> None:
-        """Drop THIS backend's frames (not other backends')."""
+        """Drop THIS backend's frames (not other backends').
+
+        Non-blocking when called from a finalizer (``finalizing()``): a
+        plotter's ``__del__`` closes its reader, and ``__del__`` can run on
+        any thread at any allocation -- including a dask worker while
+        another thread holds the cache lock and waits for that worker
+        (seen 2026-10-11 as a hang of two plotters built in one process).
+        """
         cache = _GLOBAL_FRAME_CACHE
         token = getattr(self, "_frame_cache_token", None)
         if cache is not None and token is not None:
-            cache.drop_token(token)
+            if getattr(_FINALIZING, "on", False):
+                cache.try_drop_token(token)
+            else:
+                cache.drop_token(token)
 
     def _query_columns_cached(
         self, xaxis: "Axis", yaxes: list, selection: "SelectionSpec",

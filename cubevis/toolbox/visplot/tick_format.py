@@ -89,6 +89,27 @@ if (!is_time) {
     }
     return s;
 }
+if (typeof mode !== 'undefined' && mode === 'utc') {
+    // UTC time of day (2026-10-11, HRS A0).  Times are UNIX seconds
+    // (xarray-ms / MSv4 "format: unix, scale: utc"), so a whole day is
+    // a multiple of 86400 and no calendar is needed here.  Decimals
+    // follow the tick spacing; the arithmetic is done in integer units
+    // of the last decimal so Python reproduces it exactly.
+    const st  = (typeof step !== 'undefined' && step) ? step : 1;
+    const dec = st >= 1 ? 0 : (st >= 0.1 ? 1 : 2);
+    const p   = Math.pow(10, dec);
+    const u   = Math.floor(tick * p + 0.5);
+    const per = 86400 * p;
+    const day = Math.floor(u / per);
+    let   r   = u - day * per;
+    const fr  = r % p;  r = (r - fr) / p;
+    const hh  = Math.floor(r / 3600), mm = Math.floor((r % 3600) / 60), ss = r % 60;
+    const two = (n) => (n < 10 ? '0' : '') + n;
+    let txt = two(hh) + ':' + two(mm) + ':' + two(ss);
+    if (dec > 0) txt += '.' + String(fr).padStart(dec, '0');
+    if (typeof day0 !== 'undefined' && day0 !== null) txt = (day - day0) + '/' + txt;
+    return txt;
+}
 const elapsed = tick - t0;
 if (Math.abs(elapsed) < 60)
     return elapsed.toFixed(1) + ' s';
@@ -114,6 +135,14 @@ const t0      = state.data[t0_key][0];
 const scale   = (state.data[scale_key] || [1])[0];
 const labels  = (typeof cat_key !== 'undefined' && state.data[cat_key])
                 ? state.data[cat_key][0] : null;
+// UTC or elapsed labels on a time axis (HRS A0); the day number of the
+// first sample when the axis crosses a UTC midnight, else null; the
+// tick spacing, which decides how many decimals a UTC label shows.
+const mode    = (state.data['time_labels'] || ['elapsed'])[0];
+const day0    = (typeof day_key !== 'undefined' && state.data[day_key])
+                ? state.data[day_key][0] : null;
+const step    = (typeof ticks !== 'undefined' && ticks && ticks.length > 1)
+                ? Math.abs(ticks[1] - ticks[0]) : null;
 """ + _JS_CORE
 
 
@@ -170,8 +199,94 @@ def _trim_zeros(s: str) -> str:
     return s.rstrip("0").rstrip(".")
 
 
+def _utc_decimals(step) -> int:
+    """Decimals of a UTC tick label for a tick spacing of *step* s."""
+    st = step if step else 1
+    return 0 if st >= 1 else (1 if st >= 0.1 else 2)
+
+
+def format_utc(t: float, decimals: int = 0, day0=None) -> str:
+    """UTC time of day of UNIX seconds *t*: ``"07:37:03"``.
+
+    *decimals* digits of seconds; with *day0* (a day number,
+    ``floor(t / 86400)`` of the axis start) the label is prefixed with
+    the day count from it, AIPS style: ``"1/00:10:00"``.  Mirrors the
+    UTC branch of ``_JS_CORE`` in integer arithmetic, so both give the
+    same text for the same float.
+    """
+    p   = 10 ** decimals
+    u   = math.floor(t * p + 0.5)
+    per = 86400 * p
+    day = u // per
+    r   = u - day * per
+    fr  = r % p
+    r   = (r - fr) // p
+    hh, mm, ss = r // 3600, (r % 3600) // 60, r % 60
+    txt = f"{hh:02d}:{mm:02d}:{ss:02d}"
+    if decimals > 0:
+        txt += "." + str(fr).rjust(decimals, "0")
+    if day0 is not None:
+        txt = f"{day - int(day0)}/{txt}"
+    return txt
+
+
+def utc_date(t: float) -> str:
+    """UTC calendar date of UNIX seconds *t*: ``"2012-11-19"``."""
+    import datetime as _dt
+    return (_dt.datetime(1970, 1, 1, tzinfo=_dt.timezone.utc)
+            + _dt.timedelta(seconds=float(t))).strftime("%Y-%m-%d")
+
+
+def utc_datetime_text(t: float, decimals: int = 1) -> str:
+    """``"2012-11-19 07:37:03.0"`` -- the cursor readout's UTC form."""
+    return f"{utc_date(math.floor(t))} {format_utc(t, decimals)}"
+
+
+def time_day0(lo: float, hi: float):
+    """Day number for the AIPS-style day prefix, or ``None``.
+
+    ``None`` (no prefix) when *lo* and *hi* fall on the same UTC day,
+    which is the usual case; otherwise ``floor(lo / 86400)``.
+    """
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        return None
+    d0, d1 = math.floor(lo / 86400.0), math.floor(hi / 86400.0)
+    return int(d0) if d1 != d0 else None
+
+
+# Tick spacings for a UTC axis: AdaptiveTicker with base 60 gives
+# 1, 2, 5, 10, 15, 20, 30 s, then the same in minutes and hours, so
+# ticks fall on whole minutes and hours.  Used by the browser (the
+# axis ticker is switched to these when an axis shows UTC) and by the
+# PNG export's locator, which picks the same spacing.
+UTC_TICK_BASE      = 60
+UTC_TICK_MANTISSAS = (1, 2, 5, 10, 15, 20, 30)
+
+
+def utc_tick_step(lo: float, hi: float, desired: int = 6) -> float:
+    """The spacing Bokeh's ``AdaptiveTicker`` picks for a UTC axis.
+
+    Same rule as BokehJS 3.x ``AdaptiveTicker.get_interval`` with
+    ``min_interval`` 0: ideal = span / desired; magnitude = base ** floor
+    (log_base ideal); of the extended mantissas (last / base, the
+    mantissas, first * base) the one giving the tick count nearest
+    *desired*.
+    """
+    span = abs(hi - lo)
+    if not math.isfinite(span) or span <= 0:
+        return 1.0
+    b = UTC_TICK_BASE
+    ideal = span / max(desired, 1)
+    mag = b ** math.floor(math.log(ideal) / math.log(b))
+    ext = ([UTC_TICK_MANTISSAS[-1] / b] + list(UTC_TICK_MANTISSAS)
+           + [UTC_TICK_MANTISSAS[0] * b])
+    best = min(ext, key=lambda m: abs(desired - span / (m * mag)))
+    return float(best * mag)
+
+
 def format_tick(tick: float, is_time: bool, t0: float = 0.0,
-                scale: float = 1.0, labels=None) -> str:
+                scale: float = 1.0, labels=None, *,
+                time_mode: str = "elapsed", step=None, day0=None) -> str:
     """Format one axis tick, matching the browser byte for byte.
 
     Parameters
@@ -211,6 +326,8 @@ def format_tick(tick: float, is_time: bool, t0: float = 0.0,
         if tick != 0 and s in ("0", "-0"):
             s = _trim_zeros(_to_fixed(tick, 9))
         return s
+    if time_mode == "utc":
+        return format_utc(tick, _utc_decimals(step), day0)
     elapsed = tick - t0
     if abs(elapsed) < 60:
         return _to_fixed(elapsed, 1) + " s"
@@ -298,16 +415,30 @@ def si_scale(value: float, unit: str) -> tuple[float, str]:
 
 
 def mpl_formatter(is_time: bool, t0: float = 0.0, scale: float = 1.0,
-                  labels=None):
-    """Return a ``matplotlib.ticker.FuncFormatter`` wrapping *format_tick*.
+                  labels=None, *, time_mode: str = "elapsed", day0=None):
+    """Return a matplotlib formatter wrapping *format_tick*.
 
     matplotlib is imported lazily: this module is imported by
     ``visibility_plot``, which must stay importable in a GUI-only install
     that has no matplotlib.
+
+    The tick spacing (for a UTC label's decimals) is read from the
+    formatter's own ``locs``, as the browser reads it from ``ticks``.
     """
-    from matplotlib.ticker import FuncFormatter
-    return FuncFormatter(
-        lambda v, _pos: format_tick(v, is_time, t0, scale, labels))
+    from matplotlib.ticker import Formatter
+
+    class _F(Formatter):
+        _cv_locs: list = []
+
+        def set_locs(self, locs):
+            self._cv_locs = list(locs)
+
+        def __call__(self, v, pos=None):
+            locs = self._cv_locs
+            step = abs(locs[1] - locs[0]) if len(locs) > 1 else None
+            return format_tick(v, is_time, t0, scale, labels,
+                               time_mode=time_mode, step=step, day0=day0)
+    return _F()
 
 
 # ---------------------------------------------------------------------------
@@ -390,3 +521,13 @@ def check_golden() -> list[str]:
                 f"{got!r}, expected {want!r}"
             )
     return bad
+
+
+def set_time_ticker(ticker, utc: bool) -> None:
+    """Point a Bokeh ``AdaptiveTicker`` at UTC spacings (base 60) or back
+    to Bokeh's default decimal ones.  The browser twin is in the Plot
+    response (``cvIntegerTicks``) and the time-labels toggle."""
+    if utc:
+        ticker.base, ticker.mantissas = float(UTC_TICK_BASE), list(UTC_TICK_MANTISSAS)
+    else:
+        ticker.base, ticker.mantissas = 10.0, [1, 2, 5]

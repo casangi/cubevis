@@ -132,6 +132,25 @@ _CELL_TITLE_PT = 19.0
 _WSPACE_PT     = 42.0
 _HSPACE_PT     = 50.0
 _FOOTER_PT     = 25.0
+_FOOTER_LINE_PT = 10.0     # each further footer line (B2)
+
+
+def _wrap_footer(text: str, width_pt: float, size_pt: float = 7.5) -> list:
+    """Lines of *text* no wider than *width_pt*, broken between its
+    ``|``-separated fields (a field longer than a line stays whole)."""
+    per_line = max(int(width_pt / (size_pt * 0.55)), 20)
+    fields = [f.strip() for f in text.split("|") if f.strip()]
+    lines, cur = [], ""
+    for f in fields:
+        cand = f if not cur else f"{cur}  |  {f}"
+        if cur and len(cand) > per_line:
+            lines.append(cur)
+            cur = f
+        else:
+            cur = cand
+    if cur:
+        lines.append(cur)
+    return lines
 _LEGEND_PT     = 16.0
 _CBAR_W_PT     = 9.0        # bar thickness
 _CBAR_PAD_PT   = 8.0        # gap between plot and bar
@@ -297,18 +316,41 @@ def _style_axes(ax, theme: Theme, spec: Optional[PanelSpec],
         # Elapsed-time labels are relative to the FULL extent's origin,
         # not the viewport's -- so a zoomed export keeps the same tick
         # vocabulary as the unzoomed one, exactly as the browser does.
+        tl = getattr(src, "time_labels", "elapsed")
         ax.xaxis.set_major_formatter(
             mpl_formatter(src.x_is_time, src.axis_origin("x"),
-                          src.axis_scale("x")[0], src.axis_ticks("x")))
+                          src.axis_scale("x")[0], src.axis_ticks("x"),
+                          time_mode=tl, day0=src.time_day0("x")))
         ax.yaxis.set_major_formatter(
             mpl_formatter(src.y_is_time, src.axis_origin("y"),
-                          src.axis_scale("y")[0], src.axis_ticks("y")))
+                          src.axis_scale("y")[0], src.axis_ticks("y"),
+                          time_mode=tl, day0=src.time_day0("y")))
+        # A UTC axis ticks on whole seconds / minutes / hours, at the
+        # spacing the browser's base-60 ticker would choose.
+        from matplotlib.ticker import MaxNLocator, MultipleLocator
+        from .tick_format import utc_tick_step
+        if tl == "utc":
+            if src.x_is_time:
+                ax.xaxis.set_major_locator(MultipleLocator(utc_tick_step(x0, x1)))
+            if src.y_is_time:
+                ax.yaxis.set_major_locator(MultipleLocator(utc_tick_step(y0, y1)))
         # An axis drawn in whole positions has labels only at integers.
-        from matplotlib.ticker import MaxNLocator
-        if src.axis_ticks("x"):
-            ax.xaxis.set_major_locator(MaxNLocator(nbins=8, integer=True))
-        if src.axis_ticks("y"):
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=8, integer=True))
+        # Up to 30 positions (an antenna matrix, a small array's
+        # baselines): every label, as the browser shows them, and x labels
+        # longer than 3 characters upright (HRS B2, 2026-10-11; same rule
+        # as visibility_plot.x_label_orientation).
+        from matplotlib.ticker import FixedLocator
+        for axis, labels in ((ax.xaxis, src.axis_ticks("x")),
+                             (ax.yaxis, src.axis_ticks("y"))):
+            if not labels:
+                continue
+            if len(labels) <= 30:
+                axis.set_major_locator(FixedLocator(list(range(len(labels)))))
+            else:
+                axis.set_major_locator(MaxNLocator(nbins=8, integer=True))
+        xt = src.axis_ticks("x")
+        if xt and len(xt) <= 30 and max(len(str(t)) for t in xt) > 3:
+            ax.tick_params(axis="x", labelrotation=90)
     ax.grid(True, color=theme.grid, linewidth=0.5, alpha=0.6)
     ax.set_axisbelow(True)
 
@@ -671,6 +713,17 @@ def _resolve_colorbar(mode: str, cells) -> str:
     return mode
 
 
+def _distinct_labels(values, start: int = 3, most: int = 8) -> list:
+    """``%g`` labels for *values* with the fewest significant digits (from
+    *start*) that tell neighbours apart."""
+    vals = [float(v) for v in values]
+    for d in range(start, most + 1):
+        labs = [f"{v:.{d}g}" for v in vals]
+        if len(set(labs)) == len(set(vals)):
+            return labs
+    return [f"{v:.{most}g}" for v in vals]
+
+
 def _bar_bands(spec: Optional[PanelSpec], mode: str,
                include_density: bool = True):
     """Bands of *spec* that should get their own bar under *mode*."""
@@ -706,7 +759,12 @@ def _draw_colorbar(fig, rect, band: ColorBand, theme: Theme,
     orientation = "horizontal" if side == "bottom" else "vertical"
     cb = fig.colorbar(sm, cax=cax, orientation=orientation)
     try:
-        cb.set_ticks(list(m.ticks(6)))
+        ticks = list(m.ticks(6))
+        cb.set_ticks(ticks)
+        # Enough significant digits that neighbouring ticks differ: the
+        # default formatter wrote "0.001" twice on an eq_hist bar of
+        # VLBI amplitudes around 0.001 (B2, 2026-10-11).
+        cb.set_ticklabels(_distinct_labels(ticks))
     except Exception as exc:                       # pragma: no cover
         log.debug("colorbar tick placement failed: %s", exc)
     if show_label:
@@ -925,7 +983,15 @@ def export_png(
     m_l   = _MARGIN_L_PT * px
     m_r   = _MARGIN_R_PT * px
     m_t   = _MARGIN_T_PT * px
-    m_b   = (_MARGIN_B_PT + (_FOOTER_PT if footer else 0.0)) * px
+    # The footer wraps (HRS B2, 2026-10-11): it was one line, cut off at
+    # the right in a narrow (Over / Under) export.  Broken between its
+    # " | " fields, to the width of the grid of axes.
+    footer = _plain_text(footer) if footer else footer
+    footer_lines = (_wrap_footer(footer, (ncols * cw) / px
+                                 + (ncols - 1) * _WSPACE_PT + _MARGIN_L_PT)
+                    if footer else [])
+    m_b   = (_MARGIN_B_PT + (_FOOTER_PT + _FOOTER_LINE_PT * (len(footer_lines) - 1)
+                             if footer_lines else 0.0)) * px
     title = _CELL_TITLE_PT * px
     wsp   = _WSPACE_PT * px
     hsp   = (_HSPACE_PT + _CELL_TITLE_PT) * px
@@ -1056,10 +1122,11 @@ def export_png(
         _draw_figure_legend(fig, shared, th,
                             1.0 - (m_t * 0.4) / fig_h, avail_pt=legend_avail_pt)
 
-    footer = _plain_text(footer) if footer else footer
-    if footer:
-        fig.text(m_l / fig_w, (_MARGIN_B_PT * 0.30 * px) / fig_h, footer,
-                 color=th.muted, fontsize=7.5, ha="left", va="bottom")
+    if footer_lines:
+        fig.text(m_l / fig_w, (_MARGIN_B_PT * 0.30 * px) / fig_h,
+                 "\n".join(footer_lines),
+                 color=th.muted, fontsize=7.5, ha="left", va="bottom",
+                 linespacing=1.3)
 
     path = os.path.abspath(os.path.expanduser(path))
     parent = os.path.dirname(path)

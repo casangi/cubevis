@@ -5,11 +5,11 @@ visplot
 
 .. warning::
 
-   This page is a working draft for the ``visplot`` test release.
-   Flagging (flag boxes on either panel, undo, a report, and writing
-   flags back to the MS with a backup) is enabled, but not yet
-   documented here in detail; see *Scope, explicitly* for what works
-   today.
+   This page is a working draft for the ``visplot`` test release.  The
+   control-by-control description will be rewritten after the planned
+   reorganisation of the configuration panel; the sections a tester
+   needs first -- *A commissioning workflow*, *Reporting a problem* and
+   *Scope, explicitly* -- are current.
 
 ``visplot`` is the ``cubevis`` replacement for CASA6's
 ``plotms`` (visibility scatter/line plots) and ``msview`` (2-D raster
@@ -18,41 +18,24 @@ tool that reads MSv2 measurement sets and MSv4 / Processing Set data
 and renders them interactively, backed by Datashader for large-dataset
 aggregation.
 
-This page is aimed at astronomers evaluating the preview release. It
-assumes no familiarity with the ``cubevis`` internals.
+This page is aimed at astronomers testing the release. It assumes no
+familiarity with the ``cubevis`` internals.
 
 Status of this document
 ------------------------
 
-This is a working draft. It currently covers:
-
-* Launching ``visplot`` and reading its output
-* The layout and controls
-* A basic "getting oriented" workflow using a real, previously-published
-  dataset, with side-by-side comparison against the equivalent
-  ``plotms``/``msview`` output
-
-It does not yet describe flagging, averaging, the presets or export in
-detail, although all of them now work (see *Scope*, below). A
-commissioning workflow and a "reporting a problem" section are planned
-before testing by astronomers begins.
+*Updated 2026-10-11.*  Current: launching ``visplot``, the task
+arguments, *A commissioning workflow*, *Reporting a problem* and
+*Scope, explicitly*.  The *Layout tour* still describes the controls in
+outline only; every control explains itself in the status area at the
+bottom of the window while the pointer is over it.
 
 .. note::
 
-   **Jupyter notebooks are not yet supported in this preview.** Run
-   ``visplot`` from a plain interactive Python or CASA6 session
-   instead (e.g. ``ipython``, or a ``casa`` prompt). Once notebook
-   support lands, the expected workflow will be:
-
-   .. code-block:: python
-
-      from cubevis import visplot
-      vp = visplot.notebook(ms="...", ...)
-      vp.show()
-
-   This page will be updated to describe that workflow once it's
-   available; everything below uses the plain task call, which is
-   what the preview supports today.
+   **Jupyter notebooks are not yet supported.** Run ``visplot`` from a
+   plain interactive Python or CASA6 session (``ipython``, or a ``casa``
+   prompt).  ``visplot.notebook()`` exists but raises
+   ``NotImplementedError`` saying so.
 
 Prerequisites
 -------------
@@ -95,11 +78,13 @@ Download:
 
 .. note::
 
-   This is a different test MS than the one used in earlier
-   ``cubevis``/``VisibilityRaster``/``VisibilityScatter`` unit tests
-   (``sis14_twhya_calibrated_flagged.ms``, an ALMA Band 7 dataset with
-   4 SPWs and pre-existing flags). The two should not be confused when
-   comparing screenshots or reported behavior.
+   This is a different test MS than the one used in the ``visplot``
+   regression tests (``sis14_twhya_calibrated_flagged.ms``, ALMA Band 7,
+   one spectral window of 384 channels, 26 antennas with data, linear
+   feeds, pre-existing flags). The two should not be confused when
+   comparing screenshots or reported behavior.  VLBI behaviour is checked
+   against a subset of the VLBA tutorial data set TL016B (10 stations,
+   four 128-channel spectral windows at 5 GHz, RR/LL, uncalibrated).
 
 Launching visplot
 ------------------
@@ -167,14 +152,33 @@ Task arguments (preview)
        remaining antennas; ticked baselines select exactly those.
    * - ``scan``
      - str
-     - MSSelection scan string. **Not yet wired** — same caveat.
+     - Scans, CASA style: ``"1,3,7"``, ``"1~7"``, ``">30"``, ``"!5"``
+       (all but 5). The sidebar's *Scan* box starts with it.
    * - ``timerange``
      - str
-     - MSSelection time-range string. **Not yet wired** — same
-       caveat.
+     - UTC time range, CASA style: full dates
+       (``"2012/11/19/07:37:00~2012/11/19/08:00:00"``), times of day
+       (``"07:37:00~08:00"``, on the day of the data), open ends
+       (``">08:00"``, ``"<08:30"``), a start and a length
+       (``"08:00:00+00:10:00"``), AIPS-style day numbers
+       (``"1/00:10:00"``, as the time axis labels data that cross
+       midnight), or one time (the integration around it). One range.
+       The *Time range* box starts with it.
    * - ``uvrange``
      - str
-     - UV range selection string. **Not yet wired** — same caveat.
+     - UV-distance ranges, CASA style: ``"0~50klambda"``,
+       ``"100~300m"``, ``">200m"``, ``"<1.5km"``; several with commas.
+       Units m, km, lambda, klambda, Mlambda (metres if none);
+       wavelengths are taken at each spectral window's centre
+       frequency. Whole rows (one baseline at one time) are in or out.
+       The *UV range* box starts with it.
+   * - ``autocorr``
+     - str
+     - ``"exclude"`` (default; cross-correlations only), ``"include"``
+       or ``"only"``. On VLBI data before amplitude calibration the
+       autocorrelations are hundreds of times the cross-correlations and
+       flatten every plot of all baselines. A baseline named in
+       ``antenna`` (``"BR&BR"``) is plotted whatever this says.
    * - ``correlation``
      - str
      - Comma-separated correlation labels, e.g. ``"XX,YY"``. Default:
@@ -228,14 +232,33 @@ Task arguments (preview)
      - str or int
      - Channel window for the same statistic: ``"off"`` (default) or a
        number of channels.
-   * - ``mode``
-     - str
-     - ``"both"``, ``"raster"``, or ``"scatter"`` — initial display
-       mode (also togglable live in the GUI).
    * - ``layout``
      - str
-     - ``"side"`` (side-by-side) or ``"over"`` (stacked) — initial
-       panel layout (also togglable live in the GUI).
+     - ``"side"`` (side by side), ``"over"`` (stacked) or ``"one"`` --
+       initial panel layout (also the *One / Side by Side / Over /
+       Under* buttons). ``"raster"`` / ``"scatter"`` mean one panel of
+       that kind.
+   * - ``panels``
+     - list of dicts, optional
+     - Each panel's configuration, in screen order, one dict per panel
+       (at most two for now). Keys: ``kind``, ``raster_y``, ``raster_x``,
+       ``raster_qty``, ``averaging``, ``baseline_order``,
+       ``baseline_combine``, ``detrend``, ``stat_time_window``,
+       ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
+       ``scatter_avg_time``, ``scatter_avg_chan``, and for a raster
+       ``scaling``, ``vmin``, ``vmax``. A key left out takes what the
+       flat arguments or ``preset`` give that panel. This is the form the
+       plot summary prints (see *Reporting a problem*).
+   * - ``time_labels``
+     - str
+     - ``"utc"`` (default): time axes and the cursor readout give UTC
+       time of day, with the date in the axis label; ``"elapsed"``:
+       minutes and seconds from the first sample. Also the *Time labels*
+       switch.
+   * - ``plotfile``
+     - str, optional
+     - Write a PNG of the plot to this path instead of opening the
+       window; the task returns the path.
    * - ``preset``
      - str, optional
      - Named axis preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
@@ -246,23 +269,20 @@ Task arguments (preview)
        Corresponds to the toolbar preset buttons.
    * - ``time_range``
      - tuple/list of 2 floats, optional
-     - ``(start, end)`` as MJD floats — a numeric plot-range hint,
-       distinct from the string-based ``timerange`` selection above.
+     - ``(start, end)`` in UNIX seconds (UTC): the numeric form of
+       ``timerange``. Give one or the other.
    * - ``freq_range``
      - tuple/list of 2 floats, optional
      - ``(start, end)`` in Hz.
    * - ``uvdist_range``
      - tuple/list of 2 floats, optional
-     - ``(min, max)`` in metres.
+     - ``(min, max)`` UV distance in metres: the numeric form of
+       ``uvrange``. Give one or the other.
 
-.. caution::
-
-   ``scan``, ``timerange``, and ``uvrange`` are accepted
-   by ``visplot`` and pass type validation, but are **stored without
-   effect** in the preview — they do not currently filter what gets
-   plotted. Passing a value for one of these will not raise an error,
-   which can be misleading. Use ``field``, ``spw``, ``antenna``, and
-   ``correlation`` for selection in this release.
+Text in the selection arguments (and the sidebar boxes) that does not
+parse, or matches nothing in the data, is refused with a message saying
+what is accepted -- at construction for an argument, in the status line
+for a box (and nothing is plotted until it is corrected).
 
 All arguments are plain strings, numbers, or simple tuples/lists —
 there's no need to construct any internal ``cubevis`` objects to get a
@@ -321,7 +341,7 @@ Toolbar
   * *Ant×Ant* — the antenna × antenna matrix (AIPS LISTR's): one cell
     per baseline, averaged over time and channels, mirrored so an antenna
     that is bad on every baseline shows as a whole row and column; the
-    diagonal holds the autocorrelations when the data have them. Hover a
+    diagonal holds the autocorrelations when *Autocorrelations* is *Include*. Hover a
     cell for its baseline. Flag on Baseline × Time once the antenna is
     found (a flag box on the matrix is refused)
   * *Spectrum* — two scatter panels, Amplitude above Phase against
@@ -423,8 +443,86 @@ When both panels share the same X quantity (e.g. both are plotted
 against time), their X ranges are linked, so panning one pans the
 other.
 
-A basic verification workflow
--------------------------------
+A commissioning workflow
+-------------------------
+
+A first pass over a new observation, in the order the views are useful.
+Each step says what the view is *for*; the preset buttons set both
+panels at once.
+
+1. **Survey.** Which antennas, baselines and times are wrong?
+
+   * *Ant×Ant* -- one cell per baseline, averaged over the selection. An
+     antenna that is bad on every baseline is a whole row and column.
+   * *Z-Score* -- Baseline × Time coloured by how unusual each sample is
+     for its own baseline; isolated bright cells are outliers in time.
+   * *φrms·t* / *φrms·uv* -- phase stability per baseline over time, and
+     against baseline length: a rise with length is the atmosphere, one
+     high baseline is an antenna.
+   * *vplot* -- amplitude per baseline over time: dropouts, bad scans.
+
+   On data that are not yet amplitude calibrated, keep
+   *Autocorrelations* at *Exclude* (the default); otherwise they set the
+   scale and every cross-correlation reads as zero.
+
+2. **Confirm** on one baseline, stepping with Baseline ◀ ▶ (or Antenna
+   ◀ ▶ for all baselines to one antenna):
+
+   * *Waterfall* and *φ Wfall* -- time × channel amplitude and phase.
+     Narrow features in frequency or short ones in time are interference;
+     in phase, stripes across frequency are a residual delay and stripes
+     in time a rate.
+   * *Spectrum* (scan-averaged, like AIPS POSSM) and *Time series*
+     (channel-averaged, like VPLOT) -- the bandpass, edge channels, phase
+     slopes, jumps and drifts.
+   * *All-BL* -- every selected baseline in one waterfall (AIPS FTFLG),
+     showing the largest amplitude: interference common to many
+     baselines.
+
+   Narrow the data with *Scan*, *Time range* and *UV range* (Data
+   section) to look closely at one stretch of time or baseline length;
+   the status line lists whatever is in force.
+
+3. **Flag** on the view that shows the problem best, with a box from the
+   panel's toolbar. *Flag reaches* (Flagging section) widen each box to
+   all baselines of the antenna, all channels, all correlations, all
+   spectral windows, the whole scan or all fields, as AIPS TVFLG's
+   scopes do; *Preview each proposal* shows what a box will flag before
+   it is added. Undo, redo and *Describe pending flags* work on the
+   list of pending operations.
+
+4. **Commit.** Nothing is written until *Write to MS*, which first saves
+   a backup of the flags it changes. Export the pending flags as JSON to
+   keep a record or apply them elsewhere.
+
+Times are UTC throughout (axes, readout, Time range box); the *Time
+labels* switch (Panels section) changes the axes to elapsed time.
+
+Reporting a problem
+--------------------
+
+Each plot's toolbar has a **Describe this plot** button (a page icon,
+beside the gear). It opens a page with everything that went into that
+plot: the data set and how it was opened (local or remote kernel), the
+selection in full, the axes and every setting that shaped the image, the
+colour scaling, the displayed range and zoom, the number of pending
+flags, the versions of cubevis (with its git commit when run from a
+checkout) and the main libraries, and the ``visplot(...)`` call that
+reproduces the view, with a *Copy* button. The same page is available
+from Python as ``VisibilityPlotter.describe(slot="A", html=True)``.
+
+When reporting a problem, please include:
+
+* the summary page of the panel concerned (save it, or paste its text),
+* a screenshot, or a PNG from *Export PNG*,
+* what you expected to see, and -- if you have it -- the ``plotms`` or
+  AIPS plot of the same data that shows it.
+
+The summary lists what the call does not reproduce (zoom, pending flags,
+scatter colour settings, theme), so say if any of those matter.
+
+Checking against plotms
+------------------------
 
 The goal here isn't astronomical analysis — it's confirming that
 ``visplot`` is reading the MS correctly and rendering
@@ -459,10 +557,6 @@ same selection. A reasonable sequence:
    worked (the line was removed upstream, in ``uvcontsub``, before this
    MS was written).
 
-4. **Toggle Both / Raster only / Scatter only, and Side by Side / Over
-   Under.** Purely a preview-mechanics check — confirms the CustomJS
-   toggles are wiring up the right Bokeh containers.
-
 .. figure:: _static/vp_amp_vs_time.png
    :alt: visplot amp vs time
    :width: 100%
@@ -493,8 +587,8 @@ Axis vocabulary: visplot vs. plotms
 
 ``plotms`` axis names are the closest existing vocabulary an astronomer
 will already know (see :xref:`casadocs_dataexam` for the full
-reference). The preview's sidebar dropdowns are not a 1:1 match yet
-(fewer axes are exposed), but the concepts line up as follows:
+reference). visplot exposes fewer axes, chosen for commissioning; the
+concepts line up as follows:
 
 .. list-table::
    :header-rows: 1
@@ -510,8 +604,9 @@ reference). The preview's sidebar dropdowns are not a 1:1 match yet
      - Channel
      - 
    * - ``freq`` / ``frequency``
-     - *not yet exposed*
-     - planned
+     - Frequency
+     - scatter X; a raster's Channel axis reads frequency when several
+       spectral windows are shown
    * - ``amp`` / ``amplitude``
      - Amplitude
      - 
@@ -519,8 +614,8 @@ reference). The preview's sidebar dropdowns are not a 1:1 match yet
      - Phase
      - 
    * - ``real`` / ``imag``
-     - *not yet exposed*
-     - planned
+     - Real, Imaginary
+     - 
    * - ``uvdist``
      - UVdist
      - 
@@ -528,17 +623,21 @@ reference). The preview's sidebar dropdowns are not a 1:1 match yet
      - Correlation (selection, not yet a plottable/colorize axis)
      - 
    * - ``flag``
-     - *not yet exposed*
-     - flagged data can be shown (Flagging, *Show flagged data*); no
-       flag-state axis yet
+     - Flag (raster quantity: the flagged fraction of each cell)
+     - flagged data can also be shown (Flagging, *Show flagged data*)
    * - ``coloraxis``
-     - *not yet exposed*
-     - colorize-by-axis is planned; preview colors by layer only
+     - Colourize (scatter, per layer)
+     - continuous, categorical (e.g. by antenna, baseline, scan, field)
+       or statistical (Z-Score)
+   * - ``elevation``, ``hourangle``, ``azimuth``, ``parang``
+     - *not available*
+     - add if testers ask (computable from time, positions and field
+       direction)
 
 Scope, explicitly
 -----------------
 
-*Updated 2026-10-11, after the HRS requirements work.*
+*Updated 2026-10-11, before testing by astronomers.*
 
 Present and working:
 
@@ -559,28 +658,32 @@ Present and working:
   (antennas, all baselines, channels, correlations, spectral windows,
   scan, field), reason, undo / redo, a report, JSON export, and writing
   to the MS with a backup
-* Export PNG from the toolbar, and from Python without a browser
-  (``VisibilityPlotter(..., headless=True)(plotfile=...)``)
+* Selection by scan, time range (UTC) and UV range, CASA syntax;
+  autocorrelations excluded by default (*Autocorrelations* switch)
+* UTC time axes, readout and Time range box (or elapsed time)
+* The plot summary page and its reproducing call (*Reporting a problem*)
+* Export PNG from the toolbar, from Python without a browser
+  (``VisibilityPlotter(..., headless=True)(plotfile=...)``), and from
+  the task (``visplot(..., plotfile="out.png")``)
 * Shared pan/zoom/reset, linked X range when applicable; dark and light
 
 Not yet available:
 
-* ``scan``, ``timerange`` and ``uvrange`` selection: the boxes in the
-  Data section and the task arguments are accepted but **not yet
-  applied** to what is plotted
-* ``plotfile`` in the ``visplot`` task (use the Python form above)
-* Correlation as a raster axis
-* Locate; on-the-fly calibration
+* Jupyter notebooks (``visplot.notebook()`` says so)
+* Correlation as a raster axis (removed from the axis lists; a raster
+  shows the first ticked correlation, named in its title -- untick the
+  others to see a different one)
+* Flagging on the antenna × antenna matrix (refused, with the reason)
+* More than two panels
+* Locate; on-the-fly calibration; plotting calibration tables
 * A ``flagdata`` command export (removed; JSON and writing to the MS
   replace it)
 
 Feedback
 ---------
 
-If something in this preview looks visibly wrong compared to the
-``plotms``/``msview`` reference plots above — inverted axes, obviously
-wrong amplitude scaling, missing correlations, channels that don't
-match SPW metadata, etc. — that's exactly the kind of thing this
-verification pass is meant to catch. Note the discrepancy against the
-relevant screenshot pair in this document and file it against the
-``visplot`` preview implementation.
+If something looks wrong compared to ``plotms``, ``msview`` or AIPS --
+inverted axes, wrong amplitude scaling, missing correlations, channels
+that don't match the spectral window, times that don't match the
+observing log -- that is exactly what testing is meant to catch. Report
+it as described in *Reporting a problem*, with the plot summary page.

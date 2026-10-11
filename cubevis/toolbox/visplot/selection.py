@@ -110,7 +110,11 @@ class SelectionSpec:
     spw:
         Spectral window indices to include, or ``None`` for all SPWs.
     time_range:
-        ``(t_min, t_max)`` as MJD seconds, or ``None`` for all times.
+        ``(t_min, t_max)`` as UNIX seconds (UTC; the unit of the backends'
+        time coordinates), or ``None`` for all times.
+    uv_range:
+        ``[[lo, hi, unit], ...]`` UV-distance ranges (``unit`` ``"m"`` or
+        ``"lambda"``, ``None`` for an open end), or ``None`` for all.
     baselines:
         List of ``(ant1_name, ant2_name)`` string pairs, or ``None``
         for all baselines.
@@ -143,7 +147,34 @@ class SelectionSpec:
     """SPW indices, or ``None`` = all SPWs."""
 
     time_range: Optional[tuple[float, float]] = None
-    """``(t_min, t_max)`` MJD seconds, or ``None`` = all times."""
+    """``(t_min, t_max)`` UNIX seconds (UTC), or ``None`` = all times.
+
+    (Documented as MJD seconds until 2026-10-11; the backends have always
+    compared it with their time coordinate, which is UNIX seconds.)"""
+
+    autocorr: Optional[str] = None
+    """Autocorrelations (a baseline from an antenna to itself), HRS
+    2026-10-11: ``"exclude"``, ``"include"`` or ``"only"``; ``None`` is
+    ``"include"`` (every baseline the data have), the backends' default.
+    With ``"exclude"`` an autocorrelation listed in ``baselines`` is
+    still kept: what is asked for by name is plotted.  The plotter
+    defaults to ``"exclude"``: on VLBI data the autocorrelations are
+    hundreds of times the cross-correlations and flatten every plot of
+    all baselines."""
+
+    uv_range: Optional[list] = None
+    """UV-distance ranges, ``[[lo, hi, unit], ...]``, or ``None`` = all
+    (HRS A1, 2026-10-11).
+
+    A row -- one baseline at one time -- is kept when its UV distance is
+    in any of the ranges.  ``unit`` is ``"m"`` or ``"lambda"`` (the
+    distance in wavelengths at the centre frequency of the row's
+    spectral window); ``lo`` / ``hi`` are ``None`` for an open end.
+    Rows outside are made to look like rows the data do not have
+    (``XArrayReader._apply_uv_range``), so every plot, statistic and
+    flag evaluation leaves them out.  Parsed from CASA-style text by
+    ``selection_text.parse_uvrange_text``.  Lists, not tuples, so the
+    value is the same after the remote wire."""
 
     baselines: Optional[list[tuple[str, str]]] = None
     """``[(ant1_name, ant2_name), ...]``, or ``None`` = all baselines.
@@ -368,6 +399,8 @@ class SelectionSpec:
             and self.scan is None
             and self.spw is None
             and self.time_range is None
+            and not self.uv_range
+            and self.autocorr in (None, "include")
             and self.baselines is None
             and self.antenna_names is None
             and self.freq_range is None
@@ -382,6 +415,8 @@ class SelectionSpec:
             scan=list(self.scan) if self.scan is not None else None,
             spw=list(self.spw) if self.spw is not None else None,
             time_range=self.time_range,
+            uv_range=[list(r) for r in self.uv_range] if self.uv_range else None,
+            autocorr=self.autocorr,
             baselines=list(self.baselines) if self.baselines is not None else None,
             antenna_names=list(self.antenna_names) if self.antenna_names is not None else None,
             freq_range=self.freq_range,

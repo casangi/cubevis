@@ -154,6 +154,11 @@ def _{{ task_name }}_t(
 {%- endif %}
     )
 
+    # plotfile= (visplot, 2026-10-11): a headless export, no GUI.
+    if getattr(_app, '_plotfile', None):
+        with _app:
+            return _app()
+
     id = uuid4( )
     context = exe.Context( exe.Mode.SYNC )
     bokeh_ui, exec_task = _app( context, id )
@@ -208,7 +213,17 @@ class _{{ task_name }}:
         return task_result
 
     def notebook(self, *args, **kwargs):
-        from .{{ task_name }}_notebook import {{ task_name }}_notebook
+        # A task without a notebook entry point says so plainly instead
+        # of failing with ModuleNotFoundError (visplot, 2026-10-11).
+        try:
+            from .{{ task_name }}_notebook import {{ task_name }}_notebook
+        except ModuleNotFoundError as exc:
+            if exc.name and exc.name.endswith("{{ task_name }}_notebook"):
+                raise NotImplementedError(
+                    "{{ task_name }}.notebook() is not yet available; run "
+                    "{{ task_name }}(...) from an interactive Python or CASA "
+                    "session instead") from None
+            raise
         return {{ task_name }}_notebook(*args, **kwargs)
 
 

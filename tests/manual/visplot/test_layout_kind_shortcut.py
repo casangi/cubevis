@@ -126,31 +126,13 @@ class TestOrdinaryLayoutValues:
 # ---------------------------------------------------------------------------
 
 def _lift_slot_kind_exprs():
-    """Pull the ``_slot_a_kind``/``_slot_b_kind`` assignment expressions
-    out of ``VisibilityPlotter._build_panels``.
-
-    Returns compiled expressions evaluable given a namespace with
-    ``self._kind`` set.
-    """
-    tree = ast.parse(_SRC)
-    cls = next(n for n in ast.walk(tree)
-               if isinstance(n, ast.ClassDef) and n.name == "VisibilityPlotter")
-    fn = next(n for n in ast.walk(cls)
-              if isinstance(n, ast.FunctionDef) and n.name == "_build_panels")
-
-    exprs = {}
-    for node in ast.walk(fn):
-        if not isinstance(node, ast.Assign):
-            continue
-        target = node.targets[0]
-        if isinstance(target, ast.Name) and target.id in ("_slot_a_kind", "_slot_b_kind"):
-            exprs[target.id] = compile(ast.Expression(node.value), "<lifted>", "eval")
-
-    assert set(exprs) == {"_slot_a_kind", "_slot_b_kind"}, (
-        "expected exactly one assignment each to _slot_a_kind/_slot_b_kind "
-        f"in _build_panels, found {set(exprs)}"
-    )
-    return exprs
+    """The slot-kind rule.  Since HRS A2 (2026-10-11) it lives in
+    ``VisibilityPlotter._resolve_slot_configs`` (each slot's settings are
+    resolved there, then ``panels=[...]`` applied), so the rule is called
+    directly on a stand-in ``self`` instead of being lifted from
+    ``_build_panels`` by AST."""
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    return VisibilityPlotter
 
 
 @pytest.fixture(scope="module")
@@ -158,11 +140,18 @@ def slot_kind_exprs():
     return _lift_slot_kind_exprs()
 
 
-def _eval_slot_kinds(exprs, kind, **extra):
-    fake_self = types.SimpleNamespace(_kind=kind, **extra)
-    ns = {"self": fake_self}
-    return (eval(exprs["_slot_a_kind"], {}, ns),
-            eval(exprs["_slot_b_kind"], {}, ns))
+def _eval_slot_kinds(cls, kind, **extra):
+    from cubevis.toolbox.visplot.axes import Axis
+    fake_self = types.SimpleNamespace(
+        _kind=kind, _raster_y=Axis.TIME, _raster_x=Axis.CHANNEL,
+        _raster_qty=Axis.AMPLITUDE, _averaging="vector",
+        _baseline_order="number", _baseline_combine="mean", _detrend=True,
+        _stat_time_window="auto", _stat_chan_window="off",
+        _scatter_x=Axis.UVDIST, _scatter_y=Axis.AMPLITUDE,
+        _scatter_avg_time="off", _scatter_avg_chan="off",
+        _PANEL_KEYS=cls._PANEL_KEYS, MAX_PANELS=cls.MAX_PANELS, **extra)
+    cfg = cls._resolve_slot_configs(fake_self, None)
+    return cfg[0]["kind"], cfg[1]["kind"]
 
 
 class TestSlotKindWiring:

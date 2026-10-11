@@ -601,6 +601,18 @@ class VisibilityPlot(Model):
     status_text   = String(default="",   help="Status / hover label text")
     is_rendering  = Bool(default=False,  help="True while a re-render is in flight")
 
+    # How a time axis is labelled: "utc" (time of day; the axis label
+    # carries the date) or "elapsed" (from the first sample).  HRS A0,
+    # 2026-10-11.  Set per instance by the plotter (``time_labels=``).
+    _time_labels: str = "utc"
+
+    def set_time_labels(self, mode: str) -> None:
+        """Label time axes and readouts as ``"utc"`` or ``"elapsed"``."""
+        if mode not in ("utc", "elapsed"):
+            raise ValueError(f"time_labels must be 'utc' or 'elapsed', not {mode!r}")
+        self._time_labels = mode
+        self._update_state_source()
+
     def __init__(
         self,
         backend: "VisibilityReader",
@@ -1349,13 +1361,15 @@ class VisibilityPlot(Model):
         self._fig.yaxis.formatter = CustomJSTickFormatter(
             args={"state": self._state_source,
                   "axis_key": "y_is_time", "t0_key": "y_t0",
-                  "scale_key": "y_scale", "cat_key": "y_cat"},
+                  "scale_key": "y_scale", "cat_key": "y_cat",
+                  "day_key": "y_day0"},
             code=TICK_FORMATTER_JS,
         )
         self._fig.xaxis.formatter = CustomJSTickFormatter(
             args={"state": self._state_source,
                   "axis_key": "x_is_time", "t0_key": "x_t0",
-                  "scale_key": "x_scale", "cat_key": "x_cat"},
+                  "scale_key": "x_scale", "cat_key": "x_cat",
+                  "day_key": "x_day0"},
             code=TICK_FORMATTER_JS,
         )
         # An axis drawn in whole positions (a raster's Baseline axis) has
@@ -1364,11 +1378,19 @@ class VisibilityPlot(Model):
         # change later.
         try:
             spec = self._panel_spec()
-            for axes, ticks in ((self._fig.xaxis, spec.x_ticks),
-                                (self._fig.yaxis, spec.y_ticks)):
+            from .tick_format import set_time_ticker
+            for axes, ticks, is_utc in (
+                    (self._fig.xaxis, spec.x_ticks,
+                     spec.x_is_time and spec.time_labels == "utc"),
+                    (self._fig.yaxis, spec.y_ticks,
+                     spec.y_is_time and spec.time_labels == "utc")):
                 for ax in axes:
                     if hasattr(ax.ticker, "min_interval"):
                         ax.ticker.min_interval = 1 if ticks else 0
+                    # A UTC time axis ticks on whole seconds / minutes /
+                    # hours (base 60); cvIntegerTicks does the same.
+                    if hasattr(ax.ticker, "base"):
+                        set_time_ticker(ax.ticker, is_utc)
                     # Every label when there are few (antenna matrix, HRS
                     # H7); the Plot response (cvIntegerTicks) does the same.
                     if hasattr(ax.ticker, "desired_num_ticks"):
@@ -2130,6 +2152,12 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
             else:
                 origin = getattr(self, "_x_origin", None)
                 origin = self._x_range[0] if origin is None else origin
+            if self._time_labels == "utc":
+                from .tick_format import utc_datetime_text
+                try:
+                    return f"<b>{label}:</b> {utc_datetime_text(float(value))} UTC"
+                except (OverflowError, ValueError, OSError):
+                    pass
             return f"<b>{label}:</b> {format_tick(float(value), True, origin)}"
         scaled, unit = si_scale(float(value), info.unit)
         text = f"{scaled:.6g}" if not unit else f"{scaled:.6g} {unit}"

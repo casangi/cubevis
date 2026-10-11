@@ -69,6 +69,9 @@ def _validate_params(
         kind,
         preset,
         pin_layout,
+        time_labels,
+        autocorr,
+        panels,
         raster_y,
         raster_x,
         raster_qty,
@@ -83,6 +86,7 @@ def _validate_params(
         theme,
         raster_cmap,
         scatter_cmap,
+        plotfile,
         flag_filters,
         flag_preview,
         flag_display,
@@ -120,6 +124,9 @@ def _validate_params(
         'kind': 'Optional[str]',
         'preset': 'Optional[str]',
         'pin_layout': 'bool',
+        'time_labels': 'str',
+        'autocorr': 'str',
+        'panels': 'Optional[list]',
         'raster_y': 'Optional[str]',
         'raster_x': 'Optional[str]',
         'raster_qty': 'Optional[str]',
@@ -134,6 +141,7 @@ def _validate_params(
         'theme': 'str',
         'raster_cmap': 'Optional[str]',
         'scatter_cmap': 'Optional[str]',
+        'plotfile': 'Optional[str]',
         'flag_filters': 'Optional[dict]',
         'flag_preview': 'bool',
         'flag_display': 'str',
@@ -229,6 +237,9 @@ def _validate_params(
     _check('kind', kind, _type_map['kind'])
     _check('preset', preset, _type_map['preset'])
     _check('pin_layout', pin_layout, _type_map['pin_layout'])
+    _check('time_labels', time_labels, _type_map['time_labels'])
+    _check('autocorr', autocorr, _type_map['autocorr'])
+    _check('panels', panels, _type_map['panels'])
     _check('raster_y', raster_y, _type_map['raster_y'])
     _check('raster_x', raster_x, _type_map['raster_x'])
     _check('raster_qty', raster_qty, _type_map['raster_qty'])
@@ -243,6 +254,7 @@ def _validate_params(
     _check('theme', theme, _type_map['theme'])
     _check('raster_cmap', raster_cmap, _type_map['raster_cmap'])
     _check('scatter_cmap', scatter_cmap, _type_map['scatter_cmap'])
+    _check('plotfile', plotfile, _type_map['plotfile'])
     _check('flag_filters', flag_filters, _type_map['flag_filters'])
     _check('flag_preview', flag_preview, _type_map['flag_preview'])
     _check('flag_display', flag_display, _type_map['flag_display'])
@@ -280,6 +292,9 @@ def _visplot_t(
         kind: Optional[str] = None,
         preset: Optional[str] = None,
         pin_layout: bool = False,
+        time_labels: str = 'utc',
+        autocorr: str = 'exclude',
+        panels: Optional[list] = None,
         raster_y: Optional[str] = None,
         raster_x: Optional[str] = None,
         raster_qty: Optional[str] = None,
@@ -294,6 +309,7 @@ def _visplot_t(
         theme: str = 'dark',
         raster_cmap: Optional[str] = None,
         scatter_cmap: Optional[str] = None,
+        plotfile: Optional[str] = None,
         flag_filters: Optional[dict] = None,
         flag_preview: bool = False,
         flag_display: str = 'hide',
@@ -330,6 +346,9 @@ def _visplot_t(
         kind = kind,
         preset = preset,
         pin_layout = pin_layout,
+        time_labels = time_labels,
+        autocorr = autocorr,
+        panels = panels,
         raster_y = raster_y,
         raster_x = raster_x,
         raster_qty = raster_qty,
@@ -344,6 +363,7 @@ def _visplot_t(
         theme = theme,
         raster_cmap = raster_cmap,
         scatter_cmap = scatter_cmap,
+        plotfile = plotfile,
         flag_filters = flag_filters,
         flag_preview = flag_preview,
         flag_display = flag_display,
@@ -358,6 +378,11 @@ def _visplot_t(
         enable_flagging = True,
         headless = False,
     )
+
+    # plotfile= (visplot, 2026-10-11): a headless export, no GUI.
+    if getattr(_app, '_plotfile', None):
+        with _app:
+            return _app()
 
     id = uuid4( )
     context = exe.Context( exe.Mode.SYNC )
@@ -409,11 +434,24 @@ class _visplot:
         what is initially ticked in the sidebar's Antenna and Baseline
         tables.
     scan : str
-        MSSelection scan string.  (Stored; not yet wired.)
+        Scans, CASA style: ``"1,3,7"``, ``"1~7"``, ``">30"``, ``"!5"``.
+        The sidebar's Scan box starts with it.  Text that matches no scan
+        raises ``ValueError``.  Default: all.
     timerange : str
-        MSSelection time-range string.  (Stored; not wired.)
+        UTC time range, CASA style: ``"2012/11/19/07:37:00~2012/11/19/
+        08:00:00"``, ``"07:37:00~08:00"`` (times of day, on the day of the
+        data), ``">08:00"``, ``"<08:30"``, ``"08:00:00+00:10:00"`` (start
+        and length), ``"1/00:10:00"`` (day number / time, as the time axis
+        labels data that cross midnight), or one time (the integration
+        around it).  One range.  The Time range box starts with it.
+        Default: all.
     uvrange : str
-        UV range string.  (Stored; not wired.)
+        UV-distance ranges, CASA style: ``"0~50klambda"``, ``"100~300m"``,
+        ``">200m"``, ``"<1.5km"``, several with commas; units m, km,
+        lambda, klambda, Mlambda, metres if none.  Wavelengths are taken
+        at each spectral window's centre frequency, and whole rows (a
+        baseline at one time) are in or out.  The UV range box starts
+        with it.  Default: all.
     correlation : str
         Comma-separated correlation labels (``"XX,YY"``).  Default: all.
     datacolumn : str
@@ -510,9 +548,45 @@ class _visplot:
         Start with "Pin layout" ticked: presets (this ``preset`` and the
         toolbar buttons) keep the current layout -- ``layout`` -- instead
         of switching to their own.  Default ``False``.
+    panels : list[dict] | None
+        Each panel's configuration, in screen order: ``[{...}, {...}]``,
+        one dict per panel, so that a two-panel view can be written as
+        arguments (and the plot summary can print the call that
+        reproduces what is on screen).  Keys are the names of the
+        per-panel arguments below -- ``kind``, ``raster_y``, ``raster_x``,
+        ``raster_qty``, ``averaging``, ``baseline_order``,
+        ``baseline_combine``, ``detrend``, ``stat_time_window``,
+        ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
+        ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
+        ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
+        and ``vmax`` (its colour scale).  A key left out takes the value
+        the flat argument (or ``preset``) gives that panel, so the flat
+        arguments still describe the first panel; an unknown key raises.
+        At most two panels for now.  ``layout`` still decides how many are
+        shown.  Example (Spectrum written out)::
+
+            panels=[dict(kind="scatter", scatter_x="FREQUENCY",
+                         scatter_y="AMPLITUDE", scatter_avg_time="scan"),
+                    dict(kind="scatter", scatter_x="FREQUENCY",
+                         scatter_y="PHASE", scatter_avg_time="scan")],
+            layout="over"
+    autocorr : str
+        Autocorrelations (baselines from an antenna to itself):
+        ``"exclude"`` (default; cross-correlations only), ``"include"``
+        or ``"only"``.  On VLBI data before amplitude calibration the
+        autocorrelations are hundreds of times the cross-correlations and
+        flatten every plot of all baselines.  A baseline named in
+        ``antenna`` (``"BR&BR"``) is plotted whatever this says.  Also the
+        "Autocorrelations" switch in the Data section.
+    time_labels : str
+        How time axes and the cursor readout give time: ``"utc"``
+        (default; time of day, the date in the axis label, AIPS-style
+        ``d/hh:mm:ss`` when the data cross a UTC midnight) or
+        ``"elapsed"`` (minutes and seconds from the first sample).
+        Also the "Time labels" switch in the configuration panel.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
-        ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
+        ``"CHANNEL"``, ``"ANTENNA1"`` / ``"ANTENNA2"`` (together). Takes precedence over
         ``preset``, which takes precedence over the default
         (Time vs. Channel). Validated against the same options the
         raster axis dropdowns expose in the GUI — an invalid value
@@ -530,11 +604,15 @@ class _visplot:
         directly into a U-vs-V UV-coverage scatter plot with no manual
         axis-picker step needed.
     time_range : tuple[float, float] | list[float] | None
-        ``(start, end)`` as MJD floats.
+        ``(start, end)`` in UNIX seconds (UTC), the programmatic form of
+        ``timerange``; shown in the Time range box as text.  Give one or
+        the other.
     freq_range : tuple[float, float] | list[float] | None
         ``(start, end)`` in Hz.
     uvdist_range : tuple[float, float] | list[float] | None
-        ``(min, max)`` in metres.
+        ``(min, max)`` UV distance in metres, the programmatic form of
+        ``uvrange``; shown in the UV range box as text.  Give one or the
+        other.
     compact_toolbar : bool
         Whether each figure's toolbar auto-hides until the mouse is over
         that plot.  Defaults to ``True``.
@@ -581,6 +659,12 @@ class _visplot:
         TW Hya with all fields (2 x 31 M samples, ~1.5 GiB per frame) needs
         about 3-4 GiB; on a 24 GB Mac the 2.4 GiB default evicted frames
         and a flag box took 3.6 s instead of 0.5 s.
+    plotfile : str | None
+        Write a PNG of the plot to this path instead of opening the GUI
+        (the ``visplot`` task then returns the path).  Implies
+        ``headless=True``; ``theme`` and ``layout`` apply.  A plotter
+        built this way can be called again with other selections to
+        write more files (see ``__call__``).
 
     Resource lifecycle
     ------------------
@@ -640,6 +724,9 @@ class _visplot:
             kind: Optional[str] = None,
             preset: Optional[str] = None,
             pin_layout: bool = False,
+            time_labels: str = 'utc',
+            autocorr: str = 'exclude',
+            panels: Optional[list] = None,
             raster_y: Optional[str] = None,
             raster_x: Optional[str] = None,
             raster_qty: Optional[str] = None,
@@ -654,6 +741,7 @@ class _visplot:
             theme: str = 'dark',
             raster_cmap: Optional[str] = None,
             scatter_cmap: Optional[str] = None,
+            plotfile: Optional[str] = None,
             flag_filters: Optional[dict] = None,
             flag_preview: bool = False,
             flag_display: str = 'hide',
@@ -703,6 +791,9 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             kind = kind,
             preset = preset,
             pin_layout = pin_layout,
+            time_labels = time_labels,
+            autocorr = autocorr,
+            panels = panels,
             raster_y = raster_y,
             raster_x = raster_x,
             raster_qty = raster_qty,
@@ -717,6 +808,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             theme = theme,
             raster_cmap = raster_cmap,
             scatter_cmap = scatter_cmap,
+            plotfile = plotfile,
             flag_filters = flag_filters,
             flag_preview = flag_preview,
             flag_display = flag_display,
@@ -754,6 +846,9 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'kind=' + repr(kind),
                 'preset=' + repr(preset),
                 'pin_layout=' + repr(pin_layout),
+                'time_labels=' + repr(time_labels),
+                'autocorr=' + repr(autocorr),
+                'panels=' + repr(panels),
                 'raster_y=' + repr(raster_y),
                 'raster_x=' + repr(raster_x),
                 'raster_qty=' + repr(raster_qty),
@@ -768,6 +863,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'theme=' + repr(theme),
                 'raster_cmap=' + repr(raster_cmap),
                 'scatter_cmap=' + repr(scatter_cmap),
+                'plotfile=' + repr(plotfile),
                 'flag_filters=' + repr(flag_filters),
                 'flag_preview=' + repr(flag_preview),
                 'flag_display=' + repr(flag_display),
@@ -806,6 +902,9 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 kind = kind,
                 preset = preset,
                 pin_layout = pin_layout,
+                time_labels = time_labels,
+                autocorr = autocorr,
+                panels = panels,
                 raster_y = raster_y,
                 raster_x = raster_x,
                 raster_qty = raster_qty,
@@ -820,6 +919,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 theme = theme,
                 raster_cmap = raster_cmap,
                 scatter_cmap = scatter_cmap,
+                plotfile = plotfile,
                 flag_filters = flag_filters,
                 flag_preview = flag_preview,
                 flag_display = flag_display,
@@ -838,7 +938,17 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
         return task_result
 
     def notebook(self, *args, **kwargs):
-        from .visplot_notebook import visplot_notebook
+        # A task without a notebook entry point says so plainly instead
+        # of failing with ModuleNotFoundError (visplot, 2026-10-11).
+        try:
+            from .visplot_notebook import visplot_notebook
+        except ModuleNotFoundError as exc:
+            if exc.name and exc.name.endswith("visplot_notebook"):
+                raise NotImplementedError(
+                    "visplot.notebook() is not yet available; run "
+                    "visplot(...) from an interactive Python or CASA "
+                    "session instead") from None
+            raise
         return visplot_notebook(*args, **kwargs)
 
 

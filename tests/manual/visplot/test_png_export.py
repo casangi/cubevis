@@ -75,7 +75,7 @@ def make_spec(kind="raster", title="Amplitude  [Time vs Channel]  pol=XX",
               x_label="Channel", y_label="Time",
               x_range=(0.0, 48.0), y_range=(T0, T1),
               x_is_time=False, y_is_time=True, bands=None,
-              status="ok", note=None, w=96, h=64):
+              status="ok", note=None, w=96, h=64, time_labels="utc"):
     if bands is None:
         bands = (ColorBand(label="Amplitude", cmap=PLASMA, scaling="eq_hist"),)
     return PanelSpec(
@@ -83,7 +83,7 @@ def make_spec(kind="raster", title="Amplitude  [Time vs Channel]  pol=XX",
         x_range=x_range, y_range=y_range,
         x_is_time=x_is_time, y_is_time=y_is_time,
         agg_n_x=w, agg_n_y=h, color_mode="global",
-        bands=bands, status=status, note=note,
+        bands=bands, status=status, note=note, time_labels=time_labels,
     )
 
 
@@ -302,7 +302,7 @@ class TestEmptyCells:
         (4800001750.0000) instead of 29m 10s.
         """
         empty = make_empty(title="spw=3", x_label="Channel", y_label="Time")
-        pe.export_png([make_panel(), empty],
+        pe.export_png([make_panel(time_labels="elapsed"), empty],
                       str(tmp_path / "p.png"), nrows=1, ncols=2)
         fmt = spy_axes[1].yaxis.get_major_formatter()
         assert fmt(T0 + 1750.0, 0) == "29m 10s"
@@ -333,10 +333,19 @@ class TestChrome:
 
     def test_time_axis_uses_elapsed_formatter(self, tmp_path, spy_axes):
         """Matches the browser's CustomJSTickFormatter, via tick_format."""
-        pe.export_png([make_panel()], str(tmp_path / "p.png"))
+        pe.export_png([make_panel(time_labels="elapsed")], str(tmp_path / "p.png"))
         fmt = spy_axes[0].yaxis.get_major_formatter()
         assert fmt(T0, 0) == "0.0 s"
         assert fmt(T0 + 125.0, 0) == "2m 05s"
+
+    def test_time_axis_utc_formatter(self, tmp_path, spy_axes):
+        """The default (HRS A0): UTC time of day, the date in the label."""
+        from cubevis.toolbox.visplot.tick_format import format_utc, utc_date
+        pe.export_png([make_panel()], str(tmp_path / "p.png"))
+        ax = spy_axes[0]
+        fmt = ax.yaxis.get_major_formatter()
+        assert fmt(T0 + 120.0, 0) == format_utc(T0 + 120.0)
+        assert ax.get_ylabel() == f"Time [UTC, {utc_date(T0)}]"
 
     def test_non_time_axis_trims_trailing_zeros(self, tmp_path, spy_axes):
         """"24", not "24.0000" -- trailing zeros are noise on a channel axis."""
@@ -352,7 +361,7 @@ class TestChrome:
         pe.export_png([make_panel()], str(tmp_path / "p.png"))
         ax = spy_axes[0]
         assert ax.get_xlabel() == "Channel"
-        assert ax.get_ylabel() == "Time"
+        assert ax.get_ylabel().startswith("Time [UTC, ")
         assert ax.get_title() == "Amplitude  [Time vs Channel]  pol=XX"
 
     def test_multi_band_panel_gets_a_legend(self, tmp_path, spy_axes):
@@ -856,7 +865,9 @@ class TestAxisSIPrefix:
         seconds by 1e9 would be nonsense."""
         spec = self._spec()
         assert spec.axis_scale("y") == (1.0, "s")
-        assert spec.axis_label("y") == "Time [s]"
+        # HRS A0: a time axis is labelled with its UTC date (or what
+        # elapsed time counts from), never with a prefixed unit.
+        assert spec.axis_label("y").startswith("Time [UTC, ")
 
     def test_dimensionless_axis_is_unlabelled(self):
         spec = self._spec(x_label="Amplitude", x_unit="", x_is_time=False)

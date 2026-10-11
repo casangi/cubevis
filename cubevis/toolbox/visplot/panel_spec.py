@@ -227,7 +227,11 @@ class ColorBand:
         without scaling, and is why scatter colorbars default to off.
         """
         if self.kind == "density" and self.peak_density:
-            return f"{self.label}  (\u2264{self.peak_density:.0f} pts/px)"
+            pk = self.peak_density
+            # Averaged points are sparse: a peak under one per pixel read
+            # "<=0 pts/px" with no decimals (B2, 2026-10-11).
+            txt = f"{pk:.0f}" if pk >= 10 else f"{pk:.2g}"
+            return f"{self.label}  (\u2264{txt} pts/px)"
         return self.label
 
     def bin_area(self, spec: "PanelSpec") -> tuple[float, float]:
@@ -344,6 +348,19 @@ class PanelSpec:
     y_origin:   Optional[float] = None
     x_ticks:    Optional[tuple] = None
     y_ticks:    Optional[tuple] = None
+    # Added 2026-10-11 (HRS A0): how a time axis is labelled, "utc"
+    # (time of day, the default since A0) or "elapsed" (from the axis
+    # origin, what every time axis showed before).
+    time_labels: str = "utc"
+
+    def time_day0(self, axis: str = "x"):
+        """Day number for the AIPS-style ``d/`` prefix of a UTC axis that
+        crosses a UTC midnight, else ``None``."""
+        from .tick_format import time_day0
+        if not (self.x_is_time if axis == "x" else self.y_is_time):
+            return None
+        lo, hi = self.x_range if axis == "x" else self.y_range
+        return time_day0(float(lo), float(hi))
 
     def axis_origin(self, axis: str = "x") -> float:
         """Origin of elapsed-time labels on one axis."""
@@ -388,6 +405,21 @@ class PanelSpec:
         """
         base = self.x_label if axis == "x" else self.y_label
         base = base.split(" [")[0]      # drop any unit already present
+        if self.x_is_time if axis == "x" else self.y_is_time:
+            # HRS A0: the label carries what the ticks cannot -- the UTC
+            # date, or what elapsed time counts from.
+            from .tick_format import format_utc, utc_date
+            origin = self.axis_origin(axis)
+            # A placeholder extent before any data (0..1) is no date.
+            if not (abs(origin) > 1e8):
+                return base
+            try:
+                if self.time_labels == "utc":
+                    return f"{base} [UTC, {utc_date(origin)}]"
+                return (f"{base} [elapsed from {utc_date(origin)} "
+                        f"{format_utc(origin)} UTC]")
+            except (OverflowError, ValueError, OSError):
+                return base
         _, unit = self.axis_scale(axis)
         return base + (f" [{unit}]" if unit else "")
 
@@ -433,6 +465,12 @@ class PanelSpec:
             "y_t0":      [self.axis_origin("y")],
             "x_cat":     [list(self.x_ticks) if self.x_ticks is not None else None],
             "y_cat":     [list(self.y_ticks) if self.y_ticks is not None else None],
+            # Added deliberately, 2026-10-11 (HRS A0): UTC or elapsed
+            # labels on a time axis, and the day number for the d/ prefix
+            # of a UTC axis crossing midnight (None otherwise).
+            "time_labels": [self.time_labels],
+            "x_day0":    [self.time_day0("x")],
+            "y_day0":    [self.time_day0("y")],
         }
 
         if self.kind == "scatter":

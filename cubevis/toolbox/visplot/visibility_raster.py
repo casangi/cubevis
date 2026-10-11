@@ -1518,6 +1518,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             y_origin   = self._y_origin,
             x_ticks    = bl_ticks if x_is_bl else None,
             y_ticks    = bl_ticks if y_is_bl else None,
+            time_labels = self._time_labels,
         )
 
     def _bands_with_mappings(self, spec, viewport=None):

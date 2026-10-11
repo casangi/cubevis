@@ -287,6 +287,12 @@ class TestAntennaNamesGatesAxesChanged:
         # closing paren in the actual source (confirmed directly).
         end = src.index("\n                try:", start)
         block = src[start:end]
+        # Since HRS A1 (2026-10-11) the block calls one helper that
+        # compares every row-deciding field (the hand-kept lists had
+        # missed scan / time / UV range); antenna_names must be in it.
+        from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+        if "_rows_selection_changed" in block:
+            block = " ".join(VisibilityPlotter._ROW_FIELDS)
         assert "antenna_names" in block, (
             "raster's axes_changed no longer compares antenna_names -- "
             "Prev/Next on the Antenna field would silently stop "
@@ -298,6 +304,12 @@ class TestAntennaNamesGatesAxesChanged:
         start = src.index("axes_changed = (\n                    did_reload or\n                    slot.id in switched_kind_this_round or\n                    never_rendered")
         end = src.index("\n                try:", start)
         block = src[start:end]
+        # Since HRS A1 (2026-10-11) the block calls one helper that
+        # compares every row-deciding field (the hand-kept lists had
+        # missed scan / time / UV range); antenna_names must be in it.
+        from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+        if "_rows_selection_changed" in block:
+            block = " ".join(VisibilityPlotter._ROW_FIELDS)
         assert "antenna_names" in block, (
             "scatter's axes_changed no longer compares antenna_names -- "
             "Prev/Next on the Antenna field would silently stop "

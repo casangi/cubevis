@@ -212,6 +212,9 @@ class TestRealRaster:
     @pytest.mark.parametrize("x_dim", [Axis.CHANNEL, Axis.FREQUENCY])
     def test_ranges_and_time_origin_survive_a_zoom(self, backend, x_dim):
         vr = _raster(backend, x_dim=x_dim)
+        # The elapsed-time origin is what must survive (UTC labels, the
+        # default since HRS A0, have no origin to lose).
+        vr._time_labels = "elapsed"
         vr._is_decimated = True
         X, Y = vr._x_range, vr._y_range
         t = _truth(backend, x_dim=x_dim).coords["time"].values

@@ -77,6 +77,7 @@ Package location
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import base64
 import json
 import logging
@@ -112,6 +113,8 @@ from .data._raster_stats import normalize_chan_window, normalize_time_window
 from .data._scatter_average import normalize_avg_chan, normalize_avg_time
 from . import antenna_baseline_select as _abs
 from .antenna_baseline_select import SELECTION_PAYLOAD_JS as _SELECTION_PAYLOAD_JS
+from .selection_text import (SelectionTextError, parse_scan_text,
+                             parse_timerange_text, parse_uvrange_text)
 from .visibility_raster import VisibilityRaster
 from .visibility_scatter import VisibilityScatter, ScatterLayer, _LAYER_CMAPS
 from .data.reader import DEFAULT_CATEGORY_PRIORITY as _DEFAULT_CATEGORY_PRIORITY
@@ -202,7 +205,7 @@ _STATUS_HEIGHT     = 96
 _STATIC_HINTS = {
     "col": "<b>Data column</b> \u2014 which visibilities are plotted  | <b>DATA</b>: as observed  | <b>CORRECTED_DATA</b>: after calibration has been applied  | <b>MODEL_DATA</b>: what the calibration model predicts  | Only the columns this dataset has are listed",
     # ---- raster gear tab
-    "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: one cell per baseline over time and channels, mirrored, so a bad antenna is a whole row and column (the Ant\u00d7Ant preset); the two Antenna axes only go together  | Y and X must differ; Correlation is not available yet",
+    "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: one cell per baseline over time and channels, mirrored, so a bad antenna is a whole row and column (the Ant\u00d7Ant preset); the two Antenna axes only go together  | Y and X must differ  | The raster shows the first ticked correlation (named in its title); untick the others to see a different one",
     "r_qty": "<b>Raster quantity</b> \u2014 what the colour shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
     "scaling": "<b>Colour scaling</b> \u2014 how values are spread over the colours; changes the picture, never the data  | <b>eq_hist</b> uses every colour equally and shows faint structure, but distances between colours mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap",
     "bcombine": "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines: any raster without Baseline on an axis, such as Time \u00d7 Channel with no single baseline ticked. Averaging (above) applies to the samples of each baseline; this is what happens to the baselines  | <b>Mean</b>: the average of the baselines\u2019 amplitudes. The general picture of the selected baselines; a problem on a few of them is diluted  | <b>Median</b>: the middle baseline at each cell: what most baselines share, unmoved by a few bad ones. A feature that shows in Maximum but not in Median is on a few baselines (find and flag those); one in both is on most of them  | <b>Maximum</b>: the largest baseline at each cell. Interference or a bad antenna shows even if only one baseline has it; then tick baselines to find which  | <b>Coherent</b>: the baselines are added as complex numbers first. Only for a calibrated point source, where all baselines agree and noise averages down; on anything else they cancel and the plot reads low  | Applies to Amplitude, Phase (Mean, Median and Maximum all give the mean direction), Amp V Diff and Phase Diff. A flag box on such a plot flags every selected baseline",
@@ -229,6 +232,8 @@ _STATIC_HINTS = {
     "tb_layout": "<b>Layout</b> \u2014 one panel, or both: side by side or one above the other  | Side by side suits Baseline \u00d7 Time; one above the other gives a waterfall the full width  | Each preset switches to the layout that suits it, unless <b>Pin layout</b> (in the configuration panel) is ticked",
     "gear_pin": "<b>Pin</b> \u2014 keep this panel's configuration tab open after <b>Plot &#9654;</b>, to try one setting after another (the Ant\u00d7Ant quantities, say)  | Unticked, a successful Plot closes the tab  | \u2715 closes it either way",
     "pin_layout": "<b>Pin layout</b> \u2014 keep the panels arranged as they are now (One, Side by Side or Over / Under) when a preset is pressed  | Unticked, each preset switches to the arrangement that suits it (Spectrum and the waterfalls one above the other, the others side by side)  | Only the arrangement is kept: a preset still sets what each panel shows  | The Layout buttons in the toolbar change the arrangement either way",
+    "autocorr": "<b>Autocorrelations</b> \u2014 baselines from an antenna to itself  | <b>Exclude</b> (default): cross-correlations only. Autocorrelations can be hundreds of times larger (VLBI data before amplitude calibration) and flatten every plot of all baselines  | <b>Include</b>: both; the Ant\u00d7Ant matrix then has its diagonal  | <b>Only</b>: autocorrelations alone \u2014 the bandpass shape and interference at each station  | A baseline ticked by name (e.g. BR&amp;BR) is plotted whatever is chosen here  | Applied by Plot",
+    "time_labels": "<b>Time labels</b> \u2014 how every time axis and the cursor readout give time  | <b>UTC</b>: time of day, with the date in the axis label; when the data cross midnight the ticks read day/hh:mm:ss from the first day, as in AIPS. Matches observing logs, <tt>listobs</tt> and the Time range box  | <b>Elapsed</b>: minutes and seconds from the first sample shown  | Changes the labels only; nothing is read again",
     "tb_export": "<b>Export PNG</b> \u2014 write the current view (both panels, titles, axes, colour bars) to a PNG file where Python is running  | The path is reported in the status line",
     "tb_theme": "<b>Dark / Light</b> \u2014 switch the background  | The colormaps change with it so faint points stay visible; exported PNGs follow",
 }
@@ -386,7 +391,7 @@ _PRESET_BUTTONS = (
     ("waterfall-all", "All-BL", 62,
      "<b>All-baseline waterfall</b> \u2014 Time \u00d7 Channel with every selected baseline in one image, like AIPS FTFLG  | Each cell shows the largest amplitude among the baselines (Baselines combined is set to Maximum)  | Scatter: Amplitude vs Channel  | A quick survey for interference: one picture instead of one per baseline. A flag box here flags <b>every selected baseline</b>, and the message says how many  | What looks bad here may be on only a few baselines: tick antennas or baselines to find which before flagging them all"),
     ("antmatrix", "Ant\u00d7Ant", 68,
-     "<b>Antenna \u00d7 antenna</b> \u2014 one cell per baseline, averaged over time and channels, like AIPS LISTR\u2019s matrix  | The matrix is mirrored, so an antenna that is bad on every baseline shows as a whole row and column  | Hover a cell for its baseline; the diagonal holds the autocorrelations when the data have them  | Scatter: Amplitude vs UV Distance, where that antenna\u2019s baselines stand apart  | Averaging (raster gear tab) applies: vector averaging over a long stretch reads low where the phase is not calibrated yet \u2014 use Scalar, or narrow the time range  | Flag on Baseline \u00d7 Time once the antenna is found"),
+     "<b>Antenna \u00d7 antenna</b> \u2014 one cell per baseline, averaged over time and channels, like AIPS LISTR\u2019s matrix  | The matrix is mirrored, so an antenna that is bad on every baseline shows as a whole row and column  | Hover a cell for its baseline; the diagonal holds the autocorrelations when Autocorrelations (Data section) is Include  | Scatter: Amplitude vs UV Distance, where that antenna\u2019s baselines stand apart  | Averaging (raster gear tab) applies: vector averaging over a long stretch reads low where the phase is not calibrated yet \u2014 use Scalar, or narrow the time range  | Flag on Baseline \u00d7 Time once the antenna is found"),
     ("spectrum", "Spectrum", 74,
      "<b>Spectrum</b> \u2014 amplitude above phase against frequency, each scan averaged, like AIPS POSSM  | Both panels are scatter plots, one above the other  | Read one baseline at a time: tick one, or step with Baseline \u25c0 \u25b6 (or Antenna \u25c0 \u25b6 for every baseline to one antenna)  | Shows the bandpass shape, edge channels, and a phase slope across the band (a delay)  | Average over time is set to Scan; change it in either panel's gear tab"),
     ("timeseries", "Time series", 84,
@@ -485,7 +490,10 @@ def _resolve_axis_arg(value, options, role_name, default):
 _RASTER_AXIS_OPTIONS = [("TIME",        "Time"),
                         ("BASELINE",    "Baseline"),
                         ("CHANNEL",     "Channel"),
-                        ("CORRELATION", "Correlation"),
+                        # ("CORRELATION", "Correlation") removed
+                        # 2026-10-11 (HRS A4): the backends never drew
+                        # it ("not implemented"); add it back with an
+                        # implementation if users ask for it.
                         # HRS H7 (2026-10-11): together, the antenna x
                         # antenna matrix (data/_antenna_matrix.py).
                         ("ANTENNA1",    "Antenna 1"),
@@ -522,6 +530,39 @@ _STAT_TIME_WINDOW_OPTIONS = [("auto", "Auto"), ("off", "Off"),
                              ("10", "10 s"), ("30", "30 s"), ("60", "1 min"),
                              ("120", "2 min"), ("300", "5 min"),
                              ("600", "10 min")]
+# "Time labels" switch (HRS A0): tell Python, then install each panel's
+# new state (the tick formatter reads time_labels / x_day0 from it), its
+# axis labels, and the ticker spacing (base 60 for UTC: whole seconds,
+# minutes, hours).  entries is in _all_panels order, as is the reply.
+_TIME_LABELS_JS = r"""
+const mode = cb_obj.active === 1 ? 'elapsed' : 'utc';
+if (typeof ctrl === 'undefined' || !ctrl || !ids || !ids['time_labels']) return;
+ctrl.send(ids['time_labels'], { mode: mode }, function (resp) {
+    if (!resp || resp.status !== 'ok' || !resp.panels) return;
+    const setBase = (t, utc) => {
+        if (!t || t.base === undefined) return;
+        if (utc) { t.base = 60; t.mantissas = [1, 2, 5, 10, 15, 20, 30]; }
+        else     { t.base = 10; t.mantissas = [1, 2, 5]; }
+    };
+    for (let i = 0; i < entries.length && i < resp.panels.length; i++) {
+        const p = resp.panels[i], e = entries[i];
+        if (!p || !e) continue;
+        e.state.data = p.state;
+        const utc = (p.state['time_labels'] || ['elapsed'])[0] === 'utc';
+        for (const a of [...(e.fig.below || []), ...(e.fig.above || [])]) {
+            if (!a) continue;
+            setBase(a.ticker, utc && p.state['x_is_time'][0]);
+            if (p.state['x_is_time'][0]) a.axis_label = p.x_label;
+        }
+        for (const a of [...(e.fig.left || []), ...(e.fig.right || [])]) {
+            if (!a) continue;
+            setBase(a.ticker, utc && p.state['y_is_time'][0]);
+            if (p.state['y_is_time'][0]) a.axis_label = p.y_label;
+        }
+    }
+});
+"""
+
 # Follow an X-axis pan / zoom from one panel to the other on screen while
 # both plot the same X (see _build_plot_area).  cb_obj is the Range that
 # changed.  A re-entrancy guard keeps the copy from echoing back.
@@ -789,6 +830,40 @@ _GEAR_ICON_DATA_URI = (
     "data:image/svg+xml;base64,"
     + base64.b64encode(_GEAR_ICON_SVG.encode("utf-8")).decode("ascii")
 )
+
+# "Describe this plot" toolbar action (HRS A3): a page with lines of text.
+_SUMMARY_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
+ viewBox="0 0 24 24" fill="none" stroke="#89b4fa" stroke-width="2"
+ stroke-linecap="round" stroke-linejoin="round">
+<path d="M6 2h9l5 5v15H6z" fill="#89b4fa" fill-opacity="0.15"/>
+<path d="M15 2v5h5"/><line x1="9" y1="12" x2="17" y2="12"/>
+<line x1="9" y1="15.5" x2="17" y2="15.5"/><line x1="9" y1="19" x2="14" y2="19"/>
+</svg>"""
+_SUMMARY_ICON_DATA_URI = (
+    "data:image/svg+xml;base64,"
+    + base64.b64encode(_SUMMARY_ICON_SVG.encode("utf-8")).decode("ascii")
+)
+
+# Opens the tab inside the click (pop-up blockers allow window.open only
+# from the gesture itself), asks Python for the page, fills the tab.
+_SUMMARY_JS = r"""
+let w = null;
+try { w = window.open("", "_blank"); } catch (e) { console.warn("[visplot] window.open failed", e); }
+if (w) w.document.write("<html><body style='font-family:sans-serif'>" +
+                        "<p>Building plot summary…</p></body></html>");
+const xr = fig.x_range, yr = fig.y_range;
+ctrl.send(ids['summary'], {slot: slot_id,
+                           viewport: [xr.start, xr.end, yr.start, yr.end]},
+    function (resp) {
+        if (!resp || resp.html == null) {
+            const m = (resp && resp.message) || 'no summary';
+            if (w && !w.closed) { w.document.open(); w.document.write('<p>' + m + '</p>'); w.document.close(); }
+            return;
+        }
+        if (w && !w.closed) { w.document.open(); w.document.write(resp.html); w.document.close(); }
+        else if (notify_div) { notify_div.text = "⚠ Pop-up blocked: allow pop-ups to see the plot summary."; }
+    });
+"""
 
 # Color a panel's figure title switches to while its gear/Tabs config is
 # open (added 2026-07-31). Reuses the same red/pink accent this file
@@ -2041,11 +2116,24 @@ class VisibilityPlotter:
         what is initially ticked in the sidebar's Antenna and Baseline
         tables.
     scan : str
-        MSSelection scan string.  (Stored; not yet wired.)
+        Scans, CASA style: ``"1,3,7"``, ``"1~7"``, ``">30"``, ``"!5"``.
+        The sidebar's Scan box starts with it.  Text that matches no scan
+        raises ``ValueError``.  Default: all.
     timerange : str
-        MSSelection time-range string.  (Stored; not wired.)
+        UTC time range, CASA style: ``"2012/11/19/07:37:00~2012/11/19/
+        08:00:00"``, ``"07:37:00~08:00"`` (times of day, on the day of the
+        data), ``">08:00"``, ``"<08:30"``, ``"08:00:00+00:10:00"`` (start
+        and length), ``"1/00:10:00"`` (day number / time, as the time axis
+        labels data that cross midnight), or one time (the integration
+        around it).  One range.  The Time range box starts with it.
+        Default: all.
     uvrange : str
-        UV range string.  (Stored; not wired.)
+        UV-distance ranges, CASA style: ``"0~50klambda"``, ``"100~300m"``,
+        ``">200m"``, ``"<1.5km"``, several with commas; units m, km,
+        lambda, klambda, Mlambda, metres if none.  Wavelengths are taken
+        at each spectral window's centre frequency, and whole rows (a
+        baseline at one time) are in or out.  The UV range box starts
+        with it.  Default: all.
     correlation : str
         Comma-separated correlation labels (``"XX,YY"``).  Default: all.
     datacolumn : str
@@ -2142,9 +2230,45 @@ class VisibilityPlotter:
         Start with "Pin layout" ticked: presets (this ``preset`` and the
         toolbar buttons) keep the current layout -- ``layout`` -- instead
         of switching to their own.  Default ``False``.
+    panels : list[dict] | None
+        Each panel's configuration, in screen order: ``[{...}, {...}]``,
+        one dict per panel, so that a two-panel view can be written as
+        arguments (and the plot summary can print the call that
+        reproduces what is on screen).  Keys are the names of the
+        per-panel arguments below -- ``kind``, ``raster_y``, ``raster_x``,
+        ``raster_qty``, ``averaging``, ``baseline_order``,
+        ``baseline_combine``, ``detrend``, ``stat_time_window``,
+        ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
+        ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
+        ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
+        and ``vmax`` (its colour scale).  A key left out takes the value
+        the flat argument (or ``preset``) gives that panel, so the flat
+        arguments still describe the first panel; an unknown key raises.
+        At most two panels for now.  ``layout`` still decides how many are
+        shown.  Example (Spectrum written out)::
+
+            panels=[dict(kind="scatter", scatter_x="FREQUENCY",
+                         scatter_y="AMPLITUDE", scatter_avg_time="scan"),
+                    dict(kind="scatter", scatter_x="FREQUENCY",
+                         scatter_y="PHASE", scatter_avg_time="scan")],
+            layout="over"
+    autocorr : str
+        Autocorrelations (baselines from an antenna to itself):
+        ``"exclude"`` (default; cross-correlations only), ``"include"``
+        or ``"only"``.  On VLBI data before amplitude calibration the
+        autocorrelations are hundreds of times the cross-correlations and
+        flatten every plot of all baselines.  A baseline named in
+        ``antenna`` (``"BR&BR"``) is plotted whatever this says.  Also the
+        "Autocorrelations" switch in the Data section.
+    time_labels : str
+        How time axes and the cursor readout give time: ``"utc"``
+        (default; time of day, the date in the axis label, AIPS-style
+        ``d/hh:mm:ss`` when the data cross a UTC midnight) or
+        ``"elapsed"`` (minutes and seconds from the first sample).
+        Also the "Time labels" switch in the configuration panel.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
-        ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
+        ``"CHANNEL"``, ``"ANTENNA1"`` / ``"ANTENNA2"`` (together). Takes precedence over
         ``preset``, which takes precedence over the default
         (Time vs. Channel). Validated against the same options the
         raster axis dropdowns expose in the GUI — an invalid value
@@ -2162,11 +2286,15 @@ class VisibilityPlotter:
         directly into a U-vs-V UV-coverage scatter plot with no manual
         axis-picker step needed.
     time_range : tuple[float, float] | list[float] | None
-        ``(start, end)`` as MJD floats.
+        ``(start, end)`` in UNIX seconds (UTC), the programmatic form of
+        ``timerange``; shown in the Time range box as text.  Give one or
+        the other.
     freq_range : tuple[float, float] | list[float] | None
         ``(start, end)`` in Hz.
     uvdist_range : tuple[float, float] | list[float] | None
-        ``(min, max)`` in metres.
+        ``(min, max)`` UV distance in metres, the programmatic form of
+        ``uvrange``; shown in the UV range box as text.  Give one or the
+        other.
     compact_toolbar : bool
         Whether each figure's toolbar auto-hides until the mouse is over
         that plot.  Defaults to ``True``.
@@ -2213,6 +2341,12 @@ class VisibilityPlotter:
         TW Hya with all fields (2 x 31 M samples, ~1.5 GiB per frame) needs
         about 3-4 GiB; on a 24 GB Mac the 2.4 GiB default evicted frames
         and a flag box took 3.6 s instead of 0.5 s.
+    plotfile : str | None
+        Write a PNG of the plot to this path instead of opening the GUI
+        (the ``visplot`` task then returns the path).  Implies
+        ``headless=True``; ``theme`` and ``layout`` apply.  A plotter
+        built this way can be called again with other selections to
+        write more files (see ``__call__``).
 
     Resource lifecycle
     ------------------
@@ -2276,6 +2410,9 @@ class VisibilityPlotter:
         kind:             Optional[str] = None,
         preset:           Optional[str] = None,
         pin_layout:       bool          = False,
+        time_labels:      str           = "utc",
+        autocorr:         str           = "exclude",
+        panels:           Optional[list] = None,
         raster_y:         Optional[str] = None,
         raster_x:         Optional[str] = None,
         raster_qty:       Optional[str] = None,
@@ -2292,6 +2429,7 @@ class VisibilityPlotter:
         raster_cmap:      Optional[str]  = None,
         scatter_cmap:     Optional[str]  = None,
         headless:         bool           = False,
+        plotfile:         Optional[str]  = None,
         flag_filters:     Optional[dict] = None,
         flag_preview:     bool           = False,
         flag_display:     str            = "hide",
@@ -2313,10 +2451,25 @@ class VisibilityPlotter:
         See ``_resolve_config``, ``_build_panels`` and ``_build_gui``.
         """
         self._frame_cache_mb = frame_cache_mb
-        self._headless = bool(headless)
+        # plotfile= (HRS B1, 2026-10-11): write a PNG instead of opening
+        # the GUI -- what the visplot task's plotfile= means.
+        self._plotfile = plotfile or None
+        self._headless = bool(headless) or self._plotfile is not None
         # Presets keep the layout instead of setting their own (2026-10-10;
         # the "Pin layout" checkbox starts from this).
         self._pin_layout = bool(pin_layout)
+        # How time axes and readouts give time (HRS A0, 2026-10-11).
+        if time_labels not in ("utc", "elapsed"):
+            raise ValueError(
+                f"time_labels must be 'utc' or 'elapsed', not {time_labels!r}")
+        self._time_labels = time_labels
+        if autocorr not in ("exclude", "include", "only"):
+            raise ValueError("autocorr must be 'exclude', 'include' or 'only', "
+                             f"not {autocorr!r}")
+        self._autocorr = autocorr
+        # Per-panel configuration (HRS A2, 2026-10-11); resolved in
+        # _resolve_config into self._slot_cfg.
+        self._panels_arg = panels
 
         self._resolve_config(
             ms=ms, ps=ps, backend=backend, remote_endpoint=remote_endpoint,
@@ -2422,7 +2575,11 @@ class VisibilityPlotter:
         # gc.collect() sweep). Never let teardown raise during
         # interpreter shutdown.
         try:
-            self.close()
+            # Never block here: __del__ can run on any thread, at any
+            # allocation (see data/reader.py ``finalizing``).
+            from .data.reader import finalizing
+            with finalizing():
+                self.close()
         except Exception:
             pass
 
@@ -2585,6 +2742,33 @@ class VisibilityPlotter:
         fc = getattr(self, "_frame_cache_mb", None)
         if fc is not None and hasattr(self._reader, "set_frame_cache_limit_mb"):
             self._reader.set_frame_cache_limit_mb(float(fc))
+        # Scan / Time range / UV range text (HRS A1, 2026-10-11): parsed
+        # against the data now, so bad text fails here, at construction,
+        # with a message that says what is accepted.
+        if self._timerange_str and self._time_range is not None:
+            raise ValueError("give timerange= (text) or time_range= "
+                             "(UNIX seconds), not both")
+        try:
+            self._scan_sel, _tr, self._uv_range = self._parse_selection_texts(
+                self._scan_str, self._timerange_str, self._uvrange_str)
+        except SelectionTextError as exc:
+            raise ValueError(str(exc)) from None
+        if self._uvdist_range is not None:
+            if (self._uvrange_str or "").strip():
+                raise ValueError("give uvrange= (text) or uvdist_range= "
+                                 "(metres), not both")
+            lo, hi = (float(x) for x in self._uvdist_range)
+            self._uvrange_str = f"{lo:g}~{hi:g}m"
+            self._uv_range = [[lo, hi, "m"]]
+        if self._timerange_str:
+            self._time_range = _tr
+        elif self._time_range is not None:
+            # time_range= (UNIX seconds) shown in the box as text, so the
+            # box -- which every Plot reads -- keeps it.
+            from .selection_text import format_timerange
+            self._time_range = (float(self._time_range[0]),
+                                float(self._time_range[1]))
+            self._timerange_str = format_timerange(self._time_range)
         self._selection = self._build_selection()
         # Group 3 piece 3, Chunk 2 bug fix (added 2026-08-02): per-slot,
         # not a single shared attribute. Was self._last_raster_selection
@@ -2682,6 +2866,116 @@ class VisibilityPlotter:
         self._scatter_x  = _resolved_scatter_x
         self._scatter_y  = _resolved_scatter_y
 
+        # Per-panel configuration (HRS A2): what each slot is built from.
+        # Defaults come from the flat arguments and the preset, exactly as
+        # before; panels=[...] overrides them per slot.
+        self._slot_cfg = self._resolve_slot_configs(
+            getattr(self, "_panels_arg", None))
+        self._kind = self._slot_cfg[0]["kind"]
+
+    # Keys a panels=[...] dict may hold (HRS A2).  Raster-only colour
+    # scale keys have no flat argument.
+    _PANEL_KEYS = ("kind", "raster_y", "raster_x", "raster_qty", "averaging",
+                   "baseline_order", "baseline_combine", "detrend",
+                   "stat_time_window", "stat_chan_window", "scatter_x",
+                   "scatter_y", "scatter_avg_time", "scatter_avg_chan",
+                   "scaling", "vmin", "vmax")
+    MAX_PANELS = 2
+
+    def _resolve_slot_configs(self, panels) -> list:
+        """One fully resolved settings dict per slot (A, B).
+
+        Starts from what the flat arguments and ``preset`` give each slot
+        -- slot A: the flat values; slot B: the complementary kind, or
+        for a Spectrum / Time series preset a second scatter of Phase --
+        then applies ``panels[i]`` on top.  Validates every value the way
+        the flat arguments are validated, so a typo fails here.
+        """
+        pair = getattr(self, "_pair_preset", False)
+        common = dict(
+            raster_y=self._raster_y, raster_x=self._raster_x,
+            raster_qty=self._raster_qty, averaging=self._averaging,
+            baseline_order=self._baseline_order,
+            baseline_combine=self._baseline_combine,
+            detrend=self._detrend,
+            stat_time_window=self._stat_time_window,
+            stat_chan_window=self._stat_chan_window,
+            scatter_x=self._scatter_x, scatter_y=self._scatter_y,
+            scatter_avg_time=self._scatter_avg_time,
+            scatter_avg_chan=self._scatter_avg_chan,
+            scaling=None, vmin=None, vmax=None,
+            # Whether the scatter was given its own Phase RMS settings
+            # (else it follows the plotter's, as before A2).
+            scatter_stat_own=False,
+        )
+        a = dict(common, kind=self._kind)
+        b = dict(common, kind=("scatter" if (self._kind == "raster" or pair)
+                               else "raster"))
+        if pair:
+            b["scatter_y"] = _PAIR_PRESET_Y[1]
+        cfgs = [a, b]
+        if panels is None:
+            return cfgs
+        if isinstance(panels, dict) or not isinstance(panels, (list, tuple)):
+            raise ValueError("panels must be a list of dicts, one per panel")
+        if len(panels) > self.MAX_PANELS:
+            raise ValueError(f"panels: at most {self.MAX_PANELS} panels for now "
+                             f"(got {len(panels)})")
+        for i, d in enumerate(panels):
+            if d is None:
+                continue
+            if not isinstance(d, dict):
+                raise ValueError(f"panels[{i}] must be a dict, not {type(d).__name__}")
+            bad = sorted(set(d) - set(self._PANEL_KEYS))
+            if bad:
+                raise ValueError(
+                    f"panels[{i}]: unknown key(s) {', '.join(bad)}; "
+                    f"allowed: {', '.join(self._PANEL_KEYS)}")
+            c = cfgs[i]
+            tag = f"panels[{i}]"
+            if "kind" in d:
+                if d["kind"] not in ("raster", "scatter"):
+                    raise ValueError(f"{tag}: kind must be 'raster' or 'scatter'")
+                c["kind"] = d["kind"]
+            for k, opts in (("raster_y", _RASTER_AXIS_OPTIONS),
+                            ("raster_x", _RASTER_AXIS_OPTIONS),
+                            ("raster_qty", _RASTER_QTY_OPTIONS),
+                            ("scatter_x", _SCATTER_X_OPTIONS),
+                            ("scatter_y", _SCATTER_Y_OPTIONS)):
+                if k in d:
+                    v = d[k]
+                    c[k] = (v if isinstance(v, Axis)
+                            else _resolve_axis_arg(v, opts, f"{tag}.{k}", c[k]))
+            norm = {"averaging": normalize_averaging,
+                    "baseline_order": normalize_baseline_order,
+                    "baseline_combine": normalize_baseline_combine,
+                    "stat_time_window": normalize_time_window,
+                    "stat_chan_window": normalize_chan_window,
+                    "scatter_avg_time": normalize_avg_time,
+                    "scatter_avg_chan": normalize_avg_chan}
+            for k, f in norm.items():
+                if k in d:
+                    try:
+                        c[k] = f(d[k])
+                    except ValueError as exc:
+                        raise ValueError(f"{tag}.{k}: {exc}") from None
+            if "detrend" in d:
+                c["detrend"] = bool(d["detrend"])
+            if any(k in d for k in ("detrend", "stat_time_window", "stat_chan_window")):
+                c["scatter_stat_own"] = True
+            if "scaling" in d:
+                from . import colormap_scaling as _cms
+                if d["scaling"] not in _cms.ALL_SCALINGS:
+                    raise ValueError(f"{tag}.scaling must be one of "
+                                     f"{', '.join(_cms.ALL_SCALINGS)}")
+                c["scaling"] = d["scaling"]
+            for k in ("vmin", "vmax"):
+                if k in d and d[k] is not None:
+                    c[k] = float(d[k])
+            if c["raster_y"] == c["raster_x"]:
+                raise ValueError(f"{tag}: raster_y and raster_x must differ")
+        return cfgs
+
     def _build_comm(self) -> None:
         """Phase 2a (GUI only): comm layer and reconnection handlers.
 
@@ -2765,11 +3059,17 @@ class VisibilityPlotter:
             "done": str(uuid4()),
             "theme": str(uuid4()),
             "export": str(uuid4()),
+            "time_labels": str(uuid4()),
+            "summary": str(uuid4()),
         }
         self._pipe["control"].register(self._ids["plot"], self._handle_plot)
         self._pipe["control"].register(self._ids["done"], self._handle_done)
         self._pipe["control"].register(self._ids["theme"], self._handle_theme)
         self._pipe["control"].register(self._ids["export"], self._handle_export)
+        self._pipe["control"].register(self._ids["time_labels"],
+                                       self._handle_time_labels)
+        self._pipe["control"].register(self._ids["summary"],
+                                       self._handle_summary)
 
         # FlagDB v2 controls (filter/config, undo/redo/clear, review,
         # export) on their own pipe WITHOUT queue squashing: a squashing
@@ -2883,12 +3183,12 @@ class VisibilityPlotter:
         # _slot_a_kind says".
         # HRS H6 slice 2: a Spectrum / Time series preset has two scatters
         # (one expression each: test_layout_kind_shortcut lifts them).
-        _slot_a_kind = self._kind
-        _slot_b_kind = ("scatter" if (self._kind == "raster"
-                                      or getattr(self, "_pair_preset", False))
-                        else "raster")
-        _slot_b_scatter_y = (_PAIR_PRESET_Y[1] if getattr(self, "_pair_preset", False)
-                             else self._scatter_y)
+        # HRS A2 (2026-10-11): each slot is built from its own resolved
+        # settings (_resolve_slot_configs: flat arguments and preset, then
+        # panels=[...]).
+        _ca, _cb = self._slot_cfg
+        _slot_a_kind = _ca["kind"]
+        _slot_b_kind = _cb["kind"]
 
         from .remote_reduction_context import RemoteReductionContext, DEFAULT_REMOTE_MAX_CELLS
         _raster_max_cells = (
@@ -2896,100 +3196,72 @@ class VisibilityPlotter:
             else 2_000_000
         )
 
-        _slot_a_raster = VisibilityRaster(
-            backend       = self._reader,
-            selection     = self._selection,
-            y_dim         = self._raster_y,
-            x_dim         = self._raster_x,
-            quantity      = self._raster_qty,
-            averaging     = self._averaging,
-            baseline_order = self._baseline_order,
-            baseline_combine = self._baseline_combine,
-            detrend       = self._detrend,
-            stat_time_window = self._stat_time_window,
-            stat_chan_window = self._stat_chan_window,
-            polarization  = first_pol,
-            width         = self._plot_width,
-            height        = self._plot_height,
-            comm_mgr      = self._comm_mgr,
-            cursor_source = self._cursor_source,
-            enable_flagging = self._enable_flagging,
-            compact_toolbar = self._compact_toolbar,
-            defer_initial_render = (_slot_a_kind != "raster"),
-            headless             = self._headless,
-            cmap                 = raster_ramp,
-            max_cells            = _raster_max_cells,
-        )
-        # One scatter layer per polarisation — multi-layer compositing
-        # naturally boosts density and visibility vs a single layer. Slot
-        # A's scatter has no user-configured axes yet (nothing can set them
-        # until gear/Tabs exists), so it mirrors slot B's scatter defaults
-        # as a sensible starting point rather than an arbitrary one.
-        _slot_a_scatter = VisibilityScatter(
-            backend       = self._reader,
-            selection     = self._selection,
-            x_axis        = self._scatter_x,
-            layers        = _make_scatter_layers(
-                self._scatter_y, pols, cmaps=scatter_ramps),
-            width         = self._plot_width,
-            height        = self._plot_height,
-            comm_mgr      = self._comm_mgr,
-            cursor_source = self._cursor_source,
-            enable_flagging = self._enable_flagging,
-            compact_toolbar = self._compact_toolbar,
-            defer_initial_render = (_slot_a_kind != "scatter"),
-            headless             = self._headless,
-            layer_cmaps          = scatter_ramps,
-            avg_time             = self._scatter_avg_time,
-            avg_chan             = self._scatter_avg_chan,
-            averaging            = self._averaging,
-        )
+        def _raster(c):
+            r = VisibilityRaster(
+                backend       = self._reader,
+                selection     = self._selection,
+                y_dim         = c["raster_y"],
+                x_dim         = c["raster_x"],
+                quantity      = c["raster_qty"],
+                averaging     = c["averaging"],
+                baseline_order = c["baseline_order"],
+                baseline_combine = c["baseline_combine"],
+                detrend       = c["detrend"],
+                stat_time_window = c["stat_time_window"],
+                stat_chan_window = c["stat_chan_window"],
+                polarization  = first_pol,
+                width         = self._plot_width,
+                height        = self._plot_height,
+                comm_mgr      = self._comm_mgr,
+                cursor_source = self._cursor_source,
+                enable_flagging = self._enable_flagging,
+                compact_toolbar = self._compact_toolbar,
+                defer_initial_render = (c["kind"] != "raster"),
+                headless             = self._headless,
+                cmap                 = raster_ramp,
+                max_cells            = _raster_max_cells,
+                **({"scaling": c["scaling"]} if c["scaling"] else {}),
+            )
+            if c["vmin"] is not None or c["vmax"] is not None:
+                r.update_scaling(vmin=c["vmin"], vmax=c["vmax"])
+            return r
 
-        _slot_b_scatter = VisibilityScatter(
-            backend       = self._reader,
-            selection     = self._selection,
-            x_axis        = self._scatter_x,
-            layers        = _make_scatter_layers(
-                _slot_b_scatter_y, pols, cmaps=scatter_ramps),
-            width         = self._plot_width,
-            height        = self._plot_height,
-            comm_mgr      = self._comm_mgr,
-            cursor_source = self._cursor_source,
-            enable_flagging = self._enable_flagging,
-            compact_toolbar = self._compact_toolbar,
-            defer_initial_render = (_slot_b_kind != "scatter"),
-            headless             = self._headless,
-            layer_cmaps          = scatter_ramps,
-            avg_time             = self._scatter_avg_time,
-            avg_chan             = self._scatter_avg_chan,
-            averaging            = self._averaging,
-        )
-        # Slot B's raster mirrors slot A's raster defaults — same reasoning
-        # as slot A's scatter above.
-        _slot_b_raster = VisibilityRaster(
-            backend       = self._reader,
-            selection     = self._selection,
-            y_dim         = self._raster_y,
-            x_dim         = self._raster_x,
-            quantity      = self._raster_qty,
-            averaging     = self._averaging,
-            baseline_order = self._baseline_order,
-            baseline_combine = self._baseline_combine,
-            detrend       = self._detrend,
-            stat_time_window = self._stat_time_window,
-            stat_chan_window = self._stat_chan_window,
-            polarization  = first_pol,
-            width         = self._plot_width,
-            height        = self._plot_height,
-            comm_mgr      = self._comm_mgr,
-            cursor_source = self._cursor_source,
-            enable_flagging = self._enable_flagging,
-            compact_toolbar = self._compact_toolbar,
-            defer_initial_render = (_slot_b_kind != "raster"),
-            headless             = self._headless,
-            cmap                 = raster_ramp,
-            max_cells            = _raster_max_cells,
-        )
+        # One scatter layer per polarisation -- multi-layer compositing
+        # naturally boosts density and visibility vs a single layer.
+        def _scatter(c):
+            sc = VisibilityScatter(
+                backend       = self._reader,
+                selection     = self._selection,
+                x_axis        = c["scatter_x"],
+                layers        = _make_scatter_layers(
+                    c["scatter_y"], pols, cmaps=scatter_ramps),
+                width         = self._plot_width,
+                height        = self._plot_height,
+                comm_mgr      = self._comm_mgr,
+                cursor_source = self._cursor_source,
+                enable_flagging = self._enable_flagging,
+                compact_toolbar = self._compact_toolbar,
+                defer_initial_render = (c["kind"] != "scatter"),
+                headless             = self._headless,
+                layer_cmaps          = scatter_ramps,
+                avg_time             = c["scatter_avg_time"],
+                avg_chan             = c["scatter_avg_chan"],
+                averaging            = c["averaging"],
+                # Its own Phase RMS / Coherence settings when panels=[...]
+                # gave them; else None, following the plotter's.
+                **({"detrend": c["detrend"],
+                    "stat_time_window": c["stat_time_window"],
+                    "stat_chan_window": c["stat_chan_window"]}
+                   if c.get("scatter_stat_own") else {}),
+            )
+            return sc
+
+        # Construction order as before: A raster, A scatter, B scatter,
+        # B raster.
+        _slot_a_raster  = _raster(_ca)
+        _slot_a_scatter = _scatter(_ca)
+        _slot_b_scatter = _scatter(_cb)
+        _slot_b_raster  = _raster(_cb)
 
         # Stage 1b.5: ordered slot records — self._slots[0] is "A",
         # self._slots[1] is "B". Order matches today's A/B layout
@@ -3057,6 +3329,8 @@ class VisibilityPlotter:
 
         self._all_panels = [obj for slot in self._slots
                             for obj in (slot.raster, slot.scatter)]
+        for _p in self._all_panels:
+            _p._time_labels = self._time_labels
         self._flags.init_panels()
 
         # Part 6 (2026-09): scatter layers in "statistical" coloring use
@@ -3634,7 +3908,9 @@ for (const dt of other.tools) {
         panels = [self._pos0, self._pos1][:n_panels]
         rendered = [p.render_result() for p in panels]
 
-        path = str(plotfile or "").strip() or self._default_plotfile()
+        path = (str(plotfile or "").strip()
+                or (getattr(self, "_plotfile", None) or "")
+                or self._default_plotfile())
         out = export_png(
             rendered, path,
             nrows=nrows, ncols=ncols,
@@ -3813,6 +4089,68 @@ for (const dt of other.tools) {
         return os.path.abspath(
             f"{stem}_{time.strftime('%Y%m%d-%H%M%S')}.png")
 
+    def set_time_labels(self, mode: str) -> None:
+        """Label time axes and readouts ``"utc"`` or ``"elapsed"`` on
+        every panel.  A label change only: nothing is re-read."""
+        if mode not in ("utc", "elapsed"):
+            raise ValueError(
+                f"time_labels must be 'utc' or 'elapsed', not {mode!r}")
+        self._time_labels = mode
+        for panel in self._all_panels:
+            panel.set_time_labels(mode)
+
+    def describe(self, slot: str = "A", viewport=None, html: bool = False):
+        """What panel *slot* shows and how it was made, and the
+        ``visplot(...)`` call that reproduces the view (HRS A3).
+
+        Returns the description as a dict (``plot_summary.describe``), or
+        with ``html=True`` the self-contained page the "Describe this
+        plot" toolbar button opens.  Works headless too.
+        """
+        from .plot_summary import describe as _describe, summary_html
+        d = _describe(self, slot, viewport)
+        return summary_html(d) if html else d
+
+    def reproducing_call(self) -> str:
+        """The ``visplot(...)`` call that reproduces both panels as last
+        drawn (``plot_summary.reproducing_call``)."""
+        from .plot_summary import reproducing_call
+        return reproducing_call(self)
+
+    async def _handle_summary(self, msg, context=None):
+        """The "Describe this plot" toolbar button: the page for one panel,
+        built here and returned for the browser to put in the tab it
+        opened."""
+        try:
+            vp = msg.get("viewport")
+            html = await asyncio.to_thread(
+                self.describe, str(msg.get("slot", "A")), vp, True)
+            return {"status": "ok", "html": html}
+        except Exception as exc:
+            log.warning("plot summary failed", exc_info=True)
+            return {"status": "error", "message": f"Plot summary failed: {exc}"}
+
+    async def _handle_time_labels(self, msg, context=None):
+        """The "Time labels" switch: adopt the mode and return, for each
+        panel in ``_all_panels`` order, its new state and axis labels,
+        for the browser to install (no Bokeh server, so they must be
+        returned, as the theme and Plot handlers do)."""
+        try:
+            self.set_time_labels(str(msg.get("mode", "utc")))
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+        out = []
+        for panel in self._all_panels:
+            try:
+                spec = panel._panel_spec()
+                out.append({"state":   spec.to_state_data(),
+                            "x_label": spec.axis_label("x"),
+                            "y_label": spec.axis_label("y")})
+            except Exception:
+                log.debug("time labels: panel state failed", exc_info=True)
+                out.append(None)
+        return {"status": "ok", "mode": self._time_labels, "panels": out}
+
     async def _handle_theme(self, msg, context=None):
         """Adopt a theme change from the Light/Dark toggle and re-shade.
 
@@ -3957,6 +4295,25 @@ for (const dt of other.tools) {
             self._spw_ids = None
         if "correlation" in msg: self._corr_str     = msg["correlation"]
         if "datacolumn"  in msg: self._datacolumn   = msg["datacolumn"].upper()
+        if msg.get("autocorr") in ("exclude", "include", "only"):
+            self._autocorr = msg["autocorr"]
+        # Scan / Time range / UV range boxes (HRS A1, 2026-10-11).  Bad
+        # text stops the Plot with a message; nothing is half-applied.
+        if any(k in msg for k in ("scan", "timerange", "uvrange")):
+            scan_t = msg.get("scan", self._scan_str)
+            time_t = msg.get("timerange", self._timerange_str)
+            uv_t   = msg.get("uvrange", self._uvrange_str)
+            try:
+                scan_sel, tr, uv = self._parse_selection_texts(scan_t, time_t, uv_t)
+            except SelectionTextError as exc:
+                text = f"⚠ {exc}"
+                self._notify(text)
+                return {"status": "error", "status_text": text,
+                        "notify_text": text, "notify_color": "#f38ba8"}
+            self._scan_str, self._timerange_str, self._uvrange_str = scan_t, time_t, uv_t
+            self._scan_sel, self._uv_range = scan_sel, uv
+            # The box is authoritative: empty means all times.
+            self._time_range = tr
 
         # Group 3 piece 3 / Chunk 1 (added 2026-07-31): request is now
         # per-slot (msg["panels"][slot.id] = {"kind": ..., ...}) instead
@@ -4145,10 +4502,9 @@ for (const dt of other.tools) {
                     y   != panel._y_dim    or
                     x   != panel._x_dim    or
                     qty != panel._quantity or
-                    self._selection.field_names  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'field_names', None)  or
-                    self._selection.spw          != getattr(self._last_raster_selection_by_slot.get(slot.id), 'spw', None)           or
-                    self._selection.correlation  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'correlation', None)   or
-                    self._selection.data_column  != getattr(self._last_raster_selection_by_slot.get(slot.id), 'data_column', None)   or
+                    # Every field that decides which rows are read (HRS A1:
+                    # was a list of six; scan, time and UV range were missed).
+                    self._rows_selection_changed(self._last_raster_selection_by_slot.get(slot.id)) or
                     # HRS H1 (2026-10): averaging changes what a raster
                     # cell holds, so it must re-query.  Per panel: this
                     # slot's requested mode against the mode its raster
@@ -4158,24 +4514,9 @@ for (const dt of other.tools) {
                     bcomb != panel.baseline_combine or
                     det != panel.detrend or
                     twin != panel.stat_time_window or
-                    cwin != panel.stat_chan_window or
-                    # Antenna iteration (I-3, 2026-09): found missing
-                    # here directly, not assumed -- without this,
-                    # antenna_names is the one SelectionSpec field
-                    # Prev/Next can change that this comparison never
-                    # looks at, so a raster panel would silently never
-                    # re-query when only the antenna selection changed
-                    # (same x/y/quantity/field/spw/correlation/
-                    # data_column as before). The Antenna field's own
-                    # Prev/Next buttons would then appear to do nothing
-                    # at all to this panel.
-                    self._selection.antenna_names != getattr(self._last_raster_selection_by_slot.get(slot.id), 'antenna_names', None) or
-                    # Baseline table (2026-10): the same gap again for
-                    # the same reason -- baselines is a separate
-                    # SelectionSpec field, and without this a panel
-                    # would not re-query when only the ticked baselines
-                    # changed (Baseline Prev/Next would do nothing).
-                    self._selection.baselines != getattr(self._last_raster_selection_by_slot.get(slot.id), 'baselines', None)
+                    cwin != panel.stat_chan_window
+                    # (Antenna and Baseline table changes: covered by
+                    # _rows_selection_changed above.)
                 )
                 try:
                     if axes_changed:
@@ -4371,20 +4712,9 @@ for (const dt of other.tools) {
                     y    != current_y_axis or
                     pols != current_pols or
                     colorize_changed or
-                    self._selection.field_names  != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'field_names', None)  or
-                    self._selection.spw          != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'spw', None)           or
-                    self._selection.correlation  != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'correlation', None)   or
-                    self._selection.data_column  != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'data_column', None)   or
-                    # Antenna iteration (I-3, 2026-09): same gap, same
-                    # fix, as the raster branch's own axes_changed above
-                    # -- found missing here directly, not assumed. Without
-                    # this, Slice 2's own per-antenna readout could never
-                    # actually refresh either, since it only gets
-                    # recomputed inside query_columns, which this
-                    # condition is what decides whether to call at all.
-                    self._selection.antenna_names != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'antenna_names', None) or
-                    # Baseline table (2026-10): see the raster branch.
-                    self._selection.baselines != getattr(self._last_scatter_selection_by_slot.get(slot.id), 'baselines', None) or
+                    # Every field that decides which rows are read (HRS A1:
+                    # was a list of six; scan, time and UV range were missed).
+                    self._rows_selection_changed(self._last_scatter_selection_by_slot.get(slot.id)) or
                     # This scatter's own Phase RMS / Coherence settings
                     # (2026-10): a change re-renders, like the raster's.
                     s_det != panel._detrend or
@@ -4557,6 +4887,49 @@ for (const dt of other.tools) {
     # SelectionSpec construction                                               #
     # ====================================================================== #
 
+    # SelectionSpec fields that decide which rows a panel reads.
+    _ROW_FIELDS = ("field_names", "spw", "correlation", "data_column",
+                   "antenna_names", "baselines", "scan", "time_range",
+                   "uv_range", "autocorr", "freq_range", "channel_range")
+
+    def _rows_selection_changed(self, last) -> bool:
+        """Whether the current selection reads different rows from *last*
+        (a panel's previous selection; ``None``: never rendered)."""
+        if last is None:
+            return True
+        return any(getattr(self._selection, f, None) != getattr(last, f, None)
+                   for f in self._ROW_FIELDS)
+
+    def _integration_half(self) -> float:
+        """Half an integration (s), for a single time typed in the Time
+        range box; 0.5 s when the data do not say (a remote reader)."""
+        try:
+            for ds in self._reader._iter_visibility_partitions(None):
+                it = ds.coords["time"].attrs.get("integration_time")
+                v = it.get("data") if isinstance(it, dict) else it
+                if v:
+                    return 0.5 * float(v)
+                break
+        except Exception:
+            pass
+        return 0.5
+
+    def _parse_selection_texts(self, scan_text, time_text, uv_text):
+        """``(scan names, (t0, t1), uv ranges)`` from the three boxes'
+        text, each ``None`` when its box is empty.  Raises
+        ``SelectionTextError`` (a ``ValueError``) with a message for the
+        user.  See ``selection_text``."""
+        meta = self._meta
+        # ScanInfo.name is the scan number; scan_id is only its position.
+        scans = [str(getattr(sc, "name", "") or getattr(sc, "scan_id", ""))
+                 for sc in (getattr(meta, "scans", ()) or ())]
+        obs = tuple(getattr(meta, "time_range", (0.0, 0.0)))
+        scan_sel = parse_scan_text(scan_text, scans)
+        tr = (parse_timerange_text(time_text, obs, self._integration_half())
+              if (time_text or "").strip() else None)
+        uv = parse_uvrange_text(uv_text)
+        return scan_sel, tr, uv
+
     def _build_selection(self) -> SelectionSpec:
         field_name = _parse_field_string(self._field_str, self._meta)
         # Explicit identities from the SPW table win over the string
@@ -4578,6 +4951,9 @@ for (const dt of other.tools) {
             correlation = corrs or None,
             data_column = self._datacolumn,
             time_range  = self._time_range,
+            scan        = getattr(self, "_scan_sel", None),
+            uv_range    = getattr(self, "_uv_range", None),
+            autocorr    = getattr(self, "_autocorr", "exclude"),
             freq_range  = self._freq_range,
             antenna_names = antenna_names,
             baselines   = baselines,
@@ -4595,6 +4971,9 @@ for (const dt of other.tools) {
             correlation = corrs or None,
             data_column = self._datacolumn,
             time_range  = self._time_range,
+            scan        = getattr(self, "_scan_sel", None),
+            uv_range    = getattr(self, "_uv_range", None),
+            autocorr    = getattr(self, "_autocorr", "exclude"),
             freq_range  = self._freq_range,
             antenna_names = antenna_names,
             baselines   = baselines,
@@ -4839,9 +5218,20 @@ cvApplySelectionText(
         count = self._flag_db.pending_count
         flag_note = (f"  |  <b>Flag count:</b> {count}"
                      if count > 0 else "")
+        # Scan / Time range / UV range in force (HRS A1): shown, so a
+        # narrowed plot is never mistaken for the whole observation.
+        narrowed = ""
+        if getattr(self, "_autocorr", "exclude") != "exclude":
+            narrowed += ("  |  Autocorrelations: included"
+                         if self._autocorr == "include" else "  |  Autocorrelations only")
+        for label, text in (("Scan", self._scan_str),
+                            ("Time", self._timerange_str),
+                            ("UV", self._uvrange_str)):
+            if (text or "").strip():
+                narrowed += f"  |  {label}: {_html.escape(text.strip())}"
         return (
             f"<b>{fname}</b>  |  Layout: {layout_label}<br>"
-            f"{field}  |  {spw}  |  {antenna}  |  Col: {col}{flag_note}"
+            f"{field}  |  {spw}  |  {antenna}{narrowed}  |  Col: {col}{flag_note}"
         )
 
     def _update_status_bar(self) -> None:
@@ -5198,17 +5588,17 @@ html, body { height: 100%; margin: 0; }
             the caller in ``self._panel_axis_widgets[slot.id]["raster"]``.
         """
         ry_sel = Select(
-            title="Raster Y axis", value=self._raster_y.name,
+            title="Raster Y axis", value=(slot.raster._y_dim or self._raster_y).name,
             options=[(k, v) for k, v in _RASTER_Y_OPTIONS],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
         rx_sel = Select(
-            title="Raster X axis", value=self._raster_x.name,
+            title="Raster X axis", value=(slot.raster._x_dim or self._raster_x).name,
             options=[(k, v) for k, v in _RASTER_X_OPTIONS],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
         rq_sel = Select(
-            title="Raster quantity", value=self._raster_qty.name,
+            title="Raster quantity", value=(slot.raster._quantity or self._raster_qty).name,
             options=[(k, v) for k, v in _RASTER_QTY_OPTIONS],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
@@ -5398,7 +5788,7 @@ conflict_div.text = conflict ? msg : '';
             in ``self._panel_axis_widgets[slot.id]["scatter"]``.
         """
         sx_sel = Select(
-            title="Scatter X axis", value=self._scatter_x.name,
+            title="Scatter X axis", value=(slot.scatter._x_dim or self._scatter_x).name,
             options=[(k, v) for k, v in _SCATTER_X_OPTIONS],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
@@ -5818,6 +6208,12 @@ for (let i = 0; i < cols.length; i++) {
         all_corrs = (list(meta.spws[0].polarizations)
                      if meta.spws else ["XX", "YY"])
         sel_corrs = _parse_correlation_string(self._corr_str, meta)
+        # Autocorrelations (2026-10-11): cross only by default.
+        self._autocorr_rbg = RadioButtonGroup(
+            labels=["Exclude", "Include", "Only"],
+            active=["exclude", "include", "only"].index(self._autocorr),
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
         self._corr_cbg = CheckboxGroup(
             labels      = all_corrs,
             active      = [i for i, c in enumerate(all_corrs) if c in sel_corrs],
@@ -5829,14 +6225,24 @@ for (let i = 0; i < cols.length; i++) {
         # ---- Stub inputs for unwired selections ---------------------------- #
         # ---- Context-sensitive hint text from MS metadata ------------------- #
         import datetime
-        def _mjd_to_iso(mjd_s: float) -> str:
+        def _mjd_to_iso(t_s: float) -> str:
+            # The backends' times are UNIX seconds (xarray-ms / MSv4,
+            # scale UTC), not MJD seconds: counted from 1858 they read
+            # as 1901 (fixed 2026-10-11, HRS A0).
             try:
-                dt = datetime.datetime(1858, 11, 17) + datetime.timedelta(seconds=mjd_s)
+                dt = datetime.datetime(1970, 1, 1) + datetime.timedelta(seconds=t_s)
                 return dt.strftime("%Y/%m/%d/%H:%M:%S")
             except Exception:
-                return str(mjd_s)
+                return str(t_s)
 
-        scan_ids = sorted({s.scan_id for s in meta.scans})
+        # The scan NUMBERS (ScanInfo.name); scan_id is only a position,
+        # and listing it here offered 0, 1, 2 ... (fixed 2026-10-11).
+        def _scan_no(sc):
+            try:
+                return int(str(sc.name))
+            except (TypeError, ValueError):
+                return sc.scan_id
+        scan_ids = sorted({_scan_no(s) for s in meta.scans})
         ant_names = sorted({a.name for a in meta.antennas})
         t0, t1 = meta.time_range
 
@@ -5845,10 +6251,11 @@ for (let i = 0; i < cols.length; i++) {
         corr_str         = ", ".join(meta.spws[0].polarizations) if meta.spws else "XX, YY"
 
         scan_hint    = (
-            f"<b>Scan</b> — MSSelection integer list  "
-            f"| Valid: {', '.join(str(s) for s in scan_ids[:8])}"
-            + (f" … {scan_ids[-1]} ({len(scan_ids)} total)" if len(scan_ids) > 8 else "")
-            + "  | e.g. <tt>1,3,7</tt>  or  <tt>1~7</tt>"
+            f"<b>Scan</b> \u2014 scan numbers, applied by Plot  "
+            f"| Scans: {', '.join(str(s) for s in scan_ids[:8])}"
+            + (f" \u2026 {scan_ids[-1]} ({len(scan_ids)} total)" if len(scan_ids) > 8 else "")
+            + "  | e.g. <tt>1,3,7</tt>  or  <tt>1~7</tt>  or  <tt>&gt;30</tt>  "
+              "or  <tt>!5</tt> (all but 5)  | Empty: all scans"
         )
         ant_hint     = (
             f"<b>Antenna / Baseline</b> — tick rows to select  "
@@ -5861,14 +6268,24 @@ for (let i = 0; i < cols.length; i++) {
             "| Text box: type e.g. <tt>DA41,DA43~DA46</tt>, <tt>!DA42</tt> "
             "or <tt>DA41&amp;DV01</tt> and press Enter to set the ticks"
         )
+        _day = _mjd_to_iso(t0)[:10]
         time_hint    = (
-            f"<b>Time range</b> — YYYY/MM/DD/HH:MM:SS~YYYY/MM/DD/HH:MM:SS  "
-            f"| Obs: {_mjd_to_iso(t0)} – {_mjd_to_iso(t1)}  "
-            f"| e.g. <tt>{_mjd_to_iso(t0)}~{_mjd_to_iso(t1)}</tt>"
+            f"<b>Time range</b> \u2014 UTC, applied by Plot  "
+            f"| Data: {_mjd_to_iso(t0)} \u2013 {_mjd_to_iso(t1)}  "
+            f"| e.g. <tt>{_mjd_to_iso(t0)[11:]}~{_mjd_to_iso(t1)[11:]}</tt> "
+            f"(times of day, the day of the data)  "
+            f"or  <tt>{_day}/{_mjd_to_iso(t0)[11:]}~{_day}/{_mjd_to_iso(t1)[11:]}</tt>  "
+            "| <tt>&gt;08:00</tt>  <tt>&lt;08:30</tt>  <tt>08:00:00+00:10:00</tt> (start and length)  "
+            "<tt>1/00:10:00</tt> (day/time, as the time axis labels data that cross midnight)  "
+            "| One time alone: the integration around it  | Empty: all times"
         )
         uvrange_hint = (
-            "<b>UV range</b> — distance or wavelengths  "
-            "| e.g. <tt>0~50klambda</tt>  or  <tt>100~300m</tt>  or  <tt>&gt;200m</tt>"
+            "<b>UV range</b> \u2014 baseline length (projected), applied by Plot  "
+            "| e.g. <tt>0~50klambda</tt>  <tt>100~300m</tt>  <tt>&gt;200m</tt>  "
+            "<tt>&lt;1.5km</tt>; several with commas  "
+            "| Units: m, km, lambda, klambda, Mlambda (kl, Ml); metres if none  "
+            "| Wavelengths at each spectral window's centre frequency  "
+            "| Whole rows (a baseline at one time) are in or out  | Empty: all"
         )
         field_hint   = (
             f"<b>Field</b> — name or index  "
@@ -5946,6 +6363,8 @@ for (let i = 0; i < cols.length; i++) {
         scan_inp    = _stub_input("Scan",       self._scan_str,      self._hint_scan)
         time_inp    = _stub_input("Time range", self._timerange_str, self._hint_time)
         uv_inp      = _stub_input("UV range",   self._uvrange_str,   self._hint_uvrange)
+        # Read by doPlot() (HRS A1): their text goes with every Plot.
+        self._scan_inp, self._time_inp, self._uv_inp = scan_inp, time_inp, uv_inp
 
         # ---- Antenna and Baseline tables (2026-10, HRS H3) ---------------- #
         #
@@ -6149,6 +6568,21 @@ for (let i = 0; i < cols.length; i++) {
             labels=["Pin layout"], active=[0] if self._pin_layout else [],
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+        # Time labels (HRS A0, 2026-10-11): UTC or elapsed, on every
+        # panel at once; a label change only, so it acts on the click.
+        _tl_title = _section("Time labels")
+        self._time_labels_rbg = RadioButtonGroup(
+            labels=["UTC", "Elapsed"],
+            active=0 if self._time_labels == "utc" else 1,
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
+        self._time_labels_rbg.js_on_change("active", CustomJS(
+            args={"ctrl": self._pipe["control"], "ids": self._ids,
+                  "entries": [{"fig": pn.figure, "state": pn._state_source}
+                              for pn in self._all_panels]},
+            code=_TIME_LABELS_JS))
+        _time_labels_col = column(_tl_title, self._time_labels_rbg,
+                                  width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0))
         self._sidebar_col = column(
             path_div,
             _section("Data"),
@@ -6157,6 +6591,9 @@ for (let i = 0; i < cols.length; i++) {
             self._hover(column(corr_label, self._corr_cbg,
                                width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
                         "corr"),
+            self._hover(column(_section("Autocorrelations"), self._autocorr_rbg,
+                               width=_SIDEBAR_WIDTH, margin=(0, 0, 0, 0)),
+                        "autocorr"),
             scan_inp, antenna_col, baseline_col, time_inp, uv_inp,
             # "Axes" header removed (Group 3 piece 2, 2026-07-31) along
             # with self._raster_axis_section/_scatter_axis_section that
@@ -6176,6 +6613,7 @@ for (let i = 0; i < cols.length; i++) {
               if self._enable_flagging else []),
             _section("Panels"),
             self._hover(self._pin_layout_cb, "pin_layout"),
+            self._hover(_time_labels_col, "time_labels"),
             self._gear_tabs,
             width       = _SIDEBAR_WIDTH_COL,
             visible     = True,
@@ -7041,6 +7479,17 @@ if (sidebarEl && prevScrollTop !== null) {
                     ),
                 )
                 kind_panel.figure.add_tools(gear)
+                # "Describe this plot" (HRS A3): beside the gear.
+                kind_panel.figure.add_tools(CustomAction(
+                    icon=_SUMMARY_ICON_DATA_URI,
+                    description=f"Describe Panel {slot.id}: settings, "
+                                "versions and the call that reproduces it",
+                    callback=CustomJS(
+                        args={"ctrl": self._pipe["control"], "ids": self._ids,
+                              "slot_id": slot.id, "fig": kind_panel.figure,
+                              "notify_div": getattr(self, "_notify_div", None)},
+                        code=_SUMMARY_JS),
+                ))
 
         return self._sidebar_col, toggle_btn
 
@@ -7536,6 +7985,11 @@ function doPlot(reload) {
         spw_ids:     spw_ids,
         correlation: corr.join(','),
         datacolumn:  col_sel.value,
+        // Scan / Time range / UV range text (HRS A1); parsed in Python.
+        scan:        scan_inp  ? scan_inp.value  : '',
+        timerange:   time_inp  ? time_inp.value  : '',
+        uvrange:     uv_inp    ? uv_inp.value    : '',
+        autocorr:    autocorr_rbg ? ['exclude', 'include', 'only'][autocorr_rbg.active] : 'exclude',
         panels:      panels,
         reload:      !!reload,
         // The layout as shown (2026-10-10): presets and the Layout buttons
@@ -7647,12 +8101,23 @@ function doPlot(reload) {
         function cvIntegerTicks(fig, state) {
             try {
                 const d = state.data;
-                const apply = (axes, cat) => {
+                const utcMode = (d['time_labels'] || ['elapsed'])[0] === 'utc';
+                const apply = (axes, cat, isTime) => {
                     for (const a of (axes || [])) {
                         const t = a ? a.ticker : null;
                         if (!t || t.min_interval === undefined) continue;
                         const want = (cat && cat[0]) ? 1 : 0;
                         if (t.min_interval !== want) t.min_interval = want;
+                        // HRS A0: a UTC time axis ticks on whole
+                        // seconds / minutes / hours (base 60).
+                        if (t.base !== undefined) {
+                            const utc = utcMode && isTime && isTime[0];
+                            const b = utc ? 60 : 10;
+                            if (t.base !== b) {
+                                t.base = b;
+                                t.mantissas = utc ? [1, 2, 5, 10, 15, 20, 30] : [1, 2, 5];
+                            }
+                        }
                         // Every label when there are few (an antenna
                         // matrix, HRS H7; a small array's baselines).
                         if (t.desired_num_ticks !== undefined) {
@@ -7662,7 +8127,7 @@ function doPlot(reload) {
                         }
                     }
                 };
-                apply([...(fig.below || []), ...(fig.above || [])], d['x_cat']);
+                apply([...(fig.below || []), ...(fig.above || [])], d['x_cat'], d['x_is_time']);
                 // Every x label shown and longer than 3 characters (the
                 // antenna names of the matrix): upright, or they collide.
                 // Same rule as visibility_plot.x_label_orientation.
@@ -7674,7 +8139,7 @@ function doPlot(reload) {
                     const o = up ? 'vertical' : 'horizontal';
                     if (a.major_label_orientation !== o) a.major_label_orientation = o;
                 }
-                apply([...(fig.left || []), ...(fig.right || [])], d['y_cat']);
+                apply([...(fig.left || []), ...(fig.right || [])], d['y_cat'], d['y_is_time']);
             } catch (e) {
                 console.warn('[visplot] cvIntegerTicks failed', e);
             }
@@ -8045,6 +8510,10 @@ function doPlot(reload) {
             "layout_rbg":           layout_rbg,
             "display_order_source": self._display_order_source,
             "field_sel":  self._field_select,
+            # Scan / Time range / UV range boxes (HRS A1).
+            "scan_inp":   self._scan_inp,
+            "time_inp":   self._time_inp,
+            "uv_inp":     self._uv_inp,
             # Antenna / Baseline tables' sources (2026-10): read by
             # doPlot() and stepped by their Prev/Next buttons.
             "ant_src":    self._antenna_source,
@@ -8052,6 +8521,7 @@ function doPlot(reload) {
             "ant_mode":   self._antenna_mode,
             "spw_src":    self._spw_source,
             "corr_cbg":   self._corr_cbg,
+            "autocorr_rbg": self._autocorr_rbg,
             "col_sel":    self._col_select,
             "status_div": self._status_div,
             "notify_div": self._notify_div,

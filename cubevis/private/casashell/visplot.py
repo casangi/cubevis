@@ -79,6 +79,9 @@ def _visplot_t(
         kind: Optional[str] = None,
         preset: Optional[str] = None,
         pin_layout: bool = False,
+        time_labels: str = 'utc',
+        autocorr: str = 'exclude',
+        panels: Optional[list] = None,
         raster_y: Optional[str] = None,
         raster_x: Optional[str] = None,
         raster_qty: Optional[str] = None,
@@ -93,6 +96,7 @@ def _visplot_t(
         theme: str = 'dark',
         raster_cmap: Optional[str] = None,
         scatter_cmap: Optional[str] = None,
+        plotfile: Optional[str] = None,
         flag_filters: Optional[dict] = None,
         flag_preview: bool = False,
         flag_display: str = 'hide',
@@ -129,6 +133,9 @@ def _visplot_t(
         kind = kind,
         preset = preset,
         pin_layout = pin_layout,
+        time_labels = time_labels,
+        autocorr = autocorr,
+        panels = panels,
         raster_y = raster_y,
         raster_x = raster_x,
         raster_qty = raster_qty,
@@ -143,6 +150,7 @@ def _visplot_t(
         theme = theme,
         raster_cmap = raster_cmap,
         scatter_cmap = scatter_cmap,
+        plotfile = plotfile,
         flag_filters = flag_filters,
         flag_preview = flag_preview,
         flag_display = flag_display,
@@ -204,11 +212,24 @@ class _visplot:
         what is initially ticked in the sidebar's Antenna and Baseline
         tables.
     scan : str
-        MSSelection scan string.  (Stored; not yet wired.)
+        Scans, CASA style: ``"1,3,7"``, ``"1~7"``, ``">30"``, ``"!5"``.
+        The sidebar's Scan box starts with it.  Text that matches no scan
+        raises ``ValueError``.  Default: all.
     timerange : str
-        MSSelection time-range string.  (Stored; not wired.)
+        UTC time range, CASA style: ``"2012/11/19/07:37:00~2012/11/19/
+        08:00:00"``, ``"07:37:00~08:00"`` (times of day, on the day of the
+        data), ``">08:00"``, ``"<08:30"``, ``"08:00:00+00:10:00"`` (start
+        and length), ``"1/00:10:00"`` (day number / time, as the time axis
+        labels data that cross midnight), or one time (the integration
+        around it).  One range.  The Time range box starts with it.
+        Default: all.
     uvrange : str
-        UV range string.  (Stored; not wired.)
+        UV-distance ranges, CASA style: ``"0~50klambda"``, ``"100~300m"``,
+        ``">200m"``, ``"<1.5km"``, several with commas; units m, km,
+        lambda, klambda, Mlambda, metres if none.  Wavelengths are taken
+        at each spectral window's centre frequency, and whole rows (a
+        baseline at one time) are in or out.  The UV range box starts
+        with it.  Default: all.
     correlation : str
         Comma-separated correlation labels (``"XX,YY"``).  Default: all.
     datacolumn : str
@@ -305,9 +326,45 @@ class _visplot:
         Start with "Pin layout" ticked: presets (this ``preset`` and the
         toolbar buttons) keep the current layout -- ``layout`` -- instead
         of switching to their own.  Default ``False``.
+    panels : list[dict] | None
+        Each panel's configuration, in screen order: ``[{...}, {...}]``,
+        one dict per panel, so that a two-panel view can be written as
+        arguments (and the plot summary can print the call that
+        reproduces what is on screen).  Keys are the names of the
+        per-panel arguments below -- ``kind``, ``raster_y``, ``raster_x``,
+        ``raster_qty``, ``averaging``, ``baseline_order``,
+        ``baseline_combine``, ``detrend``, ``stat_time_window``,
+        ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
+        ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
+        ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
+        and ``vmax`` (its colour scale).  A key left out takes the value
+        the flat argument (or ``preset``) gives that panel, so the flat
+        arguments still describe the first panel; an unknown key raises.
+        At most two panels for now.  ``layout`` still decides how many are
+        shown.  Example (Spectrum written out)::
+
+            panels=[dict(kind="scatter", scatter_x="FREQUENCY",
+                         scatter_y="AMPLITUDE", scatter_avg_time="scan"),
+                    dict(kind="scatter", scatter_x="FREQUENCY",
+                         scatter_y="PHASE", scatter_avg_time="scan")],
+            layout="over"
+    autocorr : str
+        Autocorrelations (baselines from an antenna to itself):
+        ``"exclude"`` (default; cross-correlations only), ``"include"``
+        or ``"only"``.  On VLBI data before amplitude calibration the
+        autocorrelations are hundreds of times the cross-correlations and
+        flatten every plot of all baselines.  A baseline named in
+        ``antenna`` (``"BR&BR"``) is plotted whatever this says.  Also the
+        "Autocorrelations" switch in the Data section.
+    time_labels : str
+        How time axes and the cursor readout give time: ``"utc"``
+        (default; time of day, the date in the axis label, AIPS-style
+        ``d/hh:mm:ss`` when the data cross a UTC midnight) or
+        ``"elapsed"`` (minutes and seconds from the first sample).
+        Also the "Time labels" switch in the configuration panel.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
-        ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
+        ``"CHANNEL"``, ``"ANTENNA1"`` / ``"ANTENNA2"`` (together). Takes precedence over
         ``preset``, which takes precedence over the default
         (Time vs. Channel). Validated against the same options the
         raster axis dropdowns expose in the GUI — an invalid value
@@ -325,11 +382,15 @@ class _visplot:
         directly into a U-vs-V UV-coverage scatter plot with no manual
         axis-picker step needed.
     time_range : tuple[float, float] | list[float] | None
-        ``(start, end)`` as MJD floats.
+        ``(start, end)`` in UNIX seconds (UTC), the programmatic form of
+        ``timerange``; shown in the Time range box as text.  Give one or
+        the other.
     freq_range : tuple[float, float] | list[float] | None
         ``(start, end)`` in Hz.
     uvdist_range : tuple[float, float] | list[float] | None
-        ``(min, max)`` in metres.
+        ``(min, max)`` UV distance in metres, the programmatic form of
+        ``uvrange``; shown in the UV range box as text.  Give one or the
+        other.
     compact_toolbar : bool
         Whether each figure's toolbar auto-hides until the mouse is over
         that plot.  Defaults to ``True``.
@@ -376,6 +437,12 @@ class _visplot:
         TW Hya with all fields (2 x 31 M samples, ~1.5 GiB per frame) needs
         about 3-4 GiB; on a 24 GB Mac the 2.4 GiB default evicted frames
         and a flag box took 3.6 s instead of 0.5 s.
+    plotfile : str | None
+        Write a PNG of the plot to this path instead of opening the GUI
+        (the ``visplot`` task then returns the path).  Implies
+        ``headless=True``; ``theme`` and ``layout`` apply.  A plotter
+        built this way can be called again with other selections to
+        write more files (see ``__call__``).
 
     Resource lifecycle
     ------------------
@@ -418,9 +485,9 @@ class _visplot:
         'field': 'Field name or integer index string.',
         'spw': 'Comma-separated SPW indices (``"0,1,2,3"``).',
         'antenna': "MSSelection antenna string (comma-separated names or IDs, ``!``-prefixed for exclusion -- see ``_parse_antenna_string``'s own docstring for the exact supported subset).",
-        'scan': 'MSSelection scan string.',
-        'timerange': 'MSSelection time-range string.',
-        'uvrange': 'UV range string.',
+        'scan': 'Scans, CASA style: ``"1,3,7"``, ``"1~7"``, ``">30"``, ``"!5"``.',
+        'timerange': 'UTC time range, CASA style: ``"2012/11/19/07:37:00~2012/11/19/ 08:00:00"``, ``"07:37:00~08:00"`` (times of day, on the day of the data), ``">08:00"``, ``"<08:30"``, ``"08:00:00+00:10:00"`` (start and length), ``"1/00:10:00"`` (day number / time, as the time axis labels data that cross midnight), or one time (the integration around it).',
+        'uvrange': 'UV-distance ranges, CASA style: ``"0~50klambda"``, ``"100~300m"``, ``">200m"``, ``"<1.5km"``, several with commas; units m, km, lambda, klambda, Mlambda, metres if none.',
         'correlation': 'Comma-separated correlation labels (``"XX,YY"``).',
         'datacolumn': 'Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.',
         'averaging': 'How raster cells combine the samples they cover: ``"vector"`` (default; average the complex visibility, then take Amplitude / Phase -- Amplitude drops where samples are incoherent) or ``"scalar"`` (Amplitude is the mean of the amplitudes, Phase the circular mean).',
@@ -435,20 +502,24 @@ class _visplot:
         'kind': 'Which panel kind leads: ``"raster"`` (default when omitted) or ``"scatter"``.',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
         'pin_layout': 'Start with "Pin layout" ticked: presets (this ``preset`` and the toolbar buttons) keep the current layout -- ``layout`` -- instead of switching to their own.',
+        'time_labels': 'How time axes and the cursor readout give time: ``"utc"`` (default; time of day, the date in the axis label, AIPS-style ``d/hh:mm:ss`` when the data cross a UTC midnight) or ``"elapsed"`` (minutes and seconds from the first sample).',
+        'autocorr': 'Autocorrelations (baselines from an antenna to itself): ``"exclude"`` (default; cross-correlations only), ``"include"`` or ``"only"``.',
+        'panels': "Each panel's configuration, in screen order: ``[{...}, {...}]``, one dict per panel, so that a two-panel view can be written as arguments (and the plot summary can print the call that reproduces what is on screen).",
         'raster_y': '',
         'raster_x': '',
         'raster_qty': 'Explicit raster quantity (color axis), e.g.',
         'scatter_x': '',
         'scatter_y': '',
-        'time_range': '``(start, end)`` as MJD floats.',
+        'time_range': '``(start, end)`` in UNIX seconds (UTC), the programmatic form of ``timerange``; shown in the Time range box as text.',
         'freq_range': '``(start, end)`` in Hz.',
-        'uvdist_range': '``(min, max)`` in metres.',
+        'uvdist_range': '``(min, max)`` UV distance in metres, the programmatic form of ``uvrange``; shown in the UV range box as text.',
         'compact_toolbar': "Whether each figure's toolbar auto-hides until the mouse is over that plot.",
         'plot_width': '',
         'plot_height': '',
         'theme': '',
         'raster_cmap': '',
         'scatter_cmap': '',
+        'plotfile': 'Write a PNG of the plot to this path instead of opening the GUI (the ``visplot`` task then returns the path).',
         'flag_filters': 'Extra flag filters, ``{name: callable | FlagFilter}``; each callable is ``func(ds, **params) -> bool mask`` (see ``flag_filters.py``).',
         'flag_preview': 'Review each flag proposal (counts, breakdown, highlighted samples) before it is added to the pending flags.',
         'flag_display': 'How pending flags are shown: ``"hide"`` (flagged points disappear, the default) or ``"color"`` (drawn in ``flag_color``).',
@@ -486,6 +557,9 @@ class _visplot:
         'kind': None,
         'preset': None,
         'pin_layout': False,
+        'time_labels': 'utc',
+        'autocorr': 'exclude',
+        'panels': None,
         'raster_y': None,
         'raster_x': None,
         'raster_qty': None,
@@ -500,6 +574,7 @@ class _visplot:
         'theme': 'dark',
         'raster_cmap': None,
         'scatter_cmap': None,
+        'plotfile': None,
         'flag_filters': None,
         'flag_preview': False,
         'flag_display': 'hide',
@@ -572,6 +647,9 @@ class _visplot:
             'kind': 'Optional[str]',
             'preset': 'Optional[str]',
             'pin_layout': 'bool',
+            'time_labels': 'str',
+            'autocorr': 'str',
+            'panels': 'Optional[list]',
             'raster_y': 'Optional[str]',
             'raster_x': 'Optional[str]',
             'raster_qty': 'Optional[str]',
@@ -586,6 +664,7 @@ class _visplot:
             'theme': 'str',
             'raster_cmap': 'Optional[str]',
             'scatter_cmap': 'Optional[str]',
+            'plotfile': 'Optional[str]',
             'flag_filters': 'Optional[dict]',
             'flag_preview': 'bool',
             'flag_display': 'str',
@@ -1046,6 +1125,51 @@ class _visplot:
             desc, fmt,
         )
 
+    def __time_labels_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('time_labels', self._arg_default['time_labels'])
+        default = self._arg_default['time_labels']
+        desc    = self._arg_description.get('time_labels', '')
+        if self.__validate_('time_labels', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('time_labels', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __autocorr_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('autocorr', self._arg_default['autocorr'])
+        default = self._arg_default['autocorr']
+        desc    = self._arg_description.get('autocorr', '')
+        if self.__validate_('autocorr', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('autocorr', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __panels_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('panels', self._arg_default['panels'])
+        default = self._arg_default['panels']
+        desc    = self._arg_description.get('panels', '')
+        if self.__validate_('panels', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('panels', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     def __raster_y_inp(self):
         glb     = self.__globals_()
         value   = glb.get('raster_y', self._arg_default['raster_y'])
@@ -1256,6 +1380,21 @@ class _visplot:
             desc, fmt,
         )
 
+    def __plotfile_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('plotfile', self._arg_default['plotfile'])
+        default = self._arg_default['plotfile']
+        desc    = self._arg_description.get('plotfile', '')
+        if self.__validate_('plotfile', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('plotfile', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     def __flag_filters_inp(self):
         glb     = self.__globals_()
         value   = glb.get('flag_filters', self._arg_default['flag_filters'])
@@ -1420,6 +1559,9 @@ class _visplot:
         if 'kind' in glb: del glb['kind']
         if 'preset' in glb: del glb['preset']
         if 'pin_layout' in glb: del glb['pin_layout']
+        if 'time_labels' in glb: del glb['time_labels']
+        if 'autocorr' in glb: del glb['autocorr']
+        if 'panels' in glb: del glb['panels']
         if 'raster_y' in glb: del glb['raster_y']
         if 'raster_x' in glb: del glb['raster_x']
         if 'raster_qty' in glb: del glb['raster_qty']
@@ -1434,6 +1576,7 @@ class _visplot:
         if 'theme' in glb: del glb['theme']
         if 'raster_cmap' in glb: del glb['raster_cmap']
         if 'scatter_cmap' in glb: del glb['scatter_cmap']
+        if 'plotfile' in glb: del glb['plotfile']
         if 'flag_filters' in glb: del glb['flag_filters']
         if 'flag_preview' in glb: del glb['flag_preview']
         if 'flag_display' in glb: del glb['flag_display']
@@ -1471,6 +1614,9 @@ class _visplot:
         self.__kind_inp()
         self.__preset_inp()
         self.__pin_layout_inp()
+        self.__time_labels_inp()
+        self.__autocorr_inp()
+        self.__panels_inp()
         self.__raster_y_inp()
         self.__raster_x_inp()
         self.__raster_qty_inp()
@@ -1485,6 +1631,7 @@ class _visplot:
         self.__theme_inp()
         self.__raster_cmap_inp()
         self.__scatter_cmap_inp()
+        self.__plotfile_inp()
         self.__flag_preview_inp()
         self.__flag_display_inp()
         self.__flag_color_inp()
@@ -1546,6 +1693,9 @@ class _visplot:
         _invocation_parameters['kind'] = glb.get('kind', self._arg_default['kind'])
         _invocation_parameters['preset'] = glb.get('preset', self._arg_default['preset'])
         _invocation_parameters['pin_layout'] = glb.get('pin_layout', self._arg_default['pin_layout'])
+        _invocation_parameters['time_labels'] = glb.get('time_labels', self._arg_default['time_labels'])
+        _invocation_parameters['autocorr'] = glb.get('autocorr', self._arg_default['autocorr'])
+        _invocation_parameters['panels'] = glb.get('panels', self._arg_default['panels'])
         _invocation_parameters['raster_y'] = glb.get('raster_y', self._arg_default['raster_y'])
         _invocation_parameters['raster_x'] = glb.get('raster_x', self._arg_default['raster_x'])
         _invocation_parameters['raster_qty'] = glb.get('raster_qty', self._arg_default['raster_qty'])
@@ -1560,6 +1710,7 @@ class _visplot:
         _invocation_parameters['theme'] = glb.get('theme', self._arg_default['theme'])
         _invocation_parameters['raster_cmap'] = glb.get('raster_cmap', self._arg_default['raster_cmap'])
         _invocation_parameters['scatter_cmap'] = glb.get('scatter_cmap', self._arg_default['scatter_cmap'])
+        _invocation_parameters['plotfile'] = glb.get('plotfile', self._arg_default['plotfile'])
         _invocation_parameters['flag_filters'] = glb.get('flag_filters', self._arg_default['flag_filters'])
         _invocation_parameters['flag_preview'] = glb.get('flag_preview', self._arg_default['flag_preview'])
         _invocation_parameters['flag_display'] = glb.get('flag_display', self._arg_default['flag_display'])
@@ -1613,6 +1764,9 @@ class _visplot:
             kind = _UNSET,
             preset = _UNSET,
             pin_layout = _UNSET,
+            time_labels = _UNSET,
+            autocorr = _UNSET,
+            panels = _UNSET,
             raster_y = _UNSET,
             raster_x = _UNSET,
             raster_qty = _UNSET,
@@ -1627,6 +1781,7 @@ class _visplot:
             theme = _UNSET,
             raster_cmap = _UNSET,
             scatter_cmap = _UNSET,
+            plotfile = _UNSET,
             flag_filters = _UNSET,
             flag_preview = _UNSET,
             flag_display = _UNSET,
@@ -1673,6 +1828,9 @@ class _visplot:
             kind,
             preset,
             pin_layout,
+            time_labels,
+            autocorr,
+            panels,
             raster_y,
             raster_x,
             raster_qty,
@@ -1687,6 +1845,7 @@ class _visplot:
             theme,
             raster_cmap,
             scatter_cmap,
+            plotfile,
             flag_filters,
             flag_preview,
             flag_display,
@@ -1774,6 +1933,15 @@ class _visplot:
             _invocation_parameters['pin_layout'] = \
                 pin_layout if pin_layout is not _UNSET \
                 else glb.get('pin_layout', self._arg_default['pin_layout'])
+            _invocation_parameters['time_labels'] = \
+                time_labels if time_labels is not _UNSET \
+                else glb.get('time_labels', self._arg_default['time_labels'])
+            _invocation_parameters['autocorr'] = \
+                autocorr if autocorr is not _UNSET \
+                else glb.get('autocorr', self._arg_default['autocorr'])
+            _invocation_parameters['panels'] = \
+                panels if panels is not _UNSET \
+                else glb.get('panels', self._arg_default['panels'])
             _invocation_parameters['raster_y'] = \
                 raster_y if raster_y is not _UNSET \
                 else glb.get('raster_y', self._arg_default['raster_y'])
@@ -1816,6 +1984,9 @@ class _visplot:
             _invocation_parameters['scatter_cmap'] = \
                 scatter_cmap if scatter_cmap is not _UNSET \
                 else glb.get('scatter_cmap', self._arg_default['scatter_cmap'])
+            _invocation_parameters['plotfile'] = \
+                plotfile if plotfile is not _UNSET \
+                else glb.get('plotfile', self._arg_default['plotfile'])
             _invocation_parameters['flag_filters'] = \
                 flag_filters if flag_filters is not _UNSET \
                 else glb.get('flag_filters', self._arg_default['flag_filters'])
@@ -1893,6 +2064,12 @@ class _visplot:
                 glb.get('preset', self._arg_default['preset'])
             _invocation_parameters['pin_layout'] = \
                 glb.get('pin_layout', self._arg_default['pin_layout'])
+            _invocation_parameters['time_labels'] = \
+                glb.get('time_labels', self._arg_default['time_labels'])
+            _invocation_parameters['autocorr'] = \
+                glb.get('autocorr', self._arg_default['autocorr'])
+            _invocation_parameters['panels'] = \
+                glb.get('panels', self._arg_default['panels'])
             _invocation_parameters['raster_y'] = \
                 glb.get('raster_y', self._arg_default['raster_y'])
             _invocation_parameters['raster_x'] = \
@@ -1921,6 +2098,8 @@ class _visplot:
                 glb.get('raster_cmap', self._arg_default['raster_cmap'])
             _invocation_parameters['scatter_cmap'] = \
                 glb.get('scatter_cmap', self._arg_default['scatter_cmap'])
+            _invocation_parameters['plotfile'] = \
+                glb.get('plotfile', self._arg_default['plotfile'])
             _invocation_parameters['flag_filters'] = \
                 glb.get('flag_filters', self._arg_default['flag_filters'])
             _invocation_parameters['flag_preview'] = \
@@ -1983,6 +2162,9 @@ class _visplot:
                     'kind=' + repr(_invocation_parameters['kind']),
                     'preset=' + repr(_invocation_parameters['preset']),
                     'pin_layout=' + repr(_invocation_parameters['pin_layout']),
+                    'time_labels=' + repr(_invocation_parameters['time_labels']),
+                    'autocorr=' + repr(_invocation_parameters['autocorr']),
+                    'panels=' + repr(_invocation_parameters['panels']),
                     'raster_y=' + repr(_invocation_parameters['raster_y']),
                     'raster_x=' + repr(_invocation_parameters['raster_x']),
                     'raster_qty=' + repr(_invocation_parameters['raster_qty']),
@@ -1997,6 +2179,7 @@ class _visplot:
                     'theme=' + repr(_invocation_parameters['theme']),
                     'raster_cmap=' + repr(_invocation_parameters['raster_cmap']),
                     'scatter_cmap=' + repr(_invocation_parameters['scatter_cmap']),
+                    'plotfile=' + repr(_invocation_parameters['plotfile']),
                     'flag_filters=' + repr(_invocation_parameters['flag_filters']),
                     'flag_preview=' + repr(_invocation_parameters['flag_preview']),
                     'flag_display=' + repr(_invocation_parameters['flag_display']),
@@ -2033,6 +2216,9 @@ class _visplot:
                 kind = _invocation_parameters['kind'],
                 preset = _invocation_parameters['preset'],
                 pin_layout = _invocation_parameters['pin_layout'],
+                time_labels = _invocation_parameters['time_labels'],
+                autocorr = _invocation_parameters['autocorr'],
+                panels = _invocation_parameters['panels'],
                 raster_y = _invocation_parameters['raster_y'],
                 raster_x = _invocation_parameters['raster_x'],
                 raster_qty = _invocation_parameters['raster_qty'],
@@ -2047,6 +2233,7 @@ class _visplot:
                 theme = _invocation_parameters['theme'],
                 raster_cmap = _invocation_parameters['raster_cmap'],
                 scatter_cmap = _invocation_parameters['scatter_cmap'],
+                plotfile = _invocation_parameters['plotfile'],
                 flag_filters = _invocation_parameters['flag_filters'],
                 flag_preview = _invocation_parameters['flag_preview'],
                 flag_display = _invocation_parameters['flag_display'],
@@ -2070,7 +2257,17 @@ class _visplot:
         return task_result
 
     def notebook(self, *args, **kwargs):
-        from .visplot_notebook import visplot_notebook
+        # A task without a notebook entry point says so plainly instead
+        # of failing with ModuleNotFoundError (visplot, 2026-10-11).
+        try:
+            from .visplot_notebook import visplot_notebook
+        except ModuleNotFoundError as exc:
+            if exc.name and exc.name.endswith("visplot_notebook"):
+                raise NotImplementedError(
+                    "visplot.notebook() is not yet available; run "
+                    "visplot(...) from an interactive Python or CASA "
+                    "session instead") from None
+            raise
         return visplot_notebook(*args, **kwargs)
 
 

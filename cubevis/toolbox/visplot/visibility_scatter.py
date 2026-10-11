@@ -1649,6 +1649,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             theme      = self._theme_hint(),
             x_unit     = self._x_info.unit,
             y_unit     = self._y_info.unit,
+            time_labels = self._time_labels,
         )
 
     def _bands_with_mappings(self, spec, viewport=None):

@@ -4,6 +4,12 @@
 Supersedes the preliminary plan at this path (recoverable from git at that
 commit). Background and evidence: `hrs_commissioning_workflow_survey.md`.*
 
+*State 2026-10-11, fourth session (base `5c0d466`): **H8 part A done**
+(UTC time, Scan / Time / UV selection, `panels=[...]`, the plot summary,
+Correlation axis removed, guide sections for testers), plus B1 / B2 and an
+autocorrelation switch from the first VLBA data. Note:
+`hrs_h8_consolidation_prep.md`. Next: the GUI refactor, then testing.*
+
 *State 2026-10-11 (`main` at `f931a8c`): **H1 to H7 done.** The sprint to
 put every requirement in is over; a consolidation period follows, with
 astronomers testing and the GUI likely refactored. H8 is now split into
@@ -259,6 +265,9 @@ two-line title. Note: `hrs_h7_antenna_matrix.md`.*
 
 ### H8. Static output and hardening (M, ongoing)
 
+*State 2026-10-11 (fourth session): **A done; B1, B2 done**; B3, B4 and
+the C list remain. Note: `hrs_h8_consolidation_prep.md`.*
+
 *State 2026-10-11: **reviewed and partitioned** (section 8; handoff
 `hrs_handoff_2026-10-11_h8.md`). Before consolidation testing: Scan /
 Time range / UV range selection (the boxes and arguments are inert
@@ -360,6 +369,8 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-11 | `4026d72` | Pin on each configuration tab committed. Darrell: the matrix's Antenna 2 names ran together on a narrow panel; every-label X axes with names longer than 3 characters are now written upright |
 | 2026-10-11 | `f931a8c` | Upright labels committed. End of the requirements sprint. H8 reviewed (Darrell: get interface features in before the GUI refactor and astronomer testing; hardcopy in between; optimisation alongside the feedback). Found: Scan / Time range / UV range boxes and arguments do nothing; arguments describe one panel; user guide out of date; headless export fine for all presets (5 to 8 s each on 3c279), with two small PNG defects. Section 8; handoff `hrs_handoff_2026-10-11_h8.md` |
 
+| 2026-10-11 | `5c0d466` | Fourth session. Decisions (Darrell): implement UV range; per-panel arguments as `panels=[...]` (he floated `plot_a`..`plot_d`; a list grows without new names); summary as a toolbar tool opening a page, built in Python; Correlation axis left to Claude (removed); UTC default with elapsed option; `notebook()` says not available. Done: A0 UTC time (also the 1901 date in the Time range help), A1 Scan / Time / UV selection (UV as absent rows; Plot change check now compares every row field; attrs bug found and fixed), A4, A2 `panels`, A3 Describe this plot (round-trip tested), A5 guide, B1 `plotfile=`, B2 export fixes. VLBA TL016B subset from Darrell: autocorrelations ~600x the crosses flattened every all-baseline view, so `autocorr=` exclude by default with a Data-section switch. Fixed a `__del__` deadlock (frame cache lock on a dask worker). Note: `hrs_h8_consolidation_prep.md` |
+
 ## 7. Performance and compute pain points
 
 A running list: things seen to be slow or memory-hungry, with what is
@@ -368,6 +379,7 @@ items are found, and strike through (with the commit) when dealt with.
 
 | Seen | Where | What is known |
 |---|---|---|
+| 2026-10-11 | Spectrum / Time series on VLBA (TL016B subset, 4C39.25, 2 scans) | Headless export 47 s (Spectrum) and 31 s (Time series) against ~11 s for the other presets on the same selection: 4 SPWs x 128 channels x 45 baselines x 2 s integrations, averaged per scan / over channels. Not profiled yet |
 | 2026-10-11 | Redraws after Plot, large selections | Frames larger than the frame cache (TW Hya field "TW Hya": 993 MiB vs 803 MiB default) are re-read by every query; averaged points are now memoised independently of the raw frame, and a resize resamples. Unaveraged scatters on such selections still re-read on every Level-2 (zoomed) redraw. Datashader resampler compile on first use: ~2 to 3 s once |
 | 2026-10-09 | Averaged scatter, viewport redraw | After Plot with averaging (TW Hya, field 3c279, X Channel, scan average) the Plot request takes ~5.8 s and the viewport redraw that follows takes a further ~1.5 s (`visplot timing: Scatter redraw`). Likely the averaging is recomputed for the redraw: `averaged_view` (`data/reader.py`) is not memoised itself. Not verified. **Measured 2026-10-09 (third session):** steady-state redraws of that scatter take 0.08 to 0.18 s; the first Level-1 (local resample) redraw in a process costs ~3 s of numba compilation of datashader's `resample_2d`, once. So it is a first-use cost, not the averaging. Warming the resampler at start-up would hide it, if it is noticed |
 | ~~2026-10-09~~ | ~~Busy cursor, long Plot~~ | ~~`window.__cvSetBusy` gives up after `GIVE_UP_MS = 30000`~~. Confirmed (40 s Plot headless: idle at 30 s); replaced by a watchdog that holds busy while a reply is awaited (third session, base `7c026d8`) |
@@ -400,3 +412,9 @@ Performance runs alongside the testers' feedback.
 
 Order: A1 to A5 (B1 with them if small), then the refactor, then
 testing; B2 to B4 and C as feedback allows.
+
+*State 2026-10-11 (fourth session):* A0 (UTC time, added), A1 to A5 done,
+B1 and B2 done, plus the autocorrelation switch (from the VLBA data). A
+VLBI-style test MS now exists (TL016B subset, `VLBA` in the test
+environment). Remaining: B3 `hardcopy=` with iteration, B4 image in the
+summary, and C. Detail: `hrs_h8_consolidation_prep.md`.

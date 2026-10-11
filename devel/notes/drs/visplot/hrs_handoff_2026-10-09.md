@@ -1,5 +1,9 @@
 # HRS visplot: handoff, 2026-10-09
 
+> **Superseded 2026-10-11 by `hrs_handoff_2026-10-11_h8.md`** (H1 to H7
+> done; the H8 review and what goes before consolidation testing). Kept
+> for its history.
+
 For whoever (person or Claude session) picks up the HRS work on `visplot`
 next. Replaces `hrs_handoff_2026-10-07.md`. Updated at the end of the
 third session (same day): state, next steps and practical notes below. Everything needed is in this

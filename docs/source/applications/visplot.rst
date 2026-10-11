@@ -5,12 +5,11 @@ visplot
 
 .. warning::
 
-   This page documents the **preview** release of ``visplot``.
-   The preview supports interactive **display** of visibility data only.
-   Flagging (box-select, ⚑ Flag, ⟲ Undo, and writing flags back to the MS)
-   is implemented under the hood but is **disabled in the
-   GUI** and not yet documented here. A flagging section will be added
-   once that workflow is user-facing.
+   This page is a working draft for the ``visplot`` test release.
+   Flagging (flag boxes on either panel, undo, a report, and writing
+   flags back to the MS with a backup) is enabled, but not yet
+   documented here in detail; see *Scope, explicitly* for what works
+   today.
 
 ``visplot`` is the ``cubevis`` replacement for CASA6's
 ``plotms`` (visibility scatter/line plots) and ``msview`` (2-D raster
@@ -28,14 +27,15 @@ Status of this document
 This is a working draft. It currently covers:
 
 * Launching ``visplot`` and reading its output
-* The layout and controls available in the preview
+* The layout and controls
 * A basic "getting oriented" workflow using a real, previously-published
   dataset, with side-by-side comparison against the equivalent
   ``plotms``/``msview`` output
 
-It intentionally does **not** yet cover flagging, iteration, averaging,
-calibration on-the-fly, or export — none of those are enabled in the
-preview.
+It does not yet describe flagging, averaging, the presets or export in
+detail, although all of them now work (see *Scope*, below). A
+commissioning workflow and a "reporting a problem" section are planned
+before testing by astronomers begins.
 
 .. note::
 
@@ -347,10 +347,9 @@ Toolbar
 * Pan / Zoom / Reset (shared across both panels when both are shown).
   Wheel (scroll) zoom is off until its toolbar button is clicked, so a
   trackpad or mouse-wheel scroll over a plot scrolls the page
-* Box Select — draws a selection region on either panel (currently
-  feeds only the disabled flagging path — see the warning at the top
-  of this document)
-* Flag ⚑ / Undo ⟲ — **present but disabled** in the preview
+* Flag / Unflag boxes (each figure's toolbar) — draw a box to propose
+  flags; the Flagging section of the configuration panel holds the
+  filters, reaches, undo / redo, the report and writing to the MS
 
 Sidebar
 ```````
@@ -529,43 +528,51 @@ reference). The preview's sidebar dropdowns are not a 1:1 match yet
      - Correlation (selection, not yet a plottable/colorize axis)
      - 
    * - ``flag``
-     - *n/a in preview*
-     - flagging is disabled; no flag-state axis yet
+     - *not yet exposed*
+     - flagged data can be shown (Flagging, *Show flagged data*); no
+       flag-state axis yet
    * - ``coloraxis``
      - *not yet exposed*
      - colorize-by-axis is planned; preview colors by layer only
 
-Preview scope, explicitly
----------------------------
+Scope, explicitly
+-----------------
+
+*Updated 2026-10-11, after the HRS requirements work.*
 
 Present and working:
 
-* Raster and scatter display, MSv2 and MSv4/Processing Set backends
-* Data/axis/colormap selection sidebar
-* Display-mode and layout toggles
-* Shared pan/zoom/reset, linked X range when applicable
-* Session-scoped layout preference memory
+* Raster and scatter display, MSv2 and MSv4/Processing Set backends,
+  local or in a remote kernel
+* Selection by data column, field, spectral window, correlation,
+  antenna and baseline (tables, or typed text); stepping through
+  fields, spectral windows, antennas and baselines with ◀ ▶
+* Raster quantities including Phase RMS, Coherence, Z-Score and the
+  phase / amplitude differences; vector or scalar averaging; how a cell
+  covering several baselines is combined
+* Scatter averaging over time and channels
+* Presets: vplot, radplot, waterfalls (one baseline, all baselines,
+  phase), Z-Score, phase RMS views, antenna × antenna matrix, Spectrum,
+  Time series
+* Colorize by axis, several correlations as layers
+* Flagging: boxes on either panel with filters, preview, reaches
+  (antennas, all baselines, channels, correlations, spectral windows,
+  scan, field), reason, undo / redo, a report, JSON export, and writing
+  to the MS with a backup
+* Export PNG from the toolbar, and from Python without a browser
+  (``VisibilityPlotter(..., headless=True)(plotfile=...)``)
+* Shared pan/zoom/reset, linked X range when applicable; dark and light
 
-Not yet available (tracked for the full release):
+Not yet available:
 
-* Flagging: box-select currently accumulates into ``FlagDB`` internally
-  and drives a red-overlay re-render, but the Flag/Undo toolbar buttons
-  are disabled and nothing is written back to the MS
-* ``scan``, ``timerange``, and ``uvrange`` selection: the
-  ``visplot`` task accepts and validates these arguments, but they are
-  not yet applied to the query — only ``field``, ``spw``, ``antenna``
-  (antennas and baselines), and ``correlation`` currently filter what's
-  plotted
-* Iteration (Prev/Next) by scan or time; field, spectral window, antenna
-  and baseline are available
-* Locate
-* Save plot / image export
-* Copy-flagdata-command export
-* Averaging controls (channel, time, baseline)
-* On-the-fly calibration
-* Colorize-by-axis, multiple simultaneous Y axes
-* Jupyter notebook support (``visplot.notebook(...)``) — not available
-  in this preview; see the note near the top of this document
+* ``scan``, ``timerange`` and ``uvrange`` selection: the boxes in the
+  Data section and the task arguments are accepted but **not yet
+  applied** to what is plotted
+* ``plotfile`` in the ``visplot`` task (use the Python form above)
+* Correlation as a raster axis
+* Locate; on-the-fly calibration
+* A ``flagdata`` command export (removed; JSON and writing to the MS
+  replace it)
 
 Feedback
 ---------

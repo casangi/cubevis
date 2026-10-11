@@ -4,6 +4,12 @@
 Supersedes the preliminary plan at this path (recoverable from git at that
 commit). Background and evidence: `hrs_commissioning_workflow_survey.md`.*
 
+*State 2026-10-11 (`main` at `f931a8c`): **H1 to H7 done.** The sprint to
+put every requirement in is over; a consolidation period follows, with
+astronomers testing and the GUI likely refactored. H8 is now split into
+work before that testing, hardcopy, and work alongside it: section 8.
+Handoff: `hrs_handoff_2026-10-11_h8.md`.*
+
 Customer: USNO/NRAO High-Resolution Subarray pathfinder. Source requirement
 (CASR-385), verbatim:
 
@@ -213,9 +219,12 @@ Flag reaches (only if users ask for it). Notes: `hrs_h5_flag_reach.md`,
 
 ### H6. Averaged line plots for commissioning (M-L)
 
-*State 2026-10-09: **slice 1 done** (scatter averaging over time /
+*State 2026-10-11: **done.** Slice 2 committed (`3d34624`) and its
+follow-ups confirmed by Darrell on macOS (stepping skips baselines
+without data, Pin layout, wheel zoom off by default, busy after Plot).
+Slice 1 (2026-10-09): scatter averaging over time /
 channels, vector or scalar, flagging behind averaged points, conditional
-pan / zoom X link). **Slice 2 delivered, awaiting Darrell's test:**
+pan / zoom X link. Slice 2:
 Spectrum and Time series presets (both panels scatter, Amplitude over
 Phase), autocorrelations read from MSv2 (they were silently dropped),
 presets with Baseline / Antenna Prev / Next; panels now render at their
@@ -234,8 +243,9 @@ long as a reply is awaited (the slice 1 bug). Notes:
 
 ### H7. Antenna x antenna matrix (S-M)
 
-*State 2026-10-11: **done** (committed `2c2e174`; Darrell asked for a
-Pin on the configuration tabs, delivered). Antenna 1 x
+*State 2026-10-11: **done** (committed `2c2e174`). From Darrell's test:
+a Pin on each configuration tab (`4026d72`) and upright antenna names
+on the matrix's X axis (`f931a8c`). Antenna 1 x
 Antenna 2 raster (any quantity, each baseline over time and channels,
 mirrored, autocorrelations on the diagonal), Ant×Ant preset, names on
 the axes and in the readout; flag boxes refused with a message. Needed
@@ -249,9 +259,14 @@ two-line title. Note: `hrs_h7_antenna_matrix.md`.*
 
 ### H8. Static output and hardening (M, ongoing)
 
-*State 2026-10-09: not started. Plot summary dialog design agreed
-(below). The live / headless browser harness used for checks is now in
-`devel/tools/visplot_headless/`.*
+*State 2026-10-11: **reviewed and partitioned** (section 8; handoff
+`hrs_handoff_2026-10-11_h8.md`). Before consolidation testing: Scan /
+Time range / UV range selection (the boxes and arguments are inert
+today), per-panel arguments, the plot summary, removing options that
+do not work, tester-facing guide sections. Headless export already
+works for every preset; the `visplot` task has no `plotfile` yet. The
+live / headless browser harness is in `devel/tools/visplot_headless/`.*
+The items below are the original H8 list; section 8 orders them.
 
 
 - Static (PNG at least) output for each view above, from the task
@@ -278,8 +293,7 @@ two-line title. Note: `hrs_h7_antenna_matrix.md`.*
 - Carry the large-data items from `visplot_flagging_follow_on.md` as time
   allows; they bear on "faster and more reliable".
 
-Suggested sequence: H1, H2, H3, H4, H5, H6, H7, with H8 items picked up as
-each view lands. H3 can be taken before H2 if a quick visible result is
+Suggested sequence (followed): H1, H2, H3, H4, H5, H6, H7. H8: section 8. H3 can be taken before H2 if a quick visible result is
 wanted; it has no dependency on H1 or H2.
 
 ## 4. Validation without stakeholders
@@ -343,6 +357,8 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-11 | `3d34624` | Darrell: stepping, Pin layout and wheel zoom confirmed; busy still lasts long after Plot. Cause: the redraws after a Plot re-read the data (resize dropped the scatter references; the averaged-points memo never matched when frames are too big for the cache). Fixed both; busy after Plot 7.4 s -> 2.2 s (first use) / 0.7 s on 3c279 with no cache. Status line follows the layout. Note: `hrs_h6_scatter_presets.md`, section 9 |
 | 2026-10-11 | `f37392c` | Section 9 committed. Cross-partition raster combine (multi-SPW Baseline x Time showed the first SPW only; now weighted per `combine_rule`). H7: antenna x antenna matrix (`data/_antenna_matrix.py`, Ant×Ant preset, `antmatrix`). Two-line-title fragment found and fixed (`min_border_top` nudge). One tick per label on short categorical axes. Note: `hrs_h7_antenna_matrix.md` | Housekeeping: per-milestone state lines; section 7, performance and compute pain points; the live / headless browser harness committed as `devel/tools/visplot_headless/`. Handoff: `hrs_handoff_2026-10-09.md` |
 | 2026-10-11 | `2c2e174` | H7 committed by Darrell ("great work"). Asked for a Pin checkbox on each configuration tab, left of its ✕: ticked, a successful Plot leaves the tab open (to go through the Ant×Ant quantities). Note: `hrs_h7_antenna_matrix.md`, section 5 |
+| 2026-10-11 | `4026d72` | Pin on each configuration tab committed. Darrell: the matrix's Antenna 2 names ran together on a narrow panel; every-label X axes with names longer than 3 characters are now written upright |
+| 2026-10-11 | `f931a8c` | Upright labels committed. End of the requirements sprint. H8 reviewed (Darrell: get interface features in before the GUI refactor and astronomer testing; hardcopy in between; optimisation alongside the feedback). Found: Scan / Time range / UV range boxes and arguments do nothing; arguments describe one panel; user guide out of date; headless export fine for all presets (5 to 8 s each on 3c279), with two small PNG defects. Section 8; handoff `hrs_handoff_2026-10-11_h8.md` |
 
 ## 7. Performance and compute pain points
 
@@ -360,3 +376,27 @@ items are found, and strike through (with the commit) when dealt with.
 | 2026-10-08 | Full plotter, TW Hya all fields | Runs out of memory in 8 GB; use `field=3c279`, or engine-level calls |
 | 2026-10-08 | Test suite | Whole suite in one process runs out of memory with the TW Hya MS present; `devel/tools/visplot_headless/runtests.sh` runs a file per process. Even so, four files run out of memory on their own: `test_colorize_by_axis_part5d_legend_status`, `test_frame_cache`, `test_info_block_integration`, `test_visibility_scatter` |
 | (earlier) | Large-data flagging | Items carried in `devel/docs/visplot/visplot_flagging_follow_on.md` |
+
+## 8. Consolidation: what goes before testing
+
+*2026-10-11. Detail, findings and code pointers:
+`hrs_handoff_2026-10-11_h8.md` (sections 3 to 6). Decisions proposed
+there (section 4) are to be confirmed with Darrell before A starts.*
+
+The rule: anything that adds a control or changes what an argument
+means goes in before the GUI refactor and astronomer testing, so it is
+refactored and tested with the rest. Hardcopy is in between.
+Performance runs alongside the testers' feedback.
+
+| | Item | Size |
+|---|---|---|
+| **A** before testing | A1 Scan / Time range / UV range selection made real (inert today; UV needs a backend filter) | M |
+| | A2 Per-panel arguments (`panel_a` / `panel_b`), so a two-panel state can be written as a call | M |
+| | A3 Plot summary: per-panel toolbar action, a page of everything the panel shows, version, the reproducing `visplot(...)` call | M |
+| | A4 Remove options that answer "not implemented" (Correlation as a raster axis) | S |
+| | A5 Guide: status and scope corrected, reporting a problem, the commissioning workflow | S-M |
+| **B** hardcopy | B1 `plotfile=` in the task; B2 PNG fixes for the HRS views; B3 `hardcopy=` with iteration (baseline included); B4 image in the summary | S, S, M, S |
+| **C** alongside | Performance (section 7, flagging follow-on), known issues, depth items only if asked, summary hotkey, test infrastructure, export leftovers, a VLBI-style test MS | — |
+
+Order: A1 to A5 (B1 with them if small), then the refactor, then
+testing; B2 to B4 and C as feedback allows.

@@ -227,6 +227,7 @@ _STATIC_HINTS = {
     "tb_plot": "<b>Plot</b> \u2014 draw both panels with everything as now set in the panel on the left  | Selections, axes, quantities and window settings take effect only when this is pressed; colour scaling applies at once  | Pending flags are kept",
     "tb_reload": "<b>Reload</b> \u2014 read the data again and redraw  | Use after something else has changed the data on disk  | <span style=\"color:#f38ba8\"><b>Discards pending (unapplied) flags</b></span>",
     "tb_layout": "<b>Layout</b> \u2014 one panel, or both: side by side or one above the other  | Side by side suits Baseline \u00d7 Time; one above the other gives a waterfall the full width  | Each preset switches to the layout that suits it, unless <b>Pin layout</b> (in the configuration panel) is ticked",
+    "gear_pin": "<b>Pin</b> \u2014 keep this panel's configuration tab open after <b>Plot &#9654;</b>, to try one setting after another (the Ant\u00d7Ant quantities, say)  | Unticked, a successful Plot closes the tab  | \u2715 closes it either way",
     "pin_layout": "<b>Pin layout</b> \u2014 keep the panels arranged as they are now (One, Side by Side or Over / Under) when a preset is pressed  | Unticked, each preset switches to the arrangement that suits it (Spectrum and the waterfalls one above the other, the others side by side)  | Only the arrangement is kept: a preset still sets what each panel shows  | The Layout buttons in the toolbar change the arrangement either way",
     "tb_export": "<b>Export PNG</b> \u2014 write the current view (both panels, titles, axes, colour bars) to a PNG file where Python is running  | The path is reported in the status line",
     "tb_theme": "<b>Dark / Light</b> \u2014 switch the background  | The colormaps change with it so faint points stay visible; exported PNGs follow",
@@ -6292,6 +6293,9 @@ btn.label        = collapsing ? '⟩' : '⟨';
         # visible (client-side, no comm) until Plot ▶ reads it.
         self._panel_axis_widgets = {}
         self._panel_kind_switch  = {}
+        # self._panel_pin[slot.id] -> that tab's "Pin" CheckboxGroup
+        # (2026-10-11): ticked, a successful Plot leaves the tab open.
+        self._panel_pin          = {}
         # Swap buttons — one per tab (added 2026-08-03). A plain list, not
         # a dict, since neither swap_js's logic nor the later
         # side_container/over_container patching care which slot's tab a
@@ -6812,6 +6816,14 @@ over_container.children = new_children;
             )
             self._panel_kind_switch[slot.id] = kind_switch
 
+            # Pin (2026-10-11, on request): ticked, a successful Plot
+            # leaves this tab open, so a panel can be re-plotted over and
+            # over (the Ant×Ant quantities, say) without reopening it.
+            pin_cb = CheckboxGroup(labels=["Pin"], active=[],
+                                   width=52, margin=(0, 6, 0, 0),
+                                   stylesheets=[dark])
+            self._panel_pin[slot.id] = pin_cb
+
             raster_panel.visible  = (slot.kind == "raster")
             scatter_panel.visible = (slot.kind == "scatter")
             kind_switch.js_on_change("active", CustomJS(
@@ -6933,9 +6945,12 @@ if (sidebarEl && prevScrollTop !== null) {
                         Tip(kind_switch,
                             tooltip=self._tt("Switch this panel between "
                                               "raster and scatter")),
-                        Tip(cancel_btn,
-                            tooltip=self._tt("Close this panel's "
-                                              "configuration tab")),
+                        # Pin sits just left of the close button.
+                        row(self._hover(pin_cb, "gear_pin"),
+                            Tip(cancel_btn,
+                                tooltip=self._tt("Close this panel's "
+                                                  "configuration tab")),
+                            styles={"align-items": "center"}),
                         styles={"justify-content": "space-between",
                                "align-items": "center"},
                         width=_SIDEBAR_WIDTH,
@@ -7915,6 +7930,16 @@ function doPlot(reload) {
         // again rather than instantly re-revealing whatever was open last
         // round.
         if (resp.status === 'ok') {
+            // A pinned tab stays open: what its close button restores is
+            // now the panel as just plotted (kind and title).
+            function keepPinned(state, shown_kind, raster_fig, scatter_fig) {
+                const f = (shown_kind === 'scatter') ? scatter_fig : raster_fig;
+                state.data = {
+                    text:  [f.title != null ? f.title.text : null],
+                    color: [f.title != null ? f.title.text_color : null],
+                    kind:  [shown_kind],
+                };
+            }
             if (gear_tabs.tabs.indexOf(panel_a_tab) !== -1) {
                 const edited_kind = panel_a_state.data['kind'][0];
                 const edited_fig  = (edited_kind === 'scatter')
@@ -7947,6 +7972,8 @@ function doPlot(reload) {
                     edited_fig.title.text_color = panel_a_state.data['color'][0];
                     edited_fig.title.change.emit();
                 }
+                if (panel_a_pin.active.length > 0) keepPinned(panel_a_state, p0 ? p0_kind : edited_kind,
+                                                       panel0_raster_fig, panel0_scatter_fig);
             }
             if (gear_tabs.tabs.indexOf(panel_b_tab) !== -1) {
                 const edited_kind = panel_b_state.data['kind'][0];
@@ -7961,9 +7988,20 @@ function doPlot(reload) {
                     edited_fig.title.text_color = panel_b_state.data['color'][0];
                     edited_fig.title.change.emit();
                 }
+                if (panel_b_pin.active.length > 0) keepPinned(panel_b_state, p1 ? p1_kind : edited_kind,
+                                                       panel1_raster_fig, panel1_scatter_fig);
             }
-            gear_tabs.visible = false;
-            gear_tabs.tabs    = [];
+            // Pinned tabs (2026-10-11) stay open; the others close.
+            // A pinned tab's panel shows its real title (restored above),
+            // and keepPinned() made that the title its close button
+            // restores, so closing it later leaves the plot as it is.
+            const still_open = gear_tabs.tabs.filter(function(t) {
+                return (t === panel_a_tab && panel_a_pin.active.length > 0) ||
+                       (t === panel_b_tab && panel_b_pin.active.length > 0);
+            });
+            gear_tabs.tabs    = still_open;
+            gear_tabs.visible = still_open.length > 0;
+            if (still_open.length > 0 && gear_tabs.active >= still_open.length) gear_tabs.active = 0;
         } else if (resp.status === 'error' && resp.failed_slot != null) {
             // Validation-error auto-switch-to-tab (added 2026-08-03) —
             // decision 9's originally-settled design, last piece built.
@@ -8027,6 +8065,8 @@ function doPlot(reload) {
             # is currently "the raster position", slot B "the scatter
             # position", per self._slots' construction order.
             "panel_a_tab":   self._panel_tabpanels[self._slots[0].id],
+            "panel_a_pin":   self._panel_pin[self._slots[0].id],
+            "panel_b_pin":   self._panel_pin[self._slots[1].id],
             "panel_b_tab":   self._panel_tabpanels[self._slots[1].id],
             "panel_a_state": self._panel_title_state[self._slots[0].id],
             "panel_b_state": self._panel_title_state[self._slots[1].id],

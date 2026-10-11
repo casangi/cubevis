@@ -337,6 +337,11 @@ Toolbar
 * Layout — *One*, *Side by Side*, *Over / Under*.  Each preset switches
   to the arrangement that suits it unless *Pin layout* (configuration
   panel, section *Panels*; ``pin_layout=True``) is ticked
+* Gear (each panel's toolbar) — opens that panel's configuration tab
+  in the sidebar; changes there apply when *Plot ▶* is pressed. A
+  successful Plot closes the tab unless its *Pin* checkbox (left of the
+  tab's ✕) is ticked, which keeps it open to try one setting after
+  another
 * Help — holding the pointer over any toolbar or sidebar control shows
   what it does in the status area at the bottom
 * Pan / Zoom / Reset (shared across both panels when both are shown).

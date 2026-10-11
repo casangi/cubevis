@@ -234,7 +234,8 @@ long as a reply is awaited (the slice 1 bug). Notes:
 
 ### H7. Antenna x antenna matrix (S-M)
 
-*State 2026-10-11: **delivered, awaiting Darrell's test.** Antenna 1 x
+*State 2026-10-11: **done** (committed `2c2e174`; Darrell asked for a
+Pin on the configuration tabs, delivered). Antenna 1 x
 Antenna 2 raster (any quantity, each baseline over time and channels,
 mirrored, autocorrelations on the diagonal), Ant×Ant preset, names on
 the axes and in the readout; flag boxes refused with a message. Needed
@@ -341,6 +342,7 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-10 | `3d34624` | Slice 2 committed by Darrell. From his macOS test: wheel zoom off by default (a two-finger scroll over a plot zoomed it and started a long redraw); the busy overlay follows page scroll and layout changes; the watchdog holds busy only for a request waiting at least 5 s (hover readouts no longer count). "Pin layout" checkbox / `pin_layout=`: presets keep the current layout. Baseline / Antenna Prev / Next skip rows without data, which the tables dim. Note: `hrs_h6_scatter_presets.md`, section 8 |
 | 2026-10-11 | `3d34624` | Darrell: stepping, Pin layout and wheel zoom confirmed; busy still lasts long after Plot. Cause: the redraws after a Plot re-read the data (resize dropped the scatter references; the averaged-points memo never matched when frames are too big for the cache). Fixed both; busy after Plot 7.4 s -> 2.2 s (first use) / 0.7 s on 3c279 with no cache. Status line follows the layout. Note: `hrs_h6_scatter_presets.md`, section 9 |
 | 2026-10-11 | `f37392c` | Section 9 committed. Cross-partition raster combine (multi-SPW Baseline x Time showed the first SPW only; now weighted per `combine_rule`). H7: antenna x antenna matrix (`data/_antenna_matrix.py`, Ant×Ant preset, `antmatrix`). Two-line-title fragment found and fixed (`min_border_top` nudge). One tick per label on short categorical axes. Note: `hrs_h7_antenna_matrix.md` | Housekeeping: per-milestone state lines; section 7, performance and compute pain points; the live / headless browser harness committed as `devel/tools/visplot_headless/`. Handoff: `hrs_handoff_2026-10-09.md` |
+| 2026-10-11 | `2c2e174` | H7 committed by Darrell ("great work"). Asked for a Pin checkbox on each configuration tab, left of its ✕: ticked, a successful Plot leaves the tab open (to go through the Ant×Ant quantities). Note: `hrs_h7_antenna_matrix.md`, section 5 |
 
 ## 7. Performance and compute pain points
 

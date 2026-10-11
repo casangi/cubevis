@@ -22,7 +22,7 @@ are reference for those areas.
 
 ## State
 
-`main` at `3d34624` (H6 slice 2 committed after Darrell's macOS test),
+`main` at `2c2e174` (H7 committed). Earlier: `3d34624` (H6 slice 2 committed after Darrell's macOS test),
 plus the 2026-10-10 follow-up delivery (`hrs_h6_scatter_presets.md`,
 section 8): wheel zoom off by default, busy overlay and watchdog
 hardened, Pin layout, stepping skips rows without data.
@@ -39,14 +39,14 @@ hardened, Pin layout, stepping skips rows without data.
 | H6 slice 2, Spectrum / Time series, autocorrelations | Committed (`3d34624`) |
 | Pin layout, stepping without empty baselines | Delivered 2026-10-10, awaiting test |
 | Raster cells several partitions share (multi-SPW) | Combined by weight; delivered 2026-10-11 |
-| H7 antenna x antenna matrix | Delivered 2026-10-11, awaiting test |
+| H7 antenna x antenna matrix | Committed (`2c2e174`) |
+| Pin on the configuration tabs | Delivered 2026-10-11, awaiting test |
 | H8 plot summary dialog, static output, user guide | Not started; dialog design agreed (plan, H8) |
 
 ## Next, in order
 
-0. **Darrell's test of the H7 delivery** (`hrs_h7_antenna_matrix.md`):
-   Ant×Ant; multi-SPW rasters now combine SPWs; the title fragment.
-   Then H8 (plot summary dialog first).
+0. **Darrell's test of the tab Pin** (`hrs_h7_antenna_matrix.md`,
+   section 5). Then H8 (plot summary dialog first).
 0. **Darrell's test of the 2026-10-11 delivery** (busy after a long
    Plot; `hrs_h6_scatter_presets.md`, section 9). The 2026-10-10 items
    (stepping, Pin layout, wheel zoom) are confirmed.

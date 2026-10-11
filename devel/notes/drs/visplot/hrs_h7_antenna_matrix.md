@@ -131,7 +131,27 @@ array's Baseline axis) get one tick per label (`desired_num_ticks`).
 - Live: Ant×Ant on TW Hya 3c279 (screenshots), hover, flag box message,
   the title fragment before and after.
 
-## 5. Not done
+## 5. Pinned configuration tabs (after Darrell's test)
+
+*2026-10-11, against `2c2e174` (H7 committed). Darrell: "This seems like
+great work"; asked for a pin on the configuration tabs, to make it
+easier to go through the Ant×Ant quantities.*
+
+Each panel's configuration (gear) tab has a **Pin** checkbox left of its
+✕. Ticked, a successful Plot leaves that tab open; unticked tabs close
+as before. While the tab stays open the panel shows its real title (not
+the red "Panel A" shown while editing), and ✕ then keeps the panel as
+plotted. Status-area help on hover. Per tab, not ticked at start, and it
+stays as set when the tab is closed and opened again. A failed Plot
+leaves every tab open, as before.
+
+`self._panel_pin`; the doPlot success branch (`keepPinned` updates the
+tab's saved title, colour and kind). `test_gear_tab_pin.py` runs that
+branch under node with stand-in models (pinned / not / both / switched to
+Scatter while pinned). Live: Ant×Ant with Panel A pinned and Panel B
+not; Phase, then Real; A stayed open, B closed; ✕ left "Real".
+
+## 6. Not done
 
 - Flagging from the matrix (whole baselines over the selection).
 - Coherent combination across SPWs (needs complex sums from the

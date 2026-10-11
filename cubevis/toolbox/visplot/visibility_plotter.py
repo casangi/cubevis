@@ -202,7 +202,7 @@ _STATUS_HEIGHT     = 96
 _STATIC_HINTS = {
     "col": "<b>Data column</b> \u2014 which visibilities are plotted  | <b>DATA</b>: as observed  | <b>CORRECTED_DATA</b>: after calibration has been applied  | <b>MODEL_DATA</b>: what the calibration model predicts  | Only the columns this dataset has are listed",
     # ---- raster gear tab
-    "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | Y and X must differ; Correlation is not available yet",
+    "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: one cell per baseline over time and channels, mirrored, so a bad antenna is a whole row and column (the Ant\u00d7Ant preset); the two Antenna axes only go together  | Y and X must differ; Correlation is not available yet",
     "r_qty": "<b>Raster quantity</b> \u2014 what the colour shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
     "scaling": "<b>Colour scaling</b> \u2014 how values are spread over the colours; changes the picture, never the data  | <b>eq_hist</b> uses every colour equally and shows faint structure, but distances between colours mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap",
     "bcombine": "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines: any raster without Baseline on an axis, such as Time \u00d7 Channel with no single baseline ticked. Averaging (above) applies to the samples of each baseline; this is what happens to the baselines  | <b>Mean</b>: the average of the baselines\u2019 amplitudes. The general picture of the selected baselines; a problem on a few of them is diluted  | <b>Median</b>: the middle baseline at each cell: what most baselines share, unmoved by a few bad ones. A feature that shows in Maximum but not in Median is on a few baselines (find and flag those); one in both is on most of them  | <b>Maximum</b>: the largest baseline at each cell. Interference or a bad antenna shows even if only one baseline has it; then tick baselines to find which  | <b>Coherent</b>: the baselines are added as complex numbers first. Only for a calibrated point source, where all baselines agree and noise averages down; on anything else they cancel and the plot reads low  | Applies to Amplitude, Phase (Mean, Median and Maximum all give the mean direction), Amp V Diff and Phase Diff. A flag box on such a plot flags every selected baseline",
@@ -314,6 +314,15 @@ _PRESETS = {
         Axis.CHANNEL,  Axis.AMPLITUDE,
         "over",
     ),
+    # HRS H7 (2026-10-11): AIPS LISTR's antenna x antenna matrix -- one
+    # cell per baseline, averaged over time and channels, mirrored so a
+    # bad antenna is a whole row and column.  The scatter beside it is
+    # radplot's, where the same antenna's baselines stand out by length.
+    "antmatrix": (
+        Axis.ANTENNA1, Axis.ANTENNA2, Axis.AMPLITUDE,
+        Axis.UVDIST,   Axis.AMPLITUDE,
+        "side",
+    ),
 }
 
 # HRS H6 slice 2 (2026-10-09): the commissioning line plots.  Both panels
@@ -375,6 +384,8 @@ _PRESET_BUTTONS = (
      "<b>Phase waterfall</b> \u2014 Time \u00d7 Channel phase in a cyclic colormap (\u2212180\u00b0 and +180\u00b0 are the same colour)  | Scatter: Phase vs Time  | Stripes across frequency are a delay; stripes in time are a rate; uniform colour is calibrated  | Tick one baseline, or step through them"),
     ("waterfall-all", "All-BL", 62,
      "<b>All-baseline waterfall</b> \u2014 Time \u00d7 Channel with every selected baseline in one image, like AIPS FTFLG  | Each cell shows the largest amplitude among the baselines (Baselines combined is set to Maximum)  | Scatter: Amplitude vs Channel  | A quick survey for interference: one picture instead of one per baseline. A flag box here flags <b>every selected baseline</b>, and the message says how many  | What looks bad here may be on only a few baselines: tick antennas or baselines to find which before flagging them all"),
+    ("antmatrix", "Ant\u00d7Ant", 68,
+     "<b>Antenna \u00d7 antenna</b> \u2014 one cell per baseline, averaged over time and channels, like AIPS LISTR\u2019s matrix  | The matrix is mirrored, so an antenna that is bad on every baseline shows as a whole row and column  | Hover a cell for its baseline; the diagonal holds the autocorrelations when the data have them  | Scatter: Amplitude vs UV Distance, where that antenna\u2019s baselines stand apart  | Averaging (raster gear tab) applies: vector averaging over a long stretch reads low where the phase is not calibrated yet \u2014 use Scalar, or narrow the time range  | Flag on Baseline \u00d7 Time once the antenna is found"),
     ("spectrum", "Spectrum", 74,
      "<b>Spectrum</b> \u2014 amplitude above phase against frequency, each scan averaged, like AIPS POSSM  | Both panels are scatter plots, one above the other  | Read one baseline at a time: tick one, or step with Baseline \u25c0 \u25b6 (or Antenna \u25c0 \u25b6 for every baseline to one antenna)  | Shows the bandpass shape, edge channels, and a phase slope across the band (a delay)  | Average over time is set to Scan; change it in either panel's gear tab"),
     ("timeseries", "Time series", 84,
@@ -473,7 +484,11 @@ def _resolve_axis_arg(value, options, role_name, default):
 _RASTER_AXIS_OPTIONS = [("TIME",        "Time"),
                         ("BASELINE",    "Baseline"),
                         ("CHANNEL",     "Channel"),
-                        ("CORRELATION", "Correlation")]
+                        ("CORRELATION", "Correlation"),
+                        # HRS H7 (2026-10-11): together, the antenna x
+                        # antenna matrix (data/_antenna_matrix.py).
+                        ("ANTENNA1",    "Antenna 1"),
+                        ("ANTENNA2",    "Antenna 2")]
 _RASTER_Y_OPTIONS   = _RASTER_AXIS_OPTIONS
 _RASTER_X_OPTIONS   = _RASTER_AXIS_OPTIONS
 _RASTER_QTY_OPTIONS = [("AMPLITUDE", "Amplitude"),
@@ -2114,8 +2129,10 @@ class VisibilityPlotter:
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
         ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
         ``"phaserms-uvdist"``, ``"phase-waterfall"``,
-        ``"waterfall-all"``, ``"spectrum"``, ``"timeseries"``, or
-        ``None``.  ``"spectrum"`` and ``"timeseries"`` show two scatter
+        ``"waterfall-all"``, ``"antmatrix"``, ``"spectrum"``,
+        ``"timeseries"``, or ``None``.  ``"antmatrix"`` is the antenna x
+        antenna matrix (raster Antenna 1 x Antenna 2: each baseline over
+        time and channels).  ``"spectrum"`` and ``"timeseries"`` show two scatter
         panels, Amplitude over Phase, against Frequency (each scan
         averaged) or Time (all channels averaged); they set ``layout``
         to ``"over"`` and supply ``scatter_avg_time`` /
@@ -7621,6 +7638,13 @@ function doPlot(reload) {
                         if (!t || t.min_interval === undefined) continue;
                         const want = (cat && cat[0]) ? 1 : 0;
                         if (t.min_interval !== want) t.min_interval = want;
+                        // Every label when there are few (an antenna
+                        // matrix, HRS H7; a small array's baselines).
+                        if (t.desired_num_ticks !== undefined) {
+                            const n = (cat && cat[0]) ? cat[0].length : 0;
+                            const dn = (n > 0 && n <= 30) ? n : 6;
+                            if (t.desired_num_ticks !== dn) t.desired_num_ticks = dn;
+                        }
                     }
                 };
                 apply([...(fig.below || []), ...(fig.above || [])], d['x_cat']);
@@ -7664,6 +7688,27 @@ function doPlot(reload) {
             }
             if (p0 && p0.x_label != null) p0_fig.below[0].axis_label = p0.x_label;
             if (p0 && p0.y_label != null) p0_fig.left[0].axis_label  = p0.y_label;
+            // A title going from one line to two (or back) left a strip of
+            // the old one painted in a strip above the new (2026-10-11;
+            // Darrell's "clipped fragment above the title"), redrawn by
+            // every repaint until the panels round the plot are laid out
+            // again.  Nudging the top border does that; a window 'resize'
+            // event, invalidate_layout() or hiding the title for a frame
+            // did not, reliably (checked pixel by pixel headlessly).
+            if (p0 && p0.title != null &&
+                    (String(p0_fig.title.text || '').indexOf(String.fromCharCode(10)) >= 0) !==
+                    (p0.title.indexOf(String.fromCharCode(10)) >= 0)) {
+                const _f = p0_fig;
+                const _nudge = function() {
+                    try {
+                        const b = (_f.min_border_top == null) ? 5 : _f.min_border_top;
+                        _f.min_border_top = b + 1;
+                        requestAnimationFrame(function() { _f.min_border_top = b; });
+                    } catch (e) {}
+                };
+                setTimeout(_nudge, 300);
+                setTimeout(_nudge, 1500);
+            }
             if (p0 && p0.title   != null) p0_fig.title.text           = p0.title;
             // A long title arrives on two lines (visibility_plot.wrap_title);
             // show those a little smaller.  fromCharCode(10) rather than a
@@ -7762,6 +7807,27 @@ function doPlot(reload) {
             }
             if (p1 && p1.x_label != null) p1_fig.below[0].axis_label = p1.x_label;
             if (p1 && p1.y_label != null) p1_fig.left[0].axis_label  = p1.y_label;
+            // A title going from one line to two (or back) left a strip of
+            // the old one painted in a strip above the new (2026-10-11;
+            // Darrell's "clipped fragment above the title"), redrawn by
+            // every repaint until the panels round the plot are laid out
+            // again.  Nudging the top border does that; a window 'resize'
+            // event, invalidate_layout() or hiding the title for a frame
+            // did not, reliably (checked pixel by pixel headlessly).
+            if (p1 && p1.title != null &&
+                    (String(p1_fig.title.text || '').indexOf(String.fromCharCode(10)) >= 0) !==
+                    (p1.title.indexOf(String.fromCharCode(10)) >= 0)) {
+                const _f = p1_fig;
+                const _nudge = function() {
+                    try {
+                        const b = (_f.min_border_top == null) ? 5 : _f.min_border_top;
+                        _f.min_border_top = b + 1;
+                        requestAnimationFrame(function() { _f.min_border_top = b; });
+                    } catch (e) {}
+                };
+                setTimeout(_nudge, 300);
+                setTimeout(_nudge, 1500);
+            }
             if (p1 && p1.title   != null) p1_fig.title.text           = p1.title;
             // A long title arrives on two lines (visibility_plot.wrap_title);
             // show those a little smaller.  fromCharCode(10) rather than a

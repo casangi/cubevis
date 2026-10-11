@@ -2336,6 +2336,75 @@ class XArrayReader(abc.ABC):
         with self.flag_view("pending"):
             return ~self._flag_mask(ds)
 
+    def _antenna_order(self) -> list:
+        """Antenna names in the data's order (the Antenna table's), for the
+        antenna x antenna matrix (HRS H7).  Cached."""
+        cached = getattr(self, "_cv_antenna_order", None)
+        if cached is None:
+            try:
+                cached = [str(a) for a in (self.metadata().get("antenna_names") or [])]
+            except Exception:
+                cached = []
+            self._cv_antenna_order = cached
+        return cached
+
+    def _matrix_fn(self, ds, y_name, x_name):
+        """For ``_raster_weight``: per-baseline counts of *ds* -> the
+        antenna matrix on (*y_name*, *x_name*)."""
+        from ._antenna_matrix import to_matrix
+        order = self._antenna_order()
+        bdim = getattr(self, "_baseline_dim", "baseline_id")
+        if not isinstance(bdim, str):
+            bdim = "baseline_id"
+        return lambda vec: to_matrix(vec, ds, order, y_name, x_name, bdim=bdim)
+
+    def _raster_weight(self, ds, y_name, x_name, quantity, polarization,
+                       drop_coords, matrix=None):
+        """A callable returning, per (y, x) raster cell of partition *ds*,
+        how many samples ``_raster_2d`` reduced there: unflagged samples of
+        *polarization*, or for the Flag quantity every recorded (not padded)
+        sample of every polarization.  The weights of a cell several
+        partitions cover (``merge_raster_partitions``, 2026-10-11); only
+        called when such a cell exists.  ``None`` when they cannot be
+        made (the merge then uses equal weights).
+        """
+        try:
+            flag = self._flag_mask(ds)
+        except Exception:
+            return None
+        name = getattr(quantity, "name", str(quantity))
+        if name == "FLAG":
+            ok = xr.ones_like(flag, dtype=bool)
+        else:
+            pols = {str(p) for p in flag.coords["polarization"].values} \
+                if "polarization" in flag.coords else set()
+            if polarization is None or str(polarization) not in pols:
+                return None
+            ok = ~flag.sel(polarization=polarization)
+        eit = ds.get("EFFECTIVE_INTEGRATION_TIME")
+        if eit is not None:
+            ok = ok & np.isfinite(eit)
+        if matrix is not None:
+            # Antenna matrix (HRS H7): count per baseline, then lay out.
+            bdim = getattr(self, "_baseline_dim", "baseline_id")
+            if not isinstance(bdim, str):
+                bdim = "baseline_id"
+            red = [d for d in ok.dims if d != bdim]
+            wb = ok.sum(dim=red) if red else ok.astype("float64")
+
+            def _compute_matrix():
+                return matrix(wb.compute().astype("float64"))
+            return _compute_matrix
+        red = [d for d in ok.dims if d not in (y_name, x_name)]
+        w = ok.sum(dim=red) if red else ok.astype("float64")
+        if set(w.dims) != {y_name, x_name}:
+            return None
+        w = drop_coords(w, y_name, x_name).transpose(y_name, x_name)
+
+        def _compute():
+            return w.compute().astype("float64")
+        return _compute
+
     def baselines_with_rows(self, selection=None) -> Optional[list]:
         """``[(ant1, ant2), ...]``: the baselines with at least one row in
         what *selection* picks by field, scan, spectral window and time

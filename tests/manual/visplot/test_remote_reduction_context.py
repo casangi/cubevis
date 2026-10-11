@@ -250,6 +250,21 @@ def test_query_raster_matches_local(remote_ctx, local_reader):
     assert remote_dec == local_dec
 
 
+def test_antenna_matrix_matches_local(remote_ctx, local_reader):
+    """HRS H7 (2026-10-11): the antenna x antenna raster, including the
+    antenna names it carries in ``attrs``."""
+    meta = local_reader.metadata()
+    selection = SelectionSpec(field_names=[meta["field_names"][-1]])
+    kw = dict(y_dim=Axis.ANTENNA1, x_dim=Axis.ANTENNA2, quantity=Axis.AMPLITUDE,
+              selection=selection, polarization="XX")
+    r_agg, r_xr, r_yr, _ = remote_ctx.query_raster(**kw)
+    l_agg, l_xr, l_yr, _ = local_reader.query_raster(**kw)
+    assert r_agg.dims == l_agg.dims == ("antenna1", "antenna2")
+    assert np.allclose(np.asarray(r_agg), np.asarray(l_agg), equal_nan=True)
+    assert list(r_agg.attrs["antenna_labels"]) == list(l_agg.attrs["antenna_labels"])
+    assert (r_xr, r_yr) == (l_xr, l_yr)
+
+
 def test_query_columns_matches_local(remote_ctx, local_reader):
     """Scatter's remote wire path: ``ScatterLayerSpec`` out,
     ``ScatterRenderResult`` back -- an RGBA image plus the coarse

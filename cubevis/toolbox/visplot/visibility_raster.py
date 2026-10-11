@@ -56,6 +56,10 @@ from .data.reader import (
 from . import raster_grid as _rg
 from .raster_grid import BaselineAxis, normalize_baseline_order
 from .axes import Axis
+from .data._antenna_matrix import ANTENNA_DIMS as _ANT_DIM_MAP
+
+#: Raster dimensions of the antenna x antenna matrix (HRS H7).
+_ANT_DIMS = tuple(_ANT_DIM_MAP.values())
 from . import palettes as _palettes
 from .selection import normalize_averaging, normalize_baseline_combine
 from .data._raster_average import combines_baselines
@@ -152,9 +156,13 @@ def _auto_title(quantity: "Axis", y_label: str, x_label: str,
     # Difference from the window mean: the window is the whole point.
     if quantity in DIFF_QUANTITIES and (windows or baselines):
         q_label = f"{q_label} ({', '.join(x for x in (windows, baselines) if x)})"
+    axes = f"[{y_label} vs {x_label}]"
+    if {y_label, x_label} == {Axis.ANTENNA1.label, Axis.ANTENNA2.label}:
+        # HRS H7: say what a cell is.
+        axes = "[Antenna \u00d7 Antenna, each baseline over time and channels]"
     return (
         f"{q_label}  "
-        f"[{y_label} vs {x_label}]"
+        f"{axes}"
         f"  pol={polarization}"
     )
 
@@ -420,10 +428,15 @@ class VisibilityRaster(VisibilityPlot):
         ``update_axes(baseline_combine=...)``."""
         return self._baseline_combine
 
+    @property
+    def _antenna_matrix(self) -> bool:
+        """Antenna 1 x Antenna 2 (HRS H7): one baseline per cell."""
+        return {self._y_dim, self._x_dim} == {Axis.ANTENNA1, Axis.ANTENNA2}
+
     def _baselines_note(self) -> str:
         """Words for the title when the cells cover several baselines and
         the quantity depends on how they are combined; else ``""``."""
-        if Axis.BASELINE in (self._y_dim, self._x_dim):
+        if Axis.BASELINE in (self._y_dim, self._x_dim) or self._antenna_matrix:
             return ""
         if not combines_baselines(self._quantity, ("baseline_id",),
                                   self._baseline_combine):
@@ -447,7 +460,7 @@ class VisibilityRaster(VisibilityPlot):
         """How many baselines each cell of this raster covers, when
         Baseline is not one of its axes (those with data in the current
         selection); ``None`` when Baseline is an axis or it is unknown."""
-        if Axis.BASELINE in (self._y_dim, self._x_dim):
+        if Axis.BASELINE in (self._y_dim, self._x_dim) or self._antenna_matrix:
             return None
         tables = getattr(self, "_identity_tables", None)
         with_data = getattr(tables, "baselines_with_data", None)
@@ -613,7 +626,9 @@ class VisibilityRaster(VisibilityPlot):
         """Fixed half-width of a cell along *dim_name*, or ``None`` when
         the width comes from the coordinate spacing.  A Baseline axis is
         drawn in whole positions (see ``_place_baselines``)."""
-        return BaselineAxis.HALF if dim_name == "baseline_id" else None
+        # The antenna matrix (HRS H7) is drawn in whole positions too.
+        return (BaselineAxis.HALF if dim_name in ("baseline_id",) + _ANT_DIMS
+                else None)
 
     def _place_baselines(self, agg, primary: bool = False):
         """Put *agg*'s baseline dimension, if it has one, in display
@@ -681,7 +696,7 @@ class VisibilityRaster(VisibilityPlot):
             ext = _rg.extent(agg.coords[dim].values, self._axis_half(dim))
             if ext is None or ext[0] == ext[1]:
                 out.append((float(b0), float(b1)))
-            elif dim == "baseline_id":
+            elif dim == "baseline_id" or dim in _ANT_DIMS:
                 out.append(ext)
             else:
                 out.append((min(ext[0], float(b0)), max(ext[1], float(b1))))
@@ -1471,6 +1486,16 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         bl_suffix = (" (by length)" if self._bl_axis is not None
                      and self._bl_axis.order == "length" else "")
 
+        # The antenna matrix (HRS H7): its positions are named by the
+        # labels the backend attached.
+        if agg is not None and agg.ndim == 2 and set(agg.dims) <= set(_ANT_DIMS):
+            from .data._antenna_matrix import labels_of
+            ant = labels_of(agg)
+            if ant:
+                bl_ticks = tuple(ant)
+                x_is_bl = y_is_bl = True
+                bl_suffix = ""
+
         return PanelSpec(
             kind       = "raster",
             title      = self._effective_title(),
@@ -2072,6 +2097,11 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         y_range  = _cell_bounds(y_coords, gy, self._axis_half(y_dim_name))
 
         t_range = bl_range = freq_range = None
+        if {x_dim_name, y_dim_name} <= set(_ANT_DIMS):
+            # Antenna matrix (HRS H7): the cell is one baseline, over the
+            # whole selection.  The readout names it ("BL: A&B").
+            return self._probe_antenna_cell(agg, value, x_centre, y_centre,
+                                            x_range, y_range)
         if x_dim_name == "time":
             t_range = x_range
         elif y_dim_name == "time":
@@ -2128,6 +2158,35 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             "x_centre": x_centre,
             "y_centre": y_centre,
             "baseline_length_m": bl_length,
+            **identity,
+        }
+
+    def _probe_antenna_cell(self, agg, value, x_centre, y_centre, x_range, y_range):
+        """Readout of an antenna-matrix cell: the baseline it is, field and
+        scans from the identity tables; no axis numbers (positions)."""
+        from .data._antenna_matrix import labels_of
+        names = labels_of(agg) or []
+        i, j = int(round(y_centre)), int(round(x_centre))
+        identity = {}
+        if 0 <= i < len(names) and 0 <= j < len(names):
+            a, b = names[i], names[j]
+            tables = getattr(self, "_identity_tables", None)
+            pairs = getattr(tables, "baseline_antennas", None) or {}
+            bid = next((k for k, p in pairs.items()
+                        if tuple(p) in ((a, b), (b, a))), None)
+            if bid is not None:
+                identity = self._match_identity(
+                    t_range=None, bl_range=None, bl_ids=[bid], freq_range=None,
+                    polarization=self._polarization)
+            if not identity.get("antenna_pairs"):
+                identity["antenna_pairs"] = [(a, b)]
+        return {
+            "value":    value,
+            "x_range":  x_range,
+            "y_range":  y_range,
+            "x_centre": None,
+            "y_centre": None,
+            "baseline_length_m": None,
             **identity,
         }
 

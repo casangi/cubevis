@@ -13,6 +13,7 @@ what state things are in, and what was learned the hard way.
 | `hrs_requirements.md` | The requirement (CASR-385) |
 | `hrs_visplot_plan.md` | The plan, H1 to H8. Each milestone has a dated **State** line; section 6 is the dated tracking table; section 7 is the running list of performance and compute pain points |
 | `hrs_h6_scatter_average.md`, `hrs_h6_scatter_presets.md` | H6 slices 1 and 2 (the latter also covers the busy-indicator watchdog, autocorrelations, render size, sparse points) |
+| `hrs_h7_antenna_matrix.md` | H7, the cross-partition raster combine, the two-line-title repaint fix |
 | `hrs_h5_flag_reach.md`, `hrs_h5_filters.md` | Flag reaches and the curated filters; most of the flag-tool browser lessons are here |
 | `devel/tools/visplot_headless/README.md` | How to run a live plotter in headless Chromium and drive it |
 
@@ -37,11 +38,15 @@ hardened, Pin layout, stepping skips rows without data.
 | Busy indicator | Fixed (watchdog); follow-up for "lasts after the plot" delivered 2026-10-10, awaiting test |
 | H6 slice 2, Spectrum / Time series, autocorrelations | Committed (`3d34624`) |
 | Pin layout, stepping without empty baselines | Delivered 2026-10-10, awaiting test |
-| H7 antenna x antenna matrix | Not started |
+| Raster cells several partitions share (multi-SPW) | Combined by weight; delivered 2026-10-11 |
+| H7 antenna x antenna matrix | Delivered 2026-10-11, awaiting test |
 | H8 plot summary dialog, static output, user guide | Not started; dialog design agreed (plan, H8) |
 
 ## Next, in order
 
+0. **Darrell's test of the H7 delivery** (`hrs_h7_antenna_matrix.md`):
+   Ant×Ant; multi-SPW rasters now combine SPWs; the title fragment.
+   Then H8 (plot summary dialog first).
 0. **Darrell's test of the 2026-10-11 delivery** (busy after a long
    Plot; `hrs_h6_scatter_presets.md`, section 9). The 2026-10-10 items
    (stepping, Pin layout, wheel zoom) are confirmed.
@@ -74,10 +79,7 @@ hardened, Pin layout, stepping skips rows without data.
 - The "rows with data" for stepping come with each Plot: after changing
   the field without plotting, the first ◀ ▶ uses the previous field's.
 - Autocorrelations are detected from the first and last 100k rows only.
-- Multi-SPW Baseline x Time shows the first SPW only.
 - The Baseline table does not narrow to the ticked antennas.
-- Two-line title: a clipped fragment above it after a replot (seen once
-  by Darrell; not reproduced headlessly).
 - Short noisy windows read somewhat low in Phase RMS; `PHASE_DIFF` above
   90 deg where a window has no coherent mean.
 - No VLBI-style test dataset. TW Hya (ALMA, one SPW, so "all spectral

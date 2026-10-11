@@ -268,6 +268,14 @@ def _raster_axis_index(axis: Axis) -> int:
 
 
 def _bad_axis(axis):
+    if axis in (Axis.ANTENNA1, Axis.ANTENNA2):
+        # HRS H7 (2026-10-11): the matrix shows baselines averaged over the
+        # whole selection; a box there would flag whole baselines, which is
+        # what the Baseline table + Flag reaches already do explicitly.
+        raise ValueError(
+            "Flagging from the antenna \u00d7 antenna matrix is not available: "
+            "find the baseline or antenna here, then flag it on Baseline \u00d7 "
+            "Time (or tick it and use Flag reaches)")
     raise ValueError(f"raster flagging on axis {axis.name} is not supported")
 
 

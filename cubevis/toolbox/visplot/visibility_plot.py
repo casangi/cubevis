@@ -1358,6 +1358,11 @@ class VisibilityPlot(Model):
                 for ax in axes:
                     if hasattr(ax.ticker, "min_interval"):
                         ax.ticker.min_interval = 1 if ticks else 0
+                    # Every label when there are few (antenna matrix, HRS
+                    # H7); the Plot response (cvIntegerTicks) does the same.
+                    if hasattr(ax.ticker, "desired_num_ticks"):
+                        n = len(ticks) if ticks else 0
+                        ax.ticker.desired_num_ticks = n if 0 < n <= 30 else 6
         except Exception:
             log.debug("could not set tick spacing", exc_info=True)
 

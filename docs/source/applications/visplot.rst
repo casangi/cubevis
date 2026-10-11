@@ -241,7 +241,8 @@ Task arguments (preview)
      - Named axis preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
        ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
        ``"phaserms-uvdist"``, ``"phase-waterfall"``,
-       ``"waterfall-all"``, ``"spectrum"`` or ``"timeseries"``.
+       ``"waterfall-all"``, ``"antmatrix"``, ``"spectrum"`` or
+       ``"timeseries"``.
        Corresponds to the toolbar preset buttons.
    * - ``time_range``
      - tuple/list of 2 floats, optional
@@ -317,6 +318,12 @@ Toolbar
     values for all baselines. These three also put the *Phase slope*
     and window controls back to their defaults
   * *φ Wfall* — Time vs Channel phase waterfall
+  * *Ant×Ant* — the antenna × antenna matrix (AIPS LISTR's): one cell
+    per baseline, averaged over time and channels, mirrored so an antenna
+    that is bad on every baseline shows as a whole row and column; the
+    diagonal holds the autocorrelations when the data have them. Hover a
+    cell for its baseline. Flag on Baseline × Time once the antenna is
+    found (a flag box on the matrix is refused)
   * *Spectrum* — two scatter panels, Amplitude above Phase against
     frequency, each scan averaged (AIPS POSSM): the bandpass shape, edge
     channels and a phase slope across the band. Read one baseline at a

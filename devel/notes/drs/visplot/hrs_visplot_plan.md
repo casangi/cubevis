@@ -161,7 +161,9 @@ colormap, and H1b.*
 *State 2026-10-09: **done.** One cell rule for image, readout, flags
 (`raster_grid.py`); `baseline_combine` (mean / median / max / coherent);
 All-BL preset; zoom of a decimated raster keeps the full aggregate.
-Known: multi-SPW Baseline x Time shows the first SPW only. Notes:
+Known: multi-SPW Baseline x Time shows the first SPW only (fixed
+2026-10-11: cells several partitions share are combined, see
+`hrs_h7_antenna_matrix.md`). Notes:
 `hrs_h4_raster_axes.md`, `hrs_h4_baseline_combine.md`, `hrs_raster_zoom.md`.*
 
 
@@ -232,7 +234,13 @@ long as a reply is awaited (the slice 1 bug). Notes:
 
 ### H7. Antenna x antenna matrix (S-M)
 
-*State 2026-10-09: not started.*
+*State 2026-10-11: **delivered, awaiting Darrell's test.** Antenna 1 x
+Antenna 2 raster (any quantity, each baseline over time and channels,
+mirrored, autocorrelations on the diagonal), Ant×Ant preset, names on
+the axes and in the readout; flag boxes refused with a message. Needed
+first: raster cells several partitions share are now combined by weight
+(was: first partition wins). Also fixed: the clipped fragment above a
+two-line title. Note: `hrs_h7_antenna_matrix.md`.*
 
 
 - Raster of ANTENNA1 x ANTENNA2 with any raster quantity, reduced over time
@@ -331,7 +339,8 @@ wanted; it has no dependency on H1 or H2.
 | 2026-10-09 | `ca927cc` | Busy fix committed; Darrell reports it did not cure the problem on his machine. Leading suspect: the 30 s give-up in `__cvSetBusy` (section 7). Carried to the next session.
 | 2026-10-09 | `7c026d8` | Third session. Busy: the fixed 30 s give-up replaced by a watchdog that keeps busy while any CommMgr request awaits a reply (cubevisjs `inFlight()` / `canReply()`; reproduced and checked with `SLOW_PLOT=40`). H6 slice 2: Spectrum / Time series presets; autocorrelations opened from MSv2 when present (`has_autocorrelations`; xarray-ms drops them by default); panels render at the figure's frame size (was the construction size: Over / Under scatters drawn with flat 2:1 bins); `spread_sparse` for sparse scatters; toolbar row wraps on narrow windows. Harness: `SLOW_PLOT`, `VW`. Note: `hrs_h6_scatter_presets.md` |
 | 2026-10-10 | `3d34624` | Slice 2 committed by Darrell. From his macOS test: wheel zoom off by default (a two-finger scroll over a plot zoomed it and started a long redraw); the busy overlay follows page scroll and layout changes; the watchdog holds busy only for a request waiting at least 5 s (hover readouts no longer count). "Pin layout" checkbox / `pin_layout=`: presets keep the current layout. Baseline / Antenna Prev / Next skip rows without data, which the tables dim. Note: `hrs_h6_scatter_presets.md`, section 8 |
-| 2026-10-11 | `3d34624` | Darrell: stepping, Pin layout and wheel zoom confirmed; busy still lasts long after Plot. Cause: the redraws after a Plot re-read the data (resize dropped the scatter references; the averaged-points memo never matched when frames are too big for the cache). Fixed both; busy after Plot 7.4 s -> 2.2 s (first use) / 0.7 s on 3c279 with no cache. Status line follows the layout. Note: `hrs_h6_scatter_presets.md`, section 9 | Housekeeping: per-milestone state lines; section 7, performance and compute pain points; the live / headless browser harness committed as `devel/tools/visplot_headless/`. Handoff: `hrs_handoff_2026-10-09.md` |
+| 2026-10-11 | `3d34624` | Darrell: stepping, Pin layout and wheel zoom confirmed; busy still lasts long after Plot. Cause: the redraws after a Plot re-read the data (resize dropped the scatter references; the averaged-points memo never matched when frames are too big for the cache). Fixed both; busy after Plot 7.4 s -> 2.2 s (first use) / 0.7 s on 3c279 with no cache. Status line follows the layout. Note: `hrs_h6_scatter_presets.md`, section 9 |
+| 2026-10-11 | `f37392c` | Section 9 committed. Cross-partition raster combine (multi-SPW Baseline x Time showed the first SPW only; now weighted per `combine_rule`). H7: antenna x antenna matrix (`data/_antenna_matrix.py`, Ant×Ant preset, `antmatrix`). Two-line-title fragment found and fixed (`min_border_top` nudge). One tick per label on short categorical axes. Note: `hrs_h7_antenna_matrix.md` | Housekeeping: per-milestone state lines; section 7, performance and compute pain points; the live / headless browser harness committed as `devel/tools/visplot_headless/`. Handoff: `hrs_handoff_2026-10-09.md` |
 
 ## 7. Performance and compute pain points
 

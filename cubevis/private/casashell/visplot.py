@@ -293,8 +293,10 @@ class _visplot:
         Named preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
         ``"zscore"``, ``"phaserms-time"``, ``"phaserms-freq"``,
         ``"phaserms-uvdist"``, ``"phase-waterfall"``,
-        ``"waterfall-all"``, ``"spectrum"``, ``"timeseries"``, or
-        ``None``.  ``"spectrum"`` and ``"timeseries"`` show two scatter
+        ``"waterfall-all"``, ``"antmatrix"``, ``"spectrum"``,
+        ``"timeseries"``, or ``None``.  ``"antmatrix"`` is the antenna x
+        antenna matrix (raster Antenna 1 x Antenna 2: each baseline over
+        time and channels).  ``"spectrum"`` and ``"timeseries"`` show two scatter
         panels, Amplitude over Phase, against Frequency (each scan
         averaged) or Time (all channels averaged); they set ``layout``
         to ``"over"`` and supply ``scatter_avg_time`` /

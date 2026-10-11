@@ -117,7 +117,8 @@ from .reader import (
     _PartitionScanLookup,
 )
 from . import _scatter_render
-from ._raster_merge import coord_extent, merge_raster_partitions
+from ._raster_merge import coord_extent, combine_rule, merge_raster_partitions
+from . import _antenna_matrix as _am
 from ._raster_average import (
     reduce_amp_phase_baselines, reduce_plain_baselines,
 )
@@ -1909,6 +1910,8 @@ class MSv4Backend(XArrayReader):
         x_name = _axis_to_dim(x_dim, self._baseline_dim)
 
         lazy_arrs:  list[xr.DataArray] = []
+        # Per-partition sample counts, for cells several partitions share.
+        weight_fns: list = []
         all_x_vals: list[float]        = []
         all_y_vals: list[float]        = []
         # Frequency coordinates, for the Axis.CHANNEL relabelling below.
@@ -1950,6 +1953,11 @@ class MSv4Backend(XArrayReader):
                 arr, _dec = _decimate_agg(arr, y_name, x_name, max_cells)
                 any_partition_decimated = any_partition_decimated or _dec
                 lazy_arrs.append(arr)
+                weight_fns.append(self._raster_weight(
+                    ds, y_name, x_name, quantity, polarization,
+                    _drop_non_raster_coords,
+                    matrix=(self._matrix_fn(ds, y_name, x_name)
+                            if _am.is_antenna_matrix(y_dim, x_dim) else None)))
 
         if not lazy_arrs:
             log.warning("query_raster: no data matched selection in %s",
@@ -2000,11 +2008,18 @@ class MSv4Backend(XArrayReader):
                 # Merge on the union of BOTH axes -- not xr.concat along
                 # y, which stacks SPWs as extra time rows for Time x
                 # Channel (see _raster_merge's module docstring).
-                agg = merge_raster_partitions(computed_arrs, y_name, x_name)
+                agg = merge_raster_partitions(
+                    computed_arrs, y_name, x_name,
+                    rule=combine_rule(quantity, getattr(
+                        selection, "baseline_combine", DEFAULT_BASELINE_COMBINE)),
+                    weights=weight_fns)
             except Exception as exc:
                 log.warning("query_raster: could not concat partitions: %s", exc)
                 agg = computed_arrs[0]
 
+        if _am.is_antenna_matrix(y_dim, x_dim):
+            # Antennas with no data leave the matrix; the rest are named.
+            agg = _am.compact(agg, self._antenna_order())
         if all_x_vals:
             x_range = (min(all_x_vals), max(all_x_vals))
         else:
@@ -2082,6 +2097,7 @@ class MSv4Backend(XArrayReader):
         Returns a lazy (not computed) DataArray.  The caller collects these
         across all partitions and issues a single ``dask.compute()`` (OPT-B).
         """
+        _am.check_axes(y_dim, x_dim)
         if Axis.CORRELATION in (y_dim, x_dim):
             # Offered in the raster axis lists but never implemented:
             # everything below reduces ONE polarization, so there is no
@@ -2098,6 +2114,13 @@ class MSv4Backend(XArrayReader):
 
         y_name = _axis_to_dim(y_dim, self._baseline_dim)
         x_name = _axis_to_dim(x_dim, self._baseline_dim)
+        # HRS H7: the antenna matrix reduces everything but the baseline
+        # (both raster dimensions set to it), then lays the baselines out
+        # as a matrix (_finish_matrix below).
+        matrix = _am.is_antenna_matrix(y_dim, x_dim)
+        if matrix:
+            mat_names = (y_name, x_name)
+            y_name = x_name = self._baseline_dim
 
         if quantity == Axis.FLAG:
             # Padding (EFFECTIVE_INTEGRATION_TIME NaN) is excluded BEFORE
@@ -2115,6 +2138,9 @@ class MSv4Backend(XArrayReader):
             )
             if eit is not None and all(d in frac.dims for d in eit.dims):
                 frac = frac.where(np.isfinite(eit))
+            if matrix:
+                return _am.to_matrix(frac, ds, self._antenna_order(), *mat_names,
+                                     bdim=y_name)
             return _drop_non_raster_coords(frac, y_name, x_name)
 
         if polarization is None:
@@ -2276,6 +2302,11 @@ class MSv4Backend(XArrayReader):
             )
             return None
 
+        if matrix:
+            out = _am.to_matrix(q, ds, self._antenna_order(), *mat_names, bdim=y_name)
+            if out is not None and quantity == Axis.Z_SCORE:
+                out.attrs = {**out.attrs, 'zscore_n_reduced': n_reduced}
+            return out
         out = _drop_non_raster_coords(q, y_name, x_name).transpose(y_name, x_name)
         if quantity == Axis.Z_SCORE:
             # Part 6 (2026-09): how many samples the per-cell MAX was
@@ -2933,6 +2964,10 @@ def _axis_to_dim(axis: Axis, baseline_dim: str = "baseline_id") -> str:
         Axis.FREQUENCY:   "frequency",
         Axis.CHANNEL:     "frequency",
         Axis.CORRELATION: "polarization",
+        # HRS H7: the antenna x antenna matrix (data/_antenna_matrix.py);
+        # not dimensions of the data -- _raster_2d builds them.
+        Axis.ANTENNA1:    "antenna1",
+        Axis.ANTENNA2:    "antenna2",
     }
     dim = _MAP.get(axis)
     if dim is None:

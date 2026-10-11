@@ -1905,12 +1905,26 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             "y0": y0, "y1": y1,
         }
 
-    def _pixel_size_changed(self) -> None:
-        """The figure's size changed: the cached per-layer references
-        were binned for the old canvas, and a Level-1 resample of them
-        would draw at the old shape.  Dropping them makes the next draw
-        a Level-2 query at the new size (2026-10-09)."""
-        self._layer_reference = [None] * len(self._layers)
+    def _pixel_size_changed(self, old_width: int, old_height: int) -> None:
+        """The figure's size changed: draw at the new size.
+
+        The canvas (which a sparse plot shrinks below the pixel size, see
+        ``compute_canvas_size``) is scaled by the same factors, and the
+        cached per-layer references are KEPT: a Level-1 resample draws
+        them at the new canvas size, and ``_can_resample_locally`` still
+        sends a draw to Level-2 when a reference is too coarse for it.
+        2026-10-09 dropped the references instead, so every resize (and
+        every preset changes the layout) re-read the data: on a large
+        selection whose frames do not fit the frame cache, as slow as the
+        Plot itself, with the busy cursor up after Plot had come back
+        (2026-10-10)."""
+        sx = self._width / float(max(1, old_width))
+        sy = self._height / float(max(1, old_height))
+        for a, f in (("_canvas_width", sx), ("_canvas_height", sy),
+                     ("_full_canvas_width", sx), ("_full_canvas_height", sy)):
+            v = getattr(self, a, None)
+            if isinstance(v, (int, float)) and v > 0:
+                setattr(self, a, max(10, int(round(v * f))))
 
     def _can_resample_locally(
         self, x0: float, x1: float, y0: float, y1: float,

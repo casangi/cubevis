@@ -42,6 +42,9 @@ hardened, Pin layout, stepping skips rows without data.
 
 ## Next, in order
 
+0. **Darrell's test of the 2026-10-11 delivery** (busy after a long
+   Plot; `hrs_h6_scatter_presets.md`, section 9). The 2026-10-10 items
+   (stepping, Pin layout, wheel zoom) are confirmed.
 1. **Darrell's test of the 2026-10-10 delivery**: a long Plot then a
    two-finger scroll (the page should scroll, nothing zoom); the busy
    cursor ending with the last redraw; Pin layout with each preset;

@@ -228,3 +228,58 @@ local, both backends). Live: Spectrum with Side by Side pinned stays
 side by side; Baseline ▶ from nothing ticked lands on DA44&DA45 (the
 first with data); dimmed rows; a wheel over a plot leaves the ranges
 alone.
+
+## 9. Busy long after Plot is enabled again (2026-10-11)
+
+Darrell, after the section 8 delivery: after a long Plot (Time series,
+All fields) the busy indicator always stays up well after Plot is
+enabled again, and the plots look finished. It does end eventually.
+
+**Cause: the redraws that follow a Plot re-read the data.** After a Plot
+each panel redraws once more when the Plot's new ranges arrive, and once
+more when a preset changed the figure's size. A redraw is meant to
+resample the reference the Plot left (Level-1, no data read). Two things
+sent them back to the data:
+
+- The resize redraw (section 4) dropped the scatter's references, so it
+  was always a full query.
+- When a selection's frames are larger than the frame cache (TW Hya,
+  field "TW Hya": a 993 MiB frame against an 803 MiB budget; All fields
+  more), every query re-reads them, and the memo of averaged points only
+  matched when the very same raw frame object came back. So every redraw
+  of an averaged scatter re-read and re-averaged the whole selection.
+
+Before section 5 the 30 s give-up hid this: the indicator went idle while
+these redraws were still running.
+
+Reproduced with field 3c279 and `CUBEVIS_VISPLOT_FRAME_CACHE_MB=1`
+(nothing fits), Time series button: Plot 11 s, then the indicator stayed
+up a further **7.4 s** (redraws of 4.7 s and 7.4 s) on `3d34624`.
+
+Fixes:
+
+- **A resize keeps the references.** The canvas is scaled to the new
+  size and the redraw resamples (`VisibilityScatter._pixel_size_changed`);
+  `_can_resample_locally` still sends it to the data when a reference is
+  too coarse.
+- **Averaged points come from the memo without the raw frames.** The
+  state (frame token, selection, generation, pending-flag version, flag
+  view, averaging) fixes the result, a commit clears the memo, and an
+  averaged result is small, so it may outlive its raw frame
+  (`_query_columns_cached_raw`). Averaged layers also read their frame
+  once (with Real and Imaginary) instead of twice.
+- **The status line follows the layout.** It said "Side by Side" under
+  an Over / Under view (Darrell's screenshot): Plot now sends the layout
+  shown, and Python's copy (status line, PNG export) follows it.
+
+After: the same run stays busy **2.2 s** after Plot (two redraws of
+1.8 s, which are numba compiling datashader's resampler on its first use
+in the process); a second preset in the same session, **0.7 s** (redraws
+of 0.15 s).
+
+Tests: `test_layout_pin_and_stepping.py` section 5 (no read for a
+repeated averaged query with nothing cached; a resize redraws without a
+query; the status line).
+
+Still open: the first-use numba compile (~2 to 3 s, once per session).
+Warming it at start-up would hide it; not done.

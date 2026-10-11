@@ -3906,6 +3906,8 @@ for (const dt of other.tools) {
                       "cache generation -> %d", self._cache_generation)
 
         if "field"       in msg: self._field_str   = msg["field"]
+        if msg.get("layout") in ("one", "side", "over"):
+            self._layout = msg["layout"]
         if "antenna_names" in msg or "baselines" in msg:
             # Ticked rows of the Antenna / Baseline tables, as lists --
             # no text round trip, like spw_ids just below.  Validated
@@ -7504,6 +7506,10 @@ function doPlot(reload) {
         datacolumn:  col_sel.value,
         panels:      panels,
         reload:      !!reload,
+        // The layout as shown (2026-10-10): presets and the Layout buttons
+        // change it in the browser only, and the status line (and the
+        // PNG export) read Python's copy, which stayed at the start value.
+        layout:      ['one', 'side', 'over'][layout_rbg.active],
     }, function(resp) {
         // Release the busy state only after this response's own updates
         // have been PAINTED (two animation frames after this callback),

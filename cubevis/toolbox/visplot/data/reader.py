@@ -2689,15 +2689,52 @@ class XArrayReader(abc.ABC):
         from ..flag_engine import RAW_HELPER_COLUMNS, frame_keep_mask
         view = _FLAG_VIEW.get()
         gen = ("raw", int(getattr(selection, "cache_generation", 0) or 0))
-        raw = self._raw_frames(xaxis, yaxes, selection, cache=cache)
-        if raw is None:
-            return None
         from ._scatter_average import scatter_average_of, averages
         avg = scatter_average_of(selection)
         memo = self.__dict__.setdefault("_cv_view_memo", {})
         state = (view, int(getattr(selection, "pending_version", 0) or 0), gen, sel_fp, xaxis, avg)
         out: dict = {}
-        for k in yaxes:
+        # Averaged points answer from the memo without the raw frames
+        # (2026-10-10).  When the raw frames are too large for the frame
+        # cache they are re-read on every call, so the identity check below
+        # never matched, and every redraw of an averaged scatter re-read and
+        # re-averaged the whole selection: as slow as the Plot, and after a
+        # Plot each panel asks for one or two redraws.  The state alone
+        # fixes the result (frame token, selection, generation, pending-flag
+        # version, flag view, averaging; a commit clears the memo), and an
+        # averaged result is small, so it may outlive its raw frame.
+        if avg is not None:
+            for k in yaxes:
+                hit = memo.get(k)
+                if (averages(k[0]) and hit is not None and len(hit) > 3
+                        and hit[3] == "avg" and hit[0] == state):
+                    out[k] = hit[2]
+            if out and all(k in out for k in yaxes):
+                return {k: out[k].copy(deep=False) for k in yaxes}
+        need = [k for k in yaxes if k not in out]
+        # Averaged layers go straight to averaged_view, which reads the
+        # layer with its Real and Imaginary frames in one go; reading the
+        # layer first as well read it twice when frames are not cached.
+        if avg is not None:
+            for k in list(need):
+                if not averages(k[0]):
+                    continue
+                got = self.averaged_view(xaxis, k, selection, view, cache=cache)
+                if got is None:
+                    continue
+                df = got[0].drop(columns=[c for c in RAW_HELPER_COLUMNS if c in got[0].columns])
+                ext = _frame_extent(df)
+                if ext is not None:
+                    df.attrs["extent"] = ext
+                memo[k] = (state, None, df, "avg")
+                out[k] = df
+                need.remove(k)
+            if not need:
+                return {k: out[k].copy(deep=False) for k in yaxes if k in out}
+        raw = self._raw_frames(xaxis, need, selection, cache=cache)
+        if raw is None:
+            return None
+        for k in need:
             if k not in raw:
                 continue
             hit = memo.get(k)
@@ -2705,16 +2742,6 @@ class XArrayReader(abc.ABC):
                 out[k] = hit[2]
                 continue
             df = raw[k]
-            if avg is not None and averages(k[0]) and len(df) and "__disk_flag" in df.columns:
-                got = self.averaged_view(xaxis, k, selection, view, cache=cache)
-                if got is not None:
-                    df = got[0].drop(columns=[c for c in RAW_HELPER_COLUMNS if c in got[0].columns])
-                    ext = _frame_extent(df)
-                    if ext is not None:
-                        df.attrs["extent"] = ext
-                    memo[k] = (state, raw[k], df)
-                    out[k] = df
-                    continue
             if len(df) and "__disk_flag" in df.columns:
                 keep = frame_keep_mask(self, df, k[1], view)
                 df = df.loc[keep].drop(columns=[c for c in RAW_HELPER_COLUMNS if c in df.columns])
@@ -2753,6 +2780,8 @@ class XArrayReader(abc.ABC):
         if raw is None or any(k not in raw for k in need):
             return None
         base, rr, ri = raw[key], raw[need[1]], raw[need[2]]
+        if len(base) == 0 or "__disk_flag" not in base.columns:
+            return None          # nothing to average: the caller draws the rows
         if not (aligned(base, rr) and aligned(base, ri)):
             log.warning("scatter averaging: the frames of %s do not line up; "
                         "drawing samples instead", pol)

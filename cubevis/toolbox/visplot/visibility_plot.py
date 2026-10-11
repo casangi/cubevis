@@ -1705,13 +1705,14 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
             return False
         if w < 10 or h < 10 or (w, h) == (self._width, self._height):
             return False
+        old = (self._width, self._height)
         self._width, self._height = w, h
-        self._pixel_size_changed()
+        self._pixel_size_changed(*old)
         return True
 
-    def _pixel_size_changed(self) -> None:
-        """Hook: drop whatever was drawn for the previous pixel size
-        (nothing by default)."""
+    def _pixel_size_changed(self, old_width: int, old_height: int) -> None:
+        """Hook: adapt whatever depends on the pixel size, which was
+        *old_width* x *old_height* (nothing by default)."""
         return None
 
     def _handle_rerender(self, message: dict) -> dict:

@@ -217,3 +217,71 @@ def test_wheel_zoom_is_off_until_clicked(plotter):
             tb = panel.figure.toolbar
             assert tb.active_scroll is None
             assert any(isinstance(t, WheelZoomTool) for t in tb.tools)
+
+
+# ---------------------------------------------------------------------------
+# 5. After a long Plot (2026-10-10, second report): the redraws that follow
+#    a Plot must not read the data again
+# ---------------------------------------------------------------------------
+
+@needs_ms
+class TestRedrawsAfterPlot:
+
+    def test_averaged_points_answer_from_the_memo_without_a_read(self, monkeypatch):
+        """Frames larger than the frame cache are re-read on every call;
+        averaged points must still come from the memo."""
+        from cubevis.toolbox.visplot.axes import Axis
+        from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
+        from cubevis.toolbox.visplot.data.reader import _FlagViewContext
+        b = MSv2Backend(MS)
+        b.open()
+        cache = b._frame_cache_obj()
+        saved = cache.max_bytes                    # process-wide: put it back
+        try:
+            cache.max_bytes = 1                    # "on", but nothing fits
+            sel = SelectionSpec(field_names=[FIELD], correlation=["XX"], avg_chan="all")
+            key = (Axis.AMPLITUDE, "XX")
+            with _FlagViewContext("effective"):
+                first = b._query_columns_cached_raw(Axis.TIME, [key], sel, cache, None)[key]
+            calls = []
+            orig = type(b)._query_columns_raw
+            monkeypatch.setattr(type(b), "_query_columns_raw",
+                                lambda self, *a, **k: calls.append(a) or orig(self, *a, **k))
+            with _FlagViewContext("effective"):
+                again = b._query_columns_cached_raw(Axis.TIME, [key], sel, cache, None)[key]
+                # another state (the pending-flag version) is computed again
+                other = b._query_columns_cached_raw(
+                    Axis.TIME, [key], SelectionSpec(field_names=[FIELD], correlation=["XX"],
+                                                    avg_chan="all", pending_version=7),
+                    cache, None)[key]
+            assert len(calls) == 1
+            assert again["y"].tolist() == first["y"].tolist()
+            assert other["y"].tolist() == first["y"].tolist()
+        finally:
+            cache.max_bytes = saved
+            b.close()
+
+    def test_resize_keeps_the_reference(self, plotter, monkeypatch):
+        sc = plotter._slots[0].scatter
+        assert any(r is not None for r in sc._layer_reference)
+        cw, ch = sc._canvas_width, sc._canvas_height
+        w, h = sc._width, sc._height
+        calls = []
+        monkeypatch.setattr(type(sc), "_rerender",
+                            lambda self, *a, **k: calls.append(1) or None)
+        x0, x1 = sc._x_range
+        y0, y1 = sc._y_range
+        out = sc._handle_rerender(dict(x0=x0, x1=x1, y0=y0, y1=y1, w=w * 2, h=h // 2,
+                                       size_only=True))
+        assert calls == []                       # Level-1: no backend query
+        assert sc._canvas_width == round(cw * 2) and abs(sc._canvas_height - ch * (h // 2) / h) <= 1
+        assert out["image"].shape == (sc._canvas_height, sc._canvas_width)
+
+    def test_status_line_follows_the_layout(self, plotter):
+        vp = plotter
+        sid = vp._slots[0].id
+        resp = _run(vp._handle_plot({
+            "field": FIELD, "layout": "over",
+            "panels": {sid: {"kind": "scatter", "x": "CHANNEL", "y": "AMPLITUDE"}}}))
+        assert "Layout: Over / Under" in resp["status_text"]
+        assert "layout:      ['one', 'side', 'over'][layout_rbg.active]," in vp._do_plot_js

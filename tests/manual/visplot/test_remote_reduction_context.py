@@ -201,6 +201,17 @@ def test_metadata_matches_local(remote_ctx, local_reader):
     assert remote_ctx.metadata() == local_reader.metadata()
 
 
+def test_baselines_with_rows_matches_local(remote_ctx, local_reader):
+    """2026-10-10: Baseline / Antenna Prev / Next skip baselines with no
+    rows; the question goes to the worker like any other."""
+    from cubevis.toolbox.visplot.selection import SelectionSpec
+    fields = local_reader.metadata()["field_names"]
+    sel = SelectionSpec(field_names=[fields[-1]])
+    remote = remote_ctx.baselines_with_rows(sel)
+    assert remote == local_reader.baselines_with_rows(sel)
+    assert remote and all(isinstance(p, tuple) and len(p) == 2 for p in remote)
+
+
 def test_list_fields_and_spws_are_nonempty(remote_ctx):
     assert remote_ctx.list_fields()
     assert remote_ctx.list_spws()

@@ -21,8 +21,10 @@ are reference for those areas.
 
 ## State
 
-`main` at `7c026d8` (housekeeping committed), plus the third session's
-delivery: H6 slice 2 and the busy fix, not yet tested by Darrell.
+`main` at `3d34624` (H6 slice 2 committed after Darrell's macOS test),
+plus the 2026-10-10 follow-up delivery (`hrs_h6_scatter_presets.md`,
+section 8): wheel zoom off by default, busy overlay and watchdog
+hardened, Pin layout, stepping skips rows without data.
 
 | Item | State |
 |---|---|
@@ -32,24 +34,28 @@ delivery: H6 slice 2 and the busy fix, not yet tested by Darrell.
 | H4 all-baseline waterfall, `baseline_combine`, decimated zoom | Done |
 | H5 Flag reaches, Shift / Option boxes, curated filters | Done; confirmed by Darrell on macOS |
 | H6 slice 1, scatter averaging | Done and confirmed |
-| Busy indicator ending early | Fixed (watchdog); awaiting Darrell's macOS test |
-| H6 slice 2, Spectrum / Time series, autocorrelations | Delivered; awaiting Darrell's test |
+| Busy indicator | Fixed (watchdog); follow-up for "lasts after the plot" delivered 2026-10-10, awaiting test |
+| H6 slice 2, Spectrum / Time series, autocorrelations | Committed (`3d34624`) |
+| Pin layout, stepping without empty baselines | Delivered 2026-10-10, awaiting test |
 | H7 antenna x antenna matrix | Not started |
 | H8 plot summary dialog, static output, user guide | Not started; dialog design agreed (plan, H8) |
 
 ## Next, in order
 
-1. **Darrell's test of the third-session delivery.** Things to look at:
-   busy held to the end of a long Plot; Spectrum / Time series buttons
-   with Baseline and Antenna ◀ ▶; points in Over / Under (now square, and
-   larger when sparse); the toolbar on his laptop screen (it wraps below
-   about 1600 px); autocorrelations if he has an MS with them (TW Hya has
-   none).
-2. **Ask:** does the Baseline table listing pairs with no data (empty
-   plots while stepping) matter for HRS data? If so, narrow the tables or
-   the stepping to baselines with rows (`hrs_h6_scatter_presets.md`, 7).
-3. H7, then H8 (plot summary dialog first), then Correlation as a raster
+1. **Darrell's test of the 2026-10-10 delivery**: a long Plot then a
+   two-finger scroll (the page should scroll, nothing zoom); the busy
+   cursor ending with the last redraw; Pin layout with each preset;
+   Baseline / Antenna ◀ ▶ on TW Hya 3c279 (no empty plots; dimmed
+   "(no data)" rows).
+2. H7, then H8 (plot summary dialog first), then Correlation as a raster
    axis (offered in the axis lists; says "not implemented").
+
+## Decided with Darrell (2026-10-10)
+
+- Wheel zoom is off until its toolbar button is clicked.
+- Stepping skips baselines / antennas with no rows; no "All" checkbox
+  (a fully flagged baseline has rows and is still stepped through).
+- Pin layout: a sidebar checkbox; the Layout buttons do not pin.
 
 ## Decided with Darrell (2026-10-09)
 
@@ -62,7 +68,8 @@ delivery: H6 slice 2 and the busy fix, not yet tested by Darrell.
 
 ## Known open issues
 
-- Baseline table / Prev / Next include antenna pairs with no data (above).
+- The "rows with data" for stepping come with each Plot: after changing
+  the field without plotting, the first ◀ ▶ uses the previous field's.
 - Autocorrelations are detected from the first and last 100k rows only.
 - Multi-SPW Baseline x Time shows the first SPW only.
 - The Baseline table does not narrow to the ticked antennas.

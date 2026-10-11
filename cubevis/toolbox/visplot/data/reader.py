@@ -2336,6 +2336,50 @@ class XArrayReader(abc.ABC):
         with self.flag_view("pending"):
             return ~self._flag_mask(ds)
 
+    def baselines_with_rows(self, selection=None) -> Optional[list]:
+        """``[(ant1, ant2), ...]``: the baselines with at least one row in
+        what *selection* picks by field, scan, spectral window and time
+        range.  Its antenna / baseline choice is ignored: this answers
+        "which baselines are there to step through", for Baseline and
+        Antenna Prev / Next (2026-10-10).
+
+        A row is a (time, baseline) cell with finite UVW: xarray-ms (and
+        Processing Sets made from it) pad absent rows with NaN.  Flags do
+        not matter, so a fully flagged baseline counts.  UVW is small next
+        to the visibilities (three numbers a row), and the answer is cached
+        per field / scan / SPW / time range.  ``None`` when it cannot be
+        told (no UVW), meaning "do not narrow".
+        """
+        import dataclasses
+        sel = selection if selection is not None else SelectionSpec()
+        key = repr((sel.field_names, sel.scan, sel.spw, sel.time_range))
+        cache = self.__dict__.setdefault("_bl_rows_cache", {})
+        if key in cache:
+            return cache[key]
+        sel = dataclasses.replace(sel, antenna_names=None, baselines=None)
+        found: set = set()
+        seen_uvw = False
+        for ds in self._iter_visibility_partitions(sel):
+            if "UVW" not in ds.data_vars:
+                continue
+            sub = self._apply_selection(ds, sel)
+            if sub.sizes.get("time", 0) == 0:
+                seen_uvw = True
+                continue
+            uvw = sub["UVW"]
+            bdim = next((d for d in uvw.dims if d not in ("time", "uvw_label")), None)
+            if bdim is None or "baseline_antenna1_name" not in sub.coords:
+                continue
+            seen_uvw = True
+            first = uvw.isel(uvw_label=0) if "uvw_label" in uvw.dims else uvw
+            present = np.asarray(np.isfinite(first).any("time").values, bool)
+            a1 = np.asarray(sub.coords["baseline_antenna1_name"].values).astype(str)
+            a2 = np.asarray(sub.coords["baseline_antenna2_name"].values).astype(str)
+            found.update(zip(a1[present].tolist(), a2[present].tolist()))
+        out = sorted(found) if seen_uvw else None
+        cache[key] = out
+        return out
+
     def spw_casa_ids(self) -> dict:
         """``{SpwKey: CASA spw id}`` for windows whose numeric id is known.
         Backends that can read the SPECTRAL_WINDOW table override this."""

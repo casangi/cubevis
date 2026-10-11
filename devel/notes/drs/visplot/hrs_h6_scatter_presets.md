@@ -153,8 +153,8 @@ cleared at 30 s.
 
 ## 7. Not done / open
 
-- **The Baseline table lists every antenna pair, including those with no
-  data.** On TW Hya 3c279, DA41 and DA42 have no rows, so Baseline ▶
+- ~~**The Baseline table lists every antenna pair, including those with no
+  data.**~~ Done 2026-10-10, section 8. On TW Hya 3c279, DA41 and DA42 have no rows, so Baseline ▶
   from the top shows about 50 empty plots before the first one with
   data. Narrowing the tables (or the stepping) to baselines with data
   needs a "which baselines have rows" pass over the selection. xarray-ms
@@ -167,3 +167,64 @@ cleared at 30 s.
 - Spectrum over several SPWs: each SPW lies at its own frequencies along
   the X axis (Frequency is absolute), which is what the plan asks.
   Checked only on single-SPW data (TW Hya, the simulator).
+
+## 8. Follow-up after Darrell's macOS test (2026-10-10, base `3d34624`)
+
+**Busy cursor lasting after the plot, Plot enabled.** Darrell's sequence:
+a preset, a long Plot, a two-finger scroll to reach the lower panel; the
+plot under the pointer zoomed and a long redraw started. Not reproduced
+headlessly (the overlay blocked the wheel there), so three causes were
+dealt with:
+
+- *Wheel zoom off by default.* Bokeh's wheel zoom acts on any scroll over
+  a plot (there is no focus to lose), and trackpad momentum keeps sending
+  scroll events after the fingers lift, after the overlay has gone. Now
+  `active_scroll=None`: a scroll over a plot scrolls the page, and the
+  wheel-zoom toolbar button turns zoom on (in both visible panels: the
+  toolbar sync). Decided with Darrell.
+- *The overlay follows the page.* It was placed once, in viewport
+  coordinates; a page scroll, or a preset's layout change after busy
+  started, could move a plot out from under it. It is now placed again
+  every 200 ms and on any scroll or resize while it is up.
+- *The watchdog no longer counts hover readouts.* It held busy while any
+  request was in flight; hover readouts are requests, sent continuously
+  while the pointer moves, so a leaked busy count could be held for as
+  long as the user kept moving the mouse. It now holds only for a
+  request that has waited at least 5 s (`CommMgr.oldestWaitMs()`). The
+  request a real busy period waits on is always that old, because the
+  30 s timer restarts at every busy change. No leak was found; this
+  removes the way one would have shown as "busy forever".
+
+**Pin layout.** Each preset already switched to its own layout (vplot
+side by side, Spectrum and the waterfalls Over / Under). The layout
+preference the Layout buttons record per axes (`pref_src`) is written
+but never read. New: a "Pin layout" checkbox (sidebar, section "Panels",
+with help) and `pin_layout=` argument. Ticked, presets keep the current
+arrangement (One, Side by Side or Over / Under) and only set what each
+panel shows; the Layout buttons do not pin. `pin_layout=True` with
+`preset=` keeps the `layout=` argument.
+
+**Stepping skips baselines and antennas without data.** On TW Hya 3c279,
+Baseline ▶ from the top showed about 50 empty plots first. Every Plot
+response now carries, per Antenna and Baseline table row, whether it has
+rows in the selected field / scan / SPW / time range (the antenna and
+baseline choice ignored). Prev / Next step over those only, and the
+tables dim the others and mark them "(no data)". A ticked antenna
+without data steps to its neighbour. Presence is finite UVW in the
+partitions (xarray-ms pads absent rows with NaN), so a fully flagged
+baseline still counts and is stepped through; that is why there is no
+"All" checkbox (agreed with Darrell). `XArrayReader.baselines_with_rows`,
+forwarded by `LocalVisibilityReader` and `RemoteReductionContext`
+(memoised like `axis_info`), cached per field / scan / SPW / time range:
+0.4 s for TW Hya 3c279 on first use.
+
+**Verified.** `test_layout_pin_and_stepping.py` (13 tests: pin from the
+constructor and in every preset's JS, rows with data on both backends
+against the MS's own ANTENNA1/2 and the Plot response, the stepping under
+node, wheel zoom off), `test_busy_watchdog.py` (a manager reporting
+request age: an old request holds busy, short ones do not),
+`test_remote_reduction_context.py` (`baselines_with_rows` remote equals
+local, both backends). Live: Spectrum with Side by Side pinned stays
+side by side; Baseline ▶ from nothing ticked lands on DA44&DA45 (the
+first with data); dimmed rows; a wheel over a plot leaves the ranges
+alone.

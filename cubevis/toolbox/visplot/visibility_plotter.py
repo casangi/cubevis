@@ -91,7 +91,8 @@ from bokeh.events import MouseEnter, MouseLeave
 from bokeh.layouts import column, row
 from bokeh.models import (
     Button, CheckboxGroup, ColumnDataSource, CustomAction, CustomJS,
-    DataTable, Div, InlineStyleSheet, MultiSelect, RadioButtonGroup,
+    DataTable, Div, HTMLTemplateFormatter, InlineStyleSheet, MultiSelect,
+    RadioButtonGroup,
     Select, TabPanel, Tabs, TableColumn, TextInput, Toggle,
 )
 
@@ -225,7 +226,8 @@ _STATIC_HINTS = {
     "tb_sidebar": "<b>\u27e8 / \u27e9</b> \u2014 hide or show the configuration panel on the left, to give the plots the full width",
     "tb_plot": "<b>Plot</b> \u2014 draw both panels with everything as now set in the panel on the left  | Selections, axes, quantities and window settings take effect only when this is pressed; colour scaling applies at once  | Pending flags are kept",
     "tb_reload": "<b>Reload</b> \u2014 read the data again and redraw  | Use after something else has changed the data on disk  | <span style=\"color:#f38ba8\"><b>Discards pending (unapplied) flags</b></span>",
-    "tb_layout": "<b>Layout</b> \u2014 one panel, or both: side by side or one above the other  | Side by side suits Baseline \u00d7 Time; one above the other gives a waterfall the full width",
+    "tb_layout": "<b>Layout</b> \u2014 one panel, or both: side by side or one above the other  | Side by side suits Baseline \u00d7 Time; one above the other gives a waterfall the full width  | Each preset switches to the layout that suits it, unless <b>Pin layout</b> (in the configuration panel) is ticked",
+    "pin_layout": "<b>Pin layout</b> \u2014 keep the panels arranged as they are now (One, Side by Side or Over / Under) when a preset is pressed  | Unticked, each preset switches to the arrangement that suits it (Spectrum and the waterfalls one above the other, the others side by side)  | Only the arrangement is kept: a preset still sets what each panel shows  | The Layout buttons in the toolbar change the arrangement either way",
     "tb_export": "<b>Export PNG</b> \u2014 write the current view (both panels, titles, axes, colour bars) to a PNG file where Python is running  | The path is reported in the status line",
     "tb_theme": "<b>Dark / Light</b> \u2014 switch the background  | The colormaps change with it so faint points stay visible; exported PNGs follow",
 }
@@ -326,6 +328,15 @@ _PAIR_PRESETS = {
     "spectrum":   (Axis.FREQUENCY, "scan", "off"),
     "timeseries": (Axis.TIME,      "off",  "all"),
 }
+def _NO_DATA_FORMATTER():
+    """Antenna / Baseline table name cells: a row with no data in the
+    current field / SPW selection (``has_data`` 0) is dimmed and marked
+    (2026-10-10).  One instance per column: Bokeh models are not shared."""
+    return HTMLTemplateFormatter(template=(
+        "<% if (has_data === 0) { %><span style=\"opacity:0.45\">"
+        "<%- value %> (no data)</span><% } else { %><%- value %><% } %>"))
+
+
 #: The Y axes of the two panels of a _PAIR_PRESETS view, slot A then B.
 _PAIR_PRESET_Y = (Axis.AMPLITUDE, Axis.PHASE)
 
@@ -2109,6 +2120,10 @@ class VisibilityPlotter:
         averaged) or Time (all channels averaged); they set ``layout``
         to ``"over"`` and supply ``scatter_avg_time`` /
         ``scatter_avg_chan`` where those are left at ``"off"``.
+    pin_layout : bool
+        Start with "Pin layout" ticked: presets (this ``preset`` and the
+        toolbar buttons) keep the current layout -- ``layout`` -- instead
+        of switching to their own.  Default ``False``.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
@@ -2242,6 +2257,7 @@ class VisibilityPlotter:
         layout:           str           = "side",
         kind:             Optional[str] = None,
         preset:           Optional[str] = None,
+        pin_layout:       bool          = False,
         raster_y:         Optional[str] = None,
         raster_x:         Optional[str] = None,
         raster_qty:       Optional[str] = None,
@@ -2280,6 +2296,9 @@ class VisibilityPlotter:
         """
         self._frame_cache_mb = frame_cache_mb
         self._headless = bool(headless)
+        # Presets keep the layout instead of setting their own (2026-10-10;
+        # the "Pin layout" checkbox starts from this).
+        self._pin_layout = bool(pin_layout)
 
         self._resolve_config(
             ms=ms, ps=ps, backend=backend, remote_endpoint=remote_endpoint,
@@ -2604,7 +2623,8 @@ class VisibilityPlotter:
             ry, rx, rq, sx, sy, pl = _PRESETS[self._preset]
             _resolved_raster_y, _resolved_raster_x, _resolved_raster_qty = ry, rx, rq
             _resolved_scatter_x, _resolved_scatter_y                    = sx, sy
-            self._layout                                                = pl
+            if not getattr(self, "_pin_layout", False):
+                self._layout                                            = pl
 
         # HRS H6 slice 2: both panels scatter (see _PAIR_PRESETS).  Slot
         # A leads, so kind is "scatter"; _build_panels makes slot B a
@@ -2615,7 +2635,9 @@ class VisibilityPlotter:
             sx, at, ac = _PAIR_PRESETS[self._preset]
             _resolved_scatter_x = sx
             _resolved_scatter_y = _PAIR_PRESET_Y[0]
-            self._layout, self._kind = "over", "scatter"
+            self._kind = "scatter"
+            if not getattr(self, "_pin_layout", False):
+                self._layout = "over"
             if self._scatter_avg_time == "off":
                 self._scatter_avg_time = normalize_avg_time(at)
             if self._scatter_avg_chan == "off":
@@ -4438,19 +4460,25 @@ for (const dt of other.tools) {
         warn_text = _colorize_warning_text(self._slots)
         if warn_text:
             self._notify(warn_text, color=_NOTIFY_WARN_COLOR)
+            bl_has, ant_has = self._rows_with_data()
             return {
                 "status":       "ok",
                 "status_text":  self._status_text(),
                 "notify_text":  warn_text,
                 "notify_color": _NOTIFY_WARN_COLOR,
                 "panels":       panels_response,
+                "bl_has_data":  bl_has,
+                "ant_has_data": ant_has,
             }
         self._notify("")   # clear any previous warning
+        bl_has, ant_has = self._rows_with_data()
         return {
             "status":      "ok",
             "status_text": self._status_text(),
             "notify_text": "",
             "panels":      panels_response,
+            "bl_has_data":  bl_has,
+            "ant_has_data": ant_has,
         }
 
     async def _handle_done(self, msg, context=None):
@@ -4675,6 +4703,28 @@ cvApplySelectionText(
                       _abs.initial_state(self._antenna_str, self._meta))
             self._ab_init_cache = cached
         return cached[1]
+
+    def _rows_with_data(self, selection=None) -> tuple:
+        """``(baseline_flags, antenna_flags)``: 1 / 0 per row of the
+        Baseline and Antenna tables (``meta.baselines`` / ``meta.antennas``
+        order) for "has rows in this field / scan / SPW / time range".
+        Baseline and Antenna Prev / Next step over the 1s only, and the
+        tables grey out the 0s (2026-10-10: stepping from the top of TW
+        Hya 3c279 showed ~50 empty plots first).  ``(None, None)`` when the
+        reader cannot tell; nothing is then narrowed."""
+        try:
+            pairs = self._reader.baselines_with_rows(
+                selection if selection is not None else self._selection)
+        except Exception:
+            log.debug("baselines_with_rows failed", exc_info=True)
+            pairs = None
+        if pairs is None:
+            return None, None
+        have = {tuple(p) for p in pairs}
+        bls = list(getattr(self._meta, "baselines", ()) or ())
+        ants = {a for p in have for a in p}
+        return ([1 if b.pair in have else 0 for b in bls],
+                [1 if a.name in ants else 0 for a in self._meta.antennas])
 
     def _antenna_baseline_selection(self) -> tuple:
         """``(antenna_names, baselines)`` for the current selection.
@@ -5894,13 +5944,17 @@ for (let i = 0; i < cols.length; i++) {
         # those, overriding the antennas) and the table contents live in
         # antenna_baseline_select.py, which is testable without Bokeh.
         _ant_data = _abs.antenna_table_data(meta)
+        _bl_has0, _ant_has0 = self._rows_with_data()
+        _ant_data["has_data"] = (_ant_has0 if _ant_has0 is not None
+                                 else [1] * len(_ant_data["name"]))
         _ab_init  = self._antenna_initial_state()
         self._antenna_source = ColumnDataSource(data=_ant_data)
         self._antenna_source.selected.indices = list(_ab_init["antenna_rows"])
         self._antenna_table = DataTable(
             source          = self._antenna_source,
             columns         = [
-                TableColumn(field="name",  title="Antenna", width=180),
+                TableColumn(field="name",  title="Antenna", width=180,
+                            formatter=_NO_DATA_FORMATTER()),
                 TableColumn(field="ident", title="#",       width=44),
             ],
             selectable      = "checkbox",
@@ -5953,6 +6007,9 @@ for (let i = 0; i < cols.length; i++) {
         )
 
         _bl_data = _abs.baseline_table_data(meta)
+        _bl_has, _ant_has = self._rows_with_data()
+        _bl_data["has_data"] = (_bl_has if _bl_has is not None
+                                else [1] * len(_bl_data["name"]))
         self._baseline_source = ColumnDataSource(data=_bl_data)
         self._baseline_source.selected.indices = list(_ab_init["baseline_rows"])
         self._baseline_table = DataTable(
@@ -5961,7 +6018,8 @@ for (let i = 0; i < cols.length; i++) {
                 # "#" is the number the Baseline axis of a raster (and
                 # the cursor readout) shows for the row, so a baseline
                 # spotted on a plot can be found here.
-                TableColumn(field="name",  title="Baseline", width=180),
+                TableColumn(field="name",  title="Baseline", width=180,
+                            formatter=_NO_DATA_FORMATTER()),
                 TableColumn(field="ident", title="#",        width=44),
             ],
             selectable      = "checkbox",
@@ -6066,6 +6124,11 @@ for (let i = 0; i < cols.length; i++) {
         # No cursor/legend/colorbar here (see info_panel.py's module
         # docstring for why that was tried and reverted): each panel
         # keeps its own, under its own figure.
+        # Pin layout (2026-10-10): presets keep the panels' arrangement.
+        self._pin_layout_cb = CheckboxGroup(
+            labels=["Pin layout"], active=[0] if self._pin_layout else [],
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
         self._sidebar_col = column(
             path_div,
             _section("Data"),
@@ -6091,6 +6154,8 @@ for (let i = 0; i < cols.length; i++) {
                                          stylesheet=self._dark,
                                          hover=self._hover)]
               if self._enable_flagging else []),
+            _section("Panels"),
+            self._hover(self._pin_layout_cb, "pin_layout"),
             self._gear_tabs,
             width       = _SIDEBAR_WIDTH_COL,
             visible     = True,
@@ -7453,6 +7518,16 @@ function doPlot(reload) {
             requestAnimationFrame(function() { cvSetBusy(false); });
         });
         if (!resp) return;
+        // Which table rows have data in this field / SPW selection: the
+        // Prev / Next stepping skips the others, the tables dim them.
+        try {
+            if (resp.bl_has_data && bl_src && bl_src.data['has_data']) {
+                bl_src.data['has_data'] = resp.bl_has_data; bl_src.change.emit();
+            }
+            if (resp.ant_has_data && ant_src && ant_src.data['has_data']) {
+                ant_src.data['has_data'] = resp.ant_has_data; ant_src.change.emit();
+            }
+        } catch (e) { console.warn('has_data update failed:', e); }
         console.log('[visplot doPlot] received status:', resp.status,
                      'panels:', resp.panels ? JSON.parse(JSON.stringify(resp.panels)) : resp.panels);
         if (resp.status_text && status_div)
@@ -8376,6 +8451,7 @@ if (!one) {
                 **self._plot_js_args,
                 "layout_rbg":      layout_rbg,
                 "active_layout":   active_layout,
+                "pin_cb":          self._pin_layout_cb,
                 # Group 3 piece 3, Chunk 2 follow-on fix (added
                 # 2026-08-02): presets always force pos0=raster/
                 # pos1=scatter (their own fixed assumption, unchanged —
@@ -8455,7 +8531,9 @@ try {
             return CustomJS(
                 args=args,
                 code=self._do_plot_js + colorize_mode_js + f"""
-layout_rbg.active      = active_layout;
+// The preset's own layout, unless "Pin layout" is ticked (2026-10-10).
+const lay = (pin_cb && pin_cb.active.length > 0) ? layout_rbg.active : active_layout;
+layout_rbg.active      = lay;
 
 // Presets' fixed target: pos0 = raster, pos1 = scatter. Set the complete
 // end-state for both positions synchronously (both the target kind
@@ -8464,7 +8542,7 @@ layout_rbg.active      = active_layout;
 // until doPlot()'s async response settles it a moment later.
 pos0_raster_layout.visible  = true;
 pos0_scatter_layout.visible = false;
-pos1_scatter_layout.visible = true;
+pos1_scatter_layout.visible = (lay !== 0);
 pos1_raster_layout.visible  = false;
 
 // Group 3 piece 3 / Chunk 1 (added 2026-07-31): presets set the
@@ -8504,10 +8582,12 @@ try {{
 }} catch(e) {{ console.warn('preset axis-select sync failed:', e); }}
 {stat_reset_js}
 
-const over = (active_layout === 2);
+const over = (lay === 2);
 side_container.visible = !over;
 over_container.visible =  over;
-if (over) {{
+if (lay === 0) {{
+    pos0_raster_fig.width   = full_w;  pos0_raster_fig.height  = panel_h;
+}} else if (over) {{
     pos0_raster_fig.width   = full_w;  pos1_scatter_fig.width  = full_w;
     pos0_raster_fig.height  = over_h;  pos1_scatter_fig.height = over_h;
 }} else {{
@@ -8530,6 +8610,9 @@ doPlot();
             args = {
                 **self._plot_js_args,
                 "layout_rbg":          layout_rbg,
+                "pin_cb":              self._pin_layout_cb,
+                "side_w":              side_w,
+                "panel_h":             panel_h,
                 "pos0_raster_layout":  _pos0_slot.raster.layout,
                 "pos0_scatter_layout": _pos0_slot.scatter.layout,
                 "pos0_scatter_fig":    _pos0_slot.scatter.figure,
@@ -8559,18 +8642,27 @@ try {{
         if (h.mode_group.active === 2) {{ h.mode_group.active = 0; }}
     }});
 }} catch(e) {{ console.warn('preset colorize-mode sync failed:', e); }}
-layout_rbg.active = 2;
+// Over / Under, unless "Pin layout" is ticked (2026-10-10).
+const lay = (pin_cb && pin_cb.active.length > 0) ? layout_rbg.active : 2;
+layout_rbg.active = lay;
 pos0_raster_layout.visible  = false;
 pos0_scatter_layout.visible = true;
 pos1_raster_layout.visible  = false;
-pos1_scatter_layout.visible = true;
+pos1_scatter_layout.visible = (lay !== 0);
 panel0_kind_switch.active = 1;
 panel1_kind_switch.active = 1;
 {sets}
-side_container.visible = false;
-over_container.visible = true;
-pos0_scatter_fig.width  = full_w;  pos1_scatter_fig.width  = full_w;
-pos0_scatter_fig.height = over_h;  pos1_scatter_fig.height = over_h;
+side_container.visible = (lay !== 2);
+over_container.visible = (lay === 2);
+if (lay === 0) {{
+    pos0_scatter_fig.width  = full_w;  pos0_scatter_fig.height = panel_h;
+}} else if (lay === 2) {{
+    pos0_scatter_fig.width  = full_w;  pos1_scatter_fig.width  = full_w;
+    pos0_scatter_fig.height = over_h;  pos1_scatter_fig.height = over_h;
+}} else {{
+    pos0_scatter_fig.width  = side_w;  pos1_scatter_fig.width  = side_w;
+    pos0_scatter_fig.height = panel_h; pos1_scatter_fig.height = panel_h;
+}}
 doPlot();
 """,
             )

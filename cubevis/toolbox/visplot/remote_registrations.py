@@ -320,6 +320,10 @@ class VisplotRemoteBackend:
     def flag_spw_table(self):
         return self._reader.flag_spw_table()
 
+    def baselines_with_rows(self, selection=None):
+        out = self._reader.baselines_with_rows(selection)
+        return None if out is None else [list(p) for p in out]
+
     # ------------------------------------------------------------------ #
     # Extra methods LocalVisibilityReader also exposes                    #
     # ------------------------------------------------------------------ #

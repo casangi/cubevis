@@ -142,6 +142,7 @@ window.__cvSetBusy = window.__cvSetBusy || function(on) {
     document.body.style.cursor = on ? 'progress' : '';
     let ov = document.getElementById(OVERLAY_ID);
     if (!on) {
+        if (window.__cvBusyTrack != null) { clearInterval(window.__cvBusyTrack); window.__cvBusyTrack = null; }
         if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
         return;
     }
@@ -172,35 +173,59 @@ window.__cvSetBusy = window.__cvSetBusy || function(on) {
         ov.appendChild(chip);
         document.body.appendChild(ov);
     }
-    let where = 'left:0;top:0;width:100vw;height:100vh;';
-    try {
-        const roots = (window.Bokeh && Bokeh.index)
-            ? Object.values(Bokeh.index).map(function(e) { return e.model_view || e; })
-            : [];
-        let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
-        for (let i = 0; i < roots.length; i++) {
-            const el = roots[i] && roots[i].el;
-            if (!el || !el.getBoundingClientRect) continue;
-            const rc = el.getBoundingClientRect();
-            if (rc.width <= 0 || rc.height <= 0) continue;
-            l = Math.min(l, rc.left);  t = Math.min(t, rc.top);
-            r = Math.max(r, rc.right); b = Math.max(b, rc.bottom);
-        }
-        if (isFinite(l) && isFinite(t) && r > l && b > t) {
-            where = 'left:' + l + 'px;top:' + t + 'px;'
-                  + 'width:' + (r - l) + 'px;height:' + (b - t) + 'px;';
-        }
-    } catch (e) { /* keep the viewport fallback */ }
-    ov.style.cssText = 'position:fixed;z-index:2147483647;'
-                     + 'background:transparent;cursor:progress;' + where;
+    // Placed over the Bokeh roots' current box, and placed again every
+    // 200 ms and on any scroll while it is up (2026-10-10).  Measured only
+    // once, it was left behind when the page moved under it: a preset
+    // switching to Over / Under after busy started, or the user scrolling
+    // to the lower panel during a long Plot.  The plot that slid out from
+    // under it then took the wheel / trackpad scroll as a zoom, which
+    // started another long redraw.
+    window.__cvBusyPlace = window.__cvBusyPlace || function() {
+        const el = document.getElementById(OVERLAY_ID);
+        if (!el) return;
+        let where = 'left:0;top:0;width:100vw;height:100vh;';
+        try {
+            const roots = (window.Bokeh && Bokeh.index)
+                ? Object.values(Bokeh.index).map(function(e) { return e.model_view || e; })
+                : [];
+            let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+            for (let i = 0; i < roots.length; i++) {
+                const rel = roots[i] && roots[i].el;
+                if (!rel || !rel.getBoundingClientRect) continue;
+                const rc = rel.getBoundingClientRect();
+                if (rc.width <= 0 || rc.height <= 0) continue;
+                l = Math.min(l, rc.left);  t = Math.min(t, rc.top);
+                r = Math.max(r, rc.right); b = Math.max(b, rc.bottom);
+            }
+            if (isFinite(l) && isFinite(t) && r > l && b > t) {
+                where = 'left:' + l + 'px;top:' + t + 'px;'
+                      + 'width:' + (r - l) + 'px;height:' + (b - t) + 'px;';
+            }
+        } catch (e) { /* keep the viewport fallback */ }
+        const css = 'position:fixed;z-index:2147483647;'
+                  + 'background:transparent;cursor:progress;' + where;
+        if (el.style.cssText !== css) el.style.cssText = css;
+    };
+    if (!window.__cvBusyScrollHooked) {
+        window.__cvBusyScrollHooked = true;
+        document.addEventListener('scroll', function() { window.__cvBusyPlace(); }, true);
+        window.addEventListener('resize', function() { window.__cvBusyPlace(); });
+    }
+    window.__cvBusyPlace();
+    if (window.__cvBusyTrack == null)
+        window.__cvBusyTrack = setInterval(function() { window.__cvBusyPlace(); }, 200);
     // Give-up watchdog (2026-10-09). Busy is abandoned only when nothing
     // can still clear it -- not after a fixed time.  A plain 30 s timer
     // cut a long averaged scatter's busy state short while Python was
     // still working on it.  After GIVE_UP_MS, and then every CHECK_MS, it
     // asks the page's CommMgr(s) (window.__cvCommMgrs, cubevisjs) whether a
-    // request is still awaiting a reply that can arrive -- connected or
-    // reconnecting; in-flight requests are replayed after a reconnection.
-    // If so, busy stays.  Busy with no such request means a reply that was
+    // request has been awaiting, for at least CHECK_MS, a reply that can
+    // arrive -- connected or reconnecting; in-flight requests are replayed
+    // after a reconnection.  If so, busy stays.  "At least CHECK_MS"
+    // (2026-10-10): the timer restarts at every busy change, so the request
+    // a real busy period waits on is always that old, while hover readouts
+    // (requests too, sent continuously while the pointer moves) are not;
+    // they must not keep a busy state alive that nothing will clear.  Busy with no such request means a reply that was
     // never going to clear it (a response callback that threw, transport
     // shut down, reconnection paused): give up.  Without the registry (an
     // older cubevisjs bundle) it gives up at GIVE_UP_MS as before.
@@ -209,7 +234,13 @@ window.__cvSetBusy = window.__cvSetBusy || function(on) {
         const mgrs = window.__cvCommMgrs;
         if (!mgrs || !mgrs.length) return false;
         for (let i = 0; i < mgrs.length; i++) {
-            try { if (mgrs[i].canReply() && mgrs[i].inFlight() > 0) return true; }
+            try {
+                if (!mgrs[i].canReply()) continue;
+                const waited = (typeof mgrs[i].oldestWaitMs === 'function')
+                    ? mgrs[i].oldestWaitMs() >= CHECK_MS
+                    : mgrs[i].inFlight() > 0;
+                if (waited) return true;
+            }
             catch (e) { /* an incompatible manager does not hold busy */ }
         }
         return false;
@@ -1277,7 +1308,14 @@ class VisibilityPlot(Model):
             x_axis_label  = self._panel_spec().axis_label("x"),
             y_axis_label  = self._panel_spec().axis_label("y"),
             tools         = "pan,wheel_zoom,box_zoom,reset,save",
-            active_scroll = "wheel_zoom",
+            # Off until its toolbar button is clicked (2026-10-10): active,
+            # a trackpad or wheel scroll over a plot zoomed it instead of
+            # scrolling the page, and started a redraw -- reported while
+            # scrolling to the lower panel of Over / Under during a long
+            # Plot (trackpad momentum carries on after the overlay is
+            # gone).  Clicking it in one panel turns it on in the other
+            # (the toolbar sync in VisibilityPlotter).
+            active_scroll = None,
         )
         # Client-side only (bokeh.models.Toolbar.autohide) — no server
         # round-trip, no JS beyond what Bokeh already generates for it.

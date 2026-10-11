@@ -280,6 +280,9 @@ class LocalVisibilityReader:
     def flag_spw_table(self) -> list:
         return self._backend.flag_spw_table()
 
+    def baselines_with_rows(self, selection=None):
+        return self._backend.baselines_with_rows(selection)
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"LocalVisibilityReader({self._backend!r})"
 

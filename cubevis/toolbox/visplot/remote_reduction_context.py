@@ -752,6 +752,12 @@ class RemoteReductionContext(ReductionContext):
     def flag_spw_table(self, timeout: Optional[float] = None) -> list:
         return self._call("flag_spw_table", timeout=timeout) or []
 
+    def baselines_with_rows(self, selection=None, timeout: Optional[float] = None):
+        # Coordinates only (UVW presence): memoised like axis_info.
+        out = self._memo_call("baselines_with_rows", selection, (),
+                              dict(selection=selection, timeout=timeout))
+        return None if out is None else [tuple(p) for p in out]
+
     def metadata(self, timeout: Optional[float] = None) -> dict:
         return self._call("metadata", timeout=timeout)
 

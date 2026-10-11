@@ -320,14 +320,21 @@ Toolbar
   * *Spectrum* — two scatter panels, Amplitude above Phase against
     frequency, each scan averaged (AIPS POSSM): the bandpass shape, edge
     channels and a phase slope across the band. Read one baseline at a
-    time: tick one, or step with Baseline ◀ ▶
+    time: tick one, or step with Baseline ◀ ▶ (which, like Antenna
+    ◀ ▶, skips baselines with no data in the selected field and SPWs;
+    the tables show those dimmed, marked "(no data)")
   * *Time series* — the same pair against time, all channels averaged
     (AIPS VPLOT): phase drifts and jumps, amplitude dropouts. Read one
     baseline at a time, as for *Spectrum*
 
+* Layout — *One*, *Side by Side*, *Over / Under*.  Each preset switches
+  to the arrangement that suits it unless *Pin layout* (configuration
+  panel, section *Panels*; ``pin_layout=True``) is ticked
 * Help — holding the pointer over any toolbar or sidebar control shows
   what it does in the status area at the bottom
-* Pan / Zoom / Reset (shared across both panels when both are shown)
+* Pan / Zoom / Reset (shared across both panels when both are shown).
+  Wheel (scroll) zoom is off until its toolbar button is clicked, so a
+  trackpad or mouse-wheel scroll over a plot scrolls the page
 * Box Select — draws a selection region on either panel (currently
   feeds only the disabled flagging path — see the warning at the top
   of this document)

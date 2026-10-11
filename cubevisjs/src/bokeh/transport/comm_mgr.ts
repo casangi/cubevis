@@ -119,6 +119,7 @@ export class CommMgr extends Model {
     private pending: Map<string, string> = new Map()  // comm_id => request_id
     private pendingRequests: Map<string, PendingRequest> = new Map()  // request_id => info
     private sendQueue: Map<string, QueuedMessage[]> = new Map()  // comm_id => queue
+    private requestBorn: Map<string, number> = new Map()  // request_id => send() time (ms)
     private sharedState: Map<string, any> = new Map()
     private context: HandlerContext
     private _state: AppState = AppState.INITIALIZING
@@ -570,6 +571,7 @@ export class CommMgr extends Model {
     send(comm: Comm, messageId: string, message: any, callback?: (response: any) => void): void {
         const commId = comm.comm_id
         const requestId = this.generateId()
+        this.requestBorn.set(requestId, Date.now())
 
         // Check if transport is connected
         if (!this.transport || !this.transport.isConnected()) {
@@ -740,6 +742,7 @@ private sendImmediate(
         // Get request info
         const request = this.pendingRequests.get(requestId)!
         this.pendingRequests.delete(requestId)
+        this.requestBorn.delete(requestId)
         
         const {commId, messageId, callback} = request
 
@@ -874,6 +877,24 @@ private sendImmediate(
      * after reconnection has paused (ERROR) until the tab regains focus or
      * the network returns.
      */
+    /**
+     * How long (ms) the longest-waiting unanswered request has waited since
+     * send() -- 0 if none.  Lets the busy indicator tell a long Plot or
+     * redraw (one request waiting a long time) from a stream of short ones
+     * such as hover readouts (2026-10-10).  Replays after a reconnection
+     * keep their first send time.
+     */
+    oldestWaitMs(): number {
+        const live = new Set<string>(this.pendingRequests.keys())
+        for (const q of this.sendQueue.values()) for (const m of q) live.add(m.requestId)
+        let oldest = Infinity
+        for (const [id, t] of this.requestBorn) {
+            if (!live.has(id)) { this.requestBorn.delete(id); continue }
+            oldest = Math.min(oldest, t)
+        }
+        return oldest === Infinity ? 0 : Date.now() - oldest
+    }
+
     canReply(): boolean {
         return this.state === AppState.RUNNING || this.state === AppState.INITIALIZING
     }
@@ -910,6 +931,7 @@ private sendImmediate(
         this.pendingRequests.clear()
         this.sendQueue.clear()
         this.comms.clear()
+        this.requestBorn.clear()
         
         this.state = AppState.STOPPED
 

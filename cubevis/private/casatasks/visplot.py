@@ -68,6 +68,7 @@ def _validate_params(
         layout,
         kind,
         preset,
+        pin_layout,
         raster_y,
         raster_x,
         raster_qty,
@@ -118,6 +119,7 @@ def _validate_params(
         'layout': 'str',
         'kind': 'Optional[str]',
         'preset': 'Optional[str]',
+        'pin_layout': 'bool',
         'raster_y': 'Optional[str]',
         'raster_x': 'Optional[str]',
         'raster_qty': 'Optional[str]',
@@ -226,6 +228,7 @@ def _validate_params(
     _check('layout', layout, _type_map['layout'])
     _check('kind', kind, _type_map['kind'])
     _check('preset', preset, _type_map['preset'])
+    _check('pin_layout', pin_layout, _type_map['pin_layout'])
     _check('raster_y', raster_y, _type_map['raster_y'])
     _check('raster_x', raster_x, _type_map['raster_x'])
     _check('raster_qty', raster_qty, _type_map['raster_qty'])
@@ -276,6 +279,7 @@ def _visplot_t(
         layout: str = 'side',
         kind: Optional[str] = None,
         preset: Optional[str] = None,
+        pin_layout: bool = False,
         raster_y: Optional[str] = None,
         raster_x: Optional[str] = None,
         raster_qty: Optional[str] = None,
@@ -325,6 +329,7 @@ def _visplot_t(
         layout = layout,
         kind = kind,
         preset = preset,
+        pin_layout = pin_layout,
         raster_y = raster_y,
         raster_x = raster_x,
         raster_qty = raster_qty,
@@ -499,6 +504,10 @@ class _visplot:
         averaged) or Time (all channels averaged); they set ``layout``
         to ``"over"`` and supply ``scatter_avg_time`` /
         ``scatter_avg_chan`` where those are left at ``"off"``.
+    pin_layout : bool
+        Start with "Pin layout" ticked: presets (this ``preset`` and the
+        toolbar buttons) keep the current layout -- ``layout`` -- instead
+        of switching to their own.  Default ``False``.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
@@ -628,6 +637,7 @@ class _visplot:
             layout: str = 'side',
             kind: Optional[str] = None,
             preset: Optional[str] = None,
+            pin_layout: bool = False,
             raster_y: Optional[str] = None,
             raster_x: Optional[str] = None,
             raster_qty: Optional[str] = None,
@@ -690,6 +700,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             layout = layout,
             kind = kind,
             preset = preset,
+            pin_layout = pin_layout,
             raster_y = raster_y,
             raster_x = raster_x,
             raster_qty = raster_qty,
@@ -740,6 +751,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'layout=' + repr(layout),
                 'kind=' + repr(kind),
                 'preset=' + repr(preset),
+                'pin_layout=' + repr(pin_layout),
                 'raster_y=' + repr(raster_y),
                 'raster_x=' + repr(raster_x),
                 'raster_qty=' + repr(raster_qty),
@@ -791,6 +803,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 layout = layout,
                 kind = kind,
                 preset = preset,
+                pin_layout = pin_layout,
                 raster_y = raster_y,
                 raster_x = raster_x,
                 raster_qty = raster_qty,

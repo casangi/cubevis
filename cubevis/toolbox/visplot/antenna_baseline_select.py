@@ -689,14 +689,30 @@ function doIterateAntenna(delta) {
     // The Antenna table's rows, in meta.antennas' own order -- already
     // on the client, like the SPW table's.
     const names = (ant_src.data && ant_src.data['name']) || [];""" + guard_js + """
+    // Antennas with no data in the field / SPW selection (has_data 0,
+    // from the last Plot) are skipped (2026-10-10).
+    const has = (ant_src.data && ant_src.data['has_data']) || null;
+    const cand = [];
+    for (let i = 0; i < names.length; i++)
+        if (!has || has[i] !== 0) cand.push(i);
+    if (cand.length === 0) return;
     // Only EXACTLY ONE ticked antenna has a position to step from.  No
     // tick, or several, starts fresh at the first antenna -- the rule
     // the free-text antenna box followed before this table replaced it.
+    // A ticked antenna with no data steps to its neighbour with data.
     const sel = ant_src.selected.indices || [];
-    const cur = sel.length === 1 ? sel[0] : null;
-    const idx = stepIterationIndex(cur, names.length, delta, true);
+    let pos = null;
+    if (sel.length === 1) {
+        pos = cand.indexOf(sel[0]);
+        if (pos === -1) {
+            let k = 0;
+            while (k < cand.length && cand[k] < sel[0]) k++;
+            pos = delta > 0 ? k - 1 : k;     // Next lands on cand[k], Prev on cand[k-1]
+        }
+    }
+    const idx = stepIterationIndex(pos, cand.length, delta, true);
     if (idx === null) return;
-    ant_src.selected.indices = [idx];
+    ant_src.selected.indices = [cand[idx]];
     // Ticked baselines override the antenna selection, so leaving them
     // ticked would make this button appear to do nothing.
     if (bl_src && bl_src.selected && (bl_src.selected.indices || []).length)
@@ -721,13 +737,16 @@ function doIterateBaseline(delta) {
     // antenna").
     const names = (ant_src && ant_src.data && ant_src.data['name']) || [];
     const asel  = (ant_src && ant_src.selected && ant_src.selected.indices) || [];
+    // Baselines with no data in the field / SPW selection (has_data 0,
+    // from the last Plot) are skipped (2026-10-10).
+    const has   = (bl_src.data && bl_src.data['has_data']) || null;
     const cand  = [];
     if (asel.length > 0 && asel.length < names.length) {
         const want = new Set(Array.from(asel).map(function(i) { return names[i]; }));
         for (let i = 0; i < a1.length; i++)
-            if (want.has(a1[i]) || want.has(a2[i])) cand.push(i);
+            if ((want.has(a1[i]) || want.has(a2[i])) && (!has || has[i] !== 0)) cand.push(i);
     } else {
-        for (let i = 0; i < a1.length; i++) cand.push(i);
+        for (let i = 0; i < a1.length; i++) if (!has || has[i] !== 0) cand.push(i);
     }""" + guard_js + """
     // Exactly one ticked baseline, and one of the candidates, has a
     // position to step from; anything else starts at the first.

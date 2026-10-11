@@ -78,6 +78,7 @@ def _visplot_t(
         layout: str = 'side',
         kind: Optional[str] = None,
         preset: Optional[str] = None,
+        pin_layout: bool = False,
         raster_y: Optional[str] = None,
         raster_x: Optional[str] = None,
         raster_qty: Optional[str] = None,
@@ -127,6 +128,7 @@ def _visplot_t(
         layout = layout,
         kind = kind,
         preset = preset,
+        pin_layout = pin_layout,
         raster_y = raster_y,
         raster_x = raster_x,
         raster_qty = raster_qty,
@@ -297,6 +299,10 @@ class _visplot:
         averaged) or Time (all channels averaged); they set ``layout``
         to ``"over"`` and supply ``scatter_avg_time`` /
         ``scatter_avg_chan`` where those are left at ``"off"``.
+    pin_layout : bool
+        Start with "Pin layout" ticked: presets (this ``preset`` and the
+        toolbar buttons) keep the current layout -- ``layout`` -- instead
+        of switching to their own.  Default ``False``.
     raster_y, raster_x : str | None
         Explicit raster Y/X axis, e.g. ``"TIME"``, ``"BASELINE"``,
         ``"CHANNEL"``, ``"CORRELATION"``. Takes precedence over
@@ -426,6 +432,7 @@ class _visplot:
         'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), or ``"over"`` (both panels, one above the other).',
         'kind': 'Which panel kind leads: ``"raster"`` (default when omitted) or ``"scatter"``.',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
+        'pin_layout': 'Start with "Pin layout" ticked: presets (this ``preset`` and the toolbar buttons) keep the current layout -- ``layout`` -- instead of switching to their own.',
         'raster_y': '',
         'raster_x': '',
         'raster_qty': 'Explicit raster quantity (color axis), e.g.',
@@ -476,6 +483,7 @@ class _visplot:
         'layout': 'side',
         'kind': None,
         'preset': None,
+        'pin_layout': False,
         'raster_y': None,
         'raster_x': None,
         'raster_qty': None,
@@ -561,6 +569,7 @@ class _visplot:
             'layout': 'str',
             'kind': 'Optional[str]',
             'preset': 'Optional[str]',
+            'pin_layout': 'bool',
             'raster_y': 'Optional[str]',
             'raster_x': 'Optional[str]',
             'raster_qty': 'Optional[str]',
@@ -1020,6 +1029,21 @@ class _visplot:
             desc, fmt,
         )
 
+    def __pin_layout_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('pin_layout', self._arg_default['pin_layout'])
+        default = self._arg_default['pin_layout']
+        desc    = self._arg_description.get('pin_layout', '')
+        if self.__validate_('pin_layout', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('pin_layout', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     def __raster_y_inp(self):
         glb     = self.__globals_()
         value   = glb.get('raster_y', self._arg_default['raster_y'])
@@ -1393,6 +1417,7 @@ class _visplot:
         if 'layout' in glb: del glb['layout']
         if 'kind' in glb: del glb['kind']
         if 'preset' in glb: del glb['preset']
+        if 'pin_layout' in glb: del glb['pin_layout']
         if 'raster_y' in glb: del glb['raster_y']
         if 'raster_x' in glb: del glb['raster_x']
         if 'raster_qty' in glb: del glb['raster_qty']
@@ -1443,6 +1468,7 @@ class _visplot:
         self.__layout_inp()
         self.__kind_inp()
         self.__preset_inp()
+        self.__pin_layout_inp()
         self.__raster_y_inp()
         self.__raster_x_inp()
         self.__raster_qty_inp()
@@ -1517,6 +1543,7 @@ class _visplot:
         _invocation_parameters['layout'] = glb.get('layout', self._arg_default['layout'])
         _invocation_parameters['kind'] = glb.get('kind', self._arg_default['kind'])
         _invocation_parameters['preset'] = glb.get('preset', self._arg_default['preset'])
+        _invocation_parameters['pin_layout'] = glb.get('pin_layout', self._arg_default['pin_layout'])
         _invocation_parameters['raster_y'] = glb.get('raster_y', self._arg_default['raster_y'])
         _invocation_parameters['raster_x'] = glb.get('raster_x', self._arg_default['raster_x'])
         _invocation_parameters['raster_qty'] = glb.get('raster_qty', self._arg_default['raster_qty'])
@@ -1583,6 +1610,7 @@ class _visplot:
             layout = _UNSET,
             kind = _UNSET,
             preset = _UNSET,
+            pin_layout = _UNSET,
             raster_y = _UNSET,
             raster_x = _UNSET,
             raster_qty = _UNSET,
@@ -1642,6 +1670,7 @@ class _visplot:
             layout,
             kind,
             preset,
+            pin_layout,
             raster_y,
             raster_x,
             raster_qty,
@@ -1740,6 +1769,9 @@ class _visplot:
             _invocation_parameters['preset'] = \
                 preset if preset is not _UNSET \
                 else glb.get('preset', self._arg_default['preset'])
+            _invocation_parameters['pin_layout'] = \
+                pin_layout if pin_layout is not _UNSET \
+                else glb.get('pin_layout', self._arg_default['pin_layout'])
             _invocation_parameters['raster_y'] = \
                 raster_y if raster_y is not _UNSET \
                 else glb.get('raster_y', self._arg_default['raster_y'])
@@ -1857,6 +1889,8 @@ class _visplot:
                 glb.get('kind', self._arg_default['kind'])
             _invocation_parameters['preset'] = \
                 glb.get('preset', self._arg_default['preset'])
+            _invocation_parameters['pin_layout'] = \
+                glb.get('pin_layout', self._arg_default['pin_layout'])
             _invocation_parameters['raster_y'] = \
                 glb.get('raster_y', self._arg_default['raster_y'])
             _invocation_parameters['raster_x'] = \
@@ -1946,6 +1980,7 @@ class _visplot:
                     'layout=' + repr(_invocation_parameters['layout']),
                     'kind=' + repr(_invocation_parameters['kind']),
                     'preset=' + repr(_invocation_parameters['preset']),
+                    'pin_layout=' + repr(_invocation_parameters['pin_layout']),
                     'raster_y=' + repr(_invocation_parameters['raster_y']),
                     'raster_x=' + repr(_invocation_parameters['raster_x']),
                     'raster_qty=' + repr(_invocation_parameters['raster_qty']),
@@ -1995,6 +2030,7 @@ class _visplot:
                 layout = _invocation_parameters['layout'],
                 kind = _invocation_parameters['kind'],
                 preset = _invocation_parameters['preset'],
+                pin_layout = _invocation_parameters['pin_layout'],
                 raster_y = _invocation_parameters['raster_y'],
                 raster_x = _invocation_parameters['raster_x'],
                 raster_qty = _invocation_parameters['raster_qty'],

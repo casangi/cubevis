@@ -4,7 +4,8 @@
 scatter was still being computed.  The watchdog now gives up only when no
 request is awaiting a reply that can still arrive, as reported by the page's
 CommMgr registry (``window.__cvCommMgrs``; ``inFlight()``, ``canReply()`` in
-cubevisjs ``comm_mgr.ts``).
+cubevisjs ``comm_mgr.ts``).  2026-10-10: and has waited at least 5 s
+(``oldestWaitMs()``), so a stream of hover readouts cannot hold it.
 
 The script runs under node with a minimal DOM stand-in and a virtual clock,
 so the 30 s / 5 s timers cost nothing.
@@ -79,6 +80,15 @@ reset(); window.__cvCommMgrs = [{ inFlight() { throw new Error('x'); }, canReply
 window.__cvSetBusy(true);
 advance(30500); out.throw_released = window.__cvBusyN === 0;
 
+// 6. (2026-10-10) a manager reporting request age: a request that has
+//    waited long holds busy; only short ones (hover readouts) do not
+reset(); const age = {v: 31000};
+window.__cvCommMgrs = [{ inFlight: () => 1, canReply: () => true,
+                         oldestWaitMs: () => age.v }];
+window.__cvSetBusy(true);
+advance(60000); out.aged_held = window.__cvBusyN === 1;
+age.v = 300; advance(5300); out.short_released = window.__cvBusyN === 0;
+
 console.log(JSON.stringify(out));
 """
 
@@ -93,4 +103,5 @@ def test_busy_watchdog_holds_while_awaiting_reply():
         "long_held": True, "long_released": True,
         "noreg_before": True, "noreg_after": True,
         "leak_released": True, "dead_released": True, "throw_released": True,
+        "aged_held": True, "short_released": True,
     }, out

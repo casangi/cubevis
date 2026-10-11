@@ -12,7 +12,9 @@ the autocorrelations.
               antennas without data left out; Antenna x Time refused
 2. TW Hya     3c279: 19 antennas with data, DA41 / DA42 left out
 3. Plotter    preset, title, tick labels, readout, flag box refused, tick
-              density, the two-line-title repaint fix (JS)
+              density, the two-line-title repaint fix (JS), upright x
+              labels (2026-10-11, after Darrell's test: the names ran
+              into each other)
 """
 from __future__ import annotations
 
@@ -218,3 +220,21 @@ class TestPlotter:
         js = plotter._do_plot_js
         assert "_f.min_border_top = b + 1;" in js
         assert "const dn = (n > 0 && n <= 30) ? n : 6;" in js
+
+
+def test_x_label_orientation_rule():
+    from cubevis.toolbox.visplot.visibility_plot import x_label_orientation
+    assert x_label_orientation(["DA44", "DA45"]) == "vertical"
+    assert x_label_orientation(["DA44&DA45"] * 30) == "vertical"
+    assert x_label_orientation(["DA44"] * 31) == "horizontal"     # sparse labels
+    assert x_label_orientation(["A", "B", "C"]) == "horizontal"
+    assert x_label_orientation(None) == x_label_orientation([]) == "horizontal"
+
+
+@needs_ms
+def test_matrix_x_labels_upright(plotter):
+    r = plotter._slots[0].raster
+    assert [a.major_label_orientation for a in r.figure.xaxis] == ["vertical"]
+    assert [a.major_label_orientation for a in r.figure.yaxis] == ["horizontal"]
+    js = plotter._do_plot_js
+    assert "const o = up ? 'vertical' : 'horizontal';" in js

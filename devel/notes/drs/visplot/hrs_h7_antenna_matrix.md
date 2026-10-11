@@ -151,6 +151,12 @@ branch under node with stand-in models (pinned / not / both / switched to
 Scatter while pinned). Live: Ant×Ant with Panel A pinned and Panel B
 not; Phase, then Real; A stayed open, B closed; ✕ left "Real".
 
+Also from the same test: the matrix's Antenna 2 names ran into each
+other on a narrow panel. An x axis that shows every label (at most 30)
+of more than 3 characters now writes them upright
+(`visibility_plot.x_label_orientation`; the Plot response applies the
+same rule, so other plots go back to horizontal).
+
 ## 6. Not done
 
 - Flagging from the matrix (whole baselines over the selection).

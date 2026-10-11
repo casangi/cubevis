@@ -7663,6 +7663,17 @@ function doPlot(reload) {
                     }
                 };
                 apply([...(fig.below || []), ...(fig.above || [])], d['x_cat']);
+                // Every x label shown and longer than 3 characters (the
+                // antenna names of the matrix): upright, or they collide.
+                // Same rule as visibility_plot.x_label_orientation.
+                const xc = (d['x_cat'] && d['x_cat'][0]) ? d['x_cat'][0] : null;
+                const up = (xc && xc.length > 0 && xc.length <= 30 &&
+                            Math.max(...xc.map(s => String(s).length)) > 3);
+                for (const a of [...(fig.below || []), ...(fig.above || [])]) {
+                    if (!a || a.major_label_orientation === undefined) continue;
+                    const o = up ? 'vertical' : 'horizontal';
+                    if (a.major_label_orientation !== o) a.major_label_orientation = o;
+                }
                 apply([...(fig.left || []), ...(fig.right || [])], d['y_cat']);
             } catch (e) {
                 console.warn('[visplot] cvIntegerTicks failed', e);

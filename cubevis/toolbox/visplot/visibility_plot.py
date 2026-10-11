@@ -522,6 +522,17 @@ plot that is no longer there.
 """
 
 
+def x_label_orientation(ticks) -> str:
+    """Bokeh's label orientation for a raster's x axis: "vertical" when
+    every label is drawn (at most 30) and they are more than 3 characters
+    long (the antenna matrix, a small array's baselines), else
+    "horizontal".  The Plot response (cvIntegerTicks) uses the same rule."""
+    n = len(ticks) if ticks else 0
+    if 0 < n <= 30 and max(len(str(t)) for t in ticks) > 3:
+        return "vertical"
+    return "horizontal"
+
+
 class VisibilityPlot(Model):
     """Abstract Bokeh Model base for visibility plot components.
 
@@ -1363,6 +1374,11 @@ class VisibilityPlot(Model):
                     if hasattr(ax.ticker, "desired_num_ticks"):
                         n = len(ticks) if ticks else 0
                         ax.ticker.desired_num_ticks = n if 0 < n <= 30 else 6
+            # Every label shown along x and longer than a few characters
+            # (antenna names): written upright, or they run into each
+            # other.  cvIntegerTicks does the same after a Plot.
+            for ax in self._fig.xaxis:
+                ax.major_label_orientation = x_label_orientation(spec.x_ticks)
         except Exception:
             log.debug("could not set tick spacing", exc_info=True)
 

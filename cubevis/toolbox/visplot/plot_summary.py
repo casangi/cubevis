@@ -237,6 +237,12 @@ def reproducing_call(plotter) -> str:
 # ----------------------------------------------------------------------
 
 
+def _data_name(plotter) -> str:
+    """The data set's file name (``tl016b_sub.ms``)."""
+    p = (getattr(plotter, "_source_path", None) or "").rstrip("/\\")
+    return os.path.basename(p) or "visplot"
+
+
 def describe(plotter, slot_id: str, viewport=None) -> dict:
     """Everything the summary page shows for panel *slot_id*.
 
@@ -400,7 +406,10 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
         "the theme and panel sizes",
     ]
     return {
-        "title": f"visplot — panel {slot.id}",
+        # The browser tab shows only the start of the title, so the data
+        # set's name leads; "visplot" is in the page heading instead.
+        "title": f"{_data_name(plotter)} · panel {slot.id}",
+        "heading": f"visplot — {_data_name(plotter)}, panel {slot.id} ({slot.kind})",
         "generated": _utc(_dt.datetime.now(_dt.timezone.utc).timestamp()) + " UTC",
         "sections": sections,
         "call": reproducing_call(plotter),
@@ -412,7 +421,7 @@ def summary_html(d: dict) -> str:
     """A self-contained page for *d* (from ``describe``): plain tables that
     paste cleanly into a report, and a Copy button for the call."""
     e = _html.escape
-    body = [f"<h2>{e(d['title'])}</h2>",
+    body = [f"<h2>{e(d.get('heading', d['title']))}</h2>",
             f"<p class='gen'>Generated {e(d['generated'])}</p>"]
     for title, rows in d["sections"]:
         body.append(f"<h3>{e(title)}</h3><table>")

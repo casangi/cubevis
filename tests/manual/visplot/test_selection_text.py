@@ -257,3 +257,19 @@ def test_raster_flag_box_stays_inside_uv_range():
             assert n_new > 0 and n_new == r["counts"]["n_changed"]
         finally:
             b.set_pending_flags([], 0)
+
+
+@pytest.mark.skipif(not (os.environ.get("MS") and os.path.isdir(os.environ["MS"])),
+                    reason="set MS to the TW Hya data")
+def test_rows_with_data_follow_the_data_section_before_plot():
+    """Stepping's "has data" flags for a field (or UV range) chosen
+    without pressing Plot (the 'first step uses the previous field' issue)."""
+    import asyncio
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    p = VisibilityPlotter(ms=os.environ["MS"], field="3c279", headless=True)
+    r = asyncio.run(p._handle_rows({"field": "J0522-364"}))
+    assert r["status"] == "ok" and sum(r["bl_has_data"]) == 210
+    r = asyncio.run(p._handle_rows({"field": "3c279", "uvrange": "<50m"}))
+    assert 0 < sum(r["bl_has_data"]) < 171
+    assert p._selection.field_names == ["3c279"]          # unchanged
+    assert asyncio.run(p._handle_rows({"uvrange": "<50parsec"}))["status"] == "ignored"

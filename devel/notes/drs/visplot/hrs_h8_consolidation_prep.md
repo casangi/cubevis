@@ -238,3 +238,20 @@ collection errors, which fail the same way on the pristine tree.
   panels is a C-list item.
 - GUI layout: proposal written up, deferred until after testing
   (`visplot_layout_proposal.md`).
+
+## 11. Stepping after a selection change without Plot (base `c89335a`)
+
+The known issue from 2026-10-10 ("after changing the field without
+plotting, the first Prev / Next uses the previous field's rows with
+data"). The tables' `has_data` flags came only with a Plot reply. Now a
+change of Field, the SPW table, Autocorrelations, or the Scan / Time /
+UV boxes asks Python for the flags of the selection as it stands
+(`_handle_rows`, read-only; text that does not parse is left to Plot to
+report), and the tables and stepping use them at once. Checked live on
+TW Hya: field 3c279 -> J0522-364 without Plot, 171 -> 210 baselines with
+data; UV `<50m`, 14. Test in `test_selection_text.py`.
+
+Still open from the known issues, judged minor for testing:
+autocorrelations detected from the first and last 100k rows; the
+Baseline table not narrowed to the ticked antennas (Baseline Prev / Next
+already steps only through their baselines).

@@ -530,6 +530,28 @@ _STAT_TIME_WINDOW_OPTIONS = [("auto", "Auto"), ("off", "Off"),
                              ("10", "10 s"), ("30", "30 s"), ("60", "1 min"),
                              ("120", "2 min"), ("300", "5 min"),
                              ("600", "10 min")]
+# Refresh the Antenna / Baseline tables' "has data" flags when the Data
+# selection changes without a Plot, so Prev / Next skip the right rows.
+_ROWS_REFRESH_JS = r"""
+if (typeof ctrl === 'undefined' || !ctrl || !ids || !ids['rows']) return;
+const _spw_idx = (spw_src && spw_src.selected && spw_src.selected.indices) || [];
+const spw_ids = _spw_idx.map(i => spw_src.data['ident'][i]);
+ctrl.send(ids['rows'], {
+    field: field_sel.value, spw_ids: spw_ids,
+    scan: scan_inp ? scan_inp.value : '', timerange: time_inp ? time_inp.value : '',
+    uvrange: uv_inp ? uv_inp.value : '',
+    autocorr: autocorr_rbg ? ['exclude', 'include', 'only'][autocorr_rbg.active] : 'exclude',
+}, function (resp) {
+    if (!resp || resp.status !== 'ok') return;
+    if (resp.bl_has_data && bl_src && bl_src.data['has_data']) {
+        bl_src.data['has_data'] = resp.bl_has_data; bl_src.change.emit();
+    }
+    if (resp.ant_has_data && ant_src && ant_src.data['has_data']) {
+        ant_src.data['has_data'] = resp.ant_has_data; ant_src.change.emit();
+    }
+});
+"""
+
 # "Time labels" switch (HRS A0): tell Python, then install each panel's
 # new state (the tick formatter reads time_labels / x_day0 from it), its
 # axis labels, and the ticker spacing (base 60 for UTC: whole seconds,
@@ -3069,6 +3091,7 @@ class VisibilityPlotter:
             "export": str(uuid4()),
             "time_labels": str(uuid4()),
             "summary": str(uuid4()),
+            "rows": str(uuid4()),
         }
         self._pipe["control"].register(self._ids["plot"], self._handle_plot)
         self._pipe["control"].register(self._ids["done"], self._handle_done)
@@ -3078,6 +3101,8 @@ class VisibilityPlotter:
                                        self._handle_time_labels)
         self._pipe["control"].register(self._ids["summary"],
                                        self._handle_summary)
+        self._pipe["control"].register(self._ids["rows"],
+                                       self._handle_rows)
 
         # FlagDB v2 controls (filter/config, undo/redo/clear, review,
         # export) on their own pipe WITHOUT queue squashing: a squashing
@@ -4124,6 +4149,37 @@ for (const dt of other.tools) {
         drawn (``plot_summary.reproducing_call``)."""
         from .plot_summary import reproducing_call
         return reproducing_call(self)
+
+    async def _handle_rows(self, msg, context=None):
+        """Which Antenna / Baseline rows have data in the selection now
+        in the Data section -- before Plot is pressed.
+
+        Stepping (Antenna / Baseline Prev / Next) skips rows without data,
+        and those flags used to come only with a Plot reply, so after the
+        field (or SPW, scan, time or UV range) was changed without
+        plotting, the first step used the previous selection's
+        (known issue since 2026-10-10; fixed 2026-10-11).  Read-only: the
+        plotter's selection is not changed.  Text that does not parse
+        answers nothing (Plot reports it)."""
+        import dataclasses as _dc
+        try:
+            field_name = _parse_field_string(str(msg.get("field", self._field_str)),
+                                             self._meta)
+            scan_sel, tr, uv = self._parse_selection_texts(
+                msg.get("scan", self._scan_str), msg.get("timerange", self._timerange_str),
+                msg.get("uvrange", self._uvrange_str))
+        except Exception:
+            return {"status": "ignored"}
+        spw = msg.get("spw_ids")
+        ac = msg.get("autocorr")
+        sel = _dc.replace(
+            self._selection,
+            field_names=[field_name] if field_name else None,
+            spw=list(spw) if spw else self._selection.spw,
+            scan=scan_sel, time_range=tr, uv_range=uv,
+            autocorr=ac if ac in ("exclude", "include", "only") else self._selection.autocorr)
+        bl_has, ant_has = await asyncio.to_thread(self._rows_with_data, sel)
+        return {"status": "ok", "bl_has_data": bl_has, "ant_has_data": ant_has}
 
     async def _handle_summary(self, msg, context=None):
         """The "Describe this plot" toolbar button: the page for one panel,
@@ -8512,6 +8568,18 @@ function doPlot(reload) {
     });
 }
 """
+        _rows_cb = CustomJS(
+            args={"ctrl": ctrl, "ids": ids, "field_sel": self._field_select,
+                  "spw_src": self._spw_source, "scan_inp": self._scan_inp,
+                  "time_inp": self._time_inp, "uv_inp": self._uv_inp,
+                  "autocorr_rbg": self._autocorr_rbg,
+                  "ant_src": self._antenna_source, "bl_src": self._baseline_source},
+            code=_ROWS_REFRESH_JS)
+        self._field_select.js_on_change("value", _rows_cb)
+        self._spw_source.selected.js_on_change("indices", _rows_cb)
+        self._autocorr_rbg.js_on_change("active", _rows_cb)
+        for _w in (self._scan_inp, self._time_inp, self._uv_inp):
+            _w.js_on_change("value", _rows_cb)
         _plot_js_args = {
             "ctrl":       ctrl,
             "ids":        ids,

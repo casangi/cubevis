@@ -314,3 +314,37 @@ two halves and what to look for.
 Not checked here: a kernel on a second host (only the local `python3`
 kernel is available in this sandbox). The layer-2 script and demo 1 with
 `--kernel cvpost106_python312 --remote-ms ...` are the check to run.
+
+## 13. Darrell's first remote run (base `e066a79`, 2026-10-12, second zip)
+
+- **Demo 3 timed out on the first Plot** (cvpost140, TW Hya, all fields):
+  a bare `TimeoutError` from the scatter's `query_columns`. Cause: the
+  plotter never passed `call_timeout=`, so every remote call had 30 s;
+  all the tests passed `call_timeout=300` and never saw it. Now
+  `RemoteReductionContext` gives the data calls (`DATA_METHODS`: images,
+  scatter, probes, flag evaluation, rows with data, pending-flag sync)
+  600 s, `CUBEVIS_REMOTE_TIMEOUT` overrides; small calls keep 30 s; an
+  explicit `call_timeout=` still sets one budget for all. A timeout now
+  says which call, which kernel, how long, and what to do. Tests:
+  `test_timeout_message_and_recovery` (the next call after a timeout is
+  answered), `test_plotter_gets_the_data_timeout`.
+  Not measured: how long the all-fields TW Hya scatter takes on cvpost
+  (this sandbox runs out of memory on it).
+- **"Reproduce this plot" drew Over / Under panels twice as tall.** Not
+  the call: `layout="over"` at startup kept the side-by-side height
+  (550); only the Over / Under button set 280. Startup now sizes them as
+  the button does (unless `plot_height=` is given). Checked live.
+- **Demos:** `--ms` is only required by demo 1 (02 and 03 need just the
+  kernel's path); each step that stands for a user call shows it first
+  (`# in your own script:` with `>>>`), and `--step` pauses after showing
+  it; the repository root goes first on `sys.path` (Darrell's traceback
+  showed a `cubevis` inside `demos/visplot-remote/`), and the first line
+  printed is which cubevis is in use.
+
+**Panel sizes (discussion, not built).** `plot_width=` / `plot_height=`
+exist but only at construction, and the layout buttons reset to fixed
+constants. Proposed: a per-panel Height in the gear tab, stored with the
+panel and written into `panels=[dict(..., height=...)]` by the
+reproducing call; width keeps stretching to the window. A drag handle
+between panels would need a cubevisjs model; better with the layout
+refactor after testing.

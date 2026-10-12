@@ -1,6 +1,13 @@
 """Demo 3: the visplot window with a remote kernel, and what to try in it.
 
-    python 03_remote_gui.py --ms /path/on/kernel/host.ms --kernel python3
+    python 03_remote_gui.py --remote-ms /path/on/kernel/host.ms \\
+        --kernel cvpost106_python312 --field 3c279
+
+    # kernel on this machine:
+    python 03_remote_gui.py --ms sis14_twhya_calibrated_flagged.ms --field 3c279
+
+Only the kernel's path is used (no local copy needed).  Without --field
+the first Plot reads every field; on a large MS that can take minutes.
 
 Prints a short guided tour, then opens the window (the call returns when
 the browser tab is closed).  For the full checklist used in testing see
@@ -10,7 +17,7 @@ from __future__ import annotations
 
 import os
 
-from _demo import args, section
+from _demo import args, call, code, note, section
 
 TOUR = """
   1. Status line (bottom): the data set and selection.  A yellow warning
@@ -31,14 +38,20 @@ TOUR = """
 
 
 def main():
-    a = args(__doc__.splitlines()[0])
-    section("The tour", "Things to try once the window opens:")
+    a = args(__doc__.splitlines()[0], local=False)
+    section("The tour", "Things to try once the window opens:", pause=False)
     print(TOUR)
-    if a.step:
-        input("[Enter to open the window] ")
     kw = dict(backend="remote", kernel_name=a.kernel)
     if a.field:
         kw["field"] = a.field
+    section("Opening the window", "The call this demo makes:", pause=False)
+    code("from cubevis import visplot\n"
+         + call("visplot", ms=a.remote_ms, field=a.field, backend="remote",
+                kernel_name=a.kernel))
+    if not a.field:
+        note("No --field: the first Plot reads all fields through the "
+             "kernel.  On a large MS that takes a while; the GUI shows "
+             "the busy cursor until it is done.")
     from cubevis import visplot              # the task, as users call it
     try:
         visplot(ms=a.remote_ms, **kw)

@@ -110,6 +110,7 @@ Package location (proposed)
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from uuid import uuid4
@@ -188,6 +189,31 @@ DEFAULT_CREATE_CONTEXT_TIMEOUT = 180.0
 # timeout was hardwired past _acall/_call with no override.
 DEFAULT_CALL_TIMEOUT = 30.0
 
+# Calls that read and aggregate data (2026-10-12).  The plotter never
+# passed call_timeout=, so these had 30 s too: an all-fields scatter of TW
+# Hya through cvpost140 timed out on the first Plot (Darrell, demo 3),
+# while every test passed call_timeout=300 and never saw it.  Small calls
+# (metadata, versions, cache limits) keep DEFAULT_CALL_TIMEOUT, so a dead
+# worker is still noticed quickly there.  CUBEVIS_REMOTE_TIMEOUT (seconds)
+# overrides this one.
+DEFAULT_DATA_CALL_TIMEOUT = 600.0
+DATA_METHODS = frozenset({
+    "query_raster", "query_columns", "probe_scatter_region",
+    "identity_tables", "baselines_with_rows", "axis_info",
+    "evaluate_flag_request", "probe_flag_region",
+    "set_pending_flags", "sync_pending_flags",
+})
+
+
+def _data_call_timeout() -> float:
+    v = os.environ.get("CUBEVIS_REMOTE_TIMEOUT", "").strip()
+    try:
+        return float(v) if v else DEFAULT_DATA_CALL_TIMEOUT
+    except ValueError:
+        log.warning("CUBEVIS_REMOTE_TIMEOUT=%r is not a number; using %.0f s",
+                    v, DEFAULT_DATA_CALL_TIMEOUT)
+        return DEFAULT_DATA_CALL_TIMEOUT
+
 
 class UserFilterNotRemoteError(RuntimeError):
     """A user-supplied (Python callable) flag filter was used with remote
@@ -258,7 +284,7 @@ class RemoteReductionContext(ReductionContext):
         max_cells: int = DEFAULT_REMOTE_MAX_CELLS,
         open_timeout: float = DEFAULT_OPEN_TIMEOUT,
         create_context_timeout: float = DEFAULT_CREATE_CONTEXT_TIMEOUT,
-        call_timeout: float = DEFAULT_CALL_TIMEOUT,
+        call_timeout: Optional[float] = None,
     ) -> None:
         if backend_kind not in ("msv2", "msv4"):
             raise ValueError(
@@ -281,7 +307,13 @@ class RemoteReductionContext(ReductionContext):
         self._kernel_name = kernel_name
         self._backend_kind = backend_kind
         self._max_cells = max_cells
-        self._call_timeout = call_timeout
+        # call_timeout= given: one budget for every call (as before).
+        # Not given: DEFAULT_CALL_TIMEOUT for small calls, the data
+        # budget for DATA_METHODS (see DEFAULT_DATA_CALL_TIMEOUT).
+        self._call_timeout_given = call_timeout is not None
+        self._call_timeout = DEFAULT_CALL_TIMEOUT if call_timeout is None else call_timeout
+        self._data_call_timeout = (call_timeout if call_timeout is not None
+                                   else _data_call_timeout())
         self._closed = False
 
         # See module docstring, point 1: this bridge is the ONE loop
@@ -438,13 +470,29 @@ class RemoteReductionContext(ReductionContext):
         particular call needs longer (or shorter) can pass ``timeout=``
         on that call alone without touching the instance-wide default.
         """
-        effective_timeout = self._call_timeout if timeout is None else timeout
+        if timeout is not None:
+            effective_timeout = timeout
+        elif method in DATA_METHODS:
+            effective_timeout = self._data_call_timeout
+        else:
+            effective_timeout = self._call_timeout
         t0 = time.perf_counter()
         ok = False
         try:
             out = self._bridge.run(self._acall(method, timeout=effective_timeout, **kwargs))
             ok = True
             return out
+        except TimeoutError as exc:
+            # A bare TimeoutError said nothing (Darrell's demo-3 report).
+            hint = ("set CUBEVIS_REMOTE_TIMEOUT (seconds) to allow longer, or "
+                    "narrow the selection (one field, fewer SPWs)"
+                    if method in DATA_METHODS and not self._call_timeout_given
+                    else "pass call_timeout= to allow longer")
+            raise TimeoutError(
+                f"the kernel {self._kernel_name!r} did not answer {method} "
+                f"within {effective_timeout:.0f} s. The worker may still be "
+                f"working on it, and the next request may wait for it; "
+                f"{hint}.") from exc
         finally:
             dt = time.perf_counter() - t0
             stats = self.__dict__.setdefault("_cv_call_stats", {})

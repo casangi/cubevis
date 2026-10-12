@@ -21,7 +21,7 @@ import warnings
 
 import numpy as np
 
-from _demo import args, note, section, timed
+from _demo import args, call, code, note, section, timed
 
 warnings.filterwarnings("ignore")
 
@@ -38,11 +38,20 @@ def main():
         aggregating to images, evaluating flag boxes -- runs either in the
         same process (local) or in a worker started by a Jupyter kernel
         (backend="remote", kernel_name=...).  Only small results cross:
-        images, sample counts, flag deltas.  Here both are built headless
-        (no browser) on the same data so they can be compared.""")
+        images, sample counts, flag deltas.""", pause=False)
     kw = dict(headless=True, layout="side")
     if a.field:
         kw["field"] = a.field
+    note("Below, both are built headless (VisibilityPlotter(..., "
+         "headless=True), no browser) on the same data so the demo can "
+         "compare them; visplot() takes the same arguments and opens the "
+         "window.")
+    code("from cubevis import visplot\n"
+         "# on this machine\n"
+         + call("visplot", ms=a.ms, field=a.field) + "\n"
+         "# the data side in the kernel\n"
+         + call("visplot", ms=a.remote_ms, field=a.field, backend="remote",
+                kernel_name=a.kernel))
     with timed("local plotter (open the MS, first render)"):
         lp = VisibilityPlotter(ms=a.ms, **kw)
     with timed(f"remote plotter (start kernel {a.kernel!r}, worker, open, first render)"):
@@ -67,7 +76,11 @@ def main():
         fields of the selection sent with every query.  The worker applies
         them where the data are: here a UV range, which removes rows
         (baseline x time) whose projected length is outside it.  The local
-        and remote images must be identical.""")
+        and remote images must be identical.""", pause=False)
+    note("In a script, as an argument (or in the GUI, type <200m in the Data "
+         "section's UV range box and press Plot):")
+    code(call("visplot", ms=a.remote_ms, field=a.field, backend="remote",
+              kernel_name=a.kernel, uvrange="<200m"))
     import dataclasses as dc
     sel = dc.replace(rp._selection, uv_range=[[None, 200.0, "m"]])
     pol = rp._slots[0].raster._polarization
@@ -87,6 +100,8 @@ def main():
         Data section changes before Plot is pressed, the browser asks the
         plotter which rows have data now; with a remote kernel the answer
         comes from the worker.""")
+    note("In the GUI: change the Data section (here UV range <100m) and "
+         "press Baseline > before Plot.")
     import asyncio
     for msg in ({}, {"uvrange": "<100m"}):
         r = asyncio.run(rp._handle_rows(dict(msg)))
@@ -98,6 +113,8 @@ def main():
         built in the plotter's process.  For a remote plotter it names the
         kernel, lists the software on both sides, and its reproducing call
         includes backend='remote' and kernel_name.""")
+    note("In the GUI: the page icon on a plot's toolbar.  Its reproducing "
+         "call, the one to keep in your own script, is:")
     print(rp.reproducing_call())
     out = tempfile.mkdtemp(prefix="visplot_remote_demo_")
     page = os.path.join(out, "summary_panel_A.html")
@@ -107,7 +124,11 @@ def main():
 
     section("6. A PNG from each side", """
         Export works the same way on both: the images are aggregated where
-        the data are, the PNG is composed where the plotter runs.""")
+        the data are, the PNG is composed where the plotter runs.""", pause=False)
+    note("visplot(..., plotfile=...) writes the PNG and returns without "
+         "opening a window.  The demo calls the plotters it already has:")
+    code(call("visplot", ms=a.remote_ms, field=a.field, backend="remote",
+              kernel_name=a.kernel, plotfile="remote.png"))
     for vp, who in ((lp, "local"), (rp, "remote")):
         with timed(f"{who} PNG"):
             p = vp(plotfile=os.path.join(out, f"{who}.png"), theme="light")

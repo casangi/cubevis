@@ -2722,6 +2722,7 @@ class VisibilityPlotter:
         # constants.
         self._plot_width  = int(plot_width or _PANEL_WIDTH_SIDE)
         self._plot_height = int(plot_height or _PANEL_HEIGHT)
+        self._plot_height_given = plot_height is not None
 
         self._requested_theme = theme if theme in ("dark", "light") else "dark"
         self._theme = self._requested_theme
@@ -9689,6 +9690,15 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             _panel_h = self._layout_js.args["panel_h"]
             self._pos0.figure.width  = _full_w
             self._pos0.figure.height = _panel_h
+        elif self._layout == "over" and not self._plot_height_given:
+            # The size the Over / Under button gives (2026-10-12).  Before,
+            # layout="over" at startup kept the side-by-side height, so a
+            # reproduced Over / Under view drew each panel twice as tall
+            # as the one it came from.
+            _over_h = self._layout_js.args["over_h"]
+            for _slot in self._slots:
+                _slot.raster.figure.height  = _over_h
+                _slot.scatter.figure.height = _over_h
 
         # ---- Linked cursor Spans ----------------------------------------- #
         # Generalized to N panels (added 2026-07-31, closing the KNOWN GAP

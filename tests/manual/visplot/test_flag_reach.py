@@ -762,8 +762,13 @@ class TestFlagTool:
         root = os.path.join(os.path.dirname(cubevis.__file__), "__js__")
         bundles = sorted(glob.glob(os.path.join(root, "bokeh-3.*", "cubevisjs.min.js")))
         assert len(bundles) >= 5
-        texts = {open(b).read() for b in bundles}
-        assert len(texts) == 1, "the bundles differ"
-        t = texts.pop()
-        assert "at_pixel_res" in t and "span" in t and ".shift" in t
-        assert "reach_wide" in t and "Escape" in t
+        by_dir = {os.path.basename(os.path.dirname(b)): open(b).read() for b in bundles}
+        # Bokeh 3.6-3.9 build one bundle; 3.10 builds a different one that
+        # does not load in 3.8 (Darrell, 2026-10-12).  So: one text for
+        # 3.6-3.9, and every bundle carries the flag-tool code.
+        older = {v for k, v in by_dir.items()
+                 if tuple(map(int, k.split("-")[1].split("."))) < (3, 10)}
+        assert len(older) == 1, "the Bokeh 3.6-3.9 bundles differ"
+        for name, t in by_dir.items():
+            assert "at_pixel_res" in t and "span" in t and ".shift" in t, name
+            assert "reach_wide" in t and "Escape" in t, name

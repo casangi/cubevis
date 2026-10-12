@@ -15,6 +15,12 @@ without it they fail to collect rather than skip.
 For a guided, non-automated walk through the same behaviour, see
 `demos/visplot-remote/` (scripts that explain each step as they run it).
 
+Timeouts: calls that read data (images, flag boxes, rows with data) wait up
+to 600 s for the kernel, other calls 30 s; `CUBEVIS_REMOTE_TIMEOUT=<seconds>`
+changes the first. A call that runs out says which call and how long it
+waited. (Before 2026-10-12 every call had 30 s; the tests passed
+`call_timeout=300` and so never saw it.)
+
 `CUBEVIS_DEBUG=1` turns on debug logging on both sides. Remote flag calls log
 their timing (`remote evaluate_flag_request: kind=… -> delta, N changed, 0.4s`),
 which is the first thing to look at if something is slow or silently does

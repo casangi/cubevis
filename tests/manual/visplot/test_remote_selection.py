@@ -208,6 +208,22 @@ def test_worker_software_versions(remote):
         assert version_mismatch(software_versions(), list(kv.items())) is None
 
 
+def test_timeout_message_and_recovery(data, local, remote):
+    """A call that runs out of time says which call, how long, and what to
+    do; the next call still works (2026-10-12: it was a bare TimeoutError)."""
+    base = _base(data, local)
+    with pytest.raises(TimeoutError) as ei:
+        remote._call("query_raster", timeout=1e-3, y_dim=Axis.BASELINE,
+                     x_dim=Axis.TIME, quantity=Axis.AMPLITUDE, selection=base,
+                     polarization=None, max_cells=2_000_000)
+    msg = str(ei.value)
+    assert "query_raster" in msg and KERNEL_NAME in msg and "call_timeout" in msg
+    # The worker finishes the abandoned call; the next one is answered.
+    assert remote.metadata()["integration_time"] > 0
+    g = remote.query_raster(Axis.BASELINE, Axis.TIME, Axis.AMPLITUDE, base)[0]
+    assert np.isfinite(np.asarray(g, float)).any()
+
+
 # ---------------------------------------------------------------------- #
 # Plotter level: local and remote headless plotters, same arguments        #
 # ---------------------------------------------------------------------- #
@@ -252,6 +268,18 @@ def test_plotters_render_the_same(plotters):
             gb = np.asarray(b.raster._agg, float)
             assert ga.shape == gb.shape
             assert np.array_equal(np.isnan(ga), np.isnan(gb))
+
+
+def test_plotter_gets_the_data_timeout(plotters):
+    """The plotter passes no call_timeout=: data calls get the long budget
+    (600 s, or CUBEVIS_REMOTE_TIMEOUT), small calls keep 30 s."""
+    from cubevis.toolbox.visplot import remote_reduction_context as rrc
+    _lp, rp = plotters
+    ctx = next(o for o in (rp._context, rp._reader)
+               if type(o).__name__ == "RemoteReductionContext")
+    assert ctx._call_timeout == rrc.DEFAULT_CALL_TIMEOUT
+    assert ctx._data_call_timeout == rrc._data_call_timeout()
+    assert {"query_raster", "query_columns", "evaluate_flag_request"} <= rrc.DATA_METHODS
 
 
 def test_reproducing_call_names_the_kernel(plotters):

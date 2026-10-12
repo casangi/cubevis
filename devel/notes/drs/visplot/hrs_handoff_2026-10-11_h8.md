@@ -275,8 +275,11 @@ Performance and depth; nothing a tester has to learn.
   preset=p, headless=True)(plotfile=..., theme="light")`; one process per
   preset keeps memory down.
 - **cubevisjs:** TypeScript in `cubevisjs/src/bokeh`; `npm ci` then
-  `bokeh build`; copy `dist/cubevisjs.min.js` to all five
-  `cubevis/__js__/bokeh-3.{6..10}/`. The build reproduces the committed
+  `bokeh build`. Bokeh 3.6–3.9 all produce the same bundle, copied to
+  `cubevis/__js__/bokeh-3.{6..9}/`; Bokeh 3.10 produces a different one,
+  which does not work with 3.8 (seen on Linux), so build it separately
+  with 3.10 for `bokeh-3.10/` (corrected 2026-10-12, Darrell; earlier
+  text said one build for all five). Each build reproduces its committed
   bundle byte for byte. It does **not** fail on type errors; check the
   result in the page.
 - Panels render at the size the browser sends (`set_pixel_size`).

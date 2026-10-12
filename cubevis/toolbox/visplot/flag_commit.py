@@ -315,8 +315,8 @@ def _append_history(ms: str, message: str, commands=(), params=()) -> bool:
 
 def _cubevis_version() -> str:
     try:
-        import cubevis
-        return str(getattr(cubevis, "__version__", "") or "unknown")
+        from .plot_summary import cubevis_version
+        return cubevis_version()
     except Exception:
         return "unknown"
 

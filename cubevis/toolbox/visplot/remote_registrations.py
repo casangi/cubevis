@@ -129,7 +129,8 @@ class VisplotRemoteBackend:
                 "frame_debug": bool(getattr(wt, "_FRAME_DEBUG", True)),
                 "pid": os.getpid()}
         try:
-            info["cubevis_version"] = getattr(cubevis, "__version__", None)
+            from .plot_summary import cubevis_version
+            info["cubevis_version"] = cubevis_version()
         except Exception:
             pass
         dbg = "/tmp/cubevis_frame_debug2.log"
@@ -330,6 +331,13 @@ class VisplotRemoteBackend:
 
     def metadata(self) -> dict:
         return self._reader.metadata()
+
+    def software_versions(self):
+        """The worker's cubevis (with git commit when run from a checkout)
+        and library versions, for the version check against the local
+        plotter (2026-10-12)."""
+        from .plot_summary import software_versions
+        return [list(r) for r in software_versions()]
 
     def axis_info(self, axis, selection=None, query: str = "columns"):
         return self._reader.axis_info(axis, selection, query)

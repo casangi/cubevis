@@ -255,3 +255,62 @@ Still open from the known issues, judged minor for testing:
 autocorrelations detected from the first and last 100k rows; the
 Baseline table not narrowed to the ticked antennas (Baseline Prev / Next
 already steps only through their baselines).
+
+## 12. Remote execution verification (base `e066a79`, 2026-10-12)
+
+Goal: every H8 feature works through `backend="remote"` exactly as it
+does locally, with automated checks for regression runs and demo scripts
+to learn from.
+
+**Found and fixed**
+
+- The reproducing call ("Describe this plot") left out `kernel_name`, so
+  pasting it reopened the data locally. It now names the kernel (the
+  remote context is found under `_context` or `_reader`).
+- A single-time selection's half-integration fell back to ±0.5 s on a
+  remote kernel (the per-row integration time was read locally). The
+  observation metadata now carries `integration_time` (median of the
+  time coordinate's `integration_time`, both backends), and
+  `_integration_half` reads it first.
+- `cubevis.__version__` does not exist, so flag exports, the MS HISTORY
+  row written by Write to MS, and the worker's diagnostics recorded
+  `None`/"unknown". One source now: `plot_summary.cubevis_version()`.
+- No check that the kernel runs the same cubevis. The worker now answers
+  `software_versions()`; on open the plotter compares (commit, dirty flag,
+  version string) with `version_mismatch` and, if they differ, logs a
+  warning, adds a yellow ⚠ line to the status line, and the summary page
+  gets a "Software on the kernel" section. Identical strings (even dirty)
+  are quiet. An older worker without the call reports "unknown (older
+  than 2026-10-12)".
+- Layer-2 script `remote_visplot_check.py`: its export step still compared
+  the removed flagdata export and JSON fields that change every run; now
+  JSONL only, ignoring `delta_id`, `created`, `exported`.
+- The remote pytest files fail to *collect* without `pytest-asyncio`;
+  noted in REMOTE_TESTING.md.
+
+**Tests** (`tests/manual/visplot/`)
+
+- `test_remote_selection.py` (new): local vs remote for Scan, Time range,
+  UV range (m, kλ, two ranges), autocorrelations exclude / only; a UV
+  range narrows the image; flag box under a UV range; `integration_time`
+  in metadata; `software_versions`; `version_mismatch` cases; a remote
+  plotter built with `uvrange`, `autocorr`, `time_labels`, `panels`
+  (render parity, summary sections, reproducing call, rows refresh,
+  integration half, no version warning). 19 pass on the simulated MS,
+  31 with `MS=`/`PS=` (TW Hya MSv2 and MSv4), python3 kernel.
+- `remote_visplot_check.py`: new steps version check, selection in the
+  worker, rows refresh, summary, time labels. 22/22 pass, python3 kernel.
+- REMOTE_TESTING.md: layer 1/2 lists, and layer-3 checklist items for the
+  version warning, UV / autocorrelation / scan / time selection, time
+  labels, Describe this plot, JSON save / load and Write to MS (the stale
+  flagdata items replaced).
+
+**Demos** (`demos/visplot-remote/`, not tests): `01_local_and_remote.py`,
+`02_remote_flagging.py` (headless, explain each step, `--step` pauses),
+`03_remote_gui.py` (a tour, then the window; falls back to running the
+plotter as the task does when casatasks is missing). README explains the
+two halves and what to look for.
+
+Not checked here: a kernel on a second host (only the local `python3`
+kernel is available in this sandbox). The layer-2 script and demo 1 with
+`--kernel cvpost106_python312 --remote-ms ...` are the check to run.

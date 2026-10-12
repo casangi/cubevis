@@ -5,9 +5,15 @@ Run them in order: each one assumes the one before passed.
 
 | Layer | What | How long | Needs |
 |---|---|---|---|
-| 1 | `test_remote_flagging.py` (pytest) | ~1 min | a kernel; data optional |
+| 1 | `test_remote_flagging.py`, `test_remote_selection.py` (pytest) | ~2 min | a kernel; data optional |
 | 2 | `remote_visplot_check.py` (script) | 1–5 min | a kernel + data |
 | 3 | Manual GUI checklist (below) | ~15 min | a browser |
+
+The pytest files need `pytest-asyncio` (`pip install pytest-asyncio`);
+without it they fail to collect rather than skip.
+
+For a guided, non-automated walk through the same behaviour, see
+`demos/visplot-remote/` (scripts that explain each step as they run it).
 
 `CUBEVIS_DEBUG=1` turns on debug logging on both sides. Remote flag calls log
 their timing (`remote evaluate_flag_request: kind=… -> delta, N changed, 0.4s`),
@@ -29,13 +35,14 @@ the one on your machine, give both:
 
 ```
 # local kernel, simulated MS (self-test of the remote path itself)
-pytest test_remote_flagging.py
+pytest test_remote_flagging.py test_remote_selection.py
 
 # real kernel, real data
 ulimit -n 8096 && MS=sis14_twhya_calibrated_flagged.ms \
   CUBEVIS_TEST_KERNEL=cvpost106_python312 \
   CUBEVIS_TEST_KERNEL_MS=/home/zuul06-2/dschieb/casa/visplot/sis14_twhya_calibrated_flagged.ms \
-  pytest test_remote_flagging.py test_remote_reduction_context.py -v
+  pytest test_remote_flagging.py test_remote_selection.py \
+         test_remote_reduction_context.py -v
 ```
 
 Every flag call made against the remote worker is compared with the same call
@@ -50,6 +57,25 @@ against a local backend:
 A headless remote plotter must also flag, undo and export exactly like a local
 one. With real data the queries are limited to the first minute of the first
 field.
+
+`test_remote_selection.py` covers the selection and reporting features added
+for H8, again local against remote:
+
+* Scan, Time range, UV range (metres, kλ, two ranges) and the autocorrelation
+  switch reach the worker: identical images and identical "baselines with
+  data", and a UV range really narrows the image;
+* a flag box under a UV range (stored as exact samples) matches local;
+* the observation metadata carries the integration time (used for the
+  half-integration around a single time);
+* the worker reports its software versions, and the version comparison
+  (`version_mismatch`) is quiet for identical versions and warns otherwise;
+* a remote plotter built with `uvrange=`, `autocorr=`, `time_labels=` and
+  `panels=` renders like a local one; its plot summary names the kernel and
+  lists the kernel's software; its reproducing call includes
+  `backend='remote'` and `kernel_name`; "rows with data" for stepping comes
+  from the worker.
+
+With `MS=`/`PS=` the same checks run on MSv2 and MSv4 data.
 
 ## Layer 2 — `remote_visplot_check.py`
 
@@ -78,8 +104,13 @@ the time for each step:
 12. Undo/redo
 13. Colour display mode
 14. User-filter refusal
-15. flagdata/JSONL export and the pending-flag report
-16. Close
+15. JSONL export and the pending-flag report
+16. Version check (kernel cubevis against local)
+17. Selection in the worker: UV range, autocorrelations, scan, time range
+18. Rows with data before Plot (stepping), as the Data section changes
+19. Plot summary page and reproducing call
+20. Time labels: UTC and elapsed
+21. Close
 
 Exit status 0 means everything passed. The timings double as a latency survey
 of the remote path, and are worth keeping to compare later runs.
@@ -115,6 +146,18 @@ Keep the terminal (Python log) and the browser DevTools console visible.
 - [ ] Colorize (continuous, categorical with hide, statistical); colour
       scaling controls.
 - [ ] Light/Dark (sidebar, Flagging controls, colour bars); Export PNG.
+- [ ] No yellow version warning in the status line (or, if there is one, it
+      names both versions correctly).
+- [ ] Data section: type `<200m` in UV range without pressing Plot. The
+      Baseline table dims baselines with no data; Baseline ▶ skips them.
+      Press Plot: the status line shows the UV range and the panels narrow.
+- [ ] Autocorrelations: Exclude / Include / Only, each followed by Plot.
+- [ ] Scan and Time range (e.g. `09:30:00~09:45:00`), each followed by Plot.
+- [ ] Time labels UTC ↔ Elapsed: axis labels change, nothing is re-read.
+- [ ] "Describe this plot" (page icon on a plot's toolbar): opens once, titled
+      with the MS name; it names the kernel, lists the software on both sides,
+      and the reproducing call includes `backend='remote'` and `kernel_name`.
+      Paste that call into a new session: it reproduces the plot.
 
 **Flagging** (repeat on raster and scatter)
 
@@ -130,11 +173,13 @@ Keep the terminal (Python log) and the browser DevTools console visible.
       and Accept and Reject both work.
 - [ ] Undo / Redo / Clear, with the panels refreshing each time.
 - [ ] Show in colour: pending samples painted on both panels; change the colour.
-- [ ] Describe pending flags, Export flagdata, Export JSONL. Note that exports
-      are written on the machine running Python, not on the kernel host.
-- [ ] Optional: apply the exported flagdata file to a **copy** of the MS in CASA
-      (`flagdata(vis=copy, mode='list', inpfile=…)`) and confirm it flags what
-      visplot showed.
+- [ ] Describe pending flags; Save flags as JSON, then Load flags from JSON
+      (as pending) into a fresh session. Note that the JSON is written on the
+      machine running Python, not on the kernel host.
+- [ ] Optional, on a **copy** of the MS: Write flags to the MS (the write runs
+      in the worker, on the kernel host, with a backup), then open the copy
+      locally and confirm the flagged data are gone. The MS HISTORY row and
+      the backup record the cubevis version.
 
 **Robustness**
 

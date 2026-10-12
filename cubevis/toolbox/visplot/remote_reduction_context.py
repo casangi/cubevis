@@ -761,6 +761,16 @@ class RemoteReductionContext(ReductionContext):
     def metadata(self, timeout: Optional[float] = None) -> dict:
         return self._call("metadata", timeout=timeout)
 
+    def software_versions(self, timeout: Optional[float] = None) -> list:
+        """``[(package, version), ...]`` in the worker.  A worker whose
+        cubevis predates this method answers with an error: reported as
+        ``[("cubevis", "unknown (older than 2026-10-12)")]``."""
+        try:
+            return [tuple(r) for r in (self._call("software_versions", timeout=timeout) or [])]
+        except Exception as exc:
+            log.debug("software_versions failed: %s", exc)
+            return [("cubevis", "unknown (older than 2026-10-12)")]
+
     def axis_info(self, axis: "Axis", selection: Optional["SelectionSpec"] = None,
                   query: str = "columns", timeout: Optional[float] = None):
         return self._memo_call("axis_info", selection, (axis, query),

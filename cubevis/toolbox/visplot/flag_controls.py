@@ -852,8 +852,8 @@ class FlagController:
         if dc:
             hdr["data_column"] = dc
         try:
-            import cubevis
-            hdr["cubevis_version"] = getattr(cubevis, "__version__", None)
+            from .plot_summary import cubevis_version
+            hdr["cubevis_version"] = cubevis_version()
         except Exception:
             pass
         return hdr

@@ -266,7 +266,7 @@ class ObservationMetadata:
     antennas:        tuple[AntennaInfo, ...]
     scans:           tuple[ScanInfo,    ...]
     data_columns:    tuple[str, ...]          # e.g. ("DATA", "CORRECTED")
-    time_range:      tuple[float, float]      # MJD seconds
+    time_range:      tuple[float, float]      # UNIX seconds (UTC)
     freq_range_hz:   tuple[float, float]      # Hz, across all SPWs
     n_baselines:     int
     source_path:     str = ""                 # path to the MS / PS for display
@@ -274,6 +274,8 @@ class ObservationMetadata:
     # for single-dish data and for a backend that does not report them;
     # defaulted so existing constructions of this class keep working.
     baselines:       tuple = ()               # tuple[BaselineInfo, ...]
+    # Typical integration time, seconds (0.0: unknown).  2026-10-12.
+    integration_time: float = 0.0
 
     @classmethod
     def from_backend_metadata(cls, meta: dict, source_path: str = "") -> "ObservationMetadata":
@@ -359,6 +361,7 @@ class ObservationMetadata:
             freq_range_hz=tuple(meta.get("freq_range", (0.0, 0.0))),
             n_baselines=meta.get("n_baselines", 0),
             source_path=source_path,
+            integration_time=float(meta.get("integration_time", 0.0) or 0.0),
             baselines=tuple(
                 BaselineInfo(baseline_id=int(b[0]), ant1=str(b[1]), ant2=str(b[2]))
                 for b in (meta.get("baselines") or [])

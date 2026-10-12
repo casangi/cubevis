@@ -2769,6 +2769,25 @@ class VisibilityPlotter:
                 kernel_name=kernel_name
             )
 
+        # Version check (2026-10-12): a kernel running another cubevis
+        # gave confusing failures before (October: a float64 cast present
+        # locally, missing in the kernel).  Said in the log, the status
+        # line and the plot summary.
+        self._kernel_versions = None
+        self._version_warning = None
+        _remote = next((o for o in (self._context, self._reader)
+                        if type(o).__name__ == "RemoteReductionContext"), None)
+        if _remote is not None:
+            from .plot_summary import software_versions, version_mismatch
+            try:
+                self._kernel_versions = _remote.software_versions()
+                self._version_warning = version_mismatch(
+                    software_versions(), self._kernel_versions)
+            except Exception:
+                log.debug("kernel version check failed", exc_info=True)
+            if self._version_warning:
+                log.warning("visplot: %s", self._version_warning)
+
         fc = getattr(self, "_frame_cache_mb", None)
         if fc is not None and hasattr(self._reader, "set_frame_cache_limit_mb"):
             self._reader.set_frame_cache_limit_mb(float(fc))
@@ -4966,7 +4985,11 @@ for (const dt of other.tools) {
 
     def _integration_half(self) -> float:
         """Half an integration (s), for a single time typed in the Time
-        range box; 0.5 s when the data do not say (a remote reader)."""
+        range box; 0.5 s when the data do not say.  From the metadata
+        (so also with a remote kernel, 2026-10-12), else the local data."""
+        it = float(getattr(self._meta, "integration_time", 0.0) or 0.0)
+        if it > 0:
+            return 0.5 * it
         try:
             for ds in self._reader._iter_visibility_partitions(None):
                 it = ds.coords["time"].attrs.get("integration_time")
@@ -5293,9 +5316,13 @@ cvApplySelectionText(
                             ("UV", self._uvrange_str)):
             if (text or "").strip():
                 narrowed += f"  |  {label}: {_html.escape(text.strip())}"
+        vw = getattr(self, "_version_warning", None)
+        vw_note = (f"<br><span style='color:#f9e2af'>⚠ {_html.escape(vw)}</span>"
+                   if vw else "")
         return (
             f"<b>{fname}</b>  |  Layout: {layout_label}<br>"
             f"{field}  |  {spw}  |  {antenna}{narrowed}  |  Col: {col}{flag_note}"
+            f"{vw_note}"
         )
 
     def _update_status_bar(self) -> None:

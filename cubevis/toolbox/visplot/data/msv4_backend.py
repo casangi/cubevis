@@ -947,6 +947,7 @@ class MSv4Backend(XArrayReader):
         spw_detail:   dict = {}
         pol_labels:   set[str] = set()
         t_min = float("inf");  t_max = float("-inf")
+        int_times: list = []
         f_min = float("inf");  f_max = float("-inf")
         n_baselines  = 0
         baselines:    dict = {}
@@ -1014,6 +1015,15 @@ class MSv4Backend(XArrayReader):
             if "time" in ds.coords:
                 t = ds.coords["time"].values
                 t_min = min(t_min, float(t.min()))
+                # Integration time (2026-10-12): for a single time typed in
+                # the Time range box, also when the plotter is remote.
+                _it = ds.coords["time"].attrs.get("integration_time") if "time" in ds.coords else None
+                _it = _it.get("data") if isinstance(_it, dict) else _it
+                try:
+                    if _it and float(_it) > 0:
+                        int_times.append(float(_it))
+                except (TypeError, ValueError):
+                    pass
                 t_max = max(t_max, float(t.max()))
 
             if "frequency" in ds.coords:
@@ -1038,6 +1048,7 @@ class MSv4Backend(XArrayReader):
                      sorted(spw_detail, key=lambda v: (isinstance(v, str), v))],
             "correlation_labels": sorted(pol_labels),
             "time_range":         (t_min, t_max),
+            "integration_time":   float(np.median(int_times)) if int_times else 0.0,
             "freq_range":         (f_min, f_max),
             "n_baselines":        n_baselines,
             "baselines":          baselines_to_meta(baselines),

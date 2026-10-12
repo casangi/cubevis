@@ -53,19 +53,27 @@ def _git_commit(path: str) -> Optional[str]:
         return None
 
 
+def cubevis_version() -> str:
+    """cubevis's version, with the git commit when run from a checkout:
+    ``"1.0.92.dev37+g5c0d466 (git c89335a1b2)"``.  The one place it is
+    worked out: ``cubevis.__version__`` does not exist, so flag exports,
+    the MS HISTORY row written on commit and the worker's diagnostics all
+    recorded nothing until 2026-10-12."""
+    from importlib import metadata
+    try:
+        ver = metadata.version("cubevis")
+    except Exception:
+        ver = "unknown"
+    commit = _git_commit(os.path.dirname(os.path.abspath(__file__)))
+    return ver + (f" (git {commit})" if commit else "")
+
+
 def software_versions() -> list[tuple[str, str]]:
     """``[(package, version), ...]`` -- cubevis first, with the git commit
     when it runs from a checkout (the installed version string of an
     editable install is only as new as its last ``pip install``)."""
     from importlib import metadata
-    out = []
-    try:
-        ver = metadata.version("cubevis")
-    except Exception:
-        ver = "unknown"
-    here = os.path.dirname(os.path.abspath(__file__))
-    commit = _git_commit(here)
-    out.append(("cubevis", ver + (f"  (git {commit})" if commit else "")))
+    out = [("cubevis", cubevis_version())]
     for pkg in ("bokeh", "numpy", "xarray", "xarray-ms", "xradio", "datashader",
                 "dask", "arcae"):
         try:
@@ -75,6 +83,48 @@ def software_versions() -> list[tuple[str, str]]:
     out.append(("python", platform.python_version()))
     out.append(("platform", platform.platform(terse=True)))
     return out
+
+
+def cubevis_identity(version: str) -> tuple:
+    """``(commit or None, dirty, version)`` from a cubevis version string as
+    ``software_versions`` gives it: ``"1.0.92.dev37+g5c0d466 (git
+    5c0d46683b+dirty)"`` -> ``("5c0d466", True, "1.0.92.dev37+g5c0d466")``.
+    The git commit wins over the one baked into the version at install
+    time (an editable install's version is as old as its last install)."""
+    import re
+    v = (version or "").strip()
+    base = v.split(" (git ")[0].strip()
+    m = re.search(r"\(git ([0-9a-f]{7,})(\+dirty)?\)", v)
+    if m:
+        return m.group(1)[:7], bool(m.group(2)), base
+    m = re.search(r"\+g([0-9a-f]{7,})", base)
+    return (m.group(1)[:7] if m else None), False, base
+
+
+def version_mismatch(local: list, remote: list) -> Optional[str]:
+    """A one-line warning when the local and kernel cubevis differ, else
+    ``None``.  Same commit with local changes on either side is reported
+    too (``+dirty``): those changes may not be on both sides."""
+    lv = dict(local).get("cubevis", "")
+    rv = dict(remote).get("cubevis", "")
+    if not rv or not lv or lv == rv:
+        # Identical (the same installation, or the same commit and state):
+        # nothing to say -- including a shared checkout with changes.
+        return None
+    lc, ld, lb = cubevis_identity(lv)
+    rc, rd, rb = cubevis_identity(rv)
+    if rv.startswith("unknown"):
+        return (f"kernel cubevis is {rv}; local is {lv}. Update cubevis "
+                "where the kernel runs")
+    same = (lc == rc) if (lc and rc) else (lb == rb)
+    if not same:
+        return (f"kernel cubevis {rv} differs from local {lv}; results may "
+                "differ. Install the same version where the kernel runs")
+    if ld or rd:
+        return (f"cubevis {lc} has uncommitted changes "
+                f"({'local' if ld else ''}{' and ' if ld and rd else ''}"
+                f"{'kernel' if rd else ''}); they may not match")
+    return None
 
 
 # ----------------------------------------------------------------------
@@ -202,9 +252,14 @@ def reproducing_call(plotter) -> str:
     args.append(("layout", getattr(plotter, "_layout", "side")))
     if getattr(plotter, "_time_labels", "utc") != "utc":
         args.append(("time_labels", plotter._time_labels))
-    ctx = getattr(plotter, "_context", None)
-    if ctx is not None and type(ctx).__name__.startswith("Remote"):
+    ctx = next((o for o in (getattr(plotter, "_context", None),
+                            getattr(plotter, "_reader", None))
+                if type(o).__name__.startswith("Remote")), None)
+    if ctx is not None:
         args.append(("backend", "remote"))
+        kn = getattr(ctx, "_kernel_name", None)
+        if kn:
+            args.append(("kernel_name", kn))
     order = list(getattr(plotter, "_slot_display_order", [0, 1]))
     slots = [plotter._slots[i] for i in order]
     panels = [_slot_settings(plotter, s) for s in slots]
@@ -262,7 +317,10 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
     sections: list[tuple[str, list]] = []
 
     # --- data set -------------------------------------------------------
-    ctx = getattr(plotter, "_context", None)
+    ctx = next((o for o in (getattr(plotter, "_context", None),
+                            getattr(plotter, "_reader", None))
+                if type(o).__name__.startswith("Remote")),
+               getattr(plotter, "_context", None))
     ctx_name = type(ctx).__name__ if ctx is not None else "local"
     rows = [
         ("Path", os.path.abspath(plotter._source_path) if plotter._source_path else "—"),
@@ -398,6 +456,13 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
         sections.append(("Flags", rows))
 
     sections.append(("Software", software_versions()))
+    kv = getattr(plotter, "_kernel_versions", None)
+    if kv:
+        rows = list(kv)
+        warn = getattr(plotter, "_version_warning", None)
+        if warn:
+            rows.insert(0, ("Version check", "⚠ " + warn))
+        sections.append(("Software on the kernel", rows))
 
     not_in_call = [
         "the zoom / pan shown (see Plot, above)",

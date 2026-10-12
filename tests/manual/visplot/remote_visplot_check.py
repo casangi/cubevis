@@ -301,19 +301,113 @@ def user_filter():
         raise AssertionError(resp["notify_text"])
 
 
-@step("export flagdata + JSONL, pending-flag report")
+@step("export JSONL, pending-flag report")
 def export():
+    # The flagdata command export was removed (flag_export); JSON Lines is
+    # the export.  Each record carries its own id and creation time, which
+    # differ between the two plotters by construction: compared without
+    # them (2026-10-12; this step still compared flagdata text before).
+    import json
     tmp = tempfile.mkdtemp(prefix="visplot_remote_check_")
+    volatile = {"delta_id", "created", "exported"}
 
     def ex(vp):
         tag = "remote" if vp is REMOTE else "local"
-        fd = open(vp.export_flags(os.path.join(tmp, f"{tag}.flagcmd.txt"))).read().splitlines()[1:]
-        vp.export_flags(os.path.join(tmp, f"{tag}.jsonl"), fmt="jsonl")
+        path = vp.export_flags(os.path.join(tmp, f"{tag}.jsonl"), fmt="jsonl")
+        recs = []
+        for line in open(path).read().splitlines():
+            if not line.strip():
+                continue
+            d = json.loads(line)
+            if isinstance(d, dict):
+                d = {k: v for k, v in d.items() if k not in volatile}
+            recs.append(json.dumps(d, sort_keys=True))
         rep = vp.flags.report_html()
-        return fd, rep.count("<h3>#")
+        return recs, rep.count("<h3>#")
     a, b = both(ex)
-    same(a, b, "flagdata lines and report sections")
-    return f"{len(b[0])} flagdata line(s), {b[1]} report section(s); files in {tmp}"
+    same(a, b, "JSONL records and report sections")
+    return f"{len(b[0])} JSONL record(s), {b[1]} report section(s); files in {tmp}"
+
+
+# ---- H8 additions (2026-10-12): the features added for HRS testing ---- #
+
+@step("version check: kernel cubevis against local")
+def version_check():
+    kv = dict(REMOTE._kernel_versions or [])
+    if not kv:
+        raise AssertionError("no versions from the kernel")
+    note = f"kernel cubevis {kv.get('cubevis')}"
+    if REMOTE._version_warning:
+        note += f"  ⚠ {REMOTE._version_warning}"
+    return note
+
+
+@step("selection in the worker: UV range, autocorrelations, scan, time range")
+def selection_fields():
+    import dataclasses as dc
+    from cubevis.toolbox.visplot.axes import Axis
+    base = REMOTE._selection
+    meta = REMOTE._meta
+    t0, t1 = REMOTE._slots[0].raster._y_range if REMOTE._slots[0].raster._y_dim == Axis.TIME \
+        else meta.time_range
+    scans = [s.name for s in meta.scans][:1]
+    cases = {"uv <300m": dc.replace(base, uv_range=[[None, 300.0, "m"]]),
+             "uv >50klambda": dc.replace(base, uv_range=[[50e3, None, "lambda"]]),
+             "autocorr only": dc.replace(base, autocorr="only"),
+             "first scan": dc.replace(base, scan=scans or None),
+             "first half": dc.replace(base, time_range=(t0, t0 + 0.5 * (t1 - t0)))}
+    out = []
+    for name, sel in cases.items():
+        def q(vp):
+            g = vp._reader.query_raster(Axis.BASELINE, Axis.TIME, Axis.AMPLITUDE, sel,
+                                        polarization=vp._slots[0].raster._polarization)[0]
+            return np.asarray(g, float)
+        a, b = both(q)
+        same(a, b, name)
+        out.append(f"{name}: {int(np.isfinite(b).sum())} cells")
+    return "; ".join(out)
+
+
+@step("rows with data before Plot (stepping), as the Data section changes")
+def rows_refresh():
+    msgs = ({}, {"uvrange": "<100m"}, {"autocorr": "only"}, {"scan": "!"})
+    def r(vp):
+        return [run(vp._handle_rows(dict(m))) for m in msgs]
+    a, b = both(r)
+    same(a, b, "has_data flags")
+    return ", ".join(str(sum(x.get("bl_has_data") or [])) if x.get("status") == "ok"
+                     else x.get("status") for x in b)
+
+
+@step("plot summary page and reproducing call")
+def summary():
+    import re
+    strip = lambda c: "\n".join(l for l in c.splitlines()
+                                if not re.match(r"\s+(ms|ps|backend|kernel_name)=", l))
+    a, b = both(lambda vp: vp.reproducing_call())
+    if a is not None:
+        same(strip(a), strip(b), "reproducing call")
+    if "kernel_name=" not in b:
+        raise AssertionError("the remote call does not name the kernel")
+    html = REMOTE.describe("A", html=True)
+    if "Software on the kernel" not in html:
+        raise AssertionError("no kernel software section")
+    return f"{len(html)} bytes"
+
+
+@step("time labels: UTC and elapsed")
+def time_labels():
+    def lab(vp):
+        out = []
+        for mode in ("elapsed", "utc"):
+            vp.set_time_labels(mode)
+            for o in panels(vp):
+                spec = o._panel_spec()
+                out.append((spec.axis_label("x"), spec.axis_label("y")))
+        return out
+    a, b = both(lab)
+    same(a, b, "axis labels")
+    return b[-2][1] if b else ""
 
 
 @step("close")
@@ -353,7 +447,8 @@ def main():
     open_local()
     for fn in (metadata, first_render, pan_zoom, hover, infotool, axes, flag_raster,
                flag_scatter, flag_zscore, rerender_pending, undo_redo, colour,
-               user_filter, export):
+               user_filter, export, version_check, selection_fields, rows_refresh,
+               summary, time_labels):
         fn()
     close()
     rc = summarize(t0)

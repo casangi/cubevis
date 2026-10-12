@@ -847,6 +847,14 @@ _SUMMARY_ICON_DATA_URI = (
 # Opens the tab inside the click (pop-up blockers allow window.open only
 # from the gesture itself), asks Python for the page, fills the tab.
 _SUMMARY_JS = r"""
+// Every figure is laid out in both the Side by Side and the Over / Under
+// containers, so each toolbar tool has two views, and one click runs a
+// CustomAction's callback once per view.  The second run here opened a
+// second tab -- which the browser blocks, having spent the click on the
+// first (seen as "Pop-ups blocked: about:blank" twice, 2026-10-11).
+const now = performance.now();
+if (cb_obj.__cvLastRun != null && now - cb_obj.__cvLastRun < 1000) return;
+cb_obj.__cvLastRun = now;
 let w = null;
 try { w = window.open("", "_blank"); } catch (e) { console.warn("[visplot] window.open failed", e); }
 if (w) w.document.write("<html><body style='font-family:sans-serif'>" +

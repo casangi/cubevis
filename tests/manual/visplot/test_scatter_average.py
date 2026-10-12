@@ -471,3 +471,34 @@ console.log(JSON.stringify(out));
         assert res.returncode == 0, res.stderr
         got = json.loads(res.stdout)
         assert got == {"same": [3, 7], "hidden": [0, 1], "other": [0, 1], "from_hidden": [3]}
+
+
+def test_group_keys_from_category_codes_match_strings():
+    """Grouping by category codes (2026-10-11, for speed) groups exactly
+    as grouping by the names' strings did."""
+    import numpy as np
+    import pandas as pd
+    from cubevis.toolbox.visplot.data._scatter_average import (
+        ScatterAverage, group_rows)
+    rng = np.random.default_rng(3)
+    n = 5000
+    ants = np.array(["BR", "FD", "HN", "KP"])
+    a1 = ants[rng.integers(0, 4, n)]
+    a2 = ants[rng.integers(0, 4, n)]
+    base = pd.DataFrame({
+        "baseline_antenna1_name": a1, "baseline_antenna2_name": a2,
+        "scan_name": rng.choice(["3", "7", "12"], n),
+        "field_name": rng.choice(["A", "B"], n),
+        "__spw": rng.integers(0, 2, n), "__chan": rng.integers(0, 16, n),
+        "time": rng.choice(np.arange(20.0), n), "baseline_id": rng.integers(0, 6, n)})
+    cat = base.copy()
+    for c in ("baseline_antenna1_name", "baseline_antenna2_name",
+              "scan_name", "field_name"):
+        cat[c] = cat[c].astype("category")
+    for spec in (ScatterAverage("scan", "off", "vector"),
+                 ScatterAverage("off", "all", "vector"),
+                 ScatterAverage("scan", "4", "scalar")):
+        g1, g2 = group_rows(base, spec), group_rows(cat, spec)
+        # Same partition of the rows (labels may differ).
+        assert pd.crosstab(g1, g2).astype(bool).sum(axis=1).eq(1).all()
+        assert len(np.unique(g1)) == len(np.unique(g2))

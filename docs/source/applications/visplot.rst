@@ -319,8 +319,6 @@ Toolbar
 * **Reload ↺** — force re-read from disk (equivalent in spirit to
   ``plotms``'s Reload checkbox, used when the MS has changed on disk)
 * **⟨ Sidebar** — collapse/expand the control sidebar
-* Display mode — Both / Raster only / Scatter only
-* Layout — Side by Side / Over Under
 * Presets — one button each; a preset sets both panels and plots:
 
   * *vplot* — Baseline vs Time amplitude raster, Amplitude vs Time
@@ -367,6 +365,9 @@ Toolbar
 * Pan / Zoom / Reset (shared across both panels when both are shown).
   Wheel (scroll) zoom is off until its toolbar button is clicked, so a
   trackpad or mouse-wheel scroll over a plot scrolls the page
+* Describe this plot (each figure's toolbar, the page icon beside the
+  gear) — opens a page describing that plot and the ``visplot(...)``
+  call that reproduces it; see *Reporting a problem*
 * Flag / Unflag boxes (each figure's toolbar) — draw a box to propose
   flags; the Flagging section of the configuration panel holds the
   filters, reaches, undo / redo, the report and writing to the MS
@@ -374,7 +375,11 @@ Toolbar
 Sidebar
 ```````
 
-* **Data selection** — field, SPW, correlation, data column
+* **Data selection** — data column, field, SPW, correlation,
+  autocorrelations (*Exclude* by default), scan, antennas and baselines,
+  time range, UV range
+* **Panels** — *Pin layout*, *Time labels* (UTC or elapsed), and each
+  panel's configuration tab (opened with its gear)
 * **Raster axis controls** — X/Y axis choice, quantity and averaging
   (vector or scalar) for the raster panel. Besides amplitude, phase,
   real, imaginary, flag and Z-Score, the quantity can be *Phase RMS*

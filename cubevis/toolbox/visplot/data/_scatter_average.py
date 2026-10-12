@@ -142,13 +142,30 @@ def _codes(values) -> np.ndarray:
     return pd.factorize(np.asarray(values), sort=False)[0].astype(np.int64)
 
 
+def _key(series) -> np.ndarray:
+    """Integer group key per row of *series*: the category codes of a
+    categorical column (no per-row strings), else factorized values.
+
+    ``astype(str)`` on these name columns built a Python string per row:
+    11 s of a 47 s Spectrum on the VLBA test data (2026-10-11)."""
+    if isinstance(series.dtype, pd.CategoricalDtype):
+        return series.cat.codes.to_numpy().astype(np.int64)
+    return _codes(series.to_numpy())
+
+
+def _pair(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """One key for two non-negative-or--1 integer keys."""
+    a = a + 1
+    b = b + 1
+    return a * (int(b.max(initial=0)) + 1) + b
+
+
 def _time_segments(df) -> np.ndarray:
     """A scan (or, without scan information, gap-free run) id per row."""
     if "scan_name" in df.columns:
-        seg = _codes(df["scan_name"].astype(str).to_numpy())
+        seg = _key(df["scan_name"])
         if "field_name" in df.columns:
-            seg = seg * (int(_codes(df["field_name"].astype(str).to_numpy()).max()) + 1) \
-                + _codes(df["field_name"].astype(str).to_numpy())
+            seg = _pair(seg, _key(df["field_name"]))
         return seg
     t = df["time"].to_numpy(np.float64)
     ut = np.unique(t)
@@ -164,14 +181,14 @@ def group_rows(df: pd.DataFrame, spec: ScatterAverage) -> np.ndarray:
     """The averaged point (0..n-1) each row of *df* belongs to."""
     if len(df) == 0:
         return np.zeros(0, np.int64)
-    keys = [_codes(df["baseline_id"].to_numpy()) if "baseline_id" in df.columns
-            else _codes(df["baseline_name"].astype(str).to_numpy()),
+    keys = [_key(df["baseline_id"]) if "baseline_id" in df.columns
+            else _key(df["baseline_name"]),
             df["__spw"].to_numpy().astype(np.int64)]
     if "baseline_antenna1_name" in df.columns:
         # baseline_id is per partition: two partitions may number the
         # same antenna pair differently, or different pairs alike.
-        keys[0] = _codes(df["baseline_antenna1_name"].astype(str).to_numpy()
-                         + "&" + df["baseline_antenna2_name"].astype(str).to_numpy())
+        keys[0] = _pair(_key(df["baseline_antenna1_name"]),
+                        _key(df["baseline_antenna2_name"]))
     t = df["time"].to_numpy(np.float64)
     if spec.time == "off":
         keys.append(_codes(t))

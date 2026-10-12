@@ -215,3 +215,26 @@ Unchanged in both: four files killed for memory
 in `test_zscore_colorization`, five files collecting nothing, and in this
 sandbox `test_reconnection` (10 failed) and three `test_remote_*`
 collection errors, which fail the same way on the pristine tree.
+
+## 10. Follow-up after Darrell's first look (base `bae9852`)
+
+- Summary page title: the tab reads `tl016b_sub.ms · panel A` (the tab
+  shows only the start of a title, so the data set leads); the heading
+  `visplot — tl016b_sub.ms, panel A (raster)`.
+- **Blocked pop-ups** ("about:blank" twice, Darrell's Chrome): one click
+  on Describe ran its callback twice. Every figure is laid out in both
+  the Side by Side and Over / Under containers, so each toolbar tool has
+  two views, and a `CustomAction` runs once per view; the first run opens
+  the tab and spends the click, the second is blocked. The summary
+  callback now ignores a repeat within 1 s. Found with
+  `POPUPS=block` (new in `drive.py`: Chromium's pop-up blocker on, which
+  Playwright otherwise disables). The gear also runs twice; harmless.
+- **Spectrum on VLBA: 47 s -> about 18 s.** Grouping for scatter
+  averaging turned the categorical name columns into a Python string per
+  row (`astype(str)`, 11 s); it now uses the category codes
+  (`_scatter_average._key`, test in `test_scatter_average.py`). Most of
+  the rest is reading the raw frame twice (Amplitude and Phase panels,
+  231 MiB frames against an 803 MiB cache); sharing it between the two
+  panels is a C-list item.
+- GUI layout: proposal written up, deferred until after testing
+  (`visplot_layout_proposal.md`).

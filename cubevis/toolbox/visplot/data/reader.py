@@ -1220,6 +1220,9 @@ METADATA_KEYS = frozenset({
     "baselines",
     "data_columns",
     "spws",
+    # Median integration (s), 2026-10-12: the half-integration around a
+    # single time, read through the metadata so a remote kernel gives it.
+    "integration_time",
 })
 """Exactly the keys every ``metadata()`` implementation must return.
 

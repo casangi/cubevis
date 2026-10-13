@@ -348,3 +348,22 @@ panel and written into `panels=[dict(..., height=...)]` by the
 reproducing call; width keeps stretching to the window. A drag handle
 between panels would need a cubevisjs model; better with the layout
 refactor after testing.
+
+## 14. Darrell's full regression run (2026-10-12): 27 failures, all explained
+
+- **22 in `test_scatter_average.py` / `test_scatter_presets.py`**
+  (`'NoneType' object is not subscriptable`): test order, not code.
+  `test_frame_columns.py`'s fixture set the *process-wide* frame cache to
+  0 (with `MS=` set) and never restored it, so every later module ran
+  without a frame cache and `_query_columns_cached_raw` returned None.
+  Passes alone, fails after it; reproduced with the pair (14 failures),
+  fixed by restoring the budget in the fixture. Likely present since the
+  scatter averaging tests (H6, 10-10).
+- **2 metadata contract** (`test_msv2/msv4_backend`): `integration_time`
+  (section 12) was not in `reader.METADATA_KEYS`. Added.
+- **3 in `test_info_block_integration.py`**: stale tests. The gear-tab pin
+  (H7, 10-11) put the close button in a small row with the pin; the X
+  pan/zoom link (10-09) added a second `change:end` callback. The tests
+  now look into the nested row and pick the busy-cursor callback. This
+  module's fixture plots all fields and runs out of memory in the
+  sandbox (8 GB), so it was run against a one-field plotter here.

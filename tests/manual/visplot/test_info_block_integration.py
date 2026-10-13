@@ -310,7 +310,7 @@ def test_close_button_is_on_the_same_row_as_the_kind_switch(plotter):
     for sid in ("A", "B"):
         tp = plotter._panel_tabpanels[sid]
         top_row = tp.child.children[0]
-        kids = [_unwrap(c) for c in top_row.children]
+        kids = _row_widgets(top_row)
         assert any(isinstance(k, RadioButtonGroup) for k in kids)
         assert any(isinstance(k, Button) and k.label == "\u2715" for k in kids)
         assert top_row.styles.get("justify-content") == "space-between"
@@ -327,8 +327,7 @@ def test_close_button_uses_the_compact_icon_stylesheet(plotter):
     for sid in ("A", "B"):
         tp = plotter._panel_tabpanels[sid]
         top_row = tp.child.children[0]
-        for c in top_row.children:
-            w = _unwrap(c)
+        for w in _row_widgets(top_row):
             if isinstance(w, Button) and w.label == "\u2715":
                 assert plotter._icon_btn_css in w.stylesheets
                 assert w.width == 24 and w.height == 24
@@ -356,6 +355,18 @@ def _unwrap(tip_or_widget):
     """A Tip wraps its target as ``.child``; return that if so, else the
     widget itself."""
     return getattr(tip_or_widget, "child", None) or tip_or_widget
+
+
+def _row_widgets(r):
+    """The widgets of a row, looking one level into nested rows: since the
+    gear-tab pin (H7, 2026-10-11) the close button sits in a small row with
+    the pin, at the right end of the top row."""
+    out = []
+    for c in r.children:
+        w = _unwrap(c)
+        kids = getattr(w, "children", None)
+        out.extend(_unwrap(k) for k in kids) if kids else out.append(w)
+    return out
 
 
 def test_sidebar_has_no_leftover_height_override(plotter):
@@ -546,7 +557,10 @@ def test_pan_zoom_rerender_shows_the_busy_cursor(plotter):
     for slot in plotter._slots:
         for kind in ("raster", "scatter"):
             panel = getattr(slot, kind)
-            cbs = panel.figure.x_range.js_property_callbacks.get("change:end", [])
+            # Two since 2026-10-09: the re-render trigger, and the X
+            # pan/zoom link between panels (_X_SYNC_JS).
+            cbs = [c for c in panel.figure.x_range.js_property_callbacks.get("change:end", [])
+                   if "__cvSetBusy" in c.code]
             assert len(cbs) == 1
             code = cbs[0].code
             assert "window.__cvSetBusy = window.__cvSetBusy ||" in code

@@ -60,8 +60,14 @@ def backend():
     from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
     b = MSv2Backend(_ms_path())
     b.open()
-    b.set_frame_cache_limit_mb(0)             # these tests exercise the read itself
+    # These tests exercise the read itself.  The cache is process-wide:
+    # put its budget back afterwards, or every later module runs with no
+    # frame cache (2026-10-12: test_scatter_average and
+    # test_scatter_presets failed after this module in a full run).
+    before = b.frame_cache_stats()["max_bytes"]
+    b.set_frame_cache_limit_mb(0)
     yield b
+    b.set_frame_cache_limit_mb(before / 2 ** 20)
     b.close()
 
 

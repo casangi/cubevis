@@ -371,8 +371,8 @@ Toolbar
 * Layout — *One*, *Side by Side*, *Over / Under*.  Each preset switches
   to the arrangement that suits it unless *Pin layout* (configuration
   panel, section *Panels*; ``pin_layout=True``) is ticked
-* Height — the height of each row of plots: the layout's default, *fit
-  window*, or a size in pixels (``row_height``). Applies at once and
+* Height — the height of each row of plots: *default* (the layout's),
+  *fit* (share the window), or a size in pixels (``row_height``). Applies at once and
   stays when the layout or preset changes
 * Gear (each panel's toolbar) — opens that panel's configuration tab
   in the sidebar; changes there apply when *Plot ▶* is pressed. A

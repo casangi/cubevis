@@ -235,7 +235,7 @@ _STATIC_HINTS = {
     "autocorr": "<b>Autocorrelations</b> \u2014 baselines from an antenna to itself  | <b>Exclude</b> (default): cross-correlations only. Autocorrelations can be hundreds of times larger (VLBI data before amplitude calibration) and flatten every plot of all baselines  | <b>Include</b>: both; the Ant\u00d7Ant matrix then has its diagonal  | <b>Only</b>: autocorrelations alone \u2014 the bandpass shape and interference at each station  | A baseline ticked by name (e.g. BR&amp;BR) is plotted whatever is chosen here  | Applied by Plot",
     "time_labels": "<b>Time labels</b> \u2014 how every time axis and the cursor readout give time  | <b>UTC</b>: time of day, with the date in the axis label; when the data cross midnight the ticks read day/hh:mm:ss from the first day, as in AIPS. Matches observing logs, <tt>listobs</tt> and the Time range box  | <b>Elapsed</b>: minutes and seconds from the first sample shown  | Changes the labels only; nothing is read again",
     "tb_export": "<b>Export PNG</b> \u2014 write the current view (both panels, titles, axes, colour bars) to a PNG file where Python is running  | The path is reported in the status line",
-    "tb_row_height": "<b>Row height</b> \u2014 the height of each row of plots, in every layout  | <i>Layout default</i>: 550 px for One and Side by Side, 280 px for Over / Under  | <i>Fit</i>: the rows share the window's height, after the readouts and colour bars below each plot (never less than 250 px; the plot area scrolls instead)  | Takes effect at once, and stays when the layout changes  | <code>row_height=</code> sets it from Python (a number, \"fit\", or one height per row)",
+    "tb_row_height": "<b>Row height</b> \u2014 the height of each row of plots, in every layout  | <i>default</i>: 550 px for One and Side by Side, 280 px for Over / Under  | <i>fit</i>: the rows share the window's height, after the readouts and colour bars below each plot (never less than 250 px; the plot area scrolls instead)  | Takes effect at once, and stays when the layout changes  | <code>row_height=</code> sets it from Python (a number, \"fit\", or one height per row)",
     "tb_theme": "<b>Dark / Light</b> \u2014 switch the background  | The colormaps change with it so faint points stay visible; exported PNGs follow",
 }
 
@@ -2802,7 +2802,7 @@ class VisibilityPlotter:
     def _row_height_options(self) -> list:
         """The Row height menu: default, Fit, the usual sizes, and the
         constructor's value when it is not one of them."""
-        opts = [("default", "Height: layout default"), ("fit", "Height: fit window")]
+        opts = [("default", "Height: default"), ("fit", "Height: fit")]
         opts += [(str(v), f"Height: {v} px") for v in self._ROW_HEIGHT_CHOICES]
         cur = self._row_height_value()
         if cur not in [o[0] for o in opts]:

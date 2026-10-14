@@ -393,8 +393,8 @@ gives ~220 px rows; Fit has a 250 px floor and the plot area scrolls.
   measured per panel block, re-fitted on window resize and every second
   as colour bars change). Layout buttons, both preset kinds and Swap call
   it (the old fixed sizes stay as the fallback). *Height* menu
-  (`_row_height_sel`, toolbar beside the layout buttons): layout default,
-  fit window, 200-900 px, plus the constructor's value if not listed
+  (`_row_height_sel`, toolbar beside the layout buttons): "Height:
+  default", "Height: fit", 200-900 px, plus the constructor's value if not listed
   (`rows:250,400` for a list).
 - Output: `plotfile=` cells are `column_width` x `row_height` (data
   area); `export_png` takes `row_heights` / `col_widths` for rows /

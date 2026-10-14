@@ -409,3 +409,27 @@ gives ~220 px rows; Fit has a 250 px floor and the plot area scrolls.
   menu 400 -> layout switches keep 400; presets keep 350; `[250, 400]`
   per row, Swap moves them with the positions; fit tracks the window
   (820 px area: 250 floor; 1120 px: 370).
+
+## 16. Wide plots: no stray scrolling, "more to the right" (base `d81e821`, 2026-10-14)
+
+Checked first: with plots wider than the window (`column_width=900`, Side
+by Side, 1400 px window) the page does not scroll sideways; the plot
+area does, inside itself, and the status bar keeps the window's width at
+the bottom with the configuration panel pinned left (the stretch_both
+layout of 2026-09). Two fixes:
+
+- **Stray overflow with default sizes.** The page was 2 px too wide (the
+  toolbar's last button, its border past the window edge) and the plot
+  area 5 px (each readout / colour-bar strip had `width: 100%` plus
+  Bokeh's default 5 px margin). Strips are now `calc(100% - 10px)`
+  (keeping the 2026-09 guard against a colour bar narrower than its
+  plot); the toolbar row has 6 px right padding. Page and plot area are
+  exactly the window's width at 900, 1100, 1280 and 1400 px, in all
+  three layouts.
+- **"more to the right ▸" chip** in `_MORE_BELOW_JS`, beside the "more
+  below" one: shown while the plot area has more than 8 px hidden to the
+  right, at the area's right edge; a click scrolls to the end. Needed
+  because on a Mac the scrollbar is hidden until used.
+
+Tests: `test_panel_sizes.py` (the cue, strip widths, toolbar padding);
+`test_info_block_integration.py` updated for the strip width.

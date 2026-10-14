@@ -139,7 +139,10 @@ def test_each_info_item_has_its_own_small_fixed_height(plotter):
                 # explicit width + border-box, in case sizing_mode alone
                 # wasn't reliably overriding a shrink-to-fit interaction
                 # with overflow-y on a flex item.
-                assert div.styles["width"] == "100%"
+                # Less the 5 px margins on each side (2026-10-14), or the
+                # strip was 5 px wider than its panel.
+                assert div.styles["width"] == "calc(100% - 10px)"
+                assert div.margin in (5, (5, 5, 5, 5), None)
                 assert div.styles["box-sizing"] == "border-box"
 
 

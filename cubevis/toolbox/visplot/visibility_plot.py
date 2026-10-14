@@ -1460,6 +1460,8 @@ class VisibilityPlot(Model):
             "width: 100% !important; box-sizing: border-box !important; }"
         ))
 
+        _STRIP_MARGIN = 5          # Bokeh's default margin for a Div
+
         def _item_style(extra):
             return {
                 "font-size":   "11px",
@@ -1471,7 +1473,12 @@ class VisibilityPlot(Model):
                 # dark in light mode.
                 "background":  "var(--cv-info-bg, #1e1e2e)",
                 "overflow-y":  "auto",
-                "width":       "100%",
+                # The full width less Bokeh's default 5 px margin on each
+                # side (2026-10-14).  A plain 100% (the 2026-09 guard
+                # against a colour bar narrower than its plot) made each
+                # strip 5 px wider than its panel, so the plot area always
+                # had a few pixels to scroll sideways.
+                "width":       f"calc(100% - {2 * _STRIP_MARGIN}px)",
                 "box-sizing":  "border-box",
                 **extra,
             }

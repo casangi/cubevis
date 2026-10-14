@@ -207,3 +207,37 @@ def test_gui_default_over_is_280():
         assert p._row_height_sel.value == "default"
     finally:
         p.close()
+
+
+# ---------------------------------------------------------------------- #
+# Plots wider than the window (2026-10-14)                                 #
+# ---------------------------------------------------------------------- #
+
+def test_more_to_the_right_cue():
+    """The plot area scrolls sideways when the plots are wider than it
+    (column_width); a chip says so, as "more below" does for height."""
+    from cubevis.toolbox.visplot.visibility_plotter import _MORE_BELOW_JS
+    assert "more to the right" in _MORE_BELOW_JS
+    assert "area.scrollWidth - area.clientWidth - area.scrollLeft" in _MORE_BELOW_JS
+
+
+@needs_ms
+def test_nothing_is_wider_than_its_place():
+    """No stray horizontal scrolling: the readout / colour-bar strips are
+    their panel's width less their margins, and the toolbar's last button
+    stays inside the window (checked in a browser: page and plot area
+    exactly the window's width at 900-1400 px)."""
+    from cubevis import exe
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    p = VisibilityPlotter(ms=MS, field="3c279", layout="side")
+    try:
+        p(exe.Context(exe.Mode.SYNC), uuid.uuid4())
+        for s in p._slots:
+            for d in (s.raster._info_div, s.scatter._colorbar_content):
+                assert d.styles["width"] == "calc(100% - 10px)"
+        from bokeh.models import Row
+        toolbar = next(m for m in p._app_context.ui.references()
+                       if isinstance(m, Row) and (m.styles or {}).get("flex-wrap") == "wrap")
+        assert toolbar.styles.get("padding-right")
+    finally:
+        p.close()

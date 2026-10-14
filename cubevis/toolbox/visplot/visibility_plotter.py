@@ -680,7 +680,27 @@ _MORE_BELOW_JS = r"""
     }
     return null;
   }
-  let area = null, chip = null;
+  let area = null, chip = null, chipR = null;
+  // "More to the right" (2026-10-14): plots wider than the window
+  // (column_width) scroll sideways inside the plot area, and on a Mac the
+  // scrollbar stays hidden until used, so the right-hand plot just looked
+  // cut off.  Same style, pinned to the area's right edge.
+  function ensureChipR() {
+    if (chipR) return chipR;
+    chipR = document.createElement('div');
+    chipR.textContent = 'more to the right \u25B8';
+    Object.assign(chipR.style, {
+      position: 'fixed', zIndex: 50, padding: '2px 12px', borderRadius: '10px',
+      font: '12px system-ui, sans-serif', cursor: 'pointer', display: 'none',
+      background: 'rgba(137,180,250,0.92)', color: '#11111b',
+      boxShadow: '0 1px 6px rgba(0,0,0,0.45)', transform: 'translateY(-50%)'});
+    chipR.title = 'The plots are wider than the window: click to scroll right';
+    chipR.addEventListener('click', () => {
+      if (area) area.scrollTo({left: area.scrollWidth, behavior: 'smooth'});
+    });
+    document.body.appendChild(chipR);
+    return chipR;
+  }
   function ensureChip() {
     if (chip) return chip;
     chip = document.createElement('div');
@@ -712,6 +732,16 @@ _MORE_BELOW_JS = r"""
       c.style.display = 'block';
     } else {
       c.style.display = 'none';
+    }
+    const cr = ensureChipR();
+    const hiddenR = area.scrollWidth - area.clientWidth - area.scrollLeft;
+    if (hiddenR > 8 && r.width > 0) {
+      cr.style.left = '';
+      cr.style.right = (window.innerWidth - (r.left + area.clientWidth) + 8) + 'px';
+      cr.style.top = (r.top + Math.min(r.height, area.clientHeight) / 2) + 'px';
+      cr.style.display = 'block';
+    } else {
+      cr.style.display = 'none';
     }
   }
   window.addEventListener('resize', update);
@@ -9933,8 +9963,12 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             self._hover(dark_btn, "tb_theme"),
             # A window too narrow for the whole row (a laptop, with the
             # Spectrum / Time series presets added, 2026-10-09) wraps it
-            # onto a second line instead of cutting off its end.
-            styles={"flex-wrap": "wrap"},
+            # onto a second line instead of cutting off its end.  The
+            # padding keeps the last button of a line inside the window:
+            # its own border sat 1-2 px past the edge, which gave the
+            # whole page a horizontal scrollbar (2026-10-14).
+            styles={"flex-wrap": "wrap", "padding-right": "6px",
+                    "box-sizing": "border-box"},
         )
 
     # ---------------------------------------------------------------------- #

@@ -866,6 +866,8 @@ def export_png(
     theme: Optional[str] = None,
     dpi: int = 100,
     cell_size: Optional[tuple[int, int]] = None,
+    row_heights: Optional[Sequence[int]] = None,
+    col_widths: Optional[Sequence[int]] = None,
     legend: str = "auto",
     colorbar: str = "auto",
     colorbar_side: str = "right",
@@ -908,6 +910,10 @@ def export_png(
         first drawable panel's image shape.  Overriding does NOT rescale
         the image: it is drawn into whatever box is provided, so a size
         other than the panel's own breaks 1:1.
+    row_heights, col_widths : sequence of int
+        Data-area height of each row and width of each column, in pixels,
+        when they differ (``row_height=[250, 400]``, 2026-10-13).  Each
+        defaults to the cell size; a short list repeats its last value.
     legend : {"auto", "figure", "panel", "none"}
         Where to put the band legend.  ``"auto"`` uses one shared figure
         legend when every populated cell carries the same bands — the
@@ -971,6 +977,13 @@ def export_png(
                      None)
         ch, cw = (first.image.shape if first is not None else (480, 640))
     cw, ch = int(cw), int(ch)
+    # Per-row heights / per-column widths (2026-10-13); uniform unless given.
+    def _spread(vals, n, dflt):
+        vals = [int(v) for v in vals] if vals else [dflt]
+        return [vals[min(i, len(vals) - 1)] for i in range(n)]
+    rh = _spread(row_heights, nrows, ch)
+    cwl = _spread(col_widths, ncols, cw)
+    cw, ch = min(cwl), max(rh)        # for the few places that need one
 
     px = dpi / 72.0                       # points -> device pixels
     legend_mode = _resolve_legend(legend, cells)
@@ -987,7 +1000,7 @@ def export_png(
     # the right in a narrow (Over / Under) export.  Broken between its
     # " | " fields, to the width of the grid of axes.
     footer = _plain_text(footer) if footer else footer
-    footer_lines = (_wrap_footer(footer, (ncols * cw) / px
+    footer_lines = (_wrap_footer(footer, sum(cwl) / px
                                  + (ncols - 1) * _WSPACE_PT + _MARGIN_L_PT)
                     if footer else [])
     m_b   = (_MARGIN_B_PT + (_FOOTER_PT + _FOOTER_LINE_PT * (len(footer_lines) - 1)
@@ -1011,7 +1024,7 @@ def export_png(
     # axes.  Handed to _legend_rows here and to the draw helpers later, so the
     # rows reserved and the columns drawn can never disagree.
     legend_avail_pt = (cw / px if legend_mode == "panel"
-                       else (ncols * cw + (ncols - 1) * wsp) / px)
+                       else (sum(cwl) + (ncols - 1) * wsp) / px)
     if legend_mode in ("panel", "figure"):
         legend_rows = max(
             (_legend_rows(p.spec.bands, avail_pt=legend_avail_pt, mode=legend_mode)
@@ -1059,14 +1072,14 @@ def export_png(
     else:
         cb_fig_w = cb_fig_h = 0.0
 
-    block  = lg_panel + ch + cb_cell_h
+    blocks = [lg_panel + h + cb_cell_h for h in rh]
     # Rounded to whole pixels so the saved canvas size and the coordinate
     # space the axes rects are computed against are the same number.
-    cell_w = cw + cb_cell_w
-    fig_w  = float(round(m_l + ncols * cell_w + (ncols - 1) * wsp
+    cell_ws = [w + cb_cell_w for w in cwl]
+    fig_w  = float(round(m_l + sum(cell_ws) + (ncols - 1) * wsp
                          + m_r + cb_fig_w))
     fig_h  = float(round(m_t + lg_fig + title
-                         + nrows * block + (nrows - 1) * hsp
+                         + sum(blocks) + (nrows - 1) * hsp
                          + m_b + cb_fig_h))
 
     fig = plt.figure(figsize=(fig_w / dpi, fig_h / dpi), dpi=dpi,
@@ -1079,12 +1092,13 @@ def export_png(
     # device pixels so the Datashader image is placed, not resampled.
     for i, panel in enumerate(cells):
         r, c = divmod(i, ncols)
+        cw, ch = cwl[c], rh[r]
         # Left-side bars sit between the margin and the plot, so the plot
         # starts further right; right-side bars sit after it.
-        x_cell = m_l + c * (cell_w + wsp)
+        x_cell = m_l + sum(cell_ws[:c]) + c * wsp
         x0 = x_cell + (cb_cell_w if colorbar_side == "left" else 0.0)
         y0 = fig_h - (m_t + lg_fig + title
-                      + r * (block + hsp) + lg_panel + ch)
+                      + sum(blocks[:r]) + r * hsp + lg_panel + ch)
         ax = fig.add_axes([x0 / fig_w, y0 / fig_h, cw / fig_w, ch / fig_h])
         _draw_cell(ax, panel, th, extents, legend_mode)
 
@@ -1106,7 +1120,7 @@ def export_png(
         band = pairs[0][1]
         if horiz:
             rect = [m_l / fig_w, (m_b * 0.62) / fig_h,
-                    (ncols * cell_w + (ncols - 1) * wsp) / fig_w,
+                    (sum(cell_ws) + (ncols - 1) * wsp) / fig_w,
                     bar_w / fig_h]
         else:
             bx = fig_w - m_r - cb_fig_w + bar_pad

@@ -91,8 +91,8 @@ def _visplot_t(
         freq_range: tuple[float, float] | list[float] | None = None,
         uvdist_range: tuple[float, float] | list[float] | None = None,
         compact_toolbar: bool = True,
-        plot_width: Optional[int] = None,
-        plot_height: Optional[int] = None,
+        row_height: int | float | str | list | None = None,
+        column_width: int | float | str | list | None = None,
         theme: str = 'dark',
         raster_cmap: Optional[str] = None,
         scatter_cmap: Optional[str] = None,
@@ -145,8 +145,8 @@ def _visplot_t(
         freq_range = freq_range,
         uvdist_range = uvdist_range,
         compact_toolbar = compact_toolbar,
-        plot_width = plot_width,
-        plot_height = plot_height,
+        row_height = row_height,
+        column_width = column_width,
         theme = theme,
         raster_cmap = raster_cmap,
         scatter_cmap = scatter_cmap,
@@ -303,6 +303,20 @@ class _visplot:
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
         an explicit, conflicting ``kind=`` raises ``ValueError``.
+    row_height : int, str or list
+        Height of each row of plots, in pixels: the plot with its axes,
+        not the readout and colour bars below it.  ``None`` (default):
+        550 for One and Side by Side, 280 for Over / Under.  ``"fit"``:
+        the rows share the window's height (never less than 250 px).  A
+        list gives one height per row (Over / Under has two).  The GUI's
+        Row height menu changes it; it stays when the layout changes.
+        With ``plotfile=``, the height of each plot's data area.
+    column_width : int, str or list
+        Width of each column of plots, in pixels.  ``None`` or ``"fit"``
+        (default): follow the window.  A number fixes the width; a list
+        gives one width per column (Side by Side has two).  With
+        ``plotfile=`` there is no window: the default is 1020 for One and
+        Over / Under, 500 per column for Side by Side.
     kind : str | None
         Which panel kind leads: ``"raster"`` (default when omitted) or
         ``"scatter"``. For ``layout="one"`` this is the single visible
@@ -514,8 +528,8 @@ class _visplot:
         'freq_range': '``(start, end)`` in Hz.',
         'uvdist_range': '``(min, max)`` UV distance in metres, the programmatic form of ``uvrange``; shown in the UV range box as text.',
         'compact_toolbar': "Whether each figure's toolbar auto-hides until the mouse is over that plot.",
-        'plot_width': '',
-        'plot_height': '',
+        'row_height': 'Height of each row of plots, in pixels: the plot with its axes, not the readout and colour bars below it.',
+        'column_width': 'Width of each column of plots, in pixels.',
         'theme': '',
         'raster_cmap': '',
         'scatter_cmap': '',
@@ -569,8 +583,8 @@ class _visplot:
         'freq_range': None,
         'uvdist_range': None,
         'compact_toolbar': True,
-        'plot_width': None,
-        'plot_height': None,
+        'row_height': None,
+        'column_width': None,
         'theme': 'dark',
         'raster_cmap': None,
         'scatter_cmap': None,
@@ -659,8 +673,8 @@ class _visplot:
             'freq_range': 'tuple[float, float] | list[float] | None',
             'uvdist_range': 'tuple[float, float] | list[float] | None',
             'compact_toolbar': 'bool',
-            'plot_width': 'Optional[int]',
-            'plot_height': 'Optional[int]',
+            'row_height': 'int | float | str | list | None',
+            'column_width': 'int | float | str | list | None',
             'theme': 'str',
             'raster_cmap': 'Optional[str]',
             'scatter_cmap': 'Optional[str]',
@@ -1305,33 +1319,33 @@ class _visplot:
             desc, fmt,
         )
 
-    def __plot_width_inp(self):
+    def __row_height_inp(self):
         glb     = self.__globals_()
-        value   = glb.get('plot_width', self._arg_default['plot_width'])
-        default = self._arg_default['plot_width']
-        desc    = self._arg_description.get('plot_width', '')
-        if self.__validate_('plot_width', value):
+        value   = glb.get('row_height', self._arg_default['row_height'])
+        default = self._arg_default['row_height']
+        desc    = self._arg_description.get('row_height', '')
+        if self.__validate_('row_height', value):
             pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('plot_width', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('row_height', pre, self.__to_string_(value), post),
             desc, fmt,
         )
 
-    def __plot_height_inp(self):
+    def __column_width_inp(self):
         glb     = self.__globals_()
-        value   = glb.get('plot_height', self._arg_default['plot_height'])
-        default = self._arg_default['plot_height']
-        desc    = self._arg_description.get('plot_height', '')
-        if self.__validate_('plot_height', value):
+        value   = glb.get('column_width', self._arg_default['column_width'])
+        default = self._arg_default['column_width']
+        desc    = self._arg_description.get('column_width', '')
+        if self.__validate_('column_width', value):
             pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('plot_height', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('column_width', pre, self.__to_string_(value), post),
             desc, fmt,
         )
 
@@ -1571,8 +1585,8 @@ class _visplot:
         if 'freq_range' in glb: del glb['freq_range']
         if 'uvdist_range' in glb: del glb['uvdist_range']
         if 'compact_toolbar' in glb: del glb['compact_toolbar']
-        if 'plot_width' in glb: del glb['plot_width']
-        if 'plot_height' in glb: del glb['plot_height']
+        if 'row_height' in glb: del glb['row_height']
+        if 'column_width' in glb: del glb['column_width']
         if 'theme' in glb: del glb['theme']
         if 'raster_cmap' in glb: del glb['raster_cmap']
         if 'scatter_cmap' in glb: del glb['scatter_cmap']
@@ -1626,8 +1640,8 @@ class _visplot:
         self.__freq_range_inp()
         self.__uvdist_range_inp()
         self.__compact_toolbar_inp()
-        self.__plot_width_inp()
-        self.__plot_height_inp()
+        self.__row_height_inp()
+        self.__column_width_inp()
         self.__theme_inp()
         self.__raster_cmap_inp()
         self.__scatter_cmap_inp()
@@ -1705,8 +1719,8 @@ class _visplot:
         _invocation_parameters['freq_range'] = glb.get('freq_range', self._arg_default['freq_range'])
         _invocation_parameters['uvdist_range'] = glb.get('uvdist_range', self._arg_default['uvdist_range'])
         _invocation_parameters['compact_toolbar'] = glb.get('compact_toolbar', self._arg_default['compact_toolbar'])
-        _invocation_parameters['plot_width'] = glb.get('plot_width', self._arg_default['plot_width'])
-        _invocation_parameters['plot_height'] = glb.get('plot_height', self._arg_default['plot_height'])
+        _invocation_parameters['row_height'] = glb.get('row_height', self._arg_default['row_height'])
+        _invocation_parameters['column_width'] = glb.get('column_width', self._arg_default['column_width'])
         _invocation_parameters['theme'] = glb.get('theme', self._arg_default['theme'])
         _invocation_parameters['raster_cmap'] = glb.get('raster_cmap', self._arg_default['raster_cmap'])
         _invocation_parameters['scatter_cmap'] = glb.get('scatter_cmap', self._arg_default['scatter_cmap'])
@@ -1776,8 +1790,8 @@ class _visplot:
             freq_range = _UNSET,
             uvdist_range = _UNSET,
             compact_toolbar = _UNSET,
-            plot_width = _UNSET,
-            plot_height = _UNSET,
+            row_height = _UNSET,
+            column_width = _UNSET,
             theme = _UNSET,
             raster_cmap = _UNSET,
             scatter_cmap = _UNSET,
@@ -1840,8 +1854,8 @@ class _visplot:
             freq_range,
             uvdist_range,
             compact_toolbar,
-            plot_width,
-            plot_height,
+            row_height,
+            column_width,
             theme,
             raster_cmap,
             scatter_cmap,
@@ -1969,12 +1983,12 @@ class _visplot:
             _invocation_parameters['compact_toolbar'] = \
                 compact_toolbar if compact_toolbar is not _UNSET \
                 else glb.get('compact_toolbar', self._arg_default['compact_toolbar'])
-            _invocation_parameters['plot_width'] = \
-                plot_width if plot_width is not _UNSET \
-                else glb.get('plot_width', self._arg_default['plot_width'])
-            _invocation_parameters['plot_height'] = \
-                plot_height if plot_height is not _UNSET \
-                else glb.get('plot_height', self._arg_default['plot_height'])
+            _invocation_parameters['row_height'] = \
+                row_height if row_height is not _UNSET \
+                else glb.get('row_height', self._arg_default['row_height'])
+            _invocation_parameters['column_width'] = \
+                column_width if column_width is not _UNSET \
+                else glb.get('column_width', self._arg_default['column_width'])
             _invocation_parameters['theme'] = \
                 theme if theme is not _UNSET \
                 else glb.get('theme', self._arg_default['theme'])
@@ -2088,10 +2102,10 @@ class _visplot:
                 glb.get('uvdist_range', self._arg_default['uvdist_range'])
             _invocation_parameters['compact_toolbar'] = \
                 glb.get('compact_toolbar', self._arg_default['compact_toolbar'])
-            _invocation_parameters['plot_width'] = \
-                glb.get('plot_width', self._arg_default['plot_width'])
-            _invocation_parameters['plot_height'] = \
-                glb.get('plot_height', self._arg_default['plot_height'])
+            _invocation_parameters['row_height'] = \
+                glb.get('row_height', self._arg_default['row_height'])
+            _invocation_parameters['column_width'] = \
+                glb.get('column_width', self._arg_default['column_width'])
             _invocation_parameters['theme'] = \
                 glb.get('theme', self._arg_default['theme'])
             _invocation_parameters['raster_cmap'] = \
@@ -2174,8 +2188,8 @@ class _visplot:
                     'freq_range=' + repr(_invocation_parameters['freq_range']),
                     'uvdist_range=' + repr(_invocation_parameters['uvdist_range']),
                     'compact_toolbar=' + repr(_invocation_parameters['compact_toolbar']),
-                    'plot_width=' + repr(_invocation_parameters['plot_width']),
-                    'plot_height=' + repr(_invocation_parameters['plot_height']),
+                    'row_height=' + repr(_invocation_parameters['row_height']),
+                    'column_width=' + repr(_invocation_parameters['column_width']),
                     'theme=' + repr(_invocation_parameters['theme']),
                     'raster_cmap=' + repr(_invocation_parameters['raster_cmap']),
                     'scatter_cmap=' + repr(_invocation_parameters['scatter_cmap']),
@@ -2228,8 +2242,8 @@ class _visplot:
                 freq_range = _invocation_parameters['freq_range'],
                 uvdist_range = _invocation_parameters['uvdist_range'],
                 compact_toolbar = _invocation_parameters['compact_toolbar'],
-                plot_width = _invocation_parameters['plot_width'],
-                plot_height = _invocation_parameters['plot_height'],
+                row_height = _invocation_parameters['row_height'],
+                column_width = _invocation_parameters['column_width'],
                 theme = _invocation_parameters['theme'],
                 raster_cmap = _invocation_parameters['raster_cmap'],
                 scatter_cmap = _invocation_parameters['scatter_cmap'],

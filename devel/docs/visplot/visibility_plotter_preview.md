@@ -408,7 +408,7 @@ plotter.show()  # returns a Bokeh layout for notebook embedding
 
 # Headless scripted export — no Bokeh figure, no browser needed
 vp = visplot(ms="sis14.ms", headless=True,
-             plot_width=1400, plot_height=700)
+             column_width=1400, row_height=700)   # was plot_width / plot_height
 vp(plotfile="amp.png", theme="light")               # full-extent view
 for spw in (0, 1, 2, 3):
     vp(plotfile=f"amp_spw{spw}.png", spw=[spw])     # iterate over SPWs

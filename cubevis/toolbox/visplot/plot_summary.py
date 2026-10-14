@@ -250,6 +250,12 @@ def reproducing_call(plotter) -> str:
         args.append(("autocorr", plotter._autocorr))
     args.append(("datacolumn", getattr(plotter, "_datacolumn", "DATA").lower()))
     args.append(("layout", getattr(plotter, "_layout", "side")))
+    # Sizes only when not the layout's default (2026-10-13).
+    from .panel_sizes import size_value
+    for name, attr in (("row_height", "_row_height"), ("column_width", "_column_width")):
+        v = size_value(getattr(plotter, attr, None))
+        if v is not None:
+            args.append((name, v))
     if getattr(plotter, "_time_labels", "utc") != "utc":
         args.append(("time_labels", plotter._time_labels))
     ctx = next((o for o in (getattr(plotter, "_context", None),
@@ -443,6 +449,14 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
             rows.append(("Status", f"{spec.status}: {spec.note or ''}"))
     rows.append(("Time labels", getattr(plotter, "_time_labels", "utc")))
     rows.append(("Theme", getattr(plotter, "_theme", "dark")))
+    # row_height / column_width (2026-10-13)
+    from .panel_sizes import size_text
+    rows.append(("Layout", {"one": "One panel", "side": "Side by Side",
+                            "over": "Over / Under"}.get(getattr(plotter, "_layout", ""),
+                                                        getattr(plotter, "_layout", ""))))
+    rows.append(("Row height", size_text(getattr(plotter, "_row_height", None))))
+    rows.append(("Column width", size_text(getattr(plotter, "_column_width", None))
+                 .replace("default", "fits the window")))
     sections.append(("Plot", rows))
 
     # --- flags ----------------------------------------------------------------

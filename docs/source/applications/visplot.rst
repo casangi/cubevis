@@ -238,6 +238,21 @@ Task arguments (preview)
        initial panel layout (also the *One / Side by Side / Over /
        Under* buttons). ``"raster"`` / ``"scatter"`` mean one panel of
        that kind.
+   * - ``row_height``
+     - int, str or list, optional
+     - Height of each row of plots in pixels (the plot with its axes,
+       not the readout and colour bars under it). Default: 550 for One
+       and Side by Side, 280 for Over / Under. ``"fit"``: the rows share
+       the window's height (never below 250 px; the plot area scrolls
+       instead). A list gives one height per row, e.g. ``[250, 400]``
+       for Over / Under. Also the *Height* menu beside the layout
+       buttons; a height chosen there stays when the layout changes.
+   * - ``column_width``
+     - int, str or list, optional
+     - Width of each column of plots in pixels. Default (or ``"fit"``):
+       follow the window. A list gives one width per column (Side by
+       Side has two). With ``plotfile`` there is no window: the default
+       is 1020 for One and Over / Under, 500 per column for Side by Side.
    * - ``panels``
      - list of dicts, optional
      - Each panel's configuration, in screen order, one dict per panel
@@ -258,7 +273,8 @@ Task arguments (preview)
    * - ``plotfile``
      - str, optional
      - Write a PNG of the plot to this path instead of opening the
-       window; the task returns the path.
+       window; the task returns the path. Each plot's data area is
+       ``column_width`` by ``row_height``.
    * - ``preset``
      - str, optional
      - Named axis preset: ``"vplot"``, ``"radplot"``, ``"waterfall"``,
@@ -355,6 +371,9 @@ Toolbar
 * Layout — *One*, *Side by Side*, *Over / Under*.  Each preset switches
   to the arrangement that suits it unless *Pin layout* (configuration
   panel, section *Panels*; ``pin_layout=True``) is ticked
+* Height — the height of each row of plots: the layout's default, *fit
+  window*, or a size in pixels (``row_height``). Applies at once and
+  stays when the layout or preset changes
 * Gear (each panel's toolbar) — opens that panel's configuration tab
   in the sidebar; changes there apply when *Plot ▶* is pressed. A
   successful Plot closes the tab unless its *Pin* checkbox (left of the

@@ -143,6 +143,17 @@ button. The grouping also says what each view is for.
   tests.
 - **Arguments.** The constructor and `visplot()` arguments do not change.
   The refactor only reorganises the GUI.
+- **Sizes and a 2 x 2 grid (2026-10-13).** Sizes are already modelled
+  on a grid: `row_height` / `column_width` (number, `"fit"`, or one value
+  per row / column; `panel_sizes.py`), held in the browser in
+  `_size_source` and applied by one function, `window.__cvApplySizes`
+  (`_SIZES_JS`), which the layout buttons, presets, Swap and the Height
+  menu call. A 2 x 2 layout adds rows and columns to the same arguments
+  (`row_height=[X, Y]`). What it still needs is the four-panel grid
+  itself: `MAX_PANELS`, two fixed screen positions, and the two
+  containers above (one grid container whose children are rearranged
+  would replace both). Drag handles between rows / columns, when added,
+  should set the same values so the reproducing call keeps working.
 
 ## 6. What to ask the testers
 

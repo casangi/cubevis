@@ -81,8 +81,8 @@ def _validate_params(
         freq_range,
         uvdist_range,
         compact_toolbar,
-        plot_width,
-        plot_height,
+        row_height,
+        column_width,
         theme,
         raster_cmap,
         scatter_cmap,
@@ -136,8 +136,8 @@ def _validate_params(
         'freq_range': 'tuple[float, float] | list[float] | None',
         'uvdist_range': 'tuple[float, float] | list[float] | None',
         'compact_toolbar': 'bool',
-        'plot_width': 'Optional[int]',
-        'plot_height': 'Optional[int]',
+        'row_height': 'int | float | str | list | None',
+        'column_width': 'int | float | str | list | None',
         'theme': 'str',
         'raster_cmap': 'Optional[str]',
         'scatter_cmap': 'Optional[str]',
@@ -249,8 +249,8 @@ def _validate_params(
     _check('freq_range', freq_range, _type_map['freq_range'])
     _check('uvdist_range', uvdist_range, _type_map['uvdist_range'])
     _check('compact_toolbar', compact_toolbar, _type_map['compact_toolbar'])
-    _check('plot_width', plot_width, _type_map['plot_width'])
-    _check('plot_height', plot_height, _type_map['plot_height'])
+    _check('row_height', row_height, _type_map['row_height'])
+    _check('column_width', column_width, _type_map['column_width'])
     _check('theme', theme, _type_map['theme'])
     _check('raster_cmap', raster_cmap, _type_map['raster_cmap'])
     _check('scatter_cmap', scatter_cmap, _type_map['scatter_cmap'])
@@ -304,8 +304,8 @@ def _visplot_t(
         freq_range: tuple[float, float] | list[float] | None = None,
         uvdist_range: tuple[float, float] | list[float] | None = None,
         compact_toolbar: bool = True,
-        plot_width: Optional[int] = None,
-        plot_height: Optional[int] = None,
+        row_height: int | float | str | list | None = None,
+        column_width: int | float | str | list | None = None,
         theme: str = 'dark',
         raster_cmap: Optional[str] = None,
         scatter_cmap: Optional[str] = None,
@@ -358,8 +358,8 @@ def _visplot_t(
         freq_range = freq_range,
         uvdist_range = uvdist_range,
         compact_toolbar = compact_toolbar,
-        plot_width = plot_width,
-        plot_height = plot_height,
+        row_height = row_height,
+        column_width = column_width,
         theme = theme,
         raster_cmap = raster_cmap,
         scatter_cmap = scatter_cmap,
@@ -525,6 +525,20 @@ class _visplot:
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
         an explicit, conflicting ``kind=`` raises ``ValueError``.
+    row_height : int, str or list
+        Height of each row of plots, in pixels: the plot with its axes,
+        not the readout and colour bars below it.  ``None`` (default):
+        550 for One and Side by Side, 280 for Over / Under.  ``"fit"``:
+        the rows share the window's height (never less than 250 px).  A
+        list gives one height per row (Over / Under has two).  The GUI's
+        Row height menu changes it; it stays when the layout changes.
+        With ``plotfile=``, the height of each plot's data area.
+    column_width : int, str or list
+        Width of each column of plots, in pixels.  ``None`` or ``"fit"``
+        (default): follow the window.  A number fixes the width; a list
+        gives one width per column (Side by Side has two).  With
+        ``plotfile=`` there is no window: the default is 1020 for One and
+        Over / Under, 500 per column for Side by Side.
     kind : str | None
         Which panel kind leads: ``"raster"`` (default when omitted) or
         ``"scatter"``. For ``layout="one"`` this is the single visible
@@ -736,8 +750,8 @@ class _visplot:
             freq_range: tuple[float, float] | list[float] | None = None,
             uvdist_range: tuple[float, float] | list[float] | None = None,
             compact_toolbar: bool = True,
-            plot_width: Optional[int] = None,
-            plot_height: Optional[int] = None,
+            row_height: int | float | str | list | None = None,
+            column_width: int | float | str | list | None = None,
             theme: str = 'dark',
             raster_cmap: Optional[str] = None,
             scatter_cmap: Optional[str] = None,
@@ -803,8 +817,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             freq_range = freq_range,
             uvdist_range = uvdist_range,
             compact_toolbar = compact_toolbar,
-            plot_width = plot_width,
-            plot_height = plot_height,
+            row_height = row_height,
+            column_width = column_width,
             theme = theme,
             raster_cmap = raster_cmap,
             scatter_cmap = scatter_cmap,
@@ -858,8 +872,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'freq_range=' + repr(freq_range),
                 'uvdist_range=' + repr(uvdist_range),
                 'compact_toolbar=' + repr(compact_toolbar),
-                'plot_width=' + repr(plot_width),
-                'plot_height=' + repr(plot_height),
+                'row_height=' + repr(row_height),
+                'column_width=' + repr(column_width),
                 'theme=' + repr(theme),
                 'raster_cmap=' + repr(raster_cmap),
                 'scatter_cmap=' + repr(scatter_cmap),
@@ -914,8 +928,8 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 freq_range = freq_range,
                 uvdist_range = uvdist_range,
                 compact_toolbar = compact_toolbar,
-                plot_width = plot_width,
-                plot_height = plot_height,
+                row_height = row_height,
+                column_width = column_width,
                 theme = theme,
                 raster_cmap = raster_cmap,
                 scatter_cmap = scatter_cmap,

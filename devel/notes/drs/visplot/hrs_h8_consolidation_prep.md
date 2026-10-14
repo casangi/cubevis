@@ -367,3 +367,45 @@ refactor after testing.
   now look into the nested row and pick the busy-cursor callback. This
   module's fixture plots all fields and runs out of memory in the
   sandbox (8 GB), so it was run against a one-field plotter here.
+
+## 15. Panel sizes: `row_height` / `column_width` (base `8683650`, 2026-10-13)
+
+Decided with Darrell: every layout is a grid (One 1 x 1, Side by Side
+1 x 2, Over / Under 2 x 1, later 2 x 2), sized by rows and columns;
+`plot_width` / `plot_height` removed, no aliases (they applied only at
+startup and the first layout click reset them). A size is the plot's
+figure (plot with axes, title, toolbar), not the readout and colour bars
+under it. Fit is an option, not the Over / Under default: on a 1000 px
+window the two panels' readouts and colour bars take ~360 px, so a fit
+gives ~220 px rows; Fit has a 250 px floor and the plot area scrolls.
+
+- `panel_sizes.py`: `parse_size` (None, `"fit"`, number, list of up to
+  `MAX_ENTRIES`=2; strings like `"300px"`, `"[250,400]"` from the shell),
+  `row_heights` / `column_widths` / `cell_sizes`, defaults
+  (`ROW_HEIGHT_DEFAULT` 550/550/280, `FILE_WIDTH` 1020/500/1020).
+- Plotter: arguments `row_height`, `column_width`; each slot drawn at its
+  own cell; numeric `column_width` makes the figures fixed-width;
+  startup sizes per position; `_size_source` (JSON spec) for the browser;
+  `_adopt_sizes` takes the browser's spec with Plot, Describe this plot
+  and Export (which also now send the layout as shown).
+- Browser: `_SIZES_JS` init script defines `window.__cvApplySizes`
+  (heights per screen position on both kinds, widths when numeric; fit
+  measured per panel block, re-fitted on window resize and every second
+  as colour bars change). Layout buttons, both preset kinds and Swap call
+  it (the old fixed sizes stay as the fallback). *Height* menu
+  (`_row_height_sel`, toolbar beside the layout buttons): layout default,
+  fit window, 200-900 px, plus the constructor's value if not listed
+  (`rows:250,400` for a list).
+- Output: `plotfile=` cells are `column_width` x `row_height` (data
+  area); `export_png` takes `row_heights` / `col_widths` for rows /
+  columns of different sizes (the GUI Export sends each panel's size).
+  Note the headless default canvas changed with this: One / Over / Under
+  are 1020 wide (were 500), Over / Under rows 280 high (were 550).
+- Reproducing call: `row_height` / `column_width` when not the default;
+  summary page: Layout, Row height, Column width.
+- Tests: `test_panel_sizes.py` (parsing, resolution, PNG rows of
+  different heights, per-cell canvas, plotfile size, call/summary,
+  adopting the browser's spec, GUI startup sizes and menu). Live check:
+  menu 400 -> layout switches keep 400; presets keep 350; `[250, 400]`
+  per row, Swap moves them with the positions; fit tracks the window
+  (820 px area: 250 floor; 1120 px: 370).

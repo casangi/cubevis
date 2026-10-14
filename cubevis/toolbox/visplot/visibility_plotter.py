@@ -235,6 +235,7 @@ _STATIC_HINTS = {
     "autocorr": "<b>Autocorrelations</b> \u2014 baselines from an antenna to itself  | <b>Exclude</b> (default): cross-correlations only. Autocorrelations can be hundreds of times larger (VLBI data before amplitude calibration) and flatten every plot of all baselines  | <b>Include</b>: both; the Ant\u00d7Ant matrix then has its diagonal  | <b>Only</b>: autocorrelations alone \u2014 the bandpass shape and interference at each station  | A baseline ticked by name (e.g. BR&amp;BR) is plotted whatever is chosen here  | Applied by Plot",
     "time_labels": "<b>Time labels</b> \u2014 how every time axis and the cursor readout give time  | <b>UTC</b>: time of day, with the date in the axis label; when the data cross midnight the ticks read day/hh:mm:ss from the first day, as in AIPS. Matches observing logs, <tt>listobs</tt> and the Time range box  | <b>Elapsed</b>: minutes and seconds from the first sample shown  | Changes the labels only; nothing is read again",
     "tb_export": "<b>Export PNG</b> \u2014 write the current view (both panels, titles, axes, colour bars) to a PNG file where Python is running  | The path is reported in the status line",
+    "tb_row_height": "<b>Row height</b> \u2014 the height of each row of plots, in every layout  | <i>Layout default</i>: 550 px for One and Side by Side, 280 px for Over / Under  | <i>Fit</i>: the rows share the window's height, after the readouts and colour bars below each plot (never less than 250 px; the plot area scrolls instead)  | Takes effect at once, and stays when the layout changes  | <code>row_height=</code> sets it from Python (a number, \"fit\", or one height per row)",
     "tb_theme": "<b>Dark / Light</b> \u2014 switch the background  | The colormaps change with it so faint points stay visible; exported PNGs follow",
 }
 
@@ -719,6 +720,160 @@ _MORE_BELOW_JS = r"""
 """
 
 
+def _grid_sizes(sizes, nrows, ncols) -> dict:
+    """``row_heights`` / ``col_widths`` for ``export_png`` from the
+    on-screen ``(w, h)`` of each panel in reading order; ``{}`` when they
+    are all the same or unknown (the cell size then serves)."""
+    if not sizes or any(s is None for s in sizes) or len(sizes) < nrows * ncols:
+        return {}
+    rows = [sizes[r * ncols][1] for r in range(nrows)]
+    cols = [sizes[c][0] for c in range(ncols)]
+    if len(set(rows)) == 1 and len(set(cols)) == 1:
+        return {}
+    return {"row_heights": rows, "col_widths": cols}
+
+
+_ROW_HEIGHT_JS = r"""
+// The Row height menu: its value is "default", "fit", a number of pixels,
+// or "rows:250,400" (one per row, from row_height=[...]).
+let rh = null;
+const v = String(cb_obj.value || 'default');
+if (v === 'fit') rh = 'fit';
+else if (v.indexOf('rows:') === 0) rh = v.slice(5).split(',').map(Number);
+else if (v !== 'default') rh = Number(v);
+let sp = {};
+try { sp = JSON.parse(size_src.data['spec'][0]) || {}; } catch (e) {}
+sp.row_height = rh;
+size_src.data = {spec: [JSON.stringify(sp)]};
+if (window.__cvApplySizes) window.__cvApplySizes();
+"""
+
+
+_SIZES_JS = r"""
+// Panel sizes (2026-10-13): row_height / column_width, see panel_sizes.py.
+// Installed once at page load; the Layout buttons, the presets and the
+// Row height control call window.__cvApplySizes() instead of setting
+// fixed sizes, so a size the user chose survives a layout switch.
+// size_src.data.spec[0] is JSON {row_height, column_width}: null (the
+// layout's default), "fit", a number, or a list (one per row / column).
+(function () {
+  const ROW_DEFAULT = [550, 550, 280];        // by layout_rbg.active
+  const FIT_MIN = __FIT_MIN__;
+  // Every figure is laid out in both containers, so a model has two
+  // views; the one on screen is the one with a size.
+  function views(m) {
+    const ix = (window.Bokeh && Bokeh.index) || null;
+    if (!m || !ix) return [];
+    let out = [];
+    try { if (typeof ix.find_by_id === 'function') out = Array.from(ix.find_by_id(m.id)); } catch (e) {}
+    if (!out.length) try { if (typeof ix.find === 'function') out = Array.from(ix.find(m)); } catch (e) {}
+    if (!out.length) try { const v = ix.find_one_by_id(m.id); if (v) out = [v]; } catch (e) {}
+    return out;
+  }
+  function rectH(m) {
+    for (const v of views(m)) {
+      if (!v || !v.el || !v.el.isConnected) continue;
+      const r = v.el.getBoundingClientRect();
+      if (r.height > 0) return r.height;
+    }
+    return null;
+  }
+  function findArea(root) {
+    const hit = root.querySelector && root.querySelector('.cv-plot-area');
+    if (hit) return hit;
+    const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+    for (const el of all) {
+      if (el.shadowRoot) { const f = findArea(el.shadowRoot); if (f) return f; }
+    }
+    return null;
+  }
+  let area = null;
+  function spec() {
+    try { return JSON.parse(size_src.data['spec'][0]) || {}; } catch (e) { return {}; }
+  }
+  function per(v, i) { return Array.isArray(v) ? v[Math.min(i, v.length - 1)] : v; }
+  // Figures in screen position p (0, 1): both kinds, so a later kind
+  // switch finds the size already set (a hidden figure does not redraw).
+  function posFigs(p) {
+    const order = display_order_source.data['order'][0];
+    const s = slots[order[p]];
+    return [s.raster_fig, s.scatter_fig];
+  }
+  // "fit": the plot area's visible height, less what is not a figure
+  // (each panel's readouts and colour bars), shared by the rows; never
+  // below FIT_MIN.  Measured per panel (its block less its figure): the
+  // containers stretch with the window, so their height says nothing
+  // about their contents.
+  function shownPair(p) {
+    const order = display_order_source.data['order'][0];
+    const s = slots[order[p]];
+    return s.raster_layout.visible ? [s.raster_layout, s.raster_fig]
+                                   : [s.scatter_layout, s.scatter_fig];
+  }
+  function chromeOf(p) {
+    const pr = shownPair(p);
+    const lh = rectH(pr[0]), fh = rectH(pr[1]);
+    return (lh == null || fh == null) ? null : Math.max(0, lh - fh);
+  }
+  function fitHeight(lay) {
+    if (!area || !area.isConnected) area = findArea(document);
+    if (!area) return null;
+    const c0 = chromeOf(0);
+    if (c0 == null) return null;
+    let chrome = c0;
+    if (lay === 1 || lay === 2) {
+      const c1 = chromeOf(1);
+      if (c1 == null) return null;
+      chrome = (lay === 2) ? c0 + c1 : Math.max(c0, c1);
+    }
+    const nrows = (lay === 2) ? 2 : 1;
+    const h = Math.floor((area.clientHeight - chrome - 8 * nrows) / nrows);
+    // For diagnosis from the browser console.
+    window.__cvFitInfo = {area: area.clientHeight, chrome: chrome, rows: nrows, height: h};
+    return Math.max(FIT_MIN, h);
+  }
+  function setH(fig, h) { if (h && Math.abs((fig.height || 0) - h) > 3) fig.height = h; }
+  function apply() {
+    const lay = layout_rbg.active;            // 0 one, 1 side, 2 over
+    const sp = spec();
+    const rh = (sp.row_height == null) ? ROW_DEFAULT[lay] : sp.row_height;
+    const cw = sp.column_width;
+    let fit = null;
+    for (let p = 0; p < 2; p++) {
+      if (lay === 0 && p === 1) break;
+      let h = per(rh, (lay === 2) ? p : 0);
+      if (h === 'fit') { if (fit == null) fit = fitHeight(lay); h = fit || ROW_DEFAULT[lay]; }
+      const w = (cw == null || cw === 'fit') ? null : per(cw, (lay === 1) ? p : 0);
+      for (const f of posFigs(p)) {
+        setH(f, h);
+        if (w) f.width = w;
+      }
+    }
+    // A fit computed before the layout settled is redone shortly.
+    if (JSON.stringify(rh).indexOf('fit') >= 0) {
+      clearTimeout(window.__cvFitTimer);
+      window.__cvFitTimer = setTimeout(refit, 250);
+    }
+  }
+  function refit() {
+    const sp = spec();
+    if (JSON.stringify(sp.row_height == null ? null : sp.row_height).indexOf('fit') < 0) return;
+    apply();
+  }
+  window.__cvApplySizes = apply;
+  window.__cvSizeSpec = spec;
+  window.__cvLayoutName = function () { return ['one', 'side', 'over'][layout_rbg.active]; };
+  window.addEventListener('resize', function () {
+    clearTimeout(window.__cvFitTimer);
+    window.__cvFitTimer = setTimeout(refit, 200);
+  });
+  // Readouts and colour bars change height after a Plot; follow them.
+  setInterval(refit, 1000);
+  setTimeout(apply, 300);
+})();
+"""
+
+
 _DARK_WIDGET_CSS = """
 :host { --bokeh-base-font: system-ui, sans-serif; }
 /* Plain text in a Div that carries this sheet (notes such as "Changes
@@ -883,7 +1038,12 @@ if (w) w.document.write("<html><body style='font-family:sans-serif'>" +
                         "<p>Building plot summary…</p></body></html>");
 const xr = fig.x_range, yr = fig.y_range;
 ctrl.send(ids['summary'], {slot: slot_id,
-                           viewport: [xr.start, xr.end, yr.start, yr.end]},
+                           viewport: [xr.start, xr.end, yr.start, yr.end],
+                           // What is on screen now, which a Layout click
+                           // or the Row height control may have changed
+                           // since the last Plot (2026-10-13).
+                           layout: (window.__cvLayoutName ? window.__cvLayoutName() : null),
+                           sizes: window.__cvSizeSpec ? window.__cvSizeSpec() : null},
     function (resp) {
         if (!resp || resp.html == null) {
             const m = (resp && resp.message) || 'no summary';
@@ -2237,6 +2397,20 @@ class VisibilityPlotter:
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
         an explicit, conflicting ``kind=`` raises ``ValueError``.
+    row_height : int, str or list
+        Height of each row of plots, in pixels: the plot with its axes,
+        not the readout and colour bars below it.  ``None`` (default):
+        550 for One and Side by Side, 280 for Over / Under.  ``"fit"``:
+        the rows share the window's height (never less than 250 px).  A
+        list gives one height per row (Over / Under has two).  The GUI's
+        Row height menu changes it; it stays when the layout changes.
+        With ``plotfile=``, the height of each plot's data area.
+    column_width : int, str or list
+        Width of each column of plots, in pixels.  ``None`` or ``"fit"``
+        (default): follow the window.  A number fixes the width; a list
+        gives one width per column (Side by Side has two).  With
+        ``plotfile=`` there is no window: the default is 1020 for One and
+        Over / Under, 500 per column for Side by Side.
     kind : str | None
         Which panel kind leads: ``"raster"`` (default when omitted) or
         ``"scatter"``. For ``layout="one"`` this is the single visible
@@ -2453,8 +2627,8 @@ class VisibilityPlotter:
         uvdist_range:     tuple[float, float] | list[float] | None = None,
         enable_flagging:  bool           = True,
         compact_toolbar:  bool           = True,
-        plot_width:       Optional[int]  = None,
-        plot_height:      Optional[int]  = None,
+        row_height:       int | float | str | list | None = None,
+        column_width:     int | float | str | list | None = None,
         theme:            str            = "dark",
         raster_cmap:      Optional[str]  = None,
         scatter_cmap:     Optional[str]  = None,
@@ -2519,7 +2693,7 @@ class VisibilityPlotter:
             uvdist_range=uvdist_range, enable_flagging=enable_flagging,
             compact_toolbar=compact_toolbar,
             theme=theme, raster_cmap=raster_cmap, scatter_cmap=scatter_cmap,
-            plot_width=plot_width, plot_height=plot_height,
+            row_height=row_height, column_width=column_width,
         )
 
         # ------------------------------------------------------------------ #
@@ -2613,6 +2787,61 @@ class VisibilityPlotter:
         except Exception:
             pass
 
+    _ROW_HEIGHT_CHOICES = (200, 280, 350, 450, 550, 700, 900)
+
+    def _row_height_value(self) -> str:
+        rh = self._row_height
+        if rh is None:
+            return "default"
+        if rh == "fit":
+            return "fit"
+        if isinstance(rh, list):
+            return "rows:" + ",".join(str(v) for v in rh)
+        return str(int(rh))
+
+    def _row_height_options(self) -> list:
+        """The Row height menu: default, Fit, the usual sizes, and the
+        constructor's value when it is not one of them."""
+        opts = [("default", "Height: layout default"), ("fit", "Height: fit window")]
+        opts += [(str(v), f"Height: {v} px") for v in self._ROW_HEIGHT_CHOICES]
+        cur = self._row_height_value()
+        if cur not in [o[0] for o in opts]:
+            label = ("Height: " + cur[5:].replace(",", " / ") + " px"
+                     if cur.startswith("rows:") else f"Height: {cur} px")
+            opts.append((cur, label))
+        return opts
+
+    def _size_spec_json(self) -> str:
+        from .panel_sizes import size_value
+        return json.dumps({"row_height": size_value(self._row_height),
+                           "column_width": size_value(self._column_width)})
+
+    def _adopt_sizes(self, msg: dict) -> None:
+        """Take ``row_height`` / ``column_width`` as the browser holds them
+        (sent with Plot, Describe this plot and Export).  Anything that
+        does not parse is ignored: the browser only sends what it got
+        from here or from its own control."""
+        sizes = msg.get("sizes") if isinstance(msg, dict) else None
+        if not isinstance(sizes, dict):
+            return
+        from .panel_sizes import parse_size, SizeError
+        for key, attr in (("row_height", "_row_height"),
+                          ("column_width", "_column_width")):
+            if key in sizes:
+                try:
+                    setattr(self, attr, parse_size(key, sizes[key]))
+                except SizeError:
+                    log.debug("ignoring browser %s=%r", key, sizes[key])
+
+    def _set_initial_canvas(self) -> None:
+        """``_plot_width`` / ``_plot_height``: the canvas each panel is
+        first drawn at -- the first position's cell for the layout, from
+        ``row_height`` / ``column_width`` (``panel_sizes.cell_sizes``)."""
+        from .panel_sizes import cell_sizes
+        lay = self._layout if getattr(self, "_layout", None) in ("one", "side", "over") else "side"
+        self._plot_width, self._plot_height = cell_sizes(
+            self._row_height, self._column_width, lay)[0]
+
     def _resolve_config(
         self,
         *,
@@ -2625,7 +2854,7 @@ class VisibilityPlotter:
         raster_y, raster_x, raster_qty, scatter_x, scatter_y,
         time_range, freq_range, uvdist_range, enable_flagging,
         compact_toolbar, theme, raster_cmap, scatter_cmap,
-        plot_width, plot_height,
+        row_height, column_width,
     ) -> None:
         """Phase 1: validate, store arguments, open the data, resolve axes.
 
@@ -2720,9 +2949,19 @@ class VisibilityPlotter:
         # resolution, not just the display scale -- see png_export's
         # `cell_size` note.  Defaults preserve the previous hardcoded
         # constants.
-        self._plot_width  = int(plot_width or _PANEL_WIDTH_SIDE)
-        self._plot_height = int(plot_height or _PANEL_HEIGHT)
-        self._plot_height_given = plot_height is not None
+        # row_height / column_width (2026-10-13; replace plot_width /
+        # plot_height, which only applied at startup and were reset by the
+        # first layout click).  See panel_sizes.  _plot_width/_plot_height
+        # stay as the canvas each panel is first drawn at: the first
+        # position's cell for the layout (the browser then sends the real
+        # size with every Plot and redraw).
+        from .panel_sizes import parse_size, cell_sizes, SizeError
+        try:
+            self._row_height   = parse_size("row_height", row_height)
+            self._column_width = parse_size("column_width", column_width)
+        except SizeError as exc:
+            raise ValueError(str(exc)) from None
+        self._set_initial_canvas()
 
         self._requested_theme = theme if theme in ("dark", "light") else "dark"
         self._theme = self._requested_theme
@@ -2894,6 +3133,8 @@ class VisibilityPlotter:
                 self._scatter_avg_time = normalize_avg_time(at)
             if self._scatter_avg_chan == "off":
                 self._scatter_avg_chan = normalize_avg_chan(ac)
+        # A preset may have changed the layout, and with it the sizes.
+        self._set_initial_canvas()
 
         # Explicit raster_y=/raster_x=/etc. arguments take precedence
         # over preset (which takes precedence over the hardcoded
@@ -3198,6 +3439,10 @@ class VisibilityPlotter:
         # structure a future N-panel "move to" scheme reuses directly,
         # rather than something to redesign later.
         self._display_order_source = ColumnDataSource(data={"order": [[0, 1]]})
+        # row_height / column_width as the browser holds them (2026-10-13):
+        # the Row height control writes here, _SIZES_JS reads it, and Plot,
+        # Describe this plot and Export send it back (no Bokeh server).
+        self._size_source = ColumnDataSource(data={"spec": [self._size_spec_json()]})
 
         # Use stretch_width so figures fill available space responsively.
         # Fixed pixel widths are not set — Bokeh's CSS flexbox handles sizing.
@@ -3249,7 +3494,7 @@ class VisibilityPlotter:
             else 2_000_000
         )
 
-        def _raster(c):
+        def _raster(c, wh):
             r = VisibilityRaster(
                 backend       = self._reader,
                 selection     = self._selection,
@@ -3263,8 +3508,8 @@ class VisibilityPlotter:
                 stat_time_window = c["stat_time_window"],
                 stat_chan_window = c["stat_chan_window"],
                 polarization  = first_pol,
-                width         = self._plot_width,
-                height        = self._plot_height,
+                width         = wh[0],
+                height        = wh[1],
                 comm_mgr      = self._comm_mgr,
                 cursor_source = self._cursor_source,
                 enable_flagging = self._enable_flagging,
@@ -3281,15 +3526,15 @@ class VisibilityPlotter:
 
         # One scatter layer per polarisation -- multi-layer compositing
         # naturally boosts density and visibility vs a single layer.
-        def _scatter(c):
+        def _scatter(c, wh):
             sc = VisibilityScatter(
                 backend       = self._reader,
                 selection     = self._selection,
                 x_axis        = c["scatter_x"],
                 layers        = _make_scatter_layers(
                     c["scatter_y"], pols, cmaps=scatter_ramps),
-                width         = self._plot_width,
-                height        = self._plot_height,
+                width         = wh[0],
+                height        = wh[1],
                 comm_mgr      = self._comm_mgr,
                 cursor_source = self._cursor_source,
                 enable_flagging = self._enable_flagging,
@@ -3311,10 +3556,15 @@ class VisibilityPlotter:
 
         # Construction order as before: A raster, A scatter, B scatter,
         # B raster.
-        _slot_a_raster  = _raster(_ca)
-        _slot_a_scatter = _scatter(_ca)
-        _slot_b_scatter = _scatter(_cb)
-        _slot_b_raster  = _raster(_cb)
+        # Each slot drawn at its own cell (row_height / column_width,
+        # 2026-10-13); "one" has a single cell, which slot B shares.
+        from .panel_sizes import cell_sizes
+        _cells = cell_sizes(self._row_height, self._column_width, self._layout)
+        _wh_a, _wh_b = _cells[0], _cells[min(1, len(_cells) - 1)]
+        _slot_a_raster  = _raster(_ca, _wh_a)
+        _slot_a_scatter = _scatter(_ca, _wh_a)
+        _slot_b_scatter = _scatter(_cb, _wh_b)
+        _slot_b_raster  = _raster(_cb, _wh_b)
 
         # Stage 1b.5: ordered slot records — self._slots[0] is "A",
         # self._slots[1] is "B". Order matches today's A/B layout
@@ -3442,6 +3692,12 @@ class VisibilityPlotter:
         for _panel in self._all_panels:
             _panel.figure.sizing_mode = "stretch_width"
             _panel.layout.sizing_mode = "stretch_width"
+        # column_width in pixels (2026-10-13): those figures keep that
+        # width instead of following the window ("fit" / None: stretch).
+        if self._column_width not in (None, "fit"):
+            for _slot in self._slots:
+                for _panel in (_slot.raster, _slot.scatter):
+                    _panel.figure.sizing_mode = "fixed"
 
         # Toolbar sits on the right of each figure, providing all standard
         # tools (pan, wheel zoom, box zoom, reset, save, etc.) with correct
@@ -3964,11 +4220,21 @@ for (const dt of other.tools) {
         path = (str(plotfile or "").strip()
                 or (getattr(self, "_plotfile", None) or "")
                 or self._default_plotfile())
+        # row_height / column_width (2026-10-13): each row and column at
+        # its own size.  The panels were drawn at these cells for the
+        # constructor's layout, so the image stays 1:1; a layout= given
+        # here only for this call scales the image into its cells.
+        from .panel_sizes import cell_sizes, GRID
+        sizes = {}
+        if (nrows, ncols) == GRID.get(lay):
+            cells = cell_sizes(self._row_height, self._column_width, lay)
+            sizes = dict(row_heights=[cells[r * ncols][1] for r in range(nrows)],
+                         col_widths=[cells[c][0] for c in range(ncols)])
         out = export_png(
             rendered, path,
             nrows=nrows, ncols=ncols,
             footer=self._status_text(),
-            theme=theme, dpi=dpi,
+            theme=theme, dpi=dpi, **sizes,
         )
         log.info("wrote %s", out)
         return out
@@ -4066,12 +4332,16 @@ for (const dt of other.tools) {
         from .png_export import export_png
 
         panels_msg = msg.get("panels") or []
+        if msg.get("layout") in ("one", "side", "over"):
+            self._layout = msg["layout"]
+        self._adopt_sizes(msg)
         nrows = int(msg.get("nrows", 1) or 1)
         ncols = int(msg.get("ncols", len(panels_msg) or 1) or 1)
         path  = str(msg.get("path") or "").strip() or self._default_plotfile()
 
         rendered = []
         cell_size = None
+        sizes_seen = []          # (w, h) per panel, in display order
         for entry in panels_msg:
             try:
                 idx = int(entry.get("panel"))
@@ -4083,13 +4353,17 @@ for (const dt of other.tools) {
             viewport = (tuple(float(v) for v in vp)
                         if vp and len(vp) == 4 else None)
             sz = entry.get("size")
-            if cell_size is None and sz and len(sz) == 2:
+            wh = None
+            if sz and len(sz) == 2:
                 try:
                     w, h = int(sz[0]), int(sz[1])
                     if w > 0 and h > 0:
-                        cell_size = (w, h)
+                        wh = (w, h)
                 except (TypeError, ValueError):
                     pass
+            sizes_seen.append(wh)
+            if cell_size is None and wh is not None:
+                cell_size = wh
             try:
                 rendered.append(panel.render_result(viewport))
             except Exception as exc:
@@ -4106,14 +4380,18 @@ for (const dt of other.tools) {
             # so matplotlib scales the image into the box.  That trades
             # 1:1 pixels (tier 1, section 1) for matching the GUI, which
             # is the right trade for an export whose whole purpose is to
-            # reproduce the view.  Pass plot_width/plot_height at
-            # construction to get both.
+            # reproduce the view.  (The browser also sends each panel's
+            # size, and redraws a panel when its size changes, so in
+            # practice the image is at that size already.)
             out = export_png(
                 rendered, path,
                 nrows=nrows, ncols=ncols,
                 footer=self._status_text(),
                 theme=self._theme,
                 cell_size=cell_size,
+                # Rows / columns of different sizes (row_height lists,
+                # 2026-10-13): each as on screen.
+                **_grid_sizes(sizes_seen, nrows, ncols),
             )
         except Exception as exc:
             log.warning("export_png failed: %s", exc)
@@ -4207,6 +4485,9 @@ for (const dt of other.tools) {
         opened."""
         try:
             vp = msg.get("viewport")
+            if msg.get("layout") in ("one", "side", "over"):
+                self._layout = msg["layout"]
+            self._adopt_sizes(msg)
             html = await asyncio.to_thread(
                 self.describe, str(msg.get("slot", "A")), vp, True)
             return {"status": "ok", "html": html}
@@ -4348,6 +4629,7 @@ for (const dt of other.tools) {
         if "field"       in msg: self._field_str   = msg["field"]
         if msg.get("layout") in ("one", "side", "over"):
             self._layout = msg["layout"]
+        self._adopt_sizes(msg)
         if "antenna_names" in msg or "baselines" in msg:
             # Ticked rows of the Antenna / Baseline tables, as lists --
             # no text round trip, like spw_ids just below.  Validated
@@ -7257,6 +7539,8 @@ const new_children = first_pair.concat(second_pair);
 // need reassignment, not .push()/.splice(), to notify the renderer).
 side_container.children = new_children;
 over_container.children = new_children;
+// Sizes belong to screen positions (row_height lists, 2026-10-13).
+if (window.__cvApplySizes) { window.__cvApplySizes(); }
 """
         # Fixed 2026-07-31 as part of the Group 1/2 rework: previously
         # paired via (self._slots[0], self._raster), (self._slots[1],
@@ -7630,6 +7914,19 @@ if (sidebarEl && prevScrollTop !== null) {
             width  = 320,
         )
         self._layout_rbg = layout_rbg
+
+        # Row height (2026-10-13): the height of each row of plots, for
+        # every layout; applied at once (the panels redraw at the new
+        # size), kept when the layout changes.  "Layout default" is 550 px
+        # (One, Side by Side) or 280 px (Over / Under); "Fit" shares the
+        # window.  row_height= sets it at startup; a value the menu does
+        # not list (or a list, one height per row) is added to it.
+        self._row_height_sel = Select(
+            options=self._row_height_options(), value=self._row_height_value(),
+            width=150, stylesheets=[self._dark()])
+        self._row_height_sel.js_on_change("value", CustomJS(
+            args={"size_src": self._size_source},
+            code=_ROW_HEIGHT_JS))
 
         # ---- Plot ▶ and Reload ↺ ----------------------------------------- #
         plot_btn   = Button(label="Plot ▶",   button_type="success", width=80)
@@ -8088,6 +8385,9 @@ function doPlot(reload) {
         // change it in the browser only, and the status line (and the
         // PNG export) read Python's copy, which stayed at the start value.
         layout:      ['one', 'side', 'over'][layout_rbg.active],
+        // Row height / column width as shown (2026-10-13), for the
+        // reproducing call and the status line.
+        sizes:       window.__cvSizeSpec ? window.__cvSizeSpec() : null,
     }, function(resp) {
         // Release the busy state only after this response's own updates
         // have been PAINTED (two animation frames after this callback),
@@ -9002,7 +9302,9 @@ let nrows = 1, ncols = panels.length;
 if (panels.length > 1 && active === 2) { nrows = 2; ncols = 1; }
 
 notify_div.text = "<i>Exporting…</i>";
-ctrl.send(ids['export'], {panels: panels, nrows: nrows, ncols: ncols},
+ctrl.send(ids['export'], {panels: panels, nrows: nrows, ncols: ncols,
+                          layout: ['one', 'side', 'over'][active],
+                          sizes: window.__cvSizeSpec ? window.__cvSizeSpec() : null},
     function(resp) {
         if (!resp) { notify_div.text = ""; return; }
         if (resp.status !== 'ok') {
@@ -9100,19 +9402,23 @@ pos1_layout.visible  = !one;
 side_container.visible = !over;   // covers both "one" and "side"
 over_container.visible =  over;
 
-if (one) {
-    pos0_fig.width  = full_w;
-    pos0_fig.height = panel_h;
-} else if (over) {
-    pos0_fig.width   = full_w;
-    pos1_fig.width  = full_w;
-    pos0_fig.height  = over_h;
-    pos1_fig.height = over_h;
-} else {
-    pos0_fig.width   = side_w;
-    pos1_fig.width  = side_w;
-    pos0_fig.height  = panel_h;
-    pos1_fig.height = panel_h;
+// row_height / column_width (2026-10-13): window.__cvApplySizes (_SIZES_JS)
+// keeps the sizes the user chose; the fixed sizes are the fallback.
+if (window.__cvApplySizes) { window.__cvApplySizes(); } else {
+    if (one) {
+        pos0_fig.width  = full_w;
+        pos0_fig.height = panel_h;
+    } else if (over) {
+        pos0_fig.width   = full_w;
+        pos1_fig.width  = full_w;
+        pos0_fig.height  = over_h;
+        pos1_fig.height = over_h;
+    } else {
+        pos0_fig.width   = side_w;
+        pos1_fig.width  = side_w;
+        pos0_fig.height  = panel_h;
+        pos1_fig.height = panel_h;
+    }
 }
 
 // Persist preference (side vs. over) — unchanged from before, "one"
@@ -9282,14 +9588,18 @@ try {{
 const over = (lay === 2);
 side_container.visible = !over;
 over_container.visible =  over;
-if (lay === 0) {{
-    pos0_raster_fig.width   = full_w;  pos0_raster_fig.height  = panel_h;
-}} else if (over) {{
-    pos0_raster_fig.width   = full_w;  pos1_scatter_fig.width  = full_w;
-    pos0_raster_fig.height  = over_h;  pos1_scatter_fig.height = over_h;
-}} else {{
-    pos0_raster_fig.width   = side_w;  pos1_scatter_fig.width  = side_w;
-    pos0_raster_fig.height  = panel_h; pos1_scatter_fig.height = panel_h;
+// row_height / column_width (2026-10-13): window.__cvApplySizes (_SIZES_JS)
+// keeps the sizes the user chose; the fixed sizes are the fallback.
+if (window.__cvApplySizes) {{ window.__cvApplySizes(); }} else {{
+    if (lay === 0) {{
+        pos0_raster_fig.width   = full_w;  pos0_raster_fig.height  = panel_h;
+    }} else if (over) {{
+        pos0_raster_fig.width   = full_w;  pos1_scatter_fig.width  = full_w;
+        pos0_raster_fig.height  = over_h;  pos1_scatter_fig.height = over_h;
+    }} else {{
+        pos0_raster_fig.width   = side_w;  pos1_scatter_fig.width  = side_w;
+        pos0_raster_fig.height  = panel_h; pos1_scatter_fig.height = panel_h;
+    }}
 }}
 
 doPlot();
@@ -9351,14 +9661,18 @@ panel1_kind_switch.active = 1;
 {sets}
 side_container.visible = (lay !== 2);
 over_container.visible = (lay === 2);
-if (lay === 0) {{
-    pos0_scatter_fig.width  = full_w;  pos0_scatter_fig.height = panel_h;
-}} else if (lay === 2) {{
-    pos0_scatter_fig.width  = full_w;  pos1_scatter_fig.width  = full_w;
-    pos0_scatter_fig.height = over_h;  pos1_scatter_fig.height = over_h;
-}} else {{
-    pos0_scatter_fig.width  = side_w;  pos1_scatter_fig.width  = side_w;
-    pos0_scatter_fig.height = panel_h; pos1_scatter_fig.height = panel_h;
+// row_height / column_width (2026-10-13): window.__cvApplySizes (_SIZES_JS)
+// keeps the sizes the user chose; the fixed sizes are the fallback.
+if (window.__cvApplySizes) {{ window.__cvApplySizes(); }} else {{
+    if (lay === 0) {{
+        pos0_scatter_fig.width  = full_w;  pos0_scatter_fig.height = panel_h;
+    }} else if (lay === 2) {{
+        pos0_scatter_fig.width  = full_w;  pos1_scatter_fig.width  = full_w;
+        pos0_scatter_fig.height = over_h;  pos1_scatter_fig.height = over_h;
+    }} else {{
+        pos0_scatter_fig.width  = side_w;  pos1_scatter_fig.width  = side_w;
+        pos0_scatter_fig.height = panel_h; pos1_scatter_fig.height = panel_h;
+    }}
 }}
 doPlot();
 """,
@@ -9422,6 +9736,7 @@ doPlot();
                 _all_cmap_figs     += w["cmap_figs"]
                 _all_cmap_icons    += w["cmap_icons"]
                 _all_cmap_tables   += w["cmap_tables"]
+        _all_axis_widgets.append(self._row_height_sel)   # toolbar, 2026-10-13
 
         # Panels that have an image source, and the sources themselves.
         # Both the toolbar args and _panel_image_payloads() iterate this
@@ -9608,6 +9923,7 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             self._hover(reload_btn, "tb_reload"),
             _sep(),
             self._hover(layout_rbg, "tb_layout"),
+            self._hover(self._row_height_sel, "tb_row_height"),
             _sep(),
             *[self._hover(btn, f"preset_{name}")
               for name, btn in preset_btns.items()],
@@ -9685,20 +10001,21 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             self._layout != "one" and pos1_slot.kind == "raster")
         pos1_slot.scatter.layout.visible = (
             self._layout != "one" and pos1_slot.kind == "scatter")
-        if self._layout == "one":
-            _full_w  = self._layout_js.args["full_w"]
-            _panel_h = self._layout_js.args["panel_h"]
-            self._pos0.figure.width  = _full_w
-            self._pos0.figure.height = _panel_h
-        elif self._layout == "over" and not self._plot_height_given:
-            # The size the Over / Under button gives (2026-10-12).  Before,
-            # layout="over" at startup kept the side-by-side height, so a
-            # reproduced Over / Under view drew each panel twice as tall
-            # as the one it came from.
-            _over_h = self._layout_js.args["over_h"]
-            for _slot in self._slots:
-                _slot.raster.figure.height  = _over_h
-                _slot.scatter.figure.height = _over_h
+        # Startup sizes (2026-10-13): row_height / column_width for the
+        # layout, set on both kinds of each position as the layout buttons
+        # do (panel_sizes).  "fit" starts at the layout's default height;
+        # the browser fits it once the page is laid out (_SIZES_JS).
+        from .panel_sizes import row_heights, column_widths, ROW_HEIGHT_DEFAULT
+        _hs = [h if isinstance(h, int) else ROW_HEIGHT_DEFAULT[self._layout]
+               for h in row_heights(self._row_height, self._layout)]
+        _ws = column_widths(self._column_width, self._layout)
+        for _pos, _slot in enumerate([pos0_slot, pos1_slot]):
+            _h = _hs[min(_pos, len(_hs) - 1)] if self._layout == "over" else _hs[0]
+            _w = _ws[min(_pos, len(_ws) - 1)] if self._layout == "side" else _ws[0]
+            for _panel in (_slot.raster, _slot.scatter):
+                _panel.figure.height = _h
+                if _w is not None:
+                    _panel.figure.width = _w
 
         # ---- Linked cursor Spans ----------------------------------------- #
         # Generalized to N panels (added 2026-07-31, closing the KNOWN GAP
@@ -9842,6 +10159,25 @@ if (x != null && !isNaN(x)) {
         for sjs in self._swap_js_objects:
             sjs.args["side_container"] = side_container
             sjs.args["over_container"] = over_container
+
+        # Panel sizes (2026-10-13): window.__cvApplySizes, see _SIZES_JS.
+        from .panel_sizes import FIT_MIN_HEIGHT
+        self._app_context.add_init_script(
+            code=_SIZES_JS.replace("__FIT_MIN__", str(int(FIT_MIN_HEIGHT))),
+            args={
+                "size_src": self._size_source,
+                "slots": [{"raster_fig": sl.raster.figure,
+                           "raster_layout": sl.raster.layout,
+                           "scatter_fig": sl.scatter.figure,
+                           "scatter_layout": sl.scatter.layout}
+                          for sl in self._slots],
+                "display_order_source": self._display_order_source,
+                "layout_rbg": self._layout_rbg,
+                "side_container": side_container,
+                "over_container": over_container,
+            },
+            description="panel sizes",
+        )
 
         return side_container, over_container
 

@@ -433,3 +433,47 @@ layout of 2026-09). Two fixes:
 
 Tests: `test_panel_sizes.py` (the cue, strip widths, toolbar padding);
 `test_info_block_integration.py` updated for the strip width.
+
+## 17. ssh wrapper for password-only login hosts (base `e323e5f`, 2026-10-14)
+
+`demos/visplot-remote/bin/ssh` (install as `~/bin/ssh`, `ln -s ssh
+~/bin/scp`): a generic rewrite of Darrell's perl wrapper, for sites whose
+login host (and sometimes the hosts behind it) asks for a password even
+with a key installed, so sshpyk (no terminal) cannot log in. Nothing
+site-specific in the script: the hosts come from
+`~/.config/ssh-wrapper/rules` (`<glob>[,<glob>] service=... [account=...]
+[backend=security|secret-tool|pass|command] [command=...]`), matched
+against each hop's effective HostName; no rules file means a plain
+pass-through.
+
+Why the git clone failed with the old wrapper (Darrell, 2026-10-14):
+- the rule matched the whole domain, so the key-only git server (port
+  7999) was treated as a password host;
+- `-p 7999` was not passed to the pre-connect or `-O check`, which went to
+  port 22 / the wrong ControlPath;
+- git's `ssh -G <host>` probe was treated as a connection.
+
+Found while testing the rewrite, against a local rig (password-only
+bastion :2201, password-only compute host behind it via ProxyJump :2202,
+key-only git-only server :2203):
+- under sshpass, the second hop's shared connection never survived: the
+  ProxyJump helper (`ssh -W` mux client) stays on sshpass's pty and is
+  killed by the hangup when sshpass exits. Now the login runs in its own
+  session (setsid), no terminal, with the wrapper itself as SSH_ASKPASS
+  (`SSH_ASKPASS_REQUIRE=force`, OpenSSH 8.4+), so sshpass is no longer
+  needed and the password store is read only when ssh asks;
+- one password attempt (`NumberOfPasswordPrompts=1`); after a failed login
+  with no terminal the wrapper stops (exit 255) instead of running the
+  command, whose ProxyJump helper otherwise made two failed attempts of its
+  own (lockout risk). With a terminal it hands over so ssh can ask.
+- exit status 255 = login failed; any other status = logged in but the
+  host refused `true` (git-only servers), treated as success.
+- askpass answers only prompts containing "password" (not passphrases,
+  host-key questions, or one-time codes).
+
+Rig results: ssh through the bastion with no terminal (both hops shared,
+reused, re-established after `-O exit`); scp; git clone from the key-only
+server with and without an over-broad rule; `ssh -G`/`-V` pass through;
+`-P`/`-o ProxyJump` parsing for scp; sshpyk-style `-O check`, BatchMode,
+`-f -N -L`; wrong stored password = exactly one failed attempt on the
+server. Not tested here: macOS (`security` backend, Apple's OpenSSH).

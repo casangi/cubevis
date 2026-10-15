@@ -1,7 +1,7 @@
 """Demo 3: the visplot window with a remote kernel, and what to try in it.
 
     python 03_remote_gui.py --remote-ms /path/on/kernel/host.ms \\
-        --kernel cvpost106_python312 --field 3c279
+        --kernel vp_remote --field 3c279
 
     # kernel on this machine:
     python 03_remote_gui.py --ms sis14_twhya_calibrated_flagged.ms --field 3c279

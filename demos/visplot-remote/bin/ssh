@@ -428,6 +428,10 @@ sub open_shared {
         my @cmd = ( $SSH, @$args, '-T', '-x',
             '-o', 'ControlMaster=auto', '-o', "ControlPersist=$persist",
             '-o', 'NumberOfPasswordPrompts=1', '-o', 'ConnectTimeout=30',
+            # sshpyk recommends BatchMode yes for its host aliases, which
+            # turns off password prompts (askpass included) -- not for this
+            # one login.
+            '-o', 'BatchMode=no',
             $target, 'true' );
         logmsg( "opening: " . join( ' ', @cmd ) );
         exec @cmd or POSIX::_exit(127);

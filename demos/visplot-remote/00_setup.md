@@ -1,0 +1,281 @@
+# Setting up visplot with a remote kernel
+
+This is the one setup we support for running visplot's data side on another
+machine: the machine that holds the data, reached through a login host. It
+works when the login host asks for your password every time, even with an
+SSH key installed, and when the machine behind it does too. It needs no
+administrator rights on either side.
+
+`00_remote_setup.py` (next to this file) asks for your host names and prints
+every command below with your values filled in, and `--check` tests each step.
+Read this page once first; then use whichever you prefer.
+
+## The pieces
+
+```
+ your computer                     login host            remote host
+ ─────────────                     ──────────            ───────────
+ visplot (browser window)  ──ssh──▶  (password)  ──ssh──▶  Jupyter kernel
+ sshpyk  (starts the kernel)                               visplot data side
+ ssh wrapper (types the password, once)                    your measurement sets
+```
+
+* **Your computer** (macOS or Linux) runs the visplot window and `sshpyk`,
+  which starts a Jupyter kernel on the remote host over ssh.
+* **The login host** (also called a bastion or gateway) is the only machine
+  you can reach from outside. You never run anything there.
+* **The remote host** holds the data and runs the kernel.
+
+sshpyk runs ssh with no terminal, so a password prompt has nobody to answer
+it. The **ssh wrapper** (`bin/ssh`) logs in to each host that asks for a
+password once, using the password stored in your keychain, and leaves a
+*shared connection* open that every later ssh command reuses.
+
+## What you need to know first
+
+| | Example | Yours |
+|---|---|---|
+| Login host | `login.example.org` | |
+| Remote host | `compute1.example.org` | |
+| Your user name there | `jsmith` | |
+| Which of them ask for a password | both | |
+| Where the data will live on the remote host | `~/visplot-data` | |
+
+Below, `<login>`, `<remote>` and `<user>` stand for these. The ssh *aliases*
+used below are short names you choose in step 5: `vp-login` and `vp-remote`.
+
+## 1. Miniforge, on your computer and on the remote host
+
+Miniforge is a conda installation in your home directory, using the
+conda-forge channel by default. If you already have conda or mamba with
+conda-forge as the channel, skip this step.
+
+On **your computer**, and again on **the remote host** (log in by hand with
+`ssh <user>@<remote>` through the login host, or `ssh -J <user>@<login>
+<user>@<remote>`):
+
+```
+curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
+bash "Miniforge3-$(uname)-$(uname -m).sh" -b -p "$HOME/miniforge3"
+"$HOME/miniforge3/bin/conda" init "$(basename "$SHELL")"
+```
+
+Open a new terminal (or log in again) so that `conda` is on your path.
+
+## 2. The visplot environment, on both sides
+
+The same environment on both sides, with the same cubevis release: visplot
+compares the two versions when it connects and warns if they differ.
+
+On **your computer** and on **the remote host**:
+
+```
+mamba create -y -n visplot python=3.12 pip ipykernel jupyter_client \
+      scipy regions 'zarr>=3' datashader certifi
+conda activate visplot
+pip install "cubevis[visplot]==1.0.95"
+```
+
+On **your computer** only, add sshpyk and get the demos (this also gives
+you the ssh wrapper):
+
+```
+pip install sshpyk
+git clone https://github.com/casangi/cubevis.git ~/cubevis
+```
+
+On the remote host, note the environment's Python; step 7 needs it:
+
+```
+conda activate visplot && python -c "import sys; print(sys.executable)"
+# e.g. /home/jsmith/miniforge3/envs/visplot/bin/python
+```
+
+## 3. The ssh wrapper, on your computer
+
+```
+mkdir -p ~/bin
+cp ~/cubevis/demos/visplot-remote/bin/ssh ~/bin/ssh
+chmod +x ~/bin/ssh
+ln -sf ssh ~/bin/scp
+```
+
+`~/bin` must come before the system directories in your `PATH`. Add this
+line at the **end** of `~/.zshrc` (macOS) or `~/.bashrc` (Linux), so it also
+comes before the conda environment's directory:
+
+```
+export PATH="$HOME/bin:$PATH"
+```
+
+Open a new terminal, activate the environment, and check:
+
+```
+conda activate visplot
+command -v ssh          # must print /Users/<you>/bin/ssh or /home/<you>/bin/ssh
+ssh -V                  # OpenSSH 8.4 or later
+```
+
+## 4. Your password, on your computer
+
+The wrapper reads the password from your keychain; it is never written in a
+file in plain text. Pick a *service* name for it, e.g. `remote_ssh_pw`.
+
+**macOS** (prompts for the password):
+```
+security add-generic-password -a <user> -s remote_ssh_pw -w
+```
+
+**Linux with a desktop keyring** (GNOME, KDE):
+```
+secret-tool store --label='remote ssh password' service remote_ssh_pw account <user>
+```
+
+**Linux without a keyring** (a gpg-encrypted file; gpg-agent remembers the
+key's passphrase for a while):
+```
+gpg --quick-generate-key "<user> ssh password"     # once, if you have no gpg key
+gpg -q -e -r "<user> ssh password" -o ~/.ssh/remote_pw.gpg
+# type the password, then Enter and Ctrl-D (so it is not in your shell history)
+```
+
+Then tell the wrapper which hosts need it. Create `~/.config/ssh-wrapper/rules`
+with the **real host names** (not the aliases); list only hosts that ask for a
+password:
+
+```
+mkdir -p ~/.config/ssh-wrapper
+cat > ~/.config/ssh-wrapper/rules <<'EOF'
+<login>,<remote>   service=remote_ssh_pw
+EOF
+```
+
+For the gpg file, end the line with `command=gpg -q -d ~/.ssh/remote_pw.gpg`
+instead of `service=...`. A pattern such as `*.example.org` covers several
+hosts; make sure it does not cover a git server or other host you reach with
+a key only.
+
+## 5. Your ssh configuration, on your computer
+
+Add to `~/.ssh/config` (create it if needed; `chmod 600 ~/.ssh/config`):
+
+```
+Host vp-login
+    HostName <login>
+    User <user>
+
+Host vp-remote
+    HostName <remote>
+    User <user>
+    ProxyJump vp-login
+
+Host vp-login vp-remote
+    ControlMaster auto
+    ControlPath ~/.ssh/cm_%r@%h_%p
+    ControlPersist 8h
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+```
+
+`ControlPath` and `ControlPersist` are what keep the shared connection open;
+without them every command would need the password again. Keep settings such
+as `ForwardX11 yes` out of a `Host *` section: they slow down or break
+non-interactive connections (sshpyk, git).
+
+## 6. Check ssh, on your computer
+
+```
+ssh vp-remote hostname
+```
+
+The first time, expect:
+
+```
+[ssh-wrapper] logging in to 'vp-login' (<login>) for a shared connection
+[ssh-wrapper] shared connection to 'vp-login' is up
+[ssh-wrapper] logging in to 'vp-remote' (<remote>) for a shared connection
+[ssh-wrapper] shared connection to 'vp-remote' is up
+<remote's host name>
+```
+
+Run it again: only the host name, no `[ssh-wrapper]` lines. `ssh -O check
+vp-remote` says `Master running`. If you are asked whether to trust a host's
+key, answer `yes` once by hand (`ssh vp-login true`, then `ssh vp-remote
+true`). If a login fails, see *Problems* below.
+
+## 7. The kernel definition, on your computer
+
+```
+sshpyk add --ssh-host-alias vp-remote \
+           --kernel-name vp_remote \
+           --display-name "visplot on <remote>" \
+           --remote-python <the python from step 2> \
+           --remote-kernel-name python3 \
+           --language python
+sshpyk list --remote
+```
+
+In the `sshpyk list` output for `vp_remote`, look for `(v)` (verified) on
+**SSH Path** (your `~/bin/ssh`), **SSH Connection**, **Remote Python** and
+**Remote Kernel Name**, and `controlmaster: auto`, `controlpersist` and
+`controlpath` on both host aliases. An `(!) identityfile` warning is expected
+when you log in with a password and can be ignored.
+
+## 8. Test data, on the remote host
+
+```
+mkdir -p ~/visplot-data && cd ~/visplot-data
+curl -L -O https://casa.nrao.edu/download/devel/casavis/data/sis14_twhya_calibrated_flagged.ms.tar.gz
+tar xzf sis14_twhya_calibrated_flagged.ms.tar.gz
+pwd          # the absolute path, for step 9
+```
+
+(443 MB; it unpacks to `sis14_twhya_calibrated_flagged.ms`.)
+
+## 9. visplot, on your computer
+
+A file first, without a window:
+
+```
+conda activate visplot
+python - <<'EOF'
+from cubevis.toolbox.visplot import VisibilityPlotter
+vp = VisibilityPlotter(ms="<path from step 8>/sis14_twhya_calibrated_flagged.ms",
+                       field="3c279", headless=True,
+                       backend="remote", kernel_name="vp_remote")
+print("version warning:", vp._version_warning)     # None: both sides match
+print(vp(plotfile="remote_test.png", theme="light"))
+vp.close()
+EOF
+```
+
+The MS path is the absolute path **on the remote host** (`~` is not
+expanded). Open `remote_test.png`: a raster and a scatter of the 3c279
+calibrator. `python 00_remote_setup.py --check --kernel` does the same and
+checks every step before it.
+
+Then the window, and the guided demos:
+
+```
+cd ~/cubevis/demos/visplot-remote
+python 03_remote_gui.py --remote-ms <path from step 8>/sis14_twhya_calibrated_flagged.ms \
+       --kernel vp_remote --field 3c279
+```
+
+`README.md` here describes demos 01–03.
+
+## Problems
+
+| What you see | What to do |
+|---|---|
+| `command -v ssh` is not `~/bin/ssh` | The `PATH` line must come after the conda lines in your shell start-up file; open a new terminal. |
+| `login to 'vp-login' failed` | Check the stored password (step 4). The wrapper tries once only, so a wrong password cannot lock your account. Try `ssh vp-login true` in a terminal: ssh will ask you. |
+| `no password found for ...` | The rules' `service=` and the keychain entry's service and account must match; the account defaults to `User` in `~/.ssh/config`. |
+| `needs a password but has no ControlPath` | Step 5: the `Host vp-login vp-remote` section is missing or names different aliases. |
+| `logged in ... but no shared connection stayed up` | `ControlPath`'s directory must exist (`~/.ssh`); `ControlPersist` must not be `no`. |
+| sshpyk hangs or times out starting the kernel | Run step 6 again; then `sshpyk list --remote`. `SSH_WRAPPER_DEBUG=1` logs every step to `~/.ssh/ssh-wrapper.log`. |
+| `version warning:` is not `None` | Install the same cubevis release on both sides (step 2). |
+| `ModuleNotFoundError` in the kernel | The kernel definition points at a Python without the environment: check `--remote-python` (step 7). |
+
+After a network interruption the shared connections close; the next ssh
+command (or sshpyk) logs in again by itself.

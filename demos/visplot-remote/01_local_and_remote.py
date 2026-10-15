@@ -5,7 +5,7 @@
 
     # data and kernel on another machine:
     python 01_local_and_remote.py --ms local/copy.ms \\
-        --remote-ms /path/on/kernel/host.ms --kernel cvpost106_python312
+        --remote-ms /path/on/kernel/host.ms --kernel vp_remote
 
 What it shows, in order: where each half of visplot runs; the version
 check between the two sides; that a selection (scan, time, UV range,

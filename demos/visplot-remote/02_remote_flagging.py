@@ -5,7 +5,7 @@
 
     # data and kernel on another machine (no local copy needed):
     python 02_remote_flagging.py --remote-ms /path/on/kernel/host.ms \\
-        --kernel cvpost106_python312 --field 3c279 --step
+        --kernel vp_remote --field 3c279 --step
 
 What it shows: a flag box is resolved in the worker (only the delta and
 counts come back); a UV range makes a box a set of samples rather than a

@@ -14,6 +14,9 @@ root is put first on the Python path (`CUBEVIS_ROOT` overrides), and the
 first line printed says which cubevis is in use. Nothing needs to be copied
 or linked into this directory.
 
+**First time?** Set up the remote side with `00_setup.md` (and its helper,
+`00_remote_setup.py`), then come back to the demos.
+
 The automated checks of the same behaviour are in `tests/manual/visplot/`
 (see `REMOTE_TESTING.md` there): `test_remote_flagging.py`,
 `test_remote_selection.py` (pytest) and `remote_visplot_check.py` (a script
@@ -33,6 +36,7 @@ results cross between them: images, sample counts, flag deltas.
 
 | Script | Shows | Browser |
 |---|---|---|
+| `00_setup.md`, `00_remote_setup.py` | how to set it up: your computer, a login host that asks for a password, and the remote host with the data; the script prints the steps with your names and `--check` tests them | no |
 | `01_local_and_remote.py` | the two halves; the version check; a UV range applied in the kernel; identical local and remote images; "rows with data" for stepping; the plot summary of a remote plotter; a PNG from each side | no |
 | `02_remote_flagging.py` | a flag box resolved in the worker; the same box under a UV range (stored as exact samples); the pending-flag record and JSON export; undo / redo | no |
 | `03_remote_gui.py` | a guided tour, then the real window on a remote kernel | yes |
@@ -59,13 +63,13 @@ python 02_remote_flagging.py  --ms sis14_twhya_calibrated_flagged.ms --field 3c2
 
 # kernel on the data host
 python 01_local_and_remote.py --ms sis14_twhya_calibrated_flagged.ms \
-    --remote-ms /home/zuul06-2/dschieb/casa/visplot/sis14_twhya_calibrated_flagged.ms \
-    --kernel cvpost106_python312 --step
+    --remote-ms /data/on/remote/sis14_twhya_calibrated_flagged.ms \
+    --kernel vp_remote --step
 
 python 02_remote_flagging.py --remote-ms /path/on/kernel/host.ms \
-    --kernel cvpost106_python312 --field 3c279 --step
+    --kernel vp_remote --field 3c279 --step
 python 03_remote_gui.py --remote-ms /path/on/kernel/host.ms \
-    --kernel cvpost106_python312 --field 3c279
+    --kernel vp_remote --field 3c279
 ```
 
 Demo 1 needs a local copy of the data as well (it compares the two sides).

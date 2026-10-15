@@ -477,3 +477,40 @@ server with and without an over-broad rule; `ssh -G`/`-V` pass through;
 `-P`/`-o ProxyJump` parsing for scp; sshpyk-style `-O check`, BatchMode,
 `-f -N -L`; wrong stored password = exactly one failed attempt on the
 server. Not tested here: macOS (`security` backend, Apple's OpenSSH).
+
+## 18. Remote setup guide and helper (base `2ba4a08`, 2026-10-14)
+
+`demos/visplot-remote/00_setup.md` (the one supported path) and
+`00_remote_setup.py` (asks for the names, prints the steps filled in, writes
+`remote-setup/{ssh_config.txt,rules.txt,steps.md,answers.json}`; `--check`
+tests every step read-only, `--check --kernel` also starts the kernel and
+draws a PNG). Generic throughout: only the test-data URL names the site.
+
+Path: Miniforge in `$HOME` on both sides (no root, conda-forge default);
+`mamba create -n visplot python=3.12 pip ipykernel jupyter_client scipy
+regions 'zarr>=3' datashader certifi` + `pip install
+"cubevis[visplot]==1.0.95"` on both (same release: the version check);
+locally also `pip install sshpyk` and an HTTPS clone of cubevis for the
+demos and `bin/ssh`; wrapper in `~/bin` (PATH line after conda's);
+password in the keychain (macOS `security`, Linux `secret-tool`, or a
+gpg-encrypted file via `command=` — conda-forge has no `pass`); rules file;
+`~/.ssh/config` aliases `vp-login` / `vp-remote` (ProxyJump) with
+ControlMaster/ControlPath/ControlPersist in a section for just those two;
+`sshpyk add ... --remote-kernel-name python3`; `sshpyk list --remote` (what
+to look for); test MS `sis14_twhya_calibrated_flagged.ms.tar.gz`; headless
+PNG, then `03_remote_gui.py`.
+
+Wrapper change found while writing it: sshpyk recommends `BatchMode yes`,
+which disables askpass; the wrapper's login now passes `-o BatchMode=no`.
+
+Checked in the rig (password bastion + password compute host): wrapper with
+`BatchMode yes`; `sshpyk add` / `sshpyk list --remote` from a cold start
+(all (v)); a kernel started through it (ran on the compute host);
+`VisibilityPlotter(..., backend="remote", kernel_name=...)` through the
+sshpyk kernel: no version warning, PNG written; the helper script's
+`--check --kernel`: all checks pass (X11 warning shown for a `Host *`
+`ForwardX11 yes`). Not checked here: macOS, Miniforge installs, the pip
+install of 1.0.95 from PyPI.
+
+The visplot-remote demos' examples no longer use site host / kernel names
+(`vp_remote`, `/data/on/remote/...`).

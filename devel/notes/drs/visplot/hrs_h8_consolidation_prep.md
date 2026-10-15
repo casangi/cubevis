@@ -558,3 +558,17 @@ The visplot-remote demos' examples no longer use site host / kernel names
   environment under miniforge3, mambaforge, miniconda3, anaconda3,
   micromamba, conda, or the per-system Miniforge prefix (rig: found under
   `~/miniconda3`).
+
+## 21. Setup guide: no Python on a new account (base `40fbc61`, 2026-10-15)
+
+A new macOS account has no `python` (Darrell's fresh-account run), so the
+helper cannot run before the environment exists. Kept in Python (its
+`--check` needs jupyter_client and, with `--kernel`, cubevis; a bash
+version could only ask and print) and made the order explicit: steps 1-2
+from the page, then `conda activate visplot` and the helper from step 3 on
+(it still prints 1-2 with your names for the remote host). `git` added to
+the environment (a Mac without the command-line tools would offer to
+install them, needing an administrator; command-line tools are per
+machine, so a new account on a set-up Mac has git). Step 2 allows a
+checkout made earlier to read the guide (fetch and check out the release
+tag). Problems table: `python: command not found`.

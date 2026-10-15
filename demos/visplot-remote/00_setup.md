@@ -6,9 +6,21 @@ works when the login host asks for your password every time, even with an
 SSH key installed, and when the machine behind it does too. It needs no
 administrator rights on either side.
 
-`00_remote_setup.py` (next to this file) asks for your host names and prints
-every command below with your values filled in, and `--check` tests each step.
-Read this page once first; then use whichever you prefer.
+**How to use this page.** Do steps 1 and 2 from this page: they install
+conda and the visplot environment, which bring the Python (and git) that a
+new account may not have. From step 3 on you can follow this page or let
+`00_remote_setup.py` take over (it comes with the cubevis checkout, which
+step 2 makes if you do not already have one), run with the environment's
+Python:
+
+```
+conda activate visplot
+cd ~/cubevis/demos/visplot-remote
+python 00_remote_setup.py            # asks your host names, prints steps 3-9 filled in
+python 00_remote_setup.py --check    # tests every step; add --kernel for a test plot
+```
+
+It also repeats steps 1 and 2 with your names, for the remote host.
 
 ## The pieces
 
@@ -91,14 +103,19 @@ compares the two versions when it connects and warns if they differ.
 On **your computer** and on **the remote host**:
 
 ```
-conda create -y -n visplot -c conda-forge python=3.12 pip ipykernel \
+conda create -y -n visplot -c conda-forge python=3.12 pip git ipykernel \
       jupyter_client scipy regions 'zarr>=3' datashader certifi
 conda activate visplot
 pip install "cubevis[visplot]==1.0.96"
 ```
 
 On **your computer** only, add sshpyk and get the demos (this also gives
-you the ssh wrapper):
+you the ssh wrapper and `00_remote_setup.py`). If you already cloned cubevis
+to read this page, skip the clone; make sure it is at the release you
+installed (`git -C ~/cubevis fetch --tags && git -C ~/cubevis checkout
+v1.0.96`). The environment includes `git`, for a computer that has none (a
+Mac without Apple's command-line tools offers to install them, which needs
+an administrator):
 
 ```
 pip install sshpyk
@@ -318,6 +335,7 @@ python 03_remote_gui.py --remote-ms <path from step 8>/sis14_twhya_calibrated_fl
 
 | What you see | What to do |
 |---|---|
+| `python: command not found` (or `python3` offers to install developer tools) | Steps 1 and 2 first, then `conda activate visplot`: a new account has no Python of its own. |
 | `command -v ssh` is not `~/bin/ssh` | The `PATH` line must come after the conda lines in your shell start-up file; open a new terminal. |
 | `login to 'vp-login' failed` | Check the stored password (step 4). The wrapper tries once only, so a wrong password cannot lock your account. Try `ssh vp-login true` in a terminal: ssh will ask you. |
 | `no password found for ...` | The rules' `service=` and the store's entry must match (keychain and secret-tool: also the account, which defaults to `User` in `~/.ssh/config`). With pass or a gpg file: run `pass show remote_ssh_pw` (or `gpg -d ...`) in a terminal once, so gpg-agent has the key's passphrase. |

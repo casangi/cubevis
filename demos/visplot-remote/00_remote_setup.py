@@ -10,7 +10,16 @@ place: ``ssh_config.txt`` (for ``~/.ssh/config``), ``rules.txt`` (for
 ``~/.config/ssh-wrapper/rules``) and ``steps.md`` (the guide with your names).
 This script never edits your ssh configuration or your keychain itself.
 
-Uses only the standard library, so it runs before the environment exists.
+Run it from the visplot environment, after steps 1 and 2 of ``00_setup.md``
+on your computer (a new account may have no ``python`` before that)::
+
+    conda activate visplot
+    cd ~/cubevis/demos/visplot-remote
+    python 00_remote_setup.py
+
+The steps it prints include 1 and 2 again, with your names, for the remote
+host. It uses only the standard library, except ``--check``, which also
+uses jupyter_client and, with ``--kernel``, cubevis.
 """
 from __future__ import annotations
 
@@ -31,7 +40,7 @@ CUBEVIS_RELEASE = "1.0.96"
 DATA_URL = ("https://casa.nrao.edu/download/devel/casavis/data/"
             "sis14_twhya_calibrated_flagged.ms.tar.gz")
 DATA_MS = "sis14_twhya_calibrated_flagged.ms"
-CONDA_PKGS = "python=3.12 pip ipykernel jupyter_client scipy regions 'zarr>=3' datashader certifi"
+CONDA_PKGS = "python=3.12 pip git ipykernel jupyter_client scipy regions 'zarr>=3' datashader certifi"
 
 QUESTIONS = [
     ("login_host", "Login host (the gateway you reach first), real name", "login.example.org"),
@@ -206,6 +215,7 @@ def steps(a: dict) -> str:
 
         pip install sshpyk
         git clone --depth 1 --branch v{CUBEVIS_RELEASE} https://github.com/casangi/cubevis.git ~/cubevis
+        # (or, with a checkout you already have: git -C ~/cubevis fetch --tags && git -C ~/cubevis checkout v{CUBEVIS_RELEASE})
 
     ON THE REMOTE HOST, print the python (a path on the remote host; give it
     when you run this script again, or let --check find it):

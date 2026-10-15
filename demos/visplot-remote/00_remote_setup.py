@@ -45,7 +45,7 @@ QUESTIONS = [
     ("remote_alias", "ssh alias for the remote host", "vp-remote"),
     ("kernel", "Jupyter kernel name", "vp_remote"),
     ("data_dir", "Data directory on the remote host (absolute path)", ""),
-    ("remote_python", "The visplot environment's python on the remote host "
+    ("remote_python", "The visplot environment's python, a path on the remote host "
                       "(blank if not created yet)", ""),
 ]
 
@@ -183,9 +183,13 @@ def steps(a: dict) -> str:
     `{a['remote_host']}` (alias `{a['remote_alias']}`), user `{a['user']}`.
     Password asked by: {', '.join(password_hosts(a))}.
 
-    ## 1. Miniforge -- ON YOUR COMPUTER, then ON THE REMOTE HOST
-    (skip if you already have conda/mamba using conda-forge; on the remote
-    host, log in by hand: ssh -J {a['user']}@{a['login_host']} {a['user']}@{a['remote_host']})
+    Your home directory on the remote host is normally not the one on your
+    computer: a path printed there is a path there.
+
+    ## 1. conda -- ON YOUR COMPUTER, then ON THE REMOTE HOST
+    Skip if you already have conda (Miniforge, Miniconda, Anaconda, mamba).
+    On the remote host, log in by hand: ssh -J {a['user']}@{a['login_host']} {a['user']}@{a['remote_host']}
+    If both machines share your home directory, see 00_setup.md, step 1.
 
         curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
         bash "Miniforge3-$(uname)-$(uname -m).sh" -b -p "$HOME/miniforge3"
@@ -194,7 +198,7 @@ def steps(a: dict) -> str:
 
     ## 2. The visplot environment -- ON BOTH
 
-        mamba create -y -n visplot {CONDA_PKGS}
+        conda create -y -n visplot -c conda-forge {CONDA_PKGS}
         conda activate visplot
         pip install "cubevis[visplot]=={CUBEVIS_RELEASE}"
 
@@ -203,7 +207,8 @@ def steps(a: dict) -> str:
         pip install sshpyk
         git clone --depth 1 --branch v{CUBEVIS_RELEASE} https://github.com/casangi/cubevis.git ~/cubevis
 
-    ON THE REMOTE HOST, note the python (answer it when you run this script again):
+    ON THE REMOTE HOST, print the python (a path on the remote host; give it
+    when you run this script again, or let --check find it):
 
         conda activate visplot && python -c "import sys; print(sys.executable)"
 
@@ -418,11 +423,13 @@ def check(a: dict, kernel: bool) -> int:
     # --- 2. remote environment
     rp = a.get("remote_python")
     if not rp and ok:
-        # The usual place (00_setup.md, steps 1-2), expanded on the remote host.
-        rc, out, _ = run(["ssh", a["remote_alias"],
-                          'p="$HOME/miniforge3/envs/visplot/bin/python"; test -x "$p" && echo "$p"'],
-                         timeout=60)
-        rp = out.strip()
+        # The usual places (00_setup.md, steps 1-2: Miniforge, or an existing
+        # conda installation), looked up on the remote host.
+        find = ('for d in miniforge3 mambaforge miniconda3 anaconda3 micromamba conda '
+                '"miniforge3-$(uname -s)-$(uname -m)"; do p="$HOME/$d/envs/visplot/bin/python"; '
+                'if test -x "$p"; then echo "$p"; break; fi; done')
+        rc, out, _ = run(["ssh", a["remote_alias"], find], timeout=60)
+        rp = out.strip().splitlines()[0] if out.strip() else ""
     if c.report(bool(rp), "remote python known", rp or "",
                 "Step 2 on the remote host, then run this script again without --check "
                 "and give the python path."):

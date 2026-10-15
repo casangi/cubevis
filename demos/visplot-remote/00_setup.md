@@ -39,20 +39,29 @@ password once, using the password stored in your keychain, and leaves a
 | Remote host | `compute1.example.org` | |
 | Your user name there | `jsmith` | |
 | Which of them ask for a password | both | |
-| Where the data will live on the remote host | `~/visplot-data` | |
+| Where the data will live on the remote host | `/home/jsmith/visplot-data` | |
 
 Below, `<login>`, `<remote>` and `<user>` stand for these. The ssh *aliases*
 used below are short names you choose in step 5: `vp-login` and `vp-remote`.
 
-## 1. Miniforge, on your computer and on the remote host
+**Two home directories.** Your home directory on the remote host is normally
+not the one on your computer: different machines, different files, often a
+different path (`/Users/jsmith` on a Mac, `/home/jsmith` there). Each step
+says where it runs, and a path printed on the remote host is a path *there*;
+`~` in a command means the home directory of the machine it runs on. Some
+sites share one home directory between your workstation and their compute
+hosts; see the note in step 1.
 
-Miniforge is a conda installation in your home directory, using the
-conda-forge channel by default. If you already have conda or mamba with
-conda-forge as the channel, skip this step.
+## 1. conda, on your computer and on the remote host
 
-On **your computer**, and again on **the remote host** (log in by hand with
-`ssh <user>@<remote>` through the login host, or `ssh -J <user>@<login>
-<user>@<remote>`):
+You need conda with the conda-forge channel on both machines. **If you
+already have conda** (Miniforge, Miniconda, Anaconda, or mamba), skip this
+step: step 2 asks for conda-forge explicitly.
+
+Otherwise install Miniforge, a conda installation in your home directory that
+uses conda-forge by default and needs no administrator rights. On **your
+computer**, and again on **the remote host** (log in by hand: `ssh -J
+<user>@<login> <user>@<remote>`):
 
 ```
 curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
@@ -60,7 +69,19 @@ bash "Miniforge3-$(uname)-$(uname -m).sh" -b -p "$HOME/miniforge3"
 "$HOME/miniforge3/bin/conda" init "$(basename "$SHELL")"
 ```
 
-Open a new terminal (or log in again) so that `conda` is on your path.
+Open a new terminal (or log in again) so that `conda` is on your path. This
+page uses `conda` throughout; `mamba` (which Miniforge also installs) takes
+the same commands, but needs its own `mamba shell init` before `mamba
+activate` works, so there is no need for both.
+
+**If your computer and the remote host share your home directory** (check:
+a file you create in `~` on one appears in `~` on the other), install once,
+from the machine whose system is the remote host's (for example both Linux
+x86_64): one installation and one environment then serve both sides, and
+step 2 is done once. If the two systems differ (a Mac and a Linux host),
+give the remote host's installation its own directory, e.g.
+`-p "$HOME/miniforge3-$(uname -s)-$(uname -m)"` in the second command, and
+use that path instead of `$HOME/miniforge3` on the remote host.
 
 ## 2. The visplot environment, on both sides
 
@@ -70,8 +91,8 @@ compares the two versions when it connects and warns if they differ.
 On **your computer** and on **the remote host**:
 
 ```
-mamba create -y -n visplot python=3.12 pip ipykernel jupyter_client \
-      scipy regions 'zarr>=3' datashader certifi
+conda create -y -n visplot -c conda-forge python=3.12 pip ipykernel \
+      jupyter_client scipy regions 'zarr>=3' datashader certifi
 conda activate visplot
 pip install "cubevis[visplot]==1.0.96"
 ```
@@ -84,11 +105,12 @@ pip install sshpyk
 git clone --depth 1 --branch v1.0.96 https://github.com/casangi/cubevis.git ~/cubevis
 ```
 
-On the remote host, note the environment's Python; step 7 needs it:
+On **the remote host**, print the environment's Python and keep the path:
+step 7 tells your computer where to find it.
 
 ```
 conda activate visplot && python -c "import sys; print(sys.executable)"
-# e.g. /home/jsmith/miniforge3/envs/visplot/bin/python
+# e.g. /home/jsmith/miniforge3/envs/visplot/bin/python  (a path on the remote host)
 ```
 
 ## 3. The ssh wrapper, on your computer

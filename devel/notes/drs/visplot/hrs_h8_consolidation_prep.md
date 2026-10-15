@@ -535,3 +535,26 @@ The visplot-remote demos' examples no longer use site host / kernel names
   so the wrapper and demos match the installed release.
 - Rig: pass (system package, gpg key without passphrase) and gpg-file each
   pass `--check --kernel` from a cold start; a locked key gives the hint.
+
+## 20. Setup guide after Darrell's fresh-account run (base `737fd0e`, 2026-10-15)
+
+- **Two home directories.** The guide read as if the remote host shared
+  your home directory (an example path that looked like the local one,
+  "same commands on both"). Now: a note that the remote home is normally a
+  different place and a path printed there is a path there; and step 1
+  handles a *shared* home (install once when both systems match; otherwise
+  a separate prefix such as `~/miniforge3-$(uname -s)-$(uname -m)` on the
+  remote host) -- installing "on both" into one shared `~/miniforge3` would
+  have collided.
+- **conda throughout.** `mamba create` + `conda activate` mixed two tools;
+  conda (libmamba solver since 23.10) is as fast, and Miniforge sets up
+  `conda init`, while `mamba activate` needs `mamba shell init`. mamba
+  mentioned as equivalent.
+- **Existing conda.** Step 1 is skipped if conda is already installed
+  (Miniforge, Miniconda, Anaconda, mamba); step 2's `conda create` now says
+  `-c conda-forge`, so a `defaults`-channel installation still uses
+  conda-forge.
+- `00_remote_setup.py` mirrors these; `--check` now finds the remote
+  environment under miniforge3, mambaforge, miniconda3, anaconda3,
+  micromamba, conda, or the per-system Miniforge prefix (rig: found under
+  `~/miniconda3`).

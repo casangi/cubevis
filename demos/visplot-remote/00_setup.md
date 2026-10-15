@@ -73,7 +73,7 @@ On **your computer** and on **the remote host**:
 mamba create -y -n visplot python=3.12 pip ipykernel jupyter_client \
       scipy regions 'zarr>=3' datashader certifi
 conda activate visplot
-pip install "cubevis[visplot]==1.0.95"
+pip install "cubevis[visplot]==1.0.96"
 ```
 
 On **your computer** only, add sshpyk and get the demos (this also gives
@@ -81,7 +81,7 @@ you the ssh wrapper):
 
 ```
 pip install sshpyk
-git clone https://github.com/casangi/cubevis.git ~/cubevis
+git clone --depth 1 --branch v1.0.96 https://github.com/casangi/cubevis.git ~/cubevis
 ```
 
 On the remote host, note the environment's Python; step 7 needs it:
@@ -118,42 +118,70 @@ ssh -V                  # OpenSSH 8.4 or later
 
 ## 4. Your password, on your computer
 
-The wrapper reads the password from your keychain; it is never written in a
-file in plain text. Pick a *service* name for it, e.g. `remote_ssh_pw`.
+The wrapper reads the password from a password store; it is never kept in a
+plain-text file. Pick a name for the entry, e.g. `remote_ssh_pw`, and one
+store:
 
-**macOS** (prompts for the password):
+| Store | Use it on | Rules-file keys (below) |
+|---|---|---|
+| keychain | macOS | `service=remote_ssh_pw backend=security` |
+| secret-tool | Linux with a desktop keyring (GNOME, KDE) | `service=remote_ssh_pw backend=secret-tool` |
+| pass | Linux, any (also without a desktop) | `service=remote_ssh_pw backend=pass` |
+| gpg file | Linux, when neither of the above is installed | `command=gpg -q -d ~/.ssh/remote_pw.gpg` |
+
+**keychain** (macOS; asks for the password; `-U` replaces an existing entry):
 ```
 security add-generic-password -a <user> -s remote_ssh_pw -w
 ```
 
-**Linux with a desktop keyring** (GNOME, KDE):
+**secret-tool** (asks for the password):
 ```
 secret-tool store --label='remote ssh password' service remote_ssh_pw account <user>
 ```
 
-**Linux without a keyring** (a gpg-encrypted file; gpg-agent remembers the
-key's passphrase for a while):
+**pass**, the standard Unix password manager: one gpg-encrypted file per
+entry, under `~/.password-store`. Install it with your system's package
+manager (`pass` on Debian/Ubuntu and Fedora, and in Homebrew), or without
+administrator rights from its source:
+```
+git clone https://git.zx2c4.com/password-store ~/src/password-store
+make -C ~/src/password-store install PREFIX="$HOME/.local"   # then ~/.local/bin on PATH
+```
+Then, once, a gpg key and a password store, and the entry:
+```
+gpg --quick-generate-key "<user> ssh password"     # once, if you have no gpg key
+pass init "<user> ssh password"                    # once, if you have no password store
+pass insert remote_ssh_pw                          # asks for the password
+```
+
+**gpg file** (a single encrypted file, no extra tools):
 ```
 gpg --quick-generate-key "<user> ssh password"     # once, if you have no gpg key
 gpg -q -e -r "<user> ssh password" -o ~/.ssh/remote_pw.gpg
 # type the password, then Enter and Ctrl-D (so it is not in your shell history)
 ```
 
-Then tell the wrapper which hosts need it. Create `~/.config/ssh-wrapper/rules`
-with the **real host names** (not the aliases); list only hosts that ask for a
-password:
+With **pass** and the **gpg file**, the gpg key's passphrase protects the
+stored password. gpg-agent remembers it for a while after you first type it
+(e.g. after `pass show remote_ssh_pw` in a terminal), and the wrapper can
+read the password only while it does. To make that last a working day, add
+`default-cache-ttl 28800` and `max-cache-ttl 28800` to
+`~/.gnupg/gpg-agent.conf`.
+
+Then tell the wrapper which hosts need the password. Create
+`~/.config/ssh-wrapper/rules` with the **real host names** (not the aliases),
+listing only hosts that ask for a password, and the keys for your store from
+the table:
 
 ```
 mkdir -p ~/.config/ssh-wrapper
 cat > ~/.config/ssh-wrapper/rules <<'EOF'
-<login>,<remote>   service=remote_ssh_pw
+<login>,<remote>   service=remote_ssh_pw backend=security
 EOF
 ```
 
-For the gpg file, end the line with `command=gpg -q -d ~/.ssh/remote_pw.gpg`
-instead of `service=...`. A pattern such as `*.example.org` covers several
-hosts; make sure it does not cover a git server or other host you reach with
-a key only.
+A pattern such as `*.example.org` covers several hosts; make sure it does not
+cover a git server or other host you reach with a key only.
 
 ## 5. Your ssh configuration, on your computer
 
@@ -270,7 +298,7 @@ python 03_remote_gui.py --remote-ms <path from step 8>/sis14_twhya_calibrated_fl
 |---|---|
 | `command -v ssh` is not `~/bin/ssh` | The `PATH` line must come after the conda lines in your shell start-up file; open a new terminal. |
 | `login to 'vp-login' failed` | Check the stored password (step 4). The wrapper tries once only, so a wrong password cannot lock your account. Try `ssh vp-login true` in a terminal: ssh will ask you. |
-| `no password found for ...` | The rules' `service=` and the keychain entry's service and account must match; the account defaults to `User` in `~/.ssh/config`. |
+| `no password found for ...` | The rules' `service=` and the store's entry must match (keychain and secret-tool: also the account, which defaults to `User` in `~/.ssh/config`). With pass or a gpg file: run `pass show remote_ssh_pw` (or `gpg -d ...`) in a terminal once, so gpg-agent has the key's passphrase. |
 | `needs a password but has no ControlPath` | Step 5: the `Host vp-login vp-remote` section is missing or names different aliases. |
 | `logged in ... but no shared connection stayed up` | `ControlPath`'s directory must exist (`~/.ssh`); `ControlPersist` must not be `no`. |
 | sshpyk hangs or times out starting the kernel | Run step 6 again; then `sshpyk list --remote`. `SSH_WRAPPER_DEBUG=1` logs every step to `~/.ssh/ssh-wrapper.log`. |

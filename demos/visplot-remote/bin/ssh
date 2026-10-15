@@ -468,6 +468,11 @@ for my $hop (@need) {
         note("login to '$target' failed (ssh exit $rc). Check the stored password"
            . " (one attempt only, so a wrong one cannot lock the account) and that"
            . " you can ssh to it by hand; SSH_WRAPPER_DEBUG=1 logs to $LOG_FILE");
+        my $be = eval { resolve_backend( $hop->{rule} ) } // '';
+        note("the password is gpg-encrypted ($be): gpg-agent must have the key's"
+           . " passphrase -- run `pass show <entry>` (or your gpg command) in a"
+           . " terminal once, then try again")
+            if $be eq 'pass' || ( $be eq 'command' && ( $hop->{rule}{command} // '' ) =~ /\bgpg\b/ );
         # The hops behind this one go through it: no point trying them,
         # and each failed attempt counts towards a lockout.  Without a
         # terminal the real command cannot ask you either -- ssh's own

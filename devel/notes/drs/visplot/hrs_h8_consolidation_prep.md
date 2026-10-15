@@ -514,3 +514,24 @@ install of 1.0.95 from PyPI.
 
 The visplot-remote demos' examples no longer use site host / kernel names
 (`vp_remote`, `/data/on/remote/...`).
+
+## 19. Password stores: pass, and release 1.0.96 (base `1ebb71b`, 2026-10-14)
+
+- `00_remote_setup.py` asks where the password is kept: `keychain`
+  (macOS), `secret-tool`, `pass`, or `gpg-file`; the default follows the
+  platform and what is installed (macOS keychain; Linux secret-tool, then
+  pass, then a gpg file). It prints only that store's commands and writes
+  the matching rules line (`backend=security|secret-tool|pass`, or
+  `command=gpg -q -d ~/.ssh/<entry>.gpg`); `--check` reports the store.
+- `00_setup.md` step 4: a table of the four stores and their rules keys;
+  `pass` installation by package manager or, without root, from source
+  (`make install PREFIX=$HOME/.local`; not tested here: the sandbox cannot
+  reach the source host); gpg-agent caching (`default-cache-ttl` /
+  `max-cache-ttl`).
+- Wrapper: a failed login with a gpg-backed store (pass, or a gpg command)
+  adds a hint that gpg-agent needs the key's passphrase.
+- Release pinned to 1.0.96 (`pip install "cubevis[visplot]==1.0.96"`), and
+  the demos cloned at the same tag (`git clone --depth 1 --branch v1.0.96`)
+  so the wrapper and demos match the installed release.
+- Rig: pass (system package, gpg key without passphrase) and gpg-file each
+  pass `--check --kernel` from a cold start; a locked key gives the hint.

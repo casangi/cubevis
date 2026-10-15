@@ -27,7 +27,7 @@ import textwrap
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "remote-setup")
 ANSWERS = os.path.join(OUT, "answers.json")
-CUBEVIS_RELEASE = "1.0.95"
+CUBEVIS_RELEASE = "1.0.96"
 DATA_URL = ("https://casa.nrao.edu/download/devel/casavis/data/"
             "sis14_twhya_calibrated_flagged.ms.tar.gz")
 DATA_MS = "sis14_twhya_calibrated_flagged.ms"
@@ -38,7 +38,9 @@ QUESTIONS = [
     ("remote_host", "Remote host (where the data and the kernel live), real name", "compute1.example.org"),
     ("user", "Your user name on them", os.environ.get("USER", "")),
     ("password_hosts", "Which ask for a password: login, remote, or both", "both"),
-    ("service", "Keychain service name for the password", "remote_ssh_pw"),
+    ("store", "Where to keep the password: keychain (macOS), secret-tool, pass, "
+              "or gpg-file (Linux)", ""),
+    ("service", "Name for the password entry", "remote_ssh_pw"),
     ("login_alias", "ssh alias for the login host", "vp-login"),
     ("remote_alias", "ssh alias for the remote host", "vp-remote"),
     ("kernel", "Jupyter kernel name", "vp_remote"),
@@ -70,8 +72,14 @@ def ask(old: dict) -> dict:
         cur = a.get(key) or default
         if key == "data_dir" and not cur:
             cur = f"/home/{a.get('user') or 'you'}/visplot-data"
+        if key == "store" and not cur:
+            cur = default_store()
         v = input(f"{prompt} [{cur}]: ").strip()
         a[key] = v or cur
+    a["store"] = a["store"].lower()
+    if a["store"] not in STORES:
+        print(f"(unknown store {a['store']!r}: using {default_store()})")
+        a["store"] = default_store()
     a["password_hosts"] = a["password_hosts"].lower()
     if a["password_hosts"] not in ("login", "remote", "both"):
         a["password_hosts"] = "both"
@@ -79,6 +87,56 @@ def ask(old: dict) -> dict:
     with open(ANSWERS, "w") as f:
         json.dump(a, f, indent=1)
     return a
+
+
+# Where the wrapper reads the password from (bin/ssh, "backend").
+STORES = ("keychain", "secret-tool", "pass", "gpg-file")
+
+
+def default_store() -> str:
+    if sys.platform == "darwin":
+        return "keychain"
+    for name in ("secret-tool", "pass"):
+        if shutil.which(name):
+            return name
+    return "gpg-file"
+
+
+def gpg_file(a: dict) -> str:
+    return f"~/.ssh/{a['service']}.gpg"
+
+
+def store_rule(a: dict) -> str:
+    """The rules-file keys for the chosen store."""
+    st = a.get("store") or default_store()
+    if st == "keychain":
+        return f"service={a['service']} backend=security"
+    if st == "secret-tool":
+        return f"service={a['service']} backend=secret-tool"
+    if st == "pass":
+        return f"service={a['service']} backend=pass"
+    return f"command=gpg -q -d {gpg_file(a)}"
+
+
+def store_commands(a: dict) -> str:
+    """Commands that put the password in the chosen store."""
+    st = a.get("store") or default_store()
+    key = f"{a['user']} ssh password"
+    if st == "keychain":
+        return (f"security add-generic-password -a {a['user']} -s {a['service']} -w\n"
+                "# (asks for the password; add -U to replace an existing entry)")
+    if st == "secret-tool":
+        return (f"secret-tool store --label='remote ssh password' "
+                f"service {a['service']} account {a['user']}\n"
+                "# (asks for the password; needs a desktop keyring, e.g. GNOME or KDE)")
+    gen = (f'gpg --list-secret-keys "{key}" >/dev/null 2>&1 || gpg --quick-generate-key "{key}"'
+           "\n# (once: a gpg key; its passphrase protects the stored password, and"
+           "\n#  gpg-agent remembers it for a while)")
+    if st == "pass":
+        return (gen + f'\npass init "{key}"            # once, if you have no password store yet'
+                f"\npass insert {a['service']}   # asks for the password")
+    return (gen + f'\ngpg -q -e -r "{key}" -o {gpg_file(a)}'
+            "\n# type the password, then Enter and Ctrl-D (it is not kept in your shell history)")
 
 
 def password_hosts(a: dict) -> list:
@@ -112,15 +170,12 @@ def ssh_config(a: dict) -> str:
 
 def rules(a: dict) -> str:
     return (f"# hosts that ask for a password (real host names)\n"
-            f"{','.join(password_hosts(a))}   service={a['service']}\n")
+            f"{','.join(password_hosts(a))}   {store_rule(a)}\n")
 
 
 def steps(a: dict) -> str:
     rp = a.get("remote_python") or "<the python printed in step 2>"
     ms = f"{a['data_dir'].rstrip('/')}/{DATA_MS}"
-    store_mac = f"security add-generic-password -a {a['user']} -s {a['service']} -w"
-    store_linux = (f"secret-tool store --label='remote ssh password' "
-                   f"service {a['service']} account {a['user']}")
     return textwrap.dedent(f"""\
     # Your setup steps (from 00_setup.md)
 
@@ -146,7 +201,7 @@ def steps(a: dict) -> str:
     ON YOUR COMPUTER also:
 
         pip install sshpyk
-        git clone https://github.com/casangi/cubevis.git ~/cubevis
+        git clone --depth 1 --branch v{CUBEVIS_RELEASE} https://github.com/casangi/cubevis.git ~/cubevis
 
     ON THE REMOTE HOST, note the python (answer it when you run this script again):
 
@@ -159,10 +214,9 @@ def steps(a: dict) -> str:
         # at the END of ~/.zshrc (macOS) or ~/.bashrc (Linux):
         export PATH="$HOME/bin:$PATH"
 
-    ## 4. Your password -- ON YOUR COMPUTER
+    ## 4. Your password -- ON YOUR COMPUTER (kept in: {a.get('store') or default_store()})
 
-        {store_mac}        # macOS
-        {store_linux}      # Linux desktop
+    @@STORE@@
         mkdir -p ~/.config/ssh-wrapper
         cp {os.path.join(OUT, 'rules.txt')} ~/.config/ssh-wrapper/rules
 
@@ -193,7 +247,8 @@ def steps(a: dict) -> str:
         python 00_remote_setup.py --check --kernel
         cd ~/cubevis/demos/visplot-remote
         python 03_remote_gui.py --remote-ms {ms} --kernel {a['kernel']} --field 3c279
-    """).replace("@@SSH_CONFIG@@\n", textwrap.indent(ssh_config(a), "    ") + "\n")
+    """).replace("@@SSH_CONFIG@@\n", textwrap.indent(ssh_config(a), "    ") + "\n"
+              ).replace("@@STORE@@\n", textwrap.indent(store_commands(a), "    ") + "\n")
 
 
 def write_files(a: dict) -> None:
@@ -280,7 +335,11 @@ def lookup_password(rule, user) -> bool:
     else:
         cmd = ["/bin/sh", "-c", rule.get("command", "false")]
     rc, out, _ = run(cmd, timeout=60)
-    return rc == 0 and bool(out.strip()), f"{backend}, service '{service}', account '{account}'"
+    where = {"security": f"keychain, service '{service}', account '{account}'",
+             "secret-tool": f"secret-tool, service '{service}', account '{account}'",
+             "pass": f"pass, entry '{rule.get('pass_name', service)}'"}.get(
+                 backend, f"command: {rule.get('command', '')}")
+    return rc == 0 and bool(out.strip()), where
 
 
 def check(a: dict, kernel: bool) -> int:
@@ -413,9 +472,14 @@ def check(a: dict, kernel: bool) -> int:
         try:
             # The installed release (not this checkout): that is what the
             # version check compares with the remote side.
+            import logging
             import warnings
             warnings.filterwarnings("ignore")
             from cubevis.toolbox.visplot import VisibilityPlotter
+            # cubevis sets its loggers to INFO when imported: quieter here.
+            for name in list(logging.root.manager.loggerDict):
+                if name.startswith("cubevis"):
+                    logging.getLogger(name).setLevel(logging.WARNING)
             vp = VisibilityPlotter(ms=ms, field="3c279", headless=True,
                                    backend="remote", kernel_name=a["kernel"])
             out_png = os.path.join(OUT, "remote_test.png")

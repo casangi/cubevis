@@ -324,6 +324,12 @@ class RemoteReductionContext(ReductionContext):
         self._bridge = SyncBridge(name=f"visplot-remote-{uuid4().hex[:8]}")
         self._bridge.start()
 
+        # A new account may not have Jupyter's runtime directory yet, and
+        # the sshpyk provisioner writes its connection file there without
+        # creating it (FileNotFoundError on the first remote kernel).
+        from jupyter_core.paths import jupyter_runtime_dir
+        os.makedirs(jupyter_runtime_dir(), mode=0o700, exist_ok=True)
+
         self._km = AsyncKernelManager(kernel_name=kernel_name)
         log.info(
             "RemoteReductionContext: connecting kernel_name=%r "

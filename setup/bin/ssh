@@ -12,16 +12,21 @@
 #
 # Install
 # -------
+# cubevis-setup (setup/cubevis-setup) installs it as
+# ~/.config/cubevis/bin/ssh and gives its path to sshpyk (--ssh), so only
+# the kernels use it. To use it for everything instead:
 #   cp ssh ~/bin/ssh && chmod +x ~/bin/ssh && ln -s ssh ~/bin/scp
-#   ~/bin must come before /usr/bin in PATH (sshpyk uses whichever "ssh"
-#   is found first). Needs perl, OpenSSH 8.4 or later, and a password
-#   store (below). sshpass is not needed.
+#   with ~/bin before /usr/bin in PATH.
+# Needs perl, OpenSSH 8.4 or later, and a password store (below).
 #
 # Rules: which hosts need the password
 # ------------------------------------
-# Read from ~/.config/ssh-wrapper/rules (or $SSH_WRAPPER_RULES). No rules
-# file, or no matching rule: the wrapper does nothing at all and runs the
-# real ssh/scp. One rule per line; '#' starts a comment:
+# Read from $SSH_WRAPPER_RULES if set; otherwise from every one of these
+# that exists: ~/.config/ssh-wrapper/rules (your own),
+# ~/.config/cubevis/ssh/rules (written by cubevis-setup), and ../ssh/rules
+# next to this file. No rules, or no matching rule: the wrapper does
+# nothing at all and runs the real ssh/scp. One rule per line; '#' starts
+# a comment:
 #
 #   <host pattern>[,<pattern>...]  [key=value ...]
 #
@@ -78,6 +83,10 @@
 # Options that change where a command goes (-p, -l, -F, -o, -i, -J; scp's
 # -P) are used for the checks and the login too.
 #
+# Checking: `ssh --explain HOST [ssh options]` prints the hops, the rule
+# each one matches (or why none does), whether a password is stored, and
+# whether a shared connection is up. It logs in nowhere.
+#
 # Debugging: SSH_WRAPPER_DEBUG=1 logs to $SSH_WRAPPER_LOG
 # (default ~/.ssh/ssh-wrapper.log).
 #
@@ -88,8 +97,7 @@ use Cwd qw(abs_path);
 
 my $DEBUG    = $ENV{SSH_WRAPPER_DEBUG} ? 1 : 0;
 my $LOG_FILE = $ENV{SSH_WRAPPER_LOG} || ( ( $ENV{HOME} || '/tmp' ) . '/.ssh/ssh-wrapper.log' );
-my $RULES_FILE = $ENV{SSH_WRAPPER_RULES}
-    || ( ( $ENV{XDG_CONFIG_HOME} || ( ( $ENV{HOME} || '' ) . '/.config' ) ) . '/ssh-wrapper/rules' );
+my $CONFIG_DIR = $ENV{XDG_CONFIG_HOME} || ( ( $ENV{HOME} || '' ) . '/.config' );
 my $DEFAULT_SERVICE = 'ssh-wrapper';
 my $PERSIST_DEFAULT = $ENV{SSH_WRAPPER_PERSIST} || '8h';
 
@@ -201,16 +209,38 @@ sub glob_to_re {
     return qr/^$re$/;
 }
 
+# The rules files, in order (see "Rules" above).
+my @RULES_FILES;
+if ( $ENV{SSH_WRAPPER_RULES} ) { @RULES_FILES = ( $ENV{SSH_WRAPPER_RULES} ); }
+else {
+    my %seen;
+    for my $f ( "$CONFIG_DIR/ssh-wrapper/rules", "$CONFIG_DIR/cubevis/ssh/rules",
+        dirname($self_dir) . '/ssh/rules' ) {
+        my $real = abs_path($f) // next;
+        next if $seen{$real}++ || !-r $real;
+        push @RULES_FILES, $f;
+    }
+}
+my $RULES_FILE = join( ', ', @RULES_FILES ) || "$CONFIG_DIR/ssh-wrapper/rules";
+
 sub read_rules {
-    return () unless -r $RULES_FILE;
-    open( my $fh, '<', $RULES_FILE ) or return ();
+    my @rules;
+    for my $file (@RULES_FILES) { push @rules, read_rules_file($file); }
+    logmsg( "rules from $RULES_FILE: " . join( ' ', map { $_->{text} } @rules ) );
+    return @rules;
+}
+
+sub read_rules_file {
+    my ($file) = @_;
+    open( my $fh, '<', $file ) or return ();
     my @rules;
     while ( my $line = <$fh> ) {
         $line =~ s/#.*//;
         $line =~ s/^\s+|\s+$//g;
         next unless length $line;
         my ( $pats, @kv ) = split /\s+/, $line;
-        my %r = ( patterns => [ map { glob_to_re($_) } split /,/, $pats ], text => $pats );
+        my %r = ( patterns => [ map { glob_to_re($_) } split /,/, $pats ], text => $pats,
+            globs => [ split /,/, $pats ], file => $file, line => $. );
         for my $kv (@kv) {
             my ( $k, $v ) = split /=/, $kv, 2;
             $r{$k} = $v if defined $v;
@@ -220,7 +250,6 @@ sub read_rules {
         push @rules, \%r;
     }
     close $fh;
-    logmsg( "rules from $RULES_FILE: " . join( ' ', map { $_->{text} } @rules ) );
     return @rules;
 }
 
@@ -240,7 +269,10 @@ if ( defined $ENV{SSH_WRAPPER_ASKPASS_RULE} ) {
     print "$pw\n";
     exit 0;
 }
-hand_off() unless @RULES;
+# ssh --explain HOST ...: report, log in nowhere (section 4).
+my $EXPLAIN = 0;
+if ( @ARGV && $ARGV[0] eq '--explain' ) { shift @ARGV; $EXPLAIN = 1; }
+hand_off() unless @RULES || $EXPLAIN;
 
 ################################################################################
 # 3. Read the command line: does it connect at all, to where, and with which
@@ -300,6 +332,7 @@ my ( $dest, @pt, $no_connect );
     }
 }
 
+die "usage: $self_name --explain HOST [ssh options]\n" if $EXPLAIN && !defined $dest;
 hand_off() if $no_connect || !defined $dest;
 logmsg( "destination: $dest  options: @pt" );
 
@@ -349,6 +382,61 @@ push @hops, { target => $dest, args => \@pt, cfg => $dest_cfg };
 my @need = grep { $_->{rule} = rule_for( $_->{cfg}{hostname} ) } @hops;
 logmsg( "hops: " . join( ' -> ', map { "$_->{target}($_->{cfg}{hostname})" } @hops )
       . "; need password: " . join( ' ', map { $_->{target} } @need ) );
+
+# Rules that look meant for a host but do not match it: a short name for a
+# full one, or the old "user,host" form. Said out loud, because otherwise
+# the wrapper silently does nothing and ssh asks for the password.
+sub near_misses {
+    my ($hop) = @_;
+    my $host = lc( $hop->{cfg}{hostname} // '' );
+    my $user = $hop->{cfg}{user} // '';
+    my @why;
+    for my $r (@RULES) {
+        my @g = @{ $r->{globs} || [] };
+        my $where = "$r->{file} line $r->{line}";
+        if ( @g >= 2 && $g[0] eq $user && $g[0] !~ /[.*?]/ ) {
+            push @why, "rule '$r->{text}' ($where) starts with your user name: rules"
+              . " list host names only (an older wrapper's 'user,host' form)";
+            next;
+        }
+        for my $g (@g) {
+            next if $g =~ /[*?]/ || $g =~ /\./;
+            push @why, "rule '$g' ($where) is not the whole host name '$host'; write"
+              . " '$host' or '$g.*'" if index( $host, lc("$g.") ) == 0;
+        }
+    }
+    return @why;
+}
+unless ($EXPLAIN) {
+    for my $hop ( grep { !$_->{rule} } @hops ) { note($_) for near_misses($hop); }
+}
+
+if ($EXPLAIN) {
+    print "rules: " . ( @RULES_FILES ? join( ', ', @RULES_FILES ) : "none (looked for $RULES_FILE)" ) . "\n";
+    my $n = 0;
+    for my $hop (@hops) {
+        my $c = $hop->{cfg};
+        printf "hop %d: %s -> %s (user %s, port %s)\n", ++$n, $hop->{target},
+            $c->{hostname} // '?', $c->{user} // '?', $c->{port} // 22;
+        my $r = $hop->{rule};
+        if ($r) {
+            my $be = eval { resolve_backend($r) } // "? ($@)";
+            chomp $be;
+            print "  rule: $r->{text} ($r->{file} line $r->{line}), backend $be\n";
+            my ($pw) = eval { fetch_password($hop) };
+            print "  password: " . ( defined $pw && length $pw ? "stored" : "NOT FOUND" ) . "\n";
+            print "  ControlPath: " . ( $c->{controlpath} // 'none' )
+              . ( lc( $c->{controlpath} // 'none' ) eq 'none' ? '  <- needed to share the login' : '' ) . "\n";
+        } else {
+            print "  rule: none -- left to ssh (an ssh key, or ssh asks you)\n";
+            print "  note: $_\n" for near_misses($hop);
+        }
+        my $up = run_redirected( [ $SSH, @{ $hop->{args} }, '-O', 'check', $hop->{target} ],
+            quiet => 1, null_stdin => 1 ) == 0;
+        print "  shared connection: " . ( $up ? "up" : "not up" ) . "\n";
+    }
+    exit 0;
+}
 hand_off() unless @need;
 
 ################################################################################
@@ -425,14 +513,15 @@ sub open_shared {
         $ENV{DISPLAY}                   //= ':0';        # older OpenSSH wants one
         $ENV{SSH_WRAPPER_ASKPASS_RULE}    = $rule_index;
         $ENV{SSH_WRAPPER_ASKPASS_ACCOUNT} = $hop->{rule}{account} || $cfg->{user} || $ENV{USER} || '';
-        my @cmd = ( $SSH, @$args, '-T', '-x',
+        # These come first: ssh keeps the first value it is given, and they
+        # must hold for this one login whatever the command line or config
+        # says (BatchMode yes, which sshpyk recommends and setup's checks
+        # use, would turn off askpass).
+        my @cmd = ( $SSH, '-T', '-x',
+            '-o', 'BatchMode=no', '-o', 'NumberOfPasswordPrompts=1',
             '-o', 'ControlMaster=auto', '-o', "ControlPersist=$persist",
-            '-o', 'NumberOfPasswordPrompts=1', '-o', 'ConnectTimeout=30',
-            # sshpyk recommends BatchMode yes for its host aliases, which
-            # turns off password prompts (askpass included) -- not for this
-            # one login.
-            '-o', 'BatchMode=no',
-            $target, 'true' );
+            '-o', 'ConnectTimeout=30',
+            @$args, $target, 'true' );
         logmsg( "opening: " . join( ' ', @cmd ) );
         exec @cmd or POSIX::_exit(127);
     }

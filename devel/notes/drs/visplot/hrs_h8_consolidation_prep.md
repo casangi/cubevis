@@ -572,3 +572,82 @@ install them, needing an administrator; command-line tools are per
 machine, so a new account on a set-up Mac has git). Step 2 allows a
 checkout made earlier to read the guide (fetch and check out the release
 tag). Problems table: `python: command not found`.
+
+## 22. cubevis-setup: an interactive setup script (base `e6954b4`, 2026-10-16)
+
+Darrell's second fresh-account run did not succeed: a guide plus a helper
+that prints commands leaves the user to copy files, edit rules and PATH,
+and run tests in the right order, and nothing said when a step silently
+did not take. (The failure itself: the account's rules file was in the old
+wrapper's `user,host` form; the new wrapper read `ssh` and `dschieb` as
+whole-host patterns, matched nothing, and quietly ran `/usr/bin/ssh`.)
+His notes also asked: no `(base)` added to the shell start-up; no
+assumption that the checkout is in `$HOME`; the environment named
+`cubevis` (iclean demos will use it too); a less invasive option than the
+wrapper first on PATH; a clear pass / secret-tool choice on Linux.
+
+Replaced by `setup/cubevis-setup`, a Configure-style bash script (bash 3.2,
+for macOS): each step checks, explains, lists its changes, asks, makes
+them, and tests them; failures offer retry / skip / quit.
+
+- **State in `~/.config/cubevis`** (XDG): `setup.conf`, one
+  `hosts/<alias>.conf` per ssh host (login hosts too), generated
+  `ssh/config` and `ssh/rules`, the wrapper in `bin/`, `activate`,
+  `changes.log` (every change, with backups' names), `setup.log` (every
+  command and its output), `backups/`. Plain `key=value` files, never
+  sourced. Meant to hold user defaults later.
+- **Re-runnable, several hosts.** Steps that pass are not repeated; a host
+  not finished is picked up where it stopped (the menu defaults to
+  continuing); `--add-host`, `--host ALIAS`, `--remove-host ALIAS`,
+  `--check [ALIAS]` (read-only), `--redo`, `--status`. A login host is set
+  up once and offered to later hosts; hosts with the same password share
+  one stored entry.
+- **`~/.ssh/config` is not needed.** The kernels get
+  `sshpyk add --ssh-config ~/.config/cubevis/ssh/config --ssh
+  ~/.config/cubevis/bin/ssh`; OpenSSH passes `-F` on to the ProxyJump hop
+  (checked). So the wrapper is not on PATH and the user's own ssh config
+  is untouched. Optional: two marked lines at the top of `~/.ssh/config`
+  (`Include ...`), written in place after a backup (a dotfiles symlink
+  stays a link); a Host block in an included file does not swallow the
+  lines after the Include (checked). Aliases are checked to be unused
+  (`ssh -G`) and different from the real name (sshpyk requires it).
+- **Remote host from what is there.** A read-only probe script (run with
+  `bash -s` whatever the login shell is) reports system, home, conda
+  installations that *run* there, an existing environment, downloads
+  (github, conda-forge, PyPI), and a shared home (a random id in
+  `~/.config/cubevis/.home-id` seen from both sides). Setup then writes one
+  script for that host, `hosts/<alias>/remote-setup.sh` (variables, then
+  the common `lib/remote-setup.sh`), and runs it over ssh or copies it for
+  the user to run. A shared home on the same kind of system reuses the
+  local environment; a shared home otherwise gets
+  `~/miniforge3-<os>-<arch>`.
+- **Password stores**: keychain, secret-tool, pass, gpg-file, command,
+  chosen when a host first needs one; on Linux the default is what is in
+  use (pass with a store, else secret-tool with a running keyring). For
+  gpg-based stores setup has gpg ask for the passphrase in the terminal
+  before each login test (the wrapper has none); `GPG_TTY` set.
+- **Wrapper changes** (`setup/bin/ssh`, moved from
+  `demos/visplot-remote/bin/ssh`): reads every rules file that exists (your
+  own `~/.config/ssh-wrapper/rules`, setup's, and `../ssh/rules` beside
+  itself); its own `-o BatchMode=no -o NumberOfPasswordPrompts=1` now come
+  before the caller's options (ssh keeps the first value, so a caller's
+  `BatchMode=yes` turned askpass off); `--explain HOST`; and it now says
+  so when a rule looks meant for a host but does not match it (a short
+  name, or the old `user,host` form) instead of doing nothing silently.
+- **Library fix** (`remote_reduction_context.py`): create Jupyter's runtime
+  directory before starting the kernel; on a new account the sshpyk
+  provisioner's connection file failed with FileNotFoundError (found by
+  the fresh-account test; setup also creates it, for 1.0.96).
+- **Tests**: `tests/manual/setup/test_setup_scripts.py` (syntax under the
+  chosen bash, no bash-4 forms, state helpers, quoting, the wrapper's
+  `--explain` and near-miss notes; `CUBEVIS_TEST_BASH` selects the bash).
+  End to end in the sandbox, as fresh local accounts with Apple's bash
+  3.2.57 built from source, against the two-hop password rig: pass,
+  gpg-file (with and without a passphrase), a symlinked `~/.ssh/config`, a
+  second host through the same login host with another user and password,
+  `--check`, `--redo`, `--remove-host`, the copy-and-run-yourself path, and
+  Miniforge download + install on both sides. conda-forge is blocked in
+  the sandbox, so environments were made by a stand-in `conda` (venv +
+  pip); not tested: macOS itself (keychain), a real `conda create`.
+- Removed: `demos/visplot-remote/00_remote_setup.py`;
+  `demos/visplot-remote/00_setup.md` now points at the script.

@@ -1,0 +1,228 @@
+#!/bin/bash
+#
+# cubevis-setup: set up cubevis on this computer, and remote hosts whose
+# Jupyter kernels visplot (backend="remote") can use.
+#
+#     bash setup/cubevis-setup                 # set up, or continue setting up
+#     bash setup/cubevis-setup --check         # test everything, change nothing
+#     bash setup/cubevis-setup --help          # all the options
+#
+# It asks before each change and tests each step as it goes. Everything it
+# keeps is in ~/.config/cubevis ($XDG_CONFIG_HOME/cubevis); every change it
+# makes is listed in changes.log there. Run it again at any time: steps that
+# pass are not repeated, and you can add more remote hosts.
+#
+# Layout (setup/):
+#   cubevis-setup        this file: options, and the order of the steps
+#   lib/common.sh        messages, questions, state files, the step runner
+#   lib/versions.sh      what is installed (release, packages, URLs)
+#   lib/local.sh         steps on this computer
+#   lib/store.sh         password stores
+#   lib/hosts.sh         ssh hosts, the generated ssh files, logging in
+#   lib/remote.sh        steps for a remote host
+#   lib/remote-probe.sh  runs on a remote host: what is there
+#   lib/remote-setup.sh  runs on a remote host: conda, the environment
+#   lib/check_kernel.py  the last test: a kernel and a plot
+#   bin/ssh              the ssh wrapper
+#
+# Written for bash 3.2 (macOS) and later.
+
+CV_SETUP=$(cd "$(dirname "$0")" && pwd)
+CV_ROOT=$(dirname "$CV_SETUP")
+for f in common versions local store hosts remote; do
+    # shellcheck source=/dev/null
+    . "$CV_SETUP/lib/$f.sh"
+done
+
+usage() {
+    cat <<EOF
+Usage: bash $(tilde "$0") [option]
+
+  (no option)          set up this computer, then add or check remote hosts
+  --add-host           add a remote host (after this computer is set up)
+  --host ALIAS         go through the steps for one host again
+  --remove-host ALIAS  forget a host: its ssh entries and kernel definition
+  --check [ALIAS]      test everything (or one host); change nothing
+  --redo               ask every question again, even for steps that pass
+  --status             what is set up, and the changes made so far
+  --help               this text
+
+State and logs: $(tilde "$CV_HOME")
+EOF
+}
+
+CV_REDO=""; CV_CHECK_ONLY=""; CV_YES=""
+MODE=setup; ARG=""
+while [ $# -gt 0 ]; do
+    case $1 in
+        --add-host) MODE=add ;;
+        --host) MODE=host; ARG=$2; shift ;;
+        --remove-host) MODE=remove; ARG=$2; shift ;;
+        --check) MODE=check; CV_CHECK_ONLY=1
+            case ${2:-} in -* | "") ;; *) ARG=$2; shift ;; esac ;;
+        --redo) CV_REDO=1 ;;
+        --status) MODE=status ;;
+        --yes) CV_YES=1 ;;   # take every default (for testing)
+        -h | --help) usage; exit 0 ;;
+        *) usage; exit 2 ;;
+    esac
+    shift
+done
+
+mkdir -p "$CV_HOME" "$CV_HOSTS"
+chmod 700 "$CV_HOME"
+# An id for this home directory: a remote host that sees the same file
+# shares it.
+[ -s "$CV_HOME/.home-id" ] || od -An -tx1 -N16 /dev/urandom | tr -d ' \n' >"$CV_HOME/.home-id"
+log "---- cubevis-setup $MODE $ARG (from $CV_ROOT)"
+
+# --------------------------------------------------------------------------
+setup_local() {
+    local s
+    heading "This computer"
+    for s in $LOCAL_STEPS; do
+        run_step "$s" || [ -n "$CV_CHECK_ONLY" ] || return 1
+    done
+}
+
+# All the steps for remote host $HOST: log in to each hop, then the rest.
+setup_host() {
+    local s hops=""
+    host_load "$HOST"
+    heading "Remote host $HOST ($H_user@$H_hostname${H_via:+, through $H_via})"
+    [ -n "$CV_CHECK_ONLY" ] || write_ssh_files
+    [ -n "$H_via" ] && hops="$H_via"
+    hops="$hops $HOST"
+    for HOP in $hops; do
+        run_step hop || return 1
+    done
+    [ -n "$CV_CHECK_ONLY" ] || run_step include
+    for s in $REMOTE_STEPS; do
+        run_step "$s" || [ -n "$CV_CHECK_ONLY" ] || return 1
+    done
+}
+
+hosts_menu() {
+    local hosts c
+    while :; do
+        hosts=$(host_list remote)
+        heading "Remote hosts"
+        if [ -z "$hosts" ]; then
+            say "None yet. A remote host is a computer with your data, where visplot's kernel runs."
+            ask_yn "Add one now?" y || return 0
+            c=a
+        else
+            local def=d
+            for HOST in $hosts; do
+                host_load "$HOST"
+                if [ -n "$H_tested" ]; then
+                    echo "    $HOST  ($H_user@$H_hostname, kernel $H_kernel, tested $H_tested)"
+                else
+                    echo "    $HOST  ($H_user@$H_hostname, not finished)"
+                    def=c
+                fi
+            done
+            [ "$def" = c ] && say "Setting up a host is not finished: [c] goes on from where it stopped."
+            ask_choice c "[a]dd a host, [c]heck (and finish) them all, or [d]one?" "$def" "a c d"
+        fi
+        case $c in
+            d) return 0 ;;
+            c) for HOST in $hosts; do setup_host; done ;;
+            a) ask_new_host && setup_host ;;
+        esac
+    done
+}
+
+status() {
+    heading "cubevis setup in $(tilde "$CV_HOME")"
+    local k
+    for k in conda env release python store ssh_include; do
+        printf '    %-12s %s\n' "$k" "$(conf_get "$CV_CONF" "$k" '-')"
+    done
+    for HOST in $(host_list); do
+        host_load "$HOST"
+        printf '    %-12s %s\n' "$HOST" "$H_role: $H_user@$H_hostname${H_via:+ via $H_via}${H_kernel:+, kernel $H_kernel}"
+    done
+    heading "Changes made by setup ($(tilde "$CV_CHANGES"))"
+    if [ -f "$CV_CHANGES" ]; then sed 's/^/    /' "$CV_CHANGES"; else echo "    none"; fi
+}
+
+remove_host() {
+    [ -f "$(host_file "$ARG")" ] || die "no host '$ARG' (see --status)"
+    host_load "$ARG"
+    local users
+    users=$(for a in $(host_list); do [ "$(conf_get "$(host_file "$a")" via)" = "$ARG" ] && printf '%s ' "$a"; done)
+    [ -z "$users" ] || die "$ARG is the login host for: $users -- remove those first"
+    changes_list "removes $ARG from $(tilde "$CV_SSH_CONFIG") and $(tilde "$CV_SSH_RULES")" \
+        "${H_kernel:+deletes the kernel definition '$H_kernel'}" \
+        "leaves the stored password, and everything on $H_hostname, as they are"
+    ask_yn "Go ahead?" y || exit 1
+    if [ -n "$H_kernel" ]; then
+        run "$(conf_get "$CV_CONF" python)" -m sshpyk.cli delete "$H_kernel"
+        record_change "deleted kernel" "$H_kernel"
+    fi
+    # Kept, not deleted: backups/<alias>.removed/ (its answers and logs).
+    mkdir -p "$CV_BACKUPS/$ARG.removed"
+    mv "$(host_file "$ARG")" "$CV_BACKUPS/$ARG.removed/"
+    [ -d "$CV_HOSTS/$ARG" ] && mv "$CV_HOSTS/$ARG" "$CV_BACKUPS/$ARG.removed/files"
+    record_change "removed host" "$ARG"
+    write_ssh_files
+}
+
+finish() {
+    show_run_changes
+    if [ -n "$CV_CHECK_ONLY" ]; then
+        echo
+        if [ "$FAILED" -eq 0 ]; then ok "all checks passed"; else fail "$FAILED check(s) failed"; fi
+        return
+    fi
+    heading "Using it"
+    say "In a new terminal, before running visplot or the demos:"
+    echo "      . $(tilde "$CV_HOME")/activate"
+    local first
+    # shellcheck disable=SC2046
+    set -- $(host_list remote)
+    first=${1:-}
+    if [ -n "$first" ]; then
+        host_load "$first"
+        if [ -n "$H_kernel" ]; then
+            say "Then, for example (demos/visplot-remote/README.md has more):"
+            echo "      cd $(tilde "$CV_ROOT")/demos/visplot-remote"
+            case $H_ms in
+                */"$CV_TEST_MS") set -- --remote-ms "$H_ms" --field "$CV_TEST_FIELD" ;;
+                "" | none) set -- --remote-ms "/path/on/$H_hostname/data.ms" ;;
+                *) set -- --remote-ms "$H_ms" ;;
+            esac
+            echo "      python 03_remote_gui.py --kernel $H_kernel $*"
+        fi
+    fi
+    case $(conf_get "$CV_CONF" store) in
+        pass | gpg-file)
+            say "Your passwords are encrypted with gpg: the wrapper can read one only while gpg-agent holds your gpg passphrase (it asks in a window on a desktop; otherwise run 'bash $(tilde "$0") --check' in a terminal first, which asks if needed)." ;;
+    esac
+    say "Run this setup again at any time to check, or to add a host."
+}
+
+case $MODE in
+    status) status; exit 0 ;;
+    remove) remove_host; finish; exit 0 ;;
+esac
+
+if [ -n "$CV_CHECK_ONLY" ]; then
+    heading "cubevis setup: checking (nothing is changed)"
+else
+heading "cubevis setup"
+say "This sets up cubevis on this computer and, if you like, on remote hosts that run visplot's kernel next to the data. It asks before each change and says what it will change; everything it keeps is in $(tilde "$CV_HOME"), and every change is listed in $(tilde "$CV_CHANGES"). Enter accepts the answer in [brackets]."
+fi
+
+setup_local || { finish; exit 1; }
+case $MODE in
+    setup) hosts_menu ;;
+    add) ask_new_host && setup_host ;;
+    host) [ -f "$(host_file "$ARG")" ] || die "no host '$ARG' (see --status)"; HOST=$ARG; setup_host ;;
+    check)
+        if [ -n "$ARG" ]; then HOST=$ARG; setup_host
+        else for HOST in $(host_list remote); do setup_host; done; fi ;;
+esac
+finish
+[ "$FAILED" -eq 0 ]

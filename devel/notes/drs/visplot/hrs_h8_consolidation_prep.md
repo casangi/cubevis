@@ -822,3 +822,19 @@ for every pair; Plot refuses without calling `query_raster`; constructor);
 `test_checkbox_guard` resolves the new name when it rebuilds doPlot's JS.
 Checked live: tab message at once, Plot sends nothing, nothing in the
 server log.
+
+## 26. Remote-plumbing tests pinned to a local kernel (base `ceec3b1`, 2026-10-18)
+
+Darrell's full run (3224 passed) had one failure:
+`test_memory_guard::test_remote_refusal_is_the_same_error` with
+`CUBEVIS_TEST_KERNEL=cvpost140_python312`.  The test passed this machine's
+(relative) MS path to that kernel, which does not have it; and it could not
+have worked there anyway -- it needs `CUBEVIS_VISPLOT_MEMORY_GUARD` to reach
+the worker and this checkout's code running in it, while a kernel on
+another host runs its own installed cubevis with its own environment.  The
+test is about plumbing, so it (and `test_vis_argument`'s `backend_kind="auto"`
+test, which had the same flaw but swallowed it as a skip) now always uses a
+python3 kernel on this host (`_local_kernel`, skipping without one), with
+absolute paths (the kernel's working directory need not be the test's).
+Passes with and without `CUBEVIS_TEST_KERNEL` set, and with a relative
+`MS=`.

@@ -149,21 +149,33 @@ def test_plot_reports_refusal(data, monkeypatch):
         vp.close()
 
 
-def test_remote_refusal_is_the_same_error(data, tiny_budget):
-    """Through a kernel (the local python3 one): the worker's refusal comes
-    back as SelectionTooLargeError (no remote traceback in the message),
-    the GUI start-up leaves the panel empty, and a failed construction
-    closes the kernel at once instead of hanging in __del__ at exit."""
+def _local_kernel():
+    """A kernel on this host, whatever CUBEVIS_TEST_KERNEL says: what is
+    tested needs this machine's path, environment and cubevis checkout in
+    the worker (a kernel elsewhere runs its own installed cubevis and sees
+    neither).  Skips when there is no python3 kernelspec."""
     pytest.importorskip("jupyter_client")
-    from cubevis.toolbox.visplot import VisibilityPlotter
-    kernel = os.environ.get("CUBEVIS_TEST_KERNEL", "python3")
+    from jupyter_client.kernelspec import KernelSpecManager, NoSuchKernel
     try:
-        with pytest.raises(R.SelectionTooLargeError) as ei:
-            VisibilityPlotter(headless=True, layout="scatter", kernel_name=kernel, **_kw(data))
-    except Exception as exc:                       # no kernel here
-        if "kernel" in str(exc).lower() and not isinstance(exc, R.SelectionTooLargeError):
-            pytest.skip(f"no kernel: {exc}")
-        raise
+        KernelSpecManager().get_kernel_spec("python3")
+    except NoSuchKernel:
+        pytest.skip("no python3 kernelspec on this host")
+    return "python3"
+
+
+def test_remote_refusal_is_the_same_error(data, tiny_budget):
+    """Through a kernel on this host (python3; see _local_kernel): the
+    worker's refusal comes back as SelectionTooLargeError (no remote
+    traceback in the message), the GUI start-up leaves the panel empty, and
+    a failed construction closes the kernel at once instead of hanging in
+    __del__ at exit."""
+    kernel = _local_kernel()
+    from cubevis.toolbox.visplot import VisibilityPlotter
+    # Absolute: the kernel's working directory need not be this one.
+    src, field = data
+    data = ({k: os.path.abspath(v) for k, v in src.items()}, field)
+    with pytest.raises(R.SelectionTooLargeError) as ei:
+        VisibilityPlotter(headless=True, layout="scatter", kernel_name=kernel, **_kw(data))
     assert "remote traceback" not in str(ei.value)
     vp = VisibilityPlotter(kernel_name=kernel, **_kw(data))
     try:

@@ -163,15 +163,28 @@ def test_task_signature_has_vis():
     assert "vis" in inspect.signature(visplot).parameters
 
 
-def test_remote_auto_detects_on_kernel(msv2):
-    """backend_kind="auto": the worker decides the format and reports it."""
+def _local_kernel():
+    """A kernel on this host, whatever CUBEVIS_TEST_KERNEL says: what is
+    tested needs this machine's path, environment and cubevis checkout in
+    the worker (a kernel elsewhere runs its own installed cubevis and sees
+    neither).  Skips when there is no python3 kernelspec."""
     pytest.importorskip("jupyter_client")
-    from cubevis.toolbox.visplot.remote_reduction_context import RemoteReductionContext
+    from jupyter_client.kernelspec import KernelSpecManager, NoSuchKernel
     try:
-        ctx = RemoteReductionContext(msv2, os.environ.get("CUBEVIS_TEST_KERNEL", "python3"),
-                                     backend_kind="auto", call_timeout=300)
-    except Exception as exc:          # no kernel here
-        pytest.skip(f"no kernel: {exc}")
+        KernelSpecManager().get_kernel_spec("python3")
+    except NoSuchKernel:
+        pytest.skip("no python3 kernelspec on this host")
+    return "python3"
+
+
+def test_remote_auto_detects_on_kernel(msv2):
+    """backend_kind="auto": the worker decides the format and reports it.
+    On a kernel on this host (python3; see _local_kernel)."""
+    kernel = _local_kernel()
+    from cubevis.toolbox.visplot.remote_reduction_context import RemoteReductionContext
+    # Absolute: the kernel's working directory need not be this one.
+    ctx = RemoteReductionContext(os.path.abspath(msv2), kernel, backend_kind="auto",
+                                 call_timeout=300)
     try:
         assert ctx.backend_kind == MSV2
         assert ctx.list_fields()

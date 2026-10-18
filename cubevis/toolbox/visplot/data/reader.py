@@ -1455,6 +1455,168 @@ def _default_frame_cache_bytes() -> int:
                    max(_FRAME_CACHE_MIN_BYTES, _FRAME_CACHE_FRACTION * phys)))
 
 
+# --------------------------------------------------------------------------
+# Raster correlation: one product, or the parallel hands together (2026-10-18)
+# --------------------------------------------------------------------------
+# A raster reduces one correlation.  Until 2026-10-18 it was always the
+# first ticked one, so on RR / LL data a problem in LL alone did not show
+# unless RR was unticked.  Each raster panel now chooses: a product, or
+# PARALLEL_HANDS -- the mean of the two parallel hands, (XX+YY)/2 or
+# (RR+LL)/2, the Stokes I-like view AIPS editors default to.  A sample of
+# that view is valid only where both hands are unflagged, and a flag drawn
+# on it applies to both hands.
+PARALLEL_HANDS = "parallel"
+_PARALLEL_PAIRS = (("XX", "YY"), ("RR", "LL"))
+_PARALLEL_LABELS = tuple(h for pair in _PARALLEL_PAIRS for h in pair)
+
+
+def is_parallel(pol) -> bool:
+    return pol is not None and str(pol).lower() == PARALLEL_HANDS
+
+
+def expand_polarization(pol, available) -> list:
+    """The correlation labels *pol* stands for among *available* (in the
+    data's order): ``[pol]`` for a product the data have, both parallel
+    hands for ``PARALLEL_HANDS`` (one if only one is present), ``[]`` when
+    nothing matches.  ``None`` stands for everything available."""
+    avail = [str(p) for p in available]
+    if pol is None:
+        return avail
+    if not is_parallel(pol):
+        return [str(pol)] if str(pol) in avail else []
+    for a, b in _PARALLEL_PAIRS:
+        if a in avail and b in avail:
+            return [p for p in avail if p in (a, b)]
+    return [p for p in avail if p in _PARALLEL_LABELS][:1]
+
+
+def parallel_label(available) -> str:
+    """How the parallel-hands choice is named for data with *available*
+    correlations, e.g. ``"(XX+YY)/2"``."""
+    hands = expand_polarization(PARALLEL_HANDS, available)
+    return f"({'+'.join(hands)})/2" if len(hands) == 2 else "parallel hands"
+
+
+def select_polarization(vis, flag, pol):
+    """``(vis, flag)`` reduced to what a raster of *pol* shows, or ``None``
+    when this partition has none of it.  ``PARALLEL_HANDS`` averages the
+    two hands' visibilities and flags a sample where either is flagged."""
+    hands = expand_polarization(pol, vis.coords["polarization"].values)
+    if not hands:
+        return None
+    if len(hands) == 1:
+        return vis.sel(polarization=hands[0]), flag.sel(polarization=hands[0])
+    with xr.set_options(keep_attrs=True):
+        v = (vis.sel(polarization=hands[0], drop=True)
+             + vis.sel(polarization=hands[1], drop=True)) * 0.5
+        f = (flag.sel(polarization=hands[0], drop=True)
+             | flag.sel(polarization=hands[1], drop=True))
+    return v, f
+
+
+def correlation_for_query(pol) -> Optional[list]:
+    """The ``SelectionSpec.correlation`` that reads what *pol* needs (both
+    hands for ``PARALLEL_HANDS``; ``_apply_selection`` keeps the labels a
+    partition has)."""
+    if pol is None:
+        return None
+    return list(_PARALLEL_LABELS) if is_parallel(pol) else [str(pol)]
+
+
+# --------------------------------------------------------------------------
+# Memory guard for scatter frames (2026-10-18)
+# --------------------------------------------------------------------------
+# A scatter holds every selected sample as a row of a DataFrame while it is
+# built, binned and cached: about 65 bytes per sample on 10-20 M sample
+# selections and 110 on 34 M (TW Hya, 8 GB Linux).  On a machine without
+# swap (the 8 GB sandbox, some cluster nodes) a selection that does not fit
+# gets the process killed -- with a remote kernel, a dead kernel.  On a
+# laptop with swap and compressed memory the same selection loads, more
+# slowly, and "available memory" says little about what will fit.
+#
+# So by default nothing is refused: a selection estimated to need more than
+# 70 % of the memory available now is logged as a warning (it may be slow)
+# and loaded.  A hard limit is opt-in: CUBEVIS_VISPLOT_MEMORY_GUARD=<MB>
+# refuses, before reading, a scatter estimated to need more than that, with
+# a message saying what to narrow.  (A first version refused by default and
+# turned away selections that load fine on a Mac; Darrell, 2026-10-18.)
+# Scatter averaging is applied to the read samples, so it does not lower
+# the estimate.
+MEMORY_GUARD_ENV = "CUBEVIS_VISPLOT_MEMORY_GUARD"
+SCATTER_BYTES_PER_SAMPLE = 110
+_MEMORY_WARN_FRACTION = 0.7
+
+
+class SelectionTooLargeError(ValueError):
+    """A selection whose scatter exceeds the limit set with
+    ``CUBEVIS_VISPLOT_MEMORY_GUARD``; the message is for the user (status
+    area, panel notice, exception)."""
+
+
+def _available_memory_bytes() -> Optional[int]:
+    """Memory the system can give this process now (Linux ``MemAvailable``,
+    psutil elsewhere), else half the physical memory, else ``None``."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    try:
+        import psutil
+        return int(psutil.virtual_memory().available)
+    except Exception:
+        pass
+    phys = _physical_memory_bytes()
+    return phys // 2 if phys else None
+
+
+def scatter_memory_budget() -> Optional[int]:
+    """The hard limit in bytes from ``$CUBEVIS_VISPLOT_MEMORY_GUARD`` (MB),
+    or ``None``: unset, ``off`` or not a number means no limit."""
+    env = (os.environ.get(MEMORY_GUARD_ENV) or "").strip().lower()
+    if not env or env in ("off", "0", "no", "false", "none"):
+        return None
+    try:
+        return int(float(env) * (1 << 20))
+    except ValueError:
+        log.warning("%s=%r is not a number of MB or 'off'; no limit",
+                    MEMORY_GUARD_ENV, env)
+        return None
+
+
+def _gb(n: float) -> str:
+    return f"{n / (1 << 30):.1f} GB"
+
+
+def check_scatter_memory(n_samples: int, n_layers: int) -> None:
+    """Before a scatter of *n_samples* (summed over its *n_layers* layers)
+    is read: raise ``SelectionTooLargeError`` if it exceeds the limit set
+    with ``CUBEVIS_VISPLOT_MEMORY_GUARD``; otherwise only log a warning when
+    it is large for the memory available now."""
+    if n_samples <= 0:
+        return
+    need = n_samples * SCATTER_BYTES_PER_SAMPLE
+    per = f" in {n_layers} layers" if n_layers > 1 else ""
+    budget = scatter_memory_budget()
+    if budget is not None:
+        if need > budget:
+            raise SelectionTooLargeError(
+                f"Scatter: {n_samples / 1e6:.1f} M samples{per} need about "
+                f"{_gb(need)}, over the {MEMORY_GUARD_ENV} limit of "
+                f"{_gb(budget)}. Narrow the selection (field, scan, time, "
+                f"SPW, antennas, correlations) or use a raster.")
+        return
+    avail = _available_memory_bytes()
+    if avail and need > _MEMORY_WARN_FRACTION * avail:
+        log.warning(
+            "visplot: scatter of %.1f M samples%s needs about %s; %s is "
+            "available now, so it may be slow (swapping). Set %s=<MB> to "
+            "refuse selections above a limit instead.",
+            n_samples / 1e6, per, _gb(need), _gb(avail), MEMORY_GUARD_ENV)
+
+
 def _freeze(v):
     """A hashable stand-in for *v* (lists/tuples/sets/dicts/arrays -> tuples
     and frozensets), for building cache keys from a ``SelectionSpec``."""

@@ -160,10 +160,12 @@ def _auto_title(quantity: "Axis", y_label: str, x_label: str,
     if {y_label, x_label} == {Axis.ANTENNA1.label, Axis.ANTENNA2.label}:
         # HRS H7: say what a cell is.
         axes = "[Antenna \u00d7 Antenna, each baseline over time and channels]"
+    from .data.reader import is_parallel
+    pol = "parallel hands (mean)" if is_parallel(polarization) else polarization
     return (
         f"{q_label}  "
         f"{axes}"
-        f"  pol={polarization}"
+        f"  pol={pol}"
     )
 
 
@@ -474,6 +476,19 @@ class VisibilityRaster(VisibilityPlot):
         """The displayed Baseline axis (positions to baseline numbers), or
         ``None`` when neither axis is Baseline or nothing is drawn yet."""
         return self._bl_axis
+
+    def _query_correlation(self, ticked):
+        """The correlations this raster's query reads (2026-10-18): the
+        ticked ones, unless the panel shows the parallel hands or a
+        product that is not ticked -- the panel's own choice then decides
+        (``reader.correlation_for_query``)."""
+        from .data.reader import correlation_for_query, is_parallel
+        pol = self._polarization
+        if pol is None:
+            return ticked
+        if is_parallel(pol) or (ticked is not None and str(pol) not in ticked):
+            return correlation_for_query(pol)
+        return ticked
 
     def update_axes(
         self,
@@ -1649,6 +1664,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
                 # selection (shared with the other panels) is untouched.
                 selection    = dataclasses.replace(
                     selection, averaging=self._averaging,
+                    correlation=self._query_correlation(selection.correlation),
                     baseline_combine=self._baseline_combine,
                     detrend=self._detrend,
                     stat_time_window=self._stat_time_window,
@@ -1976,6 +1992,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             quantity     = self._quantity,
             selection    = dataclasses.replace(
                 sel, averaging=self._averaging,
+                correlation=self._query_correlation(sel.correlation),
                 baseline_combine=self._baseline_combine,
                 detrend=self._detrend,
                 stat_time_window=self._stat_time_window,
@@ -2425,7 +2442,9 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             try:
                 sel = dataclasses.replace(selection, flag_view=view)
                 if self._polarization is not None:
-                    sel = dataclasses.replace(sel, correlation=[self._polarization])
+                    from .data.reader import correlation_for_query
+                    sel = dataclasses.replace(
+                        sel, correlation=correlation_for_query(self._polarization))
                 oagg, *_ = self._backend.query_raster(
                     y_dim=self._y_dim, x_dim=self._x_dim, quantity=Axis.FLAG,
                     selection=sel, polarization=self._polarization, max_cells=budget)

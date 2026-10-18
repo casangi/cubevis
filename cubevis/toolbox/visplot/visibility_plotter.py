@@ -77,6 +77,7 @@ Package location
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html as _html
 import base64
 import json
@@ -113,7 +114,8 @@ from .data._raster_stats import normalize_chan_window, normalize_time_window
 from .data._scatter_average import normalize_avg_chan, normalize_avg_time
 from . import antenna_baseline_select as _abs
 from .antenna_baseline_select import SELECTION_PAYLOAD_JS as _SELECTION_PAYLOAD_JS
-from .selection_text import (SelectionTextError, parse_scan_text,
+from .data_format import MSV2 as _MSV2, detect_data_format, resolve_data_args
+from .selection_text import (SelectionTextError, parse_scan_text, parse_field_text,
                              parse_timerange_text, parse_uvrange_text)
 from .visibility_raster import VisibilityRaster
 from .visibility_scatter import VisibilityScatter, ScatterLayer, _LAYER_CMAPS
@@ -205,7 +207,7 @@ _STATUS_HEIGHT     = 96
 _STATIC_HINTS = {
     "col": "<b>Data column</b> \u2014 which visibilities are plotted  | <b>DATA</b>: as observed  | <b>CORRECTED_DATA</b>: after calibration has been applied  | <b>MODEL_DATA</b>: what the calibration model predicts  | Only the columns this dataset has are listed",
     # ---- raster gear tab
-    "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: one cell per baseline over time and channels, mirrored, so a bad antenna is a whole row and column (the Ant\u00d7Ant preset); the two Antenna axes only go together  | Y and X must differ  | The raster shows the first ticked correlation (named in its title); untick the others to see a different one",
+    "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: one cell per baseline over time and channels, mirrored, so a bad antenna is a whole row and column (the Ant\u00d7Ant preset); the two Antenna axes only go together  | Y and X must differ  | Which correlation is shown: <b>Correlation shown</b>, below",
     "r_qty": "<b>Raster quantity</b> \u2014 what the colour shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
     "scaling": "<b>Colour scaling</b> \u2014 how values are spread over the colours; changes the picture, never the data  | <b>eq_hist</b> uses every colour equally and shows faint structure, but distances between colours mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap",
     "bcombine": "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines: any raster without Baseline on an axis, such as Time \u00d7 Channel with no single baseline ticked. Averaging (above) applies to the samples of each baseline; this is what happens to the baselines  | <b>Mean</b>: the average of the baselines\u2019 amplitudes. The general picture of the selected baselines; a problem on a few of them is diluted  | <b>Median</b>: the middle baseline at each cell: what most baselines share, unmoved by a few bad ones. A feature that shows in Maximum but not in Median is on a few baselines (find and flag those); one in both is on most of them  | <b>Maximum</b>: the largest baseline at each cell. Interference or a bad antenna shows even if only one baseline has it; then tick baselines to find which  | <b>Coherent</b>: the baselines are added as complex numbers first. Only for a calibrated point source, where all baselines agree and noise averages down; on anything else they cancel and the plot reads low  | Applies to Amplitude, Phase (Mean, Median and Maximum all give the mean direction), Amp V Diff and Phase Diff. A flag box on such a plot flags every selected baseline",
@@ -227,7 +229,7 @@ _STATIC_HINTS = {
     "flag_undo": "<b>Undo / Redo / Clear</b> \u2014 step back through the pending flags one box at a time, forward again, or drop them all  | Nothing here touches the data on disk",
     "flag_report": "<b>Describe pending flags</b> \u2014 open a page listing every pending flag in order: what it covers, how far it reached, its filter, its reason and how many samples it changes",
     "tb_sidebar": "<b>\u27e8 / \u27e9</b> \u2014 hide or show the configuration panel on the left, to give the plots the full width",
-    "tb_plot": "<b>Plot</b> \u2014 draw both panels with everything as now set in the panel on the left  | Selections, axes, quantities and window settings take effect only when this is pressed; colour scaling applies at once  | Pending flags are kept",
+    "tb_plot": "<b>Plot</b> \u2014 draw both panels with everything as now set in the panel on the left  | Selections, axes, quantities and window settings take effect only when this is pressed; colour scaling applies at once  | <b>Orange</b>: something has been changed since the last Plot and is not shown yet  | Pending flags are kept",
     "tb_reload": "<b>Reload</b> \u2014 read the data again and redraw  | Use after something else has changed the data on disk  | <span style=\"color:#f38ba8\"><b>Discards pending (unapplied) flags</b></span>",
     "tb_layout": "<b>Layout</b> \u2014 one panel, or both: side by side or one above the other  | Side by side suits Baseline \u00d7 Time; one above the other gives a waterfall the full width  | Each preset switches to the layout that suits it, unless <b>Pin layout</b> (in the configuration panel) is ticked",
     "gear_pin": "<b>Pin</b> \u2014 keep this panel's configuration tab open after <b>Plot &#9654;</b>, to try one setting after another (the Ant\u00d7Ant quantities, say)  | Unticked, a successful Plot closes the tab  | \u2715 closes it either way",
@@ -1236,38 +1238,68 @@ def _parse_correlation_string(corr_str: str,
     return [c.strip().upper() for c in corr_str.split(",") if c.strip()]
 
 
+def _normalize_raster_corr(value) -> str:
+    """A raster panel's correlation choice (2026-10-18): ``"auto"`` (the
+    first ticked correlation, as before), ``"parallel"`` (the mean of the
+    two parallel hands, (XX+YY)/2 or (RR+LL)/2), or a product label."""
+    if value is None or str(value).strip() == "" or str(value).strip().lower() == "auto":
+        return "auto"
+    v = str(value).strip()
+    if v.lower() in ("parallel", "parallel hands", "i", "stokes i"):
+        return "parallel"
+    return v.upper()
+
+
+def _raster_polarization(choice: str, pols) -> str:
+    """The ``polarization`` a raster with correlation *choice* queries,
+    given the ticked correlations *pols*."""
+    from .data.reader import PARALLEL_HANDS
+    if choice == "parallel":
+        return PARALLEL_HANDS
+    if choice and choice != "auto":
+        return choice
+    return pols[0]
+
+
+def _data_correlations(meta) -> list:
+    out = []
+    for sp in getattr(meta, "spws", ()) or ():
+        for p in getattr(sp, "polarizations", ()) or ():
+            if str(p) not in out:
+                out.append(str(p))
+    return out
+
+
+def _parse_field_names(field_str: str,
+                       meta: ObservationMetadata) -> Optional[list]:
+    """Field names a ``field=`` string selects, or ``None`` for all.
+
+    CASA syntax (``selection_text.parse_field_text``, 2026-10-18): names,
+    FIELD_IDs, ``a~b``, ``>n`` / ``<n``, globs, ``!`` to exclude, separated
+    by commas.  Ids are the real FIELD_IDs (``meta.fields[i].field_id``),
+    not positions -- non-contiguous ids are common after a split, and a
+    positional lookup once resolved ``field='2'`` to the wrong source.
+    Raises ``SelectionTextError`` for text that matches no field (until
+    2026-10-18 anything but one name or id was taken as a literal name,
+    matched nothing, and the plot said "no unflagged data").
+    """
+    return parse_field_text(field_str,
+                            [(getattr(f, "field_id", None), f.name) for f in meta.fields])
+
+
 def _parse_field_string(field_str: str,
                          meta: ObservationMetadata) -> Optional[str]:
-    """Resolve a field= string to a field name.
+    """The one field a ``field=`` string selects, else ``None``.
 
-    A purely-numeric string is matched against each field's real
-    ``field_id`` (not a positional index into ``meta.fields`` -- that
-    was the bug this replaced: silently wrong whenever source FIELD_IDs
-    are non-contiguous, which they commonly are, e.g. after splitting
-    out a subset of an MS's original fields. Confirmed on a real MS
-    with FIELD_IDs 0, 2, 3, 5, 6 -- the old positional-index version
-    resolved field='2' to the field at position 2 in an alphabetically-
-    sorted name list, which was J0522-364, not the field whose real
-    FIELD_ID is 2 (Ceres). ``meta.fields[i].field_id`` is now populated
-    from an authoritative source where the backend provides one -- see
-    ``ObservationMetadata.from_backend_metadata`` and
-    ``MSv2Backend._field_id_map`` -- so a direct match against it gives
-    the same answer plotms's field='N' MSSelection syntax would).
-
-    Matches plotms's field= convention. Returns None (not a fallback
-    guess) if no field has that FIELD_ID, so callers can tell "no such
-    field" apart from a real match rather than silently degrading into
-    matching the numeric string as a literal field name.
+    For what needs a single field (the Field ◀ ▶ position, the Field
+    menu's current entry); ``None`` also for empty, several fields, or
+    text that does not parse -- it never raises.
     """
-    if not field_str or field_str.strip() == "":
+    try:
+        names = _parse_field_names(field_str, meta)
+    except SelectionTextError:
         return None
-    if field_str.strip().isdigit():
-        fid = int(field_str.strip())
-        for f in meta.fields:
-            if f.field_id == fid:
-                return f.name
-        return None
-    return field_str.strip() or None
+    return names[0] if names and len(names) == 1 else None
 
 
 def _parse_antenna_string(antenna_str: str,
@@ -2298,9 +2330,13 @@ class VisibilityPlotter:
 
     Parameters
     ----------
+    vis : str | None
+        Path to the data, MSv2 measurement set or MSv4 / Processing Set:
+        the format is detected (on the kernel's host when ``kernel_name``
+        is given).  Exactly one of ``vis``, ``ms`` or ``ps`` must be
+        supplied.
     ms : str | None
-        Path to an MSv2 measurement set.  Exactly one of ``ms`` or ``ps``
-        must be supplied.
+        Path to an MSv2 measurement set.
     ps : str | None
         Path to an MSv4 / Processing Set Zarr store.
     backend : str
@@ -2367,6 +2403,13 @@ class VisibilityPlotter:
         every scatter panel when it averages (``scatter_avg_time`` /
         ``scatter_avg_chan``); each panel's own "Averaging" control
         changes it independently afterwards.
+    raster_corr : str
+        Which correlation a raster shows: ``"auto"`` (default; the first
+        of ``correlation``), ``"parallel"`` (the mean of the parallel
+        hands, (XX+YY)/2 or (RR+LL)/2, valid where both are unflagged;
+        a flag box on it flags both), or a product such as ``"LL"``
+        (read whether ticked or not).  Initial value for every raster
+        panel; each panel's "Correlation shown" control changes it.
     baseline_combine : str
         How a raster cell that covers several baselines combines them
         (only where Baseline is not a plot axis, e.g. Time x Channel
@@ -2470,7 +2513,7 @@ class VisibilityPlotter:
         arguments (and the plot summary can print the call that
         reproduces what is on screen).  Keys are the names of the
         per-panel arguments below -- ``kind``, ``raster_y``, ``raster_x``,
-        ``raster_qty``, ``averaging``, ``baseline_order``,
+        ``raster_qty``, ``averaging``, ``raster_corr``, ``baseline_order``,
         ``baseline_combine``, ``detrend``, ``stat_time_window``,
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
         ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
@@ -2614,6 +2657,7 @@ class VisibilityPlotter:
     def __init__(
         self,
         *,
+        vis:              Optional[str] = None,
         ms:               Optional[str] = None,
         ps:               Optional[str] = None,
         backend:          str           = "auto",
@@ -2631,6 +2675,7 @@ class VisibilityPlotter:
         # verbatim into the generated task layers, where that name does
         # not exist.  test_raster_averaging pins the two together.
         averaging:        str           = "vector",
+        raster_corr:      str           = "auto",
         baseline_order:   str           = "number",
         # Literal for sync_layers, like averaging; test_baseline_combine
         # pins it to selection.DEFAULT_BASELINE_COMBINE.
@@ -2705,26 +2750,31 @@ class VisibilityPlotter:
         # _resolve_config into self._slot_cfg.
         self._panels_arg = panels
 
-        self._resolve_config(
-            ms=ms, ps=ps, backend=backend, remote_endpoint=remote_endpoint,
-            kernel_name=kernel_name, field=field, spw=spw, antenna=antenna, scan=scan,
-            timerange=timerange, uvrange=uvrange, correlation=correlation,
-            datacolumn=datacolumn, averaging=averaging, detrend=detrend,
-            baseline_order=baseline_order,
-            baseline_combine=baseline_combine,
-            stat_time_window=stat_time_window,
-            stat_chan_window=stat_chan_window,
-            scatter_avg_time=scatter_avg_time,
-            scatter_avg_chan=scatter_avg_chan,
-            layout=layout, kind=kind, preset=preset,
-            raster_y=raster_y, raster_x=raster_x, raster_qty=raster_qty,
-            scatter_x=scatter_x, scatter_y=scatter_y,
-            time_range=time_range, freq_range=freq_range,
-            uvdist_range=uvdist_range, enable_flagging=enable_flagging,
-            compact_toolbar=compact_toolbar,
-            theme=theme, raster_cmap=raster_cmap, scatter_cmap=scatter_cmap,
-            row_height=row_height, column_width=column_width,
-        )
+        # A failure once the data are open closes them (and a remote
+        # kernel) here, not in __del__ at interpreter exit, where closing a
+        # kernel link can block (2026-10-18; _closing_on_error).
+        with self._closing_on_error():
+            self._resolve_config(
+                vis=vis, ms=ms, ps=ps, backend=backend, remote_endpoint=remote_endpoint,
+                kernel_name=kernel_name, field=field, spw=spw, antenna=antenna, scan=scan,
+                timerange=timerange, uvrange=uvrange, correlation=correlation,
+                datacolumn=datacolumn, averaging=averaging, raster_corr=raster_corr,
+                detrend=detrend,
+                baseline_order=baseline_order,
+                baseline_combine=baseline_combine,
+                stat_time_window=stat_time_window,
+                stat_chan_window=stat_chan_window,
+                scatter_avg_time=scatter_avg_time,
+                scatter_avg_chan=scatter_avg_chan,
+                layout=layout, kind=kind, preset=preset,
+                raster_y=raster_y, raster_x=raster_x, raster_qty=raster_qty,
+                scatter_x=scatter_x, scatter_y=scatter_y,
+                time_range=time_range, freq_range=freq_range,
+                uvdist_range=uvdist_range, enable_flagging=enable_flagging,
+                compact_toolbar=compact_toolbar,
+                theme=theme, raster_cmap=raster_cmap, scatter_cmap=scatter_cmap,
+                row_height=row_height, column_width=column_width,
+            )
 
         # ------------------------------------------------------------------ #
         # FlagDB + hotkey scope                                                #
@@ -2747,11 +2797,13 @@ class VisibilityPlotter:
             # No comm layer: VisibilityPlot already treats comm_mgr=None
             # as "no browser", so the panels are simply built without one.
             self._comm_mgr = None
-            self._build_panels()
+            with self._closing_on_error():
+                self._build_panels()
             return
 
         self._build_comm()
-        self._build_panels()
+        with self._closing_on_error():
+            self._build_panels()
         self._style_panel_figures()
         self._build_gui()
 
@@ -2794,6 +2846,18 @@ class VisibilityPlotter:
                 log.exception(
                     "VisibilityPlotter.close(): error closing data reader"
                 )
+
+    @contextlib.contextmanager
+    def _closing_on_error(self):
+        """Close what has been opened if the body raises, then re-raise."""
+        try:
+            yield
+        except BaseException:
+            try:
+                self.close()
+            except Exception:
+                log.debug("close after a failed construction", exc_info=True)
+            raise
 
     def __enter__(self) -> "VisibilityPlotter":
         return self
@@ -2875,7 +2939,7 @@ class VisibilityPlotter:
     def _resolve_config(
         self,
         *,
-        ms, ps, backend, remote_endpoint, kernel_name, field, spw, antenna, scan,
+        vis=None, raster_corr="auto", ms, ps, backend, remote_endpoint, kernel_name, field, spw, antenna, scan,
         timerange, uvrange, correlation, datacolumn, averaging, detrend,
         baseline_order, baseline_combine,
         stat_time_window, stat_chan_window,
@@ -2898,17 +2962,27 @@ class VisibilityPlotter:
         # ------------------------------------------------------------------ #
         # Validate                                                             #
         # ------------------------------------------------------------------ #
-        if ms is not None and ps is not None:
-            raise ValueError("Supply exactly one of ms= or ps=, not both.")
-        if ms is None and ps is None:
-            raise ValueError("One of ms= or ps= must be supplied.")
+        # vis= (2026-10-18): the CASA name; either format.  Exactly one
+        # of vis / ms / ps.  The format of a vis= path is decided where
+        # the data are: here, or on the kernel's host (below, at "Open
+        # data source") when a kernel runs the data access.
+        _which, _path = resolve_data_args(vis, ms, ps)
+        self._vis_remote = False
+        if _which == "vis":
+            remote = bool(kernel_name) or str(backend).lower() == "remote"
+            if remote and not os.path.exists(os.path.expanduser(_path)):
+                self._vis_remote = True
+            elif detect_data_format(_path) == _MSV2:
+                ms = _path
+            else:
+                ps = _path
 
         # ------------------------------------------------------------------ #
         # Store arguments                                                      #
         # ------------------------------------------------------------------ #
         self._ms_path       = ms
         self._ps_path       = ps
-        self._source_path   = ms or ps
+        self._source_path   = ms or ps or vis
         self._field_str     = field
         self._spw_str       = spw
         # Identities chosen in the SPW table, or None to fall back to
@@ -2932,6 +3006,10 @@ class VisibilityPlotter:
         # from that slot's raster gear tab).  Validated here so a typo
         # fails at construction, not as a silently-defaulted plot.
         self._averaging     = normalize_averaging(averaging)
+        # Which correlation each raster shows (2026-10-18): initial value
+        # for every raster panel, per panel afterwards.  A product label
+        # is checked against the data once they are open.
+        self._raster_corr   = _normalize_raster_corr(raster_corr)
         # HRS H3/H4 (2026-10-07): order of a raster's Baseline axis,
         # "number" | "length".  Initial value; per panel afterwards.
         self._baseline_order = normalize_baseline_order(baseline_order)
@@ -3028,7 +3106,17 @@ class VisibilityPlotter:
         elif kernel_name and ReductionBackend(backend) != ReductionBackend.REMOTE:
             log.warning("kernel_name=%r is ignored with backend=%r (only "
                         "backend='remote' uses a kernel)", kernel_name, backend)
-        if ms is not None:
+        if self._vis_remote:
+            if ReductionBackend(backend) != ReductionBackend.REMOTE:
+                raise ValueError(f"vis={vis!r}: no such file or directory")
+            ctx = _make_remote_context(vis, kernel_name, "auto",
+                                       remote_endpoint=remote_endpoint)
+            if ctx.backend_kind == _MSV2:
+                self._ms_path = vis
+            else:
+                self._ps_path = vis
+            self._meta, self._reader, self._context = ctx.metadata_dto(), ctx, ctx
+        elif ms is not None:
             self._meta, self._reader, self._context = open_ms(
                 ms, backend=backend, remote_endpoint=remote_endpoint,
                 kernel_name=kernel_name
@@ -3067,7 +3155,17 @@ class VisibilityPlotter:
         if self._timerange_str and self._time_range is not None:
             raise ValueError("give timerange= (text) or time_range= "
                              "(UNIX seconds), not both")
+        _avail = _data_correlations(self._meta)
+        for _i, _c in enumerate([self._raster_corr] + [
+                _normalize_raster_corr((d or {}).get("raster_corr"))
+                for d in (getattr(self, "_panels_arg", None) or [])
+                if isinstance(d, dict)]):
+            if _c not in ("auto", "parallel") and _avail and _c not in _avail:
+                raise ValueError(
+                    f"raster_corr={_c!r}: the data have {', '.join(_avail)} "
+                    "(or 'auto', 'parallel')")
         try:
+            _parse_field_names(self._field_str, self._meta)
             self._scan_sel, _tr, self._uv_range = self._parse_selection_texts(
                 self._scan_str, self._timerange_str, self._uvrange_str)
         except SelectionTextError as exc:
@@ -3197,6 +3295,7 @@ class VisibilityPlotter:
     # Keys a panels=[...] dict may hold (HRS A2).  Raster-only colour
     # scale keys have no flat argument.
     _PANEL_KEYS = ("kind", "raster_y", "raster_x", "raster_qty", "averaging",
+                   "raster_corr",
                    "baseline_order", "baseline_combine", "detrend",
                    "stat_time_window", "stat_chan_window", "scatter_x",
                    "scatter_y", "scatter_avg_time", "scatter_avg_chan",
@@ -3216,6 +3315,7 @@ class VisibilityPlotter:
         common = dict(
             raster_y=self._raster_y, raster_x=self._raster_x,
             raster_qty=self._raster_qty, averaging=self._averaging,
+            raster_corr=getattr(self, "_raster_corr", "auto"),
             baseline_order=self._baseline_order,
             baseline_combine=self._baseline_combine,
             detrend=self._detrend,
@@ -3268,6 +3368,7 @@ class VisibilityPlotter:
                     c[k] = (v if isinstance(v, Axis)
                             else _resolve_axis_arg(v, opts, f"{tag}.{k}", c[k]))
             norm = {"averaging": normalize_averaging,
+                    "raster_corr": _normalize_raster_corr,
                     "baseline_order": normalize_baseline_order,
                     "baseline_combine": normalize_baseline_combine,
                     "stat_time_window": normalize_time_window,
@@ -3524,7 +3625,7 @@ class VisibilityPlotter:
             else 2_000_000
         )
 
-        def _raster(c, wh):
+        def _raster(c, wh, skip=False):
             r = VisibilityRaster(
                 backend       = self._reader,
                 selection     = self._selection,
@@ -3537,14 +3638,14 @@ class VisibilityPlotter:
                 detrend       = c["detrend"],
                 stat_time_window = c["stat_time_window"],
                 stat_chan_window = c["stat_chan_window"],
-                polarization  = first_pol,
+                polarization  = _raster_polarization(c.get("raster_corr", "auto"), pols),
                 width         = wh[0],
                 height        = wh[1],
                 comm_mgr      = self._comm_mgr,
                 cursor_source = self._cursor_source,
                 enable_flagging = self._enable_flagging,
                 compact_toolbar = self._compact_toolbar,
-                defer_initial_render = (c["kind"] != "raster"),
+                defer_initial_render = (c["kind"] != "raster") or skip,
                 headless             = self._headless,
                 cmap                 = raster_ramp,
                 max_cells            = _raster_max_cells,
@@ -3552,11 +3653,14 @@ class VisibilityPlotter:
             )
             if c["vmin"] is not None or c["vmax"] is not None:
                 r.update_scaling(vmin=c["vmin"], vmax=c["vmax"])
+            # The panel's correlation choice ("auto", "parallel" or a
+            # product), kept with it for the gear tab and Plot.
+            r._corr_choice = c.get("raster_corr", "auto")
             return r
 
         # One scatter layer per polarisation -- multi-layer compositing
         # naturally boosts density and visibility vs a single layer.
-        def _scatter(c, wh):
+        def _scatter(c, wh, skip=False):
             sc = VisibilityScatter(
                 backend       = self._reader,
                 selection     = self._selection,
@@ -3569,7 +3673,7 @@ class VisibilityPlotter:
                 cursor_source = self._cursor_source,
                 enable_flagging = self._enable_flagging,
                 compact_toolbar = self._compact_toolbar,
-                defer_initial_render = (c["kind"] != "scatter"),
+                defer_initial_render = (c["kind"] != "scatter") or skip,
                 headless             = self._headless,
                 layer_cmaps          = scatter_ramps,
                 avg_time             = c["scatter_avg_time"],
@@ -3591,10 +3695,15 @@ class VisibilityPlotter:
         from .panel_sizes import cell_sizes
         _cells = cell_sizes(self._row_height, self._column_width, self._layout)
         _wh_a, _wh_b = _cells[0], _cells[min(1, len(_cells) - 1)]
+        # A headless One-panel export draws only slot A, so slot B is not
+        # rendered at all (2026-10-18: it read the whole selection for a
+        # panel nobody sees -- on TW Hya, all of the memory of a raster
+        # export went to slot B's scatter).
+        _skip_b = self._headless and self._layout == "one"
         _slot_a_raster  = _raster(_ca, _wh_a)
         _slot_a_scatter = _scatter(_ca, _wh_a)
-        _slot_b_scatter = _scatter(_cb, _wh_b)
-        _slot_b_raster  = _raster(_cb, _wh_b)
+        _slot_b_scatter = _scatter(_cb, _wh_b, skip=_skip_b)
+        _slot_b_raster  = _raster(_cb, _wh_b, skip=_skip_b)
 
         # Stage 1b.5: ordered slot records — self._slots[0] is "A",
         # self._slots[1] is "B". Order matches today's A/B layout
@@ -4491,7 +4600,7 @@ for (const dt of other.tools) {
         answers nothing (Plot reports it)."""
         import dataclasses as _dc
         try:
-            field_name = _parse_field_string(str(msg.get("field", self._field_str)),
+            field_names = _parse_field_names(str(msg.get("field", self._field_str)),
                                              self._meta)
             scan_sel, tr, uv = self._parse_selection_texts(
                 msg.get("scan", self._scan_str), msg.get("timerange", self._timerange_str),
@@ -4502,7 +4611,7 @@ for (const dt of other.tools) {
         ac = msg.get("autocorr")
         sel = _dc.replace(
             self._selection,
-            field_names=[field_name] if field_name else None,
+            field_names=field_names,
             spw=list(spw) if spw else self._selection.spw,
             scan=scan_sel, time_range=tr, uv_range=uv,
             autocorr=ac if ac in ("exclude", "include", "only") else self._selection.autocorr)
@@ -4854,6 +4963,12 @@ for (const dt of other.tools) {
                 det = panel_msg.get("detrend")
                 det = (panel.detrend if det not in ("remove", "keep")
                        else det == "remove")
+                # Which correlation this raster shows (2026-10-18).
+                # Absent (older client, preset payload): keep the panel's.
+                rk = (_normalize_raster_corr(panel_msg["raster_corr"])
+                      if panel_msg.get("raster_corr")
+                      else getattr(panel, "_corr_choice", "auto"))
+                rpol = _raster_polarization(rk, pols)
                 # Statistic windows for this slot (HRS H2 slice 2).
                 # Absent or unparseable: keep what the panel has.
                 try:
@@ -4910,7 +5025,8 @@ for (const dt of other.tools) {
                     bcomb != panel.baseline_combine or
                     det != panel.detrend or
                     twin != panel.stat_time_window or
-                    cwin != panel.stat_chan_window
+                    cwin != panel.stat_chan_window or
+                    rpol != panel._polarization
                     # (Antenna and Baseline table changes: covered by
                     # _rows_selection_changed above.)
                 )
@@ -4936,7 +5052,7 @@ for (const dt of other.tools) {
                                 y_dim        = y,
                                 x_dim        = x,
                                 quantity     = qty,
-                                polarization = first_pol,
+                                polarization = rpol,
                                 averaging    = avg,
                                 baseline_order = border,
                                 baseline_combine = bcomb,
@@ -4945,6 +5061,7 @@ for (const dt of other.tools) {
                                 stat_chan_window = cwin,
                             )
                         self._last_raster_selection_by_slot[slot.id] = self._selection
+                    panel._corr_choice = rk
                 except Exception as exc:
                     log.error("_handle_plot: panel %s raster update_axes "
                               "failed: %s", slot.id, exc, exc_info=True)
@@ -5331,7 +5448,7 @@ for (const dt of other.tools) {
         return scan_sel, tr, uv
 
     def _build_selection(self) -> SelectionSpec:
-        field_name = _parse_field_string(self._field_str, self._meta)
+        field_names = _parse_field_names(self._field_str, self._meta)
         # Explicit identities from the SPW table win over the string
         # form: they are already the values _spw_selected compares
         # against, and re-deriving them from text could only lose
@@ -5346,7 +5463,7 @@ for (const dt of other.tools) {
         # the rule -- see antenna_baseline_select's module docstring.
         antenna_names, baselines = self._antenna_baseline_selection()
         return SelectionSpec(
-            field_names = [field_name] if field_name else None,
+            field_names = field_names,
             spw         = spw_ids or None,
             correlation = corrs or None,
             data_column = self._datacolumn,
@@ -5366,7 +5483,7 @@ for (const dt of other.tools) {
             stat_chan_window = getattr(self, "_stat_chan_window", "off"),
             cache_generation = getattr(self, "_cache_generation", 0),
         ) if not hasattr(self, "_flags") else self._flags.stamp_selection(SelectionSpec(
-            field_names = [field_name] if field_name else None,
+            field_names = field_names,
             spw         = spw_ids or None,
             correlation = corrs or None,
             data_column = self._datacolumn,
@@ -5391,6 +5508,46 @@ for (const dt of other.tools) {
         """Every status-area help Div (the ``_hint_*`` attributes)."""
         return [v for k, v in vars(self).items()
                 if k.startswith("_hint_") and isinstance(v, Div)]
+
+    def _attach_plot_pending(self, plot_btn, js_args: dict) -> None:
+        """Plot ▶ turns orange when a control Plot reads has changed since
+        the last successful Plot, and green again when it answers
+        (2026-10-18; the layout proposal expected "a change that did not
+        appear until I pressed Plot" to be the first thing testers trip
+        over).  The controls are exactly those doPlot() reads: the values
+        of its arguments that are inputs (selects, text boxes, checkbox
+        and radio groups) and the selections of its table sources."""
+        from bokeh.models import (CheckboxGroup, ColumnDataSource, RadioButtonGroup,
+                                  RadioGroup, Select, TextInput, MultiChoice)
+        mark = CustomJS(args={"plot_btn": plot_btn}, code="""
+if (!window.__cvPlotPending) {
+    window.__cvPlotPending = function(on) {
+        const b = window.__cvPlotBtn;
+        if (b) b.button_type = on ? 'warning' : 'success';
+    };
+}
+window.__cvPlotBtn = plot_btn;
+window.__cvPlotPending(true);
+""")
+        # Not data or panel settings: the layout buttons and the tabs'
+        # Pin checkboxes act at once.
+        skip = {"status_div", "notify_div", "plot_btn", "reload_btn", "sidebar",
+                "toggle_btn", "gear_tabs", "layout_rbg", "panel_a_pin", "panel_b_pin"}
+        seen = set()
+        for name, w in js_args.items():
+            if name in skip or w is None or id(w) in seen:
+                continue
+            seen.add(id(w))
+            if isinstance(w, (Select, TextInput)):
+                w.js_on_change("value", mark)
+            elif isinstance(w, (CheckboxGroup, RadioButtonGroup, RadioGroup)):
+                w.js_on_change("active", mark)
+            elif isinstance(w, MultiChoice):
+                w.js_on_change("value", mark)
+            elif (isinstance(w, ColumnDataSource) and name.endswith("_src")
+                  and "img" not in name):
+                w.selected.js_on_change("indices", mark)
+        self._plot_pending_js = mark
 
     def _hover(self, widget, name: str):
         """Wrap *widget* so the status-area help ``self._hint_<name>``
@@ -5632,6 +5789,14 @@ cvApplySelectionText(
         vw = getattr(self, "_version_warning", None)
         vw_note = (f"<br><span style='color:#f9e2af'>⚠ {_html.escape(vw)}</span>"
                    if vw else "")
+        # A panel left empty at start-up because its selection is too
+        # large to plot (memory guard, 2026-10-18); gone after a Plot
+        # that draws it.
+        for slot in getattr(self, "_slots", ()) or ():
+            err = getattr(getattr(slot, "scatter", None), "_render_error", None)
+            if err and slot.kind == "scatter":
+                vw_note += (f"<br><span style='color:#f38ba8'>⚠ Panel {slot.id}: "
+                            f"{_html.escape(err)}</span>")
         return (
             f"<b>{fname}</b>  |  Layout: {layout_label}<br>"
             f"{field}  |  {spw}  |  {antenna}{narrowed}  |  Col: {col}{flag_note}"
@@ -6064,11 +6229,27 @@ html, body { height: 100%; margin: 0; }
                                     slot.raster.stat_chan_window, "ch"),
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
+        # Which correlation this raster shows (2026-10-18): the first
+        # ticked one (as before), the parallel hands averaged, or any
+        # product of the data.  Per slot, read at Plot-press time.
+        _corrs = _data_correlations(self._meta)
+        from .data.reader import parallel_label as _parallel_label
+        _rk_opts = [("auto", "First ticked"),
+                    ("parallel", f"Parallel hands {_parallel_label(_corrs)}")]
+        _rk_opts += [(c, c) for c in _corrs]
+        _rk_val = getattr(slot.raster, "_corr_choice", "auto")
+        if _rk_val not in [v for v, _ in _rk_opts]:
+            _rk_opts.append((_rk_val, _rk_val))
+        rk_sel = Select(
+            title="Correlation shown", value=_rk_val, options=_rk_opts,
+            width=_SIDEBAR_WIDTH, stylesheets=[dark],
+        )
         # Help in the status area while the pointer is over a control
         # (2026-10-06), the same mechanism the sidebar's inputs use.
         # The wrapped forms go in the layout; the Selects themselves
         # stay in the widgets dict below (they are what the Plot code
         # reads and the theme restyles).
+        rk_box = self._hover(rk_sel, "rcorr")
         ra_box = self._hover(ra_sel, "averaging")
         rb_box = self._hover(rb_sel, "border")
         rm_box = self._hover(rm_sel, "bcombine")
@@ -6117,7 +6298,7 @@ conflict_div.text = conflict ? msg : '';
             self._hover(column(ry_sel, rx_sel, width=_SIDEBAR_WIDTH),
                         "r_axes"),
             self._hover(rq_sel, "r_qty"),
-            ra_box, rm_box, rb_box, rd_box, rt_box, rc_box,
+            rk_box, ra_box, rm_box, rb_box, rd_box, rt_box, rc_box,
             conflict_div,
             self._hover(raster_cmap, "scaling"),
             self._hover(info_sel.column, "info"),
@@ -6127,6 +6308,7 @@ conflict_div.text = conflict ? msg : '';
             "avg_sel": ra_sel, "detrend_sel": rd_sel,
             "twin_sel": rt_sel, "cwin_sel": rc_sel,
             "border_sel": rb_sel, "bcombine_sel": rm_sel,
+            "corr_sel": rk_sel,
             "info_selectors": info_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
@@ -6430,6 +6612,16 @@ for (let i = 0; i < cols.length; i++) {
         # mismatch instead of trying to compensate for it.
         field_options = [("", "All fields")] + [(f.name, f.name) for f in meta.fields]
         current_field = _parse_field_string(self._field_str, meta) or ""
+        # Several fields from field= (2026-10-18): one extra entry holding
+        # them, value comma-joined (Field ◀ ▶ skips it: see
+        # _iterate_js, which steps only through values without a comma).
+        try:
+            _many = _parse_field_names(self._field_str, meta) or []
+        except SelectionTextError:
+            _many = []
+        if len(_many) > 1:
+            current_field = ",".join(_many)
+            field_options.append((current_field, f"{len(_many)} fields: " + ", ".join(_many)))
         self._field_select = Select(
             value       = current_field if current_field in [v for v, _ in field_options]
                           else "",
@@ -8278,13 +8470,14 @@ function doPlot(reload) {
     function buildPanelPayload(kind_switch, ry_sel, rx_sel, rq_sel, sx_sel, sy_sel,
                                 colorize_handles, ra_sel, rd_sel, rt_sel, rc_sel,
                                 rb_sel, rm_sel, sat_sel, sac_sel, sam_sel,
-                                sd_sel, st_sel, sc_sel) {
+                                sd_sel, st_sel, sc_sel, rk_sel) {
         if (kind_switch.active === 0) {
             return {kind: 'raster', y: ry_sel.value, x: rx_sel.value, qty: rq_sel.value,
                     averaging: ra_sel.value, detrend: rd_sel.value,
                     twin: rt_sel.value, cwin: rc_sel.value,
                     baseline_order: rb_sel ? rb_sel.value : null,
-                    baseline_combine: rm_sel ? rm_sel.value : null};
+                    baseline_combine: rm_sel ? rm_sel.value : null,
+                    raster_corr: rk_sel ? rk_sel.value : null};
         } else {
             return {kind: 'scatter', x: sx_sel.value, y: sy_sel.value,
                      colorize: buildColorizeArray(colorize_handles),
@@ -8329,13 +8522,13 @@ function doPlot(reload) {
         panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles, panel0_ra_sel,
         panel0_rd_sel, panel0_rt_sel, panel0_rc_sel, panel0_rb_sel, panel0_rm_sel,
         panel0_sat_sel, panel0_sac_sel, panel0_sam_sel,
-        panel0_sd_sel, panel0_st_sel, panel0_sc_sel);
+        panel0_sd_sel, panel0_st_sel, panel0_sc_sel, panel0_rk_sel);
     panels[panel1_id] = buildPanelPayload(
         panel1_kind_switch, panel1_ry_sel, panel1_rx_sel, panel1_rq_sel,
         panel1_sx_sel, panel1_sy_sel, panel1_colorize_handles, panel1_ra_sel,
         panel1_rd_sel, panel1_rt_sel, panel1_rc_sel, panel1_rb_sel, panel1_rm_sel,
         panel1_sat_sel, panel1_sac_sel, panel1_sam_sel,
-        panel1_sd_sel, panel1_st_sel, panel1_sc_sel);
+        panel1_sd_sel, panel1_st_sel, panel1_sc_sel, panel1_rk_sel);
 
     // Each panel renders at its figure's current size (2026-10-09).
     [[panels[panel0_id], panel0_raster_fig, panel0_scatter_fig],
@@ -8828,6 +9021,9 @@ function doPlot(reload) {
         // again rather than instantly re-revealing whatever was open last
         // round.
         if (resp.status === 'ok') {
+            // Everything set is now drawn: Plot back to green (2026-10-18).
+            // After this handler, so values it sets do not count.
+            setTimeout(function() { if (typeof window !== 'undefined' && window.__cvPlotPending) window.__cvPlotPending(false); }, 0);
             // A pinned tab stays open: what its close button restores is
             // now the panel as just plotted (kind and title).
             function keepPinned(state, shown_kind, raster_fig, scatter_fig) {
@@ -9006,6 +9202,7 @@ function doPlot(reload) {
             "panel0_rc_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["cwin_sel"],
             "panel0_rb_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["border_sel"],
             "panel0_rm_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["bcombine_sel"],
+            "panel0_rk_sel": self._panel_axis_widgets[self._slots[0].id]["raster"]["corr_sel"],
             "panel0_sx_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["x_sel"],
             "panel0_sy_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["y_sel"],
             "panel0_sd_sel": self._panel_axis_widgets[self._slots[0].id]["scatter"]["detrend_sel"],
@@ -9032,6 +9229,7 @@ function doPlot(reload) {
             "panel1_rc_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["cwin_sel"],
             "panel1_rb_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["border_sel"],
             "panel1_rm_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["bcombine_sel"],
+            "panel1_rk_sel": self._panel_axis_widgets[self._slots[1].id]["raster"]["corr_sel"],
             "panel1_sx_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["x_sel"],
             "panel1_sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
             "panel1_sd_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["detrend_sel"],
@@ -9102,6 +9300,7 @@ function doPlot(reload) {
         # Store for use in _preset_js callbacks
         self._do_plot_js   = _do_plot_js
         self._plot_js_args = _plot_js_args
+        self._attach_plot_pending(plot_btn, _plot_js_args)
 
         # ---- Iteration: Prev/Next, wired to the sidebar's own Field/SPW
         # controls (I-1, Phase 2.5) ------------------------------------- #
@@ -9170,7 +9369,7 @@ function doIterateField(delta) {
     // steppable position, same exclusion _field_iteration_position()
     // applies on the Python side (status-bar readout) and meta.fields
     // applies for the count iteration_step.step_index() receives.
-    const names = field_sel.options.slice(1).map(o => o[0]);""" + \
+    const names = field_sel.options.slice(1).map(o => o[0]).filter(v => v.indexOf(",") < 0);""" + \
     _iter_guard_js("names.length", "field") + """
     const cur = names.indexOf(field_sel.value);
     const idx = stepIterationIndex(cur === -1 ? null : cur, names.length, delta, true);
@@ -10290,6 +10489,7 @@ if (x != null && !isNaN(x)) {
         # Controls in the gear tabs and the antenna switch (2026-10-06):
         # what each one does and when to use it.  Fixed text, so filled
         # here; attached to the controls by _hover().
+        self._hint_rcorr      = _hint("<b>Correlation shown</b> \u2014 a raster shows one correlation at a time  | <b>First ticked</b>: the first one ticked in the Data section, named in the title  | <b>Parallel hands</b>: the mean of the two parallel hands, (XX+YY)/2 or (RR+LL)/2, the Stokes I-like view AIPS editors start from; a sample counts only where both hands are unflagged, and a flag box here flags both  | A product: that one, whether ticked or not  | Two panels on RR and LL show a problem in one hand only")
         self._hint_averaging  = _hint("<b>Averaging</b> \u2014 how a raster cell combines the samples it covers (Amplitude and Phase only)  | <b>Vector</b>: average the complex visibilities, then take amplitude / phase. Amplitude drops where samples do not line up (noise, uncalibrated phase, a delay across the averaged channels). What AIPS and plotms do  | <b>Scalar</b>: average the amplitudes themselves; shows signal plus noise level, no loss from decorrelation  | Vector next to Scalar on two panels shows where coherence is lost")
         self._hint_detrend    = _hint("<b>Phase slope</b> \u2014 for Phase RMS and Coherence  | <b>Remove</b>: take out a linear phase slope (a delay across frequency, a rate in time) before measuring the scatter, wherever the data clearly show one. Use for data that are not yet fringe-fitted  | <b>Keep</b>: measure the data as they are; a delay or rate then shows up as large scatter and low coherence  | On noise-dominated or already calibrated data the two give the same picture")
         self._hint_twin       = _hint("<b>Time window</b> \u2014 the stretch of time each Phase RMS / Coherence value is measured within  | <b>Auto</b>: one integration where Time is a plot axis, one scan where it is not  | <b>Off</b>: no windows  | <b>Scan</b> or a length: each scan, or pieces of that length; never across a gap  | For <b>Amp V Diff / Phase Diff</b> it is the stretch the reference mean is taken over (Auto and Off mean one scan)  | Longer windows are steadier but blur changes in time; on the plot they show as blocks")

@@ -93,12 +93,18 @@ def positions():
     namespace, so the global lookup inside the lifted function body
     resolves correctly.
     """
+    # _parse_field_string goes through _parse_field_names and the field
+    # parser in selection_text (2026-10-18), which has no package imports.
+    from cubevis.toolbox.visplot.selection_text import (
+        SelectionTextError, parse_field_text)
     return _lift(
         _PKG / "visibility_plotter.py",
+        "_parse_field_names",
         "_parse_field_string",
         "_field_iteration_position",
         "_spw_iteration_position",
-        extra={"Optional": Optional},
+        extra={"Optional": Optional, "SelectionTextError": SelectionTextError,
+               "parse_field_text": parse_field_text},
     )
 
 

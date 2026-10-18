@@ -286,9 +286,9 @@ class RemoteReductionContext(ReductionContext):
         create_context_timeout: float = DEFAULT_CREATE_CONTEXT_TIMEOUT,
         call_timeout: Optional[float] = None,
     ) -> None:
-        if backend_kind not in ("msv2", "msv4"):
+        if backend_kind not in ("msv2", "msv4", "auto"):
             raise ValueError(
-                f"backend_kind must be 'msv2' or 'msv4'; got {backend_kind!r}"
+                f"backend_kind must be 'msv2', 'msv4' or 'auto'; got {backend_kind!r}"
             )
         if not kernel_name:
             raise ValueError(
@@ -409,6 +409,10 @@ class RemoteReductionContext(ReductionContext):
             # happened to notice its parent process exit -- a real
             # long-lived caller (VisibilityPlotter itself) would have
             # leaked it indefinitely.
+            if self._backend_kind == "auto":
+                # vis= (2026-10-18): the worker decided the format on the
+                # data's host; ask which.
+                self._backend_kind = self._call("backend_kind")
             self._meta = ObservationMetadata.from_backend_metadata(
                 self._call("metadata"), source_path=path
             )
@@ -449,6 +453,14 @@ class RemoteReductionContext(ReductionContext):
             timeout=timeout,
         )
         if isinstance(reply, dict) and "error" in reply:
+            # The memory guard's refusal (2026-10-18) is a message for the
+            # user, not a fault: raised here as the same local type, so
+            # the plotter treats it as it does locally (panel left empty
+            # at start-up, Plot's warning without a remote traceback).
+            if "SelectionTooLargeError" in str(reply.get("traceback", "")):
+                from .data.reader import SelectionTooLargeError
+                log.debug("remote %s refused: %s", method, reply.get("traceback"))
+                raise SelectionTooLargeError(str(reply.get("error")))
             raise RemoteBackendError(method, reply)
         if isinstance(reply, dict) and "__cv_pre_encoded__" in reply:
             # Worker-encoded result passed through the kernel untouched
@@ -814,6 +826,11 @@ class RemoteReductionContext(ReductionContext):
 
     def metadata(self, timeout: Optional[float] = None) -> dict:
         return self._call("metadata", timeout=timeout)
+
+    @property
+    def backend_kind(self) -> str:
+        """``"msv2"`` or ``"msv4"`` (resolved by the worker for ``"auto"``)."""
+        return self._backend_kind
 
     def software_versions(self, timeout: Optional[float] = None) -> list:
         """``[(package, version), ...]`` in the worker.  A worker whose

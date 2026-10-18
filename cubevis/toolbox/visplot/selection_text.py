@@ -5,9 +5,16 @@ The sidebar's Scan, Time range and UV range boxes (and the ``scan=``,
 values.  HRS A1, 2026-10-11: until then the text was stored, shown and
 ignored.
 
+Field (2026-10-18; ``field=``) is parsed here too: until then only one
+name or id was understood and anything else matched nothing, silently.
+
 The syntax is CASA's (MSSelection), as plotms and ``flagdata`` take it,
 with the forms a commissioning user types; anything else is refused with
 a message that says what is accepted, never silently ignored.
+
+Field
+    ``3c279``  ``0``  ``0~2``  ``3c279,J0522-364``  ``J05*`` (glob)
+    ``!Ceres`` (all but); names or FIELD_IDs, mixed
 
 Scan
     ``1,3,7``  ``1~7``  ``>30``  ``<10``  ``!5`` (all but)
@@ -40,6 +47,7 @@ Package location
 from __future__ import annotations
 
 import datetime as _dt
+import fnmatch
 import math
 import re
 from typing import Optional, Sequence
@@ -51,6 +59,72 @@ _DAY = 86400.0
 class SelectionTextError(ValueError):
     """Text that does not parse, or matches nothing; the message is for
     the user (status area or exception)."""
+
+
+# --------------------------------------------------------------------------
+# Field
+# --------------------------------------------------------------------------
+
+def parse_field_text(text: Optional[str], fields: Sequence) -> Optional[list[str]]:
+    """Field names selected by *text*, in the data's order.
+
+    ``None`` for empty text (all fields).  *fields* are ``(field_id,
+    name)`` pairs (``field_id`` may be ``None`` when the backend does not
+    know it).  Tokens, separated by commas: an exact name, a FIELD_ID, an
+    id range ``a~b``, ``>n`` / ``<n``, a glob (``*``, ``?``, ``[..]``)
+    on names; ``!`` in front excludes.  A name is tried before an id, so
+    a field named ``"3"`` is still reachable.  Raises
+    ``SelectionTextError`` for a token that matches no field, or a
+    selection that leaves none.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    order = [str(n) for _, n in fields]
+    by_id: dict[int, str] = {}
+    for fid, name in fields:
+        if fid is not None:
+            try:
+                by_id[int(fid)] = str(name)
+            except (TypeError, ValueError):
+                pass
+    shown = ", ".join(order[:8]) + (" …" if len(order) > 8 else "")
+    keep: set[str] = set()
+    drop: set[str] = set()
+    positive = False
+    for tok in [t.strip() for t in text.split(",") if t.strip()]:
+        neg = tok.startswith("!")
+        body = tok[1:].strip() if neg else tok
+        m_rng = re.fullmatch(r"(\d+)\s*~\s*(\d+)", body)
+        m_cmp = re.fullmatch(r"([<>])\s*(\d+)", body)
+        if body in order:
+            got = {body}
+        elif m_rng:
+            lo, hi = sorted((int(m_rng.group(1)), int(m_rng.group(2))))
+            got = {n for i, n in by_id.items() if lo <= i <= hi}
+        elif m_cmp:
+            k = int(m_cmp.group(2))
+            got = {n for i, n in by_id.items() if (i > k if m_cmp.group(1) == ">" else i < k)}
+        elif re.fullmatch(r"\d+", body):
+            got = {by_id[int(body)]} if int(body) in by_id else set()
+        elif any(c in body for c in "*?["):
+            got = set(fnmatch.filter(order, body))
+        else:
+            got = set()
+        if not got:
+            raise SelectionTextError(
+                f"Field: {tok!r} matches no field in the data (fields: "
+                f"{shown}; give names, FIELD_IDs, a~b, globs such as "
+                f"J05*, or !name)")
+        if neg:
+            drop |= got
+        else:
+            positive = True
+            keep |= got
+    chosen = (keep if positive else set(order)) - drop
+    if not chosen:
+        raise SelectionTextError("Field: the selection leaves no field")
+    return [n for n in order if n in chosen]
 
 
 # --------------------------------------------------------------------------

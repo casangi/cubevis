@@ -104,6 +104,9 @@ except ImportError:
     HAS_DASK = False
 
 from .reader import (
+    check_scatter_memory,
+    expand_polarization,
+    select_polarization,
     channel_axis_is_unambiguous,
     to_channel_index,
     XArrayReader,
@@ -1276,6 +1279,8 @@ class MSv4Backend(XArrayReader):
 
         if not selected:
             return {key: pd.DataFrame({"x": [], "y": []}) for key in yaxes}
+        # Refuse before reading what will not fit (2026-10-18).
+        check_scatter_memory(total_samples, len(yaxes))
 
         use_fused    = HAS_DASK and total_samples >= _THRESH_FUSED
         use_parallel = HAS_DASK and total_samples >= _THRESH_PAR
@@ -2179,11 +2184,12 @@ class MSv4Backend(XArrayReader):
         # contributes nothing to this render rather than raising; other
         # partitions/selections that do carry it still render normally,
         # so no polarization becomes unreachable.
-        if polarization not in {str(p) for p in ds.coords["polarization"].values}:
+        # One product, or both parallel hands averaged (2026-10-18;
+        # reader.select_polarization).
+        _vf = select_polarization(vis, flag, polarization)
+        if _vf is None:
             return None
-
-        vis_pol  = vis.sel(polarization=polarization)
-        flag_pol = flag.sel(polarization=polarization)
+        vis_pol, flag_pol = _vf
 
         if quantity == Axis.AMPLITUDE:
             q = xr.DataArray(
@@ -2620,8 +2626,8 @@ class MSv4Backend(XArrayReader):
                 continue
 
             if (polarization is not None and "polarization" in ds.coords
-                    and polarization not in
-                        {str(p) for p in ds.coords["polarization"].values}):
+                    and not expand_polarization(
+                        polarization, ds.coords["polarization"].values)):
                 continue
 
             if ("scan_name" in ds.coords and "field_name" in ds.coords

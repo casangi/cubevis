@@ -238,7 +238,7 @@ def plotter():
     import warnings
     warnings.filterwarnings("ignore")
     from cubevis.toolbox.visplot import VisibilityPlotter
-    return VisibilityPlotter(ms=_ms_path(), backend="auto", field="",
+    return VisibilityPlotter(ms=_ms_path(), backend="auto", field="3c279",
                              correlation="XX,YY", layout="side")
 
 
@@ -250,7 +250,7 @@ def _msg(plotter, colorize=None):
     """Same message shape test_info_block_integration.py builds."""
     W = plotter._panel_axis_widgets
     return {
-        "field": "", "correlation": "XX,YY", "datacolumn": "data", "reload": False,
+        "field": "3c279", "correlation": "XX,YY", "datacolumn": "data", "reload": False,
         "panels": {
             "A": {"kind": "raster",
                   "y": W["A"]["raster"]["y_sel"].value,

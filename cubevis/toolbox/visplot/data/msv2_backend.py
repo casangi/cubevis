@@ -71,6 +71,9 @@ except ImportError:
     HAS_DASK = False
 
 from .reader import (
+    check_scatter_memory,
+    expand_polarization,
+    select_polarization,
     channel_axis_is_unambiguous,
     to_channel_index,
     XArrayReader,
@@ -1284,12 +1287,20 @@ class MSv2Backend(XArrayReader):
             key: [] for key in yaxes
         }
 
+        # Selected partitions first, so the memory guard (2026-10-18) can
+        # refuse before anything is read.  _apply_selection is lazy.
+        chosen = []
+        total_samples = 0
         for raw_ds in self._iter_visibility_partitions(selection):
             ds = self._apply_selection(raw_ds, selection)
             if ds.sizes.get("time", 0) == 0:
                 continue
-
             n_samples = self._estimate_samples(ds, selection, len(yaxes))
+            chosen.append((raw_ds, ds, n_samples))
+            total_samples += n_samples
+        check_scatter_memory(total_samples, len(yaxes))
+
+        for raw_ds, ds, n_samples in chosen:
             use_fused    = HAS_DASK and n_samples >= _THRESH_FUSED
             use_parallel = HAS_DASK and n_samples >= _THRESH_PAR
 
@@ -2057,11 +2068,12 @@ class MSv2Backend(XArrayReader):
         # not make the data unreachable: selecting a polarization that a
         # given partition *does* carry (e.g. via the sidebar Correlation
         # control) still renders it normally.
-        if polarization not in {str(p) for p in ds.coords["polarization"].values}:
+        # One product, or both parallel hands averaged (2026-10-18;
+        # reader.select_polarization).
+        _vf = select_polarization(vis, flag, polarization)
+        if _vf is None:
             return None
-
-        vis_pol  = vis.sel(polarization=polarization)
-        flag_pol = flag.sel(polarization=polarization)
+        vis_pol, flag_pol = _vf
 
         if quantity == Axis.AMPLITUDE:
             q = xr.DataArray(
@@ -2513,8 +2525,8 @@ class MSv2Backend(XArrayReader):
             # polarization contributed nothing to any rendered pixel,
             # so its identity shouldn't be reported either.
             if (polarization is not None and "polarization" in ds.coords
-                    and polarization not in
-                        {str(p) for p in ds.coords["polarization"].values}):
+                    and not expand_polarization(
+                        polarization, ds.coords["polarization"].values)):
                 continue
 
             if ("scan_name" in ds.coords and "field_name" in ds.coords

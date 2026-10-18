@@ -403,9 +403,11 @@ class TestMSv4OptBCrossPartition:
                     "polarization": list(pols)},
         )
 
-    @classmethod
+    # A plain method (2026-10-18): pytest 8 no longer finds a fixture
+    # wrapped in @classmethod ("fixture 'two_partitions' not found").
     @pytest.fixture(scope="class")
-    def two_partitions(cls):
+    def two_partitions(self):
+        cls = type(self)
         means = cls._shared_baseline_means()
         part1 = cls._make_partition(means, 20, 0, flagged_baseline=5,
                                     flagged_times=slice(0, 4), seed=1)
@@ -458,7 +460,7 @@ class TestMSv4OptBCrossPartition:
         # baseline 5, times 0-3 of partition 1 were flagged there.
         assert not (((bl == 5) & (t < 4)).any())
 
-    def test_opt_b_matches_per_partition_path_exactly(self, two_partitions):
+    def test_opt_b_matches_per_partition_path_exactly(self, two_partitions, monkeypatch):
         """The two ways MSv4Backend can compute the same multi-partition
         selection (OPT-B's single fused dask.compute() vs. calling
         _query_partition_scatter once per partition and concatenating)
@@ -467,6 +469,9 @@ class TestMSv4OptBCrossPartition:
         monkeypatched so each call is forced down one path or the other.
         """
         part1, part2 = two_partitions
+        # The fake 10**9-sample estimate below forces the fused path; the
+        # memory guard (2026-10-18) would refuse it.
+        monkeypatch.setenv("CUBEVIS_VISPLOT_MEMORY_GUARD", "off")
         import cubevis.toolbox.visplot.data.msv4_backend as m4mod
         orig_fused, orig_par = m4mod._THRESH_FUSED, m4mod._THRESH_PAR
 

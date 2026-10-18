@@ -1447,7 +1447,7 @@ class TestScatterPanelSettings:
                 assert f"panel{n}_{key}_sel" in a
         code = vp._do_plot_js
         assert "detrend: sd_sel.value, twin: st_sel.value, cwin: sc_sel.value" in code
-        assert "panel1_sd_sel, panel1_st_sel, panel1_sc_sel);" in code
+        assert "panel1_sd_sel, panel1_st_sel, panel1_sc_sel, panel1_rk_sel);" in code
 
 
 class TestStatusAreaHelp:

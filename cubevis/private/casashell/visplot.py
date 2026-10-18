@@ -55,6 +55,7 @@ _UNSET = object()
 
 def _visplot_t(
         *,
+        vis: Optional[str] = None,
         ms: Optional[str] = None,
         ps: Optional[str] = None,
         backend: str = 'auto',
@@ -68,6 +69,7 @@ def _visplot_t(
         correlation: str = '',
         datacolumn: str = 'data',
         averaging: str = 'vector',
+        raster_corr: str = 'auto',
         baseline_order: str = 'number',
         baseline_combine: str = 'mean',
         detrend: bool = True,
@@ -109,6 +111,7 @@ def _visplot_t(
 ):
     _app = VisibilityPlotter(
         # user-supplied arguments
+        vis = vis,
         ms = ms,
         ps = ps,
         backend = backend,
@@ -122,6 +125,7 @@ def _visplot_t(
         correlation = correlation,
         datacolumn = datacolumn,
         averaging = averaging,
+        raster_corr = raster_corr,
         baseline_order = baseline_order,
         baseline_combine = baseline_combine,
         detrend = detrend,
@@ -174,9 +178,13 @@ class _visplot:
 
     Parameters
     ----------
+    vis : str | None
+        Path to the data, MSv2 measurement set or MSv4 / Processing Set:
+        the format is detected (on the kernel's host when ``kernel_name``
+        is given).  Exactly one of ``vis``, ``ms`` or ``ps`` must be
+        supplied.
     ms : str | None
-        Path to an MSv2 measurement set.  Exactly one of ``ms`` or ``ps``
-        must be supplied.
+        Path to an MSv2 measurement set.
     ps : str | None
         Path to an MSv4 / Processing Set Zarr store.
     backend : str
@@ -243,6 +251,13 @@ class _visplot:
         every scatter panel when it averages (``scatter_avg_time`` /
         ``scatter_avg_chan``); each panel's own "Averaging" control
         changes it independently afterwards.
+    raster_corr : str
+        Which correlation a raster shows: ``"auto"`` (default; the first
+        of ``correlation``), ``"parallel"`` (the mean of the parallel
+        hands, (XX+YY)/2 or (RR+LL)/2, valid where both are unflagged;
+        a flag box on it flags both), or a product such as ``"LL"``
+        (read whether ticked or not).  Initial value for every raster
+        panel; each panel's "Correlation shown" control changes it.
     baseline_combine : str
         How a raster cell that covers several baselines combines them
         (only where Baseline is not a plot axis, e.g. Time x Channel
@@ -346,7 +361,7 @@ class _visplot:
         arguments (and the plot summary can print the call that
         reproduces what is on screen).  Keys are the names of the
         per-panel arguments below -- ``kind``, ``raster_y``, ``raster_x``,
-        ``raster_qty``, ``averaging``, ``baseline_order``,
+        ``raster_qty``, ``averaging``, ``raster_corr``, ``baseline_order``,
         ``baseline_combine``, ``detrend``, ``stat_time_window``,
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
         ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
@@ -492,6 +507,7 @@ class _visplot:
 
     # Per-parameter short descriptions, used by inp() display.
     _arg_description = {
+        'vis': "Path to the data, MSv2 measurement set or MSv4 / Processing Set: the format is detected (on the kernel's host when ``kernel_name`` is given).",
         'ms': 'Path to an MSv2 measurement set.',
         'ps': 'Path to an MSv4 / Processing Set Zarr store.',
         'backend': 'Reduction backend: ``"auto"``, ``"casa6"``, ``"radps"``, ``"remote"``, or ``"null"``.',
@@ -505,6 +521,7 @@ class _visplot:
         'correlation': 'Comma-separated correlation labels (``"XX,YY"``).',
         'datacolumn': 'Visibility column: ``"data"``, ``"corrected"``, or ``"model"``.',
         'averaging': 'How raster cells combine the samples they cover: ``"vector"`` (default; average the complex visibility, then take Amplitude / Phase -- Amplitude drops where samples are incoherent) or ``"scalar"`` (Amplitude is the mean of the amplitudes, Phase the circular mean).',
+        'raster_corr': 'Which correlation a raster shows: ``"auto"`` (default; the first of ``correlation``), ``"parallel"`` (the mean of the parallel hands, (XX+YY)/2 or (RR+LL)/2, valid where both are unflagged; a flag box on it flags both), or a product such as ``"LL"`` (read whether ticked or not).',
         'baseline_order': 'How a raster orders its Baseline axis: ``"number"`` (default; by baseline number, as the sidebar\'s Baseline table lists them) or ``"length"`` (shortest first, from the antenna positions; the ticks then read the length).',
         'baseline_combine': 'How a raster cell that covers several baselines combines them (only where Baseline is not a plot axis, e.g.',
         'detrend': 'For the Phase RMS and Coherence raster quantities: remove a linear phase slope (residual delay along frequency, residual rate along time) before the statistic is taken (default ``True``).',
@@ -547,6 +564,7 @@ class _visplot:
 
     # Default values, derived from the canonical interface signature.
     _arg_default = {
+        'vis': None,
         'ms': None,
         'ps': None,
         'backend': 'auto',
@@ -560,6 +578,7 @@ class _visplot:
         'correlation': '',
         'datacolumn': 'data',
         'averaging': 'vector',
+        'raster_corr': 'auto',
         'baseline_order': 'number',
         'baseline_combine': 'mean',
         'detrend': True,
@@ -637,6 +656,7 @@ class _visplot:
         # Type map: annotation string (or override) per parameter name.
         # Override entries are set explicitly via validator_overrides in YAML.
         _type_map = {
+            'vis': 'Optional[str]',
             'ms': 'Optional[str]',
             'ps': 'Optional[str]',
             'backend': 'str',
@@ -650,6 +670,7 @@ class _visplot:
             'correlation': 'str',
             'datacolumn': 'str',
             'averaging': 'str',
+            'raster_corr': 'str',
             'baseline_order': 'str',
             'baseline_combine': 'str',
             'detrend': 'bool',
@@ -778,6 +799,21 @@ class _visplot:
         out.write('\n'.join(output) + '\n')
 
     #--------- per-parameter inp helpers ------------------------------------------
+
+    def __vis_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('vis', self._arg_default['vis'])
+        default = self._arg_default['vis']
+        desc    = self._arg_description.get('vis', '')
+        if self.__validate_('vis', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('vis', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
 
     def __ms_inp(self):
         glb     = self.__globals_()
@@ -971,6 +1007,21 @@ class _visplot:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
         self.__do_inp_output(
             '%-23.23s = %s%-23s%s' % ('averaging', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __raster_corr_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('raster_corr', self._arg_default['raster_corr'])
+        default = self._arg_default['raster_corr']
+        desc    = self._arg_description.get('raster_corr', '')
+        if self.__validate_('raster_corr', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('raster_corr', pre, self.__to_string_(value), post),
             desc, fmt,
         )
 
@@ -1549,6 +1600,7 @@ class _visplot:
     def set_global_defaults(self):
         self.set_global_defaults.state['last'] = self
         glb = self.__globals_()
+        if 'vis' in glb: del glb['vis']
         if 'ms' in glb: del glb['ms']
         if 'ps' in glb: del glb['ps']
         if 'backend' in glb: del glb['backend']
@@ -1562,6 +1614,7 @@ class _visplot:
         if 'correlation' in glb: del glb['correlation']
         if 'datacolumn' in glb: del glb['datacolumn']
         if 'averaging' in glb: del glb['averaging']
+        if 'raster_corr' in glb: del glb['raster_corr']
         if 'baseline_order' in glb: del glb['baseline_order']
         if 'baseline_combine' in glb: del glb['baseline_combine']
         if 'detrend' in glb: del glb['detrend']
@@ -1605,6 +1658,7 @@ class _visplot:
     def inp(self):
         print("# visplot -- %s" % self._info_desc_)
         self.term_width, self.term_height = shutil.get_terminal_size(fallback=(80, 24))
+        self.__vis_inp()
         self.__ms_inp()
         self.__ps_inp()
         self.__kernel_name_inp()
@@ -1617,6 +1671,7 @@ class _visplot:
         self.__correlation_inp()
         self.__datacolumn_inp()
         self.__averaging_inp()
+        self.__raster_corr_inp()
         self.__baseline_order_inp()
         self.__baseline_combine_inp()
         self.__detrend_inp()
@@ -1683,6 +1738,7 @@ class _visplot:
         _postfile = outfile if outfile is not None else os.path.realpath('visplot.last')
         glb = self.__globals_()
         _invocation_parameters = OrderedDict()
+        _invocation_parameters['vis'] = glb.get('vis', self._arg_default['vis'])
         _invocation_parameters['ms'] = glb.get('ms', self._arg_default['ms'])
         _invocation_parameters['ps'] = glb.get('ps', self._arg_default['ps'])
         _invocation_parameters['backend'] = glb.get('backend', self._arg_default['backend'])
@@ -1696,6 +1752,7 @@ class _visplot:
         _invocation_parameters['correlation'] = glb.get('correlation', self._arg_default['correlation'])
         _invocation_parameters['datacolumn'] = glb.get('datacolumn', self._arg_default['datacolumn'])
         _invocation_parameters['averaging'] = glb.get('averaging', self._arg_default['averaging'])
+        _invocation_parameters['raster_corr'] = glb.get('raster_corr', self._arg_default['raster_corr'])
         _invocation_parameters['baseline_order'] = glb.get('baseline_order', self._arg_default['baseline_order'])
         _invocation_parameters['baseline_combine'] = glb.get('baseline_combine', self._arg_default['baseline_combine'])
         _invocation_parameters['detrend'] = glb.get('detrend', self._arg_default['detrend'])
@@ -1754,6 +1811,7 @@ class _visplot:
     #--------- __call__ -----------------------------------------------------------
     def __call__(
             self,
+            vis = _UNSET,
             ms = _UNSET,
             ps = _UNSET,
             backend = _UNSET,
@@ -1767,6 +1825,7 @@ class _visplot:
             correlation = _UNSET,
             datacolumn = _UNSET,
             averaging = _UNSET,
+            raster_corr = _UNSET,
             baseline_order = _UNSET,
             baseline_combine = _UNSET,
             detrend = _UNSET,
@@ -1818,6 +1877,7 @@ class _visplot:
 
         _invocation_parameters = OrderedDict()
         _arguments = [
+            vis,
             ms,
             ps,
             backend,
@@ -1831,6 +1891,7 @@ class _visplot:
             correlation,
             datacolumn,
             averaging,
+            raster_corr,
             baseline_order,
             baseline_combine,
             detrend,
@@ -1875,6 +1936,9 @@ class _visplot:
             # Python-style invocation: use supplied values, fall back to
             # global frame then default.  _UNSET (not None) is the sentinel
             # so that explicitly passing None is correctly forwarded.
+            _invocation_parameters['vis'] = \
+                vis if vis is not _UNSET \
+                else glb.get('vis', self._arg_default['vis'])
             _invocation_parameters['ms'] = \
                 ms if ms is not _UNSET \
                 else glb.get('ms', self._arg_default['ms'])
@@ -1914,6 +1978,9 @@ class _visplot:
             _invocation_parameters['averaging'] = \
                 averaging if averaging is not _UNSET \
                 else glb.get('averaging', self._arg_default['averaging'])
+            _invocation_parameters['raster_corr'] = \
+                raster_corr if raster_corr is not _UNSET \
+                else glb.get('raster_corr', self._arg_default['raster_corr'])
             _invocation_parameters['baseline_order'] = \
                 baseline_order if baseline_order is not _UNSET \
                 else glb.get('baseline_order', self._arg_default['baseline_order'])
@@ -2030,6 +2097,8 @@ class _visplot:
                 else glb.get('frame_cache_mb', self._arg_default['frame_cache_mb'])
         else:
             # inp/go-style invocation: read everything from the global frame
+            _invocation_parameters['vis'] = \
+                glb.get('vis', self._arg_default['vis'])
             _invocation_parameters['ms'] = \
                 glb.get('ms', self._arg_default['ms'])
             _invocation_parameters['ps'] = \
@@ -2056,6 +2125,8 @@ class _visplot:
                 glb.get('datacolumn', self._arg_default['datacolumn'])
             _invocation_parameters['averaging'] = \
                 glb.get('averaging', self._arg_default['averaging'])
+            _invocation_parameters['raster_corr'] = \
+                glb.get('raster_corr', self._arg_default['raster_corr'])
             _invocation_parameters['baseline_order'] = \
                 glb.get('baseline_order', self._arg_default['baseline_order'])
             _invocation_parameters['baseline_combine'] = \
@@ -2152,6 +2223,7 @@ class _visplot:
             _logging_state_ = _start_log(
                 'visplot',
                 [
+                    'vis=' + repr(_invocation_parameters['vis']),
                     'ms=' + repr(_invocation_parameters['ms']),
                     'ps=' + repr(_invocation_parameters['ps']),
                     'backend=' + repr(_invocation_parameters['backend']),
@@ -2165,6 +2237,7 @@ class _visplot:
                     'correlation=' + repr(_invocation_parameters['correlation']),
                     'datacolumn=' + repr(_invocation_parameters['datacolumn']),
                     'averaging=' + repr(_invocation_parameters['averaging']),
+                    'raster_corr=' + repr(_invocation_parameters['raster_corr']),
                     'baseline_order=' + repr(_invocation_parameters['baseline_order']),
                     'baseline_combine=' + repr(_invocation_parameters['baseline_combine']),
                     'detrend=' + repr(_invocation_parameters['detrend']),
@@ -2206,6 +2279,7 @@ class _visplot:
                 ],
             )
             task_result = _visplot_t(
+                vis = _invocation_parameters['vis'],
                 ms = _invocation_parameters['ms'],
                 ps = _invocation_parameters['ps'],
                 backend = _invocation_parameters['backend'],
@@ -2219,6 +2293,7 @@ class _visplot:
                 correlation = _invocation_parameters['correlation'],
                 datacolumn = _invocation_parameters['datacolumn'],
                 averaging = _invocation_parameters['averaging'],
+                raster_corr = _invocation_parameters['raster_corr'],
                 baseline_order = _invocation_parameters['baseline_order'],
                 baseline_combine = _invocation_parameters['baseline_combine'],
                 detrend = _invocation_parameters['detrend'],

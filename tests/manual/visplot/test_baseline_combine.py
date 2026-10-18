@@ -571,7 +571,7 @@ class TestRealPlotter:
         code = plotter._do_plot_js
         assert "baseline_combine: rm_sel ? rm_sel.value : null" in code
         assert "panel0_rc_sel, panel0_rb_sel, panel0_rm_sel," in code
-        assert "panel1_sd_sel, panel1_st_sel, panel1_sc_sel);" in code
+        assert "panel1_sd_sel, panel1_st_sel, panel1_sc_sel, panel1_rk_sel);" in code
 
     def test_plot_request_changes_it_and_requeries(self, plotter):
         vp = plotter

@@ -16,6 +16,17 @@ ulimit -n 4096
 : > "$OUT/summary.txt"
 for f in tests/manual/visplot/$GLOB; do
   b=$(basename "$f" .py)
+  if grep -q "_backend_matrix" "$f" && [ -n "$MS" ] && [ -n "$PS" ]; then
+    # Files that run every test once per backend when both MS and PS are
+    # set grow past 8 GB over the two passes (each passes alone): one
+    # process per backend (2026-10-18).
+    for kind in msv2 msv4; do
+      if [ $kind = msv2 ]; then envs="-u PS"; else envs="-u MS"; fi
+      env $envs timeout 1800 python -m pytest "$f" -q -p no:cacheprovider --timeout=900 -rfE > "$OUT/$b.$kind.log" 2>&1
+      echo "$b[$kind] rc=$? $(tail -1 "$OUT/$b.$kind.log")" >> "$OUT/summary.txt"
+    done
+    continue
+  fi
   timeout 1800 python -m pytest "$f" -q -p no:cacheprovider --timeout=900 -rfE > "$OUT/$b.log" 2>&1
   echo "$b rc=$? $(tail -1 "$OUT/$b.log")" >> "$OUT/summary.txt"
 done

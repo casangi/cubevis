@@ -667,3 +667,133 @@ Verified on the rig: an sshpyk kernel starts from a kernel spec held only
 in memory (`AsyncKernelManager(kernel_spec_manager=...)`). Work split into
 five stages; handoff and test-kit rebuild notes in
 `remote_session_handoff.md`.
+
+## 24. Before astronomer testing: fixes and small additions (base `45ee0aa`, 2026-10-18)
+
+Fifth session.  From the readiness review (project doc
+`hrs_consolidation_readiness_2026-10-17.md`): a regression run, a live
+tour of every preset, and memory measurements on TW Hya.  Agreed with
+Darrell: fix A1-A4, add B1-B3, then remote sessions.
+
+**A1. Scatter memory guard.**  A scatter holds every selected sample as a
+DataFrame row while it is built; peak use measured at ~65 bytes per
+sample on 10-20 M samples and ~110 on 34 M (8 GB Linux).  One TW Hya
+field (67 M samples, two correlations) was killed by the kernel at
+7.5 GB; a plain `visplot(vis=...)` on all fields (102 M) at start-up.
+Now both backends' `_query_columns_raw` estimate the samples from
+coordinates first (`_estimate_samples`, summed over the selected
+partitions; MSv2 gained the pre-pass MSv4 already had) and
+`reader.check_scatter_memory` refuses with `SelectionTooLargeError`
+(a `ValueError`) when `110 B x samples` exceeds 70 % of available memory
+(`/proc/meminfo` MemAvailable, psutil, else half of physical).
+`CUBEVIS_VISPLOT_MEMORY_GUARD=<MB>|off`.  Where it shows: Plot (the
+existing "⚠ Panel B scatter error: ..." path), a headless export / task
+`plotfile=` (raised), and the GUI's start-up render (panel left empty,
+reason in the status line; `VisibilityScatter._render` under `_build`).
+Runs where the data are, so with a remote kernel it is the kernel host's
+memory.  Averaging does not lower the estimate (applied after reading);
+the real fix -- averaging inside the reduction, smaller frames -- is
+still the C-list item.
+Also found: a headless One-panel export rendered slot B as well (all
+the memory of a raster PNG of one TW Hya field went to an invisible
+scatter); slot B is no longer rendered then.  Raster PNG of J1037-295:
+peak 1.6 -> 0.6 GB.
+
+**A1, corrected the same day (Darrell's test).**  Refusing by default was
+wrong: on his Mac (and on Linux with swap) TW Hya with all fields loads
+-- the session above was started with `CUBEVIS_VISPLOT_FRAME_CACHE_MB=8192`
+and was still refused.  The 8 GB sandbox has no swap, so "killed at
+7.5 GB" was a fact about the sandbox, not about visplot on a workstation;
+`MemAvailable` / psutil "available" says little about what will fit with
+swap and compressed memory.  Now: no limit by default (a selection
+estimated above 70 % of available memory is logged as a warning and
+loaded); `CUBEVIS_VISPLOT_MEMORY_GUARD=<MB>` is an opt-in hard limit for
+hosts where swapping is not wanted.  The frame cache budget is a separate
+thing (what is kept between redraws) and was never consulted by the
+guard.  Open question raised by Darrell: whether the ~65-110 bytes per
+sample peak while a scatter frame is built (about 12x the visibilities)
+is inherent, inefficient, or a leak -- to be measured, not assumed.
+
+**A2. Field selection.**  `field="3c279,J0522-364"` was one literal
+name: nothing matched, "no unflagged data", no error.
+`selection_text.parse_field_text`: names, FIELD_IDs, `a~b`, `>n`/`<n`,
+globs, `!`; a name is tried before an id; text matching nothing is
+refused at construction.  `_parse_field_names` feeds `SelectionSpec.field_names`
+(the backends already took lists); `_parse_field_string` stays for the
+one-field uses (Field ◀ ▶ position, menu value) and never raises.  Several
+fields from `field=` get one extra Field menu entry (value comma-joined);
+Field ◀ ▶ skips it.
+
+**A3. Guide** (`docs/source/applications/visplot.rst`): the launch example
+passed `mode="both"` (TypeError: the first thing a tester ran failed);
+Installing (Python 3.12/3.13; `arcae` wheels for Linux x86_64 / aarch64,
+macOS 14+ arm64 and macOS 15+ x86_64, none for Windows -- corrected after
+Darrell pointed to the macOS 15 Intel wheel); `vis`, `kernel_name`, `backend`, `field`, `raster_corr`
+rows; layout tour without `mode`; Plot's orange state; Large selections;
+RR / LL advice in the workflow; scope.
+
+**A4. Tests.**  The three files killed for memory plotted all fields
+(fixtures and Plot messages `field=""`); now 3c279, and they pass
+(part5d 44, frame_cache 64, info_block_integration 28).
+`test_visibility_scatter` passes per backend but grows past 8 GB over the
+MSv2 + MSv4 passes in one process (a leak across its tests, not the frame
+cache: clearing that between passes did not help); `runtests.sh` now runs
+files with `_backend_matrix` once per backend (`name[msv2]`,
+`name[msv4]` in `summary.txt`).  `test_zscore_colorization`: the 4 setup
+errors were a `@classmethod` fixture pytest 8+ no longer finds; fixed,
+which exposed one test faking 10^9 samples (guard switched off there).
+
+**B1. Correlation shown, per raster.**  A raster showed the first ticked
+correlation only, so on RR / LL data an LL-only problem did not show
+unless RR was unticked.  `raster_corr="auto" | "parallel" | <product>`
+(argument, `panels` key, gear-tab "Correlation shown").  `parallel` is
+(XX+YY)/2 or (RR+LL)/2, valid where both hands are unflagged
+(`reader.select_polarization`); a product or `parallel` not covered by
+the ticks is read anyway (`VisibilityRaster._query_correlation`); flag
+boxes on a parallel raster flag both hands (engine `expand_polarization`;
+`flag_controls` gives the request the raster's correlations).  Default
+unchanged (`auto`).  Title `pol=parallel hands (mean)`; summary and
+reproducing call carry it.  Not done: parallel hands for scatter layers
+(they already overplot each correlation).
+
+**B2. `vis=`** (any of vis / ms / ps, exactly one): `data_format.py`
+detects MSv2 (casacore `table.dat` + `table.info` "Measurement Set", or
+ANTENNA/SPECTRAL_WINDOW sub-tables) or MSv4 (`zarr.json` / `.zgroup` /
+`.zmetadata`); refuses archives, files, other casacore tables (named by
+type) and plain directories with a message.  With a kernel and a path
+not on this machine the worker decides (`VisplotRemoteBackend(backend_kind="auto")`,
+`RemoteReductionContext.backend_kind`).  The reproducing call prints
+`ms=` / `ps=` as resolved.
+
+**B3. Plot ▶ pending.**  Orange (`button_type="warning"`) when a control
+doPlot() reads has changed since the last successful Plot, green when it
+answers (`_attach_plot_pending`: every Select / TextInput / group / table
+selection among doPlot's arguments, except the layout buttons and the
+tabs' Pin).  Checked live: change "Correlation shown" -> orange; Plot ->
+green.
+
+Through a kernel (checked on the local python3 kernel):
+- the worker's refusal came back as `RemoteBackendError` with the remote
+  traceback in the text, so the GUI start-up raised instead of leaving the
+  panel empty; `RemoteReductionContext._acall` now raises it as the local
+  `SelectionTooLargeError`;
+- **a constructor that failed after the kernel was started left it open**,
+  and `__del__` at interpreter exit then blocked closing the link (seen
+  after a failed remote call during the panel build; 10 min, killed).
+  `_closing_on_error` around `_resolve_config` and `_build_panels` closes
+  the data / kernel at once and re-raises.  Not specific to the guard:
+  any failure in those phases with a kernel.
+
+Tests: `test_vis_argument` 14, `test_field_selection` 26,
+`test_memory_guard` 9 (one needs `PS`), `test_raster_correlation` 9,
+`test_plot_pending` 3.  Updated: the three formerly OOM files (field),
+`test_zscore_colorization`, `test_visibility_plotter_iteration` (lifts
+`_parse_field_names` too), `test_baseline_combine` and
+`test_raster_phase_stats` (payload signature has `rk_sel`).
+
+Regression (`runtests.sh`, MS + PS, 8 GB sandbox) against the same run on
+`45ee0aa`: no file killed for memory (was four); no errors (was four);
+every file passes except the five that collect nothing, as before.  (The
+full run found the four test updates listed above; those files and the
+remote ones were re-run after the fixes, individually.)
+`test_visibility_raster` / `_scatter` now appear as `[msv2]` / `[msv4]`.

@@ -394,6 +394,12 @@ class FlagController:
         x_ax = _plotted_axis(panel, "x")
         y_ax = _plotted_axis(panel, "y")
         if kind == "raster":
+            # Read what the raster reads: its own correlation choice may
+            # be the parallel hands or an unticked product (2026-10-18).
+            qc = getattr(panel, "_query_correlation", None)
+            if qc is not None and hasattr(sel, "correlation"):
+                import dataclasses as _dc
+                req["selection"] = sel = _dc.replace(sel, correlation=qc(sel.correlation))
             req.update(x_axis=x_ax.name, y_axis=y_ax.name,
                        polarization=getattr(panel, "_polarization", None),
                        quantity=getattr(getattr(panel, "_quantity", None), "name", None))

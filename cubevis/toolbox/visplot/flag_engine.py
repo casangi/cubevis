@@ -73,6 +73,7 @@ import xarray as xr
 from .axes import Axis
 from .flag_filters import BUILTIN_FILTERS, ALL, FlagFilter, zscore_values
 from .raster_grid import overlapping, positions_of
+from .data.reader import expand_polarization
 from .flag_model import (
     BlockCoords, FlagCounts, FlagDelta, SampleBlock, SpwChannels, SpwKey,
     ValueRange, _match_sorted, _region_axis_masks, fold_deltas, FREQ_RTOL,
@@ -496,7 +497,9 @@ def evaluate_request(backend, req: dict) -> dict:
             half = 0.5 if ax in (Axis.BASELINE, Axis.CHANNEL) else None
             chosen[ax] = union[_overlap(union, lo, hi, half=half)]
         for ds, bc in visited:
-            mp = bc.pols == str(pol) if pol is not None else np.ones(len(bc.pols), bool)
+            # Both hands for a parallel-hands raster (2026-10-18).
+            mp = (np.isin(bc.pols, expand_polarization(pol, bc.pols))
+                  if pol is not None else np.ones(len(bc.pols), bool))
             if not mp.any():
                 continue
             axes = [np.ones(n, dtype=bool) for n in bc.shape[:3]] + [mp]
@@ -1146,7 +1149,8 @@ def _region_delta(backend, parts, req, sel, x_axis, y_axis, flag, extend, data_c
     # correlation
     pol = req.get("polarization")
     if pol is not None:
-        kw["correlation"] = (str(pol),)
+        kw["correlation"] = tuple(expand_polarization(
+            pol, sorted({str(p) for _ds, bc, _a in parts for p in bc.pols}))) or (str(pol),)
     elif sel.correlation is not None:
         kw["correlation"] = tuple(sel.correlation)
 

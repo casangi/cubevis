@@ -184,6 +184,10 @@ def _slot_settings(plotter, slot) -> dict:
                  baseline_combine=r.baseline_combine, detrend=bool(r.detrend),
                  stat_time_window=r.stat_time_window,
                  stat_chan_window=r.stat_chan_window)
+        # Correlation choice (2026-10-18): only when not the default.
+        rk = getattr(r, "_corr_choice", "auto") or "auto"
+        if rk != "auto":
+            d["raster_corr"] = rk
         sc = getattr(r, "_scaling", None)
         if sc:
             d["scaling"] = sc
@@ -208,6 +212,20 @@ def _slot_settings(plotter, slot) -> dict:
                                        if s._stat_chan_window is None
                                        else s._stat_chan_window))
     return d
+
+
+def _correlation_shown(plotter, r) -> str:
+    """The summary's "Correlation shown" for a raster (2026-10-18)."""
+    from .data.reader import is_parallel, parallel_label
+    pol = getattr(r, "_polarization", None)
+    if not is_parallel(pol):
+        return str(pol) if pol is not None else "—"
+    avail = []
+    for sp in getattr(getattr(plotter, "_meta", None), "spws", ()) or ():
+        for p in getattr(sp, "polarizations", ()) or ():
+            if str(p) not in avail:
+                avail.append(str(p))
+    return f"parallel hands {parallel_label(avail)}"
 
 
 def _antenna_text(plotter) -> str:
@@ -399,7 +417,7 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
         rows += [
             ("Y axis", _axis_name(r._y_dim)), ("X axis", _axis_name(r._x_dim)),
             ("Quantity", _axis_name(r._quantity)),
-            ("Correlation shown", getattr(r, "_polarization", "—")),
+            ("Correlation shown", _correlation_shown(plotter, r)),
             ("Averaging (within a baseline)", r.averaging),
             ("Baselines combined", r.baseline_combine),
             ("Baseline order", r.baseline_order),

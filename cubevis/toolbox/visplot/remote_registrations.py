@@ -164,6 +164,12 @@ class VisplotRemoteBackend:
         # convention in open_ms/open_ps).
         from cubevis.toolbox.visplot.local_visibility_reader import LocalVisibilityReader
 
+        if backend_kind == "auto":
+            # vis= with a remote kernel (2026-10-18): the path is on
+            # this host, so the format is decided here.
+            from cubevis.toolbox.visplot.data_format import detect_data_format
+            backend_kind = detect_data_format(path)
+        self._backend_kind = backend_kind
         if backend_kind == "msv2":
             from cubevis.toolbox.visplot.data.msv2_backend import MSv2Backend
             backend = MSv2Backend(path)
@@ -331,6 +337,11 @@ class VisplotRemoteBackend:
 
     def metadata(self) -> dict:
         return self._reader.metadata()
+
+    def backend_kind(self) -> str:
+        """``"msv2"`` or ``"msv4"``: what was opened (decided here when
+        the context asked for ``"auto"``)."""
+        return self._backend_kind
 
     def software_versions(self):
         """The worker's cubevis (with git commit when run from a checkout)

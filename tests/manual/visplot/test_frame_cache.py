@@ -544,7 +544,7 @@ def plotter():
     # ~2.4 GB ambient default on the machine this was diagnosed on.
     from cubevis.toolbox.visplot.data import reader as rd
     rd._GLOBAL_FRAME_CACHE = rd._FrameCache(4096 * 2 ** 20)
-    return VisibilityPlotter(ms=_ms_path(), backend="auto", field="",
+    return VisibilityPlotter(ms=_ms_path(), backend="auto", field="3c279",
                              correlation="XX,YY", layout="side")
 
 
@@ -555,7 +555,7 @@ def _run(coro):
 def _msg(plotter, colorize=None, reload=False):
     W = plotter._panel_axis_widgets
     return {
-        "field": "", "correlation": "XX,YY", "datacolumn": "data", "reload": reload,
+        "field": "3c279", "correlation": "XX,YY", "datacolumn": "data", "reload": reload,
         "panels": {
             "A": {"kind": "raster", "y": W["A"]["raster"]["y_sel"].value,
                   "x": W["A"]["raster"]["x_sel"].value, "qty": W["A"]["raster"]["q_sel"].value},

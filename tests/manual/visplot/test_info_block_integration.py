@@ -40,7 +40,7 @@ pytestmark = pytest.mark.skipif(not MS, reason="set MS=<path>.ms to run")
 def plotter():
     warnings.filterwarnings("ignore")
     from cubevis.toolbox.visplot import VisibilityPlotter
-    return VisibilityPlotter(ms=MS, backend="auto", field="",
+    return VisibilityPlotter(ms=MS, backend="auto", field="3c279",
                              correlation="XX,YY", layout="side")
 
 
@@ -62,7 +62,7 @@ def _run(coro):
 def _msg(plotter, colorize=None):
     W = plotter._panel_axis_widgets
     return {
-        "field": "", "correlation": "XX,YY", "datacolumn": "data",
+        "field": "3c279", "correlation": "XX,YY", "datacolumn": "data",
         "reload": False,
         "panels": {
             "A": {"kind": "raster",

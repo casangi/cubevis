@@ -45,6 +45,7 @@ from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
 # required) before the task is dispatched.
 
 def _validate_params(
+        vis,
         ms,
         ps,
         backend,
@@ -58,6 +59,7 @@ def _validate_params(
         correlation,
         datacolumn,
         averaging,
+        raster_corr,
         baseline_order,
         baseline_combine,
         detrend,
@@ -100,6 +102,7 @@ def _validate_params(
     import re as _re
 
     _type_map = {
+        'vis': 'Optional[str]',
         'ms': 'Optional[str]',
         'ps': 'Optional[str]',
         'backend': 'str',
@@ -113,6 +116,7 @@ def _validate_params(
         'correlation': 'str',
         'datacolumn': 'str',
         'averaging': 'str',
+        'raster_corr': 'str',
         'baseline_order': 'str',
         'baseline_combine': 'str',
         'detrend': 'bool',
@@ -213,6 +217,7 @@ def _validate_params(
                     f"'visplot' parameter '{name}': expected {py_type.__name__}, "
                     f"got {type(value).__name__} ({value!r})"
                 )
+    _check('vis', vis, _type_map['vis'])
     _check('ms', ms, _type_map['ms'])
     _check('ps', ps, _type_map['ps'])
     _check('backend', backend, _type_map['backend'])
@@ -226,6 +231,7 @@ def _validate_params(
     _check('correlation', correlation, _type_map['correlation'])
     _check('datacolumn', datacolumn, _type_map['datacolumn'])
     _check('averaging', averaging, _type_map['averaging'])
+    _check('raster_corr', raster_corr, _type_map['raster_corr'])
     _check('baseline_order', baseline_order, _type_map['baseline_order'])
     _check('baseline_combine', baseline_combine, _type_map['baseline_combine'])
     _check('detrend', detrend, _type_map['detrend'])
@@ -268,6 +274,7 @@ def _validate_params(
 
 def _visplot_t(
         *,
+        vis: Optional[str] = None,
         ms: Optional[str] = None,
         ps: Optional[str] = None,
         backend: str = 'auto',
@@ -281,6 +288,7 @@ def _visplot_t(
         correlation: str = '',
         datacolumn: str = 'data',
         averaging: str = 'vector',
+        raster_corr: str = 'auto',
         baseline_order: str = 'number',
         baseline_combine: str = 'mean',
         detrend: bool = True,
@@ -322,6 +330,7 @@ def _visplot_t(
 ):
     _app = VisibilityPlotter(
         # user-supplied arguments
+        vis = vis,
         ms = ms,
         ps = ps,
         backend = backend,
@@ -335,6 +344,7 @@ def _visplot_t(
         correlation = correlation,
         datacolumn = datacolumn,
         averaging = averaging,
+        raster_corr = raster_corr,
         baseline_order = baseline_order,
         baseline_combine = baseline_combine,
         detrend = detrend,
@@ -396,9 +406,13 @@ class _visplot:
 
     Parameters
     ----------
+    vis : str | None
+        Path to the data, MSv2 measurement set or MSv4 / Processing Set:
+        the format is detected (on the kernel's host when ``kernel_name``
+        is given).  Exactly one of ``vis``, ``ms`` or ``ps`` must be
+        supplied.
     ms : str | None
-        Path to an MSv2 measurement set.  Exactly one of ``ms`` or ``ps``
-        must be supplied.
+        Path to an MSv2 measurement set.
     ps : str | None
         Path to an MSv4 / Processing Set Zarr store.
     backend : str
@@ -465,6 +479,13 @@ class _visplot:
         every scatter panel when it averages (``scatter_avg_time`` /
         ``scatter_avg_chan``); each panel's own "Averaging" control
         changes it independently afterwards.
+    raster_corr : str
+        Which correlation a raster shows: ``"auto"`` (default; the first
+        of ``correlation``), ``"parallel"`` (the mean of the parallel
+        hands, (XX+YY)/2 or (RR+LL)/2, valid where both are unflagged;
+        a flag box on it flags both), or a product such as ``"LL"``
+        (read whether ticked or not).  Initial value for every raster
+        panel; each panel's "Correlation shown" control changes it.
     baseline_combine : str
         How a raster cell that covers several baselines combines them
         (only where Baseline is not a plot axis, e.g. Time x Channel
@@ -568,7 +589,7 @@ class _visplot:
         arguments (and the plot summary can print the call that
         reproduces what is on screen).  Keys are the names of the
         per-panel arguments below -- ``kind``, ``raster_y``, ``raster_x``,
-        ``raster_qty``, ``averaging``, ``baseline_order``,
+        ``raster_qty``, ``averaging``, ``raster_corr``, ``baseline_order``,
         ``baseline_combine``, ``detrend``, ``stat_time_window``,
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
         ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
@@ -714,6 +735,7 @@ class _visplot:
     def __call__(
             self,
             *,
+            vis: Optional[str] = None,
             ms: Optional[str] = None,
             ps: Optional[str] = None,
             backend: str = 'auto',
@@ -727,6 +749,7 @@ class _visplot:
             correlation: str = '',
             datacolumn: str = 'data',
             averaging: str = 'vector',
+            raster_corr: str = 'auto',
             baseline_order: str = 'number',
             baseline_combine: str = 'mean',
             detrend: bool = True,
@@ -781,6 +804,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
         from casatasks.private.task_logging import except_log as _except_log
 
         _validate_params(
+            vis = vis,
             ms = ms,
             ps = ps,
             backend = backend,
@@ -794,6 +818,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             correlation = correlation,
             datacolumn = datacolumn,
             averaging = averaging,
+            raster_corr = raster_corr,
             baseline_order = baseline_order,
             baseline_combine = baseline_combine,
             detrend = detrend,
@@ -836,6 +861,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
         _logging_state_ = _start_log(
             'visplot',
             [
+                'vis=' + repr(vis),
                 'ms=' + repr(ms),
                 'ps=' + repr(ps),
                 'backend=' + repr(backend),
@@ -849,6 +875,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'correlation=' + repr(correlation),
                 'datacolumn=' + repr(datacolumn),
                 'averaging=' + repr(averaging),
+                'raster_corr=' + repr(raster_corr),
                 'baseline_order=' + repr(baseline_order),
                 'baseline_combine=' + repr(baseline_combine),
                 'detrend=' + repr(detrend),
@@ -892,6 +919,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
         task_result = None
         try:
             task_result = _visplot_t(
+                vis = vis,
                 ms = ms,
                 ps = ps,
                 backend = backend,
@@ -905,6 +933,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 correlation = correlation,
                 datacolumn = datacolumn,
                 averaging = averaging,
+                raster_corr = raster_corr,
                 baseline_order = baseline_order,
                 baseline_combine = baseline_combine,
                 detrend = detrend,

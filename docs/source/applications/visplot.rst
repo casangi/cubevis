@@ -24,9 +24,9 @@ familiarity with the ``cubevis`` internals.
 Status of this document
 ------------------------
 
-*Updated 2026-10-11.*  Current: launching ``visplot``, the task
-arguments, *A commissioning workflow*, *Reporting a problem* and
-*Scope, explicitly*.  The *Layout tour* still describes the controls in
+*Updated 2026-10-18.*  Current: installing, launching ``visplot``, the
+task arguments, *Large selections*, *A commissioning workflow*,
+*Reporting a problem* and *Scope, explicitly*.  The *Layout tour* still describes the controls in
 outline only; every control explains itself in the status area at the
 bottom of the window while the pointer is over it.
 
@@ -41,50 +41,27 @@ Prerequisites
 -------------
 
 * A working ``cubevis`` environment with the ``visplot`` task available
-  (``from cubevis import visplot``)
+  (``from cubevis import visplot``); see *Installing* below
 * An interactive Python or CASA6 session — **not** a Jupyter notebook
   (see the note above)
-* A measurement set. This guide uses ``twhya_selfcal_contsub_ms``,
-  described below.
+* A measurement set (MSv2) or an MSv4 / Processing Set. This guide uses
+  ``twhya_selfcal_contsub_ms``, described below.
 
-The test dataset
------------------
+Installing
+----------
 
-The dataset used throughout this guide is the continuum-subtracted,
-self-calibrated TW Hydra measurement set produced at the end of the
-NRAO CASA Guides imaging sequence:
+Python 3.12 or 3.13, then::
 
-* :xref:`casaguide_imaging`
-* :xref:`casaguide_selfcal`
-* :xref:`casaguide_lineimaging`
+   pip install "cubevis[visplot]"
 
-Briefly: the raw TW Hya data are calibrated, imaged, and phase (then
-amplitude) self-calibrated in four rounds against an ALMA continuum
-model of field 5 (refant ``DV22``). The resulting ``twhya_selfcal.ms``
-is then continuum-subtracted (``uvcontsub``) against the N2H+ line
-present in the observed spectral window, producing the MS used here.
-
-Because this dataset has a well-documented processing history and
-published-looking plots in the CASA Guides (phase-vs-time solutions,
-amp-vs-uvdist continuum visibilities, etc.), it's a reasonable dataset
-against which to eyeball whether ``visplot`` is producing
-sane output — even without deep ALMA expertise.
-
-Download:
-
-.. code-block:: text
-
-   https://casa.nrao.edu/download/devel/casavis/data/twhya_selfcal_contsub_ms.tar.gz
-
-.. note::
-
-   This is a different test MS than the one used in the ``visplot``
-   regression tests (``sis14_twhya_calibrated_flagged.ms``, ALMA Band 7,
-   one spectral window of 384 channels, 26 antennas with data, linear
-   feeds, pre-existing flags). The two should not be confused when
-   comparing screenshots or reported behavior.  VLBI behaviour is checked
-   against a subset of the VLBA tutorial data set TL016B (10 stations,
-   four 128-channel spectral windows at 5 GHz, RR/LL, uncalibrated).
+``visplot`` reads both MSv2 and MSv4 through ``xarray-ms`` and its
+casacore bindings, ``arcae``.  ``arcae`` is published for Linux (x86_64
+and aarch64) and macOS (Apple Silicon on macOS 14 or later, Intel on
+macOS 15 or later); there is no Windows build.  Elsewhere, run the data
+access on a machine that has the data, with the window on your own
+computer: a *remote kernel* (``kernel_name=``), described in
+``demos/visplot-remote/00_setup.md`` of the cubevis repository (being
+replaced by ``python -m cubevis.setup``).
 
 Launching visplot
 ------------------
@@ -97,12 +74,11 @@ Python or CASA6 session:
    from cubevis import visplot
 
    visplot(
-       ms          = "twhya_selfcal_contsub_ms",
+       vis         = "twhya_selfcal_contsub_ms",
        field       = "5",
        spw         = "0",
        correlation = "XX,YY",
        datacolumn  = "data",
-       mode        = "both",
        layout      = "side",
    )
 
@@ -119,24 +95,34 @@ Task arguments (preview)
    * - Argument
      - Type
      - Meaning
+   * - ``vis``
+     - str, optional
+     - Path to the data, as in every CASA task: an MSv2 measurement set
+       or an MSv4 / Processing Set; which one is detected (on the
+       kernel's host with ``kernel_name``). Give exactly one of ``vis``,
+       ``ms`` or ``ps``.
    * - ``ms``
      - str, optional
-     - Path to an MSv2 measurement set. Exactly one of ``ms`` or ``ps``
-       must be given.
+     - Path to an MSv2 measurement set (instead of ``vis``).
    * - ``ps``
      - str, optional
-     - Path to an MSv4 / Processing Set Zarr store. Exactly one of
-       ``ms`` or ``ps`` must be given.
+     - Path to an MSv4 / Processing Set Zarr store (instead of ``vis``).
+   * - ``kernel_name``
+     - str, optional
+     - Run the data access in this Jupyter kernel (usually a kernel on
+       the machine that has the data); the window stays on your
+       computer. The path is then a path on that machine.
    * - ``backend``
      - str
-     - Reduction backend: ``"auto"`` (default), ``"casa6"``,
-       ``"radps"``, ``"remote"``, or ``"null"``. ``"remote"`` requires
-       a ``remote_endpoint``, which is not yet user-exposed in the
-       preview.
+     - ``"auto"`` (default: local, or remote when ``kernel_name`` is
+       given) or ``"remote"``; other values are for development.
    * - ``field``
      - str
-     - Field selection, CASA-style selection syntax (field name or
-       ID). Default: first field.
+     - Fields, CASA style: names or FIELD_IDs (``"3c279"``, ``"5"``),
+       lists (``"3c279,J0522-364"``), id ranges (``"0~2"``, ``">3"``),
+       wildcards (``"J05*"``), ``!`` to exclude (``"!Ceres"``).
+       Default: all fields. The sidebar's *Field* menu shows one field,
+       all, or the several given here.
    * - ``spw``
      - str
      - Spectral window selection, CASA-style (comma list, ``a~b``
@@ -195,6 +181,15 @@ Task arguments (preview)
        incoherent; ``"scalar"`` averages the amplitudes themselves.
        Sets the initial value for every raster panel; each panel's
        gear tab has its own *Averaging* control.
+   * - ``raster_corr``
+     - str
+     - Which correlation a raster shows: ``"auto"`` (default; the first
+       of ``correlation``), ``"parallel"`` (the mean of the two parallel
+       hands, (XX+YY)/2 or (RR+LL)/2 -- valid where both are unflagged,
+       and a flag box on it flags both), or one product such as
+       ``"LL"`` (read whether ticked or not). Initial value for every
+       raster panel; each panel's gear tab has its own *Correlation
+       shown* control.
    * - ``baseline_combine``
      - str
      - How a raster cell that covers several baselines combines them
@@ -257,7 +252,7 @@ Task arguments (preview)
      - list of dicts, optional
      - Each panel's configuration, in screen order, one dict per panel
        (at most two for now). Keys: ``kind``, ``raster_y``, ``raster_x``,
-       ``raster_qty``, ``averaging``, ``baseline_order``,
+       ``raster_qty``, ``averaging``, ``raster_corr``, ``baseline_order``,
        ``baseline_combine``, ``detrend``, ``stat_time_window``,
        ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
        ``scatter_avg_time``, ``scatter_avg_chan``, and for a raster
@@ -295,9 +290,9 @@ Task arguments (preview)
      - ``(min, max)`` UV distance in metres: the numeric form of
        ``uvrange``. Give one or the other.
 
-Text in the selection arguments (and the sidebar boxes) that does not
-parse, or matches nothing in the data, is refused with a message saying
-what is accepted -- at construction for an argument, in the status line
+Text in the selection arguments (``field``, ``scan``, ``timerange``,
+``uvrange``, and the sidebar boxes) that does not parse, or matches
+nothing in the data, is refused with a message saying what is accepted -- at construction for an argument, in the status line
 for a box (and nothing is plotted until it is corrected).
 
 All arguments are plain strings, numbers, or simple tuples/lists —
@@ -319,19 +314,22 @@ The preview window is divided into three regions:
 .. code-block:: text
 
    ┌──────────────────────────────────────────────────────────────┐
-   │  Toolbar                                                      │
-   ├──────────────┬─────────────────────────────────────────────  │
-   │  Sidebar     │  Raster panel  (visible in "both"/"raster")    │
-   │  (collapsible)│  Scatter panel (visible in "both"/"scatter")  │
-   │              │                                                │
-   ├──────────────┴─────────────────────────────────────────────  │
-   │  Status bar                                                   │
+   │  Toolbar: Plot, Reload, layout, height, presets, Export PNG   │
+   ├──────────────┬───────────────────────────────────────────────┤
+   │  Sidebar     │  Panel A │ Panel B   (One / Side by Side /     │
+   │  (collapsible)│          │            Over / Under)           │
+   │              │  each panel: a raster or a scatter             │
+   ├──────────────┴───────────────────────────────────────────────┤
+   │  Status line, and help for the control under the pointer      │
    └──────────────────────────────────────────────────────────────┘
 
 Toolbar
 ```````
 
-* **Plot ▶** — run the query against the selected data and (re)render
+* **Plot ▶** — run the query against the selected data and (re)render.
+  It turns **orange** when something has been changed (a selection, an
+  axis, a gear-tab setting) that is not drawn yet, and green again once
+  the plot shows it
 * **Reload ↺** — force re-read from disk (equivalent in spirit to
   ``plotms``'s Reload checkbox, used when the MS has changed on disk)
 * **⟨ Sidebar** — collapse/expand the control sidebar
@@ -399,8 +397,14 @@ Sidebar
   time range, UV range
 * **Panels** — *Pin layout*, *Time labels* (UTC or elapsed), and each
   panel's configuration tab (opened with its gear)
-* **Raster axis controls** — X/Y axis choice, quantity and averaging
-  (vector or scalar) for the raster panel. Besides amplitude, phase,
+
+Each panel's configuration tab (its gear) holds the controls below; they
+apply when *Plot ▶* is pressed.
+
+* **Raster** — X/Y axis choice, quantity, *Correlation shown* (first
+  ticked, the parallel hands averaged, or one product: two panels on RR
+  and LL show a problem in one hand only), and averaging (vector or
+  scalar). Besides amplitude, phase,
   real, imaginary, flag and Z-Score, the quantity can be *Phase RMS*
   (scatter of phase, in degrees, over the samples each cell covers) or
   *Coherence* (vector over scalar averaged amplitude, 0 to 1). On
@@ -467,6 +471,18 @@ When both panels share the same X quantity (e.g. both are plotted
 against time), their X ranges are linked, so panning one pans the
 other.
 
+Large selections
+-----------------
+
+A scatter panel holds every selected sample while it draws.  A selection
+estimated to need more than 70 % of the memory available is loaded
+anyway (it may be slow while the system swaps) and noted in the log.
+Where swapping is not wanted -- a shared cluster node, a machine without
+swap -- ``CUBEVIS_VISPLOT_MEMORY_GUARD=<MB>`` sets a limit: a scatter
+estimated to need more is refused before anything is read, with a
+message saying what to narrow.  (``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` is a
+different setting: how much read data is kept for redrawing.)
+
 A commissioning workflow
 -------------------------
 
@@ -484,6 +500,11 @@ panels at once.
      against baseline length: a rise with length is the atmosphere, one
      high baseline is an antenna.
    * *vplot* -- amplitude per baseline over time: dropouts, bad scans.
+
+   On circular-feed (RR / LL) or linear-feed data, a problem in one hand
+   only shows when the raster shows that hand: set a raster's
+   *Correlation shown* to *Parallel hands* for a first look at both, or
+   put RR and LL side by side.
 
    On data that are not yet amplitude calibrated, keep
    *Autocorrelations* at *Exclude* (the default); otherwise they set the
@@ -667,12 +688,14 @@ Present and working:
 
 * Raster and scatter display, MSv2 and MSv4/Processing Set backends,
   local or in a remote kernel
-* Selection by data column, field, spectral window, correlation,
+* ``vis=`` for either format, as in CASA tasks (``ms=`` / ``ps=`` still work)
+* Selection by data column, field (one, several, ranges, wildcards), spectral window, correlation,
   antenna and baseline (tables, or typed text); stepping through
   fields, spectral windows, antennas and baselines with ◀ ▶
 * Raster quantities including Phase RMS, Coherence, Z-Score and the
   phase / amplitude differences; vector or scalar averaging; how a cell
-  covering several baselines is combined
+  covering several baselines is combined; which correlation each raster
+  shows, including the parallel hands averaged
 * Scatter averaging over time and channels
 * Presets: vplot, radplot, waterfalls (one baseline, all baselines,
   phase), Z-Score, phase RMS views, antenna × antenna matrix, Spectrum,
@@ -694,9 +717,9 @@ Present and working:
 Not yet available:
 
 * Jupyter notebooks (``visplot.notebook()`` says so)
-* Correlation as a raster axis (removed from the axis lists; a raster
-  shows the first ticked correlation, named in its title -- untick the
-  others to see a different one)
+* Correlation as a raster axis (removed from the axis lists; each
+  raster shows one correlation, or the parallel hands averaged, chosen
+  in its gear tab and named in its title)
 * Flagging on the antenna × antenna matrix (refused, with the reason)
 * More than two panels
 * Locate; on-the-fly calibration; plotting calibration tables

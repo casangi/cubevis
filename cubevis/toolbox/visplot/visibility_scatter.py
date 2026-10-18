@@ -1755,7 +1755,14 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         -- ``VisibilityRaster``'s ``_build()`` is untouched, and nothing
         about the shared base class changes. See ``_add_info_tool``.
         """
-        super()._build()
+        # A selection too large to plot at start-up leaves the panel
+        # empty with the reason (_render_error) instead of stopping the
+        # GUI from opening (2026-10-18); see _render.
+        self._in_build = True
+        try:
+            super()._build()
+        finally:
+            self._in_build = False
         if self._headless or self._fig is None:
             return
         self._add_info_tool()
@@ -1854,7 +1861,20 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
             img32 = np.zeros((self._height, self._width), dtype=np.uint32)
             self._push_image(img32, self._x_range, self._y_range)
         else:
-            self._rerender(x_range=None, y_range=None)
+            from .data.reader import SelectionTooLargeError
+            try:
+                self._rerender(x_range=None, y_range=None)
+                self._render_error = None
+            except SelectionTooLargeError as exc:
+                # Plot reports it (the handler's error path); a headless
+                # export raises it to the caller; only the start-up render
+                # of the GUI keeps going, with the panel empty.
+                if self._headless or not getattr(self, "_in_build", False):
+                    raise
+                log.warning("visplot: %s", exc)
+                self._render(selection, defer=True)
+                self._render_error = str(exc)
+                return
         log.debug("VisibilityScatter._render: %.3fs", time.perf_counter() - t0)
         self._update_state_source()
 

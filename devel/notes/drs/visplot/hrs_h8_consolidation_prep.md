@@ -651,3 +651,19 @@ them, and tests them; failures offer retry / skip / quit.
   pip); not tested: macOS itself (keychain), a real `conda create`.
 - Removed: `demos/visplot-remote/00_remote_setup.py`;
   `demos/visplot-remote/00_setup.md` now points at the script.
+
+## 23. Design: remote sessions and `python -m cubevis.setup` (base `ee125b6`, 2026-10-17)
+
+After the bash setup (section 22), Darrell proposed moving setup into the
+package (no checkout needed to add kernels) and decoupling kernels from
+hosts (cluster reservations change nodes, not environments). Agreed
+design in `remote_session_design.md`: a JSON state file as the source of
+truth with ssh files generated from it; networks behind one login host;
+nodes chosen per session through a `cubevis.remote.Session` object
+(health checks, diagnostics, later detach/reattach); a generic per-network
+node query; version checks that print upgrade commands; Configure-style
+`python -m cubevis.setup`; a bash bootstrap for the first install.
+Verified on the rig: an sshpyk kernel starts from a kernel spec held only
+in memory (`AsyncKernelManager(kernel_spec_manager=...)`). Work split into
+five stages; handoff and test-kit rebuild notes in
+`remote_session_handoff.md`.

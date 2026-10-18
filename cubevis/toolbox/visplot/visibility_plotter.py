@@ -1238,6 +1238,37 @@ def _parse_correlation_string(corr_str: str,
     return [c.strip().upper() for c in corr_str.split(",") if c.strip()]
 
 
+_ANTENNA_AXES = ("ANTENNA1", "ANTENNA2")
+
+
+def raster_axes_problem(y, x) -> Optional[str]:
+    """Why raster axes *y* / *x* (``Axis`` names) cannot be drawn, or
+    ``None``.  Checked in the browser (``_RASTER_AXES_RULE_JS``, the same
+    rules) before Plot sends anything, and again here before any data are
+    read, so a bad pair never reaches the backend or a remote kernel."""
+    y = getattr(y, "name", y)
+    x = getattr(x, "name", x)
+    if y == x:
+        return f"Raster Y and X axes must be different (both set to {y})."
+    if (y in _ANTENNA_AXES) != (x in _ANTENNA_AXES):
+        return ("Antenna 1 goes with Antenna 2: together they make the "
+                "antenna \u00d7 antenna matrix. Pair Time, Channel or "
+                "Baseline with each other.")
+    return None
+
+
+# The browser side of raster_axes_problem (kept word for word the same).
+_RASTER_AXES_RULE_JS = """
+function rasterAxesProblem(y, x) {
+    if (y === x) return 'Raster Y and X axes must be different (both set to ' + y + ').';
+    const a = (v) => v === 'ANTENNA1' || v === 'ANTENNA2';
+    if (a(y) !== a(x)) return 'Antenna 1 goes with Antenna 2: together they make the ' +
+        'antenna \u00d7 antenna matrix. Pair Time, Channel or Baseline with each other.';
+    return null;
+}
+"""
+
+
 def _normalize_raster_corr(value) -> str:
     """A raster panel's correlation choice (2026-10-18): ``"auto"`` (the
     first ticked correlation, as before), ``"parallel"`` (the mean of the
@@ -3336,7 +3367,7 @@ class VisibilityPlotter:
             b["scatter_y"] = _PAIR_PRESET_Y[1]
         cfgs = [a, b]
         if panels is None:
-            return cfgs
+            panels = []      # still validated below
         if isinstance(panels, dict) or not isinstance(panels, (list, tuple)):
             raise ValueError("panels must be a list of dicts, one per panel")
         if len(panels) > self.MAX_PANELS:
@@ -3396,6 +3427,11 @@ class VisibilityPlotter:
                     c[k] = float(d[k])
             if c["raster_y"] == c["raster_x"]:
                 raise ValueError(f"{tag}: raster_y and raster_x must differ")
+        for i, c in enumerate(cfgs):
+            problem = (raster_axes_problem(c["raster_y"], c["raster_x"])
+                       if c.get("kind") == "raster" else None)
+            if problem:
+                raise ValueError(f"panel {'AB'[i]}: {problem}")
         return cfgs
 
     def _build_comm(self) -> None:
@@ -4883,9 +4919,9 @@ for (const dt of other.tools) {
             panel_msg = panels_msg.get(slot.id)
             if panel_msg is None or panel_msg.get("kind") != "raster":
                 continue
-            if panel_msg.get("y") == panel_msg.get("x"):
-                text = (f"⚠ Panel {slot.id}: Raster Y and X axes must be "
-                        f"different (both set to {panel_msg.get('y')}).")
+            problem = raster_axes_problem(panel_msg.get("y"), panel_msg.get("x"))
+            if problem:
+                text = f"⚠ Panel {slot.id}: {problem}"
                 self._notify(text)
                 return {"status": "error", "status_text": text,
                         "notify_text": text, "notify_color": "#f38ba8",
@@ -6267,13 +6303,15 @@ html, body { height: 100%; margin: 0; }
             text="", width=_SIDEBAR_WIDTH,
             styles={"color": "#f38ba8", "font-size": "12px"},
         )
-        conflict_msg = "⚠ Raster Y and X axes must be different."
+        # Both axis rules, shown as soon as a choice breaks one (the
+        # antenna pairing added 2026-10-18: it used to reach the backend,
+        # remote kernel included, and come back as a traceback).
         conflict_js = CustomJS(
             args={"ry_sel": ry_sel, "rx_sel": rx_sel,
-                  "conflict_div": conflict_div, "msg": conflict_msg},
-            code="""
-const conflict = (ry_sel.value === rx_sel.value);
-conflict_div.text = conflict ? msg : '';
+                  "conflict_div": conflict_div},
+            code=_RASTER_AXES_RULE_JS + """
+const m = rasterAxesProblem(ry_sel.value, rx_sel.value);
+conflict_div.text = m ? '⚠ ' + m : '';
 """,
         )
         ry_sel.js_on_change("value", conflict_js)
@@ -8487,8 +8525,9 @@ function doPlot(reload) {
                      averaging: sam_sel ? sam_sel.value : null};
         }
     }
+    """ + _RASTER_AXES_RULE_JS + """
     function rasterConflict(kind_switch, ry_sel, rx_sel) {
-        return kind_switch.active === 0 && ry_sel.value === rx_sel.value;
+        return kind_switch.active === 0 && rasterAxesProblem(ry_sel.value, rx_sel.value) !== null;
     }
 
     // Refuse to send rather than let the server round-trip reject it —

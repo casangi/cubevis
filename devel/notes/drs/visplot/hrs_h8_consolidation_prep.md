@@ -797,3 +797,28 @@ every file passes except the five that collect nothing, as before.  (The
 full run found the four test updates listed above; those files and the
 remote ones were re-run after the fixes, individually.)
 `test_visibility_raster` / `_scatter` now appear as `[msv2]` / `[msv4]`.
+
+## 25. Raster axis rule in the browser (base `50ad3ed`, 2026-10-18)
+
+Darrell: choosing Antenna 1 (or 2) with a non-antenna axis in a gear tab
+showed the right message, but only after the request had reached the
+backend (`_antenna_matrix.check_axes`, a remote kernel when one is used)
+and left a `NotImplementedError` traceback in the terminal.
+
+One rule, `raster_axes_problem(y, x)` (Y == X; an antenna axis only with
+the other), in Python and word for word in JavaScript
+(`_RASTER_AXES_RULE_JS`):
+- the gear tab's live message (was Y == X only) shows either problem as
+  soon as the choice is made;
+- doPlot's `rasterConflict` refuses to send and opens that tab (was
+  Y == X only);
+- `_handle_plot` checks it before anything is read (backstop for presets
+  and programmatic callers);
+- the constructor refuses it for `raster_y` / `raster_x` / `panels`.
+The backend's `check_axes` stays as the last line.
+
+Tests: `test_raster_axes_rule.py` (Python and node give the same answer
+for every pair; Plot refuses without calling `query_raster`; constructor);
+`test_checkbox_guard` resolves the new name when it rebuilds doPlot's JS.
+Checked live: tab message at once, Plot sends nothing, nothing in the
+server log.

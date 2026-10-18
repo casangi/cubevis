@@ -112,6 +112,10 @@ def _do_plot_js() -> str:
                 "_SELECTION_PAYLOAD_JS": _module_level_str(
                     _find_module("antenna_baseline_select.py"),
                     "SELECTION_PAYLOAD_JS"),
+                # 2026-10-18: the raster axis rule, shared with the gear
+                # tabs' live message.
+                "_RASTER_AXES_RULE_JS": _module_level_str(
+                    _find_plotter(), "_RASTER_AXES_RULE_JS"),
             })
     raise RuntimeError("_do_plot_js not found")
 

@@ -905,3 +905,83 @@ directories, and `write()` warns about exactly that.
   with stage 2; it changes nothing for users of `cubevis.visplot`.
 - Alias names chosen: `<network>-login`, `<network>-<node>` (the design's
   example had `cv-node140`).
+
+## 28. Remote sessions, stage 2a: `python -m cubevis.setup` (base `56cc39d`, 2026-10-19)
+
+Stage 2 in two slices; this is 2a: this computer, networks, nodes, logging
+in, `status`, `check`.  2b: environments, kernels, versions, `upgrade`,
+`prune`, the node query.
+
+**Decided with Darrell (2026-10-19):**
+- `cubevis/__init__.py` imports `iclean` / `visplot` lazily (PEP 562
+  `__getattr__`): `import cubevis.setup` 5.6 s -> 0.06 s; `from cubevis
+  import visplot` unchanged.
+- A network's login host is optional: without one there is no
+  `<network>-login` and no ProxyJump (nodes reached directly).
+- **Inside a network, no bastion.**  Decided at each connection, so a laptop
+  that moves does the right thing: for a network with a login host and
+  `inside` ranges, the node `Host` blocks carry no ProxyJump; a
+  `Match originalhost <aliases> !exec "<python> -m cubevis.setup.inside NET"`
+  block adds it when the test says outside.  The test (`inside.py`) is the
+  *route*, not "any local address in range" -- Darrell's sample of NRAO
+  addresses showed why: libvirt / Docker bridges (192.168.122.1,
+  172.17.0.1) on many machines, a public and an inside address on the
+  bastion, and home routers' 10.0.0.x.  It resolves up to three nodes
+  (default first; 1 s limit) and asks which local address the system
+  would send from (UDP `connect`, nothing sent): inside if that is in the
+  ranges.  Anything odd answers "outside" (the login host works from
+  anywhere).  `python -m cubevis.setup.inside -v NET` says why.  Ranges
+  are asked for once (`inside: null` = not asked, `[]` = none), suggested as
+  the /16s of the two addresses a node reports for the connection
+  (`$SSH_CONNECTION`: the address it was reached from -- the bastion's
+  inside one or this computer's -- and its own); the user adds others
+  (e.g. 10.2.0.0/16 for desktops like ullr).
+
+**`cubevis/setup/`** additions:
+- `ui.py`: say / ask / ask_yn / ask_choice / secret, changes list, `run`
+  (logged to `setup.log`), `record_change` (`changes.log`), backups,
+  `run_step` (check; do only when the check fails; retry / skip / quit --
+  skip when unattended, `--yes`, so it never loops).
+- `stores.py`: the password stores, ported from `lib/store.sh` (choose,
+  put, has_entry, where, unlock; gpg key creation, pass init).
+- `__main__.py`: `python -m cubevis.setup [status | check [NET|NODE] |
+  network [NAME] | node NET [NODE...]]`, `--yes`, `--redo`,
+  `--answer KEY=VALUE`.  Steps: tools (OpenSSH 8.4+, perl), wrapper install,
+  network questions, nodes, one login step per hop (the login host, then
+  each node) -- key first, else a stored password (sharing an entry with
+  another hop of the same user), with the bash setup's diagnoses (name,
+  network, host key) -- inside ranges.  A node that fails is flagged (kept);
+  behind a login host the bare "Connection closed by UNKNOWN" (the real
+  reason goes to the shared connection) is followed up by asking the login
+  host whether it resolves the node.  The old bash setup's `ssh/config` is
+  copied to `backups/` before it is replaced.
+- `state.py`: user, host and domain names validated (a user name with a
+  space made an `ssh/config` that ssh refused, found on the first run).
+
+**Tests** (`tests/manual/setup/`): 66 with `CUBEVIS_SSH_RIG=1` (56 + 10
+skipped without): `test_inside.py` (the route rule against Darrell's
+addresses, timeouts, state), `test_sshgen.py` additions (no login host;
+Match block; on the rig, one hop inside and two outside or without ranges,
+both logging in), `test_cli.py` (help, status, refusals, an unattended run
+that fails once and skips, the bash config kept; on the rig the whole
+interactive run through a real terminal with pexpect -- password login
+host, node with the same password, inside ranges -- then `check` and
+`status`, and a direct network).  Visplot tests that import through
+`cubevis` unchanged with the lazy import.
+
+**Found in Darrell's first run (macOS, 2026-10-19):**
+`test_unresolvable_name_says_so_without_gpg_hint` failed. The messages
+were the bash setup's older wrapper's: a copy of it was on his PATH, and
+the packaged wrapper took it for the real ssh (it skipped only its own
+directory), so one wrapper ran inside the other and logged in twice.
+Kernels would have hit the same thing.  The wrapper now skips any copy of
+itself on PATH (a `#!` script that mentions `SSH_WRAPPER_RULES` near its
+top); `test_another_wrapper_copy_on_path_is_not_the_real_ssh`.
+- The tests no longer touch the account: `CUBEVIS_SETUP_KNOWN_HOSTS` (tests
+  only) adds a final `Host *` block to the generated config with that
+  `UserKnownHostsFile` and `StrictHostKeyChecking accept-new`; the wrapper
+  test's own config has its own known_hosts; `test_cli.py` clears
+  `SSH_WRAPPER_DEBUG`.  The rig tests had been passing only because the
+  rig's keys were already in the container's `~/.ssh/known_hosts`.
+- 67 passed with `CUBEVIS_SSH_RIG=1` (57 + 10 skipped without), with no
+  `~/.ssh/known_hosts` or wrapper log written.

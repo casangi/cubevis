@@ -20,6 +20,7 @@ import tempfile
 import pytest
 
 from cubevis.setup import data_file
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 needs_ssh = pytest.mark.skipif(not shutil.which("ssh") or not shutil.which("perl"),
                                reason="needs ssh and perl")
@@ -40,6 +41,7 @@ def d():
     ControlPath {p}/cm/%C
     ControlPersist 60
     StrictHostKeyChecking accept-new
+    UserKnownHostsFile {p}/known_hosts
 Host nowhere
     HostName no-such-host.example.invalid
     User alice
@@ -71,6 +73,26 @@ def test_unresolvable_name_says_so_without_gpg_hint(d):
     assert "Could not resolve hostname" in r.stderr
     assert "failed before asking for a password" in r.stderr
     assert "gpg" not in r.stderr.replace("command=gpg", "")
+
+
+@needs_ssh
+def test_another_wrapper_copy_on_path_is_not_the_real_ssh(d, monkeypatch):
+    """2026-10-19, macOS: the bash setup's older wrapper was on PATH and was
+    taken for the real ssh -- one wrapper ran inside the other, logged in
+    twice, and its old message came out instead of this one's."""
+    old = os.path.join(ROOT, "setup", "bin", "ssh")
+    copy = os.path.join(d, "oldbin", "ssh")
+    os.makedirs(os.path.dirname(copy))
+    with open(old if os.path.exists(old) else str(data_file("ssh"))) as f, open(copy, "w") as g:
+        g.write(f.read())
+    os.chmod(copy, 0o755)
+    monkeypatch.setenv("PATH", os.path.dirname(copy) + os.pathsep + os.environ["PATH"])
+    r = _run(d, "no-such-host.example.invalid service=t account=alice backend=command "
+                "command=true", "nowhere")
+    assert r.returncode == 255
+    assert r.stderr.count("logging in to 'nowhere'") == 1, r.stderr
+    assert "Could not resolve hostname" in r.stderr
+    assert "failed before asking for a password" in r.stderr
 
 
 @needs_ssh

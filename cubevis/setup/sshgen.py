@@ -123,17 +123,47 @@ def config_text(st: State) -> str:
            "# only if you chose that."]
     for name in sorted(st.networks()):
         net = st.networks()[name]
-        login = net["login"]
+        login = net.get("login")
+        ranges = net.get("inside") or []
         out.append("")
-        out.append(f"# network {name}")
-        out += _host_block(login["alias"], login["host"], login["user"],
-                           login.get("port"), None)
+        out.append(f"# network {name}" + ("" if login else " (nodes reached directly)"))
+        if login:
+            out += _host_block(login["alias"], login["host"], login["user"],
+                               login.get("port"), None)
+        # Through the login host always, never (no login host), or only
+        # when this computer is outside the network (inside ranges): then
+        # the ProxyJump goes in a Match block, decided at each connection.
+        always = login["alias"] if (login and not ranges) else None
+        aliases = []
         for nname in sorted(st.nodes(name)):
             node = st.nodes()[nname]
+            aliases.append(node["alias"])
             out.append("")
             out += _host_block(node["alias"], node["hostname"], net["user"],
-                               node.get("port"), login["alias"])
+                               node.get("port"), always)
+        if login and ranges and aliases:
+            out.append("")
+            out.append(f"# Outside {', '.join(ranges)}: through {login['alias']}"
+                       " (python -m cubevis.setup.inside -v " + name + " says which)")
+            out.append(f"Match originalhost {','.join(aliases)} !exec \"{inside_command(st, name)}\"")
+            out.append(f"    ProxyJump {login['alias']}")
+    # For the test suite: host keys go to a file of its own (a new one,
+    # so new keys are accepted), not to the account's ~/.ssh/known_hosts.
+    # Unset in normal use.
+    kh = os.environ.get("CUBEVIS_SETUP_KNOWN_HOSTS")
+    if kh:
+        out += ["", "# CUBEVIS_SETUP_KNOWN_HOSTS (tests)", "Host *",
+                f"    UserKnownHostsFile {kh}", "    StrictHostKeyChecking accept-new"]
     return "\n".join(out) + "\n"
+
+
+def inside_command(st: State, network: str) -> str:
+    """The command ssh runs (``Match exec``) to ask whether this computer
+    is inside *network*: the local Python setup recorded, else this one."""
+    import shlex
+    import sys
+    py = st.local.get("python") or sys.executable
+    return f"{shlex.quote(py)} -m cubevis.setup.inside {shlex.quote(network)}"
 
 
 def rules_text(st: State) -> str:
@@ -145,7 +175,7 @@ def rules_text(st: State) -> str:
     lines_login, lines_nodes = [], []
     for name in sorted(st.networks()):
         net = st.networks()[name]
-        login = net["login"]
+        login = net.get("login") or {}
         if login.get("password"):
             svc = login.get("service") or net.get("service") or "cubevis-ssh"
             lines_login.append(f"{login['host']}  {rule_keys(st.local, svc, login['user'])}")

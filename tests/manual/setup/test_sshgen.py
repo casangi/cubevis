@@ -35,6 +35,7 @@ def xdg(monkeypatch):
     import tempfile
     d = tempfile.mkdtemp(prefix="cvx", dir="/tmp")
     monkeypatch.setenv("XDG_CONFIG_HOME", d)
+    monkeypatch.setenv("CUBEVIS_SETUP_KNOWN_HOSTS", f"{d}/known_hosts")   # not ~/.ssh
     yield S.Path(d)
     shutil.rmtree(d, ignore_errors=True)
 
@@ -209,3 +210,78 @@ def test_rig_two_hop_password_login(xdg):
         for alias in ("rig-compute", "rig-login"):
             subprocess.run(["ssh", "-F", str(G.config_path()), "-O", "exit", alias],
                            capture_output=True)
+
+
+# ---------------------------------------------------------------------- #
+# Networks without a login host; inside / outside (2026-10-19)            #
+# ---------------------------------------------------------------------- #
+
+def test_network_without_login_host(xdg):
+    st = S.load()
+    st.local["store"] = "keychain"
+    st.add_network("lan", login_host=None, user="jo", password=True, domain="lan.example.org")
+    st.add_node("ws1", network="lan")
+    text = G.config_text(st)
+    assert "lan-login" not in text and "ProxyJump" not in text
+    assert "(nodes reached directly)" in text
+    rules = [l for l in G.rules_text(st).splitlines() if l and not l.startswith("#")]
+    assert rules == ["*.lan.example.org  service=cubevis-ssh account=jo backend=security"]
+
+
+def test_inside_ranges_put_proxyjump_in_a_match_block(xdg):
+    st = _state()
+    st.networks()["cv"]["inside"] = ["10.7.0.0/16", "10.2.0.0/16"]
+    st.local["python"] = "/opt/my env/bin/python"
+    text = G.config_text(st)
+    cv = text[text.index("# network cv"):text.index("# network keyonly")]
+    assert "ProxyJump" in cv
+    head, match = cv.split("Match ", 1)
+    assert "ProxyJump" not in head                 # not in the Host blocks
+    assert match.startswith("originalhost cv-node140,cv-node141 !exec "
+                            "\"'/opt/my env/bin/python' -m cubevis.setup.inside cv\"")
+    assert "    ProxyJump cv-login" in match
+    # keyonly has no ranges: always through its login host, as before.
+    assert "ProxyJump keyonly-login" in text[text.index("# network keyonly"):]
+
+
+def _rig_state(ranges):
+    st = S.load()
+    st.local.update(store="command", store_command="echo 's3cret pw!'")
+    st.add_network("rig", login_host="login.example.test", user="alice", login_port=2201,
+                   login_password=True, password=True, node_pattern="compute.example.test",
+                   inside=ranges)
+    st.add_node("compute", network="rig", hostname="compute.example.test", port=2202)
+    S.save(st)                    # the inside test reads state.json
+    G.write(st)
+    G.install_wrapper()
+    return st
+
+
+@needs_ssh
+@pytest.mark.skipif(os.environ.get("CUBEVIS_SSH_RIG") != "1",
+                    reason="set CUBEVIS_SSH_RIG=1 with the ssh test rig running")
+@pytest.mark.parametrize("ranges,hops", [(["127.0.0.0/8"], 1), (["10.99.0.0/16"], 2), ([], 2)])
+def test_rig_inside_goes_direct(xdg, ranges, hops):
+    """The rig's node resolves to 127.0.0.1: with 127.0.0.0/8 as the inside
+    range this computer is inside and ssh goes to the node directly (one
+    hop); with another range, or none, through the login host (two)."""
+    _rig_state(ranges)
+    env = dict(os.environ)
+    env.pop("SSH_WRAPPER_RULES", None)
+    import sys
+    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)   # the Match exec's python
+    cfg = str(G.config_path())
+    ex = subprocess.run([str(G.wrapper_path()), "--explain", "-F", cfg, "rig-compute"],
+                        capture_output=True, text=True, env=env, timeout=60,
+                        stdin=subprocess.DEVNULL)
+    assert ex.stdout.count("\nhop ") == hops, ex.stdout
+    try:
+        r = subprocess.run([str(G.wrapper_path()), "-F", cfg, "-o", "BatchMode=yes",
+                            "-o", "StrictHostKeyChecking=accept-new", "rig-compute",
+                            "echo", "reached"], capture_output=True, text=True, env=env,
+                           timeout=120, stdin=subprocess.DEVNULL)
+        assert r.returncode == 0, r.stderr
+        assert "reached" in r.stdout
+    finally:
+        for a in ("rig-compute", "rig-login"):
+            subprocess.run(["ssh", "-F", cfg, "-O", "exit", a], capture_output=True, env=env)

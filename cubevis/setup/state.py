@@ -60,6 +60,8 @@ FLAGGABLE = ("nodes", "environments")
 STORES = ("keychain", "secret-tool", "pass", "gpg-file", "command")
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@-]*$")
+_HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$|^[0-9a-fA-F:]+$")
 
 
 class StateError(ValueError):
@@ -82,6 +84,32 @@ def check_name(kind: str, name: str) -> str:
         raise StateError(f"{kind} name {name!r}: use letters, digits, '.', '_' and '-' "
                          "(starting with a letter or digit)")
     return name
+
+
+def normalize_ranges(ranges) -> list:
+    """Address ranges as canonical CIDR strings ("10.7.0.0/16"); a bare
+    address is its own /32 (/128).  Refuses what does not parse."""
+    import ipaddress
+    out = []
+    for r in ranges or []:
+        try:
+            out.append(str(ipaddress.ip_network(str(r).strip(), strict=False)))
+        except ValueError:
+            raise StateError(f"{r!r} is not an address range (like 10.7.0.0/16)") from None
+    return out
+
+
+def check_user(user: str) -> str:
+    if not isinstance(user, str) or not _USER_RE.match(user):
+        raise StateError(f"user name {user!r}: letters, digits, '.', '_', '-', '@' only")
+    return user
+
+
+def check_host(host: str) -> str:
+    if not isinstance(host, str) or not _HOST_RE.match(host):
+        raise StateError(f"host name {host!r} does not look like one (letters, digits, "
+                         "'.', '-'; or an address)")
+    return host
 
 
 def empty() -> dict:
@@ -143,39 +171,57 @@ class State:
         return n if network is None else {k: v for k, v in n.items() if v.get("network") == network}
 
     # -- networks -----------------------------------------------------------
-    def add_network(self, name: str, *, login_host: str, user: str,
+    def add_network(self, name: str, *, login_host: Optional[str], user: str,
                     login_user: Optional[str] = None, login_port: int = 22,
                     login_alias: Optional[str] = None,
                     login_password: bool = False, password: bool = False,
                     service: Optional[str] = None, login_service: Optional[str] = None,
                     node_pattern: Optional[str] = None, domain: Optional[str] = None,
                     shared_fs: bool = True, default_node: Optional[str] = None,
-                    query: Optional[dict] = None, replace: bool = False) -> dict:
-        """A network: one login host and the nodes behind it.
+                    query: Optional[dict] = None, inside: Optional[list] = None,
+                    replace: bool = False) -> dict:
+        """A network: its nodes, and the login host (bastion) in front of
+        them -- or none, when the nodes are reached directly.
 
         ``node_pattern`` (an ssh glob of the nodes' real names) is what the
         wrapper's rules match, so new nodes need no new rule; it defaults to
         ``*.<domain>`` when a domain is given.  The login host's alias in
         the generated ssh config defaults to ``<name>-login``.
+
+        ``inside``: address ranges (CIDR) of the site.  When this computer
+        would reach a node from an address in them it is inside the network
+        and goes to the node directly; outside, through the login host.
+        Decided at each connection (``inside.py``), so a laptop that moves
+        does the right thing.  Without ranges the login host is always used.
         """
         check_name("network", name)
         if name in self.networks() and not replace:
             raise StateError(f"network {name!r} exists already")
-        if not login_host:
-            raise StateError(f"network {name!r}: a login host is needed")
-        alias = check_name("ssh alias", login_alias or f"{name}-login")
-        if alias.lower() == login_host.lower():
-            raise StateError(f"the login host's alias must differ from its name {login_host!r} "
-                             "(sshpyk needs that)")
+        check_user(user)
+        if login_user:
+            check_user(login_user)
+        if domain:
+            check_host(domain)
+        alias = None
+        if login_host:
+            check_host(login_host)
+            alias = check_name("ssh alias", login_alias or f"{name}-login")
+            if alias.lower() == login_host.lower():
+                raise StateError(f"the login host's alias must differ from its name "
+                                 f"{login_host!r} (sshpyk needs that)")
+        # None: not asked yet; []: asked, none (always the login host).
+        ranges = normalize_ranges(inside) if inside is not None else None
         if (login_password or password) and not (service or login_service):
             service = "cubevis-ssh"
         if query is not None and not (isinstance(query, dict) and query.get("command")):
             raise StateError("query must be {'host': ..., 'command': ...}")
         net = {
-            "login": {"host": login_host, "user": login_user or user,
-                      "port": int(login_port or 22), "alias": alias,
-                      "password": bool(login_password),
-                      "service": login_service or service},
+            "login": ({"host": login_host, "user": login_user or user,
+                       "port": int(login_port or 22), "alias": alias,
+                       "password": bool(login_password),
+                       "service": login_service or service}
+                      if login_host else None),
+            "inside": ranges,
             "user": user, "password": bool(password), "service": service,
             "node_pattern": node_pattern or (f"*.{domain}" if domain else None),
             "domain": domain, "shared_fs": bool(shared_fs),
@@ -212,13 +258,13 @@ class State:
         if name in self.nodes() and not replace:
             raise StateError(f"node {name!r} exists already "
                              f"(in network {self.nodes()[name].get('network')!r})")
-        hn = hostname or self.node_hostname(network, name)
+        hn = check_host(hostname or self.node_hostname(network, name))
         al = check_name("ssh alias", alias or f"{network}-{name}")
         if al.lower() == hn.lower():
             raise StateError(f"node {name!r}: the alias must differ from the host name {hn!r} "
                              "(sshpyk needs that)")
         taken = {v.get("alias") for k, v in self.nodes().items() if k != name}
-        taken |= {n["login"].get("alias") for n in self.networks().values()}
+        taken |= {n["login"].get("alias") for n in self.networks().values() if n.get("login")}
         if al in taken:
             raise StateError(f"ssh alias {al!r} is already used")
         node = {"network": network, "hostname": hn, "alias": al,

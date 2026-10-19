@@ -14,8 +14,12 @@ as ee125b6) and section 17 (the ssh wrapper).
 * **Stage 1 done** (2026-10-18, base `2761bdc`): `cubevis/setup/` with
   `state.py`, `sshgen.py` and `data/` (wrapper, probe, remote-setup moved
   there), the wrapper's failed-login messages, tests in `tests/manual/setup/`.
-  Details: `hrs_h8_consolidation_prep.md` section 27.  Next: **stage 2**
-  (`python -m cubevis.setup`).
+  Details: `hrs_h8_consolidation_prep.md` section 27.
+* **Stage 2a done** (2026-10-19, base `56cc39d`): `python -m cubevis.setup`
+  for this computer, networks (login host optional), nodes, logins, inside
+  ranges (no bastion from inside a network, decided at each connection),
+  `status`, `check`; lazy `cubevis/__init__.py`.  Section 28.  Next:
+  **stage 2b** (environments, kernels, versions, upgrade, prune, query).
 
 ## Decisions made with Darrell
 

@@ -217,6 +217,17 @@ prompt and docs is Slurm's
 query, names are typed (short names completed with the network's
 domain).
 
+## 7a. Login host optional; inside a network, no bastion (2026-10-19)
+
+A network may have no login host: its nodes are reached directly.  When it
+has one and also `inside` address ranges, this computer goes to the nodes
+directly whenever it is inside the network, decided at each connection by
+an OpenSSH `Match ... !exec "<python> -m cubevis.setup.inside NET"` block
+that adds the ProxyJump only outside.  Inside means: the local address the
+system would use to reach a node (resolved here) is in the ranges -- not
+any local address (bridges, home networks).  Details and reasons:
+`hrs_h8_consolidation_prep.md` section 28.
+
 ## 8. Versions and upgrades
 
 `check` compares the local cubevis with each environment's (one command

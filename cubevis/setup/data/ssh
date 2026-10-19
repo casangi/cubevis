@@ -165,12 +165,24 @@ sub capture_list {
 
 ################################################################################
 # 1. ssh or scp (busybox style), and the real binaries -- skipping our own
-#    directory so we never run ourselves.
+#    directory, and any other copy of this wrapper (2026-10-19: an older
+#    copy on PATH, e.g. from the bash setup, was taken for the real ssh, so
+#    one wrapper ran inside the other and its own messages came out).
 ################################################################################
 my $self_path = abs_path($0) // $0;
 my $self_dir  = dirname($self_path);
 my $self_name = basename($0);
 $self_name = 'ssh' unless $self_name eq 'ssh' || $self_name eq 'scp';
+
+# A script (not a binary) that mentions SSH_WRAPPER_RULES near its top.
+sub is_wrapper_copy {
+    my ($path) = @_;
+    open( my $fh, '<', $path ) or return 0;
+    my $n = read( $fh, my $head, 4096 );
+    close $fh;
+    return 0 unless $n && substr( $head, 0, 2 ) eq '#!';
+    return $head =~ /SSH_WRAPPER_RULES/ ? 1 : 0;
+}
 
 sub find_exe {
     my ($prog) = @_;
@@ -180,6 +192,7 @@ sub find_exe {
         next unless -x $cand && !-d $cand;
         my $real = abs_path($cand) // $cand;
         next if dirname($real) eq $self_dir;
+        next if is_wrapper_copy($real);
         return $real;
     }
     return undef;

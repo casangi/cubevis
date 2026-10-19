@@ -56,8 +56,26 @@ if _os.getenv('CUBEVIS_DEBUG', '').lower() in ('1', 'true', 'yes', 'on'):
 else:
     logger.setLevel(_logging.INFO)
 
-from .private.apps import iclean
-from .private.apps import visplot
+# The applications are imported on first use (PEP 562), not here: importing
+# them pulls in bokeh, dask, xarray and casatools (about 5 s), which
+# ``python -m cubevis.setup`` and other light tools do not need
+# (2026-10-19).  ``from cubevis import visplot`` and ``cubevis.iclean`` work
+# as before.
+_LAZY_APPS = ("iclean", "visplot")
+
+
+def __getattr__(name):
+    if name in _LAZY_APPS:
+        import importlib
+        mod = importlib.import_module(".private.apps", __name__)
+        value = getattr(mod, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_LAZY_APPS))
 
 def xml_interface_defs( ):
     '''This function may eventually return XML files for use in generating casashell bindings. An

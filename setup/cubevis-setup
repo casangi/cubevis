@@ -20,14 +20,17 @@
 #   lib/store.sh         password stores
 #   lib/hosts.sh         ssh hosts, the generated ssh files, logging in
 #   lib/remote.sh        steps for a remote host
-#   lib/remote-probe.sh  runs on a remote host: what is there
-#   lib/remote-setup.sh  runs on a remote host: conda, the environment
+#   ../cubevis/setup/data/probe.sh         runs on a remote host: what is there
+#   ../cubevis/setup/data/remote-setup.sh  runs on a remote host: conda, the environment
 #   lib/check_kernel.py  the last test: a kernel and a plot
-#   bin/ssh              the ssh wrapper
+#   ../cubevis/setup/data/ssh              the ssh wrapper
 #
 # Written for bash 3.2 (macOS) and later.
 
 CV_SETUP=$(cd "$(dirname "$0")" && pwd)
+# The wrapper and the scripts run on remote hosts are package data since
+# 2026-10-18 (cubevis/setup/data), shared with python -m cubevis.setup.
+CV_DATA=$(cd "$CV_SETUP/../cubevis/setup/data" && pwd)
 CV_ROOT=$(dirname "$CV_SETUP")
 for f in common versions local store hosts remote; do
     # shellcheck source=/dev/null

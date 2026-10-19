@@ -838,3 +838,70 @@ python3 kernel on this host (`_local_kernel`, skipping without one), with
 absolute paths (the kernel's working directory need not be the test's).
 Passes with and without `CUBEVIS_TEST_KERNEL` set, and with a relative
 `MS=`.
+
+## 27. Remote sessions, stage 1: state and generated ssh files (base `2761bdc`, 2026-10-18)
+
+Design `remote_session_design.md` section 13, stage 1; handoff
+`remote_session_handoff.md`.
+
+**`cubevis/setup/`** (new package, standard library only):
+- `__init__.py`: `config_dir()` (`$XDG_CONFIG_HOME/cubevis`, else
+  `~/.config/cubevis`), `data_file(name)`.
+- `state.py`: `load()` (missing file -> empty schema 1; unreadable JSON, no
+  schema or a newer schema refused, never overwritten), `save()` (temporary
+  file in the same directory, fsync, `os.replace`; file 600, directory 700),
+  `State` with plain-dict sections and accessors: `add_network` (login host
+  `host` / `user` / `port` / `alias` / `password` / `service`; network
+  `user`, `password`, `service`, `node_pattern` -- default `*.<domain>` --,
+  `domain`, `shared_fs`, `default_node`, `query`), `add_node` (short names
+  completed with the domain; alias `<network>-<node>`; aliases unique and
+  different from the host name, as sshpyk needs), `add_environment`,
+  `add_kernel`, removal guarded by what uses a record, `flag` / `mark_ok` /
+  `flagged` (nodes and environments; flagged, never deleted), `MIGRATIONS`
+  hook.
+- `sshgen.py`: `config_text` (one `Host` per login host -- alias
+  `<network>-login` -- and per node with `ProxyJump` to it; ControlMaster
+  auto, ControlPath `<config>/cm/%C`, ControlPersist 8h, ServerAlive 30 x 6),
+  `rules_text` (login hosts first, then each network's `node_pattern`, or its
+  nodes' names when it has none; keys per store ported from the bash
+  `store_rule_keys`), `write()` (rewrites only what changed, says which, warns
+  when the ControlPath directory is too long for a socket), `install_wrapper()`
+  (copies the packaged wrapper to `bin/ssh`, `bin/scp -> ssh`).
+- `data/`: `ssh` (from `setup/bin/ssh`), `probe.sh` (from
+  `setup/lib/remote-probe.sh`), `remote-setup.sh` (from
+  `setup/lib/remote-setup.sh`) -- moved, not copied; the bash setup reads
+  them there (`CV_DATA`) until stage 4 removes it.  pdm ships them: a built
+  wheel has all three, the wrapper mode 755.
+
+**Wrapper fix** (design stage 1): when its own login failed it printed the
+gpg-agent hint whatever the cause.  The throwaway login's stderr now goes to
+a scratch file (removed before the final exec, which skips END blocks) and
+its last line is shown; the askpass call reports `found` / `notfound` /
+`error` to a second file.  Messages: never asked -> "ssh failed before
+asking for a password" (name, network, host key); `notfound` -> "no stored
+password was found", with the gpg hint only for a gpg-backed store;
+`error` -> the lookup's error; `found` -> "the stored password was
+refused".  Checked on the rig for all five cases (also: the sandbox's sshd
+had stopped, and the message said "Connection refused" instead of blaming
+gpg).
+
+**Tests** (`tests/manual/setup/`, 43 with the rig): `test_state.py` (paths,
+data files, empty / bad / newer files, atomic save and a failed save leaving
+the old file, migration hook, defaults, name and alias checks, domains,
+removal rules, flag / mark_ok); `test_sshgen.py` (keys per store, rule order,
+generated config read back with `ssh -F ... -G`, rewrite only on change,
+long-path warning, wrapper install, the installed wrapper's `--explain`
+finding the generated rules by itself, and with `CUBEVIS_SSH_RIG=1` a
+two-hop password login through the generated files with both connections
+shared); `test_wrapper_login_messages.py`; `test_setup_scripts.py` now
+points at the moved wrapper.  Found by the tests: pytest's temporary paths
+are too long for a ControlPath socket -- the tests use short `/tmp`
+directories, and `write()` warns about exactly that.
+
+**For Darrell:**
+- `import cubevis` takes ~5.6 s (the package `__init__` imports visplot and
+  bokeh), so `python -m cubevis.setup` will pay that at every start unless
+  `cubevis/__init__.py` imports lazily (PEP 562 `__getattr__`).  Worth doing
+  with stage 2; it changes nothing for users of `cubevis.visplot`.
+- Alias names chosen: `<network>-login`, `<network>-<node>` (the design's
+  example had `cv-node140`).

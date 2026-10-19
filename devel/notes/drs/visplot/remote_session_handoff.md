@@ -11,8 +11,11 @@ as ee125b6) and section 17 (the ssh wrapper).
   `setup/bin/ssh`, `tests/manual/setup/test_setup_scripts.py`, and the
   Jupyter-runtime-directory fix in `remote_reduction_context.py`.
 * The design doc is new (not yet committed when this was written).
-* Nothing of the new design is implemented yet. Next: **stage 1**
-  (design section 13).
+* **Stage 1 done** (2026-10-18, base `2761bdc`): `cubevis/setup/` with
+  `state.py`, `sshgen.py` and `data/` (wrapper, probe, remote-setup moved
+  there), the wrapper's failed-login messages, tests in `tests/manual/setup/`.
+  Details: `hrs_h8_consolidation_prep.md` section 27.  Next: **stage 2**
+  (`python -m cubevis.setup`).
 
 ## Decisions made with Darrell
 

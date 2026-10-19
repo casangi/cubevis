@@ -37,7 +37,7 @@ kept, and how to take it all away again.
 * **The remote host** holds the data and runs the kernel.
 
 A kernel is started by ssh without a terminal, so a password prompt has
-nobody to answer it. The **ssh wrapper** (`setup/bin/ssh`) logs in to each
+nobody to answer it. The **ssh wrapper** (`cubevis/setup/data/ssh`) logs in to each
 host that wants a password once, with the password from your password store,
 and leaves a shared connection that later ssh commands reuse. Only the
 kernels use it: it is not put on your PATH.

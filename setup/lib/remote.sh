@@ -20,7 +20,7 @@ probe_check() {
     d=$(host_dir); mkdir -p "$d"
     if ! run_quiet remote_bash "set -- $(sq "$(cat "$CV_HOME/.home-id")") \
 $(sq "$(conf_get "$CV_CONF" env "$CV_ENV_DEFAULT")") $(sq "$(conf_get "$CV_CONF" python)")
-$(cat "$CV_SETUP/lib/remote-probe.sh")"; then
+$(cat "$CV_DATA/probe.sh")"; then
         CHECK_MSG=$(printf '%s\n' "$OUT" | tail -1)
         return 1
     fi
@@ -109,7 +109,7 @@ renv_do() {
         echo "CV_PIP_PKGS='$pip'"
         echo "CV_MINIFORGE_URL='$CV_MINIFORGE_URL'"
         echo
-        cat "$CV_SETUP/lib/remote-setup.sh"
+        cat "$CV_DATA/remote-setup.sh"
     } >"$script"
     changes_list "on $HOST: $([ -n "$conda" ] && echo "adds the environment '$env' to $conda" || echo "installs Miniforge in $prefix, then creates the environment '$env'")" \
         "on $HOST: pip install $pip into it" \

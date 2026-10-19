@@ -189,8 +189,8 @@ EOF
 # --------------------------------------------------------------------------
 wrapper_title() { echo "The ssh wrapper (logs in with a stored password)"; }
 wrapper_check() {
-    if [ ! -x "$CV_BIN/ssh" ] || ! cmp -s "$CV_SETUP/bin/ssh" "$CV_BIN/ssh"; then
-        CHECK_MSG="not installed, or older than $(tilde "$CV_SETUP")/bin/ssh"
+    if [ ! -x "$CV_BIN/ssh" ] || ! cmp -s "$CV_DATA/ssh" "$CV_BIN/ssh"; then
+        CHECK_MSG="not installed, or older than $(tilde "$CV_DATA")/ssh"
         return 1
     fi
     if [ ! -L "$CV_BIN/scp" ]; then CHECK_MSG="no scp link"; return 1; fi
@@ -201,10 +201,10 @@ wrapper_check() {
 wrapper_do() {
     say "The remote kernels connect with ssh, without a terminal to type a password in. The wrapper runs in front of ssh: for hosts listed in its rules it logs in once with the password from your password store and lets ssh share that connection; for every other host it simply runs ssh."
     say "It is NOT put on your PATH: only the kernels (and this setup) use it, so your own ssh, git and scp are unchanged."
-    changes_list "copies $(tilde "$CV_SETUP")/bin/ssh to $(tilde "$CV_BIN")/ssh, and links scp to it"
+    changes_list "copies $(tilde "$CV_DATA")/ssh to $(tilde "$CV_BIN")/ssh, and links scp to it"
     ask_yn "Go ahead?" y || return 1
     mkdir -p "$CV_BIN"
-    run cp "$CV_SETUP/bin/ssh" "$CV_BIN/ssh" && chmod 755 "$CV_BIN/ssh" && ln -sf ssh "$CV_BIN/scp" || return 1
+    run cp "$CV_DATA/ssh" "$CV_BIN/ssh" && chmod 755 "$CV_BIN/ssh" && ln -sf ssh "$CV_BIN/scp" || return 1
     record_change "installed the ssh wrapper" "$CV_BIN/ssh"
     return 0
 }

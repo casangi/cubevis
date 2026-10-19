@@ -31,7 +31,7 @@ On your computer:
 | tools | checks for perl, curl, OpenSSH 8.4+ | nothing |
 | conda | uses a conda you have (Miniforge, Miniconda, Anaconda), or installs Miniforge in a directory you choose | that directory only: **no** changes to your shell start-up files, so no `(base)` in your prompt |
 | environment | creates the conda environment `cubevis` (conda-forge packages), then `pip install cubevis[visplot]==<release> sshpyk` | the environment; `~/.config/cubevis/activate` |
-| ssh wrapper | copies `setup/bin/ssh` to `~/.config/cubevis/bin/ssh` | that file. It is **not** put on your PATH: your own `ssh`, `scp` and `git` are unchanged |
+| ssh wrapper | copies `cubevis/setup/data/ssh` to `~/.config/cubevis/bin/ssh` | that file. It is **not** put on your PATH: your own `ssh`, `scp` and `git` are unchanged |
 
 For each remote host:
 
@@ -155,10 +155,16 @@ lib/local.sh         steps on this computer
 lib/store.sh         password stores
 lib/hosts.sh         ssh hosts, the generated ssh files, logging in
 lib/remote.sh        steps for a remote host
-lib/remote-probe.sh  runs on a remote host: looks, changes nothing
-lib/remote-setup.sh  runs on a remote host: conda and the environment
 lib/check_kernel.py  the last test
-bin/ssh              the ssh wrapper (perl)
+```
+
+Since 2026-10-18 three files are package data, shared with
+`python -m cubevis.setup` (which replaces this script):
+
+```
+../cubevis/setup/data/probe.sh         runs on a remote host: looks, changes nothing
+../cubevis/setup/data/remote-setup.sh  runs on a remote host: conda and the environment
+../cubevis/setup/data/ssh              the ssh wrapper (perl)
 ```
 
 A step `foo` is three functions: `foo_title` (one line), `foo_check`

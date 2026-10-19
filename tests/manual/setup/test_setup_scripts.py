@@ -18,6 +18,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 SETUP = ROOT / "setup"
+# The wrapper is package data since 2026-10-18.
+WRAPPER = ROOT / "cubevis" / "setup" / "data" / "ssh"
 BASH = os.environ.get("CUBEVIS_TEST_BASH", shutil.which("bash") or "/bin/bash")
 SHELL_FILES = [SETUP / "cubevis-setup"] + sorted((SETUP / "lib").glob("*.sh"))
 
@@ -49,7 +51,7 @@ def test_no_bash4_features():
 def test_wrapper_compiles():
     if not shutil.which("perl"):
         pytest.skip("no perl")
-    r = subprocess.run(["perl", "-c", str(SETUP / "bin" / "ssh")], capture_output=True, text=True)
+    r = subprocess.run(["perl", "-c", str(WRAPPER)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
 
 
@@ -92,7 +94,7 @@ def test_explain_reports_rule_and_near_misses(tmp_path):
     env = _wrapper_env(tmp_path, "jo,login backend=command command=echo pw\n"
                                  "data backend=command command=echo pw\n"
                                  "login.example.test backend=command command=echo pw\n")
-    r = subprocess.run([str(SETUP / "bin" / "ssh"), "--explain", "-F", str(cfg), "dh"],
+    r = subprocess.run([str(WRAPPER), "--explain", "-F", str(cfg), "dh"],
                        capture_output=True, text=True, env=env, timeout=60)
     assert r.returncode == 0, r.stderr
     out = r.stdout
@@ -102,7 +104,7 @@ def test_explain_reports_rule_and_near_misses(tmp_path):
     assert "rule 'data'" in out and "not the whole host name" in out
     # The old "user,host" form is pointed out for the hop it was meant for.
     env = _wrapper_env(tmp_path, "jo,login backend=command command=echo pw\n")
-    r = subprocess.run([str(SETUP / "bin" / "ssh"), "--explain", "-F", str(cfg), "gw"],
+    r = subprocess.run([str(WRAPPER), "--explain", "-F", str(cfg), "gw"],
                        capture_output=True, text=True, env=env, timeout=60)
     assert "starts with your user name" in r.stdout
 
@@ -111,5 +113,5 @@ def test_explain_reports_rule_and_near_misses(tmp_path):
 def test_wrapper_passes_through_without_rules(tmp_path):
     env = dict(os.environ, HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path / "none"))
     env.pop("SSH_WRAPPER_RULES", None)
-    r = subprocess.run([str(SETUP / "bin" / "ssh"), "-V"], capture_output=True, text=True, env=env)
+    r = subprocess.run([str(WRAPPER), "-V"], capture_output=True, text=True, env=env)
     assert "OpenSSH" in r.stderr

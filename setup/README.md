@@ -13,7 +13,7 @@ bash setup/cubevis-setup --help      # the other options
 ```
 
 It runs from a cubevis checkout, wherever that is, with the bash that comes
-with macOS (3.2) or Linux. It needs `perl`, `curl` and OpenSSH 8.4 or later
+with macOS (3.2) or Linux. It needs `perl`, `curl` and OpenSSH 8.0 or later
 (all part of macOS and of most Linux systems), and no administrator rights.
 Python is not needed beforehand: setup installs it (with conda) if there is
 none.
@@ -28,7 +28,7 @@ On your computer:
 
 | Step | What happens | What changes |
 |---|---|---|
-| tools | checks for perl, curl, OpenSSH 8.4+ | nothing |
+| tools | checks for perl, curl, OpenSSH 8.0+ | nothing |
 | conda | uses a conda you have (Miniforge, Miniconda, Anaconda), or installs Miniforge in a directory you choose | that directory only: **no** changes to your shell start-up files, so no `(base)` in your prompt |
 | environment | creates the conda environment `cubevis` (conda-forge packages), then `pip install cubevis[visplot]==<release> sshpyk` | the environment; `~/.config/cubevis/activate` |
 | ssh wrapper | copies `cubevis/setup/data/ssh` to `~/.config/cubevis/bin/ssh` | that file. It is **not** put on your PATH: your own `ssh`, `scp` and `git` are unchanged |

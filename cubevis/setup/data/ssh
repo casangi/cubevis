@@ -17,7 +17,7 @@
 # the kernels use it. To use it for everything instead:
 #   cp ssh ~/bin/ssh && chmod +x ~/bin/ssh && ln -s ssh ~/bin/scp
 #   with ~/bin before /usr/bin in PATH.
-# Needs perl, OpenSSH 8.4 or later, and a password store (below).
+# Needs perl, OpenSSH 8.0 or later, and a password store (below).
 #
 # Rules: which hosts need the password
 # ------------------------------------
@@ -556,7 +556,9 @@ sub open_shared {
         $ENV{SSH_WRAPPER_ASKPASS_STATUS}  = $status_file;
         $ENV{SSH_ASKPASS}                 = $self_path;
         $ENV{SSH_ASKPASS_REQUIRE}         = 'force';     # OpenSSH 8.4+
-        $ENV{DISPLAY}                   //= ':0';        # older OpenSSH wants one
+        # Before 8.4 ssh uses askpass only with no terminal (setsid, above)
+        # and DISPLAY set; nothing is drawn, the askpass is this file.
+        $ENV{DISPLAY}                   //= ':0';
         $ENV{SSH_WRAPPER_ASKPASS_RULE}    = $rule_index;
         $ENV{SSH_WRAPPER_ASKPASS_ACCOUNT} = $hop->{rule}{account} || $cfg->{user} || $ENV{USER} || '';
         # These come first: ssh keeps the first value it is given, and they

@@ -123,8 +123,12 @@ def local_steps(c: Ctx) -> bool:
         missing = []
         if v is None:
             missing.append("ssh")
-        elif v < (8, 4):
-            missing.append(f"OpenSSH 8.4 or later (this is {v[0]}.{v[1]})")
+        # 8.0 is RHEL 8's.  8.4 added SSH_ASKPASS_REQUIRE=force; before it ssh
+        # still uses askpass when there is no terminal and DISPLAY is set,
+        # which the wrapper arranges (tested with 8.0p1, 2026-10-19).  The
+        # generated config needs 7.6 (StrictHostKeyChecking accept-new).
+        elif v < (8, 0):
+            missing.append(f"OpenSSH 8.0 or later (this is {v[0]}.{v[1]})")
         if not shutil.which("perl"):
             missing.append("perl (the wrapper is a perl script)")
         if missing:

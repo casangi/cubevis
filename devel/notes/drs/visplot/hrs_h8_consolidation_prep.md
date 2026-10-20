@@ -985,13 +985,36 @@ top); `test_another_wrapper_copy_on_path_is_not_the_real_ssh`.
   rig's keys were already in the container's `~/.ssh/known_hosts`.
 - 67 passed with `CUBEVIS_SSH_RIG=1` (57 + 10 skipped without), with no
   `~/.ssh/known_hosts` or wrapper log written.
-- The ssh test rig is now a script, `devel/tools/ssh_rig.sh` (run as root,
-  disposable container or VM only; idempotent; `stop`).  It had lived only
-  in the sandbox and had to be rebuilt by hand after a restart.
-- Open, for 2b (Darrell's decision): when the wrapper logs in to a
-  password login host as a hop of its own it does not pass the caller's
-  `StrictHostKeyChecking`, so a login host ssh has never seen fails host
-  key verification if the first connection goes straight to a node.  Setup
-  checks the login host first, which records its key; kernels on a new
-  account going straight to a node would not.  See the handoff's "Open
-  points".
+
+## 29. OpenSSH minimum lowered from 8.4 to 8.0 (base `2ec5a25`, 2026-10-19)
+
+Darrell's first run on RHEL 8 stopped at the tools step: RHEL 8 ships
+OpenSSH 8.0p1 (`openssh-clients-8.0p1-25.el8_10`), and the step required
+8.4.
+
+* **Why 8.4 was there**: only for `SSH_ASKPASS_REQUIRE=force` (8.4+) in the
+  wrapper's throwaway login (section 17).  Before 8.4, ssh uses
+  `SSH_ASKPASS` when it has no terminal *and* `DISPLAY` is set.  The login
+  already runs under `setsid` with stdin from `/dev/null` (no terminal) and
+  sets `DISPLAY=:0` if unset, so older clients take the askpass path too.
+  Nothing is drawn: the askpass is the wrapper itself.  8.4+ ignores
+  `DISPLAY` under `force`.
+* **What else sets a floor**: the generated config uses `ProxyJump` (7.3),
+  `ControlPath %C` (6.7), `Match originalhost` / `exec` (6.5), and the
+  tests' `StrictHostKeyChecking accept-new` (7.6); `ssh -G` is 6.8.  So 7.6
+  by reading.  The check says 8.0 because that is the oldest client tested
+  (7.6p1 does not build against OpenSSL 3 here).
+* **Tested**: OpenSSH 8.0p1 client built from `openssh-portable` tag
+  `V_8_0_P1` (`--without-openssl`), first on PATH, against the rig's
+  9.6 sshd's: all 67 tests in `tests/manual/setup` pass with
+  `CUBEVIS_SSH_RIG=1`, as they do with 9.6.  The wrapper log shows it ran
+  `/opt/openssh80/bin/ssh`.  With the `DISPLAY` line removed, 8.0's login
+  fails ("Permission denied (password)", askpass never called), so that
+  line is load-bearing for pre-8.4 clients; its comment now says so.
+* **Changed**: `cubevis/setup/__main__.py` (check `(8, 0)`), the wrapper's
+  comments in `cubevis/setup/data/ssh` and `setup/bin/ssh`, and the bash
+  setup's check and text (`setup/lib/local.sh`, `setup/README.md`).
+* **Rig**: `devel/tools/ssh_rig.sh` (handoff "Test kit") had never been
+  committed; it is in this zip now: `/etc/hosts` entries, user `alice`, password-only
+  sshd's on 127.0.0.1:2201/2202 with `UsePAM yes`, from the distribution's
+  `openssh-server`.

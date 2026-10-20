@@ -14,8 +14,8 @@ platform_check() {
     has ssh || miss="$miss ssh"
     SSH_VERSION=$(ssh -V 2>&1 | sed -n 's/^OpenSSH_\([0-9]*\.[0-9]*\).*/\1/p')
     v=${SSH_VERSION%%.*}
-    if [ -z "$SSH_VERSION" ] || [ "$v" -lt 8 ] || { [ "$v" -eq 8 ] && [ "${SSH_VERSION#*.}" -lt 4 ]; }; then
-        miss="$miss OpenSSH-8.4-or-later(have:${SSH_VERSION:-?})"
+    if [ -z "$SSH_VERSION" ] || [ "$v" -lt 8 ]; then
+        miss="$miss OpenSSH-8.0-or-later(have:${SSH_VERSION:-?})"
     fi
     if [ -n "$miss" ]; then
         CHECK_MSG="missing:$miss"
@@ -26,7 +26,7 @@ platform_check() {
 }
 platform_do() {
     platform_check
-    say "Setup needs perl, curl and OpenSSH 8.4 or later. They come with macOS and with most Linux systems; ask whoever runs this computer to install what is missing (this script does not use root)."
+    say "Setup needs perl, curl and OpenSSH 8.0 or later. They come with macOS and with most Linux systems; ask whoever runs this computer to install what is missing (this script does not use root)."
     return 1
 }
 

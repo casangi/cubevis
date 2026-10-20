@@ -985,3 +985,13 @@ top); `test_another_wrapper_copy_on_path_is_not_the_real_ssh`.
   rig's keys were already in the container's `~/.ssh/known_hosts`.
 - 67 passed with `CUBEVIS_SSH_RIG=1` (57 + 10 skipped without), with no
   `~/.ssh/known_hosts` or wrapper log written.
+- The ssh test rig is now a script, `devel/tools/ssh_rig.sh` (run as root,
+  disposable container or VM only; idempotent; `stop`).  It had lived only
+  in the sandbox and had to be rebuilt by hand after a restart.
+- Open, for 2b (Darrell's decision): when the wrapper logs in to a
+  password login host as a hop of its own it does not pass the caller's
+  `StrictHostKeyChecking`, so a login host ssh has never seen fails host
+  key verification if the first connection goes straight to a node.  Setup
+  checks the login host first, which records its key; kernels on a new
+  account going straight to a node would not.  See the handoff's "Open
+  points".

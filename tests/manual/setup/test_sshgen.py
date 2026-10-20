@@ -7,8 +7,8 @@ The generated ssh/config is read back with ``ssh -F <file> -G <alias>``
 (what ssh itself makes of it) and the rules with the wrapper's
 ``--explain``; both log in nowhere.  With ``CUBEVIS_SSH_RIG=1`` a two-hop
 password login goes through the ssh test rig (login.example.test:2201 and
-compute.example.test:2202, user alice; see remote_session_handoff.md,
-"Test kit").
+compute.example.test:2202, user alice): ``sudo devel/tools/ssh_rig.sh``
+in a disposable container or VM.
 """
 from __future__ import annotations
 
@@ -181,7 +181,7 @@ def test_wrapper_explain_reads_generated_files(xdg):
 # ---------------------------------------------------------------------- #
 
 @pytest.mark.skipif(os.environ.get("CUBEVIS_SSH_RIG") != "1",
-                    reason="set CUBEVIS_SSH_RIG=1 with the ssh test rig running")
+                    reason="set CUBEVIS_SSH_RIG=1 with the ssh test rig running (devel/tools/ssh_rig.sh)")
 @needs_ssh
 def test_rig_two_hop_password_login(xdg):
     st = S.load()
@@ -259,7 +259,7 @@ def _rig_state(ranges):
 
 @needs_ssh
 @pytest.mark.skipif(os.environ.get("CUBEVIS_SSH_RIG") != "1",
-                    reason="set CUBEVIS_SSH_RIG=1 with the ssh test rig running")
+                    reason="set CUBEVIS_SSH_RIG=1 with the ssh test rig running (devel/tools/ssh_rig.sh)")
 @pytest.mark.parametrize("ranges,hops", [(["127.0.0.0/8"], 1), (["10.99.0.0/16"], 2), ([], 2)])
 def test_rig_inside_goes_direct(xdg, ranges, hops):
     """The rig's node resolves to 127.0.0.1: with 127.0.0.0/8 as the inside

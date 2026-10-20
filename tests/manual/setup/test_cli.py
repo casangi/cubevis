@@ -3,6 +3,8 @@
     pytest tests/manual/setup/test_cli.py
     CUBEVIS_SSH_RIG=1 pytest tests/manual/setup/test_cli.py   # + the rig
 
+The rig: ``sudo devel/tools/ssh_rig.sh`` (a disposable container or VM only).
+
 Without the rig: status, refusals, the old bash configuration being kept,
 unattended runs never looping.  With ``CUBEVIS_SSH_RIG=1`` the interactive
 run is driven through a real terminal (pexpect), as a user would answer it:
@@ -24,7 +26,7 @@ from cubevis.setup import sshgen as G
 from cubevis.setup import state as S
 
 needs_rig = pytest.mark.skipif(os.environ.get("CUBEVIS_SSH_RIG") != "1",
-                               reason="set CUBEVIS_SSH_RIG=1 with the ssh test rig running")
+                               reason="set CUBEVIS_SSH_RIG=1 with the ssh test rig running (devel/tools/ssh_rig.sh)")
 needs_ssh = pytest.mark.skipif(not shutil.which("ssh") or not shutil.which("perl"),
                                reason="needs ssh and perl")
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))

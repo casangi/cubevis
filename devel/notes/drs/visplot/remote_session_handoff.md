@@ -1,4 +1,4 @@
-# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17)
+# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-10-19)
 
 Read first: `devel/notes/drs/visplot/remote_session_design.md` (the
 design, agreed with Darrell 2026-10-17). Background: section 22 of
@@ -7,10 +7,11 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* main is at **ee125b6**: the bash setup (`setup/`), the wrapper at
-  `setup/bin/ssh`, `tests/manual/setup/test_setup_scripts.py`, and the
-  Jupyter-runtime-directory fix in `remote_reduction_context.py`.
-* The design doc is new (not yet committed when this was written).
+* main is at **56cc39d** (stage 1 committed).  Delivered on top of it, not
+  yet committed when this was written: **`remote_stage2a_56cc39d_r2.zip`**
+  (stage 2a and its fixes; replaces `remote_stage2a_56cc39d.zip`).  Darrell
+  ran the suite on macOS: all pass.  Check `git log` first -- if 2a is in
+  main, start 2b from there.
 * **Stage 1 done** (2026-10-18, base `2761bdc`): `cubevis/setup/` with
   `state.py`, `sshgen.py` and `data/` (wrapper, probe, remote-setup moved
   there), the wrapper's failed-login messages, tests in `tests/manual/setup/`.
@@ -18,8 +19,15 @@ as ee125b6) and section 17 (the ssh wrapper).
 * **Stage 2a done** (2026-10-19, base `56cc39d`): `python -m cubevis.setup`
   for this computer, networks (login host optional), nodes, logins, inside
   ranges (no bastion from inside a network, decided at each connection),
-  `status`, `check`; lazy `cubevis/__init__.py`.  Section 28.  Next:
-  **stage 2b** (environments, kernels, versions, upgrade, prune, query).
+  `status`, `check`; lazy `cubevis/__init__.py`.  Section 28, including
+  revision 2: the wrapper no longer takes another copy of itself on PATH
+  for the real ssh (Darrell's macOS PATH had the bash setup's wrapper), and
+  the tests no longer write `~/.ssh/known_hosts` or the wrapper log.
+* **Not yet tried on the real network**: the inside-range suggestion (/16s
+  of `$SSH_CONNECTION`) and the `Match exec` inside test.  Darrell's sample
+  addresses (section 28) are in `test_inside.py`; his first real run is the
+  check.  Ask how it went before building on it.
+* **Next: stage 2b** -- below, "Stage 2b, concretely".
 
 ## Decisions made with Darrell
 
@@ -64,22 +72,26 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 23).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 29).
 
 ## Test kit (rebuild after a sandbox restart)
 
 The sandbox loses `/etc/hosts` edits and running daemons on restart.
 
-* **ssh rig** (configs in `/tmp/claude-0/sshrig`, if still there):
-  `mkdir -p /run/sshd; for s in bastion compute git; do /usr/sbin/sshd -f /tmp/claude-0/sshrig/sshd_$s -E /tmp/claude-0/sshrig/sshd_$s.log; done`
-  and `echo "127.0.0.1 login.example.test compute.example.test git.example.test" >> /etc/hosts`.
-  Ports: 2201 login (password only), 2202 compute (password only), 2203
-  git (key only, ForceCommand). Users: `alice` ("s3cret pw!"), `carol`
-  ("s3cret c4rol"). If `/tmp/claude-0/sshrig` is gone: three sshd configs
-  with `Port`, `HostKey` (ssh-keygen -t ed25519), `PidFile`,
-  `PasswordAuthentication yes`, `KbdInteractiveAuthentication no`,
-  `PubkeyAuthentication no` (yes for git), `UsePAM yes`,
-  `AllowTcpForwarding yes`.
+* **ssh rig**: `sudo devel/tools/ssh_rig.sh` (idempotent; `stop` to stop).
+  It adds `login.example.test` / `compute.example.test` (127.0.0.1) to
+  `/etc/hosts`, the user `alice` ("s3cret pw!"), and password-only sshd's
+  on 2201 (login) and 2202 (compute) -- what `tests/manual/setup` needs
+  with `CUBEVIS_SSH_RIG=1`.  Disposable container or VM only.  (The bash
+  setup's older end-to-end runs also used a key-only git host on 2203 and
+  the user `carol`; not needed by the Python tests, not in the script.)
+* **Host keys in tests**: `CUBEVIS_SETUP_KNOWN_HOSTS=<file>` makes
+  `sshgen.config_text` end with `Host *` / `UserKnownHostsFile <file>` /
+  `StrictHostKeyChecking accept-new`.  The test fixtures set it; never set
+  in normal use.  Without it the rig tests depend on keys already in
+  `~/.ssh/known_hosts` (that is how they passed before 2026-10-19).
+* **pytest here**: `/home/claude/venv/bin/python -m pytest` (the system
+  python has none).
 * **Fresh local users** for end-to-end runs: `useradd -m -s /bin/bash
   testyN`; a gpg key without passphrase for `pass`
   (`gpg --batch --passphrase "" --quick-generate-key ...`).
@@ -109,25 +121,58 @@ The sandbox loses `/etc/hosts` edits and running daemons on restart.
   ssh_host_alias, remote_python, remote_kernel_name}}`; start with
   `AsyncKernelManager(kernel_name="not-on-disk", kernel_spec_manager=...)`.
 
-## Stage 1, concretely
+## Open points (collected 2026-10-19)
 
-1. `cubevis/setup/__init__.py`, `state.py`: dataclass-free plain dicts
-   with accessors; `load()` (missing file -> empty schema 1), `save()`
-   (tmp + `os.replace`, mode 600), `flag(kind, name, error)`,
-   `mark_ok(...)`, schema migration hook; paths honour
-   `XDG_CONFIG_HOME`.
-2. `sshgen.py`: state -> `ssh/config` (Host per login host and node:
-   HostName, User, Port, ProxyJump, ControlMaster auto, ControlPath
-   `<cfg>/cm/%C`, ControlPersist 8h, ServerAlive*), `ssh/rules` (login
-   host and `node_pattern` per network with the store keys -- port the
-   bash `store_rule_keys`); only rewrite when changed; return whether it
-   changed.
-3. Package data: move `setup/bin/ssh`, `setup/lib/remote-probe.sh`,
-   `setup/lib/remote-setup.sh` to `cubevis/setup/data/` (check
-   pyproject/pdm includes non-.py files under `cubevis/`; the bash
-   `setup/` keeps working from its own copies until stage 4, or reads
-   them from the package -- decide).
-4. Wrapper fix (design section 13, stage 1).
-5. Tests: `tests/manual/setup/test_state.py`, `test_sshgen.py` (generated
-   config parsed with `ssh -F ... -G alias`; rules exercised with the
-   wrapper's `--explain`).
+* **First contact with a login host, straight to a node.**  When the
+  wrapper logs in to a password login host as a hop of its own, it passes
+  only `-F` and the config's options, not the caller's `-o
+  StrictHostKeyChecking=accept-new`; a login host ssh has never seen then
+  fails with "Host key verification failed".  Setup is not affected (it
+  checks the login host directly before any node, which records the key),
+  but a kernel or a user going straight to a node on a new account would
+  be.  Options: setup always visits the login host first (as now) and says
+  so; or the generated config sets `StrictHostKeyChecking accept-new` for
+  the hosts the user typed in.  Darrell's decision; raise it in 2b.
+* **Scatter memory**: 65-110 bytes per sample at peak, unmeasured whether
+  inherent, wasteful or a leak (also the growth seen in
+  `test_visibility_scatter`).  The guard is opt-in
+  (`CUBEVIS_VISPLOT_MEMORY_GUARD`).  Offered to Darrell, not requested.
+* **The bash setup** (`setup/`, including `setup/bin/ssh`) stays until
+  stage 4.  Copies of its wrapper on a PATH are now skipped by the
+  packaged wrapper.
+* Design open questions: `remote_session_design.md` section 12.
+
+## Stage 2b, concretely
+
+Design sections 3, 6, 7, 8.  `cubevis/setup/__main__.py` has the `Ctx`,
+the step runner, `network` / `node` / `check` / `status` and the walk-
+through; the bash steps to port are in `setup/lib/remote.sh` (probe,
+remote environment, test data, kernel, final plot test) and
+`setup/lib/versions.sh`; the remote scripts are already in
+`cubevis/setup/data/` (`probe.sh`, `remote-setup.sh`).  `state.py`
+already has `add_environment` / `add_kernel`, the `query` field and the
+removal rules.
+
+1. **`kernel [NAME]`**: pick a network and a node to work on (default
+   node); run `probe.sh` there (read-only: python, conda, envs, cubevis
+   version, shared filesystem hints); offer an existing environment or
+   write the per-node `remote-setup.sh` (run over ssh or copied); record
+   the environment (`checked_on`, version) and the kernel.
+2. **Versions** (section 8): compare the local cubevis with each
+   environment's on any node; on a difference write
+   `<config>/upgrade/<env>.sh` and print what to run on the node.
+   `upgrade [KERNEL]` does the same and offers to copy the script.
+3. **Node query** (section 7): `network` asks for an optional query (host
+   + command; Slurm example in the prompt only); `node NET` runs it and
+   offers the names; new ones added, missing ones only flagged by checks.
+4. **`prune`**: offer to remove flagged nodes / environments and stale
+   sessions, honouring the state's removal rules.
+5. **`check` / `status`** extended to environments and kernels (design
+   section 9 items 1-3); the final kernel + plot test from the bash setup.
+6. **Walk-through**: no command = everything not done yet, in order.
+7. Tests: pexpect on the rig as in 2a; a local python3 "remote"
+   environment on the rig's compute host (alice's home); version mismatch
+   and the upgrade script; a query command that prints names.
+
+Then stage 3 (Session), 4 (bootstrap, docs, remove `setup/`), 5 (detach /
+reattach): design section 13.

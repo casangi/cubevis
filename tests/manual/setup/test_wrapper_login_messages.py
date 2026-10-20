@@ -9,6 +9,8 @@ refused.
 
     pytest tests/manual/setup/test_wrapper_login_messages.py
     CUBEVIS_SSH_RIG=1 pytest ...    # the password cases, on the ssh test rig
+
+The rig: ``sudo devel/tools/ssh_rig.sh`` (a disposable container or VM only).
 """
 from __future__ import annotations
 
@@ -25,7 +27,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")
 needs_ssh = pytest.mark.skipif(not shutil.which("ssh") or not shutil.which("perl"),
                                reason="needs ssh and perl")
 needs_rig = pytest.mark.skipif(os.environ.get("CUBEVIS_SSH_RIG") != "1",
-                               reason="set CUBEVIS_SSH_RIG=1 with the ssh test rig running")
+                               reason="set CUBEVIS_SSH_RIG=1 with the ssh test rig running (devel/tools/ssh_rig.sh)")
 
 
 @pytest.fixture

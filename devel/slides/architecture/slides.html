@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cubevis architectures</title>
+<style>
+  :root { --bg: #14181d; --fg: #d7dde4; --dim: #7d8794; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+               font-family: Helvetica, Arial, sans-serif; overflow: hidden; }
+  #stage { position: absolute; inset: 0 0 44px 0; display: flex;
+           align-items: center; justify-content: center; }
+  #stage img { max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9;
+               background: white; box-shadow: 0 6px 30px rgba(0,0,0,.5); }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 44px;
+         display: flex; align-items: center; justify-content: center; gap: 18px;
+         font-size: 14px; color: var(--dim); }
+  #bar button { background: none; border: 1px solid #3a424c; color: var(--fg);
+                border-radius: 6px; padding: 4px 12px; font-size: 14px; cursor: pointer; }
+  #bar button:hover { border-color: var(--fg); }
+  :fullscreen #bar { opacity: 0; transition: opacity .3s; }
+  :fullscreen #bar:hover { opacity: 1; }
+  :fullscreen #stage { inset: 0; }
+</style>
+</head>
+<body>
+<div id="stage"><img id="slide" alt=""></div>
+<div id="bar">
+  <button id="prev" aria-label="Previous slide">&lsaquo; Prev</button>
+  <span id="count"></span>
+  <button id="next" aria-label="Next slide">Next &rsaquo;</button>
+  <button id="full" aria-label="Toggle fullscreen">Fullscreen (F)</button>
+</div>
+<script>
+const slides = [
+  {
+    "src": "arch_1_python_cli.svg",
+    "title": "Python CLI"
+  },
+  {
+    "src": "arch_2_jupyter.svg",
+    "title": "Jupyter (JupyterLab / Notebook)"
+  },
+  {
+    "src": "arch_3_colab.svg",
+    "title": "Google Colab"
+  },
+  {
+    "src": "arch_4_remote_kernel.svg",
+    "title": "Remote Kernel (sshpyk)"
+  }
+];
+const img = document.getElementById("slide");
+let i = 0;
+// preload so stepping is instant
+slides.forEach(s => { const p = new Image(); p.src = s.src; });
+
+function show(n) {
+  i = Math.max(0, Math.min(slides.length - 1, n));
+  img.src = slides[i].src;
+  img.alt = slides[i].title;
+  document.title = slides[i].title + " \u00b7 cubevis architectures";
+  document.getElementById("count").textContent = (i + 1) + " / " + slides.length;
+  history.replaceState(null, "", "#" + (i + 1));
+}
+function fullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(() => {});
+}
+document.getElementById("prev").onclick = () => show(i - 1);
+document.getElementById("next").onclick = () => show(i + 1);
+document.getElementById("full").onclick = fullscreen;
+img.onclick = e => show(e.offsetX < img.clientWidth / 3 ? i - 1 : i + 1);
+document.addEventListener("keydown", e => {
+  if (["ArrowRight", "ArrowDown", "PageDown", " ", "Enter"].includes(e.key)) show(i + 1);
+  else if (["ArrowLeft", "ArrowUp", "PageUp", "Backspace"].includes(e.key)) show(i - 1);
+  else if (e.key === "Home") show(0);
+  else if (e.key === "End") show(slides.length - 1);
+  else if (e.key === "f" || e.key === "F") fullscreen();
+  else return;
+  e.preventDefault();
+});
+let x0 = null;  // touch swipe
+document.addEventListener("touchstart", e => { x0 = e.touches[0].clientX; });
+document.addEventListener("touchend", e => {
+  if (x0 === null) return;
+  const dx = e.changedTouches[0].clientX - x0;
+  if (Math.abs(dx) > 40) show(dx < 0 ? i + 1 : i - 1);
+  x0 = null;
+});
+const fromHash = () => show((parseInt(location.hash.slice(1), 10) || 1) - 1);
+window.addEventListener("hashchange", fromHash);
+fromHash();
+</script>
+</body>
+</html>

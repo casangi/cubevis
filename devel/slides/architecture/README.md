@@ -1,5 +1,8 @@
 # cubevis architectures
 
+**[▶ View as a slideshow](https://casangi.github.io/cubevis/architecture/slides.html)**
+(arrow keys or click to step, **F** for fullscreen)
+
 How hosts, processes and communication channels connect in each mode
 `cubevis` supports. Every slide uses the same visual vocabulary:
 
@@ -23,6 +26,12 @@ python make_diagrams.py --png --scale 3
 PNG output needs `cairosvg` (`pip install cairosvg`). PNGs are ignored by
 git; generate them when you need to drop a slide into Google Slides, which
 does not import SVG.
+
+The script also writes `slides.html`, the slideshow page, listing the SVGs
+in order. `.github/workflows/slides.yml` publishes `devel/slides/` to
+GitHub Pages whenever it changes on `main`; each slideshow folder gets its
+own URL, and https://casangi.github.io/cubevis/ lists them all. Open `slides.html` directly
+from disk to present offline; `#3` in the URL jumps to slide 3.
 
 ## Python CLI
 

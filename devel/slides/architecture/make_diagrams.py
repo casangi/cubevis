@@ -13,10 +13,12 @@ from xml.sax.saxutils import escape
 
 OUT = Path(__file__).resolve().parent
 WRITTEN = []
+TITLES = {}
 
 
-def save(name, svg):
+def save(name, svg, title=None):
     path = OUT / name
+    TITLES[name] = title or name
     path.write_text(svg, encoding="utf-8")
     WRITTEN.append(path)
 
@@ -161,7 +163,7 @@ s.chan([(880, 700), (1210, 700), (1210, 620)], "fs", both=False)
 s.text(1225, 680, "browser opens file", size=15, fill="#5A6573")
 s.chan([(390, 600), (390, 660)], "fs", both=False)
 s.data(390, 665, 300, 105, "Measurement Set", "MSv2 (casacore)  /  MSv4 (Zarr)")
-save("arch_1_python_cli.svg", s.render("Draft · v0.3"))
+save("arch_1_python_cli.svg", s.render("Draft · v0.3"), s.title)
 
 # ---- Slide 2: Jupyter -----------------------------------------------------
 s = Slide("Jupyter  (JupyterLab / Notebook)", "No connection of its own: cubevis borrows a Jupyter Comm, opened by an invisible anywidget bridge in the page.")
@@ -188,7 +190,7 @@ s.label(1012, 350, "Comm", "comms", size=15)
 s.text(600, 390, "same channel both ways", size=13, fill="#5A6573", anchor="middle")
 s.chan([(1285, 620), (1285, 665)], "fs", both=False)
 s.data(1285, 670, 300, 100, "Measurement Set", "MSv2 / MSv4 on kernel host")
-save("arch_2_jupyter.svg", s.render("Draft · v0.3"))
+save("arch_2_jupyter.svg", s.render("Draft · v0.3"), s.title)
 
 # ---- Slide 3: Colab -------------------------------------------------------
 s = Slide("Google Colab", "Each cell output is a sandboxed iframe, so a bridge relays over BroadcastChannels; Python replies to polls in chunks.")
@@ -217,7 +219,7 @@ s.chan([(985, 530), (734, 530)], "evaljs", both=False)
 s.label(845, 518, "eval_js", "evaljs", size=15)
 s.chan([(1245, 665), (1245, 690)], "fs", both=False)
 s.data(1245, 690, 280, 90, "Measurement Set", "on the Colab VM")
-save("arch_3_colab.svg", s.render("Draft · v0.3 · BroadcastChannel avoids eval_js's iframe-routing race"))
+save("arch_3_colab.svg", s.render("Draft · v0.3 · BroadcastChannel avoids eval_js's iframe-routing race"), s.title)
 
 # ---- Slide 4: Remote kernel (sshpyk) --------------------------------------
 s = Slide("Remote Kernel  (sshpyk)", "GUI and Python stay local; a dedicated kernel on the data host supervises worker subprocesses that run visplot.")
@@ -253,7 +255,91 @@ s.label(775, 677, "SSH tunnel", "ssh", anchor="start")
 s.text(775, 717, "one Jupyter comm per kernel", size=15, fill="#5A6573")
 s.chan([(1360, 525), (1360, 620)], "fs", both=False)
 s.data(1360, 625, 300, 105, "Measurement Set", "MSv2 / MSv4 local to data")
-save("arch_4_remote_kernel.svg", s.render("Draft · v0.3 · worker stderr is relayed to the kernel's log"))
+save("arch_4_remote_kernel.svg", s.render("Draft · v0.3 · worker stderr is relayed to the kernel's log"), s.title)
+
+# ---- slideshow viewer ------------------------------------------------------
+# A self-contained page that steps through the SVGs above.  Served by GitHub
+# Pages it gives a browser slideshow; it also works opened as a local file.
+SLIDES_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cubevis architectures</title>
+<style>
+  :root { --bg: #14181d; --fg: #d7dde4; --dim: #7d8794; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+               font-family: Helvetica, Arial, sans-serif; overflow: hidden; }
+  #stage { position: absolute; inset: 0 0 44px 0; display: flex;
+           align-items: center; justify-content: center; }
+  #stage img { max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9;
+               background: white; box-shadow: 0 6px 30px rgba(0,0,0,.5); }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 44px;
+         display: flex; align-items: center; justify-content: center; gap: 18px;
+         font-size: 14px; color: var(--dim); }
+  #bar button { background: none; border: 1px solid #3a424c; color: var(--fg);
+                border-radius: 6px; padding: 4px 12px; font-size: 14px; cursor: pointer; }
+  #bar button:hover { border-color: var(--fg); }
+  :fullscreen #bar { opacity: 0; transition: opacity .3s; }
+  :fullscreen #bar:hover { opacity: 1; }
+  :fullscreen #stage { inset: 0; }
+</style>
+</head>
+<body>
+<div id="stage"><img id="slide" alt=""></div>
+<div id="bar">
+  <button id="prev" aria-label="Previous slide">&lsaquo; Prev</button>
+  <span id="count"></span>
+  <button id="next" aria-label="Next slide">Next &rsaquo;</button>
+  <button id="full" aria-label="Toggle fullscreen">Fullscreen (F)</button>
+</div>
+<script>
+const slides = __SLIDES__;
+const img = document.getElementById("slide");
+let i = 0;
+// preload so stepping is instant
+slides.forEach(s => { const p = new Image(); p.src = s.src; });
+
+function show(n) {
+  i = Math.max(0, Math.min(slides.length - 1, n));
+  img.src = slides[i].src;
+  img.alt = slides[i].title;
+  document.title = slides[i].title + " \\u00b7 cubevis architectures";
+  document.getElementById("count").textContent = (i + 1) + " / " + slides.length;
+  history.replaceState(null, "", "#" + (i + 1));
+}
+function fullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(() => {});
+}
+document.getElementById("prev").onclick = () => show(i - 1);
+document.getElementById("next").onclick = () => show(i + 1);
+document.getElementById("full").onclick = fullscreen;
+img.onclick = e => show(e.offsetX < img.clientWidth / 3 ? i - 1 : i + 1);
+document.addEventListener("keydown", e => {
+  if (["ArrowRight", "ArrowDown", "PageDown", " ", "Enter"].includes(e.key)) show(i + 1);
+  else if (["ArrowLeft", "ArrowUp", "PageUp", "Backspace"].includes(e.key)) show(i - 1);
+  else if (e.key === "Home") show(0);
+  else if (e.key === "End") show(slides.length - 1);
+  else if (e.key === "f" || e.key === "F") fullscreen();
+  else return;
+  e.preventDefault();
+});
+let x0 = null;  // touch swipe
+document.addEventListener("touchstart", e => { x0 = e.touches[0].clientX; });
+document.addEventListener("touchend", e => {
+  if (x0 === null) return;
+  const dx = e.changedTouches[0].clientX - x0;
+  if (Math.abs(dx) > 40) show(dx < 0 ? i + 1 : i - 1);
+  x0 = null;
+});
+const fromHash = () => show((parseInt(location.hash.slice(1), 10) || 1) - 1);
+window.addEventListener("hashchange", fromHash);
+fromHash();
+</script>
+</body>
+</html>
+"""
 
 # ---- command line ---------------------------------------------------------
 ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -271,3 +357,9 @@ for path in WRITTEN:
         png = path.with_suffix(".png")
         cairosvg.svg2png(url=str(path), write_to=str(png), scale=args.scale)
         print(f"wrote {png.name}")
+
+import json
+slides = [{"src": p.name, "title": " ".join(TITLES[p.name].split())} for p in WRITTEN]
+(OUT / "slides.html").write_text(SLIDES_HTML.replace("__SLIDES__", json.dumps(slides, indent=2)),
+                                 encoding="utf-8")
+print("wrote slides.html")

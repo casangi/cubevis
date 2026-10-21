@@ -1,0 +1,61 @@
+# Publishes devel/slides/ to GitHub Pages. Each subfolder with a slides.html
+# becomes its own slideshow:
+#   devel/slides/architecture/  ->  https://casangi.github.io/cubevis/architecture/slides.html
+#   devel/slides/<name>/        ->  https://casangi.github.io/cubevis/<name>/slides.html
+# and https://casangi.github.io/cubevis/ lists them all.
+#
+# One-time setup: Settings -> Pages -> Build and deployment -> Source:
+# "GitHub Actions". Only devel/slides/ is published; the Sphinx docs in
+# docs/ are unaffected and stay on Read the Docs.
+name: Publish slides
+
+on:
+  push:
+    branches: [main]
+    paths: ["devel/slides/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build index of slideshows
+        run: |
+          cd devel/slides
+          {
+            echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            echo '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            echo '<title>cubevis slides</title>'
+            echo '<style>body{font-family:Helvetica,Arial,sans-serif;max-width:640px;margin:48px auto;padding:0 16px;color:#1c2733}'
+            echo 'a{color:#1f6fb2;font-size:20px;text-decoration:none}a:hover{text-decoration:underline}li{margin:12px 0}</style>'
+            echo '</head><body><h1>cubevis slides</h1><ul>'
+            for f in */slides.html; do
+              [ -e "$f" ] || continue
+              dir=$(dirname "$f")
+              title=$(sed -n 's:.*<title>\(.*\)</title>.*:\1:p' "$f" | head -1)
+              echo "<li><a href=\"$dir/slides.html\">${title:-$dir}</a></li>"
+            done
+            echo '</ul></body></html>'
+          } > index.html
+          cat index.html
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: devel/slides
+      - id: deployment
+        uses: actions/deploy-pages@v4

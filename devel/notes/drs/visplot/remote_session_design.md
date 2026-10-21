@@ -228,6 +228,98 @@ system would use to reach a node (resolved here) is in the ranges -- not
 any local address (bridges, home networks).  Details and reasons:
 `hrs_h8_consolidation_prep.md` section 28.
 
+## 7b. Roles, hosts and environments (agreed with Darrell 2026-10-20)
+
+Supersedes the parts of sections 3, 6 and 13 (stage 2) that assume setup
+runs only where the plots appear and learns about nodes from outside
+(`probe.sh`, a generated `remote-setup.sh`).
+
+**Roles.**  Each run of setup is in one role: *GUI* (plots appear here;
+kernels are started from here) or *node* (kernels run here).  The role
+belongs to the run, not the host: a host may be both (two runs), and a
+node of one network may be the GUI host for another.  Setup asks; when
+`$SSH_CONNECTION` is set it suggests *node*.
+
+**Node side** (`python -m cubevis.setup node-here`, name to settle): run
+logged in on the node, with a terminal.
+* Asks only what the node can answer: the network's name and domain, the
+  user, an optional node query (tested on the spot).
+* Environments: setup *asks* which to use; what it finds (`conda env
+  list`, `mamba env list`, an active venv) only pre-fills the choices,
+  and the user may type paths.  Kinds: `conda`, `mamba`, `venv`,
+  `python`.  Each chosen environment is tested by running its interpreter
+  with a small script (Python version; cubevis and ipykernel import, and
+  their versions); the cubevis running setup need not be in it.  Failures
+  are recorded flagged, with the reason.
+* **Only configured environments are used.**  A conda environment created
+  later is invisible until setup on that host enables it.
+* Records the host's addresses (candidate `inside` ranges for the GUI
+  side) and writes `remote/<network>/<fqdn>.json`.
+* Replaces the generated `remote-setup.sh` and its password plumbing.
+
+**GUI side.**  `network` asks how this computer reaches the network
+(directly, or through login host X; password and store), then reads the
+nodes' `remote/<network>/*.json` over ssh (one connection reads them all
+on a shared home), shows them, and records them.  The probe stays, as the
+GUI side's read-only check later (versions, section 8; health, section 9).
+
+**Environments in the state.**  Each environment has `kind`, `python`
+(resolved interpreter path; with the host, its identity), what is needed
+to activate and upgrade it, and `hosts`: every node (on a shared
+filesystem) or a list.  Several per host.  A kernel stays an environment
+plus launch options; `Session(kernel, node=)` refuses a node the
+environment is not on.  The GUI host's own configured environments are
+kernels too, started locally with no ssh.
+
+**An environment belongs to one network** (Darrell, 2026-10-21).  It may be
+shared by that network's hosts through their common filesystem; it is not
+shared across networks.  So:
+* Identity is (network, interpreter path); `hosts` is every node of that
+  network or a subset of them.  A kernel inherits its environment's
+  network, so a kernel is single-network too.
+* `Session(kernel, node=)` refuses a node of another network, before any
+  ssh.
+* Version checks, upgrade scripts and `prune` work per network: one check
+  on any node covers a shared environment.
+* The GUI host's own environments belong to a network of their own, *this
+  host* (no ssh, no login host).
+* Unhappy path, allowed but not helped: the same path visible from two
+  networks (a home mounted at both sites) is two environment records, one
+  per network, each configured and tested from its own side.  Setup does
+  not link them; a version difference shows up in each network's check.
+
+**On-site and off-site** (amends 7a).  The `inside` ranges are a positive
+list: only from them does this computer go direct; from any other address
+(a visitor network included) it uses the bastion.  Ranges come from the
+node files (as candidates, confirmed by the user) and from
+`network NET --inside-here`, run on-site, which first checks that a node
+can be reached directly from here (at setup time only) and records the
+current range only if it can.  No probing when a kernel starts.
+Override, read by the inside test before the ranges:
+`CUBEVIS_ROUTE_<network>=direct|bastion` (unset: the ranges decide).  ssh
+inherits it from the Python process, so setting it before a session
+starts is enough; it also applies to a plain `ssh` from that shell.
+
+**Shared `~/.config/cubevis`** (a home on NFS shared by the nodes and
+possibly a GUI host).  Files are split by writer, so most have one:
+
+```
+state.json                       networks, kernels (shared on purpose; locked writes)
+hosts/<fqdn>/local.json          this host as GUI: python, store, last user
+hosts/<fqdn>/ssh/{config,rules}  generated per host (the inside test runs its python)
+remote/<network>/<fqdn>.json     this host as a node: environments, addresses
+```
+
+* ControlMaster sockets cannot live on NFS: `cm/` moves to local disk
+  (`$XDG_RUNTIME_DIR/cubevis`, else `/tmp/cubevis-$USER`, mode 700).
+* `state.json` writes: take a lock file (`O_EXCL`, holding host:pid,
+  stale-lock check -- not `flock`, unreliable on older NFS), re-read,
+  apply only this run's change, write atomically (as now), release.
+* Records are keyed by stable identities (fqdn; interpreter path), so a
+  rerun updates in place and never duplicates or blindly overwrites.
+* The 2a layout (`state.json` with `local`, `ssh/`, `cm/`) is migrated
+  on first load.
+
 ## 8. Versions and upgrades
 
 `check` compares the local cubevis with each environment's (one command
@@ -306,10 +398,15 @@ Each stage is one delivery (zip on the then-current main), with tests.
    gpg hint whatever the cause (here the host name did not resolve); keep
    the throwaway login's stderr and show its last line, and give the gpg
    hint only when the password lookup itself failed.
-2. **`python -m cubevis.setup`**: `ui.py`, the steps (network, node,
-   query, password stores, probe, remote-setup, kernel, check, status,
-   upgrade script, prune). pexpect-driven tests on the ssh test rig
-   (two-hop password login), as for the bash script.
+2. **`python -m cubevis.setup`**: 2a (done): `ui.py`, this computer,
+   networks, nodes, logins, inside ranges, `status`, `check`.  2b
+   (revised 2026-10-20, section 7b): (i) the file layout, locking and
+   migration, `cm/` on local disk; (ii) environment records (kinds,
+   hosts) and the node-side command; (iii) the GUI side reading
+   `remote/` files, `--inside-here`, `CUBEVIS_ROUTE_<net>`; (iv) versions
+   and upgrade scripts, the node query, `prune`, the final kernel + plot
+   test.  pexpect-driven tests on the ssh test rig, including two
+   "hosts" sharing one config directory.
 3. **Session**: `cubevis/remote/session.py`, in-memory kernel spec,
    `RemoteReductionContext` factory, `VisibilityPlotter(session=)`,
    `check()`. Tests: local kernel; the rig with two nodes from one

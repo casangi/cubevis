@@ -36,18 +36,27 @@ jobs:
       - name: Build index of slideshows
         run: |
           cd devel/slides
+          repo="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          src="$repo/tree/$GITHUB_REF_NAME/devel/slides"
           {
             echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
             echo '<meta name="viewport" content="width=device-width, initial-scale=1">'
             echo '<title>cubevis slides</title>'
-            echo '<style>body{font-family:Helvetica,Arial,sans-serif;max-width:640px;margin:48px auto;padding:0 16px;color:#1c2733}'
-            echo 'a{color:#1f6fb2;font-size:20px;text-decoration:none}a:hover{text-decoration:underline}li{margin:12px 0}</style>'
-            echo '</head><body><h1>cubevis slides</h1><ul>'
+            echo '<style>body{font-family:Helvetica,Arial,sans-serif;max-width:640px;margin:48px auto;padding:0 16px;color:#1c2733;line-height:1.5}'
+            echo 'a{color:#1f6fb2;text-decoration:none}a:hover{text-decoration:underline}'
+            echo 'ul{padding-left:20px}li{margin:12px 0}.show{font-size:20px}.src{font-size:14px;color:#7d8794;margin-left:10px}</style>'
+            echo '</head><body><h1>cubevis slides</h1>'
+            echo "<p><a href=\"$repo\">cubevis</a> is a Bokeh-based visualization toolkit for radio"
+            echo 'astronomy images and visibility data, usable from JupyterLab, Google Colab or'
+            echo 'plain Python. These slideshows are illustrations only; installation, usage'
+            echo "and the full documentation live in the <a href=\"$repo\">GitHub repository</a>.</p>"
+            echo '<h2>Slideshows</h2><ul>'
             for f in */slides.html; do
               [ -e "$f" ] || continue
               dir=$(dirname "$f")
               title=$(sed -n 's:.*<title>\(.*\)</title>.*:\1:p' "$f" | head -1)
-              echo "<li><a href=\"$dir/slides.html\">${title:-$dir}</a></li>"
+              echo "<li><a class=\"show\" href=\"$dir/slides.html\">${title:-$dir}</a>"
+              echo "<a class=\"src\" href=\"$src/$dir\">source</a></li>"
             done
             echo '</ul></body></html>'
           } > index.html

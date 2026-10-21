@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+<defs><marker id="a-ws" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#1F6FB2"/></marker><marker id="a-comms" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6A4C93"/></marker><marker id="a-ccomm" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6A4C93"/></marker><marker id="a-evaljs" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6A4C93"/></marker><marker id="a-bc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0F8B8D"/></marker><marker id="a-ssh" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#C0392B"/></marker><marker id="a-pipe" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2E7D5B"/></marker><marker id="a-fs" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#555555"/></marker></defs>
+<rect width="1600" height="900" fill="white"/>
+<rect x="40" y="140" width="750" height="650" rx="18" fill="#F3F5F8" stroke="#8A94A0" stroke-width="2.5" stroke-dasharray="10 6"/>
+<text x="60" y="172" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="bold" fill="#4A5563" text-anchor="start" >User's host</text>
+<rect x="70" y="195" width="695" height="575" rx="10" fill="white" stroke="#C9711F" stroke-width="2.5"/>
+<path d="M70 239 V205 a10 10 0 0 1 10 -10 H755 a10 10 0 0 1 10 10 V239 Z" fill="#C9711F"/>
+<text x="417.5" y="224" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle" >Browser process  (colab.research.google.com)</text>
+<rect x="95" y="255" width="300" height="495" rx="8" fill="#FBF6F0" stroke="#C9711F" stroke-width="1.8" stroke-dasharray="6 4"/>
+<text x="245.0" y="279" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#8A4A10" text-anchor="middle" >Bokeh app cell iframe</text>
+<rect x="112" y="310" width="266" height="75" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="245.0" y="344.5" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >cubevis GUI (BokehJS)</text>
+<text x="245.0" y="366.5" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >VisibilityPlotter layout</text>
+<rect x="112" y="395" width="266" height="185" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="245.0" y="484.5" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >CommMgr / Comm (JS)</text>
+<text x="245.0" y="506.5" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >casalib.min.js</text>
+<rect x="520" y="255" width="228" height="495" rx="8" fill="#FBF6F0" stroke="#C9711F" stroke-width="1.8" stroke-dasharray="6 4"/>
+<text x="634.0" y="279" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#8A4A10" text-anchor="middle" >bridge widget iframe</text>
+<text x="634.0" y="298" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="normal" fill="#8A4A10" text-anchor="middle" >anywidget ESM · zero height</text>
+<rect x="534" y="310" width="200" height="70" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="634.0" y="342.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >Poll driver</text>
+<text x="634.0" y="364.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >polls over the Colab comm</text>
+<rect x="534" y="395" width="200" height="50" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="634.0" y="417.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >Colab comm</text>
+<text x="634.0" y="439.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >comms.open(target)</text>
+<rect x="534" y="505" width="200" height="60" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="634.0" y="532.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >Chunk reassembly</text>
+<text x="634.0" y="554.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >cubevis_chunk_&lt;id&gt;</text>
+<path d="M378 420 L534 420" fill="none" stroke="#0F8B8D" stroke-width="5" stroke-dasharray="3 5"  marker-end="url(#a-bc)"/>
+<text x="456" y="408" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="bold" fill="#0F8B8D" text-anchor="middle" >cubevis_tx</text>
+<path d="M534 545 L378 545" fill="none" stroke="#0F8B8D" stroke-width="5" stroke-dasharray="3 5"  marker-end="url(#a-bc)"/>
+<text x="456" y="572" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="bold" fill="#0F8B8D" text-anchor="middle" >cubevis_rx</text>
+<rect x="900" y="140" width="660" height="650" rx="18" fill="#F3F5F8" stroke="#8A94A0" stroke-width="2.5" stroke-dasharray="10 6"/>
+<text x="920" y="172" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="bold" fill="#4A5563" text-anchor="start" >Google-hosted Colab VM</text>
+<rect x="960" y="195" width="570" height="470" rx="10" fill="white" stroke="#3B6EA8" stroke-width="2.5"/>
+<path d="M960 239 V205 a10 10 0 0 1 10 -10 H1520 a10 10 0 0 1 10 10 V239 Z" fill="#3B6EA8"/>
+<text x="1245.0" y="224" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle" >Kernel process  (Colab ipykernel)</text>
+<rect x="985" y="255" width="520" height="45" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1245.0" y="283.5" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >Notebook cells</text>
+<rect x="985" y="395" width="520" height="170" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1245.0" y="477.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >CommMgr</text>
+<text x="1245.0" y="499.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >CommsTransport (Colab path) · replies in 500 KB chunks</text>
+<rect x="985" y="312" width="520" height="70" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1245.0" y="344.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >VisibilityPlotter</text>
+<text x="1245.0" y="366.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >VisibilityRaster / VisibilityScatter</text>
+<rect x="985" y="580" width="520" height="65" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5"/>
+<text x="1245.0" y="609.5" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >LocalVisibilityReader</text>
+<text x="1245.0" y="631.5" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle" >MSv2Backend / MSv4Backend</text>
+<path d="M734 420 L985 420" fill="none" stroke="#6A4C93" stroke-width="5"   marker-end="url(#a-ccomm)"/>
+<text x="845" y="408" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="bold" fill="#6A4C93" text-anchor="middle" >comm.send</text>
+<path d="M985 530 L734 530" fill="none" stroke="#6A4C93" stroke-width="5" stroke-dasharray="10 6"  marker-end="url(#a-evaljs)"/>
+<text x="845" y="518" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="bold" fill="#6A4C93" text-anchor="middle" >eval_js</text>
+<path d="M1245 665 L1245 690" fill="none" stroke="#555555" stroke-width="5"   marker-end="url(#a-fs)"/>
+<path d="M1105.0 704 V766 A140.0 14 0 0 0 1385.0 766 V704" fill="#FFF7E0" stroke="#A88A2E" stroke-width="2"/>
+<ellipse cx="1245" cy="704" rx="140.0" ry="14" fill="#FFEFC2" stroke="#A88A2E" stroke-width="2"/>
+<text x="1245" y="745.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#222" text-anchor="middle" >Measurement Set</text>
+<text x="1245" y="767.0" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#5A6573" text-anchor="middle" >on the Colab VM</text>
+<text x="40" y="62" font-family="Helvetica, Arial, sans-serif" font-size="40" font-weight="bold" fill="#1C2733" text-anchor="start" >Google Colab</text>
+<text x="40" y="102" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="normal" fill="#4A5563" text-anchor="start" >Each cell output is a sandboxed iframe, so a bridge relays over BroadcastChannels; Python replies to polls in chunks.</text>
+<line x1="40" y1="845" x2="90" y2="845" stroke="#0F8B8D" stroke-width="5" stroke-dasharray="3 5"/>
+<text x="100" y="851" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#333" text-anchor="start" >BroadcastChannel (cross-iframe)</text>
+<line x1="385.6" y1="845" x2="435.6" y2="845" stroke="#6A4C93" stroke-width="5" />
+<text x="445.6" y="851" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#333" text-anchor="start" >Colab kernel comm (JS to Python)</text>
+<line x1="738.8" y1="845" x2="788.8" y2="845" stroke="#6A4C93" stroke-width="5" stroke-dasharray="10 6"/>
+<text x="798.8" y="851" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#333" text-anchor="start" >google.colab.output.eval_js (Python to JS, chunked)</text>
+<line x1="1236.3999999999999" y1="845" x2="1286.3999999999999" y2="845" stroke="#555555" stroke-width="5" />
+<text x="1296.3999999999999" y="851" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="normal" fill="#333" text-anchor="start" >File I/O</text>
+<text x="1560" y="885" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#8A94A0" text-anchor="end" font-style="italic">Draft · v0.3 · BroadcastChannel avoids eval_js's iframe-routing race</text>
+</svg>

@@ -240,8 +240,9 @@ belongs to the run, not the host: a host may be both (two runs), and a
 node of one network may be the GUI host for another.  Setup asks; when
 `$SSH_CONNECTION` is set it suggests *node*.
 
-**Node side** (`python -m cubevis.setup node-here`, name to settle): run
-logged in on the node, with a terminal.
+**Node side** (`python -m cubevis.setup node-here [NETWORK]`; the walk-through
+asks the role first): run logged in on the node, with a terminal.
+Built in stage 2b part ii (`hrs_h8_consolidation_prep.md` section 31).
 * Asks only what the node can answer: the network's name and domain, the
   user, an optional node query (tested on the spot).
 * Environments: setup *asks* which to use; what it finds (`conda env

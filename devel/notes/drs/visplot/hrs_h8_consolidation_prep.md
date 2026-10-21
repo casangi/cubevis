@@ -1077,3 +1077,76 @@ keeps may be overwritten or corrupted by another computer, or by a rerun.
 * **Not done here** (parts ii-iv): environments and the node-side
   command, the GUI side reading `remote/`, `--inside-here`,
   `CUBEVIS_ROUTE_<net>`.
+
+## 31. Remote sessions, stage 2b part ii: the node side (base `bbf9d27`, 2026-10-21)
+
+`python -m cubevis.setup node-here [NETWORK]`, run logged in on the node
+(design 7b).  The walk-through (no command) now asks first: "[p]lots-here
+or [n]ode?", suggesting `n` when `$SSH_CONNECTION` is set.
+
+* **New modules.**  `envs.py` (find, classify, check environments),
+  `hostinfo.py` (full name, interface addresses with prefixes, the home's
+  filesystem type), `nodefile.py` (`remote/<network>/<id>.json`),
+  `node_here.py` (the command), `data/envcheck.py` (run with each
+  candidate interpreter).
+* **The network question.**  Over ssh the default is the domain's first
+  label, else the host id without its number (`zuul06` -> `zuul`); not
+  over ssh, `local` (this computer by itself: kernels for plots shown
+  here; no domain, sharing or query asked).  A computer already in a
+  network is offered that one.
+* **What the node records** (`node` in its file): network, host id, full
+  name, user, home and its filesystem type, addresses and their subnets
+  (candidate inside ranges for the GUI side), domain, shared home (asked;
+  default from the filesystem: nfs, lustre, gpfs, ... -> yes), the query
+  command with the names it printed when run here (a failing command is
+  kept, with its error), the cubevis that wrote it.
+* **Environments.**  Listed: the ones enabled before, then the ones found
+  -- the Python running setup, `$VIRTUAL_ENV`, `$CONDA_PREFIX`, and every
+  conda / mamba / micromamba tool's `env list --json` (tools on PATH, in
+  `$CONDA_EXE` / `$MAMBA_EXE`, and in `~/miniforge3`, `~/mambaforge`,
+  `~/miniconda3`, `~/anaconda3`, `~/micromamba`, `/opt/conda`).  An
+  environment several tools list goes with conda when conda lists it.
+  Each shows whether cubevis is installed (its `dist-info`, nothing run).
+  The user gives numbers and/or paths (an environment's directory or an
+  interpreter); the default is the ones enabled before, else the ones
+  with cubevis.  For each new one: its kind (asked; guessed from
+  `conda-meta` / `pyvenv.cfg`) and a name (default from its directory).
+  Not chosen: no longer used (removed from the file, logged).
+* **The check** (`envs.check`): `python -c <envcheck.py>` in an empty
+  temporary directory (no planted modules), `PYTHONHOME` unset, 300 s.
+  It reports Python's version, prefix, the versions of cubevis,
+  ipykernel, jupyter_client, bokeh, xarray-ms, arcae, casatasks; *ok* when
+  `cubevis.remote.worker_main` (the kernel side) and `ipykernel` import;
+  `visplot` when `xarray_ms` imports too (shown, not required).  Failures
+  are recorded `flagged` with one line: not installed / does not import
+  (the import error) / ipykernel missing / not Python 3 / does not exist;
+  "cubevis needs 3.12" added for an older Python.
+* **Identity**: the interpreter's path, absolute, symbolic links kept (a
+  venv's `bin/python` links to the base interpreter).
+* **The managing tool** of a conda/mamba environment: the tool that
+  listed it if it is of the chosen kind, else the first of that kind
+  found; None when there is none (upgrade scripts, part iv, will say so).
+* **The node file** is written only by its computer, under the same lock
+  and merge as the state (`state.merge` now takes field dicts other than
+  `local`; `node` first in the file).  `state.json` is not touched by
+  `node-here`.  `status` lists this computer's node files and their
+  environments.
+* **state.json environments** (for part iii): `add_environment(name,
+  network, python, kind, prefix, tool, hosts)`; `hosts` is `"all"` or a
+  list of the network's nodes (another network's node refused);
+  `find_environment(network, python)` (identity); `environment_on(name,
+  node)`.  `HEALTH_FIELDS` gained `versions`, `python_version`, `visplot`.
+* **Tested**: `tests/manual/setup/test_node_here.py` (13): parsing of
+  `ip -o addr` and macOS `ifconfig`, kinds and names, candidates from fake
+  conda and micromamba tools, checks that fail for each reason, a
+  passing check (`CUBEVIS_TEST_KERNEL_PYTHON`: a Python with cubevis,
+  ipykernel, bokeh; test environments see its packages through a `.pth`),
+  the node file under two concurrent runs, the command with `--yes`
+  (rerun dropping an environment; `local`; a failing query; bad paths),
+  the role question.  By hand on the rig: logged in as alice over ssh,
+  `python -m cubevis.setup` answered at the terminal (role, network,
+  shared home, query, a venv and a conda environment taken as mamba).
+  Whole suite: 97 pass, OpenSSH 9.6 and 8.0p1, Python 3.12 and 3.13.
+* **For part iii**: the GUI host's own environments (network `local`)
+  belong in its `hosts/<id>/local.json`, not in the shared `state.json`
+  -- with a shared home, gui1's local environments are not gui2's.

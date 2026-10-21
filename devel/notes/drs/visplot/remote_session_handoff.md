@@ -7,10 +7,10 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* main is at **24f5af8** (2a, OpenSSH 8.0, design 7b committed).
-  Delivered on top of it, not yet committed when this was written:
-  **`remote_stage2b1_24f5af8.zip`** (stage 2b part i, below).  Check
-  `git log` first.
+* main is at **bbf9d27** (stage 2b part i committed).  Delivered on top
+  of it, not yet committed when this was written:
+  **`remote_stage2b2_bbf9d27.zip`** (part ii, below).  Check `git log`
+  first.
 * **Design changed 2026-10-20/21** (section 7b of the design): setup runs
   in one of two roles, GUI or node; the node side configures and tests
   environments (several per host, only configured ones used; an
@@ -39,8 +39,16 @@ as ee125b6) and section 17 (the ssh wrapper).
   of `$SSH_CONNECTION`) and the `Match exec` inside test.  Darrell's sample
   addresses (section 28) are in `test_inside.py`; his first real run is the
   check.  Ask how it went before building on it.
+* **Stage 2b part ii done** (2026-10-21, base `bbf9d27`): `node-here`
+  (the node side), environments found / chosen / checked, the node file
+  `remote/<network>/<id>.json`; the walk-through asks the role.  Section 31.
+  Darrell ran part i on zuul06 (RHEL 8): `status` correct.
+* **Host identity** decided 2026-10-21: the short host name, no machine
+  id / IOPlatformUUID (regenerated per boot on diskless nodes, cloned in
+  images, changed by replacements that should keep the configuration);
+  instead every per-computer value is re-checked on each run.
 * **OpenSSH 8.0** (RHEL 8) is supported since 2026-10-19 (section 29).
-* **Next: stage 2b part ii** -- below, "Stage 2b, concretely".
+* **Next: stage 2b part iii** -- below, "Stage 2b, concretely".
 
 ## Decisions made with Darrell
 
@@ -85,7 +93,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 31).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 32).
 
 ## Test kit (rebuild after a sandbox restart)
 
@@ -110,6 +118,11 @@ The sandbox loses `/etc/hosts` edits and running daemons on restart.
   `/opt/openssh80/bin/ssh`; run the suite with `PATH=/opt/openssh80/bin:$PATH`
   as well as with the system's.  The rig's sshd is the distribution's
   (`apt-get install openssh-server`).
+* **Kernel-capable test environments**: `/home/claude/venv-kernel`
+  (python3.12 venv: `pip install ipykernel -e /home/claude/cubevis`);
+  `CUBEVIS_TEST_KERNEL_PYTHON=/home/claude/venv-kernel/bin/python` for
+  `test_node_here.py`.  As alice on the rig: `~/mf/envs/hrs` (venv +
+  `conda-meta` + a `.pth` to venv-kernel) and a fake `~/mf/bin/conda`.
 * **Several computers in one directory** (tests): `CUBEVIS_HOST_ID` names
   the computer, `CUBEVIS_RUNTIME_DIR` gives each its own socket directory
   (otherwise one rides on another's shared connections).
@@ -169,7 +182,7 @@ Design sections 7b and 13 (the plan), 8, 9.
 
 1. ~~Part i: the file layout, locking and migration, sockets on local
    disk~~ (section 30).
-2. **Part ii: environments and the node-side command.**  Environment
+2. ~~**Part ii: environments and the node-side command.**~~ (section 31)  Environment
    records: `kind` (conda, mamba, venv, python), `python` (resolved; with
    the network, the identity), activation and upgrade information,
    `hosts` (every node, or a list).  The node-side command: role
@@ -180,8 +193,12 @@ Design sections 7b and 13 (the plan), 8, 9.
    import and versions); failures recorded flagged; writes
    `remote/<network>/<id>.json` (single writer: that computer).  The
    GUI host's own environments: the network *this host*.
-3. **Part iii: the GUI side** reads `remote/<network>/*.json` over ssh,
-   shows and records them; `network NET --inside-here` (checks a direct
+3. **Part iii: the GUI side** reads `remote/<network>/*.json` (directly
+   when the home is shared with the nodes, else over ssh), shows and
+   records them (environments into `state.json` via `add_environment`,
+   merged by identity: same python on several nodes of a shared home ->
+   one environment, `hosts` "all" or the list; `local` ones into
+   `hosts/<id>/local.json`); offers the node's `ranges` as inside ranges; `network NET --inside-here` (checks a direct
    connection first, records only then); `CUBEVIS_ROUTE_<net>` in
    `inside.py`, before the ranges.
 4. **Part iv:** versions and upgrade scripts (section 8), the node query

@@ -164,7 +164,7 @@ def test_environments_kernels_and_removal_rules():
     _net(st)
     st.add_node("n1", network="cv")
     st.add_environment("cv-main", network="cv", python="/home/jo/mf/envs/cubevis/bin/python",
-                       conda="/home/jo/mf/bin/conda", env="cubevis")
+                       kind="conda", prefix="/home/jo/mf/envs/cubevis", tool="/home/jo/mf/bin/conda")
     st.add_kernel("hrs", environment="cv-main")
     assert st.kernel_network("hrs") == "cv"
     with pytest.raises(S.StateError, match="no environment"):
@@ -193,3 +193,28 @@ def test_flag_and_mark_ok():
     assert st.flagged() == []
     with pytest.raises(S.StateError):
         st.flag("kernels", "x", "y")
+
+
+def test_environment_identity_hosts_and_one_network():
+    st = S.load()
+    _net(st)
+    _net(st, name="nm", login_host="login.nm.example.org", domain="nm.example.org")
+    st.add_node("n1", network="cv")
+    st.add_node("n2", network="cv")
+    st.add_node("m1", network="nm")
+    py = "/home/jo/mf/envs/cubevis/bin/python"
+    st.add_environment("main", network="cv", python=py, kind="mamba")
+    assert st.find_environment("cv", py) == "main" and st.find_environment("nm", py) is None
+    with pytest.raises(S.StateError, match="is environment 'main' of cv already"):
+        st.add_environment("again", network="cv", python=py)
+    # The same path seen from another network is another environment.
+    st.add_environment("main-nm", network="nm", python=py)
+    assert st.environment_on("main", "n2") and not st.environment_on("main", "m1")
+    st.add_environment("only1", network="cv", python="/scratch/n1/env/bin/python", hosts=["n1"])
+    assert st.environment_on("only1", "n1") and not st.environment_on("only1", "n2")
+    with pytest.raises(S.StateError, match="belongs to one network"):
+        st.add_environment("mixed", network="cv", python="/x/bin/python", hosts=["n1", "m1"])
+    with pytest.raises(S.StateError, match="kind"):
+        st.add_environment("k", network="cv", python="/y/bin/python", kind="pixi")
+    with pytest.raises(S.StateError, match="absolute"):
+        st.add_environment("rel", network="cv", python="bin/python")

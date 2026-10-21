@@ -40,10 +40,16 @@ Layout (schema 2)::
                              "default_node", "query": {"host", "command"}}},
      "nodes":        {NAME: {"network", "hostname", "alias", "port", "status",
                              "last_checked", "last_error"}},
-     "environments": {NAME: {"network", "python", "conda", "env", "cubevis",
-                             "checked_on", "status", "last_checked",
-                             "last_error"}},
+     "environments": {NAME: {"network", "kind", "python", "prefix", "tool",
+                             "hosts", "cubevis", "versions",
+                             "python_version", "visplot", "checked_on",
+                             "status", "last_checked", "last_error"}},
      "kernels":      {NAME: {"environment", "launch_timeout"}}}
+
+An environment belongs to one network (design 7b) and is identified by
+(network, ``python``); ``hosts`` is ``"all"`` (the network's nodes see it
+on a shared filesystem) or a list of nodes.  ``kind``: conda, mamba, venv
+or python; ``tool``: the conda/mamba executable that manages it.
 
     hosts/<id>/local.json
     {"schema": 2,
@@ -90,7 +96,9 @@ FLAGGABLE = ("nodes", "environments")
 STORES = ("keychain", "secret-tool", "pass", "gpg-file", "command")
 # Fields a check writes.  A change to these alone neither keeps a record
 # another run removed nor stops this run's removal of it (``merge``).
-HEALTH_FIELDS = {"status", "last_checked", "last_error", "checked_on", "cubevis"}
+HEALTH_FIELDS = {"status", "last_checked", "last_error", "checked_on", "cubevis",
+                 "versions", "python_version", "visplot"}
+KINDS = ("conda", "mamba", "venv", "python")
 
 LOCK_TIMEOUT = 30.0      # seconds to wait for another run's lock
 LOCK_STALE = 120.0       # a lock older than this is a crashed run's (held for milliseconds)
@@ -384,17 +392,51 @@ class State:
 
     # -- environments and kernels ------------------------------------------
     def add_environment(self, name: str, *, network: str, python: str,
-                        conda: Optional[str] = None, env: Optional[str] = None,
+                        kind: str = "python", prefix: Optional[str] = None,
+                        tool: Optional[str] = None, hosts="all",
                         replace: bool = False) -> dict:
+        """An environment of *network*: the interpreter *python* (absolute;
+        links kept), on every node (``hosts="all"``) or on the listed ones."""
         check_name("environment", name)
         self.get("networks", network)
+        if kind not in KINDS:
+            raise StateError(f"environment kind {kind!r}: one of {', '.join(KINDS)}")
+        if not python.startswith("/"):
+            raise StateError(f"environment {name!r}: the interpreter must be an absolute path")
         if name in self.section("environments") and not replace:
             raise StateError(f"environment {name!r} exists already")
-        e = {"network": network, "python": python, "conda": conda, "env": env,
-             "cubevis": None, "checked_on": None, "status": "new",
-             "last_checked": None, "last_error": None}
+        same = self.find_environment(network, python)
+        if same and same != name:
+            raise StateError(f"{python} is environment {same!r} of {network} already")
+        if hosts != "all":
+            hosts = sorted(set(hosts))
+            for h in hosts:
+                node = self.get("nodes", h)
+                if node.get("network") != network:
+                    raise StateError(f"node {h!r} is not in network {network!r} (an environment "
+                                     "belongs to one network)")
+        e = {"network": network, "kind": kind, "python": python, "prefix": prefix,
+             "tool": tool, "hosts": hosts, "cubevis": None, "versions": {},
+             "python_version": None, "visplot": None, "checked_on": None,
+             "status": "new", "last_checked": None, "last_error": None}
         self.section("environments")[name] = e
         return e
+
+    def find_environment(self, network: str, python: str) -> Optional[str]:
+        """The name of *network*'s environment with interpreter *python*."""
+        for n, e in self.section("environments").items():
+            if e.get("network") == network and e.get("python") == python:
+                return n
+        return None
+
+    def environment_on(self, name: str, node: str) -> bool:
+        """Whether environment *name* is available on *node*: same network,
+        and all of its nodes or this one listed."""
+        e = self.get("environments", name)
+        n = self.get("nodes", node)
+        if n.get("network") != e.get("network"):
+            return False
+        return e.get("hosts") == "all" or node in (e.get("hosts") or [])
 
     def add_kernel(self, name: str, *, environment: str, launch_timeout: int = 120,
                    replace: bool = False) -> dict:
@@ -477,14 +519,18 @@ def _merge_record(b, o, t):
     return o
 
 
-def merge(base: Optional[dict], ours: dict, theirs: Optional[dict], sections) -> dict:
+def merge(base: Optional[dict], ours: dict, theirs: Optional[dict], sections,
+          field_dicts=("local",)) -> dict:
     """Three-way merge of one file: *base* (as loaded; None: nothing),
     *ours* (now, in this run), *theirs* (on disk now; None: no file).
     Sections merge record by record and, for a record both changed, field
-    by field; ``local`` merges field by field."""
+    by field; *field_dicts* (``local``) merge field by field."""
     base = base or {}
     theirs = theirs or {}
     out = {"schema": SCHEMA}
+    for fd in field_dicts:                # first: they describe the file
+        if fd in ours or fd in theirs:
+            out[fd] = None
     for sec in sections:
         b, o, t = base.get(sec) or {}, ours.get(sec) or {}, theirs.get(sec) or {}
         res = {}
@@ -494,13 +540,14 @@ def merge(base: Optional[dict], ours: dict, theirs: Optional[dict], sections) ->
             if r is not _GONE:
                 res[name] = r
         out[sec] = res
-    if "local" in ours or "local" in theirs:
-        out["local"] = _merge_fields(base.get("local") or {}, ours.get("local") or {},
-                                     theirs.get("local") or {})
+    for fd in field_dicts:
+        if fd in ours or fd in theirs:
+            out[fd] = _merge_fields(base.get(fd) or {}, ours.get(fd) or {},
+                                    theirs.get(fd) or {})
     return out
 
 
-def _apply_in_place(target: dict, result: dict) -> None:
+def _apply_in_place(target: dict, result: dict, sections=SECTIONS) -> None:
     """Make *target* equal to *result*, keeping the identity of the
     section and record dicts that stay (callers hold references to them,
     e.g. a network's record across several saves)."""
@@ -511,7 +558,7 @@ def _apply_in_place(target: dict, result: dict) -> None:
     for k, v in result.items():
         cur = target.get(k)
         if isinstance(cur, dict) and isinstance(v, dict) and k != "schema":
-            if k == "local":
+            if k not in sections:            # a field dict (``local``)
                 cur.clear()
                 cur.update(v)
                 continue

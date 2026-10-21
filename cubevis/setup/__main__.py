@@ -5,6 +5,7 @@
     python -m cubevis.setup check [NETWORK|NODE]  test logins; change nothing
     python -m cubevis.setup network [NAME]        add a network (or go through one again)
     python -m cubevis.setup node NETWORK [NODE..] add nodes to a network
+    python -m cubevis.setup node-here [NETWORK]   this computer as a node: its environments
 
 Stage 2 of ``devel/notes/drs/visplot/remote_session_design.md``: this
 computer, networks, nodes and logging in.  Environments, kernels, versions
@@ -28,7 +29,8 @@ import subprocess
 import sys
 from typing import Optional
 
-from . import RuntimeDirError, host_id, sshgen, state as S, stores
+from . import RuntimeDirError, host_id, nodefile, sshgen, state as S, stores
+from .node_here import cmd_node_here
 from .ui import UI, FuncStep, Quit, run_step, tilde
 
 PRIVATE_SKIP = ("172.17.0.0/16", "192.168.122.0/24", "192.168.121.0/24")  # docker, libvirt
@@ -551,6 +553,21 @@ def cmd_status(c: Ctx) -> int:
     for k in ("environments", "kernels", "sessions"):
         if st.section(k):
             ui._p(f"    {k}: {', '.join(sorted(st.section(k)))}")
+    for net in nodefile.mine():
+        try:
+            nf = nodefile.load(net)
+        except S.StateError as exc:
+            ui._p(f"    this computer as a node of {net}: {exc}")
+            continue
+        ui._p("")
+        ui._p(f"    this computer as a node of {net} ({tilde(nf.path)}):")
+        if not nf.environments:
+            ui._p("      no environments enabled")
+        for name, e in sorted(nf.environments.items()):
+            v = (e.get("versions") or {}).get("cubevis")
+            how = (f"ok, cubevis {v}" if e.get("status") == "ok"
+                   else f"{e.get('status')}: {e.get('last_error')}")
+            ui._p(f"      environment {name}: {e['kind']} {tilde(e['python'])} -- {how}")
     ui._p("")
     ui._p(f"    ssh config  {tilde(sshgen.config_path())}")
     ui._p(f"    wrapper     {tilde(sshgen.wrapper_path())}")
@@ -611,6 +628,14 @@ def cmd_walk(c: Ctx) -> int:
            f"stored password where a host asks for one. It asks before each change; "
            f"everything it keeps is in {tilde(S.state_path().parent)}, and every change is "
            f"listed in {tilde(ui.changes_path)}. Enter accepts the answer in [brackets].")
+    in_ssh = bool(os.environ.get("SSH_CONNECTION"))
+    ui.say("A computer takes part in two ways: where the plots appear (it starts kernels), "
+           "or as a node where kernels run (it offers Python environments for them). One "
+           "computer can be both: run this once for each.")
+    role = ui.ask_choice("Set this computer up as [p]lots-here or [n]ode?", "n" if in_ssh else "p",
+                         ("p", "n"), key="role")
+    if role == "n":
+        return cmd_node_here(c)
     if not local_steps(c):
         return 1
     while True:
@@ -664,6 +689,9 @@ def main(argv=None) -> int:
     pd = sub.add_parser("node", help="add nodes to a network")
     pd.add_argument("network")
     pd.add_argument("names", nargs="*")
+    ph = sub.add_parser("node-here", help="this computer as a node: where kernels run, and "
+                                          "its Python environments for them")
+    ph.add_argument("network", nargs="?")
     a = p.parse_args(argv)
     answers = dict(kv.split("=", 1) for kv in a.answer if "=" in kv)
     ui = UI(yes=a.yes, answers=answers)
@@ -686,6 +714,8 @@ def main(argv=None) -> int:
             rc = cmd_network(c, a.name)
         elif a.cmd == "node":
             rc = cmd_node(c, a.network, a.names)
+        elif a.cmd == "node-here":
+            rc = cmd_node_here(c, a.network)
         else:
             rc = cmd_walk(c)
         ui.show_changes()

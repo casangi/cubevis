@@ -6,7 +6,8 @@ each step *checks* (asks nothing, changes nothing), and only when the check
 fails *explains, lists its changes, asks, makes them*, and checks again;
 a failure offers retry / skip / quit.  Every change goes to
 ``changes.log``, every command (with its output) to ``setup.log``, both in
-the config directory.  Enter takes the answer in [brackets].
+this computer's directory (``hosts/<id>``: with a shared home, each
+computer keeps its own).  Enter takes the answer in [brackets].
 
 ``Answers`` pre-fills questions from command-line flags; ``--yes`` takes
 every default (for tests and scripts).
@@ -23,7 +24,7 @@ import textwrap
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-from . import config_dir
+from . import config_dir, host_dir
 
 WIDTH = 76
 
@@ -63,12 +64,13 @@ class UI:
         self.inp = inp or sys.stdin
         self.changes: list = []              # made in this run
         self.failed = 0
-        self.home = config_dir()
+        self.home = host_dir()
         self.home.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(self.home, 0o700)
-        except OSError:
-            pass
+        for d in (config_dir(), self.home):
+            try:
+                os.chmod(d, 0o700)
+            except OSError:
+                pass
         self.log_path = self.home / "setup.log"
         self.changes_path = self.home / "changes.log"
 

@@ -254,7 +254,7 @@ logged in on the node, with a terminal.
 * **Only configured environments are used.**  A conda environment created
   later is invisible until setup on that host enables it.
 * Records the host's addresses (candidate `inside` ranges for the GUI
-  side) and writes `remote/<network>/<fqdn>.json`.
+  side) and writes `remote/<network>/<id>.json`.
 * Replaces the generated `remote-setup.sh` and its password plumbing.
 
 **GUI side.**  `network` asks how this computer reaches the network
@@ -301,24 +301,44 @@ inherits it from the Python process, so setting it before a session
 starts is enough; it also applies to a plain `ssh` from that shell.
 
 **Shared `~/.config/cubevis`** (a home on NFS shared by the nodes and
-possibly a GUI host).  Files are split by writer, so most have one:
+possibly a GUI host).  Files are split by writer, so most have one
+(built in stage 2b part i, 2026-10-21; `hrs_h8_consolidation_prep.md`
+section 30):
 
 ```
-state.json                       networks, kernels (shared on purpose; locked writes)
-hosts/<fqdn>/local.json          this host as GUI: python, store, last user
-hosts/<fqdn>/ssh/{config,rules}  generated per host (the inside test runs its python)
-remote/<network>/<fqdn>.json     this host as a node: environments, addresses
+state.json                     networks, nodes, environments, kernels (shared; locked, merged)
+secrets/                       gpg-file passwords (shared, as ~/.gnupg is)
+hosts/<id>/local.json          this computer as GUI: python, store, sessions
+hosts/<id>/ssh/{config,rules}  generated per computer (its store; its python runs the inside test)
+hosts/<id>/bin/ssh, scp        the wrapper, per computer (computers may run different cubevis)
+hosts/<id>/{setup,changes}.log, backups/
+remote/<network>/<id>.json     this computer as a node: environments, addresses (part ii)
 ```
 
-* ControlMaster sockets cannot live on NFS: `cm/` moves to local disk
-  (`$XDG_RUNTIME_DIR/cubevis`, else `/tmp/cubevis-$USER`, mode 700).
-* `state.json` writes: take a lock file (`O_EXCL`, holding host:pid,
-  stale-lock check -- not `flock`, unreliable on older NFS), re-read,
-  apply only this run's change, write atomically (as now), release.
-* Records are keyed by stable identities (fqdn; interpreter path), so a
-  rerun updates in place and never duplicates or blindly overwrites.
-* The 2a layout (`state.json` with `local`, `ssh/`, `cm/`) is migrated
-  on first load.
+* `<id>` is the short host name (first label, lower case; on macOS the
+  `LocalHostName`, since `hostname` follows the network);
+  `$CUBEVIS_HOST_ID` overrides it.
+* ControlMaster sockets cannot live on NFS: they are in
+  `/tmp/cubevis-<uid>/cm` (mode 700, owner checked), or
+  `$CUBEVIS_RUNTIME_DIR`.  Not `$XDG_RUNTIME_DIR` as first planned: it is
+  removed when the last login session ends, under running kernels.  The
+  wrapper makes the directory again if a reboot or tmp cleaner removed it.
+* Saves take a lock file (`O_EXCL`, holding host, pid, time; stale when
+  its process is gone on this computer, or after 120 s -- not `flock`,
+  unreliable on older NFS), re-read the file, and apply only what this run
+  changed since it loaded: record by record, field by field; a field both
+  changed takes this run's value; a removal beats a change to health
+  fields only (`status`, `last_checked`, ...), loses to any other change.
+* Records are keyed by stable names, so a rerun updates in place.
+* Schema 1 (2a: `state.json` with `local` and `sessions`) is migrated on
+  load; this computer's part is written to `hosts/<id>/local.json` at the
+  first save; loading writes nothing.  The earlier layout's files
+  (`ssh/`, `bin/ssh`, `cm/` in the directory itself, also the bash
+  setup's) are left alone and named by setup: another computer sharing
+  the directory may still use them.
+* A computer that finds networks set up by another has no password store
+  yet: its rules leave those hosts out (with a note), and the first login
+  that needs one asks for the store, keeping the entry's name.
 
 ## 8. Versions and upgrades
 

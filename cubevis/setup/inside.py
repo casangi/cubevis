@@ -117,7 +117,7 @@ def main(argv=None) -> int:
     name = args[0]
     try:
         from . import state as _state
-        st = _state.load()
+        st = _state.load(host=False)      # the networks only: no lock, no write
         net = st.get("networks", name)
         ok, why = decide(network_hosts(net, st.nodes(name)), net.get("inside") or [])
     except Exception as exc:                       # never break ssh: say outside

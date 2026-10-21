@@ -1,4 +1,5 @@
-"""Tests for cubevis.setup.state (remote session design, stage 1).
+"""Tests for cubevis.setup.state (remote session design, stage 1; the
+shared-directory layout, merging and locking: ``test_state_shared.py``).
 
     pytest tests/manual/setup/test_state.py
 
@@ -19,6 +20,7 @@ from cubevis.setup import state as S
 @pytest.fixture(autouse=True)
 def xdg(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("CUBEVIS_HOST_ID", "here")
     return tmp_path / "xdg"
 
 
@@ -32,6 +34,7 @@ def _net(st, name="cv", **kw):
 def test_paths_follow_xdg(xdg, monkeypatch):
     assert config_dir() == xdg / "cubevis"
     assert S.state_path() == xdg / "cubevis" / "state.json"
+    assert S.host_state_path() == xdg / "cubevis" / "hosts" / "here" / "local.json"
     monkeypatch.delenv("XDG_CONFIG_HOME")
     monkeypatch.setenv("HOME", "/home/someone")
     assert config_dir() == S.Path("/home/someone/.config/cubevis")
@@ -102,7 +105,7 @@ def test_migration_hook(monkeypatch):
     monkeypatch.setitem(S.MIGRATIONS, 0, lambda d: {**d, "networks": {"old": {"x": 1}}})
     st = S.State({"schema": 0})
     assert st.data["schema"] == 1 and st.networks() == {"old": {"x": 1}}
-    assert all(k in st.data for k in S.SECTIONS)
+    assert all(k in st.data for k in S.SHARED_SECTIONS)
 
 
 def test_network_defaults():

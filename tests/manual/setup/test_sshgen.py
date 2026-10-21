@@ -29,12 +29,14 @@ needs_ssh = pytest.mark.skipif(not shutil.which("ssh") or not shutil.which("perl
 
 @pytest.fixture(autouse=True)
 def xdg(monkeypatch):
-    """A short config directory: pytest's own temporary paths are too long
-    for an ssh ControlPath socket (104 bytes on macOS, 108 on Linux) --
-    the very thing warnings_for() warns about."""
+    """A short directory for the sockets: pytest's own temporary paths are
+    too long for an ssh ControlPath socket (104 bytes on macOS, 108 on
+    Linux) -- the very thing warnings_for() warns about."""
     import tempfile
     d = tempfile.mkdtemp(prefix="cvx", dir="/tmp")
     monkeypatch.setenv("XDG_CONFIG_HOME", d)
+    monkeypatch.setenv("CUBEVIS_HOST_ID", "gui1")
+    monkeypatch.setenv("CUBEVIS_RUNTIME_DIR", f"{d}/run")
     monkeypatch.setenv("CUBEVIS_SETUP_KNOWN_HOSTS", f"{d}/known_hosts")   # not ~/.ssh
     yield S.Path(d)
     shutil.rmtree(d, ignore_errors=True)
@@ -114,7 +116,8 @@ def test_config_as_ssh_reads_it(xdg):
     login = _G("cv-login", cfg)
     assert (login["hostname"], login["user"], login["port"]) == ("login.example.org", "jlogin", "2201")
     assert login["controlmaster"] == "auto" and login["controlpersist"] == "28800"
-    assert login["controlpath"].startswith(str(xdg / "cubevis" / "cm"))
+    assert login["controlpath"].startswith(str(xdg / "run" / "cm"))
+    assert str(cfg) == str(xdg / "cubevis" / "hosts" / "gui1" / "ssh" / "config")
     assert login.get("proxyjump", "none") == "none"
     n = _G("cv-node140", cfg)
     assert (n["hostname"], n["user"], n["port"], n["proxyjump"]) == \
@@ -123,7 +126,7 @@ def test_config_as_ssh_reads_it(xdg):
     assert _G("cv-node141", cfg)["port"] == "2222"
     k1 = _G("keyonly-k1", cfg)
     assert (k1["hostname"], k1["proxyjump"]) == ("k1.inside.other.org", "keyonly-login")
-    assert stat.S_IMODE((xdg / "cubevis" / "cm").stat().st_mode) == 0o700
+    assert stat.S_IMODE((xdg / "run" / "cm").stat().st_mode) == 0o700
 
 
 def test_write_only_when_changed():
@@ -137,8 +140,10 @@ def test_write_only_when_changed():
     assert res["config"] and not res["rules"]      # the pattern covers the new node
 
 
-def test_long_config_dir_warns(tmp_path, monkeypatch):
+def test_long_socket_dir_warns_long_config_dir_does_not(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / ("d" * 80)))
+    assert G.write(_state())["warnings"] == []           # the sockets are not there
+    monkeypatch.setenv("CUBEVIS_RUNTIME_DIR", str(tmp_path / ("r" * 80)))
     assert "socket path" in G.write(_state())["warnings"][0]
 
 

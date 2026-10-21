@@ -1018,3 +1018,62 @@ OpenSSH 8.0p1 (`openssh-clients-8.0p1-25.el8_10`), and the step required
   committed; it is in this zip now: `/etc/hosts` entries, user `alice`, password-only
   sshd's on 127.0.0.1:2201/2202 with `UsePAM yes`, from the distribution's
   `openssh-server`.
+
+## 30. Remote sessions, stage 2b part i: a shared configuration directory (base `24f5af8`, 2026-10-21)
+
+Design section 7b (agreed 2026-10-20/21): `~/.config/cubevis` may be a home
+shared by a cluster's nodes and a GUI host among them, so nothing setup
+keeps may be overwritten or corrupted by another computer, or by a rerun.
+
+* **Per computer: `hosts/<id>/`** (`cubevis/setup/__init__.py`: `host_id`,
+  `host_dir`).  `local.json` (the old `local` section and the sessions),
+  `ssh/config` and `ssh/rules` (they name this computer's password store,
+  and the inside test runs this computer's Python), the wrapper in `bin/`
+  (computers may run different cubevis versions), `setup.log`,
+  `changes.log`, `backups/`.  `<id>`: the short host name; macOS
+  `scutil --get LocalHostName`; `$CUBEVIS_HOST_ID` overrides.
+* **Shared: `state.json`**, schema 2 (networks, nodes, environments,
+  kernels), and `secrets/` (gpg-file).
+* **Saving** (`state.save`): per file, a lock (`FileLock`: `<file>.lock`
+  by `O_EXCL`, holding host, pid, time; stale if this computer's process
+  has ended, or after `LOCK_STALE` = 120 s; a stale lock is renamed away
+  before removal so two runs cannot both break it; waits up to 30 s, then
+  names the holder), re-read, three-way `merge` against what this run
+  loaded, atomic write (skipped when unchanged).  Merge: records untouched
+  here take the file's; untouched there take ours; both changed: field by
+  field, ours wins a field both changed; removal vs. change: the removal
+  wins over health-only changes (`HEALTH_FIELDS`), otherwise the change
+  is kept.  The merged result is applied *in place* (`_apply_in_place`):
+  `__main__` holds a network's dict across several saves.
+* **Migration** schema 1 -> 2: `local` and `sessions` move to this
+  computer's file at the first save; a second computer starts empty.
+  `load` writes nothing; `load(host=False)` for the inside test (every
+  ssh connection: no host file, no lock).
+* **Sockets**: `/tmp/cubevis-<uid>/cm` (`runtime_dir`: mode 700, owner
+  checked, a file in the way refused) or `$CUBEVIS_RUNTIME_DIR`.  The
+  wrapper makes the directory again before a password login (reboots,
+  tmp cleaners).  Not `$XDG_RUNTIME_DIR`: removed at the last logout.
+  The socket-path length warning now concerns this directory only.
+* **The wrapper's rules**: `../ssh/rules` beside the copy and the user's
+  own `~/.config/ssh-wrapper/rules`; no longer `~/.config/cubevis/ssh/rules`
+  (the earlier layout's, possibly another computer's).  Only the
+  packaged wrapper; the bash setup's `setup/bin/ssh` is unchanged.
+* **Earlier layout** (`ssh/`, `bin/ssh`, `cm/` in the directory itself,
+  2a's and the bash setup's): left alone, named by `network` / the walk
+  and `status`.  The old "replace the bash setup's ssh/config, with a
+  backup" step is gone: nothing is written there any more.
+* **A second computer** finding networks it did not set up: no password
+  store yet, so `rules_text` leaves those hosts out with a comment and a
+  warning; the login step then asks for the store and keeps the entry's
+  name (`service`) instead of asking for a new one.  Warnings print once
+  per run.
+* **Tests** (`tests/manual/setup`, 83): `test_state_shared.py` (new:
+  host id, split files, migration, merges incl. removal rules, 8 processes
+  x 5 saves losing nothing, held and stale locks, socket directory
+  checks); `test_cli.py`: the earlier layout left alone, two computers
+  (`gui1`, `gui2`, each with its own socket directory) on one directory
+  over the rig, the socket directory removed between runs.  All pass on
+  the rig with OpenSSH 9.6 and 8.0p1.
+* **Not done here** (parts ii-iv): environments and the node-side
+  command, the GUI side reading `remote/`, `--inside-here`,
+  `CUBEVIS_ROUTE_<net>`.

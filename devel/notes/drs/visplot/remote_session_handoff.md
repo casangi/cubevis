@@ -1,4 +1,4 @@
-# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-10-19)
+# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-10-21)
 
 Read first: `devel/notes/drs/visplot/remote_session_design.md` (the
 design, agreed with Darrell 2026-10-17). Background: section 22 of
@@ -7,11 +7,23 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* main is at **56cc39d** (stage 1 committed).  Delivered on top of it, not
-  yet committed when this was written: **`remote_stage2a_56cc39d_r2.zip`**
-  (stage 2a and its fixes; replaces `remote_stage2a_56cc39d.zip`).  Darrell
-  ran the suite on macOS: all pass.  Check `git log` first -- if 2a is in
-  main, start 2b from there.
+* main is at **24f5af8** (2a, OpenSSH 8.0, design 7b committed).
+  Delivered on top of it, not yet committed when this was written:
+  **`remote_stage2b1_24f5af8.zip`** (stage 2b part i, below).  Check
+  `git log` first.
+* **Design changed 2026-10-20/21** (section 7b of the design): setup runs
+  in one of two roles, GUI or node; the node side configures and tests
+  environments (several per host, only configured ones used; an
+  environment belongs to one network); the GUI side reads the nodes'
+  `remote/<network>/<id>.json` over ssh; the configuration directory may
+  be shared by several computers.  Inside ranges are a positive list
+  (visitor networks use the bastion); `--inside-here` checks before
+  recording; `CUBEVIS_ROUTE_<net>=direct|bastion` overrides; no probing
+  at kernel start.
+* **Stage 2b part i done** (2026-10-21, base `24f5af8`): per-computer
+  `hosts/<id>/` (local.json, ssh files, wrapper, logs), `state.json`
+  schema 2 saved under a lock and merged field by field, migration from
+  2a, sockets in `/tmp/cubevis-<uid>/cm`.  Section 30.
 * **Stage 1 done** (2026-10-18, base `2761bdc`): `cubevis/setup/` with
   `state.py`, `sshgen.py` and `data/` (wrapper, probe, remote-setup moved
   there), the wrapper's failed-login messages, tests in `tests/manual/setup/`.
@@ -27,7 +39,8 @@ as ee125b6) and section 17 (the ssh wrapper).
   of `$SSH_CONNECTION`) and the `Match exec` inside test.  Darrell's sample
   addresses (section 28) are in `test_inside.py`; his first real run is the
   check.  Ask how it went before building on it.
-* **Next: stage 2b** -- below, "Stage 2b, concretely".
+* **OpenSSH 8.0** (RHEL 8) is supported since 2026-10-19 (section 29).
+* **Next: stage 2b part ii** -- below, "Stage 2b, concretely".
 
 ## Decisions made with Darrell
 
@@ -72,7 +85,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 29).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 31).
 
 ## Test kit (rebuild after a sandbox restart)
 
@@ -92,6 +105,14 @@ The sandbox loses `/etc/hosts` edits and running daemons on restart.
   `~/.ssh/known_hosts` (that is how they passed before 2026-10-19).
 * **pytest here**: `/home/claude/venv/bin/python -m pytest` (the system
   python has none).
+* **OpenSSH 8.0 client** (RHEL 8's): built from `openssh-portable` tag
+  `V_8_0_P1` with `--without-openssl --without-zlib-version-check` into
+  `/opt/openssh80/bin/ssh`; run the suite with `PATH=/opt/openssh80/bin:$PATH`
+  as well as with the system's.  The rig's sshd is the distribution's
+  (`apt-get install openssh-server`).
+* **Several computers in one directory** (tests): `CUBEVIS_HOST_ID` names
+  the computer, `CUBEVIS_RUNTIME_DIR` gives each its own socket directory
+  (otherwise one rides on another's shared connections).
 * **Fresh local users** for end-to-end runs: `useradd -m -s /bin/bash
   testyN`; a gpg key without passphrase for `pass`
   (`gpg --batch --passphrase "" --quick-generate-key ...`).
@@ -144,35 +165,31 @@ The sandbox loses `/etc/hosts` edits and running daemons on restart.
 
 ## Stage 2b, concretely
 
-Design sections 3, 6, 7, 8.  `cubevis/setup/__main__.py` has the `Ctx`,
-the step runner, `network` / `node` / `check` / `status` and the walk-
-through; the bash steps to port are in `setup/lib/remote.sh` (probe,
-remote environment, test data, kernel, final plot test) and
-`setup/lib/versions.sh`; the remote scripts are already in
-`cubevis/setup/data/` (`probe.sh`, `remote-setup.sh`).  `state.py`
-already has `add_environment` / `add_kernel`, the `query` field and the
-removal rules.
+Design sections 7b and 13 (the plan), 8, 9.
 
-1. **`kernel [NAME]`**: pick a network and a node to work on (default
-   node); run `probe.sh` there (read-only: python, conda, envs, cubevis
-   version, shared filesystem hints); offer an existing environment or
-   write the per-node `remote-setup.sh` (run over ssh or copied); record
-   the environment (`checked_on`, version) and the kernel.
-2. **Versions** (section 8): compare the local cubevis with each
-   environment's on any node; on a difference write
-   `<config>/upgrade/<env>.sh` and print what to run on the node.
-   `upgrade [KERNEL]` does the same and offers to copy the script.
-3. **Node query** (section 7): `network` asks for an optional query (host
-   + command; Slurm example in the prompt only); `node NET` runs it and
-   offers the names; new ones added, missing ones only flagged by checks.
-4. **`prune`**: offer to remove flagged nodes / environments and stale
-   sessions, honouring the state's removal rules.
-5. **`check` / `status`** extended to environments and kernels (design
-   section 9 items 1-3); the final kernel + plot test from the bash setup.
-6. **Walk-through**: no command = everything not done yet, in order.
-7. Tests: pexpect on the rig as in 2a; a local python3 "remote"
-   environment on the rig's compute host (alice's home); version mismatch
-   and the upgrade script; a query command that prints names.
+1. ~~Part i: the file layout, locking and migration, sockets on local
+   disk~~ (section 30).
+2. **Part ii: environments and the node-side command.**  Environment
+   records: `kind` (conda, mamba, venv, python), `python` (resolved; with
+   the network, the identity), activation and upgrade information,
+   `hosts` (every node, or a list).  The node-side command: role
+   question (suggest *node* when `$SSH_CONNECTION` is set), network name
+   and domain, user, optional node query (tested there); environments
+   asked for, found ones only offered; each tested by running its
+   interpreter with a small script (Python version; cubevis, ipykernel
+   import and versions); failures recorded flagged; writes
+   `remote/<network>/<id>.json` (single writer: that computer).  The
+   GUI host's own environments: the network *this host*.
+3. **Part iii: the GUI side** reads `remote/<network>/*.json` over ssh,
+   shows and records them; `network NET --inside-here` (checks a direct
+   connection first, records only then); `CUBEVIS_ROUTE_<net>` in
+   `inside.py`, before the ranges.
+4. **Part iv:** versions and upgrade scripts (section 8), the node query
+   on the GUI side, `prune`, `check`/`status` for environments and
+   kernels, the final kernel + plot test.
+5. Tests: pexpect on the rig as before; a local python3 "remote"
+   environment on the rig's compute host; version mismatch; a query
+   command printing names; two computers on one directory (as in part i).
 
 Then stage 3 (Session), 4 (bootstrap, docs, remove `setup/`), 5 (detach /
 reattach): design section 13.

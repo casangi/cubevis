@@ -6,13 +6,16 @@
     python -m cubevis.setup network [NAME]        add a network (or go through one again)
     python -m cubevis.setup node NETWORK [NODE..] add nodes to a network
 
-Stage 2a of ``devel/notes/drs/visplot/remote_session_design.md``: this
+Stage 2 of ``devel/notes/drs/visplot/remote_session_design.md``: this
 computer, networks, nodes and logging in.  Environments, kernels, versions
-and the node query follow (stage 2b).
+and the node query follow (stage 2b, section 7b).
 
-Everything it keeps is in ``~/.config/cubevis`` (``$XDG_CONFIG_HOME``):
-``state.json``, the generated ``ssh/config`` and ``ssh/rules``, the wrapper in
-``bin/``, ``changes.log`` (every change) and ``setup.log`` (every command).
+Everything it keeps is in ``~/.config/cubevis`` (``$XDG_CONFIG_HOME``), which
+may be shared by several computers: ``state.json`` (networks, nodes:
+shared), and per computer in ``hosts/<id>/``: ``local.json``, the generated
+``ssh/config`` and ``ssh/rules``, the wrapper in ``bin/``, ``changes.log``
+(every change) and ``setup.log`` (every command).  ssh's connection
+sockets are on local disk (``/tmp/cubevis-<uid>``).
 """
 from __future__ import annotations
 
@@ -25,7 +28,7 @@ import subprocess
 import sys
 from typing import Optional
 
-from . import sshgen, state as S, stores
+from . import RuntimeDirError, host_id, sshgen, state as S, stores
 from .ui import UI, FuncStep, Quit, run_step, tilde
 
 PRIVATE_SKIP = ("172.17.0.0/16", "192.168.122.0/24", "192.168.121.0/24")  # docker, libvirt
@@ -42,6 +45,7 @@ class Ctx:
         self.ui, self.st, self.check_only, self.redo = ui, st, check_only, redo
         self.step_n = 0
         self.last_out = ""
+        self.warned: set = set()
 
     def save(self) -> None:
         """Save the state and regenerate the ssh files from it."""
@@ -49,21 +53,18 @@ class Ctx:
             S.save(self.st)          # flags only
             return
         S.save(self.st)
-        cfg = sshgen.config_path()
-        if cfg.exists():
-            first = cfg.read_text().split("\n", 1)[0]
-            if first.startswith("# Written by cubevis-setup"):
-                b = self.ui.backup(cfg)
-                self.ui.note(f"{tilde(cfg)} was written by the older bash setup; it is "
-                             f"replaced (copy: {tilde(b)})")
-                self.ui.backup(sshgen.rules_path())
-        res = sshgen.write(self.st)
+        try:
+            res = sshgen.write(self.st)
+        except RuntimeDirError as exc:
+            raise S.StateError(str(exc)) from None
         for what in ("config", "rules"):
             if res[what]:
                 p = sshgen.config_path() if what == "config" else sshgen.rules_path()
                 self.ui.record_change("wrote", tilde(p))
         for w in res["warnings"]:
-            self.ui.note(w)
+            if w not in self.warned:
+                self.warned.add(w)
+                self.ui.note(w)
 
     def step(self, title, check, do, look_only=False) -> bool:
         self.step_n += 1
@@ -164,6 +165,12 @@ def local_steps(c: Ctx) -> bool:
 
     if not c.step("The ssh wrapper", wrapper_check, wrapper_do):
         return False
+
+    old = sshgen.old_layout_files()
+    if old and not c.check_only:
+        ui.note("not used any more (an earlier cubevis setup, or the bash one, wrote them; "
+                "remove them once no computer sharing this directory runs those): "
+                + ", ".join(tilde(p) for p in old))
 
     # The Python that ssh's "inside" test runs (Match exec): this one.
     if not c.check_only and st.local.get("python") != sys.executable:
@@ -311,7 +318,7 @@ def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
                    "(~/.ssh/known_hosts). Ask whoever runs the host whether it changed; "
                    "setup does not override that.")
             return False
-        if rec.get("password"):
+        if rec.get("password") and st.local.get("store"):
             ui.say(f"Logging in with the stored password failed: {why}")
             ui.say("The wrapper tries a stored password once per login, so a wrong one does "
                    "not lock your account at once; but sites count the failures. Store it "
@@ -319,16 +326,26 @@ def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
             if not ui.ask_yn("Type the password again?", True):
                 return False
             return stores.put(ui, st, rec["service"], h["user"], h["host"])
-        ui.say(f"{h['host']} does not accept a key from here ({why}), so it needs your "
-               "password.")
+        if rec.get("password"):
+            ui.say(f"{h['host']} needs your password, and this computer has no password "
+                   "store chosen yet (the network was set up from another computer sharing "
+                   "this directory).")
+        else:
+            ui.say(f"{h['host']} does not accept a key from here ({why}), so it needs your "
+                   "password.")
         if not ui.ask_yn(f"Store your password for {h['user']}@{h['host']}, for the wrapper "
                          "to use?", True, key="store_password"):
             return False
         if not stores.choose(ui, st):
             return False
         svc, need_put = None, True
+        if rec.get("password") and rec.get("service"):
+            # Set up elsewhere: the entry's name is known; it may already be in
+            # this computer's store too (a store shared with the other one).
+            svc = rec["service"]
+            need_put = not stores.has_entry(st, svc, h["user"])
         # The same user's password stored for another hop is often the same.
-        for other in _password_entries(st):
+        for other in ([] if svc else _password_entries(st)):
             if other[1] == h["user"]:
                 if ui.ask_yn(f"Is it the same password as for {other[2]}?", True,
                              key="same_password"):
@@ -503,6 +520,7 @@ def cmd_status(c: Ctx) -> int:
     ui, st = c.ui, c.st
     ui.heading(f"cubevis setup in {tilde(S.state_path().parent)}")
     loc = st.local
+    ui._p(f"    {'computer':<10} {host_id()} ({tilde(S.host_state_path().parent)})")
     for k in ("python", "store"):
         ui._p(f"    {k:<10} {loc.get(k) or '-'}")
     from . import inside as _in
@@ -537,6 +555,10 @@ def cmd_status(c: Ctx) -> int:
     ui._p(f"    ssh config  {tilde(sshgen.config_path())}")
     ui._p(f"    wrapper     {tilde(sshgen.wrapper_path())}")
     ui._p(f"    changes     {tilde(ui.changes_path)}")
+    ui._p(f"    sockets     {sshgen.cm_dir()}")
+    old = sshgen.old_layout_files()
+    if old:
+        ui._p("    not used any more (earlier layout): " + ", ".join(tilde(p) for p in old))
     return 0
 
 

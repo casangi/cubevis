@@ -12,9 +12,9 @@
 #
 # Install
 # -------
-# cubevis-setup (setup/cubevis-setup) installs it as
-# ~/.config/cubevis/bin/ssh and gives its path to sshpyk (--ssh), so only
-# the kernels use it. To use it for everything instead:
+# python -m cubevis.setup installs it as ~/.config/cubevis/hosts/<id>/bin/ssh
+# (one copy per computer: a shared home may hold several) and gives its path
+# to sshpyk (--ssh), so only the kernels and setup use it. To use it for everything instead:
 #   cp ssh ~/bin/ssh && chmod +x ~/bin/ssh && ln -s ssh ~/bin/scp
 #   with ~/bin before /usr/bin in PATH.
 # Needs perl, OpenSSH 8.0 or later, and a password store (below).
@@ -22,9 +22,8 @@
 # Rules: which hosts need the password
 # ------------------------------------
 # Read from $SSH_WRAPPER_RULES if set; otherwise from every one of these
-# that exists: ~/.config/ssh-wrapper/rules (your own),
-# ~/.config/cubevis/ssh/rules (written by cubevis-setup), and ../ssh/rules
-# next to this file. No rules, or no matching rule: the wrapper does
+# that exists: ~/.config/ssh-wrapper/rules (your own), and ../ssh/rules
+# next to this file (cubevis setup writes it: hosts/<id>/ssh/rules). No rules, or no matching rule: the wrapper does
 # nothing at all and runs the real ssh/scp. One rule per line; '#' starts
 # a comment:
 #
@@ -237,8 +236,9 @@ my @RULES_FILES;
 if ( $ENV{SSH_WRAPPER_RULES} ) { @RULES_FILES = ( $ENV{SSH_WRAPPER_RULES} ); }
 else {
     my %seen;
-    for my $f ( "$CONFIG_DIR/ssh-wrapper/rules", "$CONFIG_DIR/cubevis/ssh/rules",
-        dirname($self_dir) . '/ssh/rules' ) {
+    # Not ~/.config/cubevis/ssh/rules: the earlier layout's, perhaps another
+    # computer's (a shared home); this copy's own are next to it.
+    for my $f ( "$CONFIG_DIR/ssh-wrapper/rules", dirname($self_dir) . '/ssh/rules' ) {
         my $real = abs_path($f) // next;
         next if $seen{$real}++ || !-r $real;
         push @RULES_FILES, $f;
@@ -602,6 +602,16 @@ for my $hop (@need) {
         note("'$target' ($cfg->{hostname}) needs a password but has no ControlPath in your"
            . " ssh config, so the login cannot be shared -- add one for it");
         next;
+    }
+    # The sockets live on local disk (/tmp/cubevis-<uid>), which a reboot
+    # or a tmp cleaner may empty: make the directory again, closed to others.
+    {
+        my $dir = dirname($cp);
+        if ( !-d $dir ) {
+            my $parent = dirname($dir);
+            mkdir( $parent, 0700 ) if !-d $parent;
+            mkdir( $dir, 0700 ) or logmsg("cannot create $dir: $!");
+        }
     }
     my ($idx) = grep { $RULES[$_] == $hop->{rule} } 0 .. $#RULES;
     my $persist = $cfg->{controlpersist};

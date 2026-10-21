@@ -1,4 +1,5 @@
-"""The ssh files generated from the state: ``ssh/config`` and ``ssh/rules``.
+"""The ssh files generated from the state: ``ssh/config`` and ``ssh/rules``,
+in this computer's directory (``hosts/<id>/ssh``).
 
 ``ssh/config`` has one ``Host`` per login host and per node, under the
 aliases the state gives them, so the kernels (``sshpyk --ssh-config``) and
@@ -13,7 +14,11 @@ rule).  Login hosts come first: the wrapper takes the first rule that
 matches, and a login host can match its own network's node pattern.
 
 Both are regenerated from the state whenever it changes and rewritten only
-when their text changes (``write`` says which did).  The format of the
+when their text changes (``write`` says which did).  They are per computer
+(the rules name this computer's password store; the inside test runs its
+Python), as is the wrapper copy in ``hosts/<id>/bin``: computers sharing a
+home directory may run different cubevis versions.  The connection
+sockets (``ControlPath``) are on local disk (``runtime_dir``).  The format of the
 rules is the wrapper's (its header, "Rules"); the keys per password store
 are those of the bash setup's ``store_rule_keys``.
 """
@@ -25,7 +30,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from . import config_dir, data_file
+from . import config_dir, data_file, host_dir, runtime_dir, runtime_path
 from .state import State, StateError
 
 # Shared-connection options every generated Host gets.
@@ -40,7 +45,7 @@ _SOCKET_EXTRA = 58
 
 
 def ssh_dir() -> Path:
-    return config_dir() / "ssh"
+    return host_dir() / "ssh"
 
 
 def config_path() -> Path:
@@ -52,11 +57,12 @@ def rules_path() -> Path:
 
 
 def cm_dir() -> Path:
-    return config_dir() / "cm"
+    """ssh's shared-connection sockets: local disk, per user."""
+    return runtime_path() / "cm"
 
 
 def bin_dir() -> Path:
-    return config_dir() / "bin"
+    return host_dir() / "bin"
 
 
 def wrapper_path() -> Path:
@@ -64,6 +70,7 @@ def wrapper_path() -> Path:
 
 
 def secrets_dir() -> Path:
+    """gpg-file passwords: shared (with a shared home, so is ~/.gnupg)."""
     return config_dir() / "secrets"
 
 
@@ -166,12 +173,25 @@ def inside_command(st: State, network: str) -> str:
     return f"{shlex.quote(py)} -m cubevis.setup.inside {shlex.quote(network)}"
 
 
+def _password_hosts(st: State) -> list:
+    """Names of the networks with a host that asks for a password."""
+    return [n for n, net in sorted(st.networks().items())
+            if net.get("password") or (net.get("login") or {}).get("password")]
+
+
 def rules_text(st: State) -> str:
     """``ssh/rules`` for *st*: login hosts first (see module docstring),
     then each network's nodes -- by ``node_pattern``, or by name when the
     network has none."""
     out = ["# Written by cubevis setup from state.json: the hosts that ask for a",
            "# password, and where the wrapper finds it. Real host names, not aliases."]
+    if not st.local.get("store") and _password_hosts(st):
+        # Another computer sharing this directory set these networks up;
+        # this one has not chosen its password store yet (setup asks at
+        # the first login that needs it).
+        out.append("# No password store chosen on this computer yet: "
+                   + ", ".join(_password_hosts(st)) + " left out.")
+        return "\n".join(out) + "\n"
     lines_login, lines_nodes = [], []
     for name in sorted(st.networks()):
         net = st.networks()[name]
@@ -220,10 +240,14 @@ def _write_if_changed(path: Path, text: str, mode: int = 0o600) -> bool:
 def warnings_for(st: State) -> list:
     """Things about the generated files the user should know (not errors)."""
     w = []
+    if not st.local.get("store") and _password_hosts(st):
+        w.append("no password store chosen on this computer yet, so the wrapper cannot log "
+                 "in to " + ", ".join(_password_hosts(st)) + " from here: run python -m "
+                 "cubevis.setup network NAME to choose one")
     cm = str(cm_dir())
     if len(cm) + _SOCKET_EXTRA > _SOCKET_LIMIT:
         w.append(f"{cm} is a long path: ssh may fail to share connections (socket path "
-                 "too long). A shorter XDG_CONFIG_HOME, or home directory, avoids that.")
+                 "too long). A shorter CUBEVIS_RUNTIME_DIR avoids that.")
     return w
 
 
@@ -232,8 +256,9 @@ def write(st: State) -> dict:
     connection directory.  Returns ``{"config": changed, "rules": changed,
     "warnings": [...]}``."""
     ssh_dir().mkdir(parents=True, exist_ok=True)
-    cm_dir().mkdir(parents=True, exist_ok=True)
-    for d in (config_dir(), ssh_dir(), cm_dir()):
+    runtime_dir()
+    cm_dir().mkdir(mode=0o700, exist_ok=True)
+    for d in (config_dir(), host_dir(), ssh_dir(), cm_dir()):
         try:
             os.chmod(d, 0o700)
         except OSError:
@@ -241,6 +266,16 @@ def write(st: State) -> dict:
     return {"config": _write_if_changed(config_path(), config_text(st)),
             "rules": _write_if_changed(rules_path(), rules_text(st)),
             "warnings": warnings_for(st)}
+
+
+def old_layout_files() -> list:
+    """Files of the earlier layout (stage 2a, and the bash setup) in the
+    configuration directory itself, which this cubevis no longer uses.  An
+    older cubevis or the bash setup on another computer sharing this
+    directory may still; so setup only mentions them."""
+    d = config_dir()
+    return [p for p in (d / "ssh" / "config", d / "ssh" / "rules", d / "bin" / "ssh", d / "cm")
+            if p.exists() or p.is_symlink()]
 
 
 def install_wrapper() -> bool:

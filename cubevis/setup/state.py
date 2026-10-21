@@ -1,24 +1,41 @@
-"""``~/.config/cubevis/state.json``: what setup knows, in one file.
+"""What setup knows: ``state.json`` (shared) and ``hosts/<id>/local.json``
+(this computer's).
 
 Everything else setup writes (``ssh/config``, ``ssh/rules``) is generated
-from it (``sshgen``).  Plain JSON, standard library only, readable and
+from these (``sshgen``).  Plain JSON, standard library only, readable and
 diffable; written to a temporary file and renamed, mode 600.  Passwords are
-never in it -- they stay in the password stores; the state only names the
+never in them -- they stay in the password stores; the state only names the
 store and the entry.
+
+Two files, because the configuration directory may be a home directory
+shared by several computers (design section 7b):
+
+* ``state.json`` -- networks, nodes, environments, kernels: shared on
+  purpose (a GUI on any of those computers sees the same networks).
+* ``hosts/<id>/local.json`` -- this computer as the GUI side: its Python,
+  its password store, the sessions it started.
+
+**Saving never overwrites what another run wrote.**  ``save`` takes a lock
+file next to the file (created with ``O_EXCL``, which is atomic on local
+disks and NFSv3+; ``flock`` is not reliable on older NFS), reads the file
+again, and applies only what this run changed since it loaded -- record by
+record, field by field (``merge``) -- then writes atomically.  Two runs
+that change different nodes, or different fields of one, both keep their
+changes; a field both changed takes this run's value.  A removed record
+stays removed unless the other run changed more than its health fields.
 
 Problems are *flagged*, not deleted: a node or environment that fails a
 check gets ``status: "flagged"``, ``last_error`` and ``last_checked``;
 ``mark_ok`` clears them.  Removing what is flagged is the user's choice
-(``setup prune``, stage 2).
+(``setup prune``).
 
-Layout (schema 1; design section 3)::
+Layout (schema 2)::
 
-    {"schema": 1,
-     "local":        {"conda", "env", "python", "store", "store_command",
-                      "gpg_uid", "ssh_include"},
+    state.json
+    {"schema": 2,
      "networks":     {NAME: {"login": {"host", "user", "port", "alias",
                                        "password", "service"},
-                             "user", "password", "service",
+                             "inside", "user", "password", "service",
                              "node_pattern", "domain", "shared_fs",
                              "default_node", "query": {"host", "command"}}},
      "nodes":        {NAME: {"network", "hostname", "alias", "port", "status",
@@ -26,9 +43,18 @@ Layout (schema 1; design section 3)::
      "environments": {NAME: {"network", "python", "conda", "env", "cubevis",
                              "checked_on", "status", "last_checked",
                              "last_error"}},
-     "kernels":      {NAME: {"environment", "launch_timeout"}},
+     "kernels":      {NAME: {"environment", "launch_timeout"}}}
+
+    hosts/<id>/local.json
+    {"schema": 2,
+     "local":        {"python", "store", "store_command", "gpg_uid",
+                      "last_user"},
      "sessions":     {ID:   {"kernel", "node", "local_pid", "started",
                              "persistent_file"}}}
+
+Schema 1 (stage 2a) was one ``state.json`` with ``local`` and
+``sessions`` in it; ``load`` moves them to this computer's file (written at
+the first save; loading writes nothing).
 
 A network's ``login.password`` / ``password`` say whether the login host /
 the nodes ask for a password (then the wrapper logs in with the stored
@@ -36,10 +62,10 @@ one, from ``service``); ``user`` is the user name on the nodes.
 
 Use::
 
-    st = state.load()                      # missing file -> empty schema 1
+    st = state.load()                      # missing files -> empty
     st.add_network("cv", login_host="login.example.org", user="jo", ...)
     st.add_node("node140", network="cv")
-    state.save(st)                         # atomic
+    state.save(st)                         # locked, merged, atomic
 """
 from __future__ import annotations
 
@@ -48,16 +74,26 @@ import datetime as _dt
 import json
 import os
 import re
+import socket
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Optional
 
-from . import config_dir
+from . import config_dir, host_dir
 
-SCHEMA = 1
-SECTIONS = ("networks", "nodes", "environments", "kernels", "sessions")
+SCHEMA = 2
+SHARED_SECTIONS = ("networks", "nodes", "environments", "kernels")
+HOST_SECTIONS = ("sessions",)
+SECTIONS = SHARED_SECTIONS + HOST_SECTIONS
 FLAGGABLE = ("nodes", "environments")
 STORES = ("keychain", "secret-tool", "pass", "gpg-file", "command")
+# Fields a check writes.  A change to these alone neither keeps a record
+# another run removed nor stops this run's removal of it (``merge``).
+HEALTH_FIELDS = {"status", "last_checked", "last_error", "checked_on", "cubevis"}
+
+LOCK_TIMEOUT = 30.0      # seconds to wait for another run's lock
+LOCK_STALE = 120.0       # a lock older than this is a crashed run's (held for milliseconds)
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@-]*$")
@@ -69,8 +105,13 @@ class StateError(ValueError):
 
 
 def state_path() -> Path:
+    """The shared file."""
     return config_dir() / "state.json"
 
+
+def host_state_path() -> Path:
+    """This computer's file."""
+    return host_dir() / "local.json"
 
 def now() -> str:
     """Local time to the minute, as recorded in ``last_checked``."""
@@ -113,48 +154,102 @@ def check_host(host: str) -> str:
 
 
 def empty() -> dict:
-    return {"schema": SCHEMA, "local": {}, **{s: {} for s in SECTIONS}}
+    """An empty shared state."""
+    return {"schema": SCHEMA, **{s: {} for s in SHARED_SECTIONS}}
 
 
-# Migrations: MIGRATIONS[n] turns a schema-n dict into schema n+1.  None
-# yet; the hook is here so a later schema change is one function.
-MIGRATIONS: dict = {}
+def empty_host() -> dict:
+    """An empty state for this computer."""
+    return {"schema": SCHEMA, "local": {}, **{s: {} for s in HOST_SECTIONS}}
 
 
-def migrate(data: dict) -> dict:
-    """Bring *data* up to ``SCHEMA``; refuse a newer file (written by a
-    newer cubevis) rather than guess at it."""
+def _migrate_1(data: dict) -> dict:
+    """Schema 1 -> 2: ``local`` and ``sessions`` leave the shared file.  They
+    are kept under ``_host`` for ``migrate`` to hand to the caller."""
+    data = dict(data)
+    data["_host"] = {"local": data.pop("local", None) or {},
+                     "sessions": data.pop("sessions", None) or {}}
+    return data
+
+
+# MIGRATIONS[n] turns a schema-n shared dict into schema n+1.
+MIGRATIONS: dict = {1: _migrate_1}
+
+
+def migrate(data: dict, what: str = "state.json") -> tuple:
+    """``(shared, host_part)``: *data* brought up to ``SCHEMA``, and what a
+    migration moved out of it for this computer's file (or None).  Refuses
+    a newer file (written by a newer cubevis) rather than guess at it."""
     v = data.get("schema")
     if not isinstance(v, int):
-        raise StateError("state.json has no schema number; it was not written by cubevis setup")
+        raise StateError(f"{what} has no schema number; it was not written by cubevis setup")
     if v > SCHEMA:
-        raise StateError(f"state.json is schema {v}, newer than this cubevis understands "
+        raise StateError(f"{what} is schema {v}, newer than this cubevis understands "
                          f"({SCHEMA}): upgrade cubevis here, or use the newer one")
+    host_part = None
     while v < SCHEMA:
         data = MIGRATIONS[v](data)
+        host_part = data.pop("_host", None) or host_part
         v = data["schema"] = v + 1
-    for s in ("local",) + SECTIONS:
+    for s in SHARED_SECTIONS:
+        data.setdefault(s, {})
+    return data, host_part
+
+
+def migrate_host(data: dict, what: str = "local.json") -> dict:
+    v = data.get("schema")
+    if not isinstance(v, int):
+        raise StateError(f"{what} has no schema number; it was not written by cubevis setup")
+    if v > SCHEMA:
+        raise StateError(f"{what} is schema {v}, newer than this cubevis understands "
+                         f"({SCHEMA}): upgrade cubevis here, or use the newer one")
+    data["schema"] = SCHEMA
+    data.setdefault("local", {})
+    for s in HOST_SECTIONS:
         data.setdefault(s, {})
     return data
 
 
 class State:
-    """The state as a plain dict (``.data``) with accessors.  Nothing is
-    written until ``save``."""
+    """The state as two plain dicts -- ``.data`` (shared) and ``.host``
+    (this computer) -- with accessors.  Nothing is written until ``save``.
 
-    def __init__(self, data: Optional[dict] = None, path: Optional[Path] = None):
-        self.data = migrate(copy.deepcopy(data)) if data is not None else empty()
+    ``State(data)`` takes a dict of either schema (a schema-1 dict's
+    ``local`` and ``sessions`` become this computer's, unless *host* is
+    given).  Everything in a State built this way counts as changed by
+    this run; ``load`` records what was on disk, so that ``save`` writes
+    only this run's changes."""
+
+    def __init__(self, data: Optional[dict] = None, path: Optional[Path] = None,
+                 host: Optional[dict] = None, host_path: Optional[Path] = None):
+        moved = None
+        if data is not None:
+            self.data, moved = migrate(copy.deepcopy(data))
+        else:
+            self.data = empty()
+        if host is not None:
+            self.host = migrate_host(copy.deepcopy(host))
+        else:
+            self.host = empty_host()
+            if moved:
+                self.host.update(copy.deepcopy(moved))
         self.path = Path(path) if path is not None else state_path()
+        self.host_path = Path(host_path) if host_path is not None else None
+        # What each file held when loaded (None: count everything as ours).
+        self._base: Optional[dict] = None
+        self._base_host: Optional[dict] = None
 
     # -- sections ---------------------------------------------------------
     @property
     def local(self) -> dict:
-        return self.data["local"]
+        return self.host["local"]
 
     def section(self, kind: str) -> dict:
-        if kind not in SECTIONS:
-            raise StateError(f"no such section {kind!r}")
-        return self.data[kind]
+        if kind in SHARED_SECTIONS:
+            return self.data[kind]
+        if kind in HOST_SECTIONS:
+            return self.host[kind]
+        raise StateError(f"no such section {kind!r}")
 
     def get(self, kind: str, name: str) -> dict:
         try:
@@ -341,33 +436,239 @@ class State:
                 if r.get("status") == "flagged"]
 
 
-def load(path: Optional[Path] = None) -> State:
-    """The state from *path* (default ``state_path()``); a missing file is
-    an empty state.  A file that is not valid JSON raises ``StateError``
-    naming it (never silently replaced: it may be the only record)."""
-    p = Path(path) if path is not None else state_path()
+# --------------------------------------------------------------------------
+# Merging: what this run changed, applied to what is on disk now
+# --------------------------------------------------------------------------
+
+_GONE = object()     # a record or field that is not there
+
+
+def _health_only(before, after) -> bool:
+    """*after* differs from *before* in health fields only."""
+    if not (isinstance(before, dict) and isinstance(after, dict)):
+        return False
+    keys = set(before) | set(after)
+    return all(before.get(k, _GONE) == after.get(k, _GONE) for k in keys - HEALTH_FIELDS)
+
+
+def _merge_fields(base: dict, ours: dict, theirs: dict) -> dict:
+    out = {}
+    for k in list(theirs) + [k for k in ours if k not in theirs] + \
+            [k for k in base if k not in theirs and k not in ours]:
+        b, o, t = base.get(k, _GONE), ours.get(k, _GONE), theirs.get(k, _GONE)
+        v = t if o == b else o          # ours wins where we changed it
+        if v is not _GONE:
+            out[k] = v
+    return out
+
+
+def _merge_record(b, o, t):
+    if o == b:
+        return t                       # untouched here: whatever is on disk now
+    if t == b:
+        return o                       # untouched there: ours
+    if o is _GONE:                     # removed here, changed there
+        return _GONE if _health_only(b, t) else t
+    if t is _GONE:                     # removed there, changed here
+        return _GONE if _health_only(b, o) else o
+    if isinstance(b, dict) or b is _GONE:
+        if isinstance(o, dict) and isinstance(t, dict):
+            return _merge_fields(b if isinstance(b, dict) else {}, o, t)
+    return o
+
+
+def merge(base: Optional[dict], ours: dict, theirs: Optional[dict], sections) -> dict:
+    """Three-way merge of one file: *base* (as loaded; None: nothing),
+    *ours* (now, in this run), *theirs* (on disk now; None: no file).
+    Sections merge record by record and, for a record both changed, field
+    by field; ``local`` merges field by field."""
+    base = base or {}
+    theirs = theirs or {}
+    out = {"schema": SCHEMA}
+    for sec in sections:
+        b, o, t = base.get(sec) or {}, ours.get(sec) or {}, theirs.get(sec) or {}
+        res = {}
+        for name in list(t) + [n for n in o if n not in t] + \
+                [n for n in b if n not in t and n not in o]:
+            r = _merge_record(b.get(name, _GONE), o.get(name, _GONE), t.get(name, _GONE))
+            if r is not _GONE:
+                res[name] = r
+        out[sec] = res
+    if "local" in ours or "local" in theirs:
+        out["local"] = _merge_fields(base.get("local") or {}, ours.get("local") or {},
+                                     theirs.get("local") or {})
+    return out
+
+
+def _apply_in_place(target: dict, result: dict) -> None:
+    """Make *target* equal to *result*, keeping the identity of the
+    section and record dicts that stay (callers hold references to them,
+    e.g. a network's record across several saves)."""
+    result = copy.deepcopy(result)
+    for k in list(target):
+        if k not in result:
+            del target[k]
+    for k, v in result.items():
+        cur = target.get(k)
+        if isinstance(cur, dict) and isinstance(v, dict) and k != "schema":
+            if k == "local":
+                cur.clear()
+                cur.update(v)
+                continue
+            for name in list(cur):
+                if name not in v:
+                    del cur[name]
+            for name, rec in v.items():
+                old = cur.get(name)
+                if isinstance(old, dict) and isinstance(rec, dict):
+                    old.clear()
+                    old.update(rec)
+                else:
+                    cur[name] = rec
+        else:
+            target[k] = v
+
+
+# --------------------------------------------------------------------------
+# The lock
+# --------------------------------------------------------------------------
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True              # exists, not ours
+    return True
+
+
+class FileLock:
+    """``<file>.lock``, created with ``O_EXCL``; it holds ``host pid time``.
+
+    A lock is stale -- a run that crashed -- when it is this computer's and
+    its process is gone, or when it is older than ``LOCK_STALE`` (saves
+    hold it for milliseconds).  A stale lock is renamed away first, so that
+    two runs breaking it at once cannot both proceed."""
+
+    def __init__(self, path: Path, timeout: float = LOCK_TIMEOUT):
+        self.path = Path(str(path) + ".lock")
+        self.timeout = timeout
+        self.me = f"{socket.gethostname()} {os.getpid()}"
+
+    def _stale(self) -> Optional[str]:
+        try:
+            text = self.path.read_text()
+            age = time.time() - self.path.stat().st_mtime
+        except OSError:
+            return None
+        parts = text.split()
+        host, pid = (parts[0], parts[1]) if len(parts) >= 2 else ("?", "0")
+        if host == socket.gethostname() and pid.isdigit() and not _pid_alive(int(pid)):
+            return f"its process {pid} has ended"
+        if age > LOCK_STALE:
+            return f"it is {int(age)} s old"
+        return None
+
+    def holder(self) -> str:
+        try:
+            return self.path.read_text().strip() or "?"
+        except OSError:
+            return "?"
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + self.timeout
+        delay = 0.02
+        while True:
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                if self._stale():
+                    aside = Path(f"{self.path}.stale.{os.getpid()}")
+                    try:
+                        os.rename(self.path, aside)
+                        os.unlink(aside)
+                    except OSError:
+                        pass
+                    continue
+                if time.monotonic() > deadline:
+                    raise StateError(
+                        f"{self.path.with_suffix('')} is locked by another setup run "
+                        f"({self.holder()}). If none is running, remove {self.path}") from None
+                time.sleep(delay)
+                delay = min(delay * 2, 0.25)
+                continue
+            with os.fdopen(fd, "w") as f:
+                f.write(f"{self.me} {time.time():.0f}\n")
+            return self
+
+    def __exit__(self, *exc):
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
+        return False
+
+
+# --------------------------------------------------------------------------
+# Files
+# --------------------------------------------------------------------------
+
+def _read_json(p: Path) -> Optional[dict]:
+    """The file's dict, or None if it does not exist.  A file that is not
+    valid JSON raises ``StateError`` naming it (never silently replaced:
+    it may be the only record)."""
     if not p.exists():
-        return State(path=p)
+        return None
     try:
         data = json.loads(p.read_text())
     except (OSError, ValueError) as exc:
         raise StateError(f"{p} cannot be read ({exc}); fix or move it aside") from None
     if not isinstance(data, dict):
         raise StateError(f"{p} is not a cubevis state file")
-    return State(data, path=p)
+    return data
 
 
-def save(st: State, path: Optional[Path] = None) -> Path:
-    """Write atomically (temporary file in the same directory, then
-    ``os.replace``), mode 600, directory mode 700."""
-    p = Path(path) if path is not None else st.path
+def load(path: Optional[Path] = None, host_path: Optional[Path] = None,
+         host: bool = True) -> State:
+    """The state from *path* (default ``state_path()``) and this computer's
+    *host_path* (default ``host_state_path()``); missing files are empty.
+    ``host=False`` skips this computer's file (the inside test, run at
+    every ssh connection, needs only the networks).  Writes nothing."""
+    p = Path(path) if path is not None else state_path()
+    raw = _read_json(p)
+    shared, moved = migrate(raw, p.name) if raw is not None else (empty(), None)
+    st = State(path=p)
+    st.data = shared
+    st._base = copy.deepcopy(shared) if raw is not None else None
+    if host:
+        hp = Path(host_path) if host_path is not None else host_state_path()
+        st.host_path = hp
+        hraw = _read_json(hp)
+        if hraw is not None:
+            st.host = migrate_host(hraw, str(hp))
+            st._base_host = copy.deepcopy(st.host)
+        elif moved:
+            # From a schema-1 file: this computer's from now on.  Counted as
+            # this run's change, so the first save writes it.
+            st.host.update(copy.deepcopy(moved))
+    return st
+
+
+def _write_json(p: Path, data: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(p.parent, 0o700)
     except OSError:
         pass
-    text = json.dumps(st.data, indent=2, sort_keys=False) + "\n"
-    fd, tmp = tempfile.mkstemp(prefix=".state.", suffix=".tmp", dir=str(p.parent))
+    text = json.dumps(data, indent=2, sort_keys=False) + "\n"
+    try:
+        if p.read_text() == text:
+            return
+    except OSError:
+        pass
+    fd, tmp = tempfile.mkstemp(prefix=f".{p.stem}.", suffix=".tmp", dir=str(p.parent))
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
@@ -381,5 +682,36 @@ def save(st: State, path: Optional[Path] = None) -> Path:
         except OSError:
             pass
         raise
+
+
+def _save_one(p: Path, ours: dict, base: Optional[dict], sections, host: bool) -> dict:
+    with FileLock(p):
+        raw = _read_json(p)
+        if raw is None:
+            theirs = None
+        elif host:
+            theirs = migrate_host(raw, str(p))
+        else:
+            theirs = migrate(raw, p.name)[0]
+        merged = merge(base, ours, theirs, sections)
+        _write_json(p, merged)
+    return merged
+
+
+def save(st: State, path: Optional[Path] = None) -> Path:
+    """Write the shared file (*path*, default ``st.path``) and this
+    computer's (``st.host_path``, default ``host_state_path()``), each under
+    its lock, merged with whatever another run wrote since this one loaded
+    (module docstring).  Afterwards ``st`` holds the merged state, in the
+    same dicts as before.  Returns the shared file's path."""
+    p = Path(path) if path is not None else st.path
+    merged = _save_one(p, st.data, st._base, SHARED_SECTIONS, host=False)
+    _apply_in_place(st.data, merged)
+    st._base = copy.deepcopy(merged)
     st.path = p
+    hp = st.host_path or host_state_path()
+    hmerged = _save_one(hp, st.host, st._base_host, HOST_SECTIONS, host=True)
+    _apply_in_place(st.host, hmerged)
+    st._base_host = copy.deepcopy(hmerged)
+    st.host_path = hp
     return p

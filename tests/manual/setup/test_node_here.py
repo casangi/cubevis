@@ -41,7 +41,7 @@ def make_env(prefix, kind="venv", kernel=False):
     # the .pth file, so the versions must match.
     subprocess.run([KERNEL_PY or sys.executable, "-m", "venv", "--without-pip", str(prefix)],
                    check=True)
-    if kind in ("conda", "mamba"):
+    if kind == "conda":
         os.makedirs(os.path.join(prefix, "conda-meta"))
     if kernel:
         site = subprocess.run([os.path.join(prefix, "bin", "python"), "-c",
@@ -112,7 +112,7 @@ def test_home_fs_is_found():
 def test_kinds_names_and_installed_cubevis(tmp_path):
     c = make_env(tmp_path / "mf" / "envs" / "hrs", "conda")
     v = make_env(tmp_path / "proj" / ".venv")
-    assert envs.kind_of(c) == "conda" and envs.kind_of(c, "/x/micromamba") == "mamba"
+    assert envs.kind_of(c) == "conda" and envs.kind_of(c, "/x/micromamba") == "conda"
     assert envs.kind_of(v) == "venv" and envs.kind_of(str(tmp_path)) == "python"
     assert envs.cubevis_installed(c) is None
     site = [d for d in (tmp_path / "mf" / "envs" / "hrs" / "lib").glob("python3*")][0]
@@ -137,7 +137,7 @@ def test_candidates_from_tools_venv_and_setup(home, monkeypatch):
     found = envs.candidates()
     by = {c["prefix"]: c for c in found}
     assert by[a]["kind"] == "conda" and by[a]["tool"].endswith("miniforge3/bin/conda")
-    assert by[b]["kind"] == "mamba" and by[b]["tool"].endswith("bin/micromamba")
+    assert by[b]["kind"] == "conda" and by[b]["tool"].endswith("bin/micromamba")
     assert by[v]["kind"] == "venv" and by[v]["how"] == "the active virtual environment"
     assert found[0]["how"] == "running this setup"
     assert len([c for c in found if c["prefix"] == a]) == 1     # listed twice, kept once
@@ -262,13 +262,48 @@ def test_walk_asks_the_role(home):
 
 def test_bad_typed_paths_are_refused(home):
     r = _run(home, "--answer", "environments=/no/such/env 99", "node-here", "cv")
-    assert "not a number in the list, nor an environment or a python" in r.stdout
+    assert "not a number or name in the list, nor an environment or a python" in " ".join(r.stdout.split())
     assert _node_file(home)["environments"] == {}
 
 
-def test_the_managing_tool_matches_the_kind(home):
-    from cubevis.setup.node_here import _tool_for
-    fake_tool(home / "bin", "mamba", [])
-    assert _tool_for("conda", "/x/bin/conda") == "/x/bin/conda"
-    assert _tool_for("mamba", "/x/bin/conda") == str(home / "bin" / "mamba")   # not conda's
-    assert _tool_for("conda", None) is None                                    # none here
+def test_the_install_command_is_asked_for_conda_environments(home):
+    from cubevis.setup.node_here import resolve_tool
+    conda = fake_tool(home / "mf" / "bin", "conda", [])
+    mamba = fake_tool(home / "mf" / "bin", "mamba", [])
+    other = fake_tool(home / "bin", "mamba", [])
+    found = [envs.norm(other), envs.norm(conda), envs.norm(mamba)]
+    assert resolve_tool("mamba", found, near=conda) == envs.norm(mamba)   # beside the lister
+    assert resolve_tool("mamba", found) == envs.norm(other)
+    assert resolve_tool(str(conda), found) == envs.norm(conda)
+    assert resolve_tool("no-such-tool", found) is None and resolve_tool("", found) is None
+
+    e = make_env(home / "mf" / "envs" / "hrs", "conda")
+    fake_tool(home / "bin", "conda", [e])          # PATH's conda lists it
+    r = _run(home, "--answer", "environments=hrs", "--answer", f"env_tool={mamba}",
+             "node-here", "cv")
+    out = " ".join(r.stdout.split())
+    assert "Which command do you use to install and upgrade packages in it?" in out
+    rec = _node_file(home)["environments"]["hrs"]
+    assert rec["kind"] == "conda" and rec["tool"] == envs.norm(mamba)
+    # A record of the old kind 'mamba' reads as conda, its tool kept.
+    f = home / ".config/cubevis/remote/cv/zuul06.json"
+    data = json.loads(f.read_text())
+    data["environments"]["hrs"]["kind"] = "mamba"
+    f.write_text(json.dumps(data))
+    _run(home, "--answer", "environments=hrs", "node-here", "cv")
+    rec = _node_file(home)["environments"]["hrs"]
+    assert rec["kind"] == "conda" and rec["tool"] == envs.norm(mamba)
+
+
+def test_environments_are_chosen_by_name_unless_two_share_it(home):
+    a = make_env(home / "mf" / "envs" / "hrs", "conda")
+    b = make_env(home / "mf" / "envs" / "bare", "conda")
+    c = make_env(home / "other" / "envs" / "hrs", "conda")             # a second 'hrs'
+    fake_tool(home / "bin", "conda", [a, b])
+    r = _run(home, "--answer", "environments=bare", "node-here", "cv")
+    assert list(_node_file(home)["environments"]) == ["bare"]
+    fake_tool(home / "bin", "conda", [a, b, c])
+    r = _run(home, "--answer", "environments=hrs bare", "node-here", "cv")
+    out = " ".join(r.stdout.split())
+    assert "more than one has that name, give the number instead: hrs" in out
+    assert list(_node_file(home)["environments"]) == ["bare"]          # nothing changed

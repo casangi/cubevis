@@ -203,7 +203,8 @@ def test_environment_identity_hosts_and_one_network():
     st.add_node("n2", network="cv")
     st.add_node("m1", network="nm")
     py = "/home/jo/mf/envs/cubevis/bin/python"
-    st.add_environment("main", network="cv", python=py, kind="mamba")
+    st.add_environment("main", network="cv", python=py, kind="mamba")   # read as conda
+    assert st.section("environments")["main"]["kind"] == "conda"
     assert st.find_environment("cv", py) == "main" and st.find_environment("nm", py) is None
     with pytest.raises(S.StateError, match="is environment 'main' of cv already"):
         st.add_environment("again", network="cv", python=py)

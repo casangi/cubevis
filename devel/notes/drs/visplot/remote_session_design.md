@@ -247,8 +247,10 @@ Built in stage 2b part ii (`hrs_h8_consolidation_prep.md` section 31).
   user, an optional node query (tested on the spot).
 * Environments: setup *asks* which to use; what it finds (`conda env
   list`, `mamba env list`, an active venv) only pre-fills the choices,
-  and the user may type paths.  Kinds: `conda`, `mamba`, `venv`,
-  `python`.  Each chosen environment is tested by running its interpreter
+  and the user may type paths or give names.  Kinds: `conda`, `venv`,
+  `python` (2026-10-21: `mamba` dropped -- the environments are the same;
+  for a conda environment setup asks which command the user installs and
+  upgrades packages with: conda, mamba or micromamba, recorded as `tool`).  Each chosen environment is tested by running its interpreter
   with a small script (Python version; cubevis and ipykernel import, and
   their versions); the cubevis running setup need not be in it.  Failures
   are recorded flagged, with the reason.
@@ -357,7 +359,18 @@ python -m pip install "cubevis[visplot]==1.0.97"
 ```
 
 `setup upgrade` can copy that script to the node; running it is the
-user's step. Downgrades are the same with an older version.
+user's step. Downgrades are the same with an older version.  For a conda
+environment the script uses the environment's `tool` (the command the
+user said they install and upgrade with); for venv and python, `python -m
+pip`.
+
+Open (Darrell, 2026-10-21): changing an environment while a kernel runs in
+it can break that kernel.  Setup will at least say so -- before printing
+upgrade commands, it lists the sessions it knows of using that
+environment (this computer's records; other computers' are not visible).
+Whether to go further -- a lock that cubevis holds on an environment while
+kernels use it, which upgrades respect -- is a slippery slope (who
+releases it after a crash; other installers ignore it) and is not planned.
 
 ## 9. Health and diagnostics
 

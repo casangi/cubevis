@@ -1150,3 +1150,29 @@ or [n]ode?", suggesting `n` when `$SSH_CONNECTION` is set.
 * **For part iii**: the GUI host's own environments (network `local`)
   belong in its `hosts/<id>/local.json`, not in the shared `state.json`
   -- with a shared home, gui1's local environments are not gui2's.
+
+### 31a. Revision (2026-10-21, after Darrell's run on zuul06)
+
+* **Choosing environments by name**: `Use [...]` takes numbers, names
+  (the name an environment is enabled under, or its directory's name,
+  e.g. `sshpyk-python312`) and paths.  A name two candidates share is
+  refused with their numbers; nothing changes.
+* **Three kinds**: `conda`, `venv`, `python`.  `mamba` dropped: the same
+  environments; what differs is the program, now asked for a conda
+  environment as "which command do you use to install and upgrade
+  packages in it?" (conda, mamba, micromamba, a name on PATH, or a path;
+  default: the tool that listed it, else conda) and recorded as `tool`.
+  Old `mamba` records read as `conda`, tool kept (node file and
+  `state.add_environment`).  Darrell: if cubevis ever upgrades or
+  downgrades environments, that is the program it must name; the prompt
+  says so.  Design section 8: upgrades stay the user's step; the
+  in-use warning and the (not planned) environment lock are noted there.
+* **Agreed for part iii** (not built yet): a working directory per
+  environment (default `$HOME`; `Session(cwd=)` overrides), environment
+  variables per environment set on the node (`node-here`), both applied
+  by a small launcher script `node-here` writes on the node (`cd`,
+  `export`, `exec <python> "$@"`) and given to sshpyk as `remote_python`
+  -- sshpyk runs `$FP_PY -c ...` after checking only that it is an
+  executable, and passes neither cwd nor environment.  Nothing is carried
+  from the local computer by default; developers get an explicit
+  `Session(env={...})`, never stored.

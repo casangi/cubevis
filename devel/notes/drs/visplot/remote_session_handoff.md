@@ -7,10 +7,11 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* main is at **bbf9d27** (stage 2b part i committed).  Delivered on top
+* main is at **cb9a40e** (stage 2b parts i and ii committed).  Delivered on top
   of it, not yet committed when this was written:
-  **`remote_stage2b2_bbf9d27.zip`** (part ii, below).  Check `git log`
-  first.
+  **`remote_stage2b2r2_cb9a40e.zip`** (the revision 31a of part ii:
+  names as selectors, three kinds, the install command asked).  Check
+  `git log` first.
 * **Design changed 2026-10-20/21** (section 7b of the design): setup runs
   in one of two roles, GUI or node; the node side configures and tests
   environments (several per host, only configured ones used; an
@@ -157,6 +158,20 @@ The sandbox loses `/etc/hosts` edits and running daemons on restart.
 
 ## Open points (collected 2026-10-19)
 
+* **Reconnection files on a shared home** (2026-10-21, for stage 3/5).
+  sshpyk writes its persistence file to Jupyter's runtime directory
+  (`<jupyter_data_dir>/runtime/sshpyk-...-<uuid>.json`: `~/Library/Jupyter/
+  runtime` on macOS, `~/.local/share/jupyter/runtime` on Linux; on disk,
+  kept across logout and reboot -- jupyter_core 5.9 no longer uses
+  `$XDG_RUNTIME_DIR`).  cubevis's `KernelPersistenceManifest` is one file
+  there, `cubevis-kernel-manifest.json`, written atomically but without a
+  lock or re-read: on a shared home two GUI computers can drop each other's
+  entries.  Plan: the Session passes `persistent_file` under
+  `hosts/<id>/sessions/` and keeps its record in `hosts/<id>/local.json`
+  (locked, merged), instead of the shared manifest.  The sockets in
+  `/tmp/cubevis-<uid>/cm` are only live connections: losing them (logout,
+  reboot) costs one wrapper login per hop, nothing else.
+
 * **First contact with a login host, straight to a node.**  When the
   wrapper logs in to a password login host as a hop of its own, it passes
   only `-F` and the config's options, not the caller's `-o
@@ -193,7 +208,9 @@ Design sections 7b and 13 (the plan), 8, 9.
    import and versions); failures recorded flagged; writes
    `remote/<network>/<id>.json` (single writer: that computer).  The
    GUI host's own environments: the network *this host*.
-3. **Part iii: the GUI side** reads `remote/<network>/*.json` (directly
+3. **Part iii** also writes, on the node, a launcher per environment
+   (working directory, node-set environment variables; section 31a).
+   **The GUI side** reads `remote/<network>/*.json` (directly
    when the home is shared with the nodes, else over ssh), shows and
    records them (environments into `state.json` via `add_environment`,
    merged by identity: same python on several nodes of a shared home ->

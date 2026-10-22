@@ -156,8 +156,20 @@ def _listing(nf: nodefile.NodeFile) -> list:
     return out
 
 
+def _names(cand: dict) -> set:
+    """What a candidate can be chosen by, besides its number: the name it
+    is enabled under, and its directory's name (``envs/<name>``)."""
+    out = {envs.default_name(cand)}
+    if cand.get("name"):
+        out.add(cand["name"])
+    if cand.get("prefix"):
+        out.add(cand["prefix"].rstrip("/").rsplit("/", 1)[-1])
+    return {n for n in out if n}
+
+
 def _pick(c, listing: list) -> Optional[list]:
-    """The candidates the user chooses (typed paths added)."""
+    """The candidates the user chooses: by number, by name (unless two
+    share it), or by a path (others added)."""
     ui = c.ui
     ui.say("Python environments for kernels here. Found (or enabled before):")
     for i, cand in enumerate(listing, 1):
@@ -169,18 +181,25 @@ def _pick(c, listing: list) -> Optional[list]:
         ui._p("    (none found)")
     enabled = [str(i) for i, x in enumerate(listing, 1) if x.get("name")]
     default = " ".join(enabled or [str(i) for i, x in enumerate(listing, 1) if x.get("cubevis")])
-    ui.say("Give the numbers to use, and the paths of any others (an environment's directory "
-           "or its python), separated by spaces; 'none' for none. Only these are used.")
+    ui.say("Give the ones to use by number or name, and others by path (an environment's "
+           "directory or its python), separated by spaces; 'none' for none. Only these are "
+           "used.")
     while True:
         text = ui.ask("Use", default or "none", key="environments").strip()
         if text.lower() in ("none", "-", ""):
             return []
-        chosen, bad = [], []
+        chosen, bad, ambiguous = [], [], []
         for tok in re.split(r"[\s,]+", text):
+            by_name = [x for x in listing if tok in _names(x)]
             if tok.isdigit() and 1 <= int(tok) <= len(listing):
                 cand = listing[int(tok) - 1]
-            elif tok.isdigit():
+            elif tok.isdigit() and not by_name:
                 bad.append(tok)
+                continue
+            elif "/" not in tok and not tok.startswith("~") and len(by_name) == 1:
+                cand = by_name[0]
+            elif "/" not in tok and not tok.startswith("~") and len(by_name) > 1:
+                ambiguous.append(f"{tok} ({', '.join(str(listing.index(x) + 1) for x in by_name)})")
                 continue
             else:
                 cand = envs.describe_path(tok)
@@ -189,29 +208,69 @@ def _pick(c, listing: list) -> Optional[list]:
                     continue
             if cand["python"] not in [x["python"] for x in chosen]:
                 chosen.append(cand)
-        if not bad:
+        if not bad and not ambiguous:
             return chosen
-        ui.note(f"not a number in the list, nor an environment or a python: {', '.join(bad)}")
+        if ambiguous:
+            ui.note("more than one has that name, give the number instead: " + ", ".join(ambiguous))
+        if bad:
+            ui.note("not a number or name in the list, nor an environment or a python: "
+                    + ", ".join(bad))
         if ui.yes:
             return None
 
 
-def _tool_for(kind: str, guess: Optional[str]) -> Optional[str]:
-    """The executable that manages a conda/mamba environment: the one that
-    listed it when it is of that kind, else the first of that kind here
-    (None: none found; upgrade commands then say so)."""
-    names = ("conda",) if kind == "conda" else ("mamba", "micromamba")
-    if guess and os.path.basename(guess) in names:
-        return guess
-    for t in envs.conda_tools():
-        if os.path.basename(t) in names:
-            return t
-    return None
+def resolve_tool(answer: str, found: list, near: Optional[str] = None) -> Optional[str]:
+    """A tool from what the user typed: ``conda`` / ``mamba`` /
+    ``micromamba`` (the one found here, preferring the directory of *near*),
+    another name on PATH, or a path.  None if it is not an executable."""
+    import shutil
+    a = answer.strip()
+    if not a:
+        return None
+    if "/" not in a and not a.startswith("~"):
+        same = [t for t in found if os.path.basename(t) == a]
+        if near:
+            same.sort(key=lambda t: os.path.dirname(t) != os.path.dirname(near))
+        if same:
+            return same[0]
+        w = shutil.which(a)
+        return envs.norm(w) if w else None
+    p = envs.norm(a)
+    return p if os.path.isfile(p) and os.access(p, os.X_OK) else None
+
+
+def ask_tool(c, cand: dict) -> Optional[str]:
+    """For a conda environment: the command the user installs and upgrades
+    packages in it with.  Setup only ever writes commands for the user to
+    run (design section 8); this says which program they name."""
+    ui = c.ui
+    found = envs.conda_tools()
+    default = cand.get("tool") or next((t for t in found if os.path.basename(t) == "conda"),
+                                       found[0] if found else "")
+    ui.say("Which command do you use to install and upgrade packages in it? When cubevis "
+           "there needs upgrading, setup writes the commands for you to run with it (setup "
+           "never runs them)."
+           + (f" Found: {', '.join(tilde(t) for t in found)}." if found else ""))
+    while True:
+        ans = ui.ask("  Command (conda, mamba, micromamba, or its path; empty: none)",
+                     tilde(default) if default else "", key="env_tool")
+        if not ans.strip():
+            ui.note("no command recorded: upgrade instructions will name none")
+            return None
+        tool = resolve_tool(ans, found, cand.get("tool"))
+        if tool:
+            return tool
+        ui.note(f"{ans} is not a command here")
+        if ui.yes:
+            return None
 
 
 def configure_environments(c, nf: nodefile.NodeFile) -> int:
     """Choose, name and check the environments; returns how many work."""
     ui = c.ui
+    for e in nf.environments.values():
+        if e.get("kind") == "mamba":         # a kind until 2026-10-21 (envs docstring)
+            e["kind"] = "conda"
     listing = _listing(nf)
     chosen = _pick(c, listing)
     if chosen is None:
@@ -225,8 +284,9 @@ def configure_environments(c, nf: nodefile.NodeFile) -> int:
         name = nf.environment_by_python(cand["python"])
         if name is None:
             ui.say(f"{tilde(cand['python'])}:")
-            kind = ui.ask_choice("  What kind of environment is it (conda, mamba, venv, python)?",
+            kind = ui.ask_choice("  What kind of environment is it (conda, venv, python)?",
                                  cand["kind"], envs.KINDS, key="env_kind")
+            tool = ask_tool(c, cand) if kind == "conda" else None
             taken = set(nf.environments)
             base = envs.default_name(cand)
             dflt, i = base, 2
@@ -248,7 +308,7 @@ def configure_environments(c, nf: nodefile.NodeFile) -> int:
                 continue
             nf.environments[name] = {
                 "kind": kind, "python": cand["python"], "prefix": cand.get("prefix"),
-                "tool": _tool_for(kind, cand.get("tool")) if kind in ("conda", "mamba") else None,
+                "tool": tool,
                 "versions": {}, "python_version": None, "visplot": None,
                 "status": "new", "last_checked": None, "last_error": None}
             ui.record_change("enabled environment", f"{name} ({kind}, {tilde(cand['python'])})")

@@ -48,8 +48,9 @@ Layout (schema 2)::
 
 An environment belongs to one network (design 7b) and is identified by
 (network, ``python``); ``hosts`` is ``"all"`` (the network's nodes see it
-on a shared filesystem) or a list of nodes.  ``kind``: conda, mamba, venv
-or python; ``tool``: the conda/mamba executable that manages it.
+on a shared filesystem) or a list of nodes.  ``kind``: conda, venv or
+python; ``tool``: for conda, the command the user installs and upgrades
+packages with (conda, mamba or micromamba).
 
     hosts/<id>/local.json
     {"schema": 2,
@@ -98,7 +99,7 @@ STORES = ("keychain", "secret-tool", "pass", "gpg-file", "command")
 # another run removed nor stops this run's removal of it (``merge``).
 HEALTH_FIELDS = {"status", "last_checked", "last_error", "checked_on", "cubevis",
                  "versions", "python_version", "visplot"}
-KINDS = ("conda", "mamba", "venv", "python")
+KINDS = ("conda", "venv", "python")
 
 LOCK_TIMEOUT = 30.0      # seconds to wait for another run's lock
 LOCK_STALE = 120.0       # a lock older than this is a crashed run's (held for milliseconds)
@@ -399,6 +400,8 @@ class State:
         links kept), on every node (``hosts="all"``) or on the listed ones."""
         check_name("environment", name)
         self.get("networks", network)
+        if kind == "mamba":              # a kind until 2026-10-21: the same environments
+            kind = "conda"
         if kind not in KINDS:
             raise StateError(f"environment kind {kind!r}: one of {', '.join(KINDS)}")
         if not python.startswith("/"):

@@ -3,10 +3,13 @@ telling their kind, and checking that one can run cubevis kernels.
 
 Kinds (design section 7b):
 
-    conda   a conda environment, managed with ``conda``
-    mamba   a conda environment, managed with ``mamba`` or ``micromamba``
+    conda   a conda-format environment; ``tool`` is the command the user
+            installs and upgrades packages with: conda, mamba or micromamba
     venv    a virtual environment (``python -m venv``)
     python  a plain interpreter (packages installed for it, perhaps --user)
+
+(Until 2026-10-21 there was a fourth, ``mamba``: the environments are the
+same, so only the tool differs; old records read as ``conda``.)
 
 Setup *asks* which environments to use; what is found here only pre-fills
 the list.  Finding is cheap and changes nothing: the conda tools' own
@@ -34,7 +37,8 @@ from typing import Optional
 
 from . import data_file
 
-KINDS = ("conda", "mamba", "venv", "python")
+KINDS = ("conda", "venv", "python")
+TOOLS = ("conda", "mamba", "micromamba")
 CHECK_TIMEOUT = 300          # seconds: the first import from a cold NFS cache is slow
 LIST_TIMEOUT = 60
 
@@ -70,8 +74,7 @@ def cubevis_installed(prefix: str) -> Optional[str]:
 def kind_of(prefix: str, listed_by: Optional[str] = None) -> str:
     """The likely kind of the environment at *prefix* (the user is asked)."""
     if os.path.isdir(os.path.join(prefix, "conda-meta")):
-        tool = os.path.basename(listed_by or "")
-        return "mamba" if tool in ("mamba", "micromamba") else "conda"
+        return "conda"
     if os.path.isfile(os.path.join(prefix, "pyvenv.cfg")):
         return "venv"
     return "python"
@@ -132,7 +135,7 @@ def candidates() -> list:
         seen.add(py)
         k = kind_of(prefix, tool)
         out.append({"python": py, "prefix": norm(prefix), "kind": k,
-                    "tool": tool if k in ("conda", "mamba") else None,
+                    "tool": tool if k == "conda" else None,
                     "cubevis": cubevis_installed(prefix), "how": how})
 
     if sys.prefix:

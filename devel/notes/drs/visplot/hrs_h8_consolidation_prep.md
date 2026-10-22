@@ -1176,3 +1176,11 @@ or [n]ode?", suggesting `n` when `$SSH_CONNECTION` is set.
   executable, and passes neither cwd nor environment.  Nothing is carried
   from the local computer by default; developers get an explicit
   `Session(env={...})`, never stored.
+* **Node files moved** (2026-10-22, Darrell): from `remote/<network>/<id>.json`
+  to `hosts/<id>/node/<network>.json`, so everything a computer writes is in
+  its own directory (one writer per directory; one directory to look at or
+  remove).  The GUI side finds a network's nodes as
+  `hosts/*/node/<network>.json`.  No migration: while iterating, Darrell
+  clears old files himself.  `node-here`'s opening text now names that
+  directory (it said "nothing but its file in ~/.config/cubevis/remote",
+  but the logs go to `hosts/<id>/` too).

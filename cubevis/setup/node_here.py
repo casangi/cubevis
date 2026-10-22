@@ -10,8 +10,9 @@ the ones found here are offered, the user chooses, may type others, and
 says what kind each is; each is checked by running it (``envs.check``).
 Only the environments chosen here are ever used for kernels.
 
-Everything goes to ``remote/<network>/<id>.json`` (``nodefile``), written
-by this computer only; ``state.json`` is not touched.  The network
+Everything goes to this computer's own directory, ``hosts/<id>/``: the
+node file ``node/<network>.json`` (``nodefile``), and the logs.
+``state.json`` is not touched.  The network
 ``local`` is this computer by itself (kernels for plots shown here).
 """
 from __future__ import annotations
@@ -340,7 +341,8 @@ def cmd_node_here(c, network: Optional[str] = None) -> int:
     ui.heading("This computer as a node: where kernels run")
     ui.say("This records what this computer offers to kernels: which network it is in and "
            "the Python environments to run them in. Only the environments you choose here "
-           f"are used. It changes nothing but its file in {tilde(nodefile.remote_dir())}.")
+           f"are used. It writes only to this computer's directory, "
+           f"{tilde(nodefile.node_dir().parent)}.")
     name = ask_network(c, network)
     if not name:
         return 1

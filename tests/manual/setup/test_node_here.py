@@ -168,7 +168,7 @@ def test_check_passes_for_a_kernel_environment(tmp_path):
 
 def test_node_file_round_trip_and_reruns(home):
     nf = nodefile.load("cv")
-    assert not nf.path.exists() and nf.path == home / ".config/cubevis/remote/cv/zuul06.json"
+    assert not nf.path.exists() and nf.path == home / ".config/cubevis/hosts/zuul06/node/cv.json"
     nf.node["domain"] = "cv.example.org"
     nf.environments["main"] = {"kind": "conda", "python": "/p/bin/python", "status": "ok"}
     nodefile.save(nf)
@@ -184,6 +184,8 @@ def test_node_file_round_trip_and_reruns(home):
     assert back.node["domain"] == "cv.example.org"
     assert list(json.loads(back.path.read_text())) == ["schema", "node", "environments"]
     assert [(n, h) for n, h, _ in nodefile.all_files()] == [("cv", "zuul06")]
+    # Everything this computer writes is in its own directory.
+    assert nf.path.parent.parent == home / ".config/cubevis/hosts/zuul06"
 
 
 # -- the command -------------------------------------------------------------
@@ -200,7 +202,7 @@ def _run(home, *args, ssh=True, timeout=600):
 
 
 def _node_file(home, net="cv"):
-    return json.loads((home / ".config/cubevis/remote" / net / "zuul06.json").read_text())
+    return json.loads((home / ".config/cubevis/hosts/zuul06/node" / f"{net}.json").read_text())
 
 
 def test_node_here_records_the_node_and_environments(home):
@@ -226,6 +228,10 @@ def test_node_here_records_the_node_and_environments(home):
         assert hrs["status"] == "ok" and hrs["versions"]["cubevis"], r.stdout
         assert r.returncode == 0
     assert not (home / ".config/cubevis/state.json").exists()     # the node side only
+    files = sorted(str(p.relative_to(home / ".config/cubevis"))
+                   for p in (home / ".config/cubevis").rglob("*") if p.is_file())
+    assert all(f.startswith("hosts/zuul06/") for f in files), files
+    assert "It writes only to this computer's directory" in out
 
     # Again, keeping only the first: the other is no longer used.
     r = _run(home, "--answer", f"environments={good}", "node-here", "cv")
@@ -286,7 +292,7 @@ def test_the_install_command_is_asked_for_conda_environments(home):
     rec = _node_file(home)["environments"]["hrs"]
     assert rec["kind"] == "conda" and rec["tool"] == envs.norm(mamba)
     # A record of the old kind 'mamba' reads as conda, its tool kept.
-    f = home / ".config/cubevis/remote/cv/zuul06.json"
+    f = home / ".config/cubevis/hosts/zuul06/node/cv.json"
     data = json.loads(f.read_text())
     data["environments"]["hrs"]["kind"] = "mamba"
     f.write_text(json.dumps(data))

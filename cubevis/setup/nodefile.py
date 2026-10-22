@@ -1,25 +1,16 @@
-"""``remote/<network>/<id>.json``: this computer as a node of *network* --
-what it is, and the Python environments enabled on it for kernels.
+"""``hosts/<id>/node/<network>.json``: this computer as a node of
+*network* -- what it is, and the Python environments enabled on it for
+kernels.
 
-Written only by ``python -m cubevis.setup node-here`` run on that computer
-(design section 7b), so each file has one writer; reruns are merged like
-the state files (``state.merge``: lock, re-read, apply only this run's
-changes).  The GUI side reads these files -- directly when it shares the
-home directory, otherwise over ssh -- and records the environments in
-``state.json`` (stage 2b part iii).
-
-    {"schema": 2,
-     "node": {"network", "host" (the id), "hostname" (full name), "user",
-              "domain", "home", "home_fs", "shared_home", "addresses",
-              "ranges", "query": {"command", "names", "tested"} or null,
-              "cubevis" (the setup that wrote it), "updated"},
-     "environments": {NAME: {"kind", "python", "prefix", "tool",
-                             "versions": {dist: version}, "python_version",
-                             "visplot", "status", "last_checked",
-                             "last_error"}}}
-
-The network ``local`` is this computer by itself: environments for kernels
-started here, for plots shown here (no ssh).
+In this computer's own directory, with everything else it writes
+(``hosts/<id>/``: one writer per directory; one computer's files are one
+directory to look at or remove).  Written only by ``python -m
+cubevis.setup node-here`` run on that computer (design section 7b);
+reruns are merged like the state files (``state.merge``: lock, re-read,
+apply only this run's changes).  The GUI side reads them -- directly when
+it shares the home directory (``hosts/*/node/<network>.json``), otherwise
+over ssh -- and records the environments in ``state.json`` (stage 2b
+part iii).
 """
 from __future__ import annotations
 
@@ -35,29 +26,28 @@ SECTIONS = ("environments",)
 FIELD_DICTS = ("node",)
 
 
-def remote_dir() -> Path:
-    return config_dir() / "remote"
+def node_dir(host: Optional[str] = None) -> Path:
+    """``hosts/<id>/node``: this computer's node files."""
+    return config_dir() / "hosts" / (host or host_id()) / "node"
 
 
 def path(network: str, host: Optional[str] = None) -> Path:
-    return remote_dir() / S.check_name("network", network) / f"{host or host_id()}.json"
+    return node_dir(host) / f"{S.check_name('network', network)}.json"
 
 
 def mine() -> list:
     """Networks this computer has a node file for."""
-    d = remote_dir()
-    if not d.is_dir():
-        return []
-    return sorted(p.parent.name for p in d.glob(f"*/{host_id()}.json"))
+    d = node_dir()
+    return sorted(p.stem for p in d.glob("*.json")) if d.is_dir() else []
 
 
 def all_files() -> list:
     """``(network, host, path)`` of every node file in this directory (a
     shared home holds the other nodes' too)."""
-    d = remote_dir()
-    if not d.is_dir():
+    root = config_dir() / "hosts"
+    if not root.is_dir():
         return []
-    return sorted((p.parent.name, p.stem, p) for p in d.glob("*/*.json"))
+    return sorted((p.stem, p.parent.parent.name, p) for p in root.glob("*/node/*.json"))
 
 
 def empty(network: str) -> dict:

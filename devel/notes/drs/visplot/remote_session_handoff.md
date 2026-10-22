@@ -9,14 +9,14 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 * main is at **cb9a40e** (stage 2b parts i and ii committed).  Delivered on top
   of it, not yet committed when this was written:
-  **`remote_stage2b2r2_cb9a40e.zip`** (the revision 31a of part ii:
+  **`remote_stage2b2r3_cb9a40e.zip`** (the revision 31a of part ii:
   names as selectors, three kinds, the install command asked).  Check
   `git log` first.
 * **Design changed 2026-10-20/21** (section 7b of the design): setup runs
   in one of two roles, GUI or node; the node side configures and tests
   environments (several per host, only configured ones used; an
   environment belongs to one network); the GUI side reads the nodes'
-  `remote/<network>/<id>.json` over ssh; the configuration directory may
+  `hosts/<id>/node/<network>.json` over ssh; the configuration directory may
   be shared by several computers.  Inside ranges are a positive list
   (visitor networks use the bastion); `--inside-here` checks before
   recording; `CUBEVIS_ROUTE_<net>=direct|bastion` overrides; no probing
@@ -42,7 +42,7 @@ as ee125b6) and section 17 (the ssh wrapper).
   check.  Ask how it went before building on it.
 * **Stage 2b part ii done** (2026-10-21, base `bbf9d27`): `node-here`
   (the node side), environments found / chosen / checked, the node file
-  `remote/<network>/<id>.json`; the walk-through asks the role.  Section 31.
+  `hosts/<id>/node/<network>.json`; the walk-through asks the role.  Section 31.
   Darrell ran part i on zuul06 (RHEL 8): `status` correct.
 * **Host identity** decided 2026-10-21: the short host name, no machine
   id / IOPlatformUUID (regenerated per boot on diskless nodes, cloned in
@@ -206,11 +206,11 @@ Design sections 7b and 13 (the plan), 8, 9.
    asked for, found ones only offered; each tested by running its
    interpreter with a small script (Python version; cubevis, ipykernel
    import and versions); failures recorded flagged; writes
-   `remote/<network>/<id>.json` (single writer: that computer).  The
+   `hosts/<id>/node/<network>.json` (single writer: that computer).  The
    GUI host's own environments: the network *this host*.
 3. **Part iii** also writes, on the node, a launcher per environment
    (working directory, node-set environment variables; section 31a).
-   **The GUI side** reads `remote/<network>/*.json` (directly
+   **The GUI side** reads `hosts/*/node/<network>.json` (directly
    when the home is shared with the nodes, else over ssh), shows and
    records them (environments into `state.json` via `add_environment`,
    merged by identity: same python on several nodes of a shared home ->

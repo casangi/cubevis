@@ -257,12 +257,12 @@ Built in stage 2b part ii (`hrs_h8_consolidation_prep.md` section 31).
 * **Only configured environments are used.**  A conda environment created
   later is invisible until setup on that host enables it.
 * Records the host's addresses (candidate `inside` ranges for the GUI
-  side) and writes `remote/<network>/<id>.json`.
+  side) and writes `hosts/<id>/node/<network>.json`.
 * Replaces the generated `remote-setup.sh` and its password plumbing.
 
 **GUI side.**  `network` asks how this computer reaches the network
 (directly, or through login host X; password and store), then reads the
-nodes' `remote/<network>/*.json` over ssh (one connection reads them all
+nodes' `hosts/*/node/<network>.json` over ssh (one connection reads them all
 on a shared home), shows them, and records them.  The probe stays, as the
 GUI side's read-only check later (versions, section 8; health, section 9).
 
@@ -315,7 +315,7 @@ hosts/<id>/local.json          this computer as GUI: python, store, sessions
 hosts/<id>/ssh/{config,rules}  generated per computer (its store; its python runs the inside test)
 hosts/<id>/bin/ssh, scp        the wrapper, per computer (computers may run different cubevis)
 hosts/<id>/{setup,changes}.log, backups/
-remote/<network>/<id>.json     this computer as a node: environments, addresses (part ii)
+hosts/<id>/node/<network>.json this computer as a node: environments, addresses (part ii)
 ```
 
 * `<id>` is the short host name (first label, lower case; on macOS the

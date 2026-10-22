@@ -7,10 +7,10 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* main is at **cb9a40e** (stage 2b parts i and ii committed).  Delivered on top
+* main is at **3ecddd3** (stage 2b parts i, ii and revision 31a committed).  Delivered on top
   of it, not yet committed when this was written:
-  **`remote_stage2b2r3_cb9a40e.zip`** (the revision 31a of part ii:
-  names as selectors, three kinds, the install command asked).  Check
+  **`remote_stage2b2r4_3ecddd3.zip`** (part ii revision 31b:
+  how cubevis was installed, detected).  Check
   `git log` first.
 * **Design changed 2026-10-20/21** (section 7b of the design): setup runs
   in one of two roles, GUI or node; the node side configures and tests

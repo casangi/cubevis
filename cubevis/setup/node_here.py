@@ -240,25 +240,35 @@ def resolve_tool(answer: str, found: list, near: Optional[str] = None) -> Option
     return p if os.path.isfile(p) and os.access(p, os.X_OK) else None
 
 
-def ask_tool(c, cand: dict) -> Optional[str]:
-    """For a conda environment: the command the user installs and upgrades
-    packages in it with.  Setup only ever writes commands for the user to
-    run (design section 8); this says which program they name."""
+def conda_tool_for(e: dict) -> Optional[str]:
+    """For cubevis installed as a conda package: the tool to upgrade it
+    with -- the one that listed the environment, else the first conda,
+    mamba or micromamba found here (preferring conda).  None if none is."""
+    lister = e.get("listed_by")
+    if lister and os.path.basename(lister) in envs.TOOLS and os.access(lister, os.X_OK):
+        return lister
+    found = envs.conda_tools()
+    return next((t for t in found if os.path.basename(t) == "conda"), found[0] if found else None)
+
+
+def ask_tool(c, name: str) -> Optional[str]:
+    """Only when cubevis was installed in environment *name* as a conda
+    package and no conda tool is found here: the command that upgrades it.
+    Setup only ever writes commands for the user to run (design section 8)."""
     ui = c.ui
     found = envs.conda_tools()
-    default = cand.get("tool") or next((t for t in found if os.path.basename(t) == "conda"),
-                                       found[0] if found else "")
-    ui.say("Which command do you use to install and upgrade packages in it? When cubevis "
+    default = ""
+    ui.say(f"cubevis is installed in {name} as a conda package, and no conda, mamba or "
+           "micromamba was found here. Which command upgrades packages in it? When cubevis "
            "there needs upgrading, setup writes the commands for you to run with it (setup "
-           "never runs them)."
-           + (f" Found: {', '.join(tilde(t) for t in found)}." if found else ""))
+           "never runs them).")
     while True:
         ans = ui.ask("  Command (conda, mamba, micromamba, or its path; empty: none)",
                      tilde(default) if default else "", key="env_tool")
         if not ans.strip():
             ui.note("no command recorded: upgrade instructions will name none")
             return None
-        tool = resolve_tool(ans, found, cand.get("tool"))
+        tool = resolve_tool(ans, found)
         if tool:
             return tool
         ui.note(f"{ans} is not a command here")
@@ -287,7 +297,6 @@ def configure_environments(c, nf: nodefile.NodeFile) -> int:
             ui.say(f"{tilde(cand['python'])}:")
             kind = ui.ask_choice("  What kind of environment is it (conda, venv, python)?",
                                  cand["kind"], envs.KINDS, key="env_kind")
-            tool = ask_tool(c, cand) if kind == "conda" else None
             taken = set(nf.environments)
             base = envs.default_name(cand)
             dflt, i = base, 2
@@ -309,7 +318,7 @@ def configure_environments(c, nf: nodefile.NodeFile) -> int:
                 continue
             nf.environments[name] = {
                 "kind": kind, "python": cand["python"], "prefix": cand.get("prefix"),
-                "tool": tool,
+                "tool": None, "listed_by": cand.get("tool"), "cubevis_via": None,
                 "versions": {}, "python_version": None, "visplot": None,
                 "status": "new", "last_checked": None, "last_error": None}
             ui.record_change("enabled environment", f"{name} ({kind}, {tilde(cand['python'])})")
@@ -321,6 +330,14 @@ def configure_environments(c, nf: nodefile.NodeFile) -> int:
                  python_version=rep.get("python"), visplot=rep.get("visplot"))
         if rep.get("prefix"):
             e["prefix"] = rep["prefix"]
+        # How cubevis got there decides how it is upgraded (design section 8):
+        # from the packaging metadata, not asked.
+        via = envs.install_method(rep) if (rep.get("versions") or {}).get("cubevis") else None
+        e["cubevis_via"] = via
+        if via and via["method"] == "conda":
+            e["tool"] = e.get("tool") or conda_tool_for(e) or ask_tool(c, name)
+        else:
+            e["tool"] = None
         line = f"Environment {name} ({e['kind']}, {tilde(e['python'])}) -- {envs.summary(rep)}"
         if rep["ok"]:
             e.update(status="ok", last_error=None)

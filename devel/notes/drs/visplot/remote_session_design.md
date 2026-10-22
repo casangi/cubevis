@@ -248,9 +248,15 @@ Built in stage 2b part ii (`hrs_h8_consolidation_prep.md` section 31).
 * Environments: setup *asks* which to use; what it finds (`conda env
   list`, `mamba env list`, an active venv) only pre-fills the choices,
   and the user may type paths or give names.  Kinds: `conda`, `venv`,
-  `python` (2026-10-21: `mamba` dropped -- the environments are the same;
-  for a conda environment setup asks which command the user installs and
-  upgrades packages with: conda, mamba or micromamba, recorded as `tool`).  Each chosen environment is tested by running its interpreter
+  `python` (2026-10-21: `mamba` dropped -- the environments are the same).
+  How cubevis was installed in each is *detected* from its packaging
+  records (2026-10-22), since that, not the environment's kind, decides
+  how it is upgraded: `conda-meta/cubevis-*.json` (a conda package), the
+  dist-info's `direct_url.json` (a local checkout, editable or not, or a
+  VCS URL) and `INSTALLER` (pip, uv).  Only for a conda package is a
+  conda/mamba/micromamba `tool` recorded -- the one that listed the
+  environment, else one found; asked only when none is found.
+* Each chosen environment is tested by running its interpreter
   with a small script (Python version; cubevis and ipykernel import, and
   their versions); the cubevis running setup need not be in it.  Failures
   are recorded flagged, with the reason.
@@ -359,10 +365,14 @@ python -m pip install "cubevis[visplot]==1.0.97"
 ```
 
 `setup upgrade` can copy that script to the node; running it is the
-user's step. Downgrades are the same with an older version.  For a conda
-environment the script uses the environment's `tool` (the command the
-user said they install and upgrade with); for venv and python, `python -m
-pip`.
+user's step. Downgrades are the same with an older version.  The commands
+follow how cubevis was installed there (`cubevis_via`, detected by
+`node-here`): a conda package -> the environment's `tool`; pip -> `<python>
+-m pip install -U "cubevis[visplot]==V"`; uv -> `uv pip install --python
+<python> ...`; a checkout -> update that checkout (setup names the
+directory; no package command); a VCS URL -> pip from that URL; unknown ->
+say so.  pip-installed cubevis in a conda environment is the common case
+and is upgraded with pip.
 
 Open (Darrell, 2026-10-21): changing an environment while a kernel runs in
 it can break that kernel.  Setup will at least say so -- before printing

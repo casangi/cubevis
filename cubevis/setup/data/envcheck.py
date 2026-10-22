@@ -7,7 +7,8 @@
 #   python, executable, prefix, base_prefix, conda (a conda/mamba prefix),
 #   versions {dist: version or null}, kernel (true: cubevis' kernel side and
 #   ipykernel import), visplot (true: its data backend imports), errors
-#   {what: last line of the error}.
+#   {what: last line of the error}, install (how cubevis got here: from its
+#   packaging metadata -- see below).
 import json
 import os
 import sys
@@ -48,6 +49,32 @@ def _try(what, module):
         out["errors"][what] = lines[-1] if lines else "import failed"
         return False
 
+
+# How cubevis was installed, from what the installers record (nothing is
+# guessed): INSTALLER names the program (pip, uv, conda); direct_url.json
+# (PEP 610) is there for an install from a local directory -- editable or
+# not -- or from a VCS URL; conda-meta/cubevis-*.json for conda (or mamba,
+# micromamba) installing it as a conda package.
+install = {"installer": None, "conda": False, "url": None, "editable": False, "vcs": None}
+try:
+    from importlib.metadata import distribution
+    dist = distribution("cubevis")
+    inst = dist.read_text("INSTALLER")
+    install["installer"] = inst.strip() if inst else None
+    du = dist.read_text("direct_url.json")
+    if du:
+        d = json.loads(du)
+        install["url"] = d.get("url")
+        install["editable"] = bool((d.get("dir_info") or {}).get("editable"))
+        install["vcs"] = (d.get("vcs_info") or {}).get("vcs")
+except Exception:
+    pass
+try:
+    import glob
+    install["conda"] = bool(glob.glob(os.path.join(sys.prefix, "conda-meta", "cubevis-*.json")))
+except Exception:
+    pass
+out["install"] = install
 
 # The kernel side: what a remote kernel imports to serve visplot/iclean.
 kernel = _try("cubevis", "cubevis.remote.worker_main")

@@ -221,7 +221,9 @@ def test_node_here_records_the_node_and_environments(home):
     assert node["query"]["names"] == ["node140", "node141"] and node["query"]["error"] is None
     assert set(f["environments"]) == {"hrs", "bare"}
     hrs, b = f["environments"]["hrs"], f["environments"]["bare"]
-    assert hrs["kind"] == "conda" and hrs["tool"].endswith("/bin/conda")
+    assert hrs["kind"] == "conda" and hrs["listed_by"].endswith("/bin/conda")
+    if KERNEL_PY:                                  # editable from the checkout: no tool
+        assert hrs["cubevis_via"]["method"] == "checkout" and hrs["tool"] is None
     assert hrs["python"] == os.path.join(good, "bin", "python")
     assert b["status"] == "flagged" and b["last_error"] == "cubevis is not installed in it"
     if KERNEL_PY:
@@ -272,33 +274,84 @@ def test_bad_typed_paths_are_refused(home):
     assert _node_file(home)["environments"] == {}
 
 
-def test_the_install_command_is_asked_for_conda_environments(home):
-    from cubevis.setup.node_here import resolve_tool
-    conda = fake_tool(home / "mf" / "bin", "conda", [])
-    mamba = fake_tool(home / "mf" / "bin", "mamba", [])
-    other = fake_tool(home / "bin", "mamba", [])
-    found = [envs.norm(other), envs.norm(conda), envs.norm(mamba)]
-    assert resolve_tool("mamba", found, near=conda) == envs.norm(mamba)   # beside the lister
-    assert resolve_tool("mamba", found) == envs.norm(other)
-    assert resolve_tool(str(conda), found) == envs.norm(conda)
-    assert resolve_tool("no-such-tool", found) is None and resolve_tool("", found) is None
+def fake_cubevis(prefix, installer="pip", direct_url=None, conda=False, version="1.0.97"):
+    """Packaging records of a cubevis install, without cubevis itself."""
+    site = subprocess.run([os.path.join(prefix, "bin", "python"), "-c",
+                           "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    d = os.path.join(site, f"cubevis-{version}.dist-info")
+    os.makedirs(d)
+    with open(os.path.join(d, "METADATA"), "w") as f:
+        f.write(f"Metadata-Version: 2.1\nName: cubevis\nVersion: {version}\n")
+    if installer:
+        with open(os.path.join(d, "INSTALLER"), "w") as f:
+            f.write(installer + "\n")
+    if direct_url:
+        with open(os.path.join(d, "direct_url.json"), "w") as f:
+            json.dump(direct_url, f)
+    if conda:
+        with open(os.path.join(prefix, "conda-meta", f"cubevis-{version}-py_0.json"), "w") as f:
+            f.write("{}")
 
-    e = make_env(home / "mf" / "envs" / "hrs", "conda")
-    fake_tool(home / "bin", "conda", [e])          # PATH's conda lists it
-    r = _run(home, "--answer", "environments=hrs", "--answer", f"env_tool={mamba}",
-             "node-here", "cv")
+
+def test_install_method_from_the_records():
+    m = envs.install_method
+    assert m({"install": {"conda": True, "installer": "conda"}})["method"] == "conda"
+    assert m({"install": {"installer": "pip"}}) == {"method": "pip", "source": None}
+    assert m({"install": {"installer": "uv"}})["method"] == "uv"
+    c = m({"install": {"installer": "pip", "url": "file:///users/jo/src/cube%20vis",
+                       "editable": True}})
+    assert c == {"method": "checkout", "source": "/users/jo/src/cube vis", "editable": True}
+    assert envs.describe_method(c) == "from the checkout /users/jo/src/cube vis"
+    g = m({"install": {"installer": "pip", "url": "https://github.com/casangi/cubevis",
+                       "vcs": "git"}})
+    assert g == {"method": "vcs", "source": "https://github.com/casangi/cubevis"}
+    assert m({"install": {}})["method"] == "unknown" and m({})["method"] == "unknown"
+
+
+def test_the_check_reports_how_cubevis_was_installed(tmp_path):
+    e = make_env(tmp_path / "e")
+    fake_cubevis(e, direct_url={"url": "file:///src/cubevis", "dir_info": {"editable": True}})
+    r = envs.check(os.path.join(e, "bin", "python"))
+    assert r["install"] == {"installer": "pip", "conda": False, "url": "file:///src/cubevis",
+                            "editable": True, "vcs": None}
+    assert not r["ok"] and "does not import" in r["error"]      # records only, no package
+
+
+def test_node_here_records_the_install_and_asks_for_a_tool_only_when_needed(home):
+    pip_env = make_env(home / "mf" / "envs" / "pipped", "conda")
+    fake_cubevis(pip_env)                                       # pip into a conda env
+    conda_env = make_env(home / "mf" / "envs" / "condaed", "conda")
+    fake_cubevis(conda_env, installer="conda", conda=True)
+    lister = fake_tool(home / "mf" / "bin", "mamba", [pip_env, conda_env])
+    monkey_path = f"{home}/mf/bin:{os.environ['PATH']}"
+    env_path = dict(os.environ, PATH=monkey_path)
+    r = subprocess.run([sys.executable, "-m", "cubevis.setup", "--yes", "--answer",
+                        "environments=pipped condaed", "--answer", "domain=", "node-here", "cv"],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=600,
+                       env=dict(env_path, NO_COLOR="1", PYTHONPATH=ROOT,
+                                SSH_CONNECTION="1 2 3 4"))
     out = " ".join(r.stdout.split())
-    assert "Which command do you use to install and upgrade packages in it?" in out
-    rec = _node_file(home)["environments"]["hrs"]
-    assert rec["kind"] == "conda" and rec["tool"] == envs.norm(mamba)
-    # A record of the old kind 'mamba' reads as conda, its tool kept.
-    f = home / ".config/cubevis/hosts/zuul06/node/cv.json"
-    data = json.loads(f.read_text())
-    data["environments"]["hrs"]["kind"] = "mamba"
-    f.write_text(json.dumps(data))
-    _run(home, "--answer", "environments=hrs", "node-here", "cv")
-    rec = _node_file(home)["environments"]["hrs"]
-    assert rec["kind"] == "conda" and rec["tool"] == envs.norm(mamba)
+    assert "Which command" not in out                          # nothing asked: both known
+    f = _node_file(home)["environments"]
+    assert f["pipped"]["cubevis_via"]["method"] == "pip" and f["pipped"]["tool"] is None
+    assert f["condaed"]["cubevis_via"]["method"] == "conda"
+    assert f["condaed"]["tool"] == envs.norm(lister)          # the tool that listed it
+    assert "installed by pip" in out and "installed by conda" in out
+
+
+def test_a_tool_is_asked_for_when_conda_installed_cubevis_and_none_is_found(home):
+    e = make_env(home / "envs" / "c", "conda")
+    fake_cubevis(e, installer="conda", conda=True)
+    other = fake_tool(home / "elsewhere", "mytool", [])
+    r = _run(home, "--answer", f"environments={e}", "--answer", "domain=",
+             "--answer", f"env_tool={other}", "node-here", "cv")
+    out = " ".join(r.stdout.split())
+    assert "is installed in c as a conda package, and no conda, mamba or micromamba" in out
+    assert _node_file(home)["environments"]["c"]["tool"] == envs.norm(other)
+    from cubevis.setup.node_here import resolve_tool
+    assert resolve_tool(str(other), []) == envs.norm(other)
+    assert resolve_tool("no-such-tool", []) is None and resolve_tool("", []) is None
 
 
 def test_environments_are_chosen_by_name_unless_two_share_it(home):

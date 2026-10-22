@@ -1184,3 +1184,29 @@ or [n]ode?", suggesting `n` when `$SSH_CONNECTION` is set.
   clears old files himself.  `node-here`'s opening text now names that
   directory (it said "nothing but its file in ~/.config/cubevis/remote",
   but the logs go to `hosts/<id>/` too).
+
+### 31b. How cubevis was installed: detected, not asked (2026-10-22)
+
+Darrell's point: in a conda environment cubevis is often installed with
+pip (PyPI only, or from a checkout), so "which command do you install and
+upgrade packages with" named the wrong program for the one upgrade setup
+cares about.  Now:
+
+* `data/envcheck.py` reports `install`: `INSTALLER` (pip, uv, conda) and
+  `direct_url.json` (PEP 610: `url`, `dir_info.editable`, `vcs_info.vcs`)
+  from cubevis's dist-info, and whether `conda-meta/cubevis-*.json` exists.
+* `envs.install_method` -> `{"method": conda | checkout | vcs | pip | uv |
+  unknown, "source"}` (conda-meta first, then VCS, then a `file://` URL
+  -- checkout, editable or not -- then the installer).
+* `node-here` records it as `cubevis_via` on each environment and shows it
+  ("installed from the checkout /home/claude/cubevis", "installed by pip";
+  also on a failed check, where it can explain the failure).  `tool` is
+  set only for method conda: the tool that listed the environment
+  (`listed_by`), else the first conda/mamba/micromamba found, preferring
+  conda; the question is asked only when none is found.  The kind question
+  stays (conda, venv, python); no tool question otherwise.
+* Design section 8: the upgrade commands follow `cubevis_via`.
+* Tests: `install_method` for each record shape; envcheck on an
+  environment holding only a cubevis dist-info (editable record);
+  `node-here` with pip-into-conda and a conda package (nothing asked;
+  tool = the lister) and a conda package with no tool here (asked).

@@ -236,13 +236,58 @@ def check(python: str, timeout: float = CHECK_TIMEOUT) -> dict:
     return rep
 
 
+def install_method(rep: dict) -> dict:
+    """How to upgrade cubevis in an environment, from a check's ``install``
+    report: ``{"method", "source"}`` with method one of
+
+        conda     installed as a conda package (the environment's tool)
+        checkout  from a local directory, editable or not (source: the path)
+        vcs       from a git (or other VCS) URL (source: the URL)
+        pip, uv   from a package index, by that installer
+        unknown   installed, but nothing says how
+    """
+    inst = rep.get("install") or {}
+    if inst.get("conda"):
+        return {"method": "conda", "source": None}
+    url = inst.get("url") or ""
+    if inst.get("vcs"):
+        return {"method": "vcs", "source": url}
+    if url.startswith("file://"):
+        from urllib.parse import unquote, urlparse
+        return {"method": "checkout", "source": unquote(urlparse(url).path),
+                "editable": bool(inst.get("editable"))}
+    who = (inst.get("installer") or "").lower()
+    if who in ("pip", "uv"):
+        return {"method": who, "source": None}
+    if who == "conda":                 # conda-built wheel record without conda-meta
+        return {"method": "conda", "source": None}
+    return {"method": "unknown", "source": None}
+
+
+def describe_method(m: dict) -> str:
+    """For messages: how cubevis is installed there."""
+    k = m.get("method")
+    if k == "checkout":
+        return ("from the checkout " if m.get("editable") else "from the directory ") \
+            + str(m.get("source"))
+    if k == "vcs":
+        return f"from {m.get('source')}"
+    if k in ("pip", "uv", "conda"):
+        return f"by {k}"
+    return "by an installer that left no record"
+
+
 def summary(rep: dict) -> str:
     """One line for a check result."""
     v = rep.get("versions") or {}
     if not rep.get("ok"):
-        return rep.get("error") or "failed"
+        why = rep.get("error") or "failed"
+        if v.get("cubevis"):           # installed but not working: how may say why
+            why += f" (cubevis {v['cubevis']}, installed {describe_method(install_method(rep))})"
+        return why
     parts = [f"cubevis {v.get('cubevis') or '?'}", f"Python {rep.get('python')}",
              f"ipykernel {v.get('ipykernel') or '?'}"]
     parts.append("visplot data: yes" if rep.get("visplot")
                  else "visplot data: no (xarray-ms missing)")
+    parts.append("installed " + describe_method(install_method(rep)))
     return ", ".join(parts)

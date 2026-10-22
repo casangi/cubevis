@@ -98,7 +98,7 @@ STORES = ("keychain", "secret-tool", "pass", "gpg-file", "command")
 # Fields a check writes.  A change to these alone neither keeps a record
 # another run removed nor stops this run's removal of it (``merge``).
 HEALTH_FIELDS = {"status", "last_checked", "last_error", "checked_on", "cubevis",
-                 "versions", "python_version", "visplot"}
+                 "versions", "python_version", "visplot", "cubevis_via", "tool"}
 KINDS = ("conda", "venv", "python")
 
 LOCK_TIMEOUT = 30.0      # seconds to wait for another run's lock

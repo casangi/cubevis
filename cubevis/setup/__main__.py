@@ -567,6 +567,11 @@ def cmd_status(c: Ctx) -> int:
             v = (e.get("versions") or {}).get("cubevis")
             how = (f"ok, cubevis {v}" if e.get("status") == "ok"
                    else f"{e.get('status')}: {e.get('last_error')}")
+            if e.get("cubevis_via"):
+                from . import envs as _envs
+                how += ", installed " + _envs.describe_method(e["cubevis_via"])
+                if e.get("tool"):
+                    how += f" ({tilde(e['tool'])})"
             ui._p(f"      environment {name}: {e['kind']} {tilde(e['python'])} -- {how}")
     ui._p("")
     ui._p(f"    ssh config  {tilde(sshgen.config_path())}")

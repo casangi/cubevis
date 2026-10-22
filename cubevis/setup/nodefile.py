@@ -11,6 +11,26 @@ apply only this run's changes).  The GUI side reads them -- directly when
 it shares the home directory (``hosts/*/node/<network>.json``), otherwise
 over ssh -- and records the environments in ``state.json`` (stage 2b
 part iii).
+
+    {"schema": 2,
+     "node": {"network", "host" (the id), "hostname" (full name), "user",
+              "domain", "home", "home_fs", "shared_home", "addresses",
+              "ranges", "query": {"command", "names", "tested", "error"}
+              or null, "cubevis" (the setup that wrote it), "updated"},
+     "environments": {NAME: {"kind" (conda, venv, python), "python",
+                             "prefix",
+                             "cubevis_via": {"method", "source"}: how
+                               cubevis was installed -- conda, checkout,
+                               vcs, pip, uv or unknown (envs.install_method),
+                             "tool": the conda/mamba/micromamba that
+                               upgrades it, for method conda only,
+                             "listed_by": the tool that listed it, if any,
+                             "versions": {dist: version}, "python_version",
+                             "visplot", "status", "last_checked",
+                             "last_error"}}}
+
+The network ``local`` is this computer by itself: environments for kernels
+started here, for plots shown here (no ssh).
 """
 from __future__ import annotations
 

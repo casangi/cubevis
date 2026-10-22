@@ -248,7 +248,10 @@ Built in stage 2b part ii (`hrs_h8_consolidation_prep.md` section 31).
 * Environments: setup *asks* which to use; what it finds (`conda env
   list`, `mamba env list`, an active venv) only pre-fills the choices,
   and the user may type paths or give names.  Kinds: `conda`, `venv`,
-  `python` (2026-10-21: `mamba` dropped -- the environments are the same).
+  `python` (2026-10-21: `mamba` dropped -- the environments are the same),
+  reported by the interpreter itself (2026-10-22, not asked): `conda-meta`
+  in `sys.prefix` -> conda; `sys.prefix != sys.base_prefix` -> venv; else
+  python.
   How cubevis was installed in each is *detected* from its packaging
   records (2026-10-22), since that, not the environment's kind, decides
   how it is upgraded: `conda-meta/cubevis-*.json` (a conda package), the

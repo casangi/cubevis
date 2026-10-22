@@ -366,3 +366,23 @@ def test_environments_are_chosen_by_name_unless_two_share_it(home):
     out = " ".join(r.stdout.split())
     assert "more than one has that name, give the number instead: hrs" in out
     assert list(_node_file(home)["environments"]) == ["bare"]          # nothing changed
+
+
+def test_the_kind_is_reported_by_the_interpreter_not_asked(home):
+    k = envs.kind_from_report
+    assert k({"prefix": "/c/envs/x", "base_prefix": "/c/envs/x", "conda": True}) == "conda"
+    assert k({"prefix": "/p/.venv", "base_prefix": "/usr", "conda": False}) == "venv"
+    # A venv made from a conda-forge Python: sys.version says conda-forge,
+    # but the packages are the venv's -- venv, not conda.
+    assert k({"prefix": "/p/.venv", "base_prefix": "/c/envs/x", "conda": False}) == "venv"
+    assert k({"prefix": "/usr", "base_prefix": "/usr", "conda": False}) == "python"
+    assert k({"ok": False, "error": "does not exist"}) is None
+
+    c = make_env(home / "envs" / "c", "conda")
+    v = make_env(home / "proj" / ".venv")
+    r = _run(home, "--answer", f"environments={c} {v} /usr/bin/python3", "--answer", "domain=",
+             "node-here", "cv")
+    out = " ".join(r.stdout.split())
+    assert "What kind" not in out and "you choose it by this name here" in out
+    kinds = {n: e["kind"] for n, e in _node_file(home)["environments"].items()}
+    assert kinds == {"c": "conda", "proj-venv": "venv", "python3": "python"}, kinds

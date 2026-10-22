@@ -9,8 +9,8 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 * main is at **3ecddd3** (stage 2b parts i, ii and revision 31a committed).  Delivered on top
   of it, not yet committed when this was written:
-  **`remote_stage2b2r4_3ecddd3.zip`** (part ii revision 31b:
-  how cubevis was installed, detected).  Check
+  **`remote_stage2b2r5_3ecddd3.zip`** (part ii revisions 31b, 31c:
+  how cubevis was installed and the kind, detected).  Check
   `git log` first.
 * **Design changed 2026-10-20/21** (section 7b of the design): setup runs
   in one of two roles, GUI or node; the node side configures and tests

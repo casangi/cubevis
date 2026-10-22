@@ -236,6 +236,21 @@ def check(python: str, timeout: float = CHECK_TIMEOUT) -> dict:
     return rep
 
 
+def kind_from_report(rep: dict) -> Optional[str]:
+    """The kind, as the interpreter itself reports it (``envcheck``): conda
+    when its prefix has ``conda-meta``; venv when its prefix is not its base
+    prefix; else python.  Not "conda" in ``sys.version``: a venv made from a
+    conda-forge Python says that too, but its packages are the venv's.
+    None when the check could not run."""
+    if not rep.get("prefix"):
+        return None
+    if rep.get("conda"):
+        return "conda"
+    if rep.get("base_prefix") and os.path.realpath(rep["prefix"]) != os.path.realpath(rep["base_prefix"]):
+        return "venv"
+    return "python"
+
+
 def install_method(rep: dict) -> dict:
     """How to upgrade cubevis in an environment, from a check's ``install``
     report: ``{"method", "source"}`` with method one of

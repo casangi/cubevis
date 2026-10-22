@@ -7,7 +7,8 @@ shared, an optional command listing the nodes you may use (run here, at
 once) -- records what it can see for itself (full name, addresses and
 their subnets, the home's filesystem), and then the Python environments:
 the ones found here are offered, the user chooses, may type others, and
-says what kind each is; each is checked by running it (``envs.check``).
+names each; each is checked by running it (``envs.check``), which also
+reports its kind and how cubevis was installed in it (neither is asked).
 Only the environments chosen here are ever used for kernels.
 
 Everything goes to this computer's own directory, ``hosts/<id>/``: the
@@ -294,16 +295,18 @@ def configure_environments(c, nf: nodefile.NodeFile) -> int:
     for cand in chosen:
         name = nf.environment_by_python(cand["python"])
         if name is None:
-            ui.say(f"{tilde(cand['python'])}:")
-            kind = ui.ask_choice("  What kind of environment is it (conda, venv, python)?",
-                                 cand["kind"], envs.KINDS, key="env_kind")
+            # The kind (conda, venv, python) is not asked: the check below
+            # has the interpreter report it (envs.kind_from_report).
+            kind = cand["kind"]
+            ui.say(f"{tilde(cand['python'])}: a name for it -- you choose it by this name here, "
+                   "and the computer you plot from lists it under this name.")
             taken = set(nf.environments)
             base = envs.default_name(cand)
             dflt, i = base, 2
             while dflt in taken:
                 dflt, i = f"{base}-{i}", i + 1
             while True:
-                name = ui.ask("  A name for it", dflt, key="env_name")
+                name = ui.ask("  Name", dflt, key="env_name")
                 try:
                     S.check_name("environment", name)
                 except S.StateError as exc:
@@ -330,6 +333,7 @@ def configure_environments(c, nf: nodefile.NodeFile) -> int:
                  python_version=rep.get("python"), visplot=rep.get("visplot"))
         if rep.get("prefix"):
             e["prefix"] = rep["prefix"]
+        e["kind"] = envs.kind_from_report(rep) or e.get("kind")
         # How cubevis got there decides how it is upgraded (design section 8):
         # from the packaging metadata, not asked.
         via = envs.install_method(rep) if (rep.get("versions") or {}).get("cubevis") else None

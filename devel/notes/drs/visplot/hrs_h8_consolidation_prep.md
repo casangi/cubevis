@@ -1210,3 +1210,21 @@ cares about.  Now:
   environment holding only a cubevis dist-info (editable record);
   `node-here` with pip-into-conda and a conda package (nothing asked;
   tool = the lister) and a conda package with no tool here (asked).
+
+### 31c. The kind is reported, not asked (2026-10-22)
+
+Darrell, at the kind question on zuul06: what does it feed into, and a user
+may well pick the wrong one.  Now `envs.kind_from_report` takes it from the
+check (the interpreter's own `sys.prefix`, `sys.base_prefix`, and whether
+`conda-meta` is in `sys.prefix`): conda, then venv (prefix differs from
+base prefix), else python.  Not `"conda" in sys.version` (Darrell's
+sketch): a venv made from a conda-forge Python reports conda-forge there,
+but its packages are the venv's.  The guess from the files (`kind_of`)
+stands only until the check runs, or when it cannot run.  What the kind
+feeds: display, and in part iii whether the launcher runs conda's
+activation hooks; upgrades follow `cubevis_via` (31b).  The one question
+left per new environment is its name, now with what it is for ("you choose
+it by this name here, and the computer you plot from lists it under this
+name").  Test: reports for each kind (the conda-forge-based venv included)
+and `node-here` with a conda env, a venv and /usr/bin/python3, nothing
+asked.

@@ -1296,3 +1296,20 @@ asked.
   `CUBEVIS_TEST_KERNEL_PYTHON` having sshpyk; `--inside-here` recording
   only after a direct connection, nothing for a node that does not answer).
   Whole suite: 119 pass on the rig with OpenSSH 9.6 and 8.0p1.
+
+### 32a. Revision (2026-10-23)
+
+* A cubevis installed from a local wheel or sdist (`pip install
+  /tmp/cubevis-...whl`, Darrell on zuul06) was shown as "installed from the
+  directory /tmp/...whl": PEP 610 records such an install with
+  `archive_info`, a directory with `dir_info`.  `envcheck` reports
+  `archive`; `install_method` has method `file` ("installed from the file
+  ..."); an older report is told by the file name.  Checked with a real
+  wheel built from the checkout and pip-installed into a fresh environment.
+* Design 7c: what must match between here and a kernel's environment is a
+  `cubevis.remote` protocol version (integer; bumped with the wire
+  messages, their serialization, or the kernel-side handlers), exactly --
+  not the cubevis version.  Setup's environments are still made for a
+  cubevis version and never modified; the newest of ours with the local
+  protocol is the default.  The kernel side reports the protocol in the
+  `configure` round trip (stage 3) and a mismatch stops the session.

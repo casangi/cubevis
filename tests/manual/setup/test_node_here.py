@@ -307,6 +307,13 @@ def test_install_method_from_the_records():
                        "vcs": "git"}})
     assert g == {"method": "vcs", "source": "https://github.com/casangi/cubevis"}
     assert m({"install": {}})["method"] == "unknown" and m({})["method"] == "unknown"
+    # pip install /tmp/cubevis-1.0.97-py3-none-any.whl (Darrell on zuul06): a file.
+    w = m({"install": {"installer": "pip", "archive": True,
+                       "url": "file:///tmp/cubevis-1.0.97.dev22%2Bg0a5b519-py3-none-any.whl"}})
+    assert w == {"method": "file", "source": "/tmp/cubevis-1.0.97.dev22+g0a5b519-py3-none-any.whl"}
+    assert envs.describe_method(w).startswith("from the file /tmp/cubevis-")
+    # An older report without "archive": told by the name.
+    assert m({"install": {"url": "file:///x/cubevis-1.0.tar.gz"}})["method"] == "file"
 
 
 def test_the_check_reports_how_cubevis_was_installed(tmp_path):
@@ -314,7 +321,7 @@ def test_the_check_reports_how_cubevis_was_installed(tmp_path):
     fake_cubevis(e, direct_url={"url": "file:///src/cubevis", "dir_info": {"editable": True}})
     r = envs.check(os.path.join(e, "bin", "python"))
     assert r["install"] == {"installer": "pip", "conda": False, "url": "file:///src/cubevis",
-                            "editable": True, "vcs": None}
+                            "editable": True, "vcs": None, "archive": False}
     assert not r["ok"] and "does not import" in r["error"]      # records only, no package
 
 

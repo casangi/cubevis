@@ -257,6 +257,7 @@ def install_method(rep: dict) -> dict:
 
         conda     installed as a conda package (the environment's tool)
         checkout  from a local directory, editable or not (source: the path)
+        file      from a local wheel or sdist file (source: the file)
         vcs       from a git (or other VCS) URL (source: the URL)
         pip, uv   from a package index, by that installer
         unknown   installed, but nothing says how
@@ -269,8 +270,10 @@ def install_method(rep: dict) -> dict:
         return {"method": "vcs", "source": url}
     if url.startswith("file://"):
         from urllib.parse import unquote, urlparse
-        return {"method": "checkout", "source": unquote(urlparse(url).path),
-                "editable": bool(inst.get("editable"))}
+        path = unquote(urlparse(url).path)
+        if inst.get("archive") or path.endswith((".whl", ".tar.gz", ".zip")):
+            return {"method": "file", "source": path}
+        return {"method": "checkout", "source": path, "editable": bool(inst.get("editable"))}
     who = (inst.get("installer") or "").lower()
     if who in ("pip", "uv"):
         return {"method": who, "source": None}
@@ -287,6 +290,8 @@ def describe_method(m: dict) -> str:
             + str(m.get("source"))
     if k == "vcs":
         return f"from {m.get('source')}"
+    if k == "file":
+        return f"from the file {m.get('source')}"
     if k in ("pip", "uv", "conda"):
         return f"by {k}"
     return "by an installer that left no record"

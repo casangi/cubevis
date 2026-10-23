@@ -55,7 +55,8 @@ def _try(what, module):
 # (PEP 610) is there for an install from a local directory -- editable or
 # not -- or from a VCS URL; conda-meta/cubevis-*.json for conda (or mamba,
 # micromamba) installing it as a conda package.
-install = {"installer": None, "conda": False, "url": None, "editable": False, "vcs": None}
+install = {"installer": None, "conda": False, "url": None, "editable": False, "vcs": None,
+           "archive": False}
 try:
     from importlib.metadata import distribution
     dist = distribution("cubevis")
@@ -67,6 +68,7 @@ try:
         install["url"] = d.get("url")
         install["editable"] = bool((d.get("dir_info") or {}).get("editable"))
         install["vcs"] = (d.get("vcs_info") or {}).get("vcs")
+        install["archive"] = "archive_info" in d     # a wheel or sdist file, not a directory
 except Exception:
     pass
 try:

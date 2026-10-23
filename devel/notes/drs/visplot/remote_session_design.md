@@ -398,11 +398,20 @@ not a sub-command is a host):
    script goes to the node's `python3` over ssh (`ssh HOST python3 -`): it
    lists the conda environments (conda, mamba, micromamba) and checks each
    (`envcheck`).  cubevis need not be on the node.  Policy:
-   * **Default: an environment of setup's own** for the local cubevis
-     version.  If one exists on the node (recognised by its name and a
-     marker file in it) it is used; otherwise setup offers to create it.
-   * **Also listed**: the user's environments with the *same or a newer*
-     cubevis (and ipykernel), which the user may choose instead.
+   * **What must match is the protocol, exactly** (Darrell 2026-10-23): a
+     `cubevis.remote` protocol version -- an integer, bumped when the wire
+     messages, their serialization or the kernel-side handlers they rely
+     on change -- tracks compatibility; it changes far less often than
+     the cubevis version.  `envcheck` reports it; an environment whose
+     protocol differs (or is missing: older cubevis) cannot be used.
+   * **Default: an environment of setup's own** with the local protocol:
+     the newest one on the node (recognised by its name and a marker file
+     in it) is used; when there is none, setup offers to create one for
+     the local cubevis version.  When the local cubevis is newer than that
+     environment's (same protocol), it works; setup says so and offers a
+     new environment for the newer fixes, default no.
+   * **Also listed**: the user's environments with the same protocol (and
+     ipykernel), which the user may choose instead.
    * **Setup's environments are minimal and never modified** after
      creation: `<tool> create -y -n cubevis-<version> python=<local
      major.minor> pip`, then `python -m pip install "cubevis[visplot]==<version>"`
@@ -410,7 +419,9 @@ not a sub-command is a host):
      created, by which setup).  A new cubevis version gets a new
      environment.  The user's own environments are never installed into.
    * **conda only**: no conda, mamba or micromamba on the node -> setup says
-     so and how to install Miniforge, and stops for that host.  No venv.
+     so and how to install Miniforge (conda-forge's installer: conda and
+     mamba, with conda-forge as the channel), and stops for that host.
+     No venv.
    * A development install here (editable, or a version not on PyPI)
      cannot be reproduced: setup lists the environments with cubevis and
      their versions and the user picks one.
@@ -424,6 +435,11 @@ not a sub-command is a host):
    same "inside" case.
 5. **Accumulating.**  Each `setup HOST` adds to the same state; `status`,
    `check` (versions too), `prune` maintain it.
+
+**The protocol at run time** (stage 3): the kernel side reports its
+protocol version in the opening `configure` round trip; a mismatch stops
+the session with both versions named, instead of failing later on a
+message.  setup's check is advisory; this one is definitive.
 
 **`python -m cubevis.setup --cleanup HOST`**: lists setup's own
 environments on HOST (by marker), with whether a kernel here still uses

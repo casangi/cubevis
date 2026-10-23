@@ -469,6 +469,76 @@ not a sub-command is a host):
 5. **Accumulating.**  Each `setup HOST` adds to the same state; `status`,
    `check` (versions too), `prune` maintain it.
 
+**Refinements, agreed with Darrell 2026-10-23** (they settle the pain
+points reviewed that day; where they differ from the text above, they win):
+
+* **One path.**  `node-here`, the node files (`hosts/<id>/node/`) and
+  their sync into `state.json` are removed: everything is found from the
+  computer the plots are on, over ssh.  The node keeps only what kernels
+  need there -- launchers and setup's environments (with their markers).
+  `envs.py`, `hostinfo.py`, `launcher.py` and `envcheck.py` live on as the
+  pieces of the discovery script and of what setup writes on the node.
+  The plotting computer's own kernels: `setup --local`, the same flow
+  without ssh.
+* **Clusters** are what the user names and sees ("network" stays
+  internal): a name (`cvpost`), a node-name pattern (`cvpost*`), the
+  route (login host), and the cluster's kernels.  `setup cvpost140` asks
+  once whether the host is one of a cluster (name and pattern suggested);
+  afterwards `Session("tw-hya", node="cvpost141")` works without setup
+  for any node matching the pattern.  The first connection to a node not
+  seen before checks that the kernel's python is there (the nodes are
+  assumed to share the environment's filesystem) and says so plainly if
+  not.
+* **Kernels** carry a user-chosen name, the environment, the working
+  directory and variables (4a), per cluster.
+* **Environment location.**  Setup asks conda where it keeps
+  environments (`conda config --show envs_dirs`, or the tool's
+  equivalent) and shows that and the expected size before creating; the
+  user may give another place.  When conda is missing, the advice is to
+  install Miniforge on a fast shared filesystem every node sees (at NRAO
+  a project or Lustre area rather than `$HOME`: slow, with a quota) and to
+  put `CONDA_PKGS_DIRS` there too.  Creation runs detached on the node
+  (`nohup`, a log file), setup polls it, and the marker file is written
+  last, so a dropped connection (a closed laptop) resumes instead of
+  starting over.
+* **Fingerprint override.**  Only the local side compares (the node
+  reports), so one local setting covers setup and sessions:
+  `CUBEVIS_ALLOW_MISMATCH=1` or `Session(..., allow_mismatch=True)`, loud
+  each time it acts.  For development, `setup HOST --sync-checkout` copies
+  the local checkout to the node and uses it there (editable), so the
+  fingerprints match again -- the updated code being usually what is
+  wanted.
+* **The user's ssh configuration is the reference** (what `ssh HOST`
+  does); the configuration actually used is the minimal one setup
+  generates from it and from the user's answers.  Minimal still carries
+  every option that affects logging in, copied from `ssh -G HOST` where it
+  differs from ssh's defaults (`ssh -G` with an empty configuration):
+  user, port, identity and certificate files, `IdentitiesOnly`, GSSAPI
+  (Kerberos), PKCS#11, proxy.  Setup tests the login with the generated
+  configuration before saving anything.
+* **Two-factor**: connection sharing makes it one interactive login per
+  `ControlPersist` window.  A session checks for a live shared connection
+  first; when there is none (laptop asleep, expired) and the host is
+  marked `--2fa`, it stops naming the one command to run in a terminal,
+  rather than failing inside sshpyk.  The stored-password wrapper stays for
+  hosts without a second factor.
+
+**Diagnostics, on both sides** (ssh is intricate; these are part of the
+design, not extras):
+
+* **On the node**: the discovery script runs by hand,
+  `python3 -m cubevis.setup.discover` (or the file itself with any
+  `python3`), read-only, printing what setup would receive: the conda
+  tools, each environment's check (versions, fingerprint, how cubevis was
+  installed, the import error), the host's name, addresses, home
+  filesystem.  Setup prints this command after a failure on a node.
+* **Here**: `python -m cubevis.setup diagnose HOST` (read-only): what the
+  user's ssh makes of HOST (`ssh -G`) next to what the generated
+  configuration makes of it; the route decision (`inside -v`, the
+  override); the shared connection's state; a login attempt through the
+  wrapper with its `--explain` and the last lines of ssh's verbose output;
+  the fingerprints here and there.
+
 **The fingerprint at run time** (stage 3): the kernel side reports its
 fingerprint (and cubevis version) in the opening `configure` round trip; a
 mismatch stops the session naming both, instead of failing later on a
@@ -590,13 +660,15 @@ Each stage is one delivery (zip on the then-current main), with tests.
    test.  pexpect-driven tests on the ssh test rig, including two
    "hosts" sharing one config directory.
    **Revised 2026-10-23 (section 7c)**: parts i-iii done; instead of (iv),
-   2c: the kernel-side fingerprint (the declared module list, the hash,
-   the import-tracing test, `envcheck` reporting it) first; then
-   `setup HOST` -- the route from `ssh -G` and a login test, the
-   network inferred, remote discovery over ssh, setup's own environments
-   (create, reuse by marker), the launcher written over ssh, `--cleanup
-   HOST`, the `--2fa` flag; then 2d: version checks against the
-   environments, `prune`, the final kernel + plot test.
+   2c in this order: (1) the kernel-side fingerprint (declared module
+   list, hash, import-tracing test, `envcheck` reporting it) and the
+   mismatch override; (2) `setup HOST` as the single path, with clusters
+   and kernels, `node-here` and the node files removed, the discovery
+   script (also runnable by hand); (3) setup's own environments: location
+   shown, detached resumable creation, reuse by marker, `--cleanup HOST`;
+   (4) the ssh-configuration adoption with the login test, `diagnose
+   HOST`, the `--2fa` flag.  Then 2d: `--sync-checkout`, `prune`,
+   `setup --local`, the final kernel + plot test.
 3. **Session**: `cubevis/remote/session.py`, in-memory kernel spec,
    `RemoteReductionContext` factory, `VisibilityPlotter(session=)`,
    `check()`. Tests: local kernel; the rig with two nodes from one

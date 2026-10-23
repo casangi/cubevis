@@ -69,6 +69,16 @@ as ee125b6) and section 17 (the ssh wrapper).
   variables + launch options; several kernels per environment; one
   launcher per kernel; `setup HOST --kernel NAME` adds one.  2b part iii's
   per-environment directory/variables move to kernels in 2c.
+* **Refinements 2026-10-23** (design 7c, "Refinements" and "Diagnostics"):
+  one path (`node-here`, node files and their sync removed; `setup
+  --local` for the plotting computer's own kernels); clusters (name,
+  node pattern, route, kernels; any matching node usable without setup);
+  environment location from conda's `envs_dirs`, shown with size; detached,
+  resumable creation; `CUBEVIS_ALLOW_MISMATCH` / `--sync-checkout`; the
+  user's ssh config as reference, a minimal generated one carrying the
+  login options, tested before saving; 2FA via the shared connection;
+  diagnostics: `python3 -m cubevis.setup.discover` on the node,
+  `setup diagnose HOST` here.
 * **Next: stage 2c** (design section 13): the fingerprint first, then
   `setup HOST`, built from the existing pieces.  Part iv as planned below is folded into 2c/2d.
 

@@ -123,8 +123,10 @@ def host_state_path() -> Path:
     return host_dir() / "local.json"
 
 def now() -> str:
-    """Local time to the minute, as recorded in ``last_checked``."""
-    return _dt.datetime.now().strftime("%Y-%m-%dT%H:%M")
+    """Local time to the minute with its UTC offset (``2026-10-22T19:50-04:00``),
+    as recorded in ``last_checked``: the files are written by several
+    computers, which need not share a time zone."""
+    return _dt.datetime.now().astimezone().isoformat(timespec="minutes")
 
 
 def check_name(kind: str, name: str) -> str:

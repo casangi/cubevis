@@ -271,9 +271,22 @@ Built in stage 2b part ii (`hrs_h8_consolidation_prep.md` section 31).
 
 **GUI side.**  `network` asks how this computer reaches the network
 (directly, or through login host X; password and store), then reads the
-nodes' `hosts/*/node/<network>.json` over ssh (one connection reads them all
-on a shared home), shows them, and records them.  The probe stays, as the
-GUI side's read-only check later (versions, section 8; health, section 9).
+nodes' `hosts/*/node/<network>.json` -- here when the home is shared with
+the nodes, else over ssh (one connection reads them all on a shared home)
+-- shows them, and records nodes, environments and a kernel per new
+environment in `state.json`; nodes named only by the files are added and
+logged in to (built in stage 2b part iii, `hrs_h8_consolidation_prep.md`
+section 32).  The probe stays, as the GUI side's read-only check later
+(versions, section 8; health, section 9).
+
+**Launcher** (part iii).  Per environment `node-here` writes
+`hosts/<id>/node/<network>/<env>.sh`, which a kernel's ssh runs instead
+of python (sshpyk's `remote_python`): `cd` to the environment's working
+directory (default home; asked, `--redo` to change), activation (venv:
+`VIRTUAL_ENV`, `PATH`; conda: `CONDA_PREFIX`, `PATH` and the
+environment's `etc/conda/activate.d/*.sh`, output to stderr), the
+environment's variables (set on the node; nothing from the GUI side),
+`exec python "$@"`.  Verified with a real sshpyk kernel on the test rig.
 
 **Environments in the state.**  Each environment has `kind`, `python`
 (resolved interpreter path; with the host, its identity), what is needed
@@ -308,9 +321,12 @@ node files (as candidates, confirmed by the user) and from
 can be reached directly from here (at setup time only) and records the
 current range only if it can.  No probing when a kernel starts.
 Override, read by the inside test before the ranges:
-`CUBEVIS_ROUTE_<network>=direct|bastion` (unset: the ranges decide).  ssh
-inherits it from the Python process, so setting it before a session
-starts is enough; it also applies to a plain `ssh` from that shell.
+`CUBEVIS_ROUTE_<network>=direct|bastion` (the name in capitals, other
+characters as `_`; unset: the ranges decide).  ssh inherits it from the
+Python process, so setting it before a session starts is enough; it also
+applies to a plain `ssh` from that shell.  So that it always can, every
+network with a login host gets the `Match ... exec` block, with or
+without ranges (without: outside unless overridden).  Built in part iii.
 
 **Shared `~/.config/cubevis`** (a home on NFS shared by the nodes and
 possibly a GUI host).  Files are split by writer, so most have one
@@ -351,6 +367,75 @@ hosts/<id>/node/<network>.json this computer as a node: environments, addresses 
 * A computer that finds networks set up by another has no password store
   yet: its rules leave those hosts out (with a note), and the first login
   that needs one asks for the store, keeping the entry's name.
+
+## 7c. The user's path: `python -m cubevis.setup HOST` (agreed with Darrell 2026-10-23)
+
+Sections 6, 7, 7a and 7b were designed from the implementation outward:
+networks, login hosts and node files as things the user sets up.  The user's
+task is simpler: *my data is on HOST, which I can ssh to; make cubevis work
+against it.*  Networks, routes and node files are setup's own bookkeeping,
+shown only when something is ambiguous.  The pieces built in stage 2 stay
+(state and locking, generated ssh files and the wrapper, password stores,
+inside ranges and the route override, `envcheck`, launchers, the sync into
+`state.json`); the front door and the order change.
+
+**`python -m cubevis.setup HOST`** (a name or an address; anything that is
+not a sub-command is a host):
+
+1. **Route, from ssh itself.**  `ssh -G HOST` gives the real host name,
+   user, port, identity file and any `ProxyJump` / `ProxyCommand` in the
+   user's own `~/.ssh/config`: a bastion configured there is adopted (the
+   generated config, used with `-F`, copies what it needs; the user's file
+   is never changed).  Then a non-interactive login is tried: if it works,
+   no bastion from here.  If not: a known network with the same domain
+   offers its login host; only then is the user asked for one.  A host that
+   needs a password gets it stored for the wrapper, as now.
+2. **The network, inferred.**  Over ssh the node reports its full name,
+   addresses with prefixes and home filesystem (what `node-here` gathers).
+   Network = the node's domain plus its login host, named from the domain;
+   a later host in the same domain joins it without a question.
+3. **The environment, found or made from here.**  A stdlib-only discovery
+   script goes to the node's `python3` over ssh (`ssh HOST python3 -`): it
+   lists the conda environments (conda, mamba, micromamba) and checks each
+   (`envcheck`).  cubevis need not be on the node.  Policy:
+   * **Default: an environment of setup's own** for the local cubevis
+     version.  If one exists on the node (recognised by its name and a
+     marker file in it) it is used; otherwise setup offers to create it.
+   * **Also listed**: the user's environments with the *same or a newer*
+     cubevis (and ipykernel), which the user may choose instead.
+   * **Setup's environments are minimal and never modified** after
+     creation: `<tool> create -y -n cubevis-<version> python=<local
+     major.minor> pip`, then `python -m pip install "cubevis[visplot]==<version>"`
+     inside it, plus a marker file (`<prefix>/cubevis-setup.json`: version,
+     created, by which setup).  A new cubevis version gets a new
+     environment.  The user's own environments are never installed into.
+   * **conda only**: no conda, mamba or micromamba on the node -> setup says
+     so and how to install Miniforge, and stops for that host.  No venv.
+   * A development install here (editable, or a version not on PyPI)
+     cannot be reproduced: setup lists the environments with cubevis and
+     their versions and the user picks one.
+   The working directory and variables are asked here; the launcher is
+   written on the node over ssh.  `node-here` stays for doing the same from
+   the node itself.
+4. **Proximity, remembered.**  The node's subnets are offered as inside
+   ranges; `--inside-here` (or `--inside-now`, name open) adds where the
+   laptop is when on site; `CUBEVIS_ROUTE_<NET>` overrides.  A plotting
+   session on one node of the network reaching kernels on another is the
+   same "inside" case.
+5. **Accumulating.**  Each `setup HOST` adds to the same state; `status`,
+   `check` (versions too), `prune` maintain it.
+
+**`python -m cubevis.setup --cleanup HOST`**: lists setup's own
+environments on HOST (by marker), with whether a kernel here still uses
+them, and removes the ones chosen (`<tool> env remove -p`); the state is
+updated.  The user's environments are not listed.
+
+**Two-factor logins** (none now; announced for later).  A flag on the host
+(`--2fa`, name open) records that its login host asks for a second factor:
+no stored password is used for it; setup and sessions need the shared
+connection opened interactively (`ssh -fN <alias>` in a terminal, kept by
+ControlPersist), and say so when it is not up.  Opening it from a notebook
+is a stage 3/5 question.
 
 ## 8. Versions and upgrades
 
@@ -454,6 +539,12 @@ Each stage is one delivery (zip on the then-current main), with tests.
    and upgrade scripts, the node query, `prune`, the final kernel + plot
    test.  pexpect-driven tests on the ssh test rig, including two
    "hosts" sharing one config directory.
+   **Revised 2026-10-23 (section 7c)**: parts i-iii done; instead of (iv),
+   2c: `setup HOST` -- the route from `ssh -G` and a login test, the
+   network inferred, remote discovery over ssh, setup's own environments
+   (create, reuse by marker), the launcher written over ssh, `--cleanup
+   HOST`, the `--2fa` flag; then 2d: version checks against the
+   environments, `prune`, the final kernel + plot test.
 3. **Session**: `cubevis/remote/session.py`, in-memory kernel spec,
    `RemoteReductionContext` factory, `VisibilityPlotter(session=)`,
    `check()`. Tests: local kernel; the rig with two nodes from one

@@ -7,11 +7,10 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* main is at **3ecddd3** (stage 2b parts i, ii and revision 31a committed).  Delivered on top
-  of it, not yet committed when this was written:
-  **`remote_stage2b2r5_3ecddd3.zip`** (part ii revisions 31b, 31c:
-  how cubevis was installed and the kind, detected).  Check
-  `git log` first.
+* main is at **0a5b519** (stage 2b parts i and ii with revisions 31a-c
+  committed).  Delivered on top of it, not yet committed when this was
+  written: **`remote_stage2b3_0a5b519.zip`** (part iii, section 32).
+  Check `git log` first.
 * **Design changed 2026-10-20/21** (section 7b of the design): setup runs
   in one of two roles, GUI or node; the node side configures and tests
   environments (several per host, only configured ones used; an
@@ -49,7 +48,22 @@ as ee125b6) and section 17 (the ssh wrapper).
   images, changed by replacements that should keep the configuration);
   instead every per-computer value is re-checked on each run.
 * **OpenSSH 8.0** (RHEL 8) is supported since 2026-10-19 (section 29).
-* **Next: stage 2b part iii** -- below, "Stage 2b, concretely".
+* **Stage 2b part iii done** (2026-10-22, base `0a5b519`): launchers on the nodes
+  (working directory, variables, activation; verified with a real sshpyk
+  kernel), the GUI side reading node files into `state.json`,
+  `--inside-here`, `CUBEVIS_ROUTE_<NET>`.  Section 32.
+* **Direction changed 2026-10-23** (Darrell, design section 7c): the user's
+  path is `python -m cubevis.setup HOST`.  Route from `ssh -G HOST` and a
+  login test (a bastion in the user's own ssh config is adopted); the
+  network inferred from the node's domain; environments found over ssh by
+  a stdlib discovery script; default: setup's own minimal environment
+  `cubevis-<version>` (marker file; created by setup, never modified),
+  also listing the user's environments with the same or newer cubevis;
+  conda only (no venv; no conda -> ask the user to install Miniforge);
+  `--cleanup HOST` removes setup's environments there; a `--2fa` flag for
+  hosts whose login needs a second factor (not yet the case at NRAO).
+* **Next: stage 2c** (design section 13): `setup HOST`, built from the
+  existing pieces.  Part iv as planned below is folded into 2c/2d.
 
 ## Decisions made with Darrell
 
@@ -94,7 +108,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 32).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 33).
 
 ## Test kit (rebuild after a sandbox restart)
 
@@ -120,7 +134,8 @@ The sandbox loses `/etc/hosts` edits and running daemons on restart.
   as well as with the system's.  The rig's sshd is the distribution's
   (`apt-get install openssh-server`).
 * **Kernel-capable test environments**: `/home/claude/venv-kernel`
-  (python3.12 venv: `pip install ipykernel -e /home/claude/cubevis`);
+  (python3.12 venv: `pip install ipykernel sshpyk==1.23 -e /home/claude/cubevis`;
+  sshpyk for the launcher kernel test; `mkdir -p ~/.local/share/jupyter/runtime`);
   `CUBEVIS_TEST_KERNEL_PYTHON=/home/claude/venv-kernel/bin/python` for
   `test_node_here.py`.  As alice on the rig: `~/mf/envs/hrs` (venv +
   `conda-meta` + a `.pth` to venv-kernel) and a fake `~/mf/bin/conda`.
@@ -208,7 +223,7 @@ Design sections 7b and 13 (the plan), 8, 9.
    import and versions); failures recorded flagged; writes
    `hosts/<id>/node/<network>.json` (single writer: that computer).  The
    GUI host's own environments: the network *this host*.
-3. **Part iii** also writes, on the node, a launcher per environment
+3. ~~**Part iii**~~ (section 32) also writes, on the node, a launcher per environment
    (working directory, node-set environment variables; section 31a).
    **The GUI side** reads `hosts/*/node/<network>.json` (directly
    when the home is shared with the nodes, else over ssh), shows and

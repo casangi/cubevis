@@ -24,7 +24,7 @@ import re
 import subprocess
 from typing import Optional
 
-from . import envs, hostinfo, host_id, nodefile
+from . import envs, hostinfo, host_id, launcher, nodefile
 from . import state as S
 from .ui import tilde
 
@@ -277,6 +277,46 @@ def ask_tool(c, name: str) -> Optional[str]:
             return None
 
 
+def ask_settings(c, name: str, e: dict) -> None:
+    """The working directory and the environment variables of *name*'s
+    kernels (asked for a new environment, and again with --redo)."""
+    ui = c.ui
+    home = os.path.expanduser("~")
+    ui.say(f"Kernels in {name} start in a working directory: relative paths (ms='x.ms') are "
+           "found from there. ~ is your home directory.")
+    while True:
+        ans = ui.ask("  Working directory", tilde(e.get("workdir") or home), key="workdir")
+        p = envs.norm(ans)
+        if os.path.isdir(p):
+            e["workdir"] = None if p == envs.norm(home) else p
+            break
+        ui.note(f"{ans} is not a directory here")
+        if ui.yes:
+            break
+    ui.say("Environment variables to set for its kernels before Python starts, as "
+           "NAME=value separated by spaces (quote values with spaces), e.g. "
+           "HDF5_USE_FILE_LOCKING=FALSE OMP_NUM_THREADS=8. They are kept on this computer "
+           "only; nothing is taken from the computer you plot from.")
+    while True:
+        ans = ui.ask("  Variables ('none' for none)", launcher.format_vars(e.get("env")) or "none",
+                     key="env_vars")
+        try:
+            e["env"] = {} if ans.strip().lower() in ("none", "-") else launcher.parse_vars(ans)
+            break
+        except ValueError as exc:
+            ui.note(str(exc))
+            if ui.yes:
+                break
+
+
+def write_launcher(c, nf: nodefile.NodeFile, name: str) -> None:
+    e = nf.environments[name]
+    p = nodefile.launcher_path(nf.network, name)
+    if launcher.write(p, launcher.text(name, nf.network, host_id(), e, os.path.expanduser("~"))):
+        c.ui.record_change("wrote launcher", tilde(p))
+    e["launcher"] = str(p)
+
+
 def configure_environments(c, nf: nodefile.NodeFile) -> int:
     """Choose, name and check the environments; returns how many work."""
     ui = c.ui
@@ -292,6 +332,9 @@ def configure_environments(c, nf: nodefile.NodeFile) -> int:
         if e["python"] not in keep:
             del nf.environments[name]
             ui.record_change("stopped using environment", f"{name} ({tilde(e['python'])})")
+            gone = launcher.remove(nodefile.launcher_path(nf.network, name))
+            if gone:
+                ui.record_change("removed launcher", tilde(gone))
     for cand in chosen:
         name = nf.environment_by_python(cand["python"])
         if name is None:
@@ -322,9 +365,13 @@ def configure_environments(c, nf: nodefile.NodeFile) -> int:
             nf.environments[name] = {
                 "kind": kind, "python": cand["python"], "prefix": cand.get("prefix"),
                 "tool": None, "listed_by": cand.get("tool"), "cubevis_via": None,
+                "workdir": None, "env": {}, "launcher": None,
                 "versions": {}, "python_version": None, "visplot": None,
                 "status": "new", "last_checked": None, "last_error": None}
+            ask_settings(c, name, nf.environments[name])
             ui.record_change("enabled environment", f"{name} ({kind}, {tilde(cand['python'])})")
+        elif c.redo:
+            ask_settings(c, name, nf.environments[name])
     good = 0
     for name in sorted(nf.environments):
         e = nf.environments[name]
@@ -342,6 +389,7 @@ def configure_environments(c, nf: nodefile.NodeFile) -> int:
             e["tool"] = e.get("tool") or conda_tool_for(e) or ask_tool(c, name)
         else:
             e["tool"] = None
+        write_launcher(c, nf, name)
         line = f"Environment {name} ({e['kind']}, {tilde(e['python'])}) -- {envs.summary(rep)}"
         if rep["ok"]:
             e.update(status="ok", last_error=None)
@@ -384,5 +432,5 @@ def cmd_node_here(c, network: Optional[str] = None) -> int:
         ui.say("Kernels started on this computer can use these environments.")
     else:
         ui.say(f"On the computer where your plots appear, python -m cubevis.setup network "
-               f"{name} reads this (stage 2b part iii).")
+               f"{name} reads this.")
     return 0 if good else 1

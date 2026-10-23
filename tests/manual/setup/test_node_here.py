@@ -386,3 +386,38 @@ def test_the_kind_is_reported_by_the_interpreter_not_asked(home):
     assert "What kind" not in out and "you choose it by this name here" in out
     kinds = {n: e["kind"] for n, e in _node_file(home)["environments"].items()}
     assert kinds == {"c": "conda", "proj-venv": "venv", "python3": "python"}, kinds
+
+
+def test_working_directory_variables_and_the_launcher(home):
+    data = home / "data"
+    data.mkdir()
+    e = make_env(home / "envs" / "hrs", "conda")
+    fake_tool(home / "bin", "conda", [e])
+    r = _run(home, "--answer", "environments=hrs", "--answer", "domain=",
+             "--answer", f"workdir={data}", "--answer", "env_vars=OMP_NUM_THREADS=4 MSG='a b'",
+             "node-here", "cv")
+    rec = _node_file(home)["environments"]["hrs"]
+    assert rec["workdir"] == str(data) and rec["env"] == {"OMP_NUM_THREADS": "4", "MSG": "a b"}
+    lp = home / ".config/cubevis/hosts/zuul06/node/cv/hrs.sh"
+    assert rec["launcher"] == str(lp) and os.access(lp, os.X_OK)
+    run = subprocess.run([str(lp), "-c", "import os; print(os.getcwd(), os.environ['MSG'])"],
+                         capture_output=True, text=True,
+                         env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
+    assert run.stdout.strip() == f"{data} a b", run.stderr
+    # A rerun keeps them without asking; --redo asks again.
+    r = _run(home, "--answer", "environments=hrs", "node-here", "cv")
+    assert "Working directory" not in r.stdout
+    assert _node_file(home)["environments"]["hrs"]["workdir"] == str(data)
+    r = _run(home, "--redo", "--answer", "environments=hrs", "--answer", "workdir=~",
+             "--answer", "env_vars=none", "node-here", "cv")
+    assert "Working directory" in r.stdout
+    rec = _node_file(home)["environments"]["hrs"]
+    assert rec["workdir"] is None and rec["env"] == {}           # home; none
+    # Dropping the environment removes its launcher.
+    r = _run(home, "--answer", "environments=none", "node-here", "cv")
+    assert not lp.exists() and "removed launcher" in r.stdout
+    # A bad answer: refused, the old value kept.
+    r = _run(home, "--answer", "environments=hrs", "--answer", "workdir=/no/such/dir",
+             "--answer", "env_vars=PATH=/x", "node-here", "cv")
+    out = " ".join(r.stdout.split())
+    assert "/no/such/dir is not a directory here" in out and "set by the launcher itself" in out

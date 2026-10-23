@@ -1228,3 +1228,71 @@ it by this name here, and the computer you plot from lists it under this
 name").  Test: reports for each kind (the conda-forge-based venv included)
 and `node-here` with a conda env, a venv and /usr/bin/python3, nothing
 asked.
+
+## 32. Remote sessions, stage 2b part iii: launchers, the GUI side reading nodes, routes (base `0a5b519`, 2026-10-22)
+
+* **Launcher** (`cubevis/setup/launcher.py`).  `node-here` asks, for each
+  new environment (again with `--redo`), its kernels' working directory
+  (default `~`; must exist; `~` resets) and environment variables
+  (`NAME=value ...`, shell quoting; `none` clears; `PATH`, `CONDA_PREFIX`,
+  `VIRTUAL_ENV`, `PWD`, `HOME` refused: the launcher sets them), then
+  writes `hosts/<id>/node/<network>/<env>.sh` (bash, mode 700, rewritten
+  only when its text changes; removed with the environment).  It `cd`s
+  (a missing directory stops it with a message naming `--redo`),
+  activates (venv: `VIRTUAL_ENV`, `PATH`; conda: `CONDA_PREFIX`,
+  `CONDA_DEFAULT_ENV`, `PATH`, and sources `etc/conda/activate.d/*.sh`
+  with their output on stderr -- sshpyk reads stdout), exports the
+  variables (after activation: they win), and `exec`s the python with its
+  arguments.  sshpyk 1.23 runs `$FP_PY -c '...'` after checking only that
+  `remote_python` is an executable file, so the launcher is given as
+  `remote_python`.  **Verified**: a real kernel started through sshpyk
+  with the launcher on the rig ran as alice in `~/visplot-data` with the
+  node's variable and the venv active (`test_rig_a_kernel_runs_through_the_launcher`).
+  Found on the way: the local Jupyter runtime directory must exist before
+  sshpyk writes its persistence file (stage 3's Session makes it).
+* **The GUI side reads node files** (`cubevis/setup/netsync.py`,
+  `environments_step` in `network`).  Local first: `hosts/*/node/<net>.json`
+  in this configuration directory (a home shared with the nodes); else, over
+  ssh from each node logged in to, one `sh -c` printing `$(hostname)` and
+  every such file in the node's configuration directory, with markers
+  (stops after a node whose home is shared).  `sync` records:
+  - nodes: the node ssh'd to is matched by its host name; others by full
+    name or host id; unknown ones are added (host id, full name) and then
+    logged in to by the same `network` run;
+  - environments by identity (network, python): `hosts` "all" for a
+    prefix in a shared home, else the list of nodes naming it; fields
+    copied (kind, prefix, tool, cubevis_via, versions, python_version,
+    visplot, workdir, env); `on`: {node: launcher, status, error, time,
+    name there}; status ok if ok on any node;
+  - a kernel per new environment (same name; `-kernel` if taken);
+  - an environment a node's file no longer names: flagged on that node
+    (`gone`), the environment flagged when no node has it ok -- not
+    removed;
+  - names: the node's; `<name>-<node>` when taken by another environment;
+  - the nodes' `ranges`, offered first as inside ranges (private IPv4).
+  `status` lists each network's environments with their nodes, versions,
+  state and kernels.
+* **Routes.**  `inside.override`: `CUBEVIS_ROUTE_<NET>=direct|bastion`
+  wins over the ranges (and over a missing state); `status` says when it
+  is set.  `sshgen`: every network with a login host gets the `Match`
+  block, ranges or not, so the override always applies (without ranges:
+  outside, as before).  `network NET --inside-here`: resolves a node here,
+  tries it directly (`-o ProxyJump=none` -- the command line beats the
+  config's Match; checked on OpenSSH 9.6 and 8.0), and only then offers
+  the range of the interface it is reached from (else the address /32)
+  and records it; already inside: says so; no direct connection or no
+  name resolution: says so and records nothing.  At setup time only.
+* **Times** (`state.now`) now carry their UTC offset
+  (`2026-10-22T19:50-04:00`): the files are written by several computers.
+* **Not done** (part iv and stage 3): version comparison and upgrade
+  scripts from `cubevis_via`, the node query on the GUI side, `prune`,
+  `check` for environments, the final kernel + plot test; `Session(cwd=,
+  env=)`; the GUI host's own environments (`hosts/<id>/node/local.json`)
+  are read directly by the Session, not copied into `state.json`.
+* **Tests**: `test_launcher.py` (4), `test_netsync.py` (8), in
+  `test_node_here.py` the settings and launcher, in `test_inside.py` the
+  override, in `test_cli.py` three rig tests (alice's node file read over
+  ssh; a real kernel through the launcher, with
+  `CUBEVIS_TEST_KERNEL_PYTHON` having sshpyk; `--inside-here` recording
+  only after a direct connection, nothing for a node that does not answer).
+  Whole suite: 119 pass on the rig with OpenSSH 9.6 and 8.0p1.

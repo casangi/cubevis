@@ -25,6 +25,11 @@ part iii).
                              "tool": the conda/mamba/micromamba that
                                upgrades it, for method conda only,
                              "listed_by": the tool that listed it, if any,
+                             "workdir": the kernels' working directory
+                               (null: the home directory),
+                             "env": {NAME: value} set before Python starts,
+                             "launcher": the script a kernel's ssh runs
+                               instead of python (``launcher``),
                              "versions": {dist: version}, "python_version",
                              "visplot", "status", "last_checked",
                              "last_error"}}}
@@ -53,6 +58,12 @@ def node_dir(host: Optional[str] = None) -> Path:
 
 def path(network: str, host: Optional[str] = None) -> Path:
     return node_dir(host) / f"{S.check_name('network', network)}.json"
+
+
+def launcher_path(network: str, env: str, host: Optional[str] = None) -> Path:
+    """``hosts/<id>/node/<network>/<env>.sh``: the environment's launcher
+    (``launcher``)."""
+    return node_dir(host) / S.check_name("network", network) / f"{S.check_name('environment', env)}.sh"
 
 
 def mine() -> list:

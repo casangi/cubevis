@@ -29,7 +29,7 @@ import subprocess
 import sys
 from typing import Optional
 
-from . import RuntimeDirError, host_id, nodefile, sshgen, state as S, stores
+from . import RuntimeDirError, host_id, netsync, nodefile, sshgen, state as S, stores
 from .node_here import cmd_node_here
 from .ui import UI, FuncStep, Quit, run_step, tilde
 
@@ -73,13 +73,13 @@ class Ctx:
         return run_step(self.ui, FuncStep(title, check, do, look_only),
                         check_only=self.check_only, redo=self.redo, number=self.step_n)
 
-    def ssh(self, alias: str, *remote, timeout: float = 60) -> subprocess.CompletedProcess:
+    def ssh(self, alias: str, *remote, timeout: float = 60, opts=()) -> subprocess.CompletedProcess:
         """The wrapper with the generated config -- exactly what kernels use.
         BatchMode: ssh itself never asks; the wrapper logs in with the stored
         password when the rules list the host."""
         cmd = [str(sshgen.wrapper_path()), "-F", str(sshgen.config_path()),
                "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
-               "-o", "ConnectTimeout=30", alias] + (list(remote) or ["true"])
+               "-o", "ConnectTimeout=30", *opts, alias] + (list(remote) or ["true"])
         r = self.ui.run(cmd, show=False, timeout=timeout)
         self.last_out = (r.stdout or "") + (r.stderr or "")
         return r
@@ -453,13 +453,23 @@ def inside_step(c: Ctx, network: str, node: str) -> bool:
         r = c.ssh(alias, "echo", "$SSH_CONNECTION")
         seen = r.stdout.split() if r.returncode == 0 else []
         addrs = [seen[0], seen[2]] if len(seen) >= 4 else []
-        sug = suggest_ranges(addrs)
+        # The nodes' own subnets first (from their node files), then the
+        # /16s of this connection's addresses.
+        sug = netsync.suggested_ranges(st, network)
+        sug += [r for r in suggest_ranges(addrs) if r not in sug]
         ui.say("From inside the site (an office, a VPN that puts you on the site's "
                "network), ssh can go to the nodes directly instead of through the login "
                "host. Setup decides at each connection: this computer is inside when it "
                "would reach a node from an address in the site's ranges.")
         if addrs:
             ui.say(f"{node} reports this connection as from {addrs[0]} to {addrs[1]}.")
+        if netsync.suggested_ranges(st, network):
+            ui.say("The nodes' own subnets, from their node files: "
+                   + ", ".join(netsync.suggested_ranges(st, network)) + ".")
+        ui.say("Only from these ranges does this computer go to the nodes directly; from "
+               "anywhere else (a visitor network, say) it uses the login host. On site, "
+               f"python -m cubevis.setup network {network} --inside-here adds where you are, "
+               "after checking that a direct connection works from there.")
         ui.say("Give the site's address ranges (CIDR, separated by spaces), or 'none' to "
                "always use the login host. Include every range you work from inside, e.g. "
                "the desktops' as well as the cluster's.")
@@ -481,6 +491,56 @@ def inside_step(c: Ctx, network: str, node: str) -> bool:
     return c.step(f"Direct connections from inside {network}", check, do)
 
 
+def environments_step(c: Ctx, network: str, ok_nodes: list) -> list:
+    """Read the network's node files -- here, on a home shared with the
+    nodes, else over ssh from the nodes logged in to -- and record their
+    nodes, environments and kernels (``netsync``).  Returns the nodes added
+    from the files."""
+    ui, st = c.ui, c.st
+    ui.heading(f"Environments on {network}")
+    files = netsync.read_local(network)
+    reached, where = {}, "here (a home shared with the nodes)"
+    if not files:
+        seen = set()
+        for n in ok_nodes:
+            r = c.ssh(st.nodes()[n]["alias"], netsync.remote_command(network))
+            if r.returncode != 0:
+                ui.note(f"cannot read the node files on {n}: {last_line(c.last_out)}")
+                continue
+            host, got, errs = netsync.parse_dump(r.stdout)
+            for e in errs:
+                ui.note(f"{n}: {e}")
+            if host:
+                reached[netsync._short(host)] = n
+            for path, data in got:
+                if path not in seen:
+                    seen.add(path)
+                    files.append((path, data))
+            if any((d.get("node") or {}).get("shared_home") for _, d in got):
+                break                    # one read covers the nodes sharing that home
+        where = "over ssh"
+    if not files:
+        ui.note(f"no node of {network} has described itself yet: log in to one and run "
+                f"python -m cubevis.setup node-here {network}")
+        return []
+    before = set(st.nodes(network))
+    for what, item in netsync.sync(st, network, files, reached):
+        ui.record_change(what, item)
+    c.save()
+    ui.ok(f"read {len(files)} node file(s) {where}")
+    for name, e in sorted(st.section("environments").items()):
+        if e.get("network") != network:
+            continue
+        hosts = "every node" if e.get("hosts") == "all" else ", ".join(e.get("hosts") or [])
+        line = (f"environment {name}: {e.get('kind')} {e.get('python')} on {hosts}"
+                + (f", cubevis {e['cubevis']}" if e.get("cubevis") else ""))
+        if e.get("status") == "ok":
+            ui.ok(line)
+        else:
+            ui.fail(f"{line} -- {e.get('last_error') or e.get('status')}")
+    return sorted(set(st.nodes(network)) - before)
+
+
 def network_steps(c: Ctx, network: str, nodes=None) -> bool:
     """Log in to each hop of *network* (its login host, then each node), and
     settle the inside ranges."""
@@ -498,12 +558,20 @@ def network_steps(c: Ctx, network: str, nodes=None) -> bool:
     names = sorted(st.nodes(network)) if nodes is None else list(nodes)
     if not names:
         c.ui.note(f"{network} has no nodes yet: python -m cubevis.setup node {network} NAME")
-    first_ok = None
+    first_ok, ok_nodes = None, []
     for n in names:
         if hop_steps(c, network, n):
             first_ok = first_ok or n
+            ok_nodes.append(n)
         else:
             ok = False
+    if not c.check_only:
+        added = environments_step(c, network, ok_nodes)
+        for n in added:                  # nodes the files named: log in to them too
+            if hop_steps(c, network, n):
+                first_ok = first_ok or n
+            else:
+                ok = False
     if first_ok and not c.check_only:
         inside_step(c, network, first_ok)
     elif net.get("login") and c.check_only:
@@ -535,8 +603,16 @@ def cmd_status(c: Ctx) -> int:
                                           f"{':' + str(lg['port']) if lg['port'] != 22 else ''}"
                                           f" ({lg['alias']})" if lg else "direct"))
         r = net.get("inside")
+        forced, why = _in.override(name)
+        if lg and forced is not None:
+            ui._p(f"      {why} is set here: {'direct' if forced else 'through the login host'}, "
+                  "whatever the ranges")
+        elif lg and why:
+            ui._p(f"      {why}")
         if lg:
-            if r:
+            if r and forced is not None:
+                ui._p(f"      inside {', '.join(r)}")
+            elif r:
                 now = _in.decide(_in.network_hosts(net, st.nodes(name)), r)[0]
                 ui._p(f"      inside {', '.join(r)} -- this computer is "
                       f"{'inside: direct' if now else 'outside: through the login host'}")
@@ -550,9 +626,18 @@ def cmd_status(c: Ctx) -> int:
             ui._p(f"      node {n}{mark}: {node['hostname']} as {net['user']}, "
                   f"ssh {node['alias']}, {flag}"
                   + (f", checked {node['last_checked']}" if node.get("last_checked") else ""))
-    for k in ("environments", "kernels", "sessions"):
-        if st.section(k):
-            ui._p(f"    {k}: {', '.join(sorted(st.section(k)))}")
+        for en, e in sorted(st.section("environments").items()):
+            if e.get("network") != name:
+                continue
+            where = "every node" if e.get("hosts") == "all" else ", ".join(e.get("hosts") or [])
+            state_ = "ok" if e.get("status") == "ok" else f"{e.get('status')} ({e.get('last_error')})"
+            kern = [k for k, v in sorted(st.section("kernels").items())
+                    if v.get("environment") == en]
+            ui._p(f"      environment {en}: {e.get('kind')} {e.get('python')} on {where}, "
+                  + (f"cubevis {e['cubevis']}, " if e.get("cubevis") else "") + state_
+                  + (f"; kernel {', '.join(kern)}" if kern else ""))
+    if st.section("sessions"):
+        ui._p(f"    sessions: {', '.join(sorted(st.section('sessions')))}")
     for net in nodefile.mine():
         try:
             nf = nodefile.load(net)
@@ -573,6 +658,13 @@ def cmd_status(c: Ctx) -> int:
                 if e.get("tool"):
                     how += f" ({tilde(e['tool'])})"
             ui._p(f"      environment {name}: {e['kind']} {tilde(e['python'])} -- {how}")
+            extra = []
+            if e.get("workdir"):
+                extra.append(f"starts in {tilde(e['workdir'])}")
+            if e.get("env"):
+                extra.append("sets " + ", ".join(sorted(e["env"])))
+            if extra:
+                ui._p("        " + "; ".join(extra))
     ui._p("")
     ui._p(f"    ssh config  {tilde(sshgen.config_path())}")
     ui._p(f"    wrapper     {tilde(sshgen.wrapper_path())}")
@@ -613,6 +705,68 @@ def cmd_network(c: Ctx, name: Optional[str]) -> int:
             return 1
         ask_nodes(c, name)
     return 0 if network_steps(c, name) else 1
+
+
+def cmd_inside_here(c: Ctx, name: str) -> int:
+    """``network NAME --inside-here``: add where this computer is now to the
+    network's inside ranges -- only after a direct connection to a node,
+    without the login host, has worked from here (at setup time; nothing
+    is probed when kernels start)."""
+    from . import hostinfo, inside as _in
+    ui, st = c.ui, c.st
+    if not local_steps(c):
+        return 1
+    net = st.get("networks", name)
+    ui.heading(f"Inside {name}, from here")
+    if not net.get("login"):
+        ui.ok(f"{name} has no login host: its nodes are always reached directly")
+        return 0
+    nodes = _in.network_hosts(net, st.nodes(name))
+    names = {st.nodes()[n]["hostname"]: n for n in st.nodes(name)}
+    if not nodes:
+        ui.fail(f"{name} has no nodes yet")
+        return 1
+    host = nodes[0]
+    addrs = _in.resolve(host)
+    if not addrs:
+        ui.fail(f"{host} does not resolve here: from here, {name} needs its login host. "
+                "Nothing recorded.")
+        return 1
+    src = _in.route_source(addrs[0])
+    ranges = net.get("inside") or []
+    if src and _in.in_ranges(src, ranges):
+        ui.ok(f"this computer ({src}) is inside {', '.join(ranges)} already")
+        return 0
+    node = names[host]
+    ui.say(f"Trying {node} ({host}) directly, without the login host ...")
+    r = c.ssh(st.nodes()[node]["alias"], opts=("-o", "ProxyJump=none"))
+    if r.returncode != 0:
+        ui.fail(f"no direct connection from here ({last_line(c.last_out) or 'ssh exit ' + str(r.returncode)}): "
+                f"from here, {name} needs its login host. Nothing recorded.")
+        return 1
+    ui.ok(f"{node} answers directly from here ({src})")
+    import ipaddress
+    default = f"{src}/32" if src and ":" not in src else f"{src}/128"
+    for iface in hostinfo.interfaces():
+        if ipaddress.ip_address(src) in ipaddress.ip_interface(iface).network:
+            default = str(ipaddress.ip_interface(iface).network)
+            break
+    ui.say(f"This computer reaches {name} from {src}. Recording a range makes every "
+           "connection from it go directly; a narrower one is safer when the same network "
+           "also has guests (they would need the login host).")
+    while True:
+        text = ui.ask("Range to add", default, key="inside_here")
+        try:
+            new = S.normalize_ranges([text])
+            break
+        except S.StateError as exc:
+            ui.note(str(exc))
+            if ui.yes:
+                return 1
+    net["inside"] = ranges + [r_ for r_ in new if r_ not in ranges]
+    ui.record_change("added inside range", f"{name}: {', '.join(new)}")
+    c.save()
+    return 0
 
 
 def cmd_node(c: Ctx, network: str, names) -> int:
@@ -691,6 +845,9 @@ def main(argv=None) -> int:
     pc.add_argument("target", nargs="?", help="a network or node (default: all)")
     pn = sub.add_parser("network", help="add a network, or go through one again")
     pn.add_argument("name", nargs="?")
+    pn.add_argument("--inside-here", action="store_true",
+                    help="add where this computer is now to the network's inside ranges, "
+                         "after checking that its nodes answer directly from here")
     pd = sub.add_parser("node", help="add nodes to a network")
     pd.add_argument("network")
     pd.add_argument("names", nargs="*")
@@ -716,7 +873,13 @@ def main(argv=None) -> int:
         if a.cmd == "check":
             return cmd_check(c, a.target)
         if a.cmd == "network":
-            rc = cmd_network(c, a.name)
+            if a.inside_here:
+                if not a.name:
+                    ui.fail("--inside-here needs the network's name")
+                    return 1
+                rc = cmd_inside_here(c, a.name)
+            else:
+                rc = cmd_network(c, a.name)
         elif a.cmd == "node":
             rc = cmd_node(c, a.network, a.names)
         elif a.cmd == "node-here":

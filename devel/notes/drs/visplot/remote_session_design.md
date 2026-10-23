@@ -442,9 +442,25 @@ not a sub-command is a host):
    * A development install here (editable, or a version not on PyPI)
      cannot be reproduced: setup lists the environments with cubevis and
      their versions and the user picks one.
-   The working directory and variables are asked here; the launcher is
-   written on the node over ssh.  `node-here` stays for doing the same from
-   the node itself.
+   `node-here` stays for doing the same from the node itself.
+4a. **Kernels: a name, a working directory, variables** (Darrell
+   2026-10-23).  An environment is only the Python and its packages; what
+   the user works *with* is a kernel: a name of the user's choosing, an
+   environment, the kernels' working directory and environment variables,
+   and launch options.  Several kernels may share one environment (say
+   `tw-hya` and `hrs-imaging` on one `cubevis-1.0.97`), each with its own
+   directory and variables.  `setup HOST` asks for the kernel's name
+   (suggested), its working directory (default home) and variables; the
+   launcher is per kernel (`hosts/<id>/node/<network>/<kernel>.sh`, written
+   on the node over ssh); `setup HOST --kernel NAME` adds another kernel
+   for a host already set up, without environment questions;
+   `Session("tw-hya", node=...)` chooses it.  Environments become setup's
+   business (found, made, reused by fingerprint, cleaned up), rarely
+   named by the user -- which settles section 12's question of "kernel"
+   versus "environment".  ("Kernel name", not "prefix": a prefix is a conda
+   environment's directory.)  Until 2c, `node-here` keeps asking for the
+   directory and variables per environment (stage 2b part iii); 2c moves
+   them to kernels on both paths together.
 4. **Proximity, remembered.**  The node's subnets are offered as inside
    ranges; `--inside-here` (or `--inside-now`, name open) adds where the
    laptop is when on site; `CUBEVIS_ROUTE_<NET>` overrides.  A plotting
@@ -544,8 +560,9 @@ already just does the pip install.
 * Several plotters in one Python session: one kernel with a worker each
   (needs a look at how `RemoteReductionContext` spawns its worker), or a
   kernel each as today?
-* Name the user sees: "kernel" (familiar from Jupyter) for what is really
-  environment + options -- keep environments mostly hidden, or show both?
+* ~~Name the user sees~~: settled 2026-10-23 (section 7c, 4a): kernels,
+  named by the user, are what the user sees and chooses; environments are
+  setup's business.
 * Networks without a shared filesystem: an environment per node (allowed
   by `shared_fs: false`), set up node by node.
 * The bash setup's testers' state (`~/.config/cubevis/hosts/*.conf`):

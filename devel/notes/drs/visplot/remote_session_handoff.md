@@ -7,10 +7,8 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* main is at **0a5b519** (stage 2b parts i and ii with revisions 31a-c
-  committed).  Delivered on top of it, not yet committed when this was
-  written: **`remote_stage2b3_0a5b519.zip`** (part iii, section 32).
-  Check `git log` first.
+* main is at **040c0b3** (stage 2b parts i-iii, revisions, design 7c with
+  the fingerprint, committed).  Check `git log` first.
 * **Design changed 2026-10-20/21** (section 7b of the design): setup runs
   in one of two roles, GUI or node; the node side configures and tests
   environments (several per host, only configured ones used; an
@@ -66,6 +64,11 @@ as ee125b6) and section 17 (the ssh wrapper).
   design 7c): a declared list of kernel-side modules hashed by syntax tree
   on each side, compared exactly; an import-tracing test keeps the list
   complete.  Not the cubevis version, not a hand-kept protocol number.
+* **Kernels carry the settings** (Darrell 2026-10-23, design 7c 4a): a
+  kernel = a user-chosen name + an environment + working directory +
+  variables + launch options; several kernels per environment; one
+  launcher per kernel; `setup HOST --kernel NAME` adds one.  2b part iii's
+  per-environment directory/variables move to kernels in 2c.
 * **Next: stage 2c** (design section 13): the fingerprint first, then
   `setup HOST`, built from the existing pieces.  Part iv as planned below is folded into 2c/2d.
 

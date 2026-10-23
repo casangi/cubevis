@@ -398,20 +398,37 @@ not a sub-command is a host):
    script goes to the node's `python3` over ssh (`ssh HOST python3 -`): it
    lists the conda environments (conda, mamba, micromamba) and checks each
    (`envcheck`).  cubevis need not be on the node.  Policy:
-   * **What must match is the protocol, exactly** (Darrell 2026-10-23): a
-     `cubevis.remote` protocol version -- an integer, bumped when the wire
-     messages, their serialization or the kernel-side handlers they rely
-     on change -- tracks compatibility; it changes far less often than
-     the cubevis version.  `envcheck` reports it; an environment whose
-     protocol differs (or is missing: older cubevis) cannot be used.
-   * **Default: an environment of setup's own** with the local protocol:
-     the newest one on the node (recognised by its name and a marker file
-     in it) is used; when there is none, setup offers to create one for
-     the local cubevis version.  When the local cubevis is newer than that
-     environment's (same protocol), it works; setup says so and offers a
-     new environment for the newer fixes, default no.
-   * **Also listed**: the user's environments with the same protocol (and
-     ipykernel), which the user may choose instead.
+   * **What must match is the kernel-side code, exactly** (agreed with
+     Darrell 2026-10-23): a *fingerprint*, computed, not maintained.  One
+     declared list names the modules that run on the kernel side
+     (`cubevis.remote`, the visplot backends, the serialization in
+     `cubevis.utils`, ...); each side hashes those modules' source as
+     installed, by syntax tree (comments, docstrings and formatting do
+     not count), and the two must be equal.  Not the cubevis version
+     (every release would need a new environment, most for GUI-only
+     changes) and not a hand-maintained protocol number (it must cover
+     the backends too, and a forgotten bump is a silent mismatch).  Any
+     change to code that runs on the node -- protocol or bug fix --
+     changes it, which is right: both need a new environment.  It also
+     tells two development checkouts apart where `1.0.97.devN` cannot.
+     `envcheck` computes it on the node; an environment without it (older
+     cubevis) cannot be used.
+   * **The list cannot drift**: a test starts the worker, records the
+     `cubevis` modules it imported, and fails on one that is neither listed
+     nor deliberately excluded.
+   * **Not covered**: dependency versions (xarray-ms, arcae, ...).  Setup's
+     environments resolve them once, at creation, and are not changed;
+     pinning the kernel-side dependencies in the `visplot` extra would
+     tighten that (open).
+   * **Default: an environment of setup's own** with the local fingerprint
+     (recognised by its name and a marker file in it, which records the
+     fingerprint); when there is none, setup offers to create one for the
+     local cubevis version, and offers to remove its own superseded
+     environments that no kernel here uses, so they do not accumulate.
+     Environments are named by the cubevis version that created them; a
+     GUI-only release keeps the fingerprint and reuses them.
+   * **Also listed**: the user's environments with the same fingerprint
+     (and ipykernel), which the user may choose instead.
    * **Setup's environments are minimal and never modified** after
      creation: `<tool> create -y -n cubevis-<version> python=<local
      major.minor> pip`, then `python -m pip install "cubevis[visplot]==<version>"`
@@ -436,9 +453,9 @@ not a sub-command is a host):
 5. **Accumulating.**  Each `setup HOST` adds to the same state; `status`,
    `check` (versions too), `prune` maintain it.
 
-**The protocol at run time** (stage 3): the kernel side reports its
-protocol version in the opening `configure` round trip; a mismatch stops
-the session with both versions named, instead of failing later on a
+**The fingerprint at run time** (stage 3): the kernel side reports its
+fingerprint (and cubevis version) in the opening `configure` round trip; a
+mismatch stops the session naming both, instead of failing later on a
 message.  setup's check is advisory; this one is definitive.
 
 **`python -m cubevis.setup --cleanup HOST`**: lists setup's own
@@ -556,7 +573,9 @@ Each stage is one delivery (zip on the then-current main), with tests.
    test.  pexpect-driven tests on the ssh test rig, including two
    "hosts" sharing one config directory.
    **Revised 2026-10-23 (section 7c)**: parts i-iii done; instead of (iv),
-   2c: `setup HOST` -- the route from `ssh -G` and a login test, the
+   2c: the kernel-side fingerprint (the declared module list, the hash,
+   the import-tracing test, `envcheck` reporting it) first; then
+   `setup HOST` -- the route from `ssh -G` and a login test, the
    network inferred, remote discovery over ssh, setup's own environments
    (create, reuse by marker), the launcher written over ssh, `--cleanup
    HOST`, the `--2fa` flag; then 2d: version checks against the

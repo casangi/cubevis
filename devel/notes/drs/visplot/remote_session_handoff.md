@@ -62,8 +62,12 @@ as ee125b6) and section 17 (the ssh wrapper).
   conda only (no venv; no conda -> ask the user to install Miniforge);
   `--cleanup HOST` removes setup's environments there; a `--2fa` flag for
   hosts whose login needs a second factor (not yet the case at NRAO).
-* **Next: stage 2c** (design section 13): `setup HOST`, built from the
-  existing pieces.  Part iv as planned below is folded into 2c/2d.
+* **Compatibility = a kernel-side code fingerprint** (Darrell 2026-10-23,
+  design 7c): a declared list of kernel-side modules hashed by syntax tree
+  on each side, compared exactly; an import-tracing test keeps the list
+  complete.  Not the cubevis version, not a hand-kept protocol number.
+* **Next: stage 2c** (design section 13): the fingerprint first, then
+  `setup HOST`, built from the existing pieces.  Part iv as planned below is folded into 2c/2d.
 
 ## Decisions made with Darrell
 

@@ -1307,9 +1307,12 @@ asked.
   ..."); an older report is told by the file name.  Checked with a real
   wheel built from the checkout and pip-installed into a fresh environment.
 * Design 7c: what must match between here and a kernel's environment is a
-  `cubevis.remote` protocol version (integer; bumped with the wire
-  messages, their serialization, or the kernel-side handlers), exactly --
-  not the cubevis version.  Setup's environments are still made for a
-  cubevis version and never modified; the newest of ours with the local
-  protocol is the default.  The kernel side reports the protocol in the
-  `configure` round trip (stage 3) and a mismatch stops the session.
+  computed fingerprint of the kernel-side code (a declared module list,
+  hashed by syntax tree on each side), exactly -- not the cubevis version
+  (environments would accumulate for GUI-only releases) nor a
+  hand-maintained protocol number (it must cover the visplot backends; a
+  forgotten bump is a silent mismatch).  A test traces the worker's
+  imports so the list cannot drift.  Setup's environments are made for a
+  cubevis version, never modified, reused while the fingerprint holds;
+  creating a new one offers to remove superseded ones.  The kernel side
+  reports the fingerprint in the `configure` round trip (stage 3).

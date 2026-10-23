@@ -137,20 +137,22 @@ def config_text(st: State) -> str:
         if login:
             out += _host_block(login["alias"], login["host"], login["user"],
                                login.get("port"), None)
-        # Through the login host always, never (no login host), or only
-        # when this computer is outside the network (inside ranges): then
-        # the ProxyJump goes in a Match block, decided at each connection.
-        always = login["alias"] if (login and not ranges) else None
+        # Never through the login host (none), or through it when this
+        # computer is outside the network: a Match block decided at each
+        # connection -- also without inside ranges (then "outside" unless
+        # CUBEVIS_ROUTE_<NET> says direct; inside.py).
         aliases = []
         for nname in sorted(st.nodes(name)):
             node = st.nodes()[nname]
             aliases.append(node["alias"])
             out.append("")
             out += _host_block(node["alias"], node["hostname"], net["user"],
-                               node.get("port"), always)
-        if login and ranges and aliases:
+                               node.get("port"), None)
+        if login and aliases:
+            from .inside import route_var
             out.append("")
-            out.append(f"# Outside {', '.join(ranges)}: through {login['alias']}"
+            out.append((f"# Outside {', '.join(ranges)}" if ranges else "# Always (no inside ranges)")
+                       + f": through {login['alias']}, unless {route_var(name)}=direct"
                        " (python -m cubevis.setup.inside -v " + name + " says which)")
             out.append(f"Match originalhost {','.join(aliases)} !exec \"{inside_command(st, name)}\"")
             out.append(f"    ProxyJump {login['alias']}")

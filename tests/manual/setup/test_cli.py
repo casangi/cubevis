@@ -259,3 +259,135 @@ def test_rig_socket_directory_cleaned_away(home):
     import stat
     for d in ("run", "run/cm"):
         assert stat.S_IMODE(os.stat(os.path.join(home, d)).st_mode) == 0o700
+
+
+# ---------------------------------------------------------------------- #
+# Stage 2b part iii on the rig: the node side as alice, read from here     #
+# ---------------------------------------------------------------------- #
+
+def _alice_ok():
+    import pwd
+    try:
+        pwd.getpwnam("alice")
+    except KeyError:
+        return False
+    return os.geteuid() == 0
+
+needs_alice = pytest.mark.skipif(not _alice_ok(), reason="needs root and the rig's user alice")
+KERNEL_PY = os.environ.get("CUBEVIS_TEST_KERNEL_PYTHON")
+
+
+def _as_alice(cmd, timeout=300):
+    return subprocess.run(["su", "-", "alice", "-c", cmd], capture_output=True, text=True,
+                          timeout=timeout)
+
+
+def _alice_node_here(python, env_python, workdir="~", env_vars="none", net="lan"):
+    """node-here as alice on the compute host, with *python* running setup."""
+    import shlex
+    q = shlex.quote
+    r = _as_alice(
+        "rm -rf ~/.config/cubevis && mkdir -p ~/visplot-data && "
+        f"SSH_CONNECTION='1 2 3 4' NO_COLOR=1 PYTHONPATH={q(ROOT)} {q(python)} -m cubevis.setup "
+        f"--yes --answer network={net} --answer domain=example.test --answer shared_home=n "
+        f"--answer environments={q(env_python)} --answer workdir={q(workdir)} "
+        f"--answer env_vars={q(env_vars)} node-here")
+    return r
+
+
+def _lan(home):
+    return _run(home, "--yes", "--answer", "via_login=n", "--answer", "user=alice",
+                "--answer", "domain=example.test", "--answer", "network=lan",
+                "--answer", "nodes=compute:2202", "--answer", "store=command",
+                "--answer", "store_command=echo 's3cret pw!'", "network")
+
+
+@needs_rig
+@needs_ssh
+@needs_alice
+def test_rig_gui_reads_the_node_files_over_ssh(home):
+    r = _as_alice("rm -rf ~/t && python3 -m venv --without-pip ~/t/env && echo ~/t/env")
+    alice_env = r.stdout.strip().splitlines()[-1]
+    r = _alice_node_here(sys.executable, alice_env)
+    assert "enabled environment" in r.stdout, r.stdout + r.stderr
+    r = _lan(home)
+    out = " ".join(r.stdout.split())
+    assert "read 1 node file(s) over ssh" in out, r.stdout
+    st = S.load()
+    name = st.find_environment("lan", alice_env + "/bin/python")
+    assert name == "t-env"                       # a directory called env: named after its parent
+    e = st.section("environments")[name]
+    assert e["hosts"] == ["compute"]
+    assert e["status"] == "flagged" and e["last_error"] == "cubevis is not installed in it"
+    assert e["on"]["compute"]["launcher"].startswith("/home/alice/.config/cubevis/hosts/")
+    assert "kernel t-env" in _run(home, "status").stdout
+
+
+@needs_rig
+@needs_ssh
+@needs_alice
+@pytest.mark.skipif(not KERNEL_PY, reason="set CUBEVIS_TEST_KERNEL_PYTHON (with sshpyk)")
+def test_rig_a_kernel_runs_through_the_launcher(home):
+    """The design's claim (7b, 31a): sshpyk takes the launcher as remote_python,
+    so the kernel starts in the working directory with the node's variables."""
+    kenv = os.path.dirname(os.path.dirname(KERNEL_PY))
+    r = _alice_node_here(KERNEL_PY, kenv, workdir="~/visplot-data", env_vars="CUBEVIS_TRY=node")
+    assert "enabled environment" in r.stdout, r.stdout + r.stderr
+    assert _lan(home).returncode == 0
+    st = S.load()
+    name = st.find_environment("lan", KERNEL_PY)
+    lp = st.section("environments")[name]["on"]["compute"]["launcher"]
+    os.makedirs(os.path.expanduser("~/.local/share/jupyter/runtime"), exist_ok=True)
+    code = f'''
+import asyncio, sys
+from jupyter_client.kernelspec import KernelSpec, KernelSpecManager
+from jupyter_client.manager import AsyncKernelManager
+class Specs(KernelSpecManager):
+    def get_kernel_spec(self, name):
+        return KernelSpec(argv=[sys.executable, "-c", "pass"], display_name="t", language="python",
+            metadata={{"kernel_provisioner": {{"provisioner_name": "sshpyk-provisioner", "config": {{
+                "ssh": {str(G.wrapper_path())!r}, "ssh_config": {str(G.config_path())!r},
+                "ssh_host_alias": "lan-compute", "remote_python": {lp!r},
+                "remote_kernel_name": "python3", "launch_timeout": 90}}}}}})
+async def main():
+    km = AsyncKernelManager(kernel_name="not-on-disk", kernel_spec_manager=Specs())
+    await km.start_kernel()
+    kc = km.client(); kc.start_channels(); await kc.wait_for_ready(timeout=60)
+    mid = kc.execute("import os; print(os.getcwd(), os.environ.get('CUBEVIS_TRY'))")
+    while True:
+        m = await kc.get_iopub_msg(timeout=30)
+        if m["parent_header"].get("msg_id") == mid and m["msg_type"] == "stream":
+            print("KERNEL:", m["content"]["text"].strip()); break
+    kc.stop_channels(); await km.shutdown_kernel(now=True)
+asyncio.run(main())
+'''
+    kenv_vars = {k: v for k, v in _env(home).items() if k != "PYTHONPATH"}   # its own Python
+    r = subprocess.run([KERNEL_PY, "-c", code], capture_output=True, text=True, timeout=240,
+                       env=kenv_vars, cwd="/tmp")
+    assert "KERNEL: /home/alice/visplot-data node" in r.stdout, r.stdout[-2000:] + r.stderr[-3000:]
+
+
+@needs_rig
+@needs_ssh
+def test_rig_inside_here_records_only_after_a_direct_connection(home):
+    r = _run(home, "--yes", "--answer", "via_login=y", "--answer", "login_host=login.example.test:2201",
+             "--answer", "login_user=alice", "--answer", "user=alice", "--answer", "domain=example.test",
+             "--answer", "network=rig", "--answer", "nodes=compute:2202", "--answer", "store=command",
+             "--answer", "store_command=echo 's3cret pw!'", "--answer", "inside=none", "network")
+    assert r.returncode == 0, r.stdout
+    assert S.load().networks()["rig"]["inside"] == []
+    r = _run(home, "--yes", "network", "rig", "--inside-here")
+    assert r.returncode == 0 and "answers directly from here" in r.stdout, r.stdout
+    assert S.load().networks()["rig"]["inside"] == ["127.0.0.1/32"]
+    assert "inside 127.0.0.1/32 -- this computer is inside: direct" in _run(home, "status").stdout
+    # A node that does not answer directly: nothing recorded.
+    st = S.load()
+    st.add_node("far", network="rig", hostname="compute.example.test", port=2299)
+    st.networks()["rig"]["inside"] = []
+    st.networks()["rig"]["default_node"] = "far"
+    S.save(st)
+    G.write(S.load())
+    r = _run(home, "--yes", "network", "rig", "--inside-here")
+    out = " ".join(r.stdout.split())
+    assert r.returncode == 1 and "no direct connection from here" in out, r.stdout
+    assert "Nothing recorded" in out and S.load().networks()["rig"]["inside"] == []

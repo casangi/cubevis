@@ -18,6 +18,12 @@ Anything unexpected -- no state, an unknown network, a resolver that hangs
 -- answers "outside": the login host works from anywhere, a direct
 connection only from inside.  ``-v`` prints why.
 
+``CUBEVIS_ROUTE_<NETWORK>=direct`` or ``=bastion`` (the network's name in
+capitals, other characters as ``_``: ``CUBEVIS_ROUTE_CV``) overrides the
+ranges for connections started with it set -- ssh passes its environment
+to the ``exec``, so setting it in a shell or a notebook before a session
+starts is enough (design 7b: overrides instead of probing).
+
 Standard library only, and kept light: it runs at every ssh connection.
 """
 from __future__ import annotations
@@ -97,6 +103,28 @@ def decide(hosts: Iterable[str], ranges: list, *, resolver=resolve, router=route
     return False, "; ".join(tried) or "no nodes to try"
 
 
+def route_var(network: str) -> str:
+    """The override's name for *network*: ``CUBEVIS_ROUTE_`` + its name in
+    capitals, characters other than letters and digits as ``_``."""
+    import re
+    return "CUBEVIS_ROUTE_" + re.sub(r"[^A-Za-z0-9]", "_", network).upper()
+
+
+def override(network: str, environ=None) -> tuple:
+    """``(inside or None, reason)`` from the override, if set."""
+    import os
+    environ = os.environ if environ is None else environ
+    var = route_var(network)
+    v = (environ.get(var) or "").strip().lower()
+    if not v:
+        return None, ""
+    if v in ("direct", "inside"):
+        return True, f"{var}={v}"
+    if v in ("bastion", "login", "outside"):
+        return False, f"{var}={v}"
+    return None, f"{var}={v} ignored: give direct or bastion"
+
+
 def network_hosts(net: dict, nodes: dict) -> list:
     """Real names of up to MAX_NODES nodes of a network, default first."""
     names = sorted(nodes)
@@ -115,6 +143,13 @@ def main(argv=None) -> int:
         print("usage: python -m cubevis.setup.inside [-v] NETWORK", file=sys.stderr)
         return 2
     name = args[0]
+    forced, why = override(name)
+    if forced is not None:
+        if verbose:
+            print(f"{name}: {'inside' if forced else 'outside'} -- {why}", file=sys.stderr)
+        return 0 if forced else 1
+    if why and verbose:
+        print(f"{name}: {why}", file=sys.stderr)
     try:
         from . import state as _state
         st = _state.load(host=False)      # the networks only: no lock, no write

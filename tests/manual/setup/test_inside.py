@@ -96,3 +96,22 @@ def test_network_hosts_default_first():
     net = {"default_node": "b"}
     nodes = {n: {"hostname": f"{n}.x"} for n in "abcde"}
     assert I.network_hosts(net, nodes) == ["b.x", "a.x", "c.x"]
+
+
+def test_the_route_override_wins_over_the_ranges(monkeypatch):
+    """CUBEVIS_ROUTE_<NET>=direct|bastion (design 7b: overrides, no probing)."""
+    from cubevis.setup import inside as I
+    assert I.route_var("cv") == "CUBEVIS_ROUTE_CV"
+    assert I.route_var("my-site.2") == "CUBEVIS_ROUTE_MY_SITE_2"
+    assert I.override("cv", {}) == (None, "")
+    assert I.override("cv", {"CUBEVIS_ROUTE_CV": "direct"}) == (True, "CUBEVIS_ROUTE_CV=direct")
+    assert I.override("cv", {"CUBEVIS_ROUTE_CV": "Bastion"})[0] is False
+    forced, why = I.override("cv", {"CUBEVIS_ROUTE_CV": "maybe"})
+    assert forced is None and "ignored" in why
+    # main() answers from the override before looking at the state at all.
+    monkeypatch.setenv("CUBEVIS_ROUTE_NOSUCH", "direct")
+    assert I.main(["nosuch"]) == 0
+    monkeypatch.setenv("CUBEVIS_ROUTE_NOSUCH", "bastion")
+    assert I.main(["nosuch"]) == 1
+    monkeypatch.delenv("CUBEVIS_ROUTE_NOSUCH")
+    assert I.main(["nosuch"]) == 1                      # unknown network: outside

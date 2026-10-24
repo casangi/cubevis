@@ -14,7 +14,8 @@ too, and a forgotten bump is a silent mismatch).  It is *computed*:
   dependencies to compute it): module-level and function-level imports,
   relative ones resolved, ``from X import Y`` counting ``X.Y`` when that
   is a module, and every parent package (its ``__init__`` runs on
-  import).  An over-approximation, on purpose: a module that might run on
+  import) -- but not imports under ``if TYPE_CHECKING:``, which never run
+  (the lazy package ``__init__``s keep their names there for editors).  An over-approximation, on purpose: a module that might run on
   the kernel side counts.
 * ``normalize`` reduces each module to its tokens without comments, blank
   lines, docstrings and indentation width, so editing those does not
@@ -65,13 +66,31 @@ def _path_of(root: str, mod: str) -> Optional[str]:
     return None
 
 
+def _type_checking(test) -> bool:
+    return ((isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or
+            (isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"))
+
+
+def _runtime_nodes(tree):
+    """Every node, except the bodies of ``if TYPE_CHECKING:`` (their
+    ``else`` branches run, so they are kept)."""
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, ast.If) and _type_checking(node.test):
+            stack.extend(node.orelse)
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+
+
 def _imports(root: str, mod: str) -> set:
     path = _path_of(root, mod)
     with open(path, "rb") as f:
         tree = ast.parse(f.read(), filename=path)
     pkg = mod if path.endswith("__init__.py") else mod.rpartition(".")[0]
     out = set()
-    for node in ast.walk(tree):
+    for node in _runtime_nodes(tree):
         if isinstance(node, ast.Import):
             out.update(a.name for a in node.names)
         elif isinstance(node, ast.ImportFrom):

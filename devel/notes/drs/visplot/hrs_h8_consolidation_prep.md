@@ -1365,3 +1365,56 @@ not kept by hand.
 * The kernel test environment (`/home/claude/venv-kernel`) now has the
   visplot extras (`pip install -e ".[visplot]"`), which the import trace
   needs; the suite is slower for it (the checks import xarray-ms).
+
+## 34. Lazy package `__init__`s: `cubevis.toolbox`, `cubevis.toolbox.visplot` (base `454e600`, 2026-10-23)
+
+Agreed with Darrell after section 33's measurement: the two package
+`__init__`s imported their public classes eagerly, so a remote kernel --
+which imports `cubevis.toolbox.visplot` only because
+`remote_registrations` lives in it -- loaded the plotting front end and the
+clean applications on the node, and the kernel-side fingerprint changed
+with every front-end edit.
+
+* **The change.**  Both `__init__`s keep their public names in a `_LAZY`
+  table (name -> submodule) and import on first use through a
+  module-level `__getattr__` (PEP 562; the value is then stored, an
+  ordinary attribute from there on), with `__dir__`, `__all__`
+  (`cubevis.toolbox` gains one: `CubeMask`, `RegionList`,
+  `InteractiveCleanUI`), and the old imports under `if TYPE_CHECKING:` for
+  editors and type checkers.  A comment in each says why, and to add new
+  public names to `_LAZY`.  `from cubevis.toolbox.visplot import
+  VisibilityPlotter` and `from cubevis.toolbox import CubeMask` work as
+  before.  No attribute-style access to a submodule through the package
+  (`cubevis.toolbox._cube.X` without importing it) exists in `cubevis`,
+  `tests` or `demos`.  `cubevis.bokeh` was not eager (its `models` and
+  `tools` enter only through an import inside `get_app_context`, which
+  the fingerprint counts on purpose); `cubevis.utils` was left (750 lines
+  of functions used everywhere, a guarded casatools import; about ten
+  small modules to gain).
+* **`_fingerprint.closure`** skips the bodies of `if TYPE_CHECKING:`
+  (their `else` branches run and are kept).
+* **Effect.**  Fingerprinted: 127 -> 82 modules; importing the two roots
+  in a kernel environment: 116 -> 42 cubevis modules (1.9 s), without
+  `visibility_plotter`, the panels, the flag controls, `toolbox._cube` or
+  the clean UI.  The visplot modules left are the backends, readers, flag
+  engine, selection and formats -- shared by both sides, rightly counted.
+* **Tested.**  `tests/manual/setup/test_lazy_packages.py` (5): no eager
+  relative import outside `TYPE_CHECKING`; every name in `_LAZY` imports
+  as the same object as from its module; `dir`, `__all__` and `import *`
+  agree; an unknown name raises `AttributeError`; importing the package
+  alone imports none of its submodules; the kernel side does not load the
+  front end.  `test_fingerprint.py`: `TYPE_CHECKING` imports do not count;
+  the real set leaves out the front end.
+* **No change in behaviour.**  The visplot suite (`tests/manual/visplot`,
+  `CUBEVIS_SRC` set, the kernel test environment with the visplot extras,
+  `pytest -n 8`) on the unchanged tree: 2279 passed, 694 skipped, 13
+  failed; on the changed tree: 2281 passed, 694 skipped, 11 failed -- the
+  failures differ between the runs and coincide with crashed xdist workers
+  (eight workers on a 2-core, 8 GB sandbox).  All 22 tests that failed in
+  either run pass when run one at a time on the changed tree.
+  `tests/manual/remote` (real local kernels; without the two scripts that
+  name Darrell's `zuul06_python312`): 39 passed.  A real `query_raster` on
+  the TW Hya MS through a local kernel and worker: the same 10x10 raster on
+  both trees, 8.5 s each.  Setup suite: 133 passed (OpenSSH 9.6 and 8.0p1).
+* For the visplot suite here: `CUBEVIS_SRC=<checkout>/cubevis`; `-n 2` or
+  no xdist, not `-n 8`.

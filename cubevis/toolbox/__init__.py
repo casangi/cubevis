@@ -27,6 +27,40 @@
 ########################################################################
 '''Common tools used in creating applications.'''
 
-from ._cube import CubeMask
-from ._region_list import RegionList
-from ._interactive_clean_ui import InteractiveCleanUI
+# Lazy package (PEP 562).  ``CubeMask``, ``RegionList`` and
+# ``InteractiveCleanUI`` are imported on first use, not when the package is:
+# every ``cubevis.toolbox.*`` import (a remote kernel's visplot backends
+# among them) runs this file, and with eager imports it loaded the image
+# and clean applications on the node for nothing -- slower, and part of
+# the kernel-side fingerprint (``cubevis/_fingerprint.py``, remote session
+# design 7c) for code that never runs there.  ``from cubevis.toolbox import
+# CubeMask`` works as before; ``tests/manual/setup/test_lazy_packages.py``
+# checks every name.  Keep new public names in ``_LAZY``.
+import importlib as _importlib
+from typing import TYPE_CHECKING
+
+_LAZY = {
+    "CubeMask": "._cube",
+    "RegionList": "._region_list",
+    "InteractiveCleanUI": "._interactive_clean_ui",
+}
+
+__all__ = ["CubeMask", "RegionList", "InteractiveCleanUI"]
+
+
+def __getattr__(name):
+    if name in _LAZY:
+        value = getattr(_importlib.import_module(_LAZY[name], __name__), name)
+        globals()[name] = value          # once imported, an ordinary attribute
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_LAZY))
+
+
+if TYPE_CHECKING:                        # for type checkers and editors only
+    from ._cube import CubeMask
+    from ._region_list import RegionList
+    from ._interactive_clean_ui import InteractiveCleanUI

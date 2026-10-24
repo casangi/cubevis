@@ -9,7 +9,8 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 * main is at **454e600** (design 7c with the refinements committed).
   Delivered on top of it, not yet committed when this was written:
-  **`remote_stage2c1_454e600.zip`** (2c step 1: the fingerprint, section 33).
+  **`remote_stage2c1r2_454e600.zip`** (2c step 1: the fingerprint, section 33,
+  and the lazy package `__init__`s, section 34).
   Check `git log` first.
 * **Design changed 2026-10-20/21** (section 7b of the design): setup runs
   in one of two roles, GUI or node; the node side configures and tests
@@ -82,8 +83,9 @@ as ee125b6) and section 17 (the ssh wrapper).
   diagnostics: `python3 -m cubevis.setup.discover` on the node,
   `setup diagnose HOST` here.
 * **Stage 2c step 1 done** (2026-10-23): `cubevis/_fingerprint.py`, reported by
-  `envcheck`.  Open for Darrell: lazy `__init__`s for `cubevis.toolbox` and
-  `cubevis.toolbox.visplot` (127 -> 82 kernel-side modules; section 33).
+  `envcheck`.  Lazy `__init__`s for `cubevis.toolbox` and
+  `cubevis.toolbox.visplot` (agreed; 127 -> 82 fingerprinted, 116 -> 42
+  imported on the kernel side; section 34).
 * **Next: stage 2c step 2** (design section 13). Plan: the fingerprint first, then
   `setup HOST`, built from the existing pieces.  Part iv as planned below is folded into 2c/2d.
 
@@ -130,7 +132,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 34).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 35).
 
 ## Test kit (rebuild after a sandbox restart)
 

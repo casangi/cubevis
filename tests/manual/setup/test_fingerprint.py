@@ -152,3 +152,37 @@ def test_the_environment_check_reports_the_same_fingerprint():
     rep = envs.check(KERNEL_PY)
     # The kernel environment runs this very checkout (editable): identical.
     assert rep["fingerprint"] == F.fingerprint(), rep.get("errors")
+
+
+def test_imports_only_for_type_checkers_do_not_count(tmp_path):
+    """The lazy package __init__s keep their names under `if TYPE_CHECKING:`
+    for editors; those imports never run, so they are not kernel-side."""
+    root = _pkg(tmp_path, {
+        "cubevis/__init__.py": "",
+        "cubevis/remote/__init__.py": """
+            from typing import TYPE_CHECKING
+            import typing
+            if TYPE_CHECKING:
+                from ..gui import panel
+            if typing.TYPE_CHECKING:
+                from ..gui import other
+            else:
+                from ..utils import conv
+            """,
+        "cubevis/remote/worker.py": "",
+        "cubevis/gui/__init__.py": "",
+        "cubevis/gui/panel.py": "",
+        "cubevis/gui/other.py": "",
+        "cubevis/utils/__init__.py": "",
+        "cubevis/utils/conv.py": "",
+    })
+    got = F.closure(["cubevis.remote.worker"], root)
+    assert "cubevis.gui.panel" not in got and "cubevis.gui.other" not in got
+    assert "cubevis.utils.conv" in got                      # the else branch runs
+
+
+def test_the_real_kernel_side_leaves_out_the_front_end():
+    mods = set(F.closure())
+    for front in ("cubevis.toolbox.visplot.visibility_plotter", "cubevis.toolbox._cube",
+                  "cubevis.toolbox.visplot.flag_controls", "cubevis.toolbox._interactive_clean_ui"):
+        assert front not in mods, front

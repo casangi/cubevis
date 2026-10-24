@@ -8,7 +8,8 @@
 #   versions {dist: version or null}, kernel (true: cubevis' kernel side and
 #   ipykernel import), visplot (true: its data backend imports), errors
 #   {what: last line of the error}, install (how cubevis got here: from its
-#   packaging metadata -- see below).
+#   packaging metadata -- see below), fingerprint (its kernel-side code,
+#   cubevis._fingerprint; null for a cubevis without it).
 import json
 import os
 import sys
@@ -77,6 +78,19 @@ try:
 except Exception:
     pass
 out["install"] = install
+
+# The kernel-side fingerprint, computed by this environment's own cubevis
+# from its own files (design 7c): what must equal the one on the computer
+# the plots are on.  Before the imports below, which it does not need.
+out["fingerprint"] = None
+try:
+    from cubevis._fingerprint import fingerprint as _fp
+    out["fingerprint"] = _fp()
+except ImportError:
+    pass                                     # a cubevis from before it: none
+except Exception:
+    lines = traceback.format_exc().strip().splitlines()
+    out["errors"]["fingerprint"] = lines[-1] if lines else "failed"
 
 # The kernel side: what a remote kernel imports to serve visplot/iclean.
 kernel = _try("cubevis", "cubevis.remote.worker_main")

@@ -1316,3 +1316,52 @@ asked.
   cubevis version, never modified, reused while the fingerprint holds;
   creating a new one offers to remove superseded ones.  The kernel side
   reports the fingerprint in the `configure` round trip (stage 3).
+
+## 33. Stage 2c (1): the kernel-side fingerprint (base `454e600`, 2026-10-23)
+
+Design 7c: what must be identical between the plotting computer and a
+kernel's environment is the code that runs on the kernel side -- computed,
+not kept by hand.
+
+* **`cubevis/_fingerprint.py`** (stdlib only; importing it imports nothing
+  else of cubevis).  `ROOTS` declares the entry points: `cubevis.remote.
+  worker_main` and `cubevis.toolbox.visplot.remote_registrations` (the
+  `register_function` a worker loads by name).  `closure` follows `import`
+  statements in the source from them, without importing anything:
+  module- and function-level imports, relative ones resolved, `from X
+  import Y` counting `X.Y` when it is a module, every parent package (its
+  `__init__` runs).  `normalize` keeps a module's tokens without comments,
+  blank lines, continuations, indentation width and string-only statements
+  (docstrings) -- the tokenizer is the same from Python 3.12 on, `ast.dump`
+  is not.  `fingerprint()` = `k1-` + 20 hex digits of a sha256 over the
+  modules in name order.  `compatible(local, remote)` and the override
+  `CUBEVIS_ALLOW_MISMATCH=1` (or `allow=`), which says so in its message.
+* **`envcheck.py`** reports `fingerprint`, computed by the environment's
+  own cubevis from its own files (null for a cubevis without the module).
+* **Measured** on this checkout: 127 modules fingerprinted (of 164 in the
+  package); importing the two roots really imports 116.  The kernel side
+  takes in much of the visplot front end (`visibility_plotter`,
+  `flag_controls`, `info_panel`, ...) and the clean tools (`toolbox._cube`,
+  `_interactive_clean_ui`), because `cubevis/toolbox/__init__.py` and
+  `cubevis/toolbox/visplot/__init__.py` import their public classes
+  eagerly.  So today nearly every visplot change changes the fingerprint.
+  With those two `__init__`s lazy (PEP 562 `__getattr__`; `from
+  cubevis.toolbox.visplot import VisibilityPlotter` keeps working) the set
+  would be 82, the visplot part being the backends, readers, flag engine,
+  selection and formats.  Offered to Darrell, not done: it changes how the
+  packages import.  `cubevis.bokeh`'s `__init__` brings in models and tools
+  the same way.
+* **Cost**: about 1.2 s warm (closure 0.7 s, normalizing 0.5 s), mostly
+  the few very large modules (`visibility_plotter.py` is 563 kB); once per
+  process.  The lazy `__init__`s would shrink it too.
+* **Tested** (`tests/manual/setup/test_fingerprint.py`, 7): normalization;
+  the closure on a made-up package (relative, function-level, parents; an
+  unreached module and a comment do not change it, code does); the real
+  roots; the same value under Python 3.12 and 3.13; `compatible` and the
+  override; the import trace (every cubevis module the roots import is
+  fingerprinted); and `envcheck` in the kernel test environment (editable
+  on this checkout) reporting the same fingerprint.  Whole suite: 126 pass
+  on the rig with OpenSSH 9.6 and 8.0p1.
+* The kernel test environment (`/home/claude/venv-kernel`) now has the
+  visplot extras (`pip install -e ".[visplot]"`), which the import trace
+  needs; the suite is slower for it (the checks import xarray-ms).

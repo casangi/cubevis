@@ -399,12 +399,14 @@ not a sub-command is a host):
    lists the conda environments (conda, mamba, micromamba) and checks each
    (`envcheck`).  cubevis need not be on the node.  Policy:
    * **What must match is the kernel-side code, exactly** (agreed with
-     Darrell 2026-10-23): a *fingerprint*, computed, not maintained.  One
-     declared list names the modules that run on the kernel side
-     (`cubevis.remote`, the visplot backends, the serialization in
-     `cubevis.utils`, ...); each side hashes those modules' source as
-     installed, by syntax tree (comments, docstrings and formatting do
-     not count), and the two must be equal.  Not the cubevis version
+     Darrell 2026-10-23): a *fingerprint*, computed, not maintained.
+     Only the kernel side's entry points are declared (`ROOTS` in
+     `cubevis/_fingerprint.py`: the worker and each registration module
+     a worker loads by name); the modules they may run are found by
+     following `import` statements in the source (built 2026-10-23,
+     `hrs_h8_consolidation_prep.md` section 33); each side hashes those
+     modules' tokens (comments, blank lines, docstrings and indentation
+     width do not count), and the two must be equal.  Not the cubevis version
      (every release would need a new environment, most for GUI-only
      changes) and not a hand-maintained protocol number (it must cover
      the backends too, and a forgotten bump is a silent mismatch).  Any
@@ -413,9 +415,9 @@ not a sub-command is a host):
      tells two development checkouts apart where `1.0.97.devN` cannot.
      `envcheck` computes it on the node; an environment without it (older
      cubevis) cannot be used.
-   * **The list cannot drift**: a test starts the worker, records the
-     `cubevis` modules it imported, and fails on one that is neither listed
-     nor deliberately excluded.
+   * **The list cannot drift**: a test imports the roots in a fresh
+     interpreter and fails on any `cubevis` module imported there that the
+     computed set does not hold.
    * **Not covered**: dependency versions (xarray-ms, arcae, ...).  Setup's
      environments resolve them once, at creation, and are not changed;
      pinning the kernel-side dependencies in the `visplot` extra would

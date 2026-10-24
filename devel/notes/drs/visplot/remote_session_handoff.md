@@ -7,8 +7,10 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* main is at **040c0b3** (stage 2b parts i-iii, revisions, design 7c with
-  the fingerprint, committed).  Check `git log` first.
+* main is at **454e600** (design 7c with the refinements committed).
+  Delivered on top of it, not yet committed when this was written:
+  **`remote_stage2c1_454e600.zip`** (2c step 1: the fingerprint, section 33).
+  Check `git log` first.
 * **Design changed 2026-10-20/21** (section 7b of the design): setup runs
   in one of two roles, GUI or node; the node side configures and tests
   environments (several per host, only configured ones used; an
@@ -79,7 +81,10 @@ as ee125b6) and section 17 (the ssh wrapper).
   login options, tested before saving; 2FA via the shared connection;
   diagnostics: `python3 -m cubevis.setup.discover` on the node,
   `setup diagnose HOST` here.
-* **Next: stage 2c** (design section 13): the fingerprint first, then
+* **Stage 2c step 1 done** (2026-10-23): `cubevis/_fingerprint.py`, reported by
+  `envcheck`.  Open for Darrell: lazy `__init__`s for `cubevis.toolbox` and
+  `cubevis.toolbox.visplot` (127 -> 82 kernel-side modules; section 33).
+* **Next: stage 2c step 2** (design section 13). Plan: the fingerprint first, then
   `setup HOST`, built from the existing pieces.  Part iv as planned below is folded into 2c/2d.
 
 ## Decisions made with Darrell
@@ -125,7 +130,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 33).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 34).
 
 ## Test kit (rebuild after a sandbox restart)
 
@@ -151,7 +156,7 @@ The sandbox loses `/etc/hosts` edits and running daemons on restart.
   as well as with the system's.  The rig's sshd is the distribution's
   (`apt-get install openssh-server`).
 * **Kernel-capable test environments**: `/home/claude/venv-kernel`
-  (python3.12 venv: `pip install ipykernel sshpyk==1.23 -e /home/claude/cubevis`;
+  (python3.12 venv: `pip install ipykernel sshpyk==1.23 -e "/home/claude/cubevis[visplot]"`;
   sshpyk for the launcher kernel test; `mkdir -p ~/.local/share/jupyter/runtime`);
   `CUBEVIS_TEST_KERNEL_PYTHON=/home/claude/venv-kernel/bin/python` for
   `test_node_here.py`.  As alice on the rig: `~/mf/envs/hrs` (venv +

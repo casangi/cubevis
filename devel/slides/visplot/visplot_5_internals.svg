@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="100%" height="100%">
+<rect width="1600" height="900" fill="white"/>
+<rect x="40" y="140" width="860" height="680" rx="10" fill="white" stroke="#3B6EA8" stroke-width="2.5" />
+<path d="M40 184 V150 a10 10 0 0 1 10 -10 H890 a10 10 0 0 1 10 10 V184 Z" fill="#3B6EA8"/>
+<text x="58" y="170" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">Under the hood</text>
+<rect x="70" y="205" width="800" height="62" rx="7" fill="#FBF6F0" stroke="#C9711F" stroke-width="1.5" />
+<text x="470.0" y="233.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">Browser: BokehJS window</text>
+<text x="470.0" y="255.0" font-family="DejaVu Sans, Arial Unicode MS, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">panels, sidebar, flag boxes · cubevis's own Python ↔ JS channel</text>
+<path d="M470 267 V289" stroke="#8A94A0" stroke-width="3"/><path d="M463 287 L470 297 L477 287 Z" fill="#8A94A0"/>
+<rect x="70" y="297" width="800" height="62" rx="7" fill="#EEF3FA" stroke="#3B6EA8" stroke-width="1.5" />
+<text x="470.0" y="325.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">VisibilityPlotter</text>
+<text x="470.0" y="347.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">presets, selection, flagging (FlagDB), plot summary, PNG export</text>
+<path d="M470 359 V381" stroke="#8A94A0" stroke-width="3"/><path d="M463 379 L470 389 L477 379 Z" fill="#8A94A0"/>
+<rect x="70" y="389" width="800" height="62" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="470.0" y="417.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">Datashader</text>
+<text x="470.0" y="439.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">aggregates every selected sample into the raster or scatter image</text>
+<path d="M470 451 V473" stroke="#8A94A0" stroke-width="3"/><path d="M463 471 L470 481 L477 471 Z" fill="#8A94A0"/>
+<rect x="70" y="481" width="800" height="62" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="470.0" y="509.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">XArrayReader</text>
+<text x="470.0" y="531.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">one interface: raster and scatter queries, averaging, statistics</text>
+<path d="M270 543 V565" stroke="#8A94A0" stroke-width="3"/><path d="M263 563 L270 573 L277 563 Z" fill="#8A94A0"/>
+<path d="M670 543 V565" stroke="#8A94A0" stroke-width="3"/><path d="M663 563 L670 573 L677 563 Z" fill="#8A94A0"/>
+<rect x="70" y="573" width="380" height="62" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="260.0" y="601.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">MSv2Backend</text>
+<text x="260.0" y="623.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">reads: xarray-ms on arcae · flags: arcae</text>
+<rect x="490" y="573" width="380" height="62" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="680.0" y="601.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">MSv4Backend</text>
+<text x="680.0" y="623.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">reads and flags: xarray / Zarr, no xradio</text>
+<path d="M270 635 V657" stroke="#8A94A0" stroke-width="3"/><path d="M263 655 L270 665 L277 655 Z" fill="#8A94A0"/>
+<path d="M670 635 V657" stroke="#8A94A0" stroke-width="3"/><path d="M663 655 L670 665 L677 655 Z" fill="#8A94A0"/>
+<path d="M120 680 V744 A150 13 0 0 0 420 744 V680" fill="#FFF7E0" stroke="#A88A2E" stroke-width="2"/>
+<ellipse cx="270" cy="680" rx="150" ry="13" fill="#FFEFC2" stroke="#A88A2E" stroke-width="2"/>
+<text x="270" y="719" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">MSv2 measurement set</text>
+<text x="270" y="740" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">CASA table format</text>
+<path d="M520 680 V744 A150 13 0 0 0 820 744 V680" fill="#FFF7E0" stroke="#A88A2E" stroke-width="2"/>
+<ellipse cx="670" cy="680" rx="150" ry="13" fill="#FFEFC2" stroke="#A88A2E" stroke-width="2"/>
+<text x="670" y="719" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">MSv4 / Processing Set</text>
+<text x="670" y="740" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">Zarr store</text>
+<text x="470" y="800" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">Local, or everything below the browser in a remote kernel beside the data (see the architecture slides)</text>
+<rect x="940" y="140" width="620" height="680" rx="10" fill="white" stroke="#C9711F" stroke-width="2.5" />
+<path d="M940 184 V150 a10 10 0 0 1 10 -10 H1550 a10 10 0 0 1 10 10 V184 Z" fill="#C9711F"/>
+<text x="958" y="170" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">Not here yet</text>
+<text x="964" y="222" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">Jupyter notebooks</text>
+<text x="964" y="254" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">JupyterLab and Colab. cubevis already talks over both;</text>
+<text x="964" y="279.08" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">the visplot window does not yet run in a notebook.</text>
+<text x="964" y="334.15999999999997" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">Calibration tables</text>
+<text x="964" y="366.15999999999997" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">What SNPLT, POSSM on BP tables, plotbandpass and plotms</text>
+<text x="964" y="391.23999999999995" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">on cal tables show. Solutions are per antenna, not per</text>
+<text x="964" y="416.31999999999994" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">baseline, so this needs its own data model.</text>
+<text x="964" y="471.3999999999999" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">Iteration over pages</text>
+<text x="964" y="503.3999999999999" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">plotms's iteraxis: one plot per antenna, baseline, SPW</text>
+<text x="964" y="528.4799999999999" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">or scan, laid out in a grid. visplot has two panels and</text>
+<text x="964" y="553.56" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">steps through antennas and baselines with Prev / Next.</text>
+<text x="964" y="608.64" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">Elevation and angle axes</text>
+<text x="964" y="640.64" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Elevation, hour angle, azimuth and parallactic angle, as</text>
+<text x="964" y="665.72" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">plotms offers.</text>
+<text x="40" y="62" font-family="Helvetica, Arial, sans-serif" font-size="40" font-weight="bold" fill="#1C2733" text-anchor="start"  xml:space="preserve">Under the hood, and what is next</text>
+<text x="40" y="102" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="normal" fill="#4A5563" text-anchor="start"  xml:space="preserve">One reader interface over both data formats; Datashader in Python, Bokeh in the browser, no Bokeh server.</text>
+<text x="1560" y="885" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#8A94A0" text-anchor="end" font-style="italic" xml:space="preserve">Scope as of the visplot user guide, 18 Oct 2026 · visplot test release · October 2026</text>
+</svg>

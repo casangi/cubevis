@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="100%" height="100%">
+<rect width="1600" height="900" fill="white"/>
+<rect x="40" y="140" width="900" height="155" rx="10" fill="white" stroke="#A9B8CA" stroke-width="1.5" />
+<path d="M40 150 a10 10 0 0 1 10 -10 H170 V295 H50 a10 10 0 0 1 -10 -10 Z" fill="#3B6EA8"/>
+<text x="105" y="225" font-family="Helvetica, Arial, sans-serif" font-size="24" font-weight="bold" fill="white" text-anchor="middle"  xml:space="preserve">Reads</text>
+<text x="195" y="199.0" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">MSv2 measurement sets through xarray-ms, and MSv4 / Processing Sets</text>
+<text x="195" y="224.08" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">through xarray's own Zarr engine. vis= detects which, as in any CASA</text>
+<text x="195" y="249.16000000000003" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">task. Data column DATA, CORRECTED or MODEL.</text>
+<rect x="40" y="310" width="900" height="155" rx="10" fill="white" stroke="#A9B8CA" stroke-width="1.5" />
+<path d="M40 320 a10 10 0 0 1 10 -10 H170 V465 H50 a10 10 0 0 1 -10 -10 Z" fill="#C9711F"/>
+<text x="105" y="395" font-family="Helvetica, Arial, sans-serif" font-size="24" font-weight="bold" fill="white" text-anchor="middle"  xml:space="preserve">Shows</text>
+<text x="195" y="344.0" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">One plot or two (side by side, or one over the other), each a raster (a</text>
+<text x="195" y="369.08" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">2-D image over Baseline, Time, Channel or Antenna × Antenna) or a</text>
+<text x="195" y="394.15999999999997" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">scatter (Amplitude, Phase, Real, Imaginary, Phase RMS … against Time,</text>
+<text x="195" y="419.23999999999995" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Frequency, Channel or UV distance). Datashader aggregates every sample:</text>
+<text x="195" y="444.31999999999994" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">nothing is decimated.</text>
+<rect x="40" y="480" width="900" height="155" rx="10" fill="white" stroke="#A9B8CA" stroke-width="1.5" />
+<path d="M40 490 a10 10 0 0 1 10 -10 H170 V635 H50 a10 10 0 0 1 -10 -10 Z" fill="#6A4C93"/>
+<text x="105" y="565" font-family="Helvetica, Arial, sans-serif" font-size="24" font-weight="bold" fill="white" text-anchor="middle"  xml:space="preserve">Runs</text>
+<text x="195" y="539.0" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">From ipython or a CASA6 prompt, with the window in a browser. Data</text>
+<text x="195" y="564.08" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">access runs locally, or in a remote kernel on the machine that holds the</text>
+<text x="195" y="589.1600000000001" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">data, so large data sets need not move.</text>
+<rect x="40" y="650" width="900" height="155" rx="10" fill="white" stroke="#A9B8CA" stroke-width="1.5" />
+<path d="M40 660 a10 10 0 0 1 10 -10 H170 V805 H50 a10 10 0 0 1 -10 -10 Z" fill="#2E7D5B"/>
+<text x="105" y="735" font-family="Helvetica, Arial, sans-serif" font-size="24" font-weight="bold" fill="white" text-anchor="middle"  xml:space="preserve">Does</text>
+<text x="195" y="696.5" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Twelve preset views modelled on AIPS and CASA tasks, CASA-syntax</text>
+<text x="195" y="721.58" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">selection, box flagging with undo and write-back, PNG export (also</text>
+<text x="195" y="746.6600000000001" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">without a window), and a summary of every plot with the call that</text>
+<text x="195" y="771.7400000000001" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">reproduces it.</text>
+<rect x="980" y="140" width="580" height="330" rx="10" fill="white" stroke="#1C2733" stroke-width="2.5" />
+<path d="M980 184 V150 a10 10 0 0 1 10 -10 H1550 a10 10 0 0 1 10 10 V184 Z" fill="#1C2733"/>
+<text x="998" y="170" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">One call, CASA-style</text>
+<rect x="1000" y="200" width="540" height="250" rx="8" fill="#1C2733" stroke="#1C2733" stroke-width="1.5" />
+<text x="1020" y="235" font-family="monospace" font-size="17" font-weight="normal" fill="#E6EDF3" text-anchor="start"  xml:space="preserve">from cubevis import visplot</text>
+<text x="1020" y="259" font-family="monospace" font-size="17" font-weight="normal" fill="#E6EDF3" text-anchor="start"  xml:space="preserve"></text>
+<text x="1020" y="283" font-family="monospace" font-size="17" font-weight="normal" fill="#E6EDF3" text-anchor="start"  xml:space="preserve">visplot(vis="twhya_selfcal_contsub_ms",</text>
+<text x="1020" y="307" font-family="monospace" font-size="17" font-weight="normal" fill="#E6EDF3" text-anchor="start"  xml:space="preserve">        field="5", spw="0",</text>
+<text x="1020" y="331" font-family="monospace" font-size="17" font-weight="normal" fill="#E6EDF3" text-anchor="start"  xml:space="preserve">        correlation="XX,YY",</text>
+<text x="1020" y="355" font-family="monospace" font-size="17" font-weight="normal" fill="#E6EDF3" text-anchor="start"  xml:space="preserve">        preset="vplot")</text>
+<text x="1020" y="379" font-family="monospace" font-size="17" font-weight="normal" fill="#E6EDF3" text-anchor="start"  xml:space="preserve"></text>
+<text x="1020" y="403" font-family="monospace" font-size="17" font-weight="normal" fill="#8FA3B8" text-anchor="start"  xml:space="preserve"># or plotfile="out.png" for a PNG</text>
+<text x="1020" y="427" font-family="monospace" font-size="17" font-weight="normal" fill="#8FA3B8" text-anchor="start"  xml:space="preserve"># and no window</text>
+<rect x="980" y="490" width="580" height="330" rx="10" fill="white" stroke="#0F8B8D" stroke-width="2.5" />
+<path d="M980 534 V500 a10 10 0 0 1 10 -10 H1550 a10 10 0 0 1 10 10 V534 Z" fill="#0F8B8D"/>
+<text x="998" y="520" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">Where it stands</text>
+<text x="1002" y="568" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="bold" fill="#0F8B8D" text-anchor="start"  xml:space="preserve">•</text>
+<text x="1024" y="568" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Test release: astronomers are trying it now,</text>
+<text x="1024" y="593.08" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">guided by the user page on Read the Docs.</text>
+<text x="1002" y="632.1600000000001" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="bold" fill="#0F8B8D" text-anchor="start"  xml:space="preserve">•</text>
+<text x="1024" y="632.1600000000001" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Exercised on ALMA (TW Hya) and VLBA data, MSv2 and</text>
+<text x="1024" y="657.2400000000001" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">MSv4.</text>
+<text x="1002" y="696.3200000000002" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="bold" fill="#0F8B8D" text-anchor="start"  xml:space="preserve">•</text>
+<text x="1024" y="696.3200000000002" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Built for plotms parity plus commissioning needs:</text>
+<text x="1024" y="721.4000000000002" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">waterfalls, phase RMS, AIPS-style flagging.</text>
+<text x="1002" y="760.4800000000002" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="bold" fill="#0F8B8D" text-anchor="start"  xml:space="preserve">•</text>
+<text x="1024" y="760.4800000000002" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">How it is deployed: see the architecture slides.</text>
+<text x="40" y="62" font-family="Helvetica, Arial, sans-serif" font-size="40" font-weight="bold" fill="#1C2733" text-anchor="start"  xml:space="preserve">visplot at a glance</text>
+<text x="40" y="102" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="normal" fill="#4A5563" text-anchor="start"  xml:space="preserve">One tool for what plotms and msview do today, built for commissioning and data inspection.</text>
+<text x="1560" y="885" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#8A94A0" text-anchor="end" font-style="italic" xml:space="preserve">visplot test release · October 2026</text>
+</svg>

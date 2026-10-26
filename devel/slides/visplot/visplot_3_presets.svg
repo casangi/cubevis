@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="100%" height="100%">
+<rect width="1600" height="900" fill="white"/>
+<rect x="40" y="135" width="1520" height="40" rx="6" fill="#1C2733" stroke="#1C2733" stroke-width="1.5" />
+<text x="54" y="162" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">Preset</text>
+<text x="204" y="162" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">Panels</text>
+<text x="674" y="162" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">Used for</text>
+<text x="1129" y="162" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">AIPS</text>
+<text x="1324" y="162" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">CASA</text>
+<rect x="40" y="178" width="1520" height="53" rx="0" fill="#F3F5F8" stroke="none" stroke-width="1.5" />
+<rect x="52" y="190" width="67" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="85.5" y="211" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">vplot</text>
+<text x="204" y="200.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Raster Baseline × Time amplitude · scatter Amplitude</text>
+<text x="204" y="220.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">vs Time</text>
+<text x="674" y="210.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">First look: dropouts, bad scans, bad baselines</text>
+<text x="1129" y="210.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">VPLOT, TVFLG</text>
+<text x="1324" y="210.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">plotms amp vs time</text>
+<rect x="52" y="243" width="85" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="94.5" y="264" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">radplot</text>
+<text x="204" y="263.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Same raster · scatter Amplitude vs UV distance</text>
+<text x="674" y="253.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Source structure: flat for a point source, falling</text>
+<text x="674" y="273.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">for a resolved one</text>
+<text x="1129" y="263.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">UVPLT</text>
+<text x="1324" y="263.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">plotms amp vs uvdist</text>
+<rect x="40" y="284" width="1520" height="53" rx="0" fill="#F3F5F8" stroke="none" stroke-width="1.5" />
+<rect x="52" y="296" width="103" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="103.5" y="317" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">Waterfall</text>
+<text x="204" y="306.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Raster Time × Channel amplitude, one baseline ·</text>
+<text x="204" y="326.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Amplitude vs Time</text>
+<text x="674" y="316.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Interference narrow in frequency or short in time</text>
+<text x="1129" y="316.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">SPFLG</text>
+<text x="1324" y="316.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">msview raster</text>
+<rect x="52" y="349" width="76" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="90.0" y="370" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">All-BL</text>
+<text x="204" y="359.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Raster Time × Channel, largest amplitude over all</text>
+<text x="204" y="379.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">baselines · Amplitude vs Channel</text>
+<text x="674" y="369.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Interference common to many baselines</text>
+<text x="1129" y="369.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">FTFLG</text>
+<text x="1324" y="369.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#A9B3BE" text-anchor="start"  xml:space="preserve">—</text>
+<rect x="40" y="390" width="1520" height="53" rx="0" fill="#F3F5F8" stroke="none" stroke-width="1.5" />
+<rect x="52" y="402" width="85" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="94.5" y="423" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">Z-Score</text>
+<text x="204" y="412.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Raster Baseline × Time coloured by Z-Score ·</text>
+<text x="204" y="432.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Amplitude vs Time</text>
+<text x="674" y="422.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Samples unusual for their own baseline</text>
+<text x="1129" y="422.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#A9B3BE" text-anchor="start"  xml:space="preserve">—</text>
+<text x="1324" y="422.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#A9B3BE" text-anchor="start"  xml:space="preserve">—</text>
+<rect x="52" y="455" width="76" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="90.0" y="476" font-family="DejaVu Sans, Arial Unicode MS, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">φrms·t</text>
+<text x="204" y="475.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Phase RMS: raster Baseline × Time · scatter vs Time</text>
+<text x="674" y="475.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Phase stability across the band, per integration</text>
+<text x="1129" y="475.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#A9B3BE" text-anchor="start"  xml:space="preserve">—</text>
+<text x="1324" y="475.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#A9B3BE" text-anchor="start"  xml:space="preserve">—</text>
+<rect x="40" y="496" width="1520" height="53" rx="0" fill="#F3F5F8" stroke="none" stroke-width="1.5" />
+<rect x="52" y="508" width="76" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="90.0" y="529" font-family="DejaVu Sans, Arial Unicode MS, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">φrms·ν</text>
+<text x="204" y="518.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Phase RMS: raster Baseline × Channel · scatter vs</text>
+<text x="204" y="538.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Channel</text>
+<text x="674" y="528.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Phase stability per channel; band edges</text>
+<text x="1129" y="528.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#A9B3BE" text-anchor="start"  xml:space="preserve">—</text>
+<text x="1324" y="528.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#A9B3BE" text-anchor="start"  xml:space="preserve">—</text>
+<rect x="52" y="561" width="85" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="94.5" y="582" font-family="DejaVu Sans, Arial Unicode MS, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">φrms·uv</text>
+<text x="204" y="581.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Phase RMS raster · scatter vs UV distance</text>
+<text x="674" y="581.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Atmosphere (rises with length) or one bad antenna</text>
+<text x="1129" y="581.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#A9B3BE" text-anchor="start"  xml:space="preserve">—</text>
+<text x="1324" y="581.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#A9B3BE" text-anchor="start"  xml:space="preserve">—</text>
+<rect x="40" y="602" width="1520" height="53" rx="0" fill="#F3F5F8" stroke="none" stroke-width="1.5" />
+<rect x="52" y="614" width="85" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="94.5" y="635" font-family="DejaVu Sans, Arial Unicode MS, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">φ Wfall</text>
+<text x="204" y="624.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Raster Time × Channel phase, cyclic colormap · Phase</text>
+<text x="204" y="644.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">vs Time</text>
+<text x="674" y="624.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Delay (stripes across the band) or rate (stripes</text>
+<text x="674" y="644.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">in time)</text>
+<text x="1129" y="634.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">SPFLG (phase)</text>
+<text x="1324" y="634.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">msview raster</text>
+<rect x="52" y="667" width="85" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="94.5" y="688" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">Ant×Ant</text>
+<text x="204" y="687.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Antenna × antenna matrix · Amplitude vs UV distance</text>
+<text x="674" y="677.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">An antenna bad on every baseline: a whole row and</text>
+<text x="674" y="697.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">column</text>
+<text x="1129" y="687.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">LISTR matrix</text>
+<text x="1324" y="687.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#A9B3BE" text-anchor="start"  xml:space="preserve">—</text>
+<rect x="40" y="708" width="1520" height="53" rx="0" fill="#F3F5F8" stroke="none" stroke-width="1.5" />
+<rect x="52" y="720" width="94" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="99.0" y="741" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">Spectrum</text>
+<text x="204" y="740.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Amplitude over Phase vs Frequency, scan-averaged</text>
+<text x="674" y="740.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Bandpass shape, edge channels, phase slope</text>
+<text x="1129" y="740.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">POSSM</text>
+<text x="1324" y="740.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">plotms amp/phase vs freq</text>
+<rect x="52" y="773" width="121" height="30" rx="6" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="112.5" y="794" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">Time series</text>
+<text x="204" y="793.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Amplitude over Phase vs Time, channels averaged</text>
+<text x="674" y="793.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Phase drifts and jumps, amplitude dropouts</text>
+<text x="1129" y="793.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">VPLOT</text>
+<text x="1324" y="793.5" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">plotms amp/phase vs time</text>
+<text x="40" y="857" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#5A6573" text-anchor="start"  xml:space="preserve">Raster quantities beyond the presets include TVFLG's Amp V Diff and Phase Diff, Coherence, Real, Imaginary and Flag fraction.</text>
+<text x="40" y="62" font-family="Helvetica, Arial, sans-serif" font-size="40" font-weight="bold" fill="#1C2733" text-anchor="start"  xml:space="preserve">Predefined views</text>
+<text x="40" y="102" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="normal" fill="#4A5563" text-anchor="start"  xml:space="preserve">Each preset sets both panels at once; the AIPS and CASA columns name the closest existing view.</text>
+<text x="1560" y="885" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#8A94A0" text-anchor="end" font-style="italic" xml:space="preserve">visplot test release · October 2026</text>
+</svg>

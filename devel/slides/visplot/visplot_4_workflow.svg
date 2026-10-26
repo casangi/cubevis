@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="100%" height="100%">
+<rect width="1600" height="900" fill="white"/>
+<polygon points="40,150 384,150 410,195 384,240 40,240 40,195" fill="#3B6EA8"/>
+<text x="64" y="205" font-family="Helvetica, Arial, sans-serif" font-size="26" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">1  Survey</text>
+<rect x="40" y="258" width="356" height="400" rx="10" fill="white" stroke="#3B6EA8" stroke-width="2" />
+<text x="58" y="294" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">Which antennas, baselines and</text>
+<text x="58" y="320.4" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">times are wrong?</text>
+<text x="58" y="356.79999999999995" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">•</text>
+<text x="80" y="356.79999999999995" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Ant×Ant: a bad antenna is a</text>
+<text x="80" y="380.55999999999995" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">whole row and column</text>
+<text x="58" y="415.31999999999994" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">•</text>
+<text x="80" y="415.31999999999994" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Z-Score: outliers in time per</text>
+<text x="80" y="439.0799999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">baseline</text>
+<text x="58" y="473.8399999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">•</text>
+<text x="80" y="473.8399999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Phase RMS vs time and vs UV</text>
+<text x="80" y="497.5999999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">distance: atmosphere or</text>
+<text x="80" y="521.3599999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">antenna?</text>
+<text x="58" y="556.1199999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">•</text>
+<text x="80" y="556.1199999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">vplot: dropouts and bad scans</text>
+<text x="58" y="590.8799999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#3B6EA8" text-anchor="start"  xml:space="preserve">•</text>
+<text x="80" y="590.8799999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">RR / LL or XX / YY side by</text>
+<text x="80" y="614.6399999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">side: problems in one hand</text>
+<polygon points="423,150 767,150 793,195 767,240 423,240 449,195" fill="#6A4C93"/>
+<text x="471" y="205" font-family="Helvetica, Arial, sans-serif" font-size="26" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">2  Confirm</text>
+<rect x="423" y="258" width="356" height="400" rx="10" fill="white" stroke="#6A4C93" stroke-width="2" />
+<text x="441" y="294" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#6A4C93" text-anchor="start"  xml:space="preserve">Look closely, one baseline at</text>
+<text x="441" y="320.4" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#6A4C93" text-anchor="start"  xml:space="preserve">a time</text>
+<text x="441" y="356.79999999999995" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#6A4C93" text-anchor="start"  xml:space="preserve">•</text>
+<text x="463" y="356.79999999999995" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Step baseline by baseline, or</text>
+<text x="463" y="380.55999999999995" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">antenna by antenna</text>
+<text x="441" y="415.31999999999994" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#6A4C93" text-anchor="start"  xml:space="preserve">•</text>
+<text x="463" y="415.31999999999994" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Amplitude and phase waterfalls:</text>
+<text x="463" y="439.0799999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">RFI, delay, rate</text>
+<text x="441" y="473.8399999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#6A4C93" text-anchor="start"  xml:space="preserve">•</text>
+<text x="463" y="473.8399999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Spectrum (POSSM) and Time</text>
+<text x="463" y="497.5999999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">series (VPLOT)</text>
+<text x="441" y="532.3599999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#6A4C93" text-anchor="start"  xml:space="preserve">•</text>
+<text x="463" y="532.3599999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">All-BL (FTFLG): RFI on many</text>
+<text x="463" y="556.1199999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">baselines</text>
+<text x="441" y="590.8799999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#6A4C93" text-anchor="start"  xml:space="preserve">•</text>
+<text x="463" y="590.8799999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Narrow with Scan, Time range,</text>
+<text x="463" y="614.6399999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">UV range</text>
+<polygon points="806,150 1150,150 1176,195 1150,240 806,240 832,195" fill="#C9711F"/>
+<text x="854" y="205" font-family="Helvetica, Arial, sans-serif" font-size="26" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">3  Flag</text>
+<rect x="806" y="258" width="356" height="400" rx="10" fill="white" stroke="#C9711F" stroke-width="2" />
+<text x="824" y="294" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">Box on whichever view shows it</text>
+<text x="824" y="320.4" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">best</text>
+<text x="824" y="356.79999999999995" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">•</text>
+<text x="846" y="356.79999999999995" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Flag or unflag boxes on raster</text>
+<text x="846" y="380.55999999999995" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">and scatter</text>
+<text x="824" y="415.31999999999994" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">•</text>
+<text x="846" y="415.31999999999994" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Reaches widen a box, as TVFLG's</text>
+<text x="846" y="439.0799999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">scopes do: antenna, channels,</text>
+<text x="846" y="462.8399999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">correlations, SPWs, scan, field</text>
+<text x="824" y="497.5999999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">•</text>
+<text x="846" y="497.5999999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Preview each proposal before</text>
+<text x="846" y="521.3599999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">adding it</text>
+<text x="824" y="556.1199999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#C9711F" text-anchor="start"  xml:space="preserve">•</text>
+<text x="846" y="556.1199999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Undo, redo, reason, and a</text>
+<text x="846" y="579.8799999999999" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">report</text>
+<polygon points="1189,150 1533,150 1559,195 1533,240 1189,240 1215,195" fill="#2E7D5B"/>
+<text x="1237" y="205" font-family="Helvetica, Arial, sans-serif" font-size="26" font-weight="bold" fill="white" text-anchor="start"  xml:space="preserve">4  Commit</text>
+<rect x="1189" y="258" width="356" height="400" rx="10" fill="white" stroke="#2E7D5B" stroke-width="2" />
+<text x="1207" y="294" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#2E7D5B" text-anchor="start"  xml:space="preserve">Write only when satisfied</text>
+<text x="1207" y="330.4" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#2E7D5B" text-anchor="start"  xml:space="preserve">•</text>
+<text x="1229" y="330.4" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Write to MS saves a backup of</text>
+<text x="1229" y="354.15999999999997" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">the flags it changes first</text>
+<text x="1207" y="388.91999999999996" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#2E7D5B" text-anchor="start"  xml:space="preserve">•</text>
+<text x="1229" y="388.91999999999996" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Export pending flags as JSON to</text>
+<text x="1229" y="412.67999999999995" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">keep or reapply</text>
+<text x="1207" y="447.43999999999994" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#2E7D5B" text-anchor="start"  xml:space="preserve">•</text>
+<text x="1229" y="447.43999999999994" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">Show flagged data to check the</text>
+<text x="1229" y="471.19999999999993" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">result</text>
+<rect x="40" y="680" width="1520" height="140" rx="10" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
+<text x="64" y="715" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="bold" fill="#1C2733" text-anchor="start"  xml:space="preserve">Around every plot</text>
+<text x="64" y="752" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="bold" fill="#1C2733" text-anchor="start"  xml:space="preserve">Describe this plot</text>
+<text x="64" y="776" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="start"  xml:space="preserve">selection, settings, versions, and the</text>
+<text x="64" y="795.5" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="start"  xml:space="preserve">visplot(...) call that reproduces it</text>
+<text x="439" y="752" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="bold" fill="#1C2733" text-anchor="start"  xml:space="preserve">Export PNG</text>
+<text x="439" y="776" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="start"  xml:space="preserve">from the toolbar, or plotfile= with no</text>
+<text x="439" y="795.5" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="start"  xml:space="preserve">window at all</text>
+<text x="814" y="752" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="bold" fill="#1C2733" text-anchor="start"  xml:space="preserve">Linked panels</text>
+<text x="814" y="776" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="start"  xml:space="preserve">cursor tracked across panels on a shared</text>
+<text x="814" y="795.5" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="start"  xml:space="preserve">axis; X pan and zoom follow a shared X</text>
+<text x="1189" y="752" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="bold" fill="#1C2733" text-anchor="start"  xml:space="preserve">Dark and light</text>
+<text x="1189" y="776" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="start"  xml:space="preserve">colormaps adjust so faint points stay</text>
+<text x="1189" y="795.5" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="start"  xml:space="preserve">visible</text>
+<text x="40" y="62" font-family="Helvetica, Arial, sans-serif" font-size="40" font-weight="bold" fill="#1C2733" text-anchor="start"  xml:space="preserve">From survey to written flags</text>
+<text x="40" y="102" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="normal" fill="#4A5563" text-anchor="start"  xml:space="preserve">The views are arranged for a first pass over a new observation; nothing reaches the data until it is committed.</text>
+<text x="1560" y="885" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#8A94A0" text-anchor="end" font-style="italic" xml:space="preserve">visplot test release · October 2026</text>
+</svg>

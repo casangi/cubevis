@@ -546,6 +546,17 @@ fingerprint (and cubevis version) in the opening `configure` round trip; a
 mismatch stops the session naming both, instead of failing later on a
 message.  setup's check is advisory; this one is definitive.
 
+**Built (stage 2c step 2, 2026-10-23; `hrs_h8_consolidation_prep.md`
+section 35).**  `setup HOST` as the one path (`hostsetup.py`): placement
+(known node, a cluster's pattern, a known domain, else a new network whose
+route is still asked -- step 4 -- and whose name is made from the domain),
+logins, discovery (`discover.py`, Python 3.6 and later, sent as `python3 -`),
+the cluster question, inside ranges, the environment by fingerprint (none
+usable: what to do; creation is step 3), the kernel with its launcher at
+`~/.config/cubevis/launch/<gui-id>/<kernel>.sh` on the node, tested by
+running it.  State schema 3 (`clusters`; kernels carry their settings).
+`node-here`, the node files and their sync are gone.
+
 **`python -m cubevis.setup --cleanup HOST`**: lists setup's own
 environments on HOST (by marker), with whether a kernel here still uses
 them, and removes the ones chosen (`<tool> env remove -p`); the state is
@@ -670,7 +681,8 @@ Each stage is one delivery (zip on the then-current main), with tests.
    shown, detached resumable creation, reuse by marker, `--cleanup HOST`;
    (4) the ssh-configuration adoption with the login test, `diagnose
    HOST`, the `--2fa` flag.  Then 2d: `--sync-checkout`, `prune`,
-   `setup --local`, the final kernel + plot test.
+   `setup --local`, the final kernel + plot test.  (1) and (2) done
+   2026-10-23 (`hrs_h8_consolidation_prep.md` sections 33-35).
 3. **Session**: `cubevis/remote/session.py`, in-memory kernel spec,
    `RemoteReductionContext` factory, `VisibilityPlotter(session=)`,
    `check()`. Tests: local kernel; the rig with two nodes from one

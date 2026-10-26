@@ -93,7 +93,7 @@ def test_schema_1_moves_to_this_computer_at_the_first_save(xdg, monkeypatch):
     assert not (xdg / "hosts").exists()
     S.save(st)
     shared = json.loads((xdg / "state.json").read_text())
-    assert shared["schema"] == 2 and "local" not in shared and "cv" in shared["networks"]
+    assert shared["schema"] == S.SCHEMA and "local" not in shared and "cv" in shared["networks"]
     mine = json.loads((xdg / "hosts" / "gui1" / "local.json").read_text())
     assert mine["local"]["python"] == "/old/python"
     # A second computer sharing the directory starts with its own, empty.

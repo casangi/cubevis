@@ -2,7 +2,7 @@
 # ssh test rig for tests/manual/setup (CUBEVIS_SSH_RIG=1). Disposable container only.
 set -e
 if [ "$1" = stop ]; then pkill -f 'sshd -f /etc/ssh/rig-' || true; exit 0; fi
-grep -q login.example.test /etc/hosts || echo "127.0.0.1 login.example.test compute.example.test" >> /etc/hosts
+grep -q compute2.example.test /etc/hosts || echo "127.0.0.1 login.example.test compute.example.test compute2.example.test" >> /etc/hosts
 id alice >/dev/null 2>&1 || useradd -m -s /bin/bash alice
 echo 'alice:s3cret pw!' | chpasswd
 ssh-keygen -A >/dev/null

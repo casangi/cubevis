@@ -1,15 +1,18 @@
 """The launcher: a small script on the node that a kernel's ssh runs
-instead of the environment's python.
+instead of the environment's python -- one per kernel (design 7c, 4a).
 
 sshpyk starts the remote kernel as ``$FP_PY -c '...'``, with ``FP_PY`` the
 configured ``remote_python``, after checking only that it is an executable
-file; it passes no working directory and no environment.  So
-``node-here`` writes, per environment, ``hosts/<id>/node/<network>/<env>.sh``
-and the GUI side gives its path as ``remote_python``.  Before Python
-starts -- which matters: ``OMP_NUM_THREADS``, ``HDF5_USE_FILE_LOCKING`` and
-the like are read when the libraries load -- it
+file; it passes no working directory and no environment.  So setup writes,
+on the node, ``<config>/launch/<gui>/<kernel>.sh`` (``<config>`` the node's
+``~/.config/cubevis``, ``<gui>`` the id of the computer the plots are on,
+so that two such computers with their own state never overwrite each
+other's), and the kernel's record gives its path as ``remote_python``.
+Before Python starts -- which matters: ``OMP_NUM_THREADS``,
+``HDF5_USE_FILE_LOCKING`` and the like are read when the libraries load --
+it
 
-1. changes to the environment's working directory (default: the home
+1. changes to the kernel's working directory (default: the home
    directory), so that relative paths (``ms="sis14.ms"``) are found there;
    a directory that is gone stops the kernel with a message, rather than
    starting it somewhere else;
@@ -17,12 +20,18 @@ the like are read when the libraries load -- it
    ``CONDA_PREFIX`` / ``VIRTUAL_ENV``, and, for conda, the environment's
    ``etc/conda/activate.d/*.sh`` scripts (their output goes to stderr:
    sshpyk reads the launcher's stdout);
-3. sets the environment's variables (after activation, so they win);
+3. sets the kernel's variables (after activation, so they win);
 4. ``exec``s the python with the arguments it was given.
 
-Only what ``node-here`` recorded on the node goes in; nothing comes from
-the computer the plots are on (developers pass that explicitly, stage 3).
+Only what the kernel's record holds goes in; nothing else comes from the
+computer the plots are on (developers pass that explicitly, stage 3).
 bash, not sh: conda's activation scripts are written for bash and zsh.
+
+``install_script`` is the small Python program, run by the node's
+``python3`` over ssh, that writes it there (atomically, mode 700, only
+when its text changed); ``test_code`` is what setup runs through it to see
+that the kernel can start: the directory, the activation, the imports, and
+the kernel-side fingerprint.
 """
 from __future__ import annotations
 
@@ -63,17 +72,26 @@ def format_vars(env: dict) -> str:
     return " ".join(f"{k}={shlex.quote(v)}" for k, v in sorted((env or {}).items()))
 
 
-def text(name: str, network: str, host: str, e: dict, home: str) -> str:
+def relpath(gui: str, kernel: str) -> str:
+    """Where a kernel's launcher goes, relative to the node's configuration
+    directory (``~/.config/cubevis``)."""
+    return f"launch/{gui}/{kernel}.sh"
+
+
+def text(kernel: str, k: dict, e: dict, home: str, gui: str, host: str = "HOST") -> str:
+    """The launcher of *kernel* (its record *k*: ``workdir``, ``env``) in
+    environment *e* (``python``, ``prefix``, ``kind``), on a node whose home
+    is *home*, written by the computer *gui*."""
     q = shlex.quote
     prefix = e.get("prefix") or os.path.dirname(os.path.dirname(e["python"]))
-    workdir = e.get("workdir") or home
+    workdir = k.get("workdir") or home
     lines = [
         "#!/bin/bash",
-        f"# Written by python -m cubevis.setup node-here on {host} for environment",
-        f"# {name} of network {network}; written again at each run (change it there).",
+        f"# Kernel {kernel}: written by python -m cubevis.setup on {gui}, again at each",
+        f"# run (change it there: python -m cubevis.setup {host} --kernel {kernel}).",
         "# A kernel's ssh runs this instead of python: working directory, activation,",
         "# environment variables, then the environment's python with the arguments given.",
-        f"cd {q(workdir)} || {{ echo {q(f'cubevis: cannot change to {workdir}, the working directory of environment {name} (python -m cubevis.setup --redo node-here {network})')} >&2; exit 1; }}",
+        f"cd {q(workdir)} || {{ echo {q(f'cubevis: cannot change to {workdir}, the working directory of kernel {kernel} (python -m cubevis.setup {host} --kernel {kernel} changes it)')} >&2; exit 1; }}",
     ]
     if e.get("kind") == "conda":
         lines += [
@@ -89,10 +107,69 @@ def text(name: str, network: str, host: str, e: dict, home: str) -> str:
             f"export VIRTUAL_ENV={q(prefix)}",
             f"export PATH={q(prefix + '/bin')}:\"$PATH\"",
         ]
-    for k, v in sorted((e.get("env") or {}).items()):
-        lines.append(f"export {check_var(k)}={q(v)}")
+    for name, v in sorted((k.get("env") or {}).items()):
+        lines.append(f"export {check_var(name)}={q(v)}")
     lines.append(f"exec {q(e['python'])} \"$@\"")
     return "\n".join(lines) + "\n"
+
+
+# Run by the node's python3 (3.6 or later) with the launcher's path and text
+# filled in; prints CUBEVIS-LAUNCHER written|same|error <path or reason>.
+_INSTALL = r'''
+import os, sys, tempfile
+path, text = %(path)r, %(text)r
+try:
+    try:
+        with open(path) as f:
+            same = f.read() == text
+    except (OSError, ValueError):
+        same = False
+    if same:
+        print("CUBEVIS-LAUNCHER same " + path)
+    else:
+        d = os.path.dirname(path)
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(path) + ".", dir=d)
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.chmod(tmp, 0o700)
+        os.replace(tmp, path)
+        print("CUBEVIS-LAUNCHER written " + path)
+except Exception as exc:
+    print("CUBEVIS-LAUNCHER error %%s" %% exc)
+'''
+
+# Through the launcher: the kernel's directory, its imports, its fingerprint.
+# One line without quotes, '$' or '!', so that any login shell (csh too)
+# passes it through single quotes unchanged.
+TEST_CODE = ("import os,ipykernel,cubevis.remote.worker_main;"
+             "from cubevis._fingerprint import fingerprint as f;"
+             "print(chr(10)+\"CUBEVIS-LAUNCH-OK\",f(),os.getcwd())")
+
+
+def install_script(path: str, content: str) -> str:
+    """The Python program that writes *content* to *path* on the node."""
+    return _INSTALL % {"path": path, "text": content}
+
+
+def parse_install(out: str) -> tuple:
+    """``(status, detail)`` from the install program's output: status
+    ``written``, ``same`` or ``error`` (None: it said nothing)."""
+    for line in (out or "").splitlines():
+        if line.startswith("CUBEVIS-LAUNCHER "):
+            parts = line.split(" ", 2)
+            return parts[1], (parts[2] if len(parts) > 2 else "")
+    return None, ""
+
+
+def parse_test(out: str) -> Optional[tuple]:
+    """``(fingerprint, cwd)`` from a run of ``TEST_CODE``, or None."""
+    for line in (out or "").splitlines():
+        if line.startswith("CUBEVIS-LAUNCH-OK "):
+            parts = line.split(" ", 2)
+            if len(parts) == 3:
+                return parts[1], parts[2]
+    return None
 
 
 def write(path: Path, content: str) -> bool:

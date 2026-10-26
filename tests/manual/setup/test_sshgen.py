@@ -290,3 +290,21 @@ def test_rig_inside_goes_direct(xdg, ranges, hops):
     finally:
         for a in ("rig-compute", "rig-login"):
             subprocess.run(["ssh", "-F", cfg, "-O", "exit", a], capture_output=True, env=env)
+
+
+def test_rules_cover_clusters_and_nodes_no_pattern_matches():
+    """A cluster's pattern is a rule of its own; a node typed by its short
+    name (the domain learned later, from the node) is listed by name, so
+    its password login still works."""
+    st = S.load()
+    st.local["store"] = "pass"
+    st.add_network("n", login_host="gw.x.org", user="u", password=True)
+    st.add_cluster("cvpost", network="n", pattern="cvpost*")
+    st.add_node("cvpost1", network="n", hostname="cvpost1", cluster="cvpost")
+    st.add_node("b", network="n", hostname="b.x.org")
+    rules = [l.split("  ")[0] for l in G.rules_text(st).splitlines() if l and not l.startswith("#")]
+    assert rules == ["cvpost*", "b.x.org"]
+    st.networks()["n"].update(domain="x.org", node_pattern="*.x.org")
+    st.add_node("zuul06", network="n", hostname="zuul06")
+    rules = [l.split("  ")[0] for l in G.rules_text(st).splitlines() if l and not l.startswith("#")]
+    assert rules == ["*.x.org,cvpost*", "zuul06"]

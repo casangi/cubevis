@@ -191,8 +191,8 @@ def test_flag_and_mark_ok():
     assert e["status"] == "ok" and e["cubevis"] == "1.0.97" and e["last_error"] is None
     st.mark_ok("nodes", "n1")
     assert st.flagged() == []
-    with pytest.raises(S.StateError):
-        st.flag("kernels", "x", "y")
+    with pytest.raises(S.StateError, match="only nodes"):
+        st.flag("networks", "cv", "y")
 
 
 def test_environment_identity_hosts_and_one_network():
@@ -219,3 +219,71 @@ def test_environment_identity_hosts_and_one_network():
         st.add_environment("k", network="cv", python="/y/bin/python", kind="pixi")
     with pytest.raises(S.StateError, match="absolute"):
         st.add_environment("rel", network="cv", python="bin/python")
+
+
+def test_clusters_their_nodes_and_their_environments():
+    """A cluster: nodes named alike in one network; a node matching its
+    pattern is added without questions (``node_for``) and sees the
+    cluster's environments; a node outside it does not."""
+    st = S.load()
+    _net(st)
+    st.add_cluster("cvpost", network="cv", pattern="cvpost*")
+    st.add_node("cvpost140", network="cv", cluster="cvpost")
+    st.add_node("zuul06", network="cv")
+    assert st.cluster_for("cvpost141") == "cvpost"
+    assert st.cluster_for("cvpost141.cv.example.org") == "cvpost"
+    assert st.cluster_for("zuul06") is None
+    assert st.find_node("cvpost140.cv.example.org") == "cvpost140"
+    assert st.find_node("cv-cvpost140") == "cvpost140" and st.find_node("nope") is None
+    n = st.node_for("cvpost141")
+    assert n == "cvpost141" and st.nodes()[n]["cluster"] == "cvpost"
+    assert st.nodes()[n]["hostname"] == "cvpost141.cv.example.org"
+    assert st.node_for("cvpost141") == "cvpost141"          # known now: not added twice
+    assert st.node_for("elsewhere") is None
+    st.add_environment("e1", network="cv", python="/lustre/cv/mf/envs/c/bin/python",
+                       cluster="cvpost", hosts=[])
+    assert st.environment_on("e1", "cvpost141") and not st.environment_on("e1", "zuul06")
+    st.add_kernel("tw-hya", environment="e1", workdir="/lustre/jo/tw", env={"A": "1"},
+                  launcher="/home/jo/.config/cubevis/launch/gui1/tw-hya.sh")
+    assert st.kernels_on("cvpost141") == ["tw-hya"] and st.kernels_on("zuul06") == []
+    k = st.section("kernels")["tw-hya"]
+    assert k["status"] == "new" and k["env"] == {"A": "1"}
+    st.flag("kernels", "tw-hya", "it failed")
+    assert st.section("kernels")["tw-hya"]["status"] == "flagged"
+    with pytest.raises(S.StateError, match="absolute"):
+        st.add_kernel("rel", environment="e1", workdir="data")
+    with pytest.raises(S.StateError, match="node pattern"):
+        st.add_cluster("bad", network="cv", pattern="*")
+    with pytest.raises(S.StateError, match="exists already"):
+        st.add_cluster("cvpost", network="cv", pattern="x*")
+    _net(st, name="nm", login_host="login.nm.example.org", domain="nm.example.org")
+    with pytest.raises(S.StateError, match="is in network 'cv'"):
+        st.add_node("m1", network="nm", cluster="cvpost")
+    with pytest.raises(S.StateError, match="still used"):
+        st.remove_network("cv")
+    S.save(st)
+    assert S.load().section("clusters") == {"cvpost": {"network": "cv", "pattern": "cvpost*"}}
+
+
+def test_schema_2_kernels_take_their_environments_settings(xdg):
+    """Stage 2b part iii kept the working directory and variables per
+    environment, with launchers per node in ``on``: in schema 3 they are
+    the kernel's, which has no launcher until setup HOST writes one."""
+    v2 = {"schema": 2,
+          "networks": {"cv": {"login": None, "user": "jo", "domain": "cv.example.org"}},
+          "nodes": {"n1": {"network": "cv", "hostname": "n1.cv.example.org", "alias": "cv-n1"}},
+          "environments": {"hrs": {"network": "cv", "python": "/e/bin/python", "kind": "conda",
+                                   "hosts": ["n1"], "workdir": "/data", "env": {"X": "1"},
+                                   "on": {"n1": {"launcher": "/old.sh"}}}},
+          "kernels": {"hrs": {"environment": "hrs", "launch_timeout": 120}}}
+    (xdg / "cubevis").mkdir(parents=True)
+    (xdg / "cubevis" / "state.json").write_text(json.dumps(v2))
+    st = S.load()
+    k = st.section("kernels")["hrs"]
+    assert k["workdir"] == "/data" and k["env"] == {"X": "1"} and k["launcher"] is None
+    assert "setup HOST again" in k["last_error"]
+    e = st.section("environments")["hrs"]
+    assert "on" not in e and "workdir" not in e and e["cluster"] is None
+    assert st.section("clusters") == {}
+    S.save(st)
+    assert json.loads((xdg / "cubevis" / "state.json").read_text())["schema"] == S.SCHEMA == 3

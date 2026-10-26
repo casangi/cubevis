@@ -3,12 +3,21 @@ host, environments on their shared filesystems, kernels, and the sessions
 that run them.
 
 Design: ``devel/notes/drs/visplot/remote_session_design.md`` (section 7b
-for the file layout).
+for the file layout, 7c for ``setup HOST``).
 
-* ``state``   -- what setup knows: ``state.json`` (shared) and this
-                 computer's ``hosts/<id>/local.json``
-* ``sshgen``  -- the ssh configuration and wrapper rules generated from it
-* ``data/``   -- the ssh wrapper and the scripts run on remote hosts
+* ``state``     -- what setup knows: ``state.json`` (shared) and this
+                   computer's ``hosts/<id>/local.json``
+* ``sshgen``    -- the ssh configuration and wrapper rules generated from it
+* ``hostsetup`` -- ``python -m cubevis.setup HOST``: route, logins, the
+                   environment, the kernel
+* ``steps``     -- the steps the commands share: tools, wrapper, logins,
+                   inside ranges
+* ``remote``    -- what setup runs on a node over ssh
+* ``discover``  -- the discovery script (runs with any python3 from 3.6)
+* ``envs``      -- what an environment check's report means
+* ``launcher``  -- a kernel's launcher on the node
+* ``inside``    -- is this computer inside a network (run by ssh)
+* ``data/``     -- the ssh wrapper and ``envcheck.py``
 
 The configuration directory may be a home directory shared by several
 computers (a cluster's nodes, and a GUI host among them).  What belongs to
@@ -31,8 +40,9 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
 def data_file(name: str) -> Path:
-    """A file shipped in ``cubevis/setup/data`` (``ssh``, ``probe.sh``,
-    ``remote-setup.sh``)."""
+    """A file shipped in ``cubevis/setup/data``: ``ssh`` (the wrapper),
+    ``envcheck.py``; ``probe.sh`` and ``remote-setup.sh`` are the bash
+    setup's (``setup/``, until stage 4)."""
     p = DATA_DIR / name
     if not p.is_file():
         raise FileNotFoundError(f"cubevis setup data file {name!r} is missing ({p})")

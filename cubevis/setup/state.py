@@ -29,28 +29,46 @@ check gets ``status: "flagged"``, ``last_error`` and ``last_checked``;
 ``mark_ok`` clears them.  Removing what is flagged is the user's choice
 (``setup prune``).
 
-Layout (schema 2)::
+Layout (schema 3)::
 
     state.json
-    {"schema": 2,
+    {"schema": 3,
      "networks":     {NAME: {"login": {"host", "user", "port", "alias",
                                        "password", "service"},
                              "inside", "user", "password", "service",
                              "node_pattern", "domain", "shared_fs",
                              "default_node", "query": {"host", "command"}}},
-     "nodes":        {NAME: {"network", "hostname", "alias", "port", "status",
+     "clusters":     {NAME: {"network", "pattern"}},
+     "nodes":        {NAME: {"network", "hostname", "alias", "port", "cluster",
+                             "fqdn", "ranges", "home", "status",
                              "last_checked", "last_error"}},
      "environments": {NAME: {"network", "kind", "python", "prefix", "tool",
-                             "hosts", "cubevis", "versions",
-                             "python_version", "visplot", "checked_on",
+                             "hosts", "cluster", "cubevis", "versions",
+                             "python_version", "visplot", "cubevis_via",
+                             "fingerprint", "marker", "checked_on",
                              "status", "last_checked", "last_error"}},
-     "kernels":      {NAME: {"environment", "launch_timeout"}}}
+     "kernels":      {NAME: {"environment", "workdir", "env", "launcher",
+                             "launch_timeout", "fingerprint", "checked_on",
+                             "status", "last_checked", "last_error"}}}
+
+A **network** is setup's own bookkeeping (design 7c): a route (the login
+host, if any, and the inside ranges) and a domain.  A **cluster** is what
+the user names: nodes of one network whose short names match ``pattern``
+(``cvpost*``), sharing a filesystem; any node matching it can be used
+without setting it up (``node_for``).  A node outside every cluster stands
+alone.
 
 An environment belongs to one network (design 7b) and is identified by
-(network, ``python``); ``hosts`` is ``"all"`` (the network's nodes see it
-on a shared filesystem) or a list of nodes.  ``kind``: conda, venv or
-python; ``tool``: for conda, the command the user installs and upgrades
-packages with (conda, mamba or micromamba).
+(network, ``python``); it is on every node of its ``cluster`` when it has
+one, else on the nodes listed in ``hosts`` (``"all"``: every node of the
+network, a shared filesystem).  ``kind``: conda, venv or python; ``tool``:
+for cubevis installed as a conda package, the command that upgrades it;
+``fingerprint``: its kernel-side code (``cubevis._fingerprint``).
+
+A **kernel** is what the user chooses (``Session("tw-hya", node=...)``): a
+name, an environment, the working directory (None: the home directory) and
+environment variables its kernels start with, and the path of its
+``launcher`` on the node, which applies them.
 
     hosts/<id>/local.json
     {"schema": 2,
@@ -61,7 +79,12 @@ packages with (conda, mamba or micromamba).
 
 Schema 1 (stage 2a) was one ``state.json`` with ``local`` and
 ``sessions`` in it; ``load`` moves them to this computer's file (written at
-the first save; loading writes nothing).
+the first save; loading writes nothing).  Schema 2 (stage 2b) had no
+clusters, and kept a working directory and variables per environment, with
+launchers written on the node by stage 2b's node side: they move to the
+environment's kernels, which have no launcher until ``setup HOST`` writes
+one.  An older cubevis refuses a newer file rather than drop what it does
+not know.
 
 A network's ``login.password`` / ``password`` say whether the login host /
 the nodes ask for a password (then the wrapper logs in with the stored
@@ -89,16 +112,17 @@ from typing import Any, Optional
 
 from . import config_dir, host_dir
 
-SCHEMA = 2
-SHARED_SECTIONS = ("networks", "nodes", "environments", "kernels")
+SCHEMA = 3
+SHARED_SECTIONS = ("networks", "clusters", "nodes", "environments", "kernels")
 HOST_SECTIONS = ("sessions",)
 SECTIONS = SHARED_SECTIONS + HOST_SECTIONS
-FLAGGABLE = ("nodes", "environments")
+FLAGGABLE = ("nodes", "environments", "kernels")
 STORES = ("keychain", "secret-tool", "pass", "gpg-file", "command")
 # Fields a check writes.  A change to these alone neither keeps a record
 # another run removed nor stops this run's removal of it (``merge``).
 HEALTH_FIELDS = {"status", "last_checked", "last_error", "checked_on", "cubevis",
-                 "versions", "python_version", "visplot", "cubevis_via", "tool", "kind"}
+                 "versions", "python_version", "visplot", "cubevis_via", "tool", "kind",
+                 "fingerprint", "marker", "fqdn", "ranges", "home"}
 KINDS = ("conda", "venv", "python")
 
 LOCK_TIMEOUT = 30.0      # seconds to wait for another run's lock
@@ -183,8 +207,30 @@ def _migrate_1(data: dict) -> dict:
     return data
 
 
+def _migrate_2(data: dict) -> dict:
+    """Schema 2 -> 3: clusters; kernels carry the working directory and
+    variables (from their environment, stage 2b part iii); the node-file
+    sync's per-node fields leave the environments."""
+    data = dict(data)
+    data.setdefault("clusters", {})
+    envs = data.get("environments") or {}
+    for k in (data.get("kernels") or {}).values():
+        e = envs.get(k.get("environment")) or {}
+        k.setdefault("workdir", e.get("workdir"))
+        k.setdefault("env", e.get("env") or {})
+        k.setdefault("launcher", None)
+        k.setdefault("status", "new")
+        k.setdefault("last_checked", None)
+        k.setdefault("last_error", "no launcher yet: run python -m cubevis.setup HOST again")
+    for e in envs.values():
+        for f in ("on", "workdir", "env", "launcher", "names"):
+            e.pop(f, None)
+        e.setdefault("cluster", None)
+    return data
+
+
 # MIGRATIONS[n] turns a schema-n shared dict into schema n+1.
-MIGRATIONS: dict = {1: _migrate_1}
+MIGRATIONS: dict = {1: _migrate_1, 2: _migrate_2}
 
 
 def migrate(data: dict, what: str = "state.json") -> tuple:
@@ -339,6 +385,7 @@ class State:
     def remove_network(self, name: str) -> None:
         self.get("networks", name)
         users = [n for n, v in self.nodes(name).items()]
+        users += [c for c, v in self.section("clusters").items() if v.get("network") == name]
         users += [e for e, v in self.section("environments").items() if v.get("network") == name]
         if users:
             raise StateError(f"network {name!r} is still used by {', '.join(sorted(users))}")
@@ -355,10 +402,10 @@ class State:
 
     def add_node(self, name: str, *, network: str, hostname: Optional[str] = None,
                  alias: Optional[str] = None, port: Optional[int] = None,
-                 replace: bool = False) -> dict:
-        """A node of *network*.  ``hostname`` defaults to *name* completed
-        with the network's domain; ``alias`` (its ssh name in the generated
-        config) to ``<network>-<name>``."""
+                 cluster: Optional[str] = None, replace: bool = False) -> dict:
+        """A node of *network* (of its *cluster*, if given).  ``hostname``
+        defaults to *name* completed with the network's domain; ``alias``
+        (its ssh name in the generated config) to ``<network>-<name>``."""
         check_name("node", name)
         net = self.get("networks", network)
         if name in self.nodes() and not replace:
@@ -373,7 +420,12 @@ class State:
         taken |= {n["login"].get("alias") for n in self.networks().values() if n.get("login")}
         if al in taken:
             raise StateError(f"ssh alias {al!r} is already used")
-        node = {"network": network, "hostname": hn, "alias": al,
+        if cluster is not None:
+            c = self.get("clusters", cluster)
+            if c.get("network") != network:
+                raise StateError(f"cluster {cluster!r} is in network {c.get('network')!r}, "
+                                 f"not {network!r}")
+        node = {"network": network, "hostname": hn, "alias": al, "cluster": cluster,
                 "status": "new", "last_checked": None, "last_error": None}
         if port and int(port) != 22:
             node["port"] = int(port)
@@ -393,13 +445,74 @@ class State:
             rest = sorted(self.nodes(node.get("network")))
             net["default_node"] = rest[0] if rest else None
 
+    def find_node(self, host: str) -> Optional[str]:
+        """The node *host* names: its name, its ssh alias, its host name or
+        full name, or (a short name) the first label of one of those."""
+        h = host.lower()
+        for n, v in self.nodes().items():
+            names = {n.lower(), (v.get("alias") or "").lower(),
+                     (v.get("hostname") or "").lower(), (v.get("fqdn") or "").lower()}
+            if h in names:
+                return n
+        if "." not in h:
+            for n, v in self.nodes().items():
+                if h in {(v.get("hostname") or "").split(".")[0].lower(),
+                         (v.get("fqdn") or "").split(".")[0].lower()}:
+                    return n
+        return None
+
+    # -- clusters -----------------------------------------------------------
+    def add_cluster(self, name: str, *, network: str, pattern: str,
+                    replace: bool = False) -> dict:
+        """A cluster of *network*: the nodes whose short names match
+        *pattern* (an ssh-style glob, ``cvpost*``)."""
+        check_name("cluster", name)
+        self.get("networks", network)
+        if name in self.section("clusters") and not replace:
+            raise StateError(f"cluster {name!r} exists already")
+        if not isinstance(pattern, str) or not re.match(r"^[A-Za-z0-9*?\[\]._-]+$", pattern) \
+                or not re.search(r"[A-Za-z0-9]", pattern):
+            raise StateError(f"node pattern {pattern!r}: a host name with * or ? in it "
+                             "(cvpost* for cvpost001, cvpost002, ...)")
+        c = {"network": network, "pattern": pattern}
+        self.section("clusters")[name] = c
+        return c
+
+    def cluster_for(self, host: str) -> Optional[str]:
+        """The cluster whose pattern *host*'s short name (or full name)
+        matches; the longest pattern wins when several do."""
+        import fnmatch
+        short = host.split(".")[0].lower()
+        hits = [(len(c["pattern"]), n) for n, c in self.section("clusters").items()
+                if fnmatch.fnmatchcase(short, c["pattern"].lower())
+                or fnmatch.fnmatchcase(host.lower(), c["pattern"].lower())]
+        return max(hits)[1] if hits else None
+
+    def node_for(self, host: str) -> Optional[str]:
+        """The node *host* names, adding it when it matches a cluster's
+        pattern (no questions: a cluster's nodes share its route and its
+        kernels).  None when it is neither known nor in a cluster."""
+        n = self.find_node(host)
+        if n:
+            return n
+        cl = self.cluster_for(host)
+        if not cl:
+            return None
+        net = self.section("clusters")[cl]["network"]
+        short = host.split(".")[0]
+        if short in self.nodes():
+            short = f"{short}-{cl}"
+        self.add_node(short, network=net, hostname=self.node_hostname(net, host), cluster=cl)
+        return short
+
     # -- environments and kernels ------------------------------------------
     def add_environment(self, name: str, *, network: str, python: str,
                         kind: str = "python", prefix: Optional[str] = None,
                         tool: Optional[str] = None, hosts="all",
-                        replace: bool = False) -> dict:
+                        cluster: Optional[str] = None, replace: bool = False) -> dict:
         """An environment of *network*: the interpreter *python* (absolute;
-        links kept), on every node (``hosts="all"``) or on the listed ones."""
+        links kept), on every node of *cluster*, or on every node
+        (``hosts="all"``) or the listed ones."""
         check_name("environment", name)
         self.get("networks", network)
         if kind == "mamba":              # a kind until 2026-10-21: the same environments
@@ -420,8 +533,10 @@ class State:
                 if node.get("network") != network:
                     raise StateError(f"node {h!r} is not in network {network!r} (an environment "
                                      "belongs to one network)")
+        if cluster is not None and self.get("clusters", cluster).get("network") != network:
+            raise StateError(f"cluster {cluster!r} is not in network {network!r}")
         e = {"network": network, "kind": kind, "python": python, "prefix": prefix,
-             "tool": tool, "hosts": hosts, "cubevis": None, "versions": {},
+             "tool": tool, "hosts": hosts, "cluster": cluster, "cubevis": None, "versions": {},
              "python_version": None, "visplot": None, "checked_on": None,
              "status": "new", "last_checked": None, "last_error": None}
         self.section("environments")[name] = e
@@ -441,17 +556,34 @@ class State:
         n = self.get("nodes", node)
         if n.get("network") != e.get("network"):
             return False
+        if e.get("cluster") and n.get("cluster") == e.get("cluster"):
+            return True
         return e.get("hosts") == "all" or node in (e.get("hosts") or [])
 
-    def add_kernel(self, name: str, *, environment: str, launch_timeout: int = 120,
-                   replace: bool = False) -> dict:
+    def add_kernel(self, name: str, *, environment: str, workdir: Optional[str] = None,
+                   env: Optional[dict] = None, launcher: Optional[str] = None,
+                   launch_timeout: int = 120, replace: bool = False) -> dict:
+        """A kernel: environment *environment*, started in *workdir* (None:
+        the home directory) with the variables *env*, through *launcher*
+        (its path on the node)."""
         check_name("kernel", name)
         self.get("environments", environment)
         if name in self.section("kernels") and not replace:
             raise StateError(f"kernel {name!r} exists already")
-        k = {"environment": environment, "launch_timeout": int(launch_timeout)}
+        if workdir is not None and not str(workdir).startswith("/"):
+            raise StateError(f"kernel {name!r}: the working directory must be an absolute path")
+        k = {"environment": environment, "workdir": workdir, "env": dict(env or {}),
+             "launcher": launcher, "launch_timeout": int(launch_timeout),
+             "fingerprint": None, "checked_on": None,
+             "status": "new", "last_checked": None, "last_error": None}
         self.section("kernels")[name] = k
         return k
+
+    def kernels_on(self, node: str) -> list:
+        """Names of the kernels whose environment is on *node*."""
+        return sorted(k for k, v in self.section("kernels").items()
+                      if v.get("environment") in self.section("environments")
+                      and self.environment_on(v["environment"], node))
 
     def kernel_network(self, kernel: str) -> str:
         env = self.get("environments", self.get("kernels", kernel)["environment"])

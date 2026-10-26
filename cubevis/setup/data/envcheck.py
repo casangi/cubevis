@@ -1,4 +1,4 @@
-# Run by `python -m cubevis.setup node-here` with each candidate Python, to
+# Run with each candidate Python by cubevis setup's discovery script (discover.py), to
 # see whether it can run cubevis kernels.  It changes nothing.  Standard
 # library only; it must run (and report) even in a Python too old for
 # cubevis, so no f-strings or other recent syntax.

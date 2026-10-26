@@ -183,8 +183,8 @@ def _password_hosts(st: State) -> list:
 
 def rules_text(st: State) -> str:
     """``ssh/rules`` for *st*: login hosts first (see module docstring),
-    then each network's nodes -- by ``node_pattern``, or by name when the
-    network has none."""
+    then each network's nodes -- by ``node_pattern`` and the clusters'
+    patterns, and by name the nodes none of them covers."""
     out = ["# Written by cubevis setup from state.json: the hosts that ask for a",
            "# password, and where the wrapper finds it. Real host names, not aliases."]
     if not st.local.get("store") and _password_hosts(st):
@@ -204,12 +204,20 @@ def rules_text(st: State) -> str:
         if net.get("password"):
             svc = net.get("service") or login.get("service") or "cubevis-ssh"
             keys = rule_keys(st.local, svc, net["user"])
-            if net.get("node_pattern"):
-                lines_nodes.append(f"{net['node_pattern']}  {keys}")
-            else:
-                hosts = sorted(n["hostname"] for n in st.nodes(name).values())
-                if hosts:
-                    lines_nodes.append(f"{','.join(hosts)}  {keys}")
+            # The network's pattern (``*.<domain>``) and its clusters' (a node
+            # added later needs no new rule), then the nodes no pattern
+            # covers -- one typed by its short name, say.
+            import fnmatch
+            pats = ([net["node_pattern"]] if net.get("node_pattern") else []) + sorted(
+                {c["pattern"] for c in st.section("clusters").values() if c.get("network") == name}
+                - {net.get("node_pattern")})
+            hosts = sorted(n["hostname"] for n in st.nodes(name).values()
+                           if not any(fnmatch.fnmatchcase(n["hostname"].lower(), p.lower())
+                                      for p in pats))
+            if pats:
+                lines_nodes.append(f"{','.join(pats)}  {keys}")
+            if hosts:
+                lines_nodes.append(f"{','.join(hosts)}  {keys}")
     return "\n".join(out + lines_login + lines_nodes) + "\n"
 
 

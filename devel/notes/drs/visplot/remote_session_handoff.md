@@ -1,4 +1,4 @@
-# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-10-21)
+# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-10-23)
 
 Read first: `devel/notes/drs/visplot/remote_session_design.md` (the
 design, agreed with Darrell 2026-10-17). Background: section 22 of
@@ -7,11 +7,20 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* main is at **454e600** (design 7c with the refinements committed).
-  Delivered on top of it, not yet committed when this was written:
-  **`remote_stage2c1r2_454e600.zip`** (2c step 1: the fingerprint, section 33,
-  and the lazy package `__init__`s, section 34).
-  Check `git log` first.
+* main is at **e6f4fe9** (2c step 1 committed: the fingerprint, section 33,
+  and the lazy package `__init__`s, section 34).  Delivered on top of it,
+  not yet committed when this was written: **`remote_stage2c2_e6f4fe9.zip`**
+  (2c step 2: `setup HOST`, section 35).  Check `git log` first.
+* **Stage 2c step 2 done** (2026-10-23, base `e6f4fe9`): `python -m
+  cubevis.setup HOST [--kernel NAME]` as the one path; clusters; kernels
+  with their directory, variables and a launcher per kernel on the node
+  (`~/.config/cubevis/launch/<gui-id>/<kernel>.sh`), tested by running it;
+  the discovery script (`discover.py`, Python 3.6+, `python3 -` over ssh;
+  by hand `python3 -m cubevis.setup.discover`); state schema 3;
+  `node-here`, node files, netsync, hostinfo and the `node` command
+  removed.  Section 35.  **Not yet run on the real network**: ask how
+  Darrell's first `setup zuul06...` / `setup cvpost...` went (RHEL 8's
+  python3 3.6, tcsh logins, the cluster question) before building on it.
 * **Design changed 2026-10-20/21** (section 7b of the design): setup runs
   in one of two roles, GUI or node; the node side configures and tests
   environments (several per host, only configured ones used; an
@@ -86,8 +95,16 @@ as ee125b6) and section 17 (the ssh wrapper).
   `envcheck`.  Lazy `__init__`s for `cubevis.toolbox` and
   `cubevis.toolbox.visplot` (agreed; 127 -> 82 fingerprinted, 116 -> 42
   imported on the kernel side; section 34).
-* **Next: stage 2c step 2** (design section 13). Plan: the fingerprint first, then
-  `setup HOST`, built from the existing pieces.  Part iv as planned below is folded into 2c/2d.
+* **Next: stage 2c step 3** (design 7c "Refinements", section 13): setup's
+  own environments -- `envs_dirs` (discovery reports it) shown with the
+  expected size, another place allowed; `<tool> create -y -n cubevis-<v>
+  python=<here> pip` + `pip install "cubevis[visplot]==<v>"`, detached on
+  the node (`nohup`, a log), polled, the marker `cubevis-setup.json` written
+  last (resumable); reuse by marker; offer to remove superseded ones;
+  `--cleanup HOST`.  Hook: `hostsetup.no_environment_advice` prints the
+  commands today; discovery already reads markers and sorts setup's own
+  environments first.  Then step 4 (route from `ssh -G`, `diagnose HOST`,
+  `--2fa`), then 2d.  Part iv as planned below is folded into 2c/2d.
 
 ## Decisions made with Darrell
 
@@ -132,15 +149,16 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 35).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 36).
 
 ## Test kit (rebuild after a sandbox restart)
 
 The sandbox loses `/etc/hosts` edits and running daemons on restart.
 
 * **ssh rig**: `sudo devel/tools/ssh_rig.sh` (idempotent; `stop` to stop).
-  It adds `login.example.test` / `compute.example.test` (127.0.0.1) to
-  `/etc/hosts`, the user `alice` ("s3cret pw!"), and password-only sshd's
+  It adds `login.example.test` / `compute.example.test` /
+  `compute2.example.test` (127.0.0.1; compute2 is a second name for the
+  same sshd, a second node of a cluster) to `/etc/hosts`, the user `alice` ("s3cret pw!"), and password-only sshd's
   on 2201 (login) and 2202 (compute) -- what `tests/manual/setup` needs
   with `CUBEVIS_SSH_RIG=1`.  Disposable container or VM only.  (The bash
   setup's older end-to-end runs also used a key-only git host on 2203 and
@@ -158,11 +176,20 @@ The sandbox loses `/etc/hosts` edits and running daemons on restart.
   as well as with the system's.  The rig's sshd is the distribution's
   (`apt-get install openssh-server`).
 * **Kernel-capable test environments**: `/home/claude/venv-kernel`
-  (python3.12 venv: `pip install ipykernel sshpyk==1.23 -e "/home/claude/cubevis[visplot]"`;
+  (python3.12 venv: `pip install ipykernel sshpyk==1.23 pytest pexpect -e "/home/claude/cubevis[visplot]"`;
   sshpyk for the launcher kernel test; `mkdir -p ~/.local/share/jupyter/runtime`);
-  `CUBEVIS_TEST_KERNEL_PYTHON=/home/claude/venv-kernel/bin/python` for
-  `test_node_here.py`.  As alice on the rig: `~/mf/envs/hrs` (venv +
-  `conda-meta` + a `.pth` to venv-kernel) and a fake `~/mf/bin/conda`.
+  `CUBEVIS_TEST_KERNEL_PYTHON=/home/claude/venv-kernel/bin/python`; run the
+  suite with that Python.  alice's node side is made by `test_cli.py`'s
+  `alice_envs` fixture (nothing by hand): a fake `~/miniforge3/bin/conda`
+  listing `envs/hrs` (venv + `conda-meta` + venv-kernel's cubevis
+  `dist-info` + a `.pth` to the checkout and venv-kernel's site-packages),
+  `envs/plain`, `envs/alt` (a copy of cubevis with a changed
+  `worker_main`: another fingerprint).
+* **Python 3.6** (RHEL 8's python3), for `test_discover.py`: built from
+  `github.com/python/cpython` tag `v3.6.15` (`./configure --prefix=/opt/py36
+  && make && make altinstall`), found at `/opt/py36/bin/python3.6` or
+  `CUBEVIS_TEST_PY36`.  **tcsh** (`apt-get install tcsh`) for the csh
+  tests.
 * **Several computers in one directory** (tests): `CUBEVIS_HOST_ID` names
   the computer, `CUBEVIS_RUNTIME_DIR` gives each its own socket directory
   (otherwise one rides on another's shared connections).
@@ -182,8 +209,9 @@ The sandbox loses `/etc/hosts` edits and running daemons on restart.
   system site-packages + pip) answering `--version`, `info --base`,
   `env list`, `create -n NAME ...`.
 * **Test MS**: `sis14_twhya_calibrated_flagged.ms` in
-  `/home/alice/visplot-data/` and `/home/carol/data/` (casa.nrao.edu is
-  blocked here).
+  `/home/alice/visplot-data/` (from Darrell's upload: `cat ...part0* | tar
+  -xz`; casa.nrao.edu is blocked here); the launcher kernel test opens it
+  when it is there.
 * **pexpect driver**: `/tmp/claude-0/st/drive.py CMD ANSWERS.json LOG`
   (answers: list of [regex, reply or [replies]]; a reply ending in `\r`
   is sent raw, needed for pinentry-curses). Run as the test user through

@@ -1418,3 +1418,144 @@ with every front-end edit.
   both trees, 8.5 s each.  Setup suite: 133 passed (OpenSSH 9.6 and 8.0p1).
 * For the visplot suite here: `CUBEVIS_SRC=<checkout>/cubevis`; `-n 2` or
   no xdist, not `-n 8`.
+
+## 35. Stage 2c (2): `setup HOST`, clusters, kernels, the discovery script (base `e6f4fe9`, 2026-10-23)
+
+Design 7c's single path: the user names the host the data is on; networks,
+routes and launchers are setup's own bookkeeping.
+
+```
+python -m cubevis.setup HOST [--kernel NAME]    make kernels work on HOST; again: check them
+python -m cubevis.setup                         the same, asking for the host
+python -m cubevis.setup status | check [NAME] | network NAME [--inside-here]
+```
+
+* **The flow** (`cubevis/setup/hostsetup.py`).  (1) Where HOST is: a node
+  setup knows (by name, alias, host name or full name); a node of a known
+  cluster (its name matches the pattern: added, nothing asked); a host in
+  the domain of a known network (joins it, same route, said so); else a
+  new network -- the route is asked as before (login host or direct; step
+  4 takes it from `ssh -G` instead) and the network is *named, not asked*,
+  from the domain (`cvpost140.cv.nrao.edu` -> `cv`).  (2) Logins, each hop
+  (`steps.hop_steps`, unchanged).  (3) Discovery over ssh (below); the
+  node's full name, home and subnets go into its record, its domain into
+  the network's when it had none.  (4) "Is HOST one of a cluster's
+  nodes?", once per node: default yes when the name ends in digits; name
+  and pattern suggested (`cvpost140` -> `cvpost`, `cvpost*`); nodes known
+  before that match join it.  (5) Inside ranges (the node's own private
+  subnets suggested first).  (6) The environment.  (7) The kernel.
+* **The environment** is chosen from discovery's list: each environment
+  with cubevis is shown with whether it can be used and why -- "same
+  kernel-side code as here", "its kernel-side code differs (there k1-...,
+  here k1-...)", "cubevis is not installed in it", the import error.
+  Usable first, setup's own (marker) first among them.  A number, a path
+  on the node (checked there, one more round trip), or `none`.  A mismatch
+  is usable only with `CUBEVIS_ALLOW_MISMATCH=1` (said each time).  None
+  usable: setup says why and what to do -- a development install here
+  (editable, a local directory, a version that is not a release): install
+  the same checkout there, or the override; a release: the two commands
+  for an environment of setup's own name (`<conda> create -y -n
+  cubevis-<v> python=<here> pip`, `<conda> run -n ... pip install
+  "cubevis[visplot]==<v>"`); no conda: Miniforge on a fast shared
+  filesystem.  Creating it is step 3.  The record: name `<dir>-<cluster or
+  node>`, `cluster` or `hosts: [node]`, versions, `cubevis_via`, `tool`
+  (conda packages only), `fingerprint`, `marker`.
+* **The kernel**: a name (default: the cluster's or the node's), the
+  working directory on the node (`~`, `~/x`, absolute, or relative to the
+  home; None = home) and variables.  Setup writes its launcher on the node
+  and runs `launcher.TEST_CODE` through it -- the `cd`, the activation,
+  `import ipykernel, cubevis.remote.worker_main`, the fingerprint -- and
+  records the kernel only as ok when that works and the fingerprints are
+  compatible; otherwise flagged with the reason (the launcher's own "cannot
+  change to ..." for a missing directory) and "Change its settings and try
+  again?".  `--kernel NAME` adds or changes one kernel on a host already
+  set up, without the environment question (when the host has one
+  environment).  A rerun without it checks the host's kernels (rewrites
+  launchers whose text changed, runs each once); `--redo` asks their
+  settings again.
+* **Launchers** (`launcher.py`): per kernel, on the node at
+  `~/.config/cubevis/launch/<gui-id>/<kernel>.sh` (the node's
+  `$XDG_CONFIG_HOME`; `<gui-id>` so that two plotting computers that do not
+  share a state never overwrite each other's).  Written by a small program
+  for the node's python3 on stdin (atomic, mode 700, `same` when unchanged)
+  -- no remote-shell quoting involved.  The header names the command that
+  changes it (`python -m cubevis.setup HOST --kernel NAME`).
+* **Discovery** (`cubevis/setup/discover.py`): `hostinfo.py` and the
+  finding half of `envs.py` moved into it; standard library only and
+  **Python 3.6** (RHEL 8's python3: no `from __future__ import
+  annotations`, no `capture_output=`/`text=`).  Setup sends `payload()` --
+  the file with `envcheck.py` embedded -- to the node's `python3 -` (the
+  first of `python3`, `/usr/libexec/platform-python`, `python`, chosen by
+  one `/bin/sh -c '...'` line that csh passes unchanged).  It reports the
+  host (name, full name, domain, user, home and its filesystem, config
+  directory, addresses and subnets, `$SSH_CONNECTION`), the conda tools and
+  their `envs_dirs` (for step 3), and the environments (conda's lists, the
+  active ones, the Python running it), each with its kind, cubevis from its
+  `dist-info`, setup's marker (`cubevis-setup.json`), and `envcheck`'s
+  report for those with cubevis, a marker, or given on the command line
+  (`--only PATHS` for just those).  By hand on a node: `python3 -m
+  cubevis.setup.discover` (readable text), or the bundle (`--bundle`),
+  which setup also leaves in `hosts/<id>/discover.py` after a failed look
+  and names.  `envs.py` keeps the interpretation (`interpret`,
+  `kind_from_report` -- now `normpath`, not `realpath`: the paths are the
+  node's -- `install_method`, `summary`).
+* **State schema 3** (`state.py`; older cubevis refuses it rather than
+  drop what it does not know).  New section `clusters` {network,
+  pattern}; nodes gain `cluster`, `standalone`, `fqdn`, `ranges`, `home`;
+  environments `cluster`, `fingerprint`, `marker` (an environment of a
+  cluster is on all its nodes); kernels carry `workdir`, `env`,
+  `launcher`, `fingerprint`, `checked_on` and the health fields, and can be
+  flagged.  `find_node`, `add_cluster`, `cluster_for`, `node_for` (adds a
+  node matching a cluster: what stage 3's `Session(kernel, node=)` will
+  use), `kernels_on`.  Migration 2 -> 3: kernels take their environment's
+  `workdir`/`env`, have no launcher (flagged "run setup HOST again"); the
+  node-file sync's fields leave the environments.
+* **ssh rules**: a network's nodes are matched by its `*.<domain>` pattern
+  and its clusters' patterns, and *by name for every node none covers*.
+  Before, a node typed by its short name (`zuul06`) in a network whose
+  domain was learned later would have lost its password login.
+* **Removed**: `node-here`, `node_here.py`, `nodefile.py`, `netsync.py`,
+  `hostinfo.py` (into `discover`), the node files, the `node` command and
+  the walk-through's role question; `network NAME` now only goes through
+  an existing network (logins, inside ranges, `--inside-here`).  The bash
+  setup's `probe.sh` and `remote-setup.sh` stay in `data/` (it reads them)
+  until stage 4.  `__main__.py` split: `steps.py` (Ctx, tools, wrapper,
+  logins, inside ranges), `remote.py` (discovery, launcher install, test
+  run), `hostsetup.py`, `__main__.py` (commands, argv: anything that is
+  not a command is a host; `--kernel` before or after it).
+* **`check`** runs every kernel's launcher once on a node it is on (the
+  last one checked first) and compares fingerprints; a target may be a
+  kernel, node, cluster or network.  **`status`** lists clusters (pattern,
+  nodes set up), nodes (cluster, port), environments and kernels (directory,
+  variables, state).
+* **Tested.**  `test_discover.py` (14; the node-side parts of the old
+  `test_node_here.py` moved here): host facts, parsing, candidates with
+  fake conda/micromamba, `envs_dirs`, markers, checks failing for each
+  reason and passing, install methods; the payload on stdin (`--only`,
+  missing paths), by hand (module, bundle, bare file without envcheck);
+  **under Python 3.6.15** (built here; `CUBEVIS_TEST_PY36`), envcheck
+  included; the command lines through **tcsh**.  `test_launcher.py` (6): per
+  kernel, the install program (written / same / error), the test run's
+  fingerprint and directory.  `test_state.py`: clusters, `node_for`,
+  kernels, the 2 -> 3 migration.  `test_sshgen.py`: cluster and unmatched
+  node rules.  `test_hostsetup.py` (6, no ssh): placement (new network
+  named from the domain, same domain joins, any name finds a node, ports,
+  addresses), the cluster question and a pattern that misses, the bundle
+  left after a failure, the walk.  `test_cli.py` (14, 9 of them on the rig): `setup HOST`
+  through a terminal (pexpect) via the password login host, then `check`
+  and `status`; direct, `--kernel` adding a second kernel, a rerun that
+  changes nothing; a path without cubevis refused, a mismatched
+  environment (alice's copy of cubevis with one line added to
+  `worker_main`) listed with both fingerprints, refused, then used with
+  `CUBEVIS_ALLOW_MISMATCH=1` and flagged by `check` without it; a cluster
+  (`comp`, `compute*`) and `compute2` (a second name for the rig's node,
+  added to `ssh_rig.sh`) joining it with no route question and finding the
+  kernel; two computers on one directory; alice's login shell tcsh; a real
+  sshpyk kernel through the launcher, in `~/visplot-data` with its
+  variable, opening the TW Hya MS by a relative path (xarray-ms); and
+  `--inside-here`.  Whole suite: 133 pass with OpenSSH 9.6 and 8.0p1.
+* **Not yet**: setup's own environments (creation, location, detached
+  resumable, reuse, `--cleanup HOST`: step 3); the route from `ssh -G`,
+  `diagnose HOST`, `--2fa` (step 4); `--sync-checkout`, `prune`, `--local`
+  (2d).  The open point from 2026-10-19 on first contact with a login host
+  straight to a node stands (setup still visits the login host first).

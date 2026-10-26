@@ -12,12 +12,12 @@
 <text x="470.0" y="347.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">presets, selection, flagging (FlagDB), plot summary, PNG export</text>
 <path d="M470 359 V381" stroke="#8A94A0" stroke-width="3"/><path d="M463 379 L470 389 L477 379 Z" fill="#8A94A0"/>
 <rect x="70" y="389" width="800" height="62" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
-<text x="470.0" y="417.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">Datashader</text>
-<text x="470.0" y="439.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">aggregates every selected sample into the raster or scatter image</text>
+<text x="470.0" y="417.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">Image building</text>
+<text x="470.0" y="439.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">scatter: Datashader bins points · raster: cells drawn to pixels · both: Datashader colours</text>
 <path d="M470 451 V473" stroke="#8A94A0" stroke-width="3"/><path d="M463 471 L470 481 L477 471 Z" fill="#8A94A0"/>
 <rect x="70" y="481" width="800" height="62" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
 <text x="470.0" y="509.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">XArrayReader</text>
-<text x="470.0" y="531.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">one interface: raster and scatter queries, averaging, statistics</text>
+<text x="470.0" y="531.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">one interface: scatter samples, raster cells (averaged here), statistics</text>
 <path d="M270 543 V565" stroke="#8A94A0" stroke-width="3"/><path d="M263 563 L270 573 L277 563 Z" fill="#8A94A0"/>
 <path d="M670 543 V565" stroke="#8A94A0" stroke-width="3"/><path d="M663 563 L670 573 L677 563 Z" fill="#8A94A0"/>
 <rect x="70" y="573" width="380" height="62" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
@@ -55,6 +55,6 @@
 <text x="964" y="640.64" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">Elevation, hour angle, azimuth and parallactic angle, as</text>
 <text x="964" y="665.72" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#1C2733" text-anchor="start"  xml:space="preserve">plotms offers.</text>
 <text x="40" y="62" font-family="Helvetica, Arial, sans-serif" font-size="40" font-weight="bold" fill="#1C2733" text-anchor="start"  xml:space="preserve">Under the hood, and what is next</text>
-<text x="40" y="102" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="normal" fill="#4A5563" text-anchor="start"  xml:space="preserve">One reader interface over both data formats; Datashader in Python, Bokeh in the browser, no Bokeh server.</text>
+<text x="40" y="102" font-family="Helvetica, Arial, sans-serif" font-size="21" font-weight="normal" fill="#4A5563" text-anchor="start"  xml:space="preserve">One reader interface over both data formats; images made in Python, drawn by Bokeh in the browser, no Bokeh server.</text>
 <text x="1560" y="885" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#8A94A0" text-anchor="end" font-style="italic" xml:space="preserve">Scope as of the visplot user guide, 18 Oct 2026 · visplot test release · October 2026</text>
 </svg>

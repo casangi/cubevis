@@ -126,7 +126,7 @@ rows = [
                     "vis= detects which, as in any CASA task. Data column DATA, CORRECTED or MODEL."),
     ("Shows", ORANGE, "One plot or two (side by side, or one over the other), each a raster (a 2-D image over Baseline, Time, Channel or Antenna × Antenna) "
                       "or a scatter (Amplitude, Phase, Real, Imaginary, Phase RMS … against Time, Frequency, "
-                      "Channel or UV distance). Datashader aggregates every sample: nothing is decimated."),
+                      "Channel or UV distance). Every sample counts: rasters average into cells, scatters are binned by Datashader."),
     ("Runs", PURPLE, "From ipython or a CASA6 prompt, with the window in a browser. Data access runs locally, "
                      "or in a remote kernel on the machine that holds the data, so large data sets need not move."),
     ("Does", GREEN, "Twelve preset views modelled on AIPS and CASA tasks, CASA-syntax selection, box flagging "
@@ -361,7 +361,7 @@ save("visplot_4_workflow.svg", s)
 
 # ---- Slide 5: under the hood, and what is not here yet ---------------------
 s = Slide("Under the hood, and what is next",
-          "One reader interface over both data formats; Datashader in Python, Bokeh in the browser, no Bokeh server.")
+          "One reader interface over both data formats; images made in Python, drawn by Bokeh in the browser, no Bokeh server.")
 s.card(40, 140, 860, 680, "Under the hood", BLUE)
 
 
@@ -386,9 +386,9 @@ down(470, 267, 297)
 layer(L, 297, R - L, 62, "VisibilityPlotter", "presets, selection, flagging (FlagDB), plot summary, PNG export",
       fill="#EEF3FA", stroke=BLUE)
 down(470, 359, 389)
-layer(L, 389, R - L, 62, "Datashader", "aggregates every selected sample into the raster or scatter image")
+layer(L, 389, R - L, 62, "Image building", "scatter: Datashader bins points · raster: cells drawn to pixels · both: Datashader colours")
 down(470, 451, 481)
-layer(L, 481, R - L, 62, "XArrayReader", "one interface: raster and scatter queries, averaging, statistics")
+layer(L, 481, R - L, 62, "XArrayReader", "one interface: scatter samples, raster cells (averaged here), statistics")
 down(270, 543, 573)
 down(670, 543, 573)
 layer(L, 573, 380, 62, "MSv2Backend", "reads: xarray-ms on arcae · flags: arcae")

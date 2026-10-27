@@ -105,3 +105,14 @@ def test_the_walk_asks_for_a_host_and_stops_on_none(tmp_path, monkeypatch):
     r = subprocess.run([sys.executable, "-m", "cubevis.setup"], input="\n", capture_output=True,
                        text=True, env=env, timeout=60)
     assert r.returncode == 0 and "The host your data is on" in r.stdout, r.stdout + r.stderr
+
+
+def test_a_password_command_that_holds_it_in_plain_text_is_refused(monkeypatch):
+    from cubevis.setup import stores
+    monkeypatch.delenv("CUBEVIS_SETUP_ALLOW_PLAIN_COMMAND", raising=False)
+    for cmd in ("echo 's3cret pw!'", "printf %s pw", "/bin/cat ~/pw.txt", "head -1 pw"):
+        assert "plain text" in stores.plain_text_command(cmd), cmd
+    for cmd in ("op read op://vault/@SERVICE@/@ACCOUNT@", "bw get password ssh", "security x"):
+        assert stores.plain_text_command(cmd) is None, cmd
+    monkeypatch.setenv("CUBEVIS_SETUP_ALLOW_PLAIN_COMMAND", "1")      # the test rig's
+    assert stores.plain_text_command("echo pw") is None

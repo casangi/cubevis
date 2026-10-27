@@ -1611,3 +1611,90 @@ having none, the kernel's launcher written and run.
   range; found ranges taken by default with nothing typed; `jupyter`
   refusals (unknown kernel, no launcher, unknown node); on the rig the
   definition's fields and the printed call run headless against the MS.
+
+## 37. A fresh account's first `visplot`: CASA, the login-host and password wording (base `9f21e53`, 2026-10-26)
+
+Darrell's second clean-account run (a Miniforge `visplot` environment with
+the `cubevis-1.0.97.dev35+gd1b8f20` wheel; casatasks installed, its data
+not set up).
+
+* **CASA is never imported to find out whether to use it**
+  (`cubevis/utils/_casa.py`).  `from cubevis import visplot` failed in
+  `casaconfig` (`AutoUpdatesNotAllowed: data_update: path must exist ...
+  ~/.casa/data` -- an `Exception`, which the `except ImportError` around
+  `from casatools import regionmanager` in `cubevis/utils/__init__.py` and
+  `from casatasks import casalog` in `utils/_logging.py` did not catch), and
+  `visplot(...)` required `casatasks.private.task_logging`.  Now:
+  - casalog, and the task's start/end/except log lines, only when
+    `casatasks` is already in `sys.modules` (inside CASA, or imported by the
+    user first): `_casa.loaded()`, `_casa.task_logging()` (quiet stand-ins
+    with casatasks' signatures otherwise);
+  - `cubevis.utils`: `_have_casatools()` when a CASA region is made, not at
+    import; `cubevis.bokeh.sources._image_pipe` and `cubevis.data.casaimage`
+    (which visplot loads) get `imagetool` / `regionmanager` /
+    `casatools_available` from `_casa`, importing casatools when an image is
+    first opened -- in CASA's absence nothing changes for iclean, which
+    needs it anyway;
+  - the `auto` backend probe no longer imports casatasks (its context is
+    not implemented: the import only cost seconds and could raise);
+    `backend="casa6"` and committing flags with `flagdata` use
+    `_casa.usable()`, which reports any failure as a reason.
+  Tested (`tests/manual/visplot/test_casa_optional.py`, fresh interpreters
+  with a fake CASA): a CASA that raises at import is not touched by `from
+  cubevis import visplot` or a `visplot(...)` call, only by the flag-commit
+  check (which says no); with `casatasks` imported first, casalog and the
+  task log lines are used; installed but not imported, left alone.
+* **`cubevis.private.apps`**: the `ImportProtectedModule` class swap
+  replaced by a PEP 562 `__getattr__` over a `_LAZY` table (as
+  `cubevis.toolbox` since section 34); `cubevis/utils/_import_protected_module.py`
+  removed.
+* **An unknown `kernel_name=`** fails before anything starts
+  (`visibility_plotter._check_kernel_name`), naming what to run --
+  `python -m cubevis.setup jupyter NAME` for `cubevis-NAME` -- the kernels
+  known here and the directories searched, instead of jupyter_client's
+  `NoSuchKernel` from deep in the start.  (Darrell's `NoSuchKernel:
+  cubevis-cvpost` in the test account: not reproduced; `setup jupyter` now
+  also prints where it wrote the definition.)
+* **Wording** (setup): "Do you log in to an intermediate host before
+  logging in to HOST?" (an intermediate host, "often called a login host or
+  bastion"), "The intermediate host's name"; before storing a password:
+  kernels cannot ask, so it is kept in an encrypted store that only the
+  wrapper reads, never in setup's files or logs -- "Store your password for
+  USER@HOST that way?"; each store's line says how it protects it
+  (Keychain "encrypted, unlocked by your login", pass/gpg-file
+  "gpg-encrypted"); when typing: "(twice); nothing is shown as you type",
+  where it goes, "encrypted, without passing through setup".
+* **Plain-text password commands refused**: a `command` store beginning
+  with `echo`, `printf`, `cat`, ... would hold the password in setup's own
+  `local.json` (the command is recorded there) or in a plain file;
+  refused with the reason.  The tests' `echo` of the rig's password sets
+  `CUBEVIS_SETUP_ALLOW_PLAIN_COMMAND=1`.
+* **For step 3** (Darrell: "option to create an environment just for
+  cubevis-1.0.97.dev35"): a cubevis installed here *from a wheel file*
+  (`install_method` "file") is reproducible on a node -- copy that wheel
+  there and `pip install` it into setup's new environment -- unlike a
+  checkout (`--sync-checkout`, 2d).  Setup's environments must cover three
+  sources: a release (PyPI), a local wheel (copied), a checkout (synced).
+* **Note**: `cubevis/utils` is kernel-side code, so this changes the
+  kernel-side fingerprint: the environment on the cluster needs the same
+  code again (Darrell's development install there).
+* **One Jupyter kernel per node** (Darrell: how is `cubevis-cvpost` used on
+  cvpost106 *and* cvpost140?).  `setup jupyter KERNEL` makes
+  `cubevis-KERNEL` on the node it was last checked on; `setup jupyter
+  KERNEL NODE` makes `cubevis-KERNEL-NODE` (any node of the kernel's
+  cluster, added on the way), so several nodes can be used at once.
+  Stage 3's `Session(kernel, node=)` makes the node an argument and these
+  files unnecessary.  A node added through a cluster's pattern now takes
+  the ssh port the cluster's nodes share (when they share one other than
+  22: the rig's compute2).
+* Tested: the rig's jupyter test makes `cubevis-tw-hya` and
+  `cubevis-tw-hya-compute2` side by side; `test_state.py` the port.
+  Setup suite 138 pass (OpenSSH 9.6 and 8.0p1).
+* **Checked against the rest** (these touch `cubevis.utils`, its logging and
+  the image sources, which most of cubevis imports): the visplot suite
+  (`-n 2`, `CUBEVIS_SRC` set) 2270 passed, 694 skipped; its 13 failures and
+  3 errors all pass when run again by file -- 10 + 3 were `pytest-asyncio`
+  missing from the test environment (now installed: add it to the kernel
+  test environment's list), the other 3 coincided with an xdist worker
+  killed for memory, as in section 34.  `tests/manual/remote` without the
+  two scripts that name Darrell's `zuul06_python312`: 39 passed.

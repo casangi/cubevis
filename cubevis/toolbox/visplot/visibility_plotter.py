@@ -1511,12 +1511,14 @@ def _spw_iteration_position(spw_ids,
 # Backend probes and open_ms / open_ps factory functions
 # ---------------------------------------------------------------------------
 
-def _probe_casatasks() -> bool:
-    try:
-        import casatasks  # noqa: F401
-        return True
-    except ImportError:
-        return False
+def _probe_casatasks(import_it: bool = True) -> bool:
+    """Whether casatasks can be used here.  *import_it* false: only if it is
+    loaded already (``cubevis.utils._casa``) -- importing CASA is slow and
+    can raise more than ImportError (its data not set up)."""
+    from cubevis.utils import _casa
+    if not import_it:
+        return _casa.loaded() is not None
+    return _casa.usable()[0] is not None
 
 
 def _probe_radps() -> bool:
@@ -1553,8 +1555,36 @@ def _make_remote_context(path: str, kernel_name, backend_kind: str,
             "backend='remote' requires kernel_name= (a kernelspec name "
             "resolvable by `jupyter kernelspec list`)."
         )
+    _check_kernel_name(kernel_name)
     from .remote_reduction_context import RemoteReductionContext
     return RemoteReductionContext(path, kernel_name, backend_kind=backend_kind)
+
+
+def _check_kernel_name(kernel_name: str) -> None:
+    """A kernel name Jupyter does not know fails here, saying what to do,
+    rather than deep in jupyter_client (NoSuchKernel).  A ``cubevis-NAME``
+    is what ``python -m cubevis.setup jupyter NAME`` makes."""
+    try:
+        from jupyter_client.kernelspec import KernelSpecManager, NoSuchKernel
+    except ImportError:
+        return                            # RemoteReductionContext says so itself
+    ksm = KernelSpecManager()
+    try:
+        ksm.get_kernel_spec(kernel_name)
+        return
+    except NoSuchKernel:
+        pass
+    known = sorted(ksm.find_kernel_specs())
+    hint = ("python -m cubevis.setup jupyter KERNEL makes cubevis-KERNEL, and ... "
+            "jupyter KERNEL NODE makes cubevis-KERNEL-NODE (run it in this account, with "
+            "this Python; python -m cubevis.setup status lists the kernels)"
+            if kernel_name.startswith("cubevis-") else
+            "python -m cubevis.setup HOST sets up a kernel on a remote host, and "
+            "python -m cubevis.setup jupyter NAME makes its Jupyter kernel")
+    raise ValueError(f"no Jupyter kernel named {kernel_name!r} here: {hint}. "
+                     f"Known here: {', '.join(known) or 'none'} "
+                     f"(searched {', '.join(ksm.kernel_dirs)}).")
+
 
 def _resolve_context_msv2(path, backend, remote_endpoint):
     if backend == ReductionBackend.NULL:
@@ -1569,8 +1599,10 @@ def _resolve_context_msv2(path, backend, remote_endpoint):
         if not _probe_radps():
             raise RuntimeError("backend='radps' requested but RADPS not available.")
         return _make_radps_context(path)
-    # AUTO
-    if _probe_casatasks():
+    # AUTO: CASA only if it is loaded already (its context is not
+    # implemented yet; importing it just to try costs seconds, and fails
+    # loudly where its data are not set up).
+    if _probe_casatasks(import_it=False):
         try:
             return _make_casa6_context(path)
         except NotImplementedError:

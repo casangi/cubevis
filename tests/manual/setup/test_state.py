@@ -287,3 +287,14 @@ def test_schema_2_kernels_take_their_environments_settings(xdg):
     assert st.section("clusters") == {}
     S.save(st)
     assert json.loads((xdg / "cubevis" / "state.json").read_text())["schema"] == S.SCHEMA == 3
+
+
+def test_a_node_added_by_a_cluster_pattern_takes_the_port_its_nodes_share():
+    st = S.load()
+    _net(st)
+    st.add_cluster("c", network="cv", pattern="c*")
+    st.add_node("c1", network="cv", cluster="c", port=2202)
+    assert st.nodes()[st.node_for("c2")]["port"] == 2202
+    st.add_cluster("d", network="cv", pattern="d*")
+    st.add_node("d1", network="cv", cluster="d")
+    assert "port" not in st.nodes()[st.node_for("d2")]

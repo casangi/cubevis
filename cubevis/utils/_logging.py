@@ -1,13 +1,20 @@
 """ Use the python logging interface for cubevis logs.
-If casalog is available, then send log messages to it.
-Otherwise, use the base python logging mechanisms.
+If CASA is loaded in this process (inside CASA, or casatasks imported by
+the user before cubevis), send log messages to casalog.  Otherwise, use
+the base python logging mechanisms -- casatasks is never imported here
+(see ``_casa``: importing it can fail, and is slow).
 """
 import logging
 
-try:
-	from casatasks import casalog
-	__casalog_avail = True
-except ImportError:
+from ._casa import loaded as _casa_loaded
+
+if _casa_loaded() is not None:
+	try:
+		from casatasks import casalog
+		__casalog_avail = True
+	except Exception:
+		__casalog_avail = False
+else:
 	__casalog_avail = False
 
 class _Logging:

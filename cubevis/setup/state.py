@@ -502,7 +502,11 @@ class State:
         short = host.split(".")[0]
         if short in self.nodes():
             short = f"{short}-{cl}"
-        self.add_node(short, network=net, hostname=self.node_hostname(net, host), cluster=cl)
+        # The ssh port its nodes share, if they all use one other than 22.
+        ports = {v.get("port") or 22 for v in self.nodes().values() if v.get("cluster") == cl}
+        port = ports.pop() if len(ports) == 1 else None
+        self.add_node(short, network=net, hostname=self.node_hostname(net, host), cluster=cl,
+                      port=port)
         return short
 
     # -- environments and kernels ------------------------------------------

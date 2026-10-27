@@ -80,6 +80,7 @@ def _env(home, **extra):
     env.pop("SSH_WRAPPER_RULES", None)
     env.pop("SSH_WRAPPER_DEBUG", None)       # its log is in the real ~/.ssh
     env.pop("CUBEVIS_ALLOW_MISMATCH", None)
+    env["CUBEVIS_SETUP_ALLOW_PLAIN_COMMAND"] = "1"      # the rig's password: echo
     env.update(extra)
     return env
 
@@ -252,16 +253,16 @@ def test_rig_interactive_host(home, alice_envs):
     p = _spawn(home, HOST)
     script = [
         (r"Go ahead\?", ""),                                         # the wrapper
-        (r"through a login host\? \[Y/n\]", "y"),
-        (r"Login host, its real name", "login.example.test:2201"),
+        (r"intermediate host before logging in to compute.example.test\? \[Y/n\]", "y"),
+        (r"The intermediate host's name", "login.example.test:2201"),
         (r"Your user name on login.example.test", "alice"),
         (r"Your user name on compute.example.test", ""),             # alice (default)
-        (r"Store your password for alice@login.example.test", "y"),
+        (r"Store your password for alice@login.example.test that way", "y"),
         (r"Which store\?", "command"),
         (r"Command", "echo 's3cret pw!'"),
         (r"Name for the stored entry", ""),
         (r"Press Enter when it is stored", ""),
-        (r"Store your password for alice@compute.example.test", "y"),
+        (r"Store your password for alice@compute.example.test that way", "y"),
         (r"same password as for login host example-login\?", "y"),
         (r"cluster's nodes\? \[y/N\]", ""),
         (r"\[u\]se these, \[c\]hange them", "c"),
@@ -374,7 +375,7 @@ def test_rig_a_cluster_and_another_of_its_nodes(home, alice_envs):
     out = _flat(r)
     assert r.returncode == 0, r.stdout
     assert "added node: compute2 to cluster comp" in out
-    assert "through a login host" not in out and "cluster's nodes?" not in out
+    assert "intermediate host" not in out and "cluster's nodes?" not in out
     assert "kernel tw-hya: starts in ~" in out
     st = S.load()
     assert st.nodes()["compute2"]["cluster"] == "comp" and st.nodes()["compute2"]["status"] == "ok"
@@ -576,8 +577,9 @@ def test_rig_jupyter_kernel_and_a_remote_plotter(home, alice_envs, tmp_path):
     kernel, and the call it prints -- the MS by its name in the kernel's
     working directory -- run headless (field Ceres: the whole MS's first
     scatter needs more memory than a small test machine has)."""
-    r = _host(home, "--answer", "kernel=tw-hya", "--answer", "workdir=~/visplot-data",
-              "--answer", "env_vars=none", route=LOGIN)
+    r = _host(home, "--answer", "cluster=y", "--answer", "cluster_name=comp",
+              "--answer", "cluster_pattern=compute*", "--answer", "kernel=tw-hya",
+              "--answer", "workdir=~/visplot-data", "--answer", "env_vars=none", route=LOGIN)
     assert r.returncode == 0, r.stdout
     jd = str(tmp_path / "jupyter")
     r = _run(home, "jupyter", "tw-hya", JUPYTER_DATA_DIR=jd)
@@ -587,6 +589,14 @@ def test_rig_jupyter_kernel_and_a_remote_plotter(home, alice_envs, tmp_path):
     cfg = spec["metadata"]["kernel_provisioner"]["config"]
     assert cfg["ssh_host_alias"] == "example-compute" and cfg["ssh"] == str(G.wrapper_path())
     assert cfg["remote_python"] == "/home/alice/.config/cubevis/launch/gui1/tw-hya.sh"
+    # Another node of the cluster, alongside: its own Jupyter kernel, the
+    # node added on the way (with the port the cluster's nodes share).
+    r = _run(home, "jupyter", "tw-hya", "compute2", JUPYTER_DATA_DIR=jd)
+    assert r.returncode == 0 and 'kernel_name="cubevis-tw-hya-compute2"' in r.stdout, r.stdout
+    two = json.load(open(os.path.join(jd, "kernels", "cubevis-tw-hya-compute2", "kernel.json")))
+    assert two["metadata"]["kernel_provisioner"]["config"]["ssh_host_alias"] == "example-compute2"
+    assert os.path.exists(os.path.join(jd, "kernels", "cubevis-tw-hya", "kernel.json"))
+    assert S.load().nodes()["compute2"]["port"] == 2202
     if not os.path.isdir("/home/alice/visplot-data/sis14_twhya_calibrated_flagged.ms"):
         pytest.skip("the test MS is not in alice's ~/visplot-data")
     code = ("from cubevis.toolbox.visplot import VisibilityPlotter\n"

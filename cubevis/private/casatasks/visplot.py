@@ -799,9 +799,10 @@ figure styling, no layout.
 
 See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
 
-        from casatasks.private.task_logging import start_log as _start_log
-        from casatasks.private.task_logging import end_log as _end_log
-        from casatasks.private.task_logging import except_log as _except_log
+        # casatasks' task log lines when CASA is loaded; nothing of CASA
+        # otherwise (cubevis.utils._casa: visplot does not need it).
+        from cubevis.utils._casa import task_logging as _task_logging
+        _start_log, _end_log, _except_log = _task_logging()
 
         _validate_params(
             vis = vis,

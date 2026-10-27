@@ -40,27 +40,30 @@ def available(store: str) -> tuple:
     """``(usable, why)`` for *store* on this computer."""
     darwin = platform.system() == "Darwin"
     if store == "keychain":
-        return (True, "macOS Keychain") if darwin and has("security") else (False, "macOS only")
+        return ((True, "macOS Keychain: encrypted, unlocked by your login")
+                if darwin and has("security") else (False, "macOS only"))
     if store == "secret-tool":
         if not has("secret-tool"):
             return False, "secret-tool is not installed"
         r = subprocess.run(["secret-tool", "lookup", "service", "cubevis-setup-probe"],
                            capture_output=True, text=True, stdin=subprocess.DEVNULL)
         if not (r.stdout + r.stderr).strip():
-            return True, "your desktop keyring is running"
+            return True, "your desktop keyring (encrypted) is running"
         return False, ("no desktop keyring in this session (works only where you log "
                        "in to a desktop)")
     if store == "pass":
         if not has("pass"):
             return False, "pass is not installed"
         if (_pass_dir() / ".gpg-id").is_file():
-            return True, "you already use pass"
-        return (True, "pass is installed (setup will initialise it)") if has("gpg") \
-            else (False, "pass needs gpg")
+            return True, "you already use pass (gpg-encrypted)"
+        return (True, "pass is installed (gpg-encrypted; setup will initialise it)") \
+            if has("gpg") else (False, "pass needs gpg")
     if store == "gpg-file":
-        return (True, "gpg is installed") if has("gpg") else (False, "gpg is not installed")
+        return ((True, "one gpg-encrypted file per password, kept by setup")
+                if has("gpg") else (False, "gpg is not installed"))
     if store == "command":
-        return True, "any command that prints the password (a password manager's CLI)"
+        return True, ("your password manager's command that prints it (op, bw, ...); "
+                      "how safe that is, is up to it")
     return False, "unknown"
 
 
@@ -107,8 +110,9 @@ def choose(ui: UI, st: State) -> bool:
     s = st.local.get("store")
     if s and available(s)[0]:
         return True
-    ui.say("The password is kept in a password store and read by the wrapper only "
-           "when it logs in. Stores that work here:")
+    ui.say("The password is never written to setup's files or logs. It is kept in an "
+           "encrypted password store, from which the wrapper reads it only to log in. "
+           "Stores that work here:")
     usable = []
     for name in ALL:
         ok, why = available(name)
@@ -125,15 +129,46 @@ def choose(ui: UI, st: State) -> bool:
         if not _pass_init(ui, st):
             return False
     if s == "command":
-        ui.say("Give a command that prints the password on its first line. It runs with "
-               "/bin/sh; @SERVICE@ and @ACCOUNT@ are replaced by the entry's names.")
-        cmd = ui.ask("Command", st.local.get("store_command") or "", key="store_command")
-        if not cmd:
-            return False
+        ui.say("Give your password manager's command that prints the password on its first "
+               "line. It runs with /bin/sh; @SERVICE@ and @ACCOUNT@ are replaced by the "
+               "entry's names.")
+        while True:
+            cmd = ui.ask("Command", st.local.get("store_command") or "", key="store_command")
+            if not cmd:
+                return False
+            why = plain_text_command(cmd)
+            if not why:
+                break
+            ui.note(why)
+            if ui.yes or "store_command" in ui.answers:
+                return False
         st.local["store_command"] = cmd
     st.local["store"] = s
     ui.record_change("chose password store", s)
     return True
+
+
+# Commands that would hold the password in plain text -- in the command
+# itself, which setup records in its own files, or in a file read as is.
+_PLAIN = ("echo", "printf", "cat", "head", "tail", "less", "more", "print")
+
+
+def plain_text_command(cmd: str) -> Optional[str]:
+    """Why *cmd* is refused as a password store, or None.  The test suite
+    (an ``echo`` of the rig's password) sets
+    ``CUBEVIS_SETUP_ALLOW_PLAIN_COMMAND=1``."""
+    if os.environ.get("CUBEVIS_SETUP_ALLOW_PLAIN_COMMAND") == "1":
+        return None
+    import shlex
+    try:
+        first = shlex.split(cmd)[0] if cmd.strip() else ""
+    except ValueError:
+        first = cmd.split()[0] if cmd.split() else ""
+    if os.path.basename(first) in _PLAIN:
+        return (f"'{first} ...' would keep the password in plain text (setup records the "
+                "command in its own files): give a password manager's command, or choose "
+                "an encrypted store")
+    return None
 
 
 def _gpg_key(ui: UI, st: State) -> Optional[str]:
@@ -180,8 +215,12 @@ def _pass_init(ui: UI, st: State) -> bool:
 def put(ui: UI, st: State, service: str, account: str, host: str) -> bool:
     """Ask for the password of *account* on *host* and store it."""
     s = st.local.get("store")
-    ui.say(f"Type your password for {account} on {host} when asked. "
-           f"It goes to: {where(st, service, account)}.")
+    twice = {"keychain": " (twice)", "secret-tool": "", "pass": " (twice)", "gpg-file": " (twice)"}
+    if s != "command":
+        ui.say(f"Type your password for {account} on {host} when asked{twice.get(s, '')}; "
+               "nothing is shown as you type. It goes to "
+               f"{where(st, service, account)}, encrypted"
+               + ("" if s == "gpg-file" else ", without passing through setup") + ".")
     if s == "keychain":
         r = ui.run(["security", "add-generic-password", "-U", "-a", account, "-s", service,
                     "-l", f"ssh password ({service})", "-w"], tty=True)

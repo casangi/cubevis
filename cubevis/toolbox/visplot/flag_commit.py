@@ -67,8 +67,11 @@ def data_format(backend) -> str:
 
 def casatools_available() -> tuple:
     """``(ok, reason)``: can this process run ``casatasks.flagdata``?"""
+    from cubevis.utils import _casa
+    mod, why = _casa.usable()
+    if mod is None:
+        return False, why
     try:
-        import casatasks  # noqa: F401
         from casatasks import flagdata, flagmanager  # noqa: F401
         return True, ""
     except Exception as exc:          # ImportError, or a broken binary install

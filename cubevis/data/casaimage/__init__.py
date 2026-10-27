@@ -33,13 +33,8 @@ from pathlib import Path
 import PIL.Image
 import base64
 
-try:
-    import casatools as ct
-    from casatools import image as imagetool
-except:
-    ct = None
-    from cubevis.utils import warn_import
-    warn_import('casatools')
+# casatools on first use, not at import (cubevis.utils._casa).
+from cubevis.utils._casa import casatools_available, imagetool
 
 def as_mime( path ):
 
@@ -74,7 +69,7 @@ def new( pattern, path, overwrite=False ):
     overwrite: bool
         overwrite any existing image, directory or file
     '''
-    if ct is None:
+    if not casatools_available():
         raise RuntimeError( 'casaimage.new: casatools is not available' )
     if exists(path) and not overwrite:
         raise RuntimeError( '''casaimage.new: image already exists (and 'overwrite=False')''' )

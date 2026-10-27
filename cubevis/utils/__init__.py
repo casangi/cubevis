@@ -52,12 +52,15 @@ from astropy import units
 from regions import PixCoord
 from regions import RectanglePixelRegion, PolygonPixelRegion
 
-try:
-    from casatools import regionmanager
-
-    __have_casatools = True
-except ImportError:
-    __have_casatools = False
+def _have_casatools() -> bool:
+    """Whether casatools imports here -- asked only when a CASA region is
+    made, never at import: importing casatools is slow, and raises more
+    than ImportError where CASA's data are not set up (``_casa``)."""
+    try:
+        from casatools import regionmanager  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 logger = get_logger()
 
@@ -68,7 +71,6 @@ from ._conversion import remote_serialize, remote_deserialize
 from ._static import static_vars, static_dir
 from ._tiles import TMSTiles
 from ._contextmgrchain import ContextMgrChain
-from ._import_protected_module import ImportProtectedModule
 from ._mutual_exclusion import MutualExclusionManager
 
 @static_vars(mgr=None)
@@ -628,7 +630,7 @@ def __convert_masks(masks, format='crtf', coord='pixel', ret_type='str', cdesc=N
         coordinate system for coordinate conversion.
     '''
     if format == 'region':
-        if __have_casatools == False:
+        if not _have_casatools():
             raise RuntimeError('casatools is not available, cannot create CASA regions')
         if cdesc is None or 'csys' not in cdesc or 'shape' not in cdesc:
             raise RuntimeError('region operations requires a coordinate description (cdesc parameter)')
@@ -655,6 +657,7 @@ def __convert_masks(masks, format='crtf', coord='pixel', ret_type='str', cdesc=N
     polygon_definitions = {index: poly for index, poly in masks['polys'].items()}
 
     if format == 'region' and coord == 'pixel':
+        from casatools import regionmanager
         rg = regionmanager()
         rg.setcoordinates(csys_dict)
 

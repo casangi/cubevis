@@ -45,14 +45,9 @@ from ..state import casalib_url, cubevisjs_url
 from ..transport import Comm
 
 import numpy as np
-try:
-    import casatools as ct
-    from casatools import regionmanager
-    from casatools import image as imagetool
-except:
-    ct = None
-    from cubevis.utils import warn_import
-    warn_import('casatools')
+# casatools on first use, not at import (cubevis.utils._casa): visplot
+# imports this module and needs none of CASA.
+from ...utils._casa import casatools_available, imagetool, regionmanager
 
 from ...utils import pack_arrays, partition, resource_manager, strip_arrays
 
@@ -486,7 +481,7 @@ class ImagePipe( Model ):
 
         super( ).__init__( *args, **kwargs, )
 
-        if ct is None:
+        if not casatools_available():
             raise RuntimeError('cannot open an image because casatools is not available')
 
         self.__img = None

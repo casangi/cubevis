@@ -11,7 +11,9 @@
                                                   go directly from where this computer is
     python -m cubevis.setup jupyter KERNEL [NODE] a Jupyter kernel for it, for
                                                   VisibilityPlotter(kernel_name=...) until
-                                                  sessions (stage 3) start kernels themselves
+                                                  sessions (stage 3) start kernels themselves:
+                                                  cubevis-KERNEL (its usual node), or
+                                                  cubevis-KERNEL-NODE (on NODE)
 
 Remote session design, section 7c: the user names a host; networks (the
 route to it), clusters and launchers are setup's own bookkeeping
@@ -231,21 +233,27 @@ def cmd_inside_here(c: Ctx, name: str) -> int:
     return 0
 
 
-def jupyter_name(kernel: str) -> str:
-    return f"cubevis-{kernel}"
+def jupyter_name(kernel: str, node: Optional[str] = None) -> str:
+    """``cubevis-KERNEL`` (its usual node), or ``cubevis-KERNEL-NODE`` for a
+    node named explicitly -- one Jupyter kernel per node, so a kernel of a
+    cluster can be used on several nodes at once."""
+    return f"cubevis-{kernel}" + (f"-{node}" if node else "")
 
 
 def cmd_jupyter(c: Ctx, kernel: str, node: Optional[str]) -> int:
-    """A Jupyter kernel definition for setup kernel *kernel* on *node*
-    (default: where it was last checked), made with ``sshpyk add``: the
-    wrapper, the generated ssh configuration, the node's alias, the
-    kernel's launcher as the remote python.  A bridge: today's plotters take
-    ``kernel_name=``; stage 3's Session builds the same definition in memory
-    and chooses the node per session, so no file per kernel is needed then.
-    Run again with another node to move it there."""
+    """A Jupyter kernel definition for setup kernel *kernel*, made with
+    ``sshpyk add``: the wrapper, the generated ssh configuration, the node's
+    alias, the kernel's launcher as the remote python.  Without *node*:
+    ``cubevis-KERNEL``, on the node it was last checked on (run again later,
+    it follows that).  With *node* (any node of the kernel's cluster; added
+    on the way): ``cubevis-KERNEL-NODE``, so that several nodes can be used
+    at once.  A bridge: today's plotters take ``kernel_name=``; stage 3's
+    Session builds the definition in memory and takes the node as an
+    argument, so no file per node is needed then."""
     ui, st = c.ui, c.st
     import importlib.util
     k = st.get("kernels", kernel)
+    explicit = bool(node)
     if importlib.util.find_spec("sshpyk") is None:
         ui.fail("sshpyk is not installed here (it starts remote kernels): "
                 f"{sys.executable} -m pip install sshpyk")
@@ -276,7 +284,7 @@ def cmd_jupyter(c: Ctx, kernel: str, node: Optional[str]) -> int:
         return 1
     c.save()                                 # a cluster node added above: in the ssh config
     alias = st.nodes()[node]["alias"]
-    name = jupyter_name(kernel)
+    name = jupyter_name(kernel, node if explicit else None)
     # sshpyk's command-line entry point ("python -m sshpyk" does nothing).
     cmd = [sys.executable, "-c",
            "import sys; from sshpyk.cli import main; sys.argv[0] = 'sshpyk'; sys.exit(main())",
@@ -303,14 +311,17 @@ def cmd_jupyter(c: Ctx, kernel: str, node: Optional[str]) -> int:
         os.makedirs(jupyter_runtime_dir(), exist_ok=True)
     except Exception:
         pass
-    ui.ok(f"Jupyter kernel {name}: kernel {kernel} on {node}")
+    ui.ok(f"Jupyter kernel {name}: kernel {kernel} on {node}, in {tilde(spec.resource_dir)} "
+          "(Jupyter finds it there for this account)")
     ui.say("For example, with a measurement set in the kernel's working directory there:")
     ui._p("")
     ui._p("    from cubevis import visplot")
     ui._p("    visplot(ms=\"sis14_twhya_calibrated_flagged.ms\", backend=\"remote\",")
     ui._p(f"            kernel_name=\"{name}\")")
     ui._p("")
-    ui.say(f"Another node: python -m cubevis.setup jupyter {kernel} NODE.")
+    if not explicit:
+        ui.say(f"On another node of it, alongside this one: python -m cubevis.setup jupyter "
+               f"{kernel} NODE makes cubevis-{kernel}-NODE.")
     return 0
 
 

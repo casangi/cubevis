@@ -26,26 +26,40 @@
 #
 ########################################################################
 # pylint: disable=wrong-import-position
-'''End user applications supplied by ``cubevis``.'''
-import sys
-from cubevis.utils import copydoc, ImportProtectedModule
-#from cubevis.bokeh.state import initialize_session
-#initialize_session()
+'''End user applications supplied by ``cubevis``.
 
-###
-### This import roundabout was introduced when astroviper and casa6 apps were in the same
-### package to avoid forcing the user to install BOTH astroviper and casa6 even if they
-### were only going to use one of the applications. Now it could be removed...
-###
-sys.modules[__name__].__class__ = ImportProtectedModule( __name__, { 'plotants': '._plotants',
-                                                                     'plotbandpass': '._plotbandpass',
-                                                                     'CreateMask': '._createmask',
-                                                                     'CreateRegion': '._createregion',
-                                                                     'InteractiveClean': '._interactiveclean',
-                                                                     'InteractiveCleanNotebook': '._interactivecleannotebook',
-                                                                     'iclean': '..casatasks.iclean',
-                                                                     'visplot': '..casatasks.visplot',
-                                                                     'iclean_notebook': '..casatasks.iclean_notebook',
-                                                                     'createmask': '..casatasks.createmask',
-                                                                     'createregion': '..casatasks.createregion',
-                                                                   } )
+Each is imported on first use (PEP 562 ``__getattr__``), so that using one
+needs only that one's dependencies: ``visplot`` needs no CASA, ``iclean``
+does.  (Until 2026-10-26 this was ``utils.ImportProtectedModule``, which
+replaced this module's class to the same end.)  A new application goes in
+``_LAZY``.
+'''
+import importlib as _importlib
+
+_LAZY = {
+    'plotants':                 '._plotants',
+    'plotbandpass':             '._plotbandpass',
+    'CreateMask':               '._createmask',
+    'CreateRegion':             '._createregion',
+    'InteractiveClean':         '._interactiveclean',
+    'InteractiveCleanNotebook': '._interactivecleannotebook',
+    'iclean':                   '..casatasks.iclean',
+    'visplot':                  '..casatasks.visplot',
+    'iclean_notebook':          '..casatasks.iclean_notebook',
+    'createmask':               '..casatasks.createmask',
+    'createregion':             '..casatasks.createregion',
+}
+
+__all__ = sorted(_LAZY)
+
+
+def __getattr__(name):
+    if name in _LAZY:
+        value = getattr(_importlib.import_module(_LAZY[name], __name__), name)
+        globals()[name] = value             # an ordinary attribute from now on
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_LAZY))

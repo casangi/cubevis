@@ -238,8 +238,12 @@ def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
         else:
             ui.say(f"{h['host']} does not accept a key from here ({why}), so it needs your "
                    "password.")
-        if not ui.ask_yn(f"Store your password for {h['user']}@{h['host']}, for the wrapper "
-                         "to use?", True, key="store_password"):
+        ui.say("Kernels log in without a terminal, so they cannot ask you for it. Setup can "
+               "keep it in an encrypted password store (the macOS Keychain, say), where only "
+               "the ssh wrapper reads it, to log in; it is never written to setup's files "
+               "or logs.")
+        if not ui.ask_yn(f"Store your password for {h['user']}@{h['host']} that way?", True,
+                         key="store_password"):
             return False
         if not stores.choose(ui, st):
             return False

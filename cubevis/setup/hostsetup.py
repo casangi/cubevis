@@ -141,15 +141,18 @@ def new_network(c: Ctx, host: str) -> Optional[str]:
     and kernels, not networks)."""
     ui, st = c.ui, c.st
     ui.heading(f"How this computer reaches {host}")
-    ui.say(f"Kernels on {host} are started from here over ssh. Some sites put their "
-           "computers behind a login host (a bastion), reached first, as in "
-           f"'ssh -J login.example.org {host}'.")
-    via = ui.ask_yn(f"Do you reach {host} through a login host?", True, key="via_login")
+    ui.say(f"Kernels on {host} are started from here over ssh, the way you log in to it. "
+           "At some sites you first log in to another computer -- an intermediate host, "
+           "often called a login host or bastion, like ssh.example.org -- and from there to "
+           f"{host}.")
+    via = ui.ask_yn(f"Do you log in to an intermediate host before logging in to {host}?",
+                    True, key="via_login")
     login, lport, luser = None, 22, None
     me = os.environ.get("USER") or ""
     if via:
         while True:
-            text = ui.ask("Login host, its real name (host[:port])", "", key="login_host")
+            text = ui.ask("The intermediate host's name (host, or host:port)", "",
+                          key="login_host")
             if not text:
                 return None
             login, lport = split_port(text)

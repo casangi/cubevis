@@ -102,6 +102,12 @@ as ee125b6) and section 17 (the ssh wrapper).
   Jupyter kernel definition so `visplot(..., backend="remote",
   kernel_name="cubevis-KERNEL")` works until the Session exists.  Found,
   not fixed: a dead worker leaves the plotter waiting forever.
+* **Second clean-account run** (2026-10-26, section 37): CASA is never
+  imported to see whether to use it (`cubevis/utils/_casa.py`); an unknown
+  `kernel_name=` names the fix; the login-host and password wording; plain
+  `echo` password commands refused (tests: `CUBEVIS_SETUP_ALLOW_PLAIN_COMMAND=1`).
+  For step 3: setup's environments from a release (PyPI), a local wheel
+  (copied to the node) or a checkout (synced, 2d).
 * **Next: stage 2c step 3** (design 7c "Refinements", section 13): setup's
   own environments -- `envs_dirs` (discovery reports it) shown with the
   expected size, another place allowed; `<tool> create -y -n cubevis-<v>
@@ -156,7 +162,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 37).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 38).
 
 ## Test kit (rebuild after a sandbox restart)
 
@@ -183,7 +189,7 @@ The sandbox loses `/etc/hosts` edits and running daemons on restart.
   as well as with the system's.  The rig's sshd is the distribution's
   (`apt-get install openssh-server`).
 * **Kernel-capable test environments**: `/home/claude/venv-kernel`
-  (python3.12 venv: `pip install ipykernel sshpyk==1.23 pytest pexpect -e "/home/claude/cubevis[visplot]"`;
+  (python3.12 venv: `pip install ipykernel sshpyk==1.23 pytest pexpect pytest-asyncio pytest-xdist -e "/home/claude/cubevis[visplot]"`;
   sshpyk for the launcher kernel test; `mkdir -p ~/.local/share/jupyter/runtime`);
   `CUBEVIS_TEST_KERNEL_PYTHON=/home/claude/venv-kernel/bin/python`; run the
   suite with that Python.  alice's node side is made by `test_cli.py`'s

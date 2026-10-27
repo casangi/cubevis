@@ -9,6 +9,9 @@
     python -m cubevis.setup network NAME          go through a network's logins again
     python -m cubevis.setup network NAME --inside-here
                                                   go directly from where this computer is
+    python -m cubevis.setup jupyter KERNEL [NODE] a Jupyter kernel for it, for
+                                                  VisibilityPlotter(kernel_name=...) until
+                                                  sessions (stage 3) start kernels themselves
 
 Remote session design, section 7c: the user names a host; networks (the
 route to it), clusters and launchers are setup's own bookkeeping
@@ -35,7 +38,7 @@ from .hostsetup import check_kernel, cmd_host, rtilde
 from .steps import Ctx, last_line, local_steps, network_steps
 from .ui import UI, Quit, tilde
 
-COMMANDS = ("status", "check", "network")
+COMMANDS = ("status", "check", "network", "jupyter")
 
 
 # ==========================================================================
@@ -228,6 +231,89 @@ def cmd_inside_here(c: Ctx, name: str) -> int:
     return 0
 
 
+def jupyter_name(kernel: str) -> str:
+    return f"cubevis-{kernel}"
+
+
+def cmd_jupyter(c: Ctx, kernel: str, node: Optional[str]) -> int:
+    """A Jupyter kernel definition for setup kernel *kernel* on *node*
+    (default: where it was last checked), made with ``sshpyk add``: the
+    wrapper, the generated ssh configuration, the node's alias, the
+    kernel's launcher as the remote python.  A bridge: today's plotters take
+    ``kernel_name=``; stage 3's Session builds the same definition in memory
+    and chooses the node per session, so no file per kernel is needed then.
+    Run again with another node to move it there."""
+    ui, st = c.ui, c.st
+    import importlib.util
+    k = st.get("kernels", kernel)
+    if importlib.util.find_spec("sshpyk") is None:
+        ui.fail("sshpyk is not installed here (it starts remote kernels): "
+                f"{sys.executable} -m pip install sshpyk")
+        return 1
+    if node:
+        n = st.node_for(node)
+        if n is None:
+            ui.fail(f"{node} is not a node setup knows, nor one of a cluster's: "
+                    f"python -m cubevis.setup {node} first")
+            return 1
+        node = n
+    else:
+        nodes = [x for x in sorted(st.nodes()) if st.environment_on(k["environment"], x)]
+        node = k.get("checked_on") if k.get("checked_on") in nodes else (nodes or [None])[0]
+        if node is None:
+            ui.fail(f"no node has kernel {kernel}'s environment")
+            return 1
+    if not st.environment_on(k["environment"], node):
+        ui.fail(f"kernel {kernel}'s environment is not on {node}")
+        return 1
+    if not k.get("launcher"):
+        ui.fail(f"kernel {kernel} has no launcher yet: python -m cubevis.setup HOST --kernel {kernel}")
+        return 1
+    if k.get("status") != "ok":
+        ui.note(f"kernel {kernel} is {k.get('status')} ({k.get('last_error')}); "
+                f"python -m cubevis.setup check {kernel} says whether it works now")
+    if not local_steps(c):
+        return 1
+    c.save()                                 # a cluster node added above: in the ssh config
+    alias = st.nodes()[node]["alias"]
+    name = jupyter_name(kernel)
+    # sshpyk's command-line entry point ("python -m sshpyk" does nothing).
+    cmd = [sys.executable, "-c",
+           "import sys; from sshpyk.cli import main; sys.argv[0] = 'sshpyk'; sys.exit(main())",
+           "add", "--kernel-name", name,
+           "--display-name", f"cubevis {kernel} on {node}", "--language", "python",
+           "--ssh-host-alias", alias, "--ssh-config", str(sshgen.config_path()),
+           "--ssh", str(sshgen.wrapper_path()), "--remote-python", k["launcher"],
+           "--remote-kernel-name", "python3",
+           "--launch-timeout", str(k.get("launch_timeout") or 120), "--replace"]
+    r = ui.run(cmd, show=False)
+    from jupyter_client.kernelspec import KernelSpecManager, NoSuchKernel
+    try:
+        spec = KernelSpecManager().get_kernel_spec(name)
+        made = spec.metadata["kernel_provisioner"]["config"]["remote_python"] == k["launcher"]
+    except (NoSuchKernel, KeyError, TypeError):
+        made = False
+    if r.returncode != 0 or not made:
+        from .steps import last_line
+        ui.fail(f"sshpyk add failed: {last_line(r.stdout + r.stderr) or 'no kernel written'}")
+        return 1
+    ui.record_change("jupyter kernel", f"{name}: {kernel} on {node}")
+    try:                                      # sshpyk writes its reconnection file there
+        from jupyter_core.paths import jupyter_runtime_dir
+        os.makedirs(jupyter_runtime_dir(), exist_ok=True)
+    except Exception:
+        pass
+    ui.ok(f"Jupyter kernel {name}: kernel {kernel} on {node}")
+    ui.say("For example, with a measurement set in the kernel's working directory there:")
+    ui._p("")
+    ui._p("    from cubevis import visplot")
+    ui._p("    visplot(ms=\"sis14_twhya_calibrated_flagged.ms\", backend=\"remote\",")
+    ui._p(f"            kernel_name=\"{name}\")")
+    ui._p("")
+    ui.say(f"Another node: python -m cubevis.setup jupyter {kernel} NODE.")
+    return 0
+
+
 def cmd_walk(c: Ctx) -> int:
     ui, st = c.ui, c.st
     ui.heading("cubevis setup")
@@ -276,6 +362,10 @@ def main(argv=None) -> int:
     pc.add_argument("target", nargs="?", help="a kernel, node, cluster or network (default: all)")
     pn = sub.add_parser("network", help="go through a network's logins and inside ranges again")
     pn.add_argument("name")
+    pj = sub.add_parser("jupyter", help="a Jupyter kernel for a setup kernel, for "
+                                        "VisibilityPlotter(kernel_name=...)")
+    pj.add_argument("jkernel", metavar="kernel")
+    pj.add_argument("node", nargs="?", help="where it runs (default: where it was last checked)")
     pn.add_argument("--inside-here", action="store_true",
                     help="add where this computer is now to the network's inside ranges, "
                          "after checking that its nodes answer directly from here")
@@ -316,6 +406,8 @@ def main(argv=None) -> int:
             return cmd_check(c, a.target)
         if a.cmd == "network":
             rc = cmd_inside_here(c, a.name) if a.inside_here else cmd_network(c, a.name)
+        elif a.cmd == "jupyter":
+            rc = cmd_jupyter(c, a.jkernel, a.node)
         elif a.cmd == "host":
             rc = cmd_host(c, a.host, a.kernel)
         else:

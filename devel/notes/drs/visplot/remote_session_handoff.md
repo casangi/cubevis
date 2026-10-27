@@ -95,6 +95,13 @@ as ee125b6) and section 17 (the ssh wrapper).
   `envcheck`.  Lazy `__init__`s for `cubevis.toolbox` and
   `cubevis.toolbox.visplot` (agreed; 127 -> 82 fingerprinted, 116 -> 42
   imported on the kernel side; section 34).
+* **Darrell's first real run** (2026-10-26, `setup cvpost106` from a fresh
+  macOS account): worked end to end.  Since then (section 36, base
+  `9f21e53`): the inside ranges are offered as found ([u]se / [c]hange /
+  [n]one), and `python -m cubevis.setup jupyter KERNEL [NODE]` makes a
+  Jupyter kernel definition so `visplot(..., backend="remote",
+  kernel_name="cubevis-KERNEL")` works until the Session exists.  Found,
+  not fixed: a dead worker leaves the plotter waiting forever.
 * **Next: stage 2c step 3** (design 7c "Refinements", section 13): setup's
   own environments -- `envs_dirs` (discovery reports it) shown with the
   expected size, another place allowed; `<tool> create -y -n cubevis-<v>
@@ -149,7 +156,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 36).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 37).
 
 ## Test kit (rebuild after a sandbox restart)
 

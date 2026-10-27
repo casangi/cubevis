@@ -1559,3 +1559,55 @@ python -m cubevis.setup status | check [NAME] | network NAME [--inside-here]
   `diagnose HOST`, `--2fa` (step 4); `--sync-checkout`, `prune`, `--local`
   (2d).  The open point from 2026-10-19 on first contact with a login host
   straight to a node stands (setup still visits the login host first).
+
+## 36. After Darrell's first `setup cvpost106` (base `9f21e53`, 2026-10-26)
+
+Darrell's run from a fresh local account (macOS, OpenSSH 10.3, Keychain)
+through `ssh.cv.nrao.edu` to cvpost106 (RHEL 8, python3 3.6.8, 31
+environments): every step worked as designed -- discovery under 3.6, the
+cluster suggested and taken (`cvpost`, `cvpost*`), his development
+environment found with the same fingerprint, the 1.0.96 one refused for
+having none, the kernel's launcher written and run.
+
+* **Inside ranges: found ones are the answer, not a hint** (Darrell: users
+  will not know their site's numbers, and should be assumed to answer
+  inaccurately as often as accurately).  `steps.inside_step` now lists what
+  it found, each with where it comes from ("cvpost106's own network", "a
+  wider guess around it" -- the /16 of the connection's private addresses),
+  says that keeping them is the usual answer, how `--inside-here` adds the
+  exact one on site and that `CUBEVIS_ROUTE_<NET>=bastion` overrides, and
+  asks `[u]se these, [c]hange them, or [n]one` (default use).  Nothing
+  found: nothing asked, always the login host, `--inside-here` named.
+  `--answer inside=...` still sets them directly (scripts, tests).
+* **`python -m cubevis.setup jupyter KERNEL [NODE]`**: a bridge until stage
+  3's Session -- today's plotters take `kernel_name=`, and setup kernels
+  have no Jupyter definition.  It writes `cubevis-<kernel>` with sshpyk's
+  `add` (the wrapper, the generated config, the node's alias -- default
+  where the kernel was last checked; NODE may be any node of its cluster,
+  added on the way -- and the kernel's launcher as `remote_python`),
+  verifies the file was written (`python -m sshpyk` is a no-op that exits
+  0: the CLI entry point is called instead), makes Jupyter's runtime
+  directory, and prints the call:
+  `visplot(ms="sis14_twhya_calibrated_flagged.ms", backend="remote",
+  kernel_name="cubevis-<kernel>")`.  Run again with another node to move
+  it.  `setup HOST`'s closing message names it.
+* **Verified on the rig**: the printed call, headless, through the
+  password login host: the kernel started in `~/visplot-data`, the MS
+  opened by its relative name, first render 16 s (`field="Ceres"`).
+  The relative path is passed to the kernel untouched
+  (`VisibilityPlotter` only checks existence locally for `vis=`).
+* **Found on the way, not fixed** (outside setup): (1) without a
+  selection, the first scatter of the whole TW Hya MS takes the worker
+  past 5.5 GB and the sandbox's memory limit killed it, local or remote
+  (the scatter memory point of 2026-10-19); (2) when the worker dies,
+  the plotter waits for its reply forever (`_bridge.run` ->
+  `future.result()` without a timeout or a liveness check) instead of
+  failing with the reason.  (3) `spw="0:0~15"` and `spw="<its name>:0~15"`
+  were both ignored ("matched no spectral window; ignoring it"); not looked
+  into -- which channel syntax `spw=` takes is to be checked.
+* **Next** as planned: step 3, setup's own environments (Darrell's run
+  offered none to create; that is step 3).
+* Tests: `test_cli.py` -- the terminal run answers `[c]hange` then the
+  range; found ranges taken by default with nothing typed; `jupyter`
+  refusals (unknown kernel, no launcher, unknown node); on the rig the
+  definition's fields and the printed call run headless against the MS.

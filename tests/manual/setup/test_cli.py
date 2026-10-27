@@ -264,7 +264,8 @@ def test_rig_interactive_host(home, alice_envs):
         (r"Store your password for alice@compute.example.test", "y"),
         (r"same password as for login host example-login\?", "y"),
         (r"cluster's nodes\? \[y/N\]", ""),
-        (r"Inside ranges", "127.0.0.0/8"),
+        (r"\[u\]se these, \[c\]hange them", "c"),
+        (r"Ranges \(CIDR", "127.0.0.0/8"),
         (r"Environment \[1\]", ""),
         (r"A name for the kernel \[compute\]", "tw-hya"),
         (r"Working directory \[~\]", "~/visplot-data"),
@@ -532,3 +533,67 @@ def test_rig_inside_here_records_only_after_a_direct_connection(home, alice_envs
     out = _flat(r)
     assert r.returncode == 1 and "no direct connection from here" in out, r.stdout
     assert "Nothing recorded" in out and S.load().networks()["example"]["inside"] == []
+
+
+@needs_rig
+@needs_ssh
+def test_rig_found_ranges_are_the_default_answer(home, alice_envs):
+    """Users rarely know their site's numbers: what setup finds (the node's
+    own subnets) is offered and taken by default -- nothing to type."""
+    r = _run(home, "--yes", *LOGIN, *STORE, "--answer", "environment=none", HOST)
+    from cubevis.setup.steps import node_ranges
+    st = S.load()
+    want = node_ranges(st, "example")             # the rig's: loopback, so no /16 guess
+    out = _flat(r)
+    if want:
+        assert "Found, from compute:" in out and "[u]se these" in out, r.stdout
+        assert st.networks()["example"]["inside"] == want
+    else:
+        assert "Nothing found to recognise the site by" in out, r.stdout
+    assert "Give the site's address ranges" not in out
+
+
+def test_jupyter_refuses_what_it_cannot_make(home):
+    r = _run(home, "jupyter", "nope")
+    assert r.returncode == 1 and "no kernel 'nope'" in r.stdout
+    st = S.load()
+    st.add_network("n", login_host=None, user="jo")
+    st.add_node("a", network="n", hostname="a.example.org")
+    st.add_environment("e", network="n", python="/e/bin/python", hosts=["a"])
+    st.add_kernel("k", environment="e")
+    S.save(st)
+    r = _run(home, "jupyter", "k")
+    assert r.returncode == 1 and "has no launcher yet" in _flat(r)
+    r = _run(home, "jupyter", "k", "elsewhere")
+    assert r.returncode == 1 and "not a node setup knows" in _flat(r)
+
+
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_jupyter_kernel_and_a_remote_plotter(home, alice_envs, tmp_path):
+    """The bridge until sessions: a Jupyter kernel definition for a setup
+    kernel, and the call it prints -- the MS by its name in the kernel's
+    working directory -- run headless (field Ceres: the whole MS's first
+    scatter needs more memory than a small test machine has)."""
+    r = _host(home, "--answer", "kernel=tw-hya", "--answer", "workdir=~/visplot-data",
+              "--answer", "env_vars=none", route=LOGIN)
+    assert r.returncode == 0, r.stdout
+    jd = str(tmp_path / "jupyter")
+    r = _run(home, "jupyter", "tw-hya", JUPYTER_DATA_DIR=jd)
+    assert r.returncode == 0, r.stdout
+    assert 'kernel_name="cubevis-tw-hya"' in r.stdout and "visplot(ms=" in r.stdout
+    spec = json.load(open(os.path.join(jd, "kernels", "cubevis-tw-hya", "kernel.json")))
+    cfg = spec["metadata"]["kernel_provisioner"]["config"]
+    assert cfg["ssh_host_alias"] == "example-compute" and cfg["ssh"] == str(G.wrapper_path())
+    assert cfg["remote_python"] == "/home/alice/.config/cubevis/launch/gui1/tw-hya.sh"
+    if not os.path.isdir("/home/alice/visplot-data/sis14_twhya_calibrated_flagged.ms"):
+        pytest.skip("the test MS is not in alice's ~/visplot-data")
+    code = ("from cubevis.toolbox.visplot import VisibilityPlotter\n"
+            "vp = VisibilityPlotter(ms='sis14_twhya_calibrated_flagged.ms', field='Ceres', "
+            "backend='remote', kernel_name='cubevis-tw-hya', headless=True)\n"
+            "print('PLOTTER', type(vp._reader).__name__)\n")
+    env = {k: v for k, v in _env(home, JUPYTER_DATA_DIR=jd).items() if k != "PYTHONPATH"}
+    r = subprocess.run([KERNEL_PY, "-c", code], capture_output=True, text=True, timeout=600,
+                       env=env, cwd="/tmp")
+    assert "PLOTTER RemoteReductionContext" in r.stdout, r.stdout[-2000:] + r.stderr[-3000:]

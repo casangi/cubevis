@@ -610,9 +610,11 @@ def kernel_step(c: Ctx, node: str, env: str, rep: dict, name: Optional[str],
             return False
         k = dict(kernels[name])
     where = (f"any node of cluster {n['cluster']}" if n.get("cluster") else node)
-    ui.say(f"Kernel {name} is set up, on {where}: sessions choose it by this name "
-           f"(cubevis.remote.Session, next stage). Another kernel here: "
-           f"python -m cubevis.setup {host_text} --kernel NAME.")
+    ui.say(f"Kernel {name} is set up, on {where}. To plot with it now: python -m "
+           f"cubevis.setup jupyter {name} makes a Jupyter kernel for "
+           "VisibilityPlotter(kernel_name=...) and prints an example (sessions will "
+           f"choose it by name, next stage). Another kernel here: python -m cubevis.setup "
+           f"{host_text} --kernel NAME.")
     return True
 
 

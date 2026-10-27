@@ -349,11 +349,31 @@ def node_ranges(st: S.State, network: str) -> list:
     return out
 
 
+def _route_var(network: str) -> str:
+    from .inside import route_var
+    return route_var(network)
+
+
+def _parse_ranges(ui: UI, text: str) -> Optional[list]:
+    """Ranges as typed; [] for none; None (said why) when one does not parse."""
+    if text.strip().lower() in ("none", "-", ""):
+        return []
+    try:
+        return S.normalize_ranges(re.split(r"[,\s]+", text.strip()))
+    except S.StateError as exc:
+        ui.note(str(exc))
+        if ui.yes:
+            return []
+        return None
+
+
 def inside_step(c: Ctx, network: str, node: str) -> bool:
-    """Ask once for the site's address ranges, suggested from the nodes'
-    own subnets (discovery) and the addresses a node reports for this very
-    connection ($SSH_CONNECTION: the address it was reached from -- the
-    login host's inside one, or this computer's -- and its own)."""
+    """Settle once the site's address ranges: what setup finds -- the
+    nodes' own subnets (discovery) and the /16 around the addresses a node
+    reports for this very connection ($SSH_CONNECTION) -- is offered as
+    the answer ([u]se, [c]hange, [n]one), since users rarely know their
+    site's numbers; nothing found, nothing is asked.  ``--inside-here``,
+    on site, adds the exact one later."""
     ui, st = c.ui, c.st
     net = st.networks()[network]
 
@@ -371,36 +391,51 @@ def inside_step(c: Ctx, network: str, node: str) -> bool:
         r = c.ssh(alias, "echo", "$SSH_CONNECTION")
         seen = r.stdout.split() if r.returncode == 0 else []
         addrs = [seen[0], seen[2]] if len(seen) >= 4 else []
-        # The nodes' own subnets first, then the /16s of this connection's
-        # addresses.
-        own = node_ranges(st, network)
-        sug = list(own)
-        sug += [r for r in suggest_ranges(addrs) if r not in sug]
-        ui.say("From inside the site (an office, a VPN that puts you on the site's "
-               "network), ssh can go to the nodes directly instead of through the login "
-               "host. Setup decides at each connection: this computer is inside when it "
-               "would reach a node from an address in the site's ranges.")
-        if addrs:
-            ui.say(f"{node} reports this connection as from {addrs[0]} to {addrs[1]}.")
-        if own:
-            ui.say("The nodes' own subnets: " + ", ".join(own) + ".")
-        ui.say("Only from these ranges does this computer go to the nodes directly; from "
-               "anywhere else (a visitor network, say) it uses the login host. On site, "
-               f"python -m cubevis.setup network {network} --inside-here adds where you are, "
-               "after checking that a direct connection works from there.")
-        ui.say("Give the site's address ranges (CIDR, separated by spaces), or 'none' to "
-               "always use the login host. Include every range you work from inside, e.g. "
-               "the desktops' as well as the cluster's.")
-        while True:
-            text = ui.ask("Inside ranges", " ".join(sug) or "none", key="inside")
-            if text.strip().lower() in ("none", "-", ""):
+        # What setup can find by itself, each with where it comes from: the
+        # nodes' own subnets (discovery), then the /16 around the addresses
+        # of this very connection (a guess).  Users mostly do not know their
+        # site's numbers, so these are offered as the answer, not as hints.
+        found = []
+        for rng in node_ranges(st, network):
+            owner = [n for n, v in sorted(st.nodes(network).items()) if rng in (v.get("ranges") or [])]
+            found.append((rng, f"{', '.join(owner) or 'a node'}'s own network"))
+        for rng in suggest_ranges(addrs):
+            if rng not in [f[0] for f in found]:
+                found.append((rng, "a wider guess around it"))
+        ranges = None
+        if "inside" in ui.answers:                    # scripts and tests: the ranges given
+            ranges = _parse_ranges(ui, ui.answers["inside"])
+        ui.say(f"ssh can go straight to the nodes of {network}, without the login host, "
+               "when this computer is on the site's network (in the office, or on a VPN "
+               "that puts it there). Setup recognises that by this computer's own address, "
+               "at each connection.")
+        if ranges is None and not found:
+            ui.say(f"Nothing found to recognise the site by, so this computer always goes "
+                   "through the login host, which works from anywhere. On site, "
+                   f"python -m cubevis.setup network {network} --inside-here adds where you "
+                   "are, after checking that a direct connection works from there.")
+            ranges = []
+        elif ranges is None:
+            ui.say(f"Found, from {node}:")
+            for rng, why in found:
+                ui._p(f"      {rng:<18} {why}")
+            ui.say("From an address in these this computer goes directly; from anywhere else "
+                   "(home, a visitor network) through the login host. You need not know "
+                   "these numbers: keeping them is the usual answer. On site, python -m "
+                   f"cubevis.setup network {network} --inside-here adds exactly where you are, "
+                   "after checking that it works; if a direct connection ever fails from "
+                   f"somewhere, {_route_var(network)}=bastion makes ssh use the login host.")
+            choice = ui.ask_choice("[u]se these, [c]hange them, or [n]one (always the login "
+                                   "host)?", "u", ("u", "c", "n"), key="inside_choice")
+            if choice == "u":
+                ranges = [f[0] for f in found]
+            elif choice == "n":
                 ranges = []
-                break
-            try:
-                ranges = S.normalize_ranges(re.split(r"[,\s]+", text.strip()))
-                break
-            except S.StateError as exc:
-                ui.note(str(exc))
+            else:
+                while ranges is None:
+                    text = ui.ask("Ranges (CIDR, separated by spaces; 'none' for none)",
+                                  " ".join(f[0] for f in found))
+                    ranges = _parse_ranges(ui, text)
         net["inside"] = ranges
         ui.record_change("set inside ranges", f"{network}: {', '.join(ranges) or 'none'}")
         c.save()

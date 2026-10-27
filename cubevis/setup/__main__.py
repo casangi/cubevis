@@ -36,6 +36,7 @@ import sys
 from typing import Optional
 
 from . import host_id, sshgen, state as S
+from . import jupyterspec as J
 from .hostsetup import check_kernel, cmd_host, rtilde
 from .steps import Ctx, last_line, local_steps, network_steps
 from .ui import UI, Quit, tilde
@@ -117,6 +118,15 @@ def cmd_status(c: Ctx) -> int:
                   + (", sets " + ", ".join(sorted(k["env"])) if k.get("env") else "")
                   + f", {state_}"
                   + (f" (on {k['checked_on']}, {k['last_checked']})" if k.get("checked_on") else ""))
+            specs = J.specs_for(st, kn)
+            if specs:
+                for jn, jnode in specs:
+                    shown = kn if jn == J.jupyter_name(kn) else jn
+                    ui._p(f"        visplot(..., backend=\"remote\", kernel_name=\"{shown}\")"
+                          f"   runs it on {jnode}")
+            else:
+                ui._p(f"        no Jupyter kernel for it here: python -m cubevis.setup "
+                      f"jupyter {kn}")
     if st.section("sessions"):
         ui._p(f"    sessions: {', '.join(sorted(st.section('sessions')))}")
     ui._p("")
@@ -233,46 +243,17 @@ def cmd_inside_here(c: Ctx, name: str) -> int:
     return 0
 
 
-def jupyter_name(kernel: str, node: Optional[str] = None) -> str:
-    """``cubevis-KERNEL`` (its usual node), or ``cubevis-KERNEL-NODE`` for a
-    node named explicitly -- one Jupyter kernel per node, so a kernel of a
-    cluster can be used on several nodes at once."""
-    return f"cubevis-{kernel}" + (f"-{node}" if node else "")
-
-
 def cmd_jupyter(c: Ctx, kernel: str, node: Optional[str]) -> int:
-    """A Jupyter kernel definition for setup kernel *kernel*, made with
-    ``sshpyk add``: the wrapper, the generated ssh configuration, the node's
-    alias, the kernel's launcher as the remote python.  Without *node*:
-    ``cubevis-KERNEL``, on the node it was last checked on (run again later,
-    it follows that).  With *node* (any node of the kernel's cluster; added
-    on the way): ``cubevis-KERNEL-NODE``, so that several nodes can be used
-    at once.  A bridge: today's plotters take ``kernel_name=``; stage 3's
-    Session builds the definition in memory and takes the node as an
-    argument, so no file per node is needed then."""
+    """``setup jupyter KERNEL [NODE]``: the Jupyter kernel for a setup kernel
+    (``jupyterspec``): ``cubevis-KERNEL`` on its usual node -- ``setup HOST``
+    makes that one too -- or ``cubevis-KERNEL-NODE`` on another node of its
+    cluster, alongside."""
     ui, st = c.ui, c.st
-    import importlib.util
     k = st.get("kernels", kernel)
-    explicit = bool(node)
-    if importlib.util.find_spec("sshpyk") is None:
-        ui.fail("sshpyk is not installed here (it starts remote kernels): "
-                f"{sys.executable} -m pip install sshpyk")
-        return 1
-    if node:
-        n = st.node_for(node)
-        if n is None:
-            ui.fail(f"{node} is not a node setup knows, nor one of a cluster's: "
-                    f"python -m cubevis.setup {node} first")
-            return 1
-        node = n
-    else:
-        nodes = [x for x in sorted(st.nodes()) if st.environment_on(k["environment"], x)]
-        node = k.get("checked_on") if k.get("checked_on") in nodes else (nodes or [None])[0]
-        if node is None:
-            ui.fail(f"no node has kernel {kernel}'s environment")
-            return 1
-    if not st.environment_on(k["environment"], node):
-        ui.fail(f"kernel {kernel}'s environment is not on {node}")
+    # What cannot work is said before anything is installed or asked.
+    if node and not (st.find_node(node) or st.cluster_for(node)):
+        ui.fail(f"{node} is not a node setup knows, nor one of a cluster's: "
+                f"python -m cubevis.setup {node} first")
         return 1
     if not k.get("launcher"):
         ui.fail(f"kernel {kernel} has no launcher yet: python -m cubevis.setup HOST --kernel {kernel}")
@@ -282,44 +263,14 @@ def cmd_jupyter(c: Ctx, kernel: str, node: Optional[str]) -> int:
                 f"python -m cubevis.setup check {kernel} says whether it works now")
     if not local_steps(c):
         return 1
-    c.save()                                 # a cluster node added above: in the ssh config
-    alias = st.nodes()[node]["alias"]
-    name = jupyter_name(kernel, node if explicit else None)
-    # sshpyk's command-line entry point ("python -m sshpyk" does nothing).
-    cmd = [sys.executable, "-c",
-           "import sys; from sshpyk.cli import main; sys.argv[0] = 'sshpyk'; sys.exit(main())",
-           "add", "--kernel-name", name,
-           "--display-name", f"cubevis {kernel} on {node}", "--language", "python",
-           "--ssh-host-alias", alias, "--ssh-config", str(sshgen.config_path()),
-           "--ssh", str(sshgen.wrapper_path()), "--remote-python", k["launcher"],
-           "--remote-kernel-name", "python3",
-           "--launch-timeout", str(k.get("launch_timeout") or 120), "--replace"]
-    r = ui.run(cmd, show=False)
-    from jupyter_client.kernelspec import KernelSpecManager, NoSuchKernel
-    try:
-        spec = KernelSpecManager().get_kernel_spec(name)
-        made = spec.metadata["kernel_provisioner"]["config"]["remote_python"] == k["launcher"]
-    except (NoSuchKernel, KeyError, TypeError):
-        made = False
-    if r.returncode != 0 or not made:
-        from .steps import last_line
-        ui.fail(f"sshpyk add failed: {last_line(r.stdout + r.stderr) or 'no kernel written'}")
+    name = J.make(c, kernel, node)
+    if not name:
         return 1
-    ui.record_change("jupyter kernel", f"{name}: {kernel} on {node}")
-    try:                                      # sshpyk writes its reconnection file there
-        from jupyter_core.paths import jupyter_runtime_dir
-        os.makedirs(jupyter_runtime_dir(), exist_ok=True)
-    except Exception:
-        pass
-    ui.ok(f"Jupyter kernel {name}: kernel {kernel} on {node}, in {tilde(spec.resource_dir)} "
-          "(Jupyter finds it there for this account)")
+    where = node or J.default_node(st, kernel)
+    ui.ok(f"Jupyter kernel {name}: kernel {kernel} on {where}")
     ui.say("For example, with a measurement set in the kernel's working directory there:")
-    ui._p("")
-    ui._p("    from cubevis import visplot")
-    ui._p("    visplot(ms=\"sis14_twhya_calibrated_flagged.ms\", backend=\"remote\",")
-    ui._p(f"            kernel_name=\"{name}\")")
-    ui._p("")
-    if not explicit:
+    J.show_use(ui, kernel if not node else name)
+    if not node:
         ui.say(f"On another node of it, alongside this one: python -m cubevis.setup jupyter "
                f"{kernel} NODE makes cubevis-{kernel}-NODE.")
     return 0

@@ -612,12 +612,28 @@ def kernel_step(c: Ctx, node: str, env: str, rep: dict, name: Optional[str],
         if ui.yes or not ui.ask_yn("Change its settings and try again?", True):
             return False
         k = dict(kernels[name])
-    where = (f"any node of cluster {n['cluster']}" if n.get("cluster") else node)
-    ui.say(f"Kernel {name} is set up, on {where}. To plot with it now: python -m "
-           f"cubevis.setup jupyter {name} makes a Jupyter kernel for "
-           "VisibilityPlotter(kernel_name=...) and prints an example (sessions will "
-           f"choose it by name, next stage). Another kernel here: python -m cubevis.setup "
-           f"{host_text} --kernel NAME.")
+    use_kernel(c, name, host_text)
+    return True
+
+
+def use_kernel(c: Ctx, name: str, host_text: str) -> bool:
+    """The Jupyter kernel for setup kernel *name* (``jupyterspec``), and
+    how to plot with it."""
+    from . import jupyterspec as J
+    ui, st = c.ui, c.st
+    if not J.make(c, name):
+        ui.note(f"kernel {name} works, but visplot cannot start it from here yet: "
+                f"python -m cubevis.setup jupyter {name} once sshpyk is installed")
+        return False
+    node = J.default_node(st, name)
+    cl = st.nodes()[node].get("cluster")
+    ui.ok(f"visplot can use kernel {name} (on {node}):")
+    J.show_use(ui, name)
+    ui.say("Relative paths are found in the kernel's working directory there. "
+           + (f"On another node of cluster {cl}, alongside: python -m cubevis.setup jupyter "
+              f"{name} NODE. " if cl else "")
+           + f"Another kernel here: python -m cubevis.setup {host_text} --kernel NAME. "
+           "python -m cubevis.setup status lists them all.")
     return True
 
 
@@ -638,8 +654,11 @@ def check_kernels(c: Ctx, node: str, rep: dict, host_text: str) -> bool:
         (ui.ok if ok else ui.fail)(f"kernel {name}: {msg}")
         good = good and ok
     c.save()
-    ui.say(f"Another kernel here: python -m cubevis.setup {host_text} --kernel NAME"
-           + ("" if c.redo else "; --redo asks the kernels' settings again") + ".")
+    for name in names:
+        if st.section("kernels")[name].get("status") == "ok":
+            use_kernel(c, name, host_text)
+    if not c.redo:
+        ui.say(f"python -m cubevis.setup --redo {host_text} asks the kernels' settings again.")
     return good
 
 

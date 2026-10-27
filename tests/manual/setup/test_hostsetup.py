@@ -116,3 +116,39 @@ def test_a_password_command_that_holds_it_in_plain_text_is_refused(monkeypatch):
         assert stores.plain_text_command(cmd) is None, cmd
     monkeypatch.setenv("CUBEVIS_SETUP_ALLOW_PLAIN_COMMAND", "1")      # the test rig's
     assert stores.plain_text_command("echo pw") is None
+
+
+def test_without_sshpyk_setup_offers_it_and_unattended_does_not_install(ctx, monkeypatch):
+    from cubevis.setup import jupyterspec as J
+    monkeypatch.setattr(J, "have_sshpyk", lambda: False)
+    c = ctx()
+    assert J.ensure_sshpyk(c) is False
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "sshpyk starts kernels on other computers" in out and "not installed (unattended" in out
+    assert "-m pip install" in out
+
+
+def test_visplot_takes_a_setup_kernels_own_name(tmp_path, monkeypatch):
+    """kernel_name="cvpost" (the name setup gave) starts cubevis-cvpost; a
+    setup kernel without its Jupyter kernel says how to make it."""
+    import json as _json
+    from cubevis.toolbox.visplot import visibility_plotter as V
+    monkeypatch.setenv("JUPYTER_DATA_DIR", str(tmp_path / "jd"))
+    monkeypatch.setenv("JUPYTER_PATH", str(tmp_path / "jd"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    d = tmp_path / "jd" / "kernels" / "cubevis-cvpost"
+    d.mkdir(parents=True)
+    (d / "kernel.json").write_text(_json.dumps({"argv": ["python", "-c", "pass"],
+                                                "display_name": "x", "language": "python"}))
+    assert V._resolve_kernel_name("cvpost") == "cubevis-cvpost"
+    assert V._resolve_kernel_name("cubevis-cvpost") == "cubevis-cvpost"
+    st = S.load()
+    st.add_network("n", login_host=None, user="jo")
+    st.add_node("a", network="n", hostname="a.example.org")
+    st.add_environment("e", network="n", python="/e/bin/python", hosts=["a"])
+    st.add_kernel("tw", environment="e")
+    S.save(st)
+    with pytest.raises(ValueError, match="'tw' is a kernel set up with python -m cubevis.setup"):
+        V._resolve_kernel_name("tw")
+    with pytest.raises(ValueError, match="set up with cubevis: tw"):
+        V._resolve_kernel_name("nope")

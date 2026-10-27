@@ -1698,3 +1698,46 @@ not set up).
   test environment's list), the other 3 coincided with an xdist worker
   killed for memory, as in section 34.  `tests/manual/remote` without the
   two scripts that name Darrell's `zuul06_python312`: 39 passed.
+
+## 38. `setup HOST` ends with a kernel visplot can start (base `6294aad`, 2026-10-27)
+
+Darrell's third clean-account run: setup worked, but nothing said what to
+pass to `visplot` -- `kernel_name="cvpost"` and `"cubevis-cvpost"` both
+failed (the Jupyter kernel was a separate `setup jupyter` step, named only
+in a closing sentence), sshpyk was not in his environment (cubevis does not
+depend on it), and `status` showed no kernel names.
+
+* **`setup HOST` makes the Jupyter kernel itself** (`cubevis/setup/
+  jupyterspec.py`, `hostsetup.use_kernel`): once a kernel works (new, or
+  checked on a rerun), `cubevis-KERNEL` is written on that node -- rewritten
+  only when its ssh files, alias or launcher changed -- and setup ends with
+  "visplot can use kernel cvpost (on cvpost106):" and the call,
+  `visplot(ms="sis14_twhya_calibrated_flagged.ms", backend="remote",
+  kernel_name="cvpost")`, how to add another node of the cluster, another
+  kernel, and that `status` lists them.
+* **`kernel_name=` takes the setup kernel's name** (`visibility_plotter.
+  _resolve_kernel_name`): a name Jupyter knows is used as is; else, if
+  `cubevis-NAME` exists, that (logged at INFO); a setup kernel without one
+  says `python -m cubevis.setup jupyter NAME`; anything else lists the
+  Jupyter kernels and the setup kernels here.
+* **sshpyk**: a `remote` extra (`sshpyk>=1.23`, `ipykernel`,
+  `jupyter_client`), part of `visplot` (`pip install "cubevis[visplot]"`).
+  When it is missing, setup says what it is for and offers `pip install
+  'sshpyk>=1.23'` into the Python running it (not in unattended runs).
+* **`status`** lists under each kernel its Jupyter kernels:
+  `visplot(..., backend="remote", kernel_name="cvpost")   runs it on
+  cvpost106` (the default one by the setup name), `... kernel_name=
+  "cubevis-cvpost-cvpost140")   runs it on cvpost140`; or "no Jupyter
+  kernel for it here: python -m cubevis.setup jupyter cvpost".
+* `setup jupyter` is now the same code (`jupyterspec.make`), for another
+  node or by hand.
+* Tests: the rig's jupyter test -- `setup HOST` writes `cubevis-tw-hya` and
+  prints `kernel_name="tw-hya"`; `setup jupyter tw-hya` again writes
+  nothing; `compute2` alongside; `status` lists both; the headless plotter
+  with `kernel_name="tw-hya"` against the MS.  `test_hostsetup.py`: no
+  sshpyk (unattended: not installed, said so), `_resolve_kernel_name`
+  (setup name -> `cubevis-NAME`; a setup kernel without one; unknown).
+  The rig tests' Jupyter kernels go to the test's own `JUPYTER_DATA_DIR`.
+* `setup jupyter` says what cannot work (an unknown node, no launcher)
+  before the wrapper step or the sshpyk offer.  Setup suite 140 pass with
+  OpenSSH 9.6 and 8.0p1; `test_casa_optional.py` 3.

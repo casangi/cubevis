@@ -62,6 +62,7 @@ def home(monkeypatch):
     monkeypatch.setenv("CUBEVIS_HOST_ID", "gui1")
     monkeypatch.setenv("CUBEVIS_RUNTIME_DIR", f"{d}/run")
     monkeypatch.setenv("CUBEVIS_SETUP_KNOWN_HOSTS", f"{d}/known_hosts")   # not ~/.ssh
+    monkeypatch.setenv("JUPYTER_DATA_DIR", f"{d}/jupyter")         # Jupyter kernels: not ~
     yield d
     for host in ("gui1", "gui2"):
         cfg = os.path.join(d, "cubevis", "hosts", host, "ssh", "config")
@@ -572,38 +573,44 @@ def test_jupyter_refuses_what_it_cannot_make(home):
 @needs_rig
 @needs_ssh
 @needs_kernel_py
-def test_rig_jupyter_kernel_and_a_remote_plotter(home, alice_envs, tmp_path):
-    """The bridge until sessions: a Jupyter kernel definition for a setup
-    kernel, and the call it prints -- the MS by its name in the kernel's
-    working directory -- run headless (field Ceres: the whole MS's first
-    scatter needs more memory than a small test machine has)."""
+def test_rig_jupyter_kernel_and_a_remote_plotter(home, alice_envs):
+    """setup HOST makes the Jupyter kernel for the kernel it sets up and
+    prints the visplot call; the setup kernel's own name works as
+    kernel_name; `setup jupyter KERNEL NODE` adds another node of the
+    cluster alongside; status lists them.  Then the printed call, the MS by
+    its name in the kernel's working directory, run headless (field Ceres:
+    the whole MS's first scatter needs more memory than a small test
+    machine has)."""
     r = _host(home, "--answer", "cluster=y", "--answer", "cluster_name=comp",
               "--answer", "cluster_pattern=compute*", "--answer", "kernel=tw-hya",
               "--answer", "workdir=~/visplot-data", "--answer", "env_vars=none", route=LOGIN)
     assert r.returncode == 0, r.stdout
-    jd = str(tmp_path / "jupyter")
-    r = _run(home, "jupyter", "tw-hya", JUPYTER_DATA_DIR=jd)
-    assert r.returncode == 0, r.stdout
-    assert 'kernel_name="cubevis-tw-hya"' in r.stdout and "visplot(ms=" in r.stdout
+    assert 'kernel_name="tw-hya"' in r.stdout and "visplot can use kernel tw-hya" in _flat(r)
+    jd = os.path.join(home, "jupyter")
     spec = json.load(open(os.path.join(jd, "kernels", "cubevis-tw-hya", "kernel.json")))
     cfg = spec["metadata"]["kernel_provisioner"]["config"]
     assert cfg["ssh_host_alias"] == "example-compute" and cfg["ssh"] == str(G.wrapper_path())
     assert cfg["remote_python"] == "/home/alice/.config/cubevis/launch/gui1/tw-hya.sh"
+    # setup jupyter for the same: already right, nothing written again.
+    r = _run(home, "jupyter", "tw-hya")
+    assert r.returncode == 0 and "jupyter kernel:" not in r.stdout, r.stdout
     # Another node of the cluster, alongside: its own Jupyter kernel, the
     # node added on the way (with the port the cluster's nodes share).
-    r = _run(home, "jupyter", "tw-hya", "compute2", JUPYTER_DATA_DIR=jd)
+    r = _run(home, "jupyter", "tw-hya", "compute2")
     assert r.returncode == 0 and 'kernel_name="cubevis-tw-hya-compute2"' in r.stdout, r.stdout
     two = json.load(open(os.path.join(jd, "kernels", "cubevis-tw-hya-compute2", "kernel.json")))
     assert two["metadata"]["kernel_provisioner"]["config"]["ssh_host_alias"] == "example-compute2"
-    assert os.path.exists(os.path.join(jd, "kernels", "cubevis-tw-hya", "kernel.json"))
     assert S.load().nodes()["compute2"]["port"] == 2202
+    r = _run(home, "status")
+    assert 'kernel_name="tw-hya")   runs it on compute' in r.stdout, r.stdout
+    assert 'kernel_name="cubevis-tw-hya-compute2")   runs it on compute2' in r.stdout
     if not os.path.isdir("/home/alice/visplot-data/sis14_twhya_calibrated_flagged.ms"):
         pytest.skip("the test MS is not in alice's ~/visplot-data")
     code = ("from cubevis.toolbox.visplot import VisibilityPlotter\n"
             "vp = VisibilityPlotter(ms='sis14_twhya_calibrated_flagged.ms', field='Ceres', "
-            "backend='remote', kernel_name='cubevis-tw-hya', headless=True)\n"
+            "backend='remote', kernel_name='tw-hya', headless=True)\n"
             "print('PLOTTER', type(vp._reader).__name__)\n")
-    env = {k: v for k, v in _env(home, JUPYTER_DATA_DIR=jd).items() if k != "PYTHONPATH"}
+    env = {k: v for k, v in _env(home).items() if k != "PYTHONPATH"}
     r = subprocess.run([KERNEL_PY, "-c", code], capture_output=True, text=True, timeout=600,
                        env=env, cwd="/tmp")
     assert "PLOTTER RemoteReductionContext" in r.stdout, r.stdout[-2000:] + r.stderr[-3000:]

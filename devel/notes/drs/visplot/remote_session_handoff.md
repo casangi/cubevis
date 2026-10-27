@@ -108,6 +108,10 @@ as ee125b6) and section 17 (the ssh wrapper).
   `echo` password commands refused (tests: `CUBEVIS_SETUP_ALLOW_PLAIN_COMMAND=1`).
   For step 3: setup's environments from a release (PyPI), a local wheel
   (copied to the node) or a checkout (synced, 2d).
+* **Third clean-account run** (2026-10-27, section 38): `setup HOST` now
+  writes the Jupyter kernel and prints the visplot call; `kernel_name=`
+  takes the setup kernel's name; `status` lists the Jupyter kernels; a
+  `remote` extra (sshpyk), offered by setup when missing.
 * **Next: stage 2c step 3** (design 7c "Refinements", section 13): setup's
   own environments -- `envs_dirs` (discovery reports it) shown with the
   expected size, another place allowed; `<tool> create -y -n cubevis-<v>
@@ -162,7 +166,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 38).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 39).
 
 ## Test kit (rebuild after a sandbox restart)
 

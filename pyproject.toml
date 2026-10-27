@@ -87,8 +87,12 @@ xarray = [
 # iclean/visplot's backend needs ever diverge from casa6/xarray 1:1, update
 # these two lines only - the public names iclean/visplot don't need to
 # change for users.
+# Kernels on another computer (backend="remote"): sshpyk starts them over
+# ssh from the computer the plots are on; ipykernel and jupyter_client are
+# what a kernel's environment needs there (python -m cubevis.setup HOST).
+remote = ["sshpyk>=1.23", "ipykernel", "jupyter_client"]
 iclean = ["cubevis[casa6]"]
-visplot = ["cubevis[xarray]"]
+visplot = ["cubevis[xarray,remote]"]
 
 
 [project.urls]

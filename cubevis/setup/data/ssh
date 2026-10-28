@@ -89,6 +89,20 @@
 # Debugging: SSH_WRAPPER_DEBUG=1 logs to $SSH_WRAPPER_LOG
 # (default ~/.ssh/ssh-wrapper.log).
 #
+# Stale shared connections (from Darrell's ~/bin copy, 2026-10-28): a
+# shared connection can go on answering `ssh -O check` locally after its
+# remote session has died -- a laptop put to sleep, a network drop, macOS
+# Fast User Switching.  So one not confirmed for a while gets a real probe
+# before it is trusted: a throwaway `true` ridden over the existing master,
+# as any multiplexed client would (never a separate, unshared connection,
+# which would need its own password and so always fail).  A probe that
+# fails, or gets no answer within SSH_WRAPPER_PROBE_TIMEOUT seconds
+# (default 10: on a dead link the master itself may take minutes to notice),
+# retires the master and logs in again.  "Confirmed" is the ControlPath
+# socket's own mtime, set on each login and good probe -- no state file of
+# its own.  SSH_WRAPPER_STALE_AFTER: seconds a connection is trusted without
+# a probe (default 300; 0 probes every time).
+#
 use strict;
 use warnings;
 use File::Basename qw(basename dirname);
@@ -104,6 +118,10 @@ my $PERSIST_DEFAULT = $ENV{SSH_WRAPPER_PERSIST} || '8h';
 # that it is there before giving up.
 my $VERIFY_ATTEMPTS = $ENV{SSH_WRAPPER_VERIFY_ATTEMPTS} || 8;
 my $VERIFY_DELAY    = $ENV{SSH_WRAPPER_VERIFY_DELAY} || 0.25;    # seconds
+
+# Stale shared connections (header, "Stale shared connections").
+my $STALE_AFTER   = exists $ENV{SSH_WRAPPER_STALE_AFTER} ? $ENV{SSH_WRAPPER_STALE_AFTER} : 300;
+my $PROBE_TIMEOUT = $ENV{SSH_WRAPPER_PROBE_TIMEOUT} || 10;
 
 sub logmsg {
     return unless $DEBUG;
@@ -468,7 +486,11 @@ if ($EXPLAIN) {
         }
         my $up = run_redirected( [ $SSH, @{ $hop->{args} }, '-O', 'check', $hop->{target} ],
             quiet => 1, null_stdin => 1 ) == 0;
-        print "  shared connection: " . ( $up ? "up" : "not up" ) . "\n";
+        my $cpx = $c->{controlpath} // 'none';
+        my $mt  = ( $up && lc $cpx ne 'none' ) ? ( stat($cpx) )[9] : undef;
+        print "  shared connection: " . ( $up ? "up" : "not up" )
+          . ( defined $mt ? sprintf( " (confirmed %ds ago; probed after %ds)", time() - $mt, $STALE_AFTER ) : '' )
+          . "\n";
     }
     exit 0;
 }
@@ -591,13 +613,64 @@ sub open_shared {
     return ( $rc, $last, $asked );
 }
 
+# A no-op command riding the shared connection as an ordinary multiplexed
+# client would -- ControlMaster/ControlPath as configured, so a live master
+# answers it with no new authentication.  BatchMode: should the master be
+# gone, never a password prompt.  Killed after $PROBE_TIMEOUT seconds: on a
+# dead link the request may otherwise wait until the master's keep-alives
+# give up.  (A probe forcing ControlMaster=no would open a separate,
+# unshared connection, which needs its own password -- it would always
+# fail and condemn a live master.  Don't.)
+sub probe_alive {
+    my ( $args, $target ) = @_;
+    my $pid = fork();
+    return 0 unless defined $pid;
+    if ( $pid == 0 ) {
+        open( STDIN,  '<', '/dev/null' );
+        open( STDOUT, '>', '/dev/null' );
+        open( STDERR, '>', '/dev/null' );
+        exec( $SSH, @$args, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', $target, 'true' )
+          or POSIX::_exit(127);
+    }
+    my $deadline = time() + $PROBE_TIMEOUT;
+    while ( time() <= $deadline ) {
+        my $w = waitpid( $pid, POSIX::WNOHANG() );
+        return ( $? == 0 ) ? 1 : 0 if $w == $pid;
+        select( undef, undef, undef, 0.1 );
+    }
+    kill 'KILL', $pid;
+    waitpid( $pid, 0 );
+    logmsg("$target: probe got no answer within ${PROBE_TIMEOUT}s");
+    return 0;
+}
+
+# "Confirmed healthy just now", as the ControlPath socket's own mtime.
+sub mark_verified {
+    my ($cp) = @_;
+    my $now = time();
+    utime( $now, $now, $cp ) or logmsg("couldn't touch $cp: $!");
+}
+
 for my $hop (@need) {
     my ( $target, $args, $cfg ) = ( $hop->{target}, $hop->{args}, $hop->{cfg} );
-    if ( run_redirected( [ $SSH, @$args, '-O', 'check', $target ], quiet => 1, null_stdin => 1 ) == 0 ) {
-        logmsg("$target: shared connection already up");
-        next;
-    }
     my $cp = $cfg->{controlpath} // 'none';
+    if ( run_redirected( [ $SSH, @$args, '-O', 'check', $target ], quiet => 1, null_stdin => 1 ) == 0 ) {
+        my $mtime = lc $cp ne 'none' ? ( stat($cp) )[9] : undef;
+        my $age   = defined $mtime ? time() - $mtime : $STALE_AFTER;
+        if ( $age < $STALE_AFTER ) {
+            logmsg("$target: shared connection already up (confirmed ${age}s ago)");
+            next;
+        }
+        if ( probe_alive( $args, $target ) ) {
+            mark_verified($cp) if lc $cp ne 'none';
+            logmsg("$target: shared connection up (probed; last confirmed ${age}s before)");
+            next;
+        }
+        note("the shared connection to '$target' is stale (it answers here, but its remote"
+           . " session is gone: sleep, a network drop, a user switch); logging in again");
+        run_redirected( [ $SSH, @$args, '-O', 'exit', $target ], quiet => 1, null_stdin => 1 );
+        # On to a fresh login, as for a connection that was not up.
+    }
     if ( lc $cp eq 'none' ) {
         note("'$target' ($cfg->{hostname}) needs a password but has no ControlPath in your"
            . " ssh config, so the login cannot be shared -- add one for it");
@@ -669,6 +742,7 @@ for my $hop (@need) {
         }
         select( undef, undef, undef, $VERIFY_DELAY );
     }
+    mark_verified($cp) if $ok;
     note( $ok ? "shared connection to '$target' is up"
               : "logged in to '$target' but no shared connection stayed up"
               . " (normal for a host that only runs fixed commands, such as a git"

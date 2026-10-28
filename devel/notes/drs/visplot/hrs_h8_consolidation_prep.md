@@ -1847,3 +1847,35 @@ the kernel was for.  Agreed with Darrell:
   the cluster's defaults and a second kernel (`--kernel imaging`, nothing
   answered) takes them.
 * Setup suite 145 pass with OpenSSH 9.6 and 8.0p1.
+
+## 42. The wrapper: stale shared connections (base `e66f0ba`, 2026-10-28)
+
+* **Why**: Darrell's `~/bin/ssh` had been changed to cope with a shared
+  connection whose socket still answers `ssh -O check` after its remote
+  session has died (a Mac asleep, a network drop, Fast User Switching):
+  every use then hung or failed until the socket was removed by hand.  The
+  check only asks the local master process, which has not noticed yet.
+* **Ported into `cubevis/setup/data/ssh`** (the packaged wrapper keeps its
+  own extras: several rules files, `--explain`, the failed-login messages,
+  socket-directory recreation, skipping other wrapper copies on PATH):
+  - a connection confirmed less than `SSH_WRAPPER_STALE_AFTER` seconds ago
+    (default 300; 0 probes every time) is trusted as before;
+  - an older one gets a probe: `true` run over the existing master, as any
+    multiplexed client (`BatchMode=yes`, `ConnectTimeout=5`; never
+    `ControlMaster=no`, which would open a separate connection needing its
+    own password and always fail);
+  - new here: the probe is killed after `SSH_WRAPPER_PROBE_TIMEOUT` seconds
+    (default 10).  On a link that is dead rather than closed the request
+    otherwise waits until the master's keep-alives give up -- minutes;
+  - a good probe refreshes the confirmation; a failed one says "the shared
+    connection to 'X' is stale ... logging in again", runs `-O exit` and
+    goes on to the ordinary login;
+  - "confirmed" is the ControlPath socket's mtime (set after each login and
+    good probe): no state file;
+  - `--explain` shows "up (confirmed Ns ago; probed after 300s)".
+* Tests (`test_wrapper_login_messages.py`, rig): a fresh master is used
+  without a probe; with `SSH_WRAPPER_STALE_AFTER=0` it is probed and kept
+  (same remote session); with the remote `sshd: alice` session processes
+  stopped (SIGSTOP: the socket answers, nothing else does) the probe times
+  out, the wrapper says "stale", logs in again and runs the command.
+* Setup suite 148 pass with OpenSSH 9.6 and 8.0p1.

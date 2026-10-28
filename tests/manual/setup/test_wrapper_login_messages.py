@@ -121,3 +121,78 @@ def test_good_password_runs_the_command(d):
                 "command=echo 's3cret pw!'", "gw")
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "ran"
+
+
+# --- Stale shared connections (2026-10-28, from Darrell's ~/bin copy) -------
+
+GOOD = "login.example.test service=t account=alice backend=command command=echo 's3cret pw!'"
+
+
+def _run_logged(d, **extra):
+    """_run with the debug log on; returns (result, log text of this run)."""
+    log = f"{d}/wrapper.log"
+    open(log, "w").close()
+    with open(f"{d}/rules", "w") as f:
+        f.write(GOOD + "\n")
+    env = dict(os.environ, SSH_WRAPPER_RULES=f"{d}/rules", TMPDIR=d,
+               SSH_WRAPPER_DEBUG="1", SSH_WRAPPER_LOG=log, **extra)
+    r = subprocess.run([str(data_file("ssh")), "-F", f"{d}/config", "-o", "BatchMode=yes",
+                        "gw", "echo", "ran"], capture_output=True, text=True, env=env,
+                       timeout=90, stdin=subprocess.DEVNULL)
+    return r, open(log).read()
+
+
+def _session_pids():
+    """alice's sshd session processes on the rig (the remote end of a master)."""
+    r = subprocess.run(["pgrep", "-u", "alice", "-f", "^sshd: alice"],
+                       capture_output=True, text=True)
+    return {int(p) for p in r.stdout.split()}
+
+
+@needs_ssh
+@needs_rig
+def test_fresh_master_is_trusted_without_a_probe(d):
+    r, _ = _run_logged(d)
+    assert r.returncode == 0, r.stderr
+    r, log = _run_logged(d)
+    assert r.returncode == 0 and r.stdout.strip() == "ran", r.stderr
+    assert "confirmed" in log and "probed" not in log, log
+    assert "logging in" not in r.stderr
+
+
+@needs_ssh
+@needs_rig
+def test_unconfirmed_master_is_probed_and_kept(d):
+    _run_logged(d)
+    before = _session_pids()
+    r, log = _run_logged(d, SSH_WRAPPER_STALE_AFTER="0")
+    assert r.returncode == 0 and r.stdout.strip() == "ran", r.stderr
+    assert "probed" in log, log
+    assert "stale" not in r.stderr
+    assert _session_pids() >= before           # the same master, not a new login
+
+
+@needs_ssh
+@needs_rig
+def test_stale_master_is_replaced(d):
+    """The remote session frozen: the socket still answers -O check, nothing
+    answers a command -- as after sleep or a dropped link."""
+    r, _ = _run_logged(d)
+    assert r.returncode == 0, r.stderr
+    frozen = _session_pids()
+    assert frozen
+    for p in frozen:
+        os.kill(p, 19)                          # SIGSTOP
+    try:
+        r, log = _run_logged(d, SSH_WRAPPER_STALE_AFTER="0", SSH_WRAPPER_PROBE_TIMEOUT="2")
+        assert "is stale" in r.stderr, r.stderr
+        assert "shared connection to 'gw' is up" in r.stderr, r.stderr
+        assert r.returncode == 0 and r.stdout.strip() == "ran", r.stderr
+        assert _session_pids() - frozen          # a new remote session
+    finally:
+        for p in frozen:
+            try:
+                os.kill(p, 18)                  # SIGCONT, then gone
+                os.kill(p, 15)
+            except ProcessLookupError:
+                pass

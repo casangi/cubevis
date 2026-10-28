@@ -124,6 +124,10 @@ as ee125b6) and section 17 (the ssh wrapper).
   3: the node chosen per session (given, else the cluster's reservation
   query -- moved into stage 3 -- else the last that answered), the
   Jupyter-kernel bridge gone with the Session.
+* **The wrapper** (2026-10-28, section 42): a shared connection not
+  confirmed within `SSH_WRAPPER_STALE_AFTER` (300 s) is probed over the
+  master (timeout `SSH_WRAPPER_PROBE_TIMEOUT`, 10 s) and replaced when stale
+  -- ported from Darrell's `~/bin/ssh`.
 * **Next: stage 2c step 3** (design 7c "Refinements", section 13): setup's
   own environments -- `envs_dirs` (discovery reports it) shown with the
   expected size, another place allowed; `<tool> create -y -n cubevis-<v>

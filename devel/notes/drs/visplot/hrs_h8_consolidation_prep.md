@@ -1879,3 +1879,140 @@ the kernel was for.  Agreed with Darrell:
   stopped (SIGSTOP: the socket answers, nothing else does) the probe times
   out, the wrapper says "stale", logs in again and runs the command.
 * Setup suite 148 pass with OpenSSH 9.6 and 8.0p1.
+
+## 43. Setup's own environments (stage 2c step 3; base `858e4d5`, 2026-10-28)
+
+`setup HOST` no longer ends at "no environment has the same kernel-side
+code": it makes one (design 7c, "Setup's environments are minimal and never
+modified").
+
+* **What is made**: `<tool> create -y -p PREFIX python=X.Y pip` (X.Y: this
+  computer's Python), then `PREFIX/bin/python -m pip install
+  "cubevis[visplot]==VERSION"` (`PYTHONNOUSERSITE=1`, no pip prompts), named
+  `cubevis-VERSION`; a name taken by anything (a user's environment, an
+  earlier one) is never reused: `-2` ... `-9`.  The marker
+  `PREFIX/cubevis-setup.json` (schema 1, name, version, spec, Python, the
+  creating tool, created, `setup: {cubevis, host}` -- which computer's
+  setup made it) is written **last**.  Setup never changes it afterwards
+  and never installs into the user's own environments.
+* **On the node** (`cubevis/setup/envmake.py`): one standard-library
+  program (Python 3.6+, like discovery), sent as `python3 -` with its
+  request embedded (`REQUEST = json.loads(...)`; no quoting for csh), whose
+  one-line answer is `CUBEVIS-ENVMAKE {json}`.  Actions:
+  - `plan` -- per candidate directory: writable?, free bytes, which names
+    are taken; and the jobs earlier runs left (status, log tail);
+  - `start` -- writes `<config>/make/NAME.job.json`, `.json` (status), `.log`
+    and spawns a **detached worker** (`python3 -c WORKER job.json`, its own
+    session, stdin /dev/null, output to the log), so the ssh call returns at
+    once (tested: under 1.5 s with a 2 s install) and nothing holds the
+    connection's pipes.  Refuses while one is running, and refuses an
+    existing prefix unless an earlier job of its own left it (`failed` /
+    `died`, same prefix);
+  - `status` -- the status file, `died` when the recorded process is gone
+    (node restarted, killed) or never started (> 60 s), with the log's tail;
+  - `remove` -- only a prefix with a valid marker whose name matches, by the
+    tool's `env remove -y -p`; **never by deleting files itself**; clears the
+    job files; says so when the directory is still there.
+  The worker records each finished step (`done: [create, install]`); started
+  again for the same environment it skips them and first removes an
+  unfinished prefix (`env remove`) when the create step never finished --
+  so a failed solve or a dropped connection costs nothing already done.
+* **On the computer the plots are on** (`hostsetup.py`):
+  - **When offered**: no usable environment (the default answer is yes), or
+    the user answers **`new`** at the environment question (new: makes setup's
+    own even when others are usable).  A development install here (editable,
+    a directory, a non-release version) and a node without conda keep their
+    advice (Miniforge, "then run this again, and setup will make the
+    environment"); when the user declines, or it fails, the same two
+    commands are printed ("To make it yourself").
+  - **The question** (once): why, what (Python X.Y, `cubevis[visplot]==V`
+    from PyPI, about 1.5 GB -- the pip part measured 965 MB), that it is
+    made in the background, where conda keeps environments (`envs_dirs[0]`
+    from discovery, free space there), and a directory prompt (`env_dir`) for
+    another place -- at NRAO a project or Lustre area; an unwritable
+    directory, or one with every name taken, is refused; under 3 GB free
+    warns.
+  - **Waiting** (`wait_for_job`): polls every 5 s over the shared
+    connection, says each step once ("creating the environment (conda)",
+    "installing cubevis (pip)"), again every minute; Ctrl-C stops the
+    waiting, not the work ("goes on being made on NODE (its log: ...); run
+    this again"); six failed polls in a row do the same.
+  - **Running setup again** finds the job: still running -> "An environment
+    is being made on NODE", waits for that one; stopped (`failed`/`died`) ->
+    its error and the log's tail, "Try again? It goes on from the step it
+    stopped at"; finished while away -> it is simply in discovery's list
+    (made by setup, same kernel-side code, sorted first) and is used.
+  - **After it is made**: checked through discovery (`--only PREFIX`:
+    fingerprint, ipykernel), recorded like any environment -- with its
+    `marker`, so `status` says "made by setup" -- and the kernel goes on.
+* **Older ones** (`own_environments`, `offer_cleanup`, `cmd_cleanup`):
+  after a kernel is set up, setup's own environments **made from this
+  computer** (`marker.setup.host == host_id()`), used by no kernel here and
+  not of this computer's kernel-side code, are offered for removal -- default
+  **no**, with "`--cleanup HOST` removes them whenever you like".
+  `python -m cubevis.setup --cleanup HOST` (also `HOST --cleanup`) lists every
+  environment with setup's marker on HOST, with what uses it ("used by
+  kernel X" / "not used ..., same code" / "... its kernel-side code
+  differs" / "made from gui2"); the default selection is the ones made from
+  this computer, unused and superseded; one made from another computer
+  needs a separate yes ("whose kernels may use it"); one a kernel here uses
+  is never removed.  The user's own environments are never listed.  The
+  state's record goes with it (`State.remove_environment`, refused while a
+  kernel uses it).  The prompt takes numbers or `none`; Enter takes the
+  default (as everywhere in setup).
+* **Decisions beyond the design text -- for Darrell to confirm**:
+  1. `create -p` with an explicit prefix, not `-n NAME`: the place is then
+     what the user was shown (conda's `-n` takes the first *writable*
+     `envs_dirs` entry) and a chosen directory needs no special case.
+  2. Removal is offered only for environments made from **this** computer
+     (marker host): with a configuration directory per laptop, another
+     laptop's kernels may be using an environment this one's state knows
+     nothing about.  (`--cleanup` can still remove it, after a yes.)
+  3. The user's conda configuration decides the channels (not forced to
+     conda-forge): only Python and pip come from conda, cubevis and its
+     dependencies from PyPI.  At a site whose conda is Anaconda's with the
+     default channels, recent conda versions ask for the terms of service
+     to be accepted first; the failure shows in the log tail.
+  4. Dependencies are whatever PyPI resolves on the day (design 7c: "not
+     covered", pinning the `visplot` extra stays open).
+* **Test hooks** (the run's environment; never set in normal use):
+  `CUBEVIS_SETUP_TEST_INSTALL` -- a shell command that replaces the pip
+  install (`$PREFIX` is the new environment) and lifts the development-install
+  refusal; `CUBEVIS_SETUP_POLL_SECONDS` -- the polling interval.
+* **Tests**: `test_envmake.py` (no ssh; the node program under `python3 -`
+  with a fake conda: plan, detached start returns at once, marker last,
+  the default pip command and its failure, resume after a failed create
+  (partial prefix removed) and after a failed install (create not repeated),
+  a second start while running, nothing that is not setup's is touched or
+  removed, bad requests, a dead worker reported `died`, `remove` through the
+  tool only; every one of these also runs the program under Python 3.6.15
+  when `CUBEVIS_TEST_PY36` or `/opt/py36/bin/python3.6` exists, worker
+  included -- all pass, no 3.6 changes were needed); `test_hostsetup.py` (the node mocked:
+  development install, no conda, the question's content and declining, an
+  unwritable or full directory, taken names -> `-2`, the request sent,
+  waiting and its end states, an unreachable node, Ctrl-C, which
+  environments are setup's and which may go, the offer's default no,
+  `State.remove_environment`, `--cleanup` on an unknown host); `test_cli.py`
+  (the rig, fake conda extended with `create -y -p` / `env remove -y -p` and
+  a `~/fail-conda-create` switch): made on request (`new`) and used,
+  `--cleanup` refusing the one in use; none usable -> made without asking,
+  an older one offered and removed, the user's own untouched; `--cleanup`
+  with a mine / another computer's pair; Ctrl-C while it is made and the
+  rerun waiting for the same job (made once); the same finished while away
+  (found, nothing made again); a failed create, its message and log tail,
+  and the next run going on; the argument checks.
+* **Found on the way**: the fake install first pointed the environment at
+  cubevis and slept afterwards, so a half-made environment already passed
+  discovery's check and was picked up as a user's usable one.  A real pip
+  install is not like that (cubevis does not import until it is done), so
+  the hook now sleeps *before*.  A window remains in principle -- between
+  pip finishing and the marker, a rerun could list the environment as an
+  ordinary usable one -- a few milliseconds; harmless (it is the same code).
+* **Suite**: setup suite 190 passed, 1 skipped with the rig and venv-kernel
+  (OpenSSH 9.6 only: the 8.0 client was not rebuilt this session; step 3
+  adds nothing to the wrapper or ssh's options).
+* **Not covered**: mamba and micromamba are driven the same way
+  (`create -y -p`, `env remove -y -p`) but only conda's interface is
+  faked; a real conda on the real network is the first check -- ask Darrell
+  how a `setup HOST` on a node with no usable environment goes (the
+  question's wording, the directory default on NRAO's conda, the time).

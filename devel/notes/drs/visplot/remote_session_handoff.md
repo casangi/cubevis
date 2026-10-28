@@ -1,4 +1,4 @@
-# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-10-23)
+# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-10-28)
 
 Read first: `devel/notes/drs/visplot/remote_session_design.md` (the
 design, agreed with Darrell 2026-10-17). Background: section 22 of
@@ -7,12 +7,19 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* **main is at 8521c71** (2026-10-28): everything through notes section 42
-  is committed; nothing delivered is pending.  Check `git log` first.  The
-  next notes section is **43**.  **Start here: "Next: stage 2c step 3"**
-  below (setup's own environments), then stage 3 (the Session, with the
-  node chosen per session and the reservation query).  The test kit is
-  rebuilt from "Test kit" below (rig, venv-kernel, OpenSSH 8.0 build).
+* **main is at 858e4d5** (2026-10-28; 8521c71 plus this file): everything
+  through notes section 42 is committed.  Delivered on top of it, not yet
+  committed when this was written: **`remote_stage2c3_858e4d5.zip`** (2c
+  step 3: setup's own environments, section 43).  Check `git log` first.
+  The next notes section is **44**.  **Start here: "Next: stage 2c step 4
+  and 2d"** below, then stage 3 (the Session, with the node chosen per
+  session and the reservation query).  The test kit is rebuilt from "Test
+  kit" below (rig, venv-kernel, OpenSSH 8.0 and Python 3.6 builds).
+* **Ask Darrell first**: how `setup HOST` went on a real node with no usable
+  environment (step 3 has only been run against the fake conda): the
+  question's wording, the default directory on NRAO's conda, how long the
+  create + pip install took, and whether the channels (his conda's own, not
+  forced to conda-forge) were a problem.
 * History, oldest first, follows (2c step 2 onwards).
 * **Stage 2c step 2 done** (2026-10-23, base `e6f4fe9`): `python -m
   cubevis.setup HOST [--kernel NAME]` as the one path; clusters; kernels
@@ -131,16 +138,37 @@ as ee125b6) and section 17 (the ssh wrapper).
   confirmed within `SSH_WRAPPER_STALE_AFTER` (300 s) is probed over the
   master (timeout `SSH_WRAPPER_PROBE_TIMEOUT`, 10 s) and replaced when stale
   -- ported from Darrell's `~/bin/ssh`.
-* **Next: stage 2c step 3** (design 7c "Refinements", section 13): setup's
-  own environments -- `envs_dirs` (discovery reports it) shown with the
-  expected size, another place allowed; `<tool> create -y -n cubevis-<v>
-  python=<here> pip` + `pip install "cubevis[visplot]==<v>"`, detached on
-  the node (`nohup`, a log), polled, the marker `cubevis-setup.json` written
-  last (resumable); reuse by marker; offer to remove superseded ones;
-  `--cleanup HOST`.  Hook: `hostsetup.no_environment_advice` prints the
-  commands today; discovery already reads markers and sorts setup's own
-  environments first.  Then step 4 (route from `ssh -G`, `diagnose HOST`,
-  `--2fa`), then 2d.  Part iv as planned below is folded into 2c/2d.
+* **Stage 2c step 3 done** (2026-10-28, base `858e4d5`; section 43): setup's
+  own environments.  `cubevis/setup/envmake.py` is one stdlib program (3.6+)
+  sent to the node (`plan`, `start`, `status`, `remove`); `start` spawns a
+  detached worker (own session, output to `<config>/make/NAME.log`) that runs
+  `<tool> create -y -p PREFIX python=X.Y pip` and `PREFIX/bin/python -m pip
+  install "cubevis[visplot]==V"`, records each finished step (resumable) and
+  writes the marker `cubevis-setup.json` last.  `hostsetup.offer_creation`
+  asks once (where: `envs_dirs[0]` and its free space, about 1.5 GB, another
+  directory allowed), polls (`wait_for_job`), re-checks the result through
+  discovery; offered when no environment is usable or on the answer `new`;
+  a rerun waits for a running job, offers to go on from a stopped one, and
+  finds a finished one by its marker.  `offer_cleanup` (after a kernel;
+  default no) and `python -m cubevis.setup --cleanup HOST` remove setup's
+  own older environments -- only by the marker, only by the tool's own
+  `env remove -p`, only what this computer made without a separate yes,
+  never one a kernel here uses.  **Development installs still get advice, not
+  creation** (a checkout cannot be reproduced from PyPI): see 2d.
+  Decisions to confirm with Darrell are listed in section 43 (explicit `-p`;
+  removal offers limited to what this computer made; the user's conda
+  channels; unpinned dependencies).
+* **Next: stage 2c step 4 and 2d** (design 7c).  Step 4: the rest of "route
+  from `ssh -G`" (the defaults are in; adopting a `ProxyJump` bastion and a
+  login test before saving, the generated config carrying every login option
+  `ssh -G` shows), `setup diagnose HOST` (what the user's ssh makes of HOST
+  next to the generated one, the route decision, the shared connection, a
+  login through the wrapper with `--explain`, the fingerprints here and
+  there), `--2fa`.  2d: for a development install -- `setup HOST
+  --sync-checkout` (copy this checkout to the node, use it there editable, so
+  the fingerprints match), and setup's environment from a local wheel
+  (copied to the node); `CUBEVIS_ALLOW_MISMATCH` / `allow_mismatch=` at run
+  time belongs to stage 3.  Then stage 3 (Session).
 
 ## Decisions made with Darrell
 
@@ -185,7 +213,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 42).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 44).
 
 ## Test kit (rebuild after a sandbox restart)
 
@@ -221,7 +249,28 @@ The sandbox loses `/etc/hosts` edits and running daemons on restart.
   `dist-info` + a `.pth` to the checkout and venv-kernel's site-packages),
   `envs/plain`, `envs/alt` (a copy of cubevis with a changed
   `worker_main`: another fingerprint).
-* **Python 3.6** (RHEL 8's python3), for `test_discover.py`: built from
+* **Setup's own environments** (2026-10-28): the rig's fake conda
+  (`ALICE_ENVS` in `test_cli.py`) also answers `create -y -p PREFIX ...` (a
+  `--without-pip` venv plus `conda-meta`) and `env remove -y -p PREFIX`, and
+  fails `create` (leaving a partial prefix) while `~/fail-conda-create`
+  exists.  `CUBEVIS_SETUP_TEST_INSTALL` (a shell command run in place of the
+  pip install, `$PREFIX` the new environment; also lifts the
+  development-install refusal) and `CUBEVIS_SETUP_POLL_SECONDS` are the
+  hooks; `_install_hook()` in `test_cli.py` points the new environment at the
+  checkout like `hrs`.  Tests that make environments use the `alice_tidy`
+  fixture (kills leftover workers -- `pkill -f '[m]ake/cubevis-...'` -- and
+  removes `envs/cubevis-*`, `~/.config/cubevis/make`, and puts `hrs` back
+  from `~/hrs.off`; `hrs` must be moved *out of* conda's `envs/` to be
+  hidden, the fake lists everything there).  `test_envmake.py` needs no
+  ssh.  A pytest started with `nohup ... &` has SIGINT ignored, inherited by
+  everything it spawns: the Ctrl-C tests reset it in the child
+  (`preexec_fn`), and so should any new one.  Running as root, "not
+  writable" cannot be seen (`os.access`): those assertions are skipped.
+  Python 3.6 was rebuilt this session (below); the OpenSSH 8.0 client was
+  not (nothing in step 3 touches the wrapper or ssh's options).  The full
+  setup suite needs about 7 minutes (2 CPUs).  Last run: 190 passed, 1 skipped (OpenSSH 9.6; test_envmake also under Python 3.6.15).
+* **Python 3.6** (RHEL 8's python3), for `test_discover.py` and
+  `test_envmake.py`: built from
   `github.com/python/cpython` tag `v3.6.15` (`./configure --prefix=/opt/py36
   && make && make altinstall`), found at `/opt/py36/bin/python3.6` or
   `CUBEVIS_TEST_PY36`.  **tcsh** (`apt-get install tcsh`) for the csh

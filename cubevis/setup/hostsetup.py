@@ -22,8 +22,13 @@ routes and launchers are setup's own bookkeeping.  In order:
 5. **The environment**: one whose kernel-side code is the same as here
    (``cubevis._fingerprint``), setup's own first; the user's are listed
    with whether they can be used and why not.  A mismatch is usable only
-   with ``CUBEVIS_ALLOW_MISMATCH=1``.  None usable: setup says how to make
-   one (creating it is stage 2c step 3).
+   with ``CUBEVIS_ALLOW_MISMATCH=1``.  None usable: setup offers to make its
+   own (``envmake``: a minimal conda environment named for this cubevis
+   version, made in the background on HOST and polled; answering ``new``
+   to the question makes one even when others are usable), and then offers
+   to remove its own older ones that nothing here uses
+   (``--cleanup HOST`` does that on request).  Where it cannot (a
+   development install here, no conda there) it says what to do instead.
 6. **The kernel**: a name (``Session("tw-hya", node=...)`` chooses it), its
    working directory on HOST and its environment variables; setup writes
    its launcher on HOST and runs it once (directory, activation, imports,
@@ -40,9 +45,10 @@ import ipaddress
 import os
 import posixpath
 import re
+import time
 from typing import Optional
 
-from . import host_dir, host_id, launcher, envs
+from . import host_dir, host_id, launcher, envs, envmake
 from . import remote as R
 from . import state as S
 from .steps import (Ctx, account_name, first_jump, hop_steps, inside_step, local_steps,
@@ -400,13 +406,17 @@ def _rows(c: Ctx, rep: dict) -> list:
     return out
 
 
-def no_environment_advice(c: Ctx, node: str, rep: dict) -> None:
+def no_environment_advice(c: Ctx, node: str, rep: dict, declined: bool = False) -> None:
+    """Why setup cannot (or was asked not to) make an environment, and what
+    to do instead.  *declined*: it could have, and the user said no (or it
+    failed): the commands setup would have run."""
     ui = c.ui
     here = local_fingerprint(c)
-    ui.say(f"No environment on {node} has the same kernel-side code as this computer "
-           f"({here}): the code that runs in a kernel must be identical on both sides.")
+    if not declined:
+        ui.say(f"No environment on {node} has the same kernel-side code as this computer "
+               f"({here}): the code that runs in a kernel must be identical on both sides.")
     dev, why = local_is_development()
-    if dev:
+    if dev and not os.environ.get("CUBEVIS_SETUP_TEST_INSTALL"):
         ui.say(f"cubevis here is a development install ({why}), which no package "
                f"reproduces. Install the same checkout in an environment on {node} (pip "
                "install -e on a checkout both computers see), then run this again; or, to "
@@ -414,21 +424,207 @@ def no_environment_advice(c: Ctx, node: str, rep: dict) -> None:
                "any message).")
         return
     v = local_version()
-    tools = [t for t in rep.get("tools") or [] if t["name"] in ("conda", "mamba")]
+    tool = envmake.pick_tool(rep.get("tools"))
     import sys
     py = f"{sys.version_info[0]}.{sys.version_info[1]}"      # the same Python as here
-    if not tools:
+    if tool is None:
         ui.say(f"There is no conda on {node}. Install Miniforge (conda-forge's installer, "
                "https://conda-forge.org/download) on a fast filesystem every node sees -- at "
                "NRAO a project or Lustre area rather than your home, which is slow and has a "
-               f"quota -- then run this again.")
+               f"quota -- then run this again, and setup will make the environment.")
         return
-    t = rtilde(tools[0]["path"], (rep.get("host") or {}).get("home"))
-    ui.say("Setup will make its own environment for this (a later step of setup); until "
-           f"then, on {node}:")
+    t = rtilde(tool["path"], (rep.get("host") or {}).get("home"))
+    ui.say(("To make it yourself, on " if declined else "Setup can make its own environment: "
+            "run this again and answer yes; or, on ") + f"{node}:")
     ui._p(f"    {t} create -y -n cubevis-{v} python={py} pip")
     ui._p(f"    {t} run -n cubevis-{v} python -m pip install \"cubevis[visplot]=={v}\"")
     ui.say("and run this again.")
+
+
+def _node_access(c: Ctx, node: str, rep: dict) -> tuple:
+    """``(alias, python3, config_dir)`` for requests to *node*."""
+    h = rep.get("host") or {}
+    home = h.get("home") or "/"
+    return (c.st.nodes()[node]["alias"], rep.get("python_exe") or "python3",
+            h.get("config_dir") or posixpath.join(home, ".config", "cubevis"))
+
+
+def poll_seconds() -> float:
+    try:
+        return max(0.05, float(os.environ.get("CUBEVIS_SETUP_POLL_SECONDS", "5")))
+    except ValueError:
+        return 5.0
+
+
+def wait_for_job(c: Ctx, node: str, rep: dict, name: str) -> Optional[dict]:
+    """Poll the environment being made on *node* until it is done: its
+    status (``state`` ok, failed or died).  None when setup stops waiting
+    (interrupted, or the node cannot be reached): the work goes on there,
+    and running setup again picks it up."""
+    ui = c.ui
+    alias, python3, config_dir = _node_access(c, node, rep)
+    home = (rep.get("host") or {}).get("home")
+    interval, t0, last_say, step, errors = poll_seconds(), time.time(), time.time(), None, 0
+    try:
+        while True:
+            try:
+                res = envmake.call(c, alias, python3, envmake.request("status", config_dir, name=name))
+                errors = 0
+            except R.RemoteError as exc:
+                errors += 1
+                if errors >= 6:
+                    ui.fail(f"cannot reach {node} to see how it is going ({exc}); it goes on "
+                            f"there -- run this again to pick it up")
+                    return None
+                time.sleep(interval)
+                continue
+            st = res.get("status")
+            if not st:
+                ui.fail(f"{node} has no record of {name} any more")
+                return None
+            if st["state"] in ("ok", "failed", "died"):
+                return st
+            if st.get("step") != step or time.time() - last_say > 60:
+                step, last_say = st.get("step"), time.time()
+                mins = int((time.time() - t0) // 60)
+                ui.say(f"  {step} ..." + (f" ({mins} min so far)" if mins else ""))
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        ui._p()
+        ui.say(f"Stopped waiting. The environment goes on being made on {node} (its log: "
+               f"{rtilde(envmake_log(config_dir, name), home)}); run this again to pick it up.")
+        return None
+
+
+def envmake_log(config_dir: str, name: str) -> str:
+    return posixpath.join(config_dir, "make", name + ".log")
+
+
+def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Optional[tuple]:
+    """Make setup's own environment on *node* (``envmake``): where, how big,
+    asked once; then made in the background and waited for.  Continues one
+    already being made, or one that stopped (it goes on from the step it
+    reached).  Returns the new environment's row ``(cand, report, usable,
+    why)``, checked, or None when none was made (the reason has been said)."""
+    ui = c.ui
+    test_install = os.environ.get("CUBEVIS_SETUP_TEST_INSTALL")
+    dev, _why = local_is_development()
+    tool = envmake.pick_tool(rep.get("tools"))
+    if (dev and not test_install) or tool is None:
+        no_environment_advice(c, node, rep)
+        return None
+    import sys
+    h = rep.get("host") or {}
+    home = h.get("home") or "/"
+    v = local_version()
+    py = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    names = envmake.candidate_names(v)
+    alias, python3, config_dir = _node_access(c, node, rep)
+    dirs = list((rep.get("envs_dirs") or {}).get(tool["path"]) or [])
+    if not dirs:        # the tool would not say: next to its own, where conda keeps them
+        dirs = [posixpath.join(posixpath.dirname(posixpath.dirname(tool["path"])), "envs")]
+    try:
+        plan = envmake.call(c, alias, python3, envmake.request("plan", config_dir, dirs=dirs,
+                                                               names=names))
+    except R.RemoteError as exc:
+        ui.fail(f"cannot look at where an environment would go on {node}: {exc}")
+        return None
+    if not plan.get("ok"):
+        ui.fail(f"cannot look at where an environment would go on {node}: {plan.get('error')}")
+        return None
+    jobs = plan.get("jobs") or {}
+    live = [n for n in names if (jobs.get(n) or {}).get("state") in ("starting", "running")]
+    stopped = [n for n in names if (jobs.get(n) or {}).get("state") in ("failed", "died")]
+    name = prefix = None
+    if live:
+        name, prefix = live[0], jobs[live[0]]["prefix"]
+        ui.heading(f"An environment is being made on {node}")
+        ui.say(f"{rtilde(prefix, home)} (cubevis {v}) was started on {node} earlier and is not "
+               "finished: waiting for it.")
+    elif stopped:
+        name = stopped[0]
+        j = jobs[name]
+        prefix = j["prefix"]
+        ui.heading(f"An environment stopped on {node}")
+        ui.note(f"An earlier try to make {rtilde(prefix, home)} stopped at "
+                f"{j.get('step') or 'the start'}: {j.get('error') or 'no reason recorded'}")
+        for line in (j.get("log_tail") or [])[-6:]:
+            ui._p("    " + line)
+        ui.say(f"(its log: {rtilde(j.get('log'), home)} on {node})")
+        if not ui.ask_yn("Try again? It goes on from the step it stopped at.", True, key="make_env"):
+            no_environment_advice(c, node, rep, declined=True)
+            return None
+    else:
+        facts = {d["dir"]: d for d in plan.get("dirs") or []}
+        first = facts.get(dirs[0]) or {}
+        ui.heading(f"Making an environment for cubevis {v} on {node}")
+        ui.say(("You asked for one of setup's own. " if forced else
+                f"No environment on {node} has the same kernel-side code as this computer "
+                f"({local_fingerprint(c)}), so ") + "setup makes its own there: a minimal conda "
+               f"environment with Python {py} and cubevis {v} (cubevis[visplot]=={v}, from "
+               f"PyPI), {envmake.EXPECTED_SIZE}. It is made in the background on {node}, so "
+               "closing the laptop does not lose it; setup never changes it afterwards (a "
+               "later cubevis gets a new one) and never touches your own environments.")
+        default = next((d for d in dirs if (facts.get(d) or {}).get("writable")), dirs[0])
+        ui.say(f"{os.path.basename(tool['path'])} keeps environments in {rtilde(dirs[0], home)}"
+               f" ({envmake.human_bytes(first.get('free'))} free there). Another directory is fine"
+               " -- a fast filesystem every node sees (at NRAO a project or Lustre area), "
+               "rather than a home directory with a quota.")
+        while True:
+            where = ui.ask(f"Directory for it on {node}", rtilde(default, home), key="env_dir")
+            d = expand_remote(where, home)
+            if d not in facts:
+                more = envmake.call(c, alias, python3, envmake.request("plan", config_dir,
+                                                                       dirs=[d], names=names))
+                facts[d] = (more.get("dirs") or [{"dir": d}])[0]
+            f = facts[d]
+            free_name = next((n for n in names if n not in f.get("taken", [])), None)
+            if not f.get("writable"):
+                ui.note(f"cannot write in {rtilde(d, home)} on {node}")
+            elif free_name is None:
+                ui.note(f"every name cubevis-{v}... is taken in {rtilde(d, home)}")
+            else:
+                break
+            if ui.yes or "env_dir" in ui.answers:
+                return None
+        if f.get("free") is not None and f["free"] < envmake.MIN_FREE:
+            ui.note(f"only {envmake.human_bytes(f['free'])} free in {rtilde(d, home)}")
+        name, prefix = free_name, posixpath.join(d, free_name)
+        if not ui.ask_yn(f"Make {rtilde(prefix, home)} now?", True, key="make_env"):
+            no_environment_advice(c, node, rep, declined=True)
+            return None
+    if not live:
+        req = envmake.request("start", config_dir, name=name, prefix=prefix, tool=tool["path"],
+                              python=py, spec=envmake.spec(v), version=v,
+                              setup={"cubevis": v, "host": host_id()}, install_shell=test_install)
+        try:
+            res = envmake.call(c, alias, python3, req)
+        except R.RemoteError as exc:
+            ui.fail(f"cannot start it on {node}: {exc}")
+            return None
+        if not res.get("ok"):
+            ui.fail(f"cannot start it on {node}: {res.get('error')}")
+            return None
+        ui.record_change("started environment", f"{node}:{rtilde(prefix, home)} (cubevis {v}, "
+                         f"made in the background; log {rtilde(envmake_log(config_dir, name), home)})")
+        ui.say("Started; setup waits for it (Ctrl-C stops waiting, not the work).")
+    st = wait_for_job(c, node, rep, name)
+    if st is None:
+        return None
+    if st["state"] != "ok":
+        ui.fail(f"{rtilde(prefix, home)} could not be made: {st.get('error')}")
+        for line in (st.get("log_tail") or [])[-8:]:
+            ui._p("    " + line)
+        ui.say(f"Its log is {rtilde(st.get('log'), home)} on {node}. Run this again to try again "
+               "from the step that failed (nothing done is repeated).")
+        return None
+    ui.ok(f"{rtilde(prefix, home)} is made")
+    more = discover_step(c, node, [prefix], only=True, python3=rep.get("python_exe"))
+    got = _rows(c, more) if more else []
+    if not got:
+        ui.fail(f"{rtilde(prefix, home)} was made, but it cannot be checked")
+        return None
+    return got[0]
 
 
 def environment_step(c: Ctx, node: str, rep: dict, reuse: bool) -> Optional[str]:
@@ -453,25 +649,36 @@ def environment_step(c: Ctx, node: str, rep: dict, reuse: bool) -> Optional[str]
                 f"{', Python ' + r['python'] if r.get('python') else ''}): {why}")
         (ui.ok if usable else ui.fail)(line)
     usable = [i for i, x in enumerate(rows, 1) if x[2]]
+    created, ans = None, ""
     if not usable:
-        no_environment_advice(c, node, rep)
-        ans = ui.ask(f"Or give the path of an environment on {node} to check (empty: stop)",
-                     "", key="environment")
-        if not ans:
-            return None
+        created = offer_creation(c, node, rep)
+        if created is None:
+            ans = ui.ask(f"Or give the path of an environment on {node} to check (empty: stop)",
+                         "", key="environment")
+            if not ans:
+                return None
     else:
         prev = [i for i, x in enumerate(rows, 1)
                 if x[2] and st.find_environment(net, x[0]["python"]) in used]
         default = str((prev or usable)[0])
         ui.say("Choose one by its number, or give the path of another environment there "
-               "(its directory or its python); 'none' to stop here.")
+               "(its directory or its python); 'new' to have setup make its own; 'none' to "
+               "stop here.")
         ans = ui.ask("Environment", default, key="environment")
-    while True:
+    pick = created
+    if created is not None and not created[2]:
+        ui.note(f"{rtilde(created[0]['prefix'], home)} cannot be used: {created[3]}")
+        return None
+    while pick is None:
         ans = ans.strip()
         if ans.lower() in ("none", "-"):
             return None
-        pick = None
-        if ans.isdigit() and 1 <= int(ans) <= len(rows):
+        if ans.lower() == "new":
+            pick = offer_creation(c, node, rep, forced=True)
+            if pick is not None and not pick[2]:
+                ui.note(f"{rtilde(pick[0]['prefix'], home)} cannot be used: {pick[3]}")
+                return None
+        elif ans.isdigit() and 1 <= int(ans) <= len(rows):
             pick = rows[int(ans) - 1]
         elif ans and not ans.isdigit():
             path = ans if not ans.startswith("~") else (home or "~") + ans[1:]
@@ -490,6 +697,7 @@ def environment_step(c: Ctx, node: str, rep: dict, reuse: bool) -> Optional[str]
             ui.note(f"no environment {ans} in the list")
         if ui.yes or "environment" in ui.answers:
             return None
+        pick = None
         ans = ui.ask("Environment (empty: stop)", "")
         if not ans:
             return None
@@ -497,6 +705,176 @@ def environment_step(c: Ctx, node: str, rep: dict, reuse: bool) -> Optional[str]
     if "CUBEVIS_ALLOW_MISMATCH" in why:
         ui.note(f"using {rtilde(cand['prefix'], home)} although {why}")
     return record_environment(c, node, cand, r)
+
+
+# --------------------------------------------------------------------------
+# Setup's own environments, afterwards: older ones, removed
+# --------------------------------------------------------------------------
+
+def own_environments(c: Ctx, rep: dict, net: str) -> list:
+    """Setup's own environments in discovery's report *rep* (those with its
+    marker) as dicts: ``cand``, ``r`` (its check), ``marker``, ``used_by``
+    (kernels here whose environment it is), ``current`` (same kernel-side
+    code as here), ``mine`` (made by this computer's setup: another
+    computer's may be what its kernels use)."""
+    st = c.st
+    here = local_fingerprint(c)
+    out = []
+    for cand in rep.get("environments") or []:
+        m = cand.get("marker")
+        if not isinstance(m, dict) or m.get("schema") != 1 or not m.get("name"):
+            continue                                  # unreadable: not ours to remove
+        r = envs.interpret(cand["check"]) if cand.get("check") is not None else {"ok": False}
+        used = sorted(k for k, kv in st.section("kernels").items()
+                      if (st.section("environments").get(kv.get("environment")) or {}).get("python")
+                      == cand["python"]
+                      and (st.section("environments").get(kv.get("environment")) or {}).get("network") == net)
+        out.append({"cand": cand, "r": r, "marker": m, "used_by": used,
+                    "current": bool(r.get("ok")) and r.get("fingerprint") == here,
+                    "mine": (m.get("setup") or {}).get("host") == host_id()})
+    return out
+
+
+def remove_environments(c: Ctx, node: str, rep: dict, items: list) -> int:
+    """Remove setup's environments *items* (``own_environments``) from
+    *node*, and their records here; how many went."""
+    ui, st = c.ui, c.st
+    alias, python3, config_dir = _node_access(c, node, rep)
+    home = (rep.get("host") or {}).get("home")
+    net = st.nodes()[node]["network"]
+    tools = {t["path"] for t in rep.get("tools") or []}
+    gone = 0
+    for x in items:
+        prefix = x["cand"]["prefix"]
+        tool = x["marker"].get("tool")
+        if tool not in tools:
+            t = envmake.pick_tool(rep.get("tools"))
+            tool = t["path"] if t else None
+        if tool is None:
+            ui.fail(f"no conda tool on {node} to remove {rtilde(prefix, home)} with")
+            continue
+        try:
+            res = envmake.call(c, alias, python3,
+                               envmake.request("remove", config_dir, prefix=prefix, tool=tool),
+                               timeout=900)
+        except R.RemoteError as exc:
+            ui.fail(f"removing {rtilde(prefix, home)}: {exc}")
+            continue
+        if not res.get("ok"):
+            ui.fail(f"{res.get('error')}")
+            for line in res.get("output") or []:
+                ui._p("    " + line)
+            continue
+        gone += 1
+        ui.ok(f"removed {rtilde(prefix, home)}")
+        ui.record_change("removed environment", f"{node}:{rtilde(prefix, home)}")
+        name = st.find_environment(net, x["cand"]["python"])
+        if name:
+            try:
+                st.remove_environment(name)
+            except S.StateError as exc:
+                ui.note(str(exc))
+    c.save()
+    return gone
+
+
+def offer_cleanup(c: Ctx, node: str, rep: dict, host_text: str, keep_python: str) -> None:
+    """After an environment is chosen: setup's own older ones on *node*,
+    made from this computer, that differ from this computer's kernel-side
+    code and that no kernel here uses -- offered for removal (not by
+    default)."""
+    ui = c.ui
+    home = (rep.get("host") or {}).get("home")
+    net = c.st.nodes()[node]["network"]
+    old = [x for x in own_environments(c, rep, net)
+           if x["mine"] and not x["used_by"] and not x["current"]
+           and x["cand"]["python"] != keep_python]
+    if not old:
+        return
+    ui.heading(f"Older environments setup made on {node}")
+    ui.say("These differ from this computer's kernel-side code, and no kernel here uses them:")
+    for x in old:
+        ui._p(f"    {rtilde(x['cand']['prefix'], home)}  (cubevis {x['marker'].get('version')})")
+    if ui.ask_yn("Remove them?", False, key="cleanup"):
+        remove_environments(c, node, rep, old)
+    else:
+        ui.say(f"python -m cubevis.setup --cleanup {host_text} removes them whenever you like.")
+
+
+def cmd_cleanup(c: Ctx, text: str) -> int:
+    """``--cleanup HOST``: list the environments setup made on HOST, with
+    what uses them, and remove the ones chosen.  The user's own are never
+    listed."""
+    ui, st = c.ui, c.st
+    host, port = split_port(text)
+    try:
+        S.check_host(host)
+    except S.StateError as exc:
+        ui.fail(str(exc))
+        return 1
+    if not (st.find_node(host) or st.cluster_for(host)):
+        ui.fail(f"setup does not know {host}: python -m cubevis.setup {host} sets it up first")
+        return 1
+    if not local_steps(c):
+        return 1
+    node = locate(c, host, port)
+    if not node:
+        return 1
+    c.save()
+    n = st.nodes()[node]
+    net = st.networks()[n["network"]]
+    ui.heading(f"{host}: the environments setup made there")
+    if net.get("login") and not hop_steps(c, n["network"], None):
+        return 1
+    if not hop_steps(c, n["network"], node):
+        return 1
+    rep = discover_step(c, node)
+    if rep is None:
+        return 1
+    home = (rep.get("host") or {}).get("home")
+    own = own_environments(c, rep, n["network"])
+    if not own:
+        ui.ok(f"setup has made no environment on {node}")
+        return 0
+    default = []
+    for i, x in enumerate(own, 1):
+        v = x["marker"].get("version")
+        if x["used_by"]:
+            what, good = f"used by kernel {', '.join(x['used_by'])}", True
+        elif x["current"]:
+            what, good = "not used by a kernel here; same kernel-side code as here", True
+        else:
+            what, good = "not used by a kernel here; its kernel-side code differs from here", False
+        if not x["mine"]:
+            what += f"; made from {(x['marker'].get('setup') or {}).get('host') or 'another computer'}"
+        (ui.ok if good else ui.note)(f"{i:>2}. {rtilde(x['cand']['prefix'], home)}  (cubevis {v}): {what}")
+        if x["mine"] and not x["used_by"] and not x["current"]:
+            default.append(str(i))
+    ans = ui.ask("Remove which? (numbers separated by spaces; 'none' for none)",
+                 " ".join(default), key="remove")
+    chosen = []
+    for tok in [] if ans.strip().lower() in ("none", "-") else ans.split():
+        if not tok.isdigit() or not 1 <= int(tok) <= len(own):
+            ui.note(f"{tok!r} is not in the list")
+            return 1
+        x = own[int(tok) - 1]
+        if x["used_by"]:
+            ui.note(f"{rtilde(x['cand']['prefix'], home)} is used by kernel "
+                    f"{', '.join(x['used_by'])}: not removed")
+            continue
+        if not x["mine"] and not ui.ask_yn(
+                f"{rtilde(x['cand']['prefix'], home)} was made from another computer, whose "
+                "kernels may use it. Remove it anyway?", False):
+            continue
+        if x not in chosen:
+            chosen.append(x)
+    if not chosen:
+        ui.say("Nothing removed.")
+        return 0
+    if not ui.ask_yn(f"Remove {len(chosen)} environment(s) from {node}?", True, key="confirm"):
+        ui.say("Nothing removed.")
+        return 0
+    return 0 if remove_environments(c, node, rep, chosen) == len(chosen) else 1
 
 
 def record_environment(c: Ctx, node: str, cand: dict, r: dict) -> str:
@@ -782,7 +1160,10 @@ def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None) -> int:
     c.save()
     if env is None:
         return 1
-    return 0 if kernel_step(c, node, env, rep, kernel, text) else 1
+    ok = kernel_step(c, node, env, rep, kernel, text)
+    if ok:
+        offer_cleanup(c, node, rep, text, st.section("environments")[env]["python"])
+    return 0 if ok else 1
 
 
 def check_kernel(c: Ctx, name: str) -> bool:

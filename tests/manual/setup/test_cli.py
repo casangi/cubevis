@@ -12,7 +12,11 @@ log in as alice give her, on the "node", a fake ``~/miniforge3/bin/conda``
 listing ``envs/hrs`` (a venv with ``conda-meta`` that sees
 ``CUBEVIS_TEST_KERNEL_PYTHON``'s packages: the same cubevis as here),
 ``envs/plain`` (no cubevis) and ``envs/alt`` (a copy of cubevis whose
-kernel-side code differs).
+kernel-side code differs).  The fake conda also makes (``create -y -p``) and
+removes (``env remove -y -p``) environments, and fails to make one while
+``~/fail-conda-create`` exists; the tests of setup's own environments
+(``CUBEVIS_SETUP_TEST_INSTALL`` replaces the pip install by one that points
+the new environment at this checkout) clean up after themselves.
 
 Without the rig: status, refusals, the earlier layout's files being left
 alone, unattended runs never looping.  With it, ``setup HOST`` driven
@@ -34,6 +38,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 import pytest
 
@@ -198,10 +203,17 @@ case "$*" in
   "env list --json") printf '{"envs": ["%s/miniforge3"' "$HOME"
                      for e in "$HOME"/miniforge3/envs/*; do printf ', "%s"' "$e"; done; echo ']}';;
   "config --show envs_dirs --json") printf '{"envs_dirs": ["%s/miniforge3/envs"]}\n' "$HOME";;
+  "create -y -p "*) shift 3; prefix=$1
+      if [ -e "$HOME/fail-conda-create" ]; then
+          mkdir -p "$prefix"; echo "fake conda: solver failed" >&2; exit 1
+      fi
+      @PY@ -m venv --without-pip "$prefix" && mkdir -p "$prefix/conda-meta";;
+  "env remove -y -p "*) shift 4; rm -rf "$1";;
   *) echo "fake conda: $*" >&2; exit 1;;
 esac
 C
 chmod +x ~/miniforge3/bin/conda
+sed -i "s|@PY@|${KPY:-python3}|" ~/miniforge3/bin/conda
 if [ -n "$KPY" ]; then
   KSITE=$("$KPY" -c "import sysconfig; print(sysconfig.get_paths()['purelib'])")
   for e in hrs alt; do
@@ -626,3 +638,255 @@ def test_rig_jupyter_kernel_and_a_remote_plotter(home, alice_envs):
     r = subprocess.run([KERNEL_PY, "-c", code], capture_output=True, text=True, timeout=600,
                        env=env, cwd="/tmp")
     assert "PLOTTER RemoteReductionContext" in r.stdout, r.stdout[-2000:] + r.stderr[-3000:]
+
+
+# ---------------------------------------------------------------------- #
+# Setup's own environments (stage 2c step 3), over the rig                  #
+# ---------------------------------------------------------------------- #
+
+ENVS = "/home/alice/miniforge3/envs"
+
+
+def _install_hook(then="", before=""):
+    """What stands in for the pip install on the rig: point the new
+    environment at this checkout and the kernel venv's packages, as
+    ``alice_envs`` does for ``hrs`` (the release is not on PyPI).  *before*
+    (a slow install: cubevis does not import until pip is done, so the
+    environment is not usable yet) or *then* (after) run around it."""
+    ksite = subprocess.run([KERNEL_PY, "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+                           capture_output=True, text=True).stdout.strip()
+    return ((f"{before} && " if before else "") +
+            'SITE=$("$PREFIX/bin/python" -c "import sysconfig; print(sysconfig.get_paths()[\'purelib\'])")'
+            f' && cp -r {shlex.quote(ksite)}/cubevis-*.dist-info "$SITE"/'
+            f' && printf "%s\\n%s\\n" {shlex.quote(ROOT)} {shlex.quote(ksite)} > "$SITE/kernel.pth"'
+            + (f" && {then}" if then else ""))
+
+
+FAST = {"CUBEVIS_SETUP_POLL_SECONDS": "0.2"}
+
+
+@pytest.fixture
+def alice_tidy(alice_envs):
+    """The tests below make environments on alice's side; the others expect
+    ``hrs`` to be the only usable one."""
+    def tidy():
+        # A worker left by an aborted test must not outlive its job files ('[m]': pkill -f
+        # would otherwise match this very command line).
+        _as_alice("pkill -f '[m]ake/cubevis-.*[.]job[.]json'; sleep 0.3; "
+                  "rm -rf ~/miniforge3/envs/cubevis-* ~/.config/cubevis/make ~/fail-conda-create; "
+                  "[ -d ~/hrs.off ] && mv ~/hrs.off ~/miniforge3/envs/hrs; true")
+    tidy()
+    yield
+    tidy()
+
+
+def _made(prefix_glob="cubevis-*"):
+    r = _as_alice(f"ls -d {ENVS}/{prefix_glob} 2>/dev/null")
+    return sorted(r.stdout.split())
+
+
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_setup_makes_its_own_environment_when_asked(home, alice_tidy):
+    """'new' at the environment question, with a usable one there: made in
+    the background on the node, polled, checked, recorded (with its marker),
+    and used by the kernel.  --cleanup lists it as in use and removes nothing."""
+    r = _host(home, "--answer", "environment=new", "--answer", "make_env=y", "--answer", "workdir=~",
+              "--answer", "env_vars=none", route=DIRECT,
+              CUBEVIS_SETUP_TEST_INSTALL=_install_hook(then="sleep 1"), **FAST)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert "Making an environment for cubevis" in out and "You asked for one of setup's own" in out
+    assert "installing cubevis (pip) ..." in out               # a poll saw it at work
+    assert "is made" in out and "started environment" in out
+    st = S.load()
+    k = st.section("kernels")["compute"]
+    e = st.section("environments")[k["environment"]]
+    made = _made()
+    assert len(made) == 1 and e["prefix"] == made[0] and "/envs/cubevis-" in e["prefix"]
+    assert e["marker"]["schema"] == 1 and e["marker"]["setup"]["host"] == "gui1"
+    assert k["status"] == "ok"
+    from cubevis._fingerprint import fingerprint
+    assert e["fingerprint"] == k["fingerprint"] == fingerprint()
+    r2 = _as_alice(f"ls {made[0]} && ls ~/.config/cubevis/make")
+    assert "cubevis-setup.json" in r2.stdout and ".log" in r2.stdout and ".json" in r2.stdout
+    assert "made by setup, cubevis" in _run(home, "status").stdout
+    # It is used by the kernel: --cleanup says so and keeps it.
+    r = _run(home, "--yes", "--answer", "remove=1", "--cleanup", HOST)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert "used by kernel compute" in out and "not removed" in out and "Nothing removed" in out
+    assert _made() == made
+    # The next run finds it (made by setup, same code) and just checks the kernel.
+    r = _run(home, "--yes", HOST)
+    assert r.returncode == 0 and "Making an environment" not in r.stdout, r.stdout
+
+
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_none_usable_is_made_without_asking_and_older_ones_are_offered_for_removal(home, alice_tidy):
+    """No usable environment (hrs set aside, out of conda's list): setup makes one (the default
+    answer).  An older one of setup's own, made from this computer, that
+    nothing uses is offered for removal afterwards; alt (the user's own,
+    unusable too) is never offered."""
+    _as_alice("mv ~/miniforge3/envs/hrs ~/hrs.off && "          # out of conda's list
+              "cp -a ~/miniforge3/envs/alt ~/miniforge3/envs/cubevis-0.0.1 && "
+              "printf '{\"schema\":1,\"name\":\"cubevis-0.0.1\",\"version\":\"0.0.1\","
+              "\"setup\":{\"host\":\"gui1\"}}' > ~/miniforge3/envs/cubevis-0.0.1/cubevis-setup.json")
+    r = _host(home, "--answer", "workdir=~", "--answer", "env_vars=none", "--answer", "cleanup=y",
+              route=DIRECT, CUBEVIS_SETUP_TEST_INSTALL=_install_hook(), **FAST)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert "No environment on compute has the same kernel-side code" in out
+    assert "Older environments setup made on compute" in out
+    assert "removed ~/miniforge3/envs/cubevis-0.0.1" in out and "removed environment" in out
+    made = _made()
+    assert len(made) == 1 and "cubevis-0.0.1" not in made[0]
+    assert os.path.isdir(f"{ENVS}/alt")                                  # the user's own: untouched
+    st = S.load()
+    assert st.section("kernels")["compute"]["status"] == "ok"
+    assert st.section("environments")[st.section("kernels")["compute"]["environment"]]["prefix"] == made[0]
+
+
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_cleanup_removes_what_is_chosen_and_only_setups_own(home, alice_tidy):
+    """--cleanup HOST: setup's environments by their markers, with what uses
+    them; the default is the ones that are mine, unused and superseded.
+    Another computer's needs a yes of its own; a user's environment is never
+    listed."""
+    r = _host(home, "--answer", "workdir=~", "--answer", "env_vars=none", route=DIRECT)
+    assert r.returncode == 0, r.stdout                                     # hrs: a kernel exists
+    for n, host in (("0.0.1", "gui1"), ("0.0.2", "gui2")):
+        _as_alice(f"cp -a ~/miniforge3/envs/alt ~/miniforge3/envs/cubevis-{n} && "
+                  f"printf '{{\"schema\":1,\"name\":\"cubevis-{n}\",\"version\":\"{n}\","
+                  f"\"setup\":{{\"host\":\"{host}\"}}}}' > ~/miniforge3/envs/cubevis-{n}/cubevis-setup.json")
+    r = _run(home, "--yes", "--answer", "remove=none", "--cleanup", HOST)
+    out = _flat(r)
+    assert r.returncode == 0 and "Nothing removed" in out, r.stdout
+    assert "Remove which? (numbers separated by spaces; 'none' for none) [1]" in out   # Enter: the default
+    assert "cubevis-0.0.1" in out and "cubevis-0.0.2" in out and "made from gui2" in out
+    assert "envs/alt" not in out and "envs/hrs" not in out and "envs/plain" not in out
+    assert len(_made()) == 2
+    # The default: only the one that is mine, superseded and unused.
+    r = _run(home, "--yes", "--cleanup", HOST)
+    assert r.returncode == 0, r.stdout
+    assert [os.path.basename(p) for p in _made()] == ["cubevis-0.0.2"]
+    # The other computer's one: removed only when chosen and confirmed; refused without the yes.
+    r = _run(home, "--yes", "--answer", "remove=1", "--cleanup", HOST)
+    assert r.returncode == 0 and "Nothing removed" in _flat(r) and len(_made()) == 1
+    assert "whose kernels may use it" in _flat(r)
+    r = _run(home, "--answer", "remove=1", "--cleanup", HOST, input="y\ny\n")   # "anyway?" and "remove 1?"
+    assert r.returncode == 0, r.stdout
+    assert _made() == []
+    r = _run(home, "--yes", "--cleanup", HOST)
+    assert r.returncode == 0 and "setup has made no environment on compute" in _flat(r)
+
+
+def _stop_waiting_for_a_making(home, seconds):
+    """Setup, with nothing usable on the node (hrs set aside, out of conda's
+    list), starts an environment that takes *seconds* to make and is
+    interrupted (Ctrl-C: what a closed laptop does to the polling) while it
+    is being made.  ``(hook, args, what the first run said)``."""
+    import pexpect
+    _as_alice("mv ~/miniforge3/envs/hrs ~/hrs.off")
+    hook = _install_hook(before=f"sleep {seconds}")
+    args = ["--yes", *DIRECT, *STORE, "--answer", "inside=127.0.0.0/8", "--answer", "workdir=~",
+            "--answer", "env_vars=none", HOST]
+    import signal
+    # A pytest started in the background (nohup ... &) has SIGINT ignored, and
+    # that is inherited: Python would then never raise KeyboardInterrupt.
+    p = pexpect.spawn(sys.executable, ["-m", "cubevis.setup", *args],
+                      env=_env(home, CUBEVIS_SETUP_TEST_INSTALL=hook, **FAST),
+                      encoding="utf-8", timeout=120, dimensions=(50, 200),
+                      preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+    p.expect(r"installing cubevis \(pip\) \.\.\.")
+    p.sendintr()
+    p.expect(r"Stopped waiting")
+    p.expect(pexpect.EOF)
+    first = " ".join(p.before.split())
+    p.close()
+    assert p.exitstatus == 1 and "goes on being made on compute" in first, first
+    assert not S.load().section("kernels")
+    return hook, args, first
+
+
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_stopping_to_wait_does_not_stop_the_work_and_a_rerun_waits_for_it(home, alice_tidy):
+    """Ctrl-C while it is being made: the worker goes on on the node.  Run
+    again while it still does (login and discovery take several seconds, so
+    it is made to take longer), setup waits for that one instead of starting
+    another, and finishes the job."""
+    hook, args, _first = _stop_waiting_for_a_making(home, 30)
+    r = _run(home, *args, CUBEVIS_SETUP_TEST_INSTALL=hook, **FAST)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert "An environment is being made on compute" in out and "Making an environment for" not in out, r.stdout
+    assert len(_made()) == 1
+    log = _as_alice("cat ~/.config/cubevis/make/cubevis-*.log").stdout
+    assert log.count("create -y -p") == 1                                  # made once
+    assert S.load().section("kernels")["compute"]["status"] == "ok"
+
+
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_an_environment_finished_while_setup_was_away_is_simply_found(home, alice_tidy):
+    """The laptop was closed for the rest of it: by the next run the
+    environment is complete, with its marker, so discovery lists it (made by
+    setup, same kernel-side code) and it is used -- nothing is made again."""
+    hook, args, _first = _stop_waiting_for_a_making(home, 2)
+    time.sleep(3)
+    r = _run(home, *args, CUBEVIS_SETUP_TEST_INSTALL=hook, **FAST)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert "Making an environment" not in out and "is being made" not in out
+    assert "made by setup, cubevis" in out and "same kernel-side code as here" in out
+    made = _made()
+    assert len(made) == 1
+    st = S.load()
+    e = st.section("environments")[st.section("kernels")["compute"]["environment"]]
+    assert e["prefix"] == made[0] and e["marker"]["schema"] == 1
+    assert st.section("kernels")["compute"]["status"] == "ok"
+    log = _as_alice("cat ~/.config/cubevis/make/cubevis-*.log").stdout
+    assert log.count("create -y -p") == 1
+
+
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_a_failed_creation_says_why_and_the_next_run_goes_on(home, alice_tidy):
+    _as_alice("touch ~/fail-conda-create")
+    args = ["--answer", "environment=new", "--answer", "make_env=y", "--answer", "workdir=~",
+            "--answer", "env_vars=none"]
+    r = _host(home, *args, route=DIRECT, CUBEVIS_SETUP_TEST_INSTALL=_install_hook(), **FAST)
+    out = _flat(r)
+    assert r.returncode == 1, r.stdout
+    assert "could not be made: conda create failed" in out and "fake conda: solver failed" in out
+    assert "Run this again to try again from the step that failed" in out
+    assert not S.load().section("kernels")
+    _as_alice("rm ~/fail-conda-create")
+    r = _host(home, *args, route=DIRECT, CUBEVIS_SETUP_TEST_INSTALL=_install_hook(), **FAST)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert "An environment stopped on compute" in out and "stopped at creating the environment" in out
+    assert "is made" in out
+    log = _as_alice("cat ~/.config/cubevis/make/cubevis-*.log").stdout
+    assert "conda env remove -y -p /home/alice/miniforge3/envs/cubevis-" in log   # the partial prefix
+    assert log.count("create -y -p") == 2 and log.count("-> exit 1") == 1
+    assert S.load().section("kernels")["compute"]["status"] == "ok"
+    assert len(_made()) == 1
+
+
+def test_cleanup_goes_with_a_host_only(home):
+    r = _run(home, "--cleanup", "status")
+    assert r.returncode == 2 and "--cleanup goes with a host" in r.stderr
+    r = _run(home, "--cleanup", "--kernel", "k", "somewhere.example.org")
+    assert r.returncode == 2 and "do not go together" in r.stderr
+    r = _run(home, "--yes", "--cleanup", "unknown.example.org")
+    assert r.returncode == 1 and "setup does not know unknown.example.org" in _flat(r)

@@ -37,7 +37,7 @@ from typing import Optional
 
 from . import host_id, sshgen, state as S
 from . import jupyterspec as J
-from .hostsetup import check_kernel, cmd_host, rtilde
+from .hostsetup import check_kernel, cmd_cleanup, cmd_host, rtilde
 from .steps import Ctx, last_line, local_steps, network_steps
 from .ui import UI, Quit, tilde
 
@@ -109,6 +109,7 @@ def cmd_status(c: Ctx) -> int:
                      "every node" if e.get("hosts") == "all" else ", ".join(e.get("hosts") or []))
             state_ = "ok" if e.get("status") == "ok" else f"{e.get('status')} ({e.get('last_error')})"
             ui._p(f"      environment {en}: {e.get('kind')} {e.get('python')} on {where}, "
+                  + ("made by setup, " if e.get("marker") else "")
                   + (f"cubevis {e['cubevis']}, " if e.get("cubevis") else "") + state_)
         for kn, k in sorted(st.section("kernels").items()):
             e = envs_.get(k.get("environment")) or {}
@@ -319,11 +320,15 @@ def main(argv=None) -> int:
     p.add_argument("--answer", action="append", default=[], metavar="KEY=VALUE",
                    help="pre-fill one question (for scripts and tests)")
     p.add_argument("--kernel", metavar="NAME", help="with HOST: add or change this kernel there")
+    p.add_argument("--cleanup", action="store_true",
+                   help="with HOST: remove environments setup made there (nothing else)")
     sub = p.add_subparsers(dest="cmd")
     ph = sub.add_parser("host", help="make kernels work on HOST (the default command)")
     ph.add_argument("host")
     ph.add_argument("--kernel", dest="kernel_after", metavar="NAME",
                     help="add or change this kernel there")
+    ph.add_argument("--cleanup", dest="cleanup_after", action="store_true",
+                    help="remove environments setup made there (nothing else)")
     sub.add_parser("status", help="what is set up")
     pc = sub.add_parser("check", help="test logins and kernels; change nothing")
     pc.add_argument("target", nargs="?", help="a kernel, node, cluster or network (default: all)")
@@ -352,8 +357,13 @@ def main(argv=None) -> int:
         break
     a = p.parse_args(argv)
     a.kernel = getattr(a, "kernel_after", None) or a.kernel
+    a.cleanup = a.cleanup or getattr(a, "cleanup_after", False)
     if a.kernel and a.cmd != "host":
         p.error("--kernel goes with a host: python -m cubevis.setup HOST --kernel NAME")
+    if a.cleanup and a.cmd != "host":
+        p.error("--cleanup goes with a host: python -m cubevis.setup --cleanup HOST")
+    if a.cleanup and a.kernel:
+        p.error("--cleanup and --kernel do not go together")
     answers = dict(kv.split("=", 1) for kv in a.answer if "=" in kv)
     ui = UI(yes=a.yes, answers=answers)
     try:
@@ -376,7 +386,7 @@ def main(argv=None) -> int:
         elif a.cmd == "jupyter":
             rc = cmd_jupyter(c, a.jkernel, a.node)
         elif a.cmd == "host":
-            rc = cmd_host(c, a.host, a.kernel)
+            rc = cmd_cleanup(c, a.host) if a.cleanup else cmd_host(c, a.host, a.kernel)
         else:
             rc = cmd_walk(c)
         ui.show_changes()

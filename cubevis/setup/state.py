@@ -546,6 +546,16 @@ class State:
         self.section("environments")[name] = e
         return e
 
+    def remove_environment(self, name: str) -> None:
+        """Forget environment *name* (its files are not touched here);
+        refused while a kernel uses it."""
+        self.get("environments", name)
+        users = sorted(k for k, v in self.section("kernels").items()
+                       if v.get("environment") == name)
+        if users:
+            raise StateError(f"environment {name!r} is used by kernel {', '.join(users)}")
+        del self.section("environments")[name]
+
     def find_environment(self, network: str, python: str) -> Optional[str]:
         """The name of *network*'s environment with interpreter *python*."""
         for n, e in self.section("environments").items():

@@ -248,3 +248,231 @@ def test_a_kernel_is_named_for_its_directory_not_a_node(ctx):
                        hosts=[])
     st.add_kernel("visplot", environment="e")
     assert H.default_kernel_name(st, node, n, "/x/visplot") == "visplot-2"
+
+
+# ---------------------------------------------------------------------- #
+# Setup's own environments (stage 2c step 3), with the node's side mocked  #
+# ---------------------------------------------------------------------- #
+
+CONDA = "/opt/c/bin/conda"
+
+
+def _rep(tools=((("conda", CONDA)),), dirs=("/opt/c/envs",), envs=()):
+    return {"python_exe": "/usr/bin/python3", "python": "3.9.1",
+            "host": {"home": "/home/jo", "config_dir": "/home/jo/.config/cubevis"},
+            "tools": [{"name": n, "path": p} for n, p in tools],
+            "envs_dirs": {p: list(dirs) for _n, p in tools}, "environments": list(envs)}
+
+
+@pytest.fixture
+def release(monkeypatch):
+    """This computer has a release cubevis 1.0.97 with a known fingerprint."""
+    monkeypatch.delenv("CUBEVIS_SETUP_TEST_INSTALL", raising=False)
+    monkeypatch.setattr(H, "local_is_development", lambda: (False, ""))
+    monkeypatch.setattr(H, "local_version", lambda: "1.0.97")
+    monkeypatch.setattr(H, "local_fingerprint", lambda c: "FP-HERE")
+    monkeypatch.setattr(H, "poll_seconds", lambda: 0.01)
+
+
+def _node(c):
+    return H.locate(c, "node1.example.org", 22)
+
+
+def _plan(free=50 * 1024 ** 3, writable=True, taken=(), jobs=None):
+    calls = []
+
+    def call(c, alias, python3, req, timeout=120):
+        calls.append(req)
+        assert req["action"] == "plan", req
+        return {"ok": True, "jobs": jobs or {}, "dirs": [
+            {"dir": d, "exists": True, "free": free, "writable": writable, "taken": list(taken)}
+            for d in req["dirs"]]}
+    return call, calls
+
+
+def test_a_development_install_is_not_made_elsewhere(ctx, monkeypatch):
+    monkeypatch.delenv("CUBEVIS_SETUP_TEST_INSTALL", raising=False)
+    monkeypatch.setattr(H, "local_is_development", lambda: (True, "version 1.0.97.dev3 is not a release"))
+    monkeypatch.setattr(H, "local_fingerprint", lambda c: "FP-HERE")
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    assert H.offer_creation(c, node, _rep()) is None
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "development install" in out and "no package reproduces" in out
+    assert "create -y" not in out                                    # nothing to run for it
+
+
+def test_no_conda_says_how_to_get_one(ctx, release):
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    assert H.offer_creation(c, node, _rep(tools=())) is None
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "There is no conda on node1" in out and "Miniforge" in out and "make the environment" in out
+
+
+def test_the_question_shows_where_and_how_big_and_declining_gives_the_commands(ctx, release, monkeypatch):
+    call, calls = _plan(free=7 * 1024 ** 3)
+    monkeypatch.setattr(H.envmake, "call", call)
+    c = ctx(via_login="n", user="jo", make_env="n")
+    node = _node(c)
+    assert H.offer_creation(c, node, _rep()) is None
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "Making an environment for cubevis 1.0.97 on node1" in out
+    assert "about 1.5 GB" in out and "(7.0 GB free there)" in out and "PyPI" in out
+    assert "cubevis[visplot]==1.0.97" in out and "(FP-HERE)" in out
+    assert "To make it yourself" in out and f"{H.rtilde(CONDA, '/home/jo')} create -y -n cubevis-1.0.97" in out
+    assert [r["action"] for r in calls] == ["plan"]                  # nothing was started
+    assert calls[0]["dirs"] == ["/opt/c/envs"] and calls[0]["names"][0] == "cubevis-1.0.97"
+
+
+def test_a_directory_that_cannot_be_written_is_refused_and_a_full_one_warned(ctx, release, monkeypatch):
+    call, calls = _plan(writable=False)
+    monkeypatch.setattr(H.envmake, "call", call)
+    c = ctx(via_login="n", user="jo", env_dir="/nowhere")
+    assert H.offer_creation(c, _node(c), _rep()) is None
+    assert "cannot write in /nowhere" in c.ui.out.getvalue()
+    call, calls = _plan(free=1 * 1024 ** 3)
+    monkeypatch.setattr(H.envmake, "call", call)
+    c = ctx(via_login="n", user="jo", make_env="n")
+    H.offer_creation(c, _node(c), _rep())
+    assert "only 1.0 GB free in /opt/c/envs" in c.ui.out.getvalue()
+
+
+def test_every_name_taken_is_said(ctx, release, monkeypatch):
+    call, _ = _plan(taken=envmake_names())
+    monkeypatch.setattr(H.envmake, "call", call)
+    c = ctx(via_login="n", user="jo")
+    assert H.offer_creation(c, _node(c), _rep()) is None
+    assert "every name cubevis-1.0.97... is taken" in c.ui.out.getvalue()
+
+
+def envmake_names():
+    return H.envmake.candidate_names("1.0.97")
+
+
+def test_a_taken_name_gets_the_next_one(ctx, release, monkeypatch):
+    seen = []
+
+    def call(c, alias, python3, req, timeout=120):
+        seen.append(req)
+        if req["action"] == "plan":
+            return {"ok": True, "jobs": {}, "dirs": [{"dir": d, "exists": True, "free": 9 * 1024 ** 3,
+                                                       "writable": True, "taken": ["cubevis-1.0.97"]}
+                                                      for d in req["dirs"]]}
+        assert req["action"] == "start"
+        return {"ok": False, "error": "stop here"}
+    monkeypatch.setattr(H.envmake, "call", call)
+    c = ctx(via_login="n", user="jo")
+    assert H.offer_creation(c, _node(c), _rep()) is None
+    start = seen[-1]
+    assert start["name"] == "cubevis-1.0.97-2" and start["prefix"] == "/opt/c/envs/cubevis-1.0.97-2"
+    assert start["tool"] == CONDA and start["spec"] == "cubevis[visplot]==1.0.97"
+    assert start["version"] == "1.0.97" and start["setup"] == {"cubevis": "1.0.97", "host": "gui1"}
+    assert start["python"] == "%d.%d" % __import__("sys").version_info[:2]
+    assert "cannot start it on node1: stop here" in c.ui.out.getvalue()
+
+
+def test_waiting_follows_the_steps_and_ends_on_the_state(ctx, release, monkeypatch):
+    seq = iter([{"state": "running", "step": "creating the environment (conda)"},
+                {"state": "running", "step": "creating the environment (conda)"},
+                {"state": "running", "step": "installing cubevis (pip)"},
+                {"state": "ok", "step": "done"}])
+    monkeypatch.setattr(H.envmake, "call", lambda *a, **k: {"ok": True, "status": next(seq)})
+    c = ctx(via_login="n", user="jo")
+    st = H.wait_for_job(c, _node(c), _rep(), "cubevis-1.0.97")
+    assert st["state"] == "ok"
+    out = c.ui.out.getvalue()
+    assert out.count("creating the environment (conda) ...") == 1       # said once, not per poll
+    assert "installing cubevis (pip) ..." in out
+
+
+def test_waiting_gives_up_on_an_unreachable_node_without_stopping_the_work(ctx, release, monkeypatch):
+    def call(*a, **k):
+        raise H.R.RemoteError("ssh exit 255")
+    monkeypatch.setattr(H.envmake, "call", call)
+    c = ctx(via_login="n", user="jo")
+    assert H.wait_for_job(c, _node(c), _rep(), "cubevis-1.0.97") is None
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "cannot reach node1" in out and "it goes on there" in out and "run this again" in out
+
+
+def test_ctrl_c_stops_waiting_not_the_work(ctx, release, monkeypatch):
+    def call(*a, **k):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(H.envmake, "call", call)
+    c = ctx(via_login="n", user="jo")
+    assert H.wait_for_job(c, _node(c), _rep(), "cubevis-1.0.97") is None
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "Stopped waiting" in out and "goes on being made on node1" in out
+    assert "~/.config/cubevis/make/cubevis-1.0.97.log" in out
+
+
+def _own(prefix, version, host="gui1", fp="FP-OLD", python=None):
+    return {"python": python or f"{prefix}/bin/python", "prefix": prefix, "kind": "conda",
+            "cubevis": version, "marker": {"schema": 1, "name": prefix.rsplit("/", 1)[1],
+                                           "version": version, "setup": {"host": host}},
+            "check": {"versions": {"cubevis": version}, "kernel": True, "python": "3.12.1",
+                      "fingerprint": fp, "errors": {}}}
+
+
+def test_which_environments_are_setups_and_which_may_go(ctx, release, monkeypatch):
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    net = c.st.nodes()[node]["network"]
+    c.st.add_environment("used", network=net, python="/opt/c/envs/cubevis-0.9/bin/python")
+    c.st.add_kernel("tw-hya", environment="used")
+    users_env = {"python": "/home/jo/mine/bin/python", "prefix": "/home/jo/mine", "kind": "conda",
+                 "cubevis": "1.0.97", "marker": None, "check": None}
+    rep = _rep(envs=[_own("/opt/c/envs/cubevis-0.9", "0.9"),                  # a kernel uses it
+                     _own("/opt/c/envs/cubevis-0.8", "0.8"),                  # superseded, mine
+                     _own("/opt/c/envs/cubevis-0.7", "0.7", host="gui2"),      # another computer's
+                     _own("/opt/c/envs/cubevis-1.0.97", "1.0.97", fp="FP-HERE"),   # current
+                     users_env,
+                     dict(_own("/opt/c/envs/cubevis-bad", "x"), marker={"error": "unreadable"})])
+    own = {x["marker"]["name"]: x for x in H.own_environments(c, rep, net)}
+    assert sorted(own) == ["cubevis-0.7", "cubevis-0.8", "cubevis-0.9", "cubevis-1.0.97"]
+    assert own["cubevis-0.9"]["used_by"] == ["tw-hya"] and not own["cubevis-0.8"]["used_by"]
+    assert own["cubevis-1.0.97"]["current"] and not own["cubevis-0.8"]["current"]
+    assert own["cubevis-0.8"]["mine"] and not own["cubevis-0.7"]["mine"]
+    # What is offered after choosing: mine, unused, not current, not the one just chosen.
+    removed = []
+    c2 = ctx(via_login="n", user="jo", cleanup="y")
+    c2.st = c.st
+    monkeypatch.setattr(H, "remove_environments",
+                        lambda c_, n_, r_, items: removed.extend(i["marker"]["name"] for i in items)
+                        or len(items))
+    H.offer_cleanup(c2, node, rep, "node1.example.org", keep_python="/opt/c/envs/cubevis-1.0.97/bin/python")
+    assert removed == ["cubevis-0.8"]
+    out = c2.ui.out.getvalue()
+    assert "cubevis-0.8" in out and "cubevis-0.7" not in out and "cubevis-0.9" not in out
+
+
+def test_older_environments_are_offered_not_removed_by_default(ctx, release):
+    c = ctx(via_login="n", user="jo")                      # --yes: the default is no
+    node = _node(c)
+    rep = _rep(envs=[_own("/opt/c/envs/cubevis-0.8", "0.8")])
+    H.offer_cleanup(c, node, rep, "node1.example.org", keep_python="/x/bin/python")
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "Older environments setup made on node1" in out
+    assert "python -m cubevis.setup --cleanup node1.example.org removes them" in out
+
+
+def test_a_used_environment_cannot_be_forgotten(ctx):
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    net = c.st.nodes()[node]["network"]
+    c.st.add_environment("e", network=net, python="/e/bin/python")
+    c.st.add_kernel("k", environment="e")
+    with pytest.raises(S.StateError, match="used by kernel k"):
+        c.st.remove_environment("e")
+    del c.st.section("kernels")["k"]
+    c.st.remove_environment("e")
+    assert "e" not in c.st.section("environments")
+    with pytest.raises(S.StateError):
+        c.st.remove_environment("e")
+
+
+def test_cleanup_needs_a_host_known_to_setup(ctx):
+    c = ctx(via_login="n", user="jo")
+    assert H.cmd_cleanup(c, "never-seen.example.org") == 1
+    assert "setup does not know never-seen.example.org" in c.ui.out.getvalue()

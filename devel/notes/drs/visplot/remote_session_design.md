@@ -557,10 +557,26 @@ usable: what to do; creation is step 3), the kernel with its launcher at
 running it.  State schema 3 (`clusters`; kernels carry their settings).
 `node-here`, the node files and their sync are gone.
 
-**`python -m cubevis.setup --cleanup HOST`**: lists setup's own
-environments on HOST (by marker), with whether a kernel here still uses
-them, and removes the ones chosen (`<tool> env remove -p`); the state is
-updated.  The user's environments are not listed.
+**Built (stage 2c step 3, 2026-10-28; `hrs_h8_consolidation_prep.md`
+section 43).**  Setup's own environments (`envmake.py`, `hostsetup.py`): a
+stdlib program sent to the node (`plan`, `start`, `status`, `remove`) whose
+worker runs detached, records each finished step (resumable) and writes the
+marker last; setup polls it.  Offered when no environment is usable, or on
+the answer `new`; running setup again waits for a job still running, offers
+to go on from the step a stopped one reached, and finds a finished one by its
+marker.  `create -p` with an explicit prefix (the user is shown the place;
+`-n` would take the first writable `envs_dirs` entry).
+
+**`python -m cubevis.setup --cleanup HOST`** (built, section 43): lists
+setup's own environments on HOST (by marker), with whether a kernel here still
+uses them, and removes the ones chosen (`<tool> env remove -y -p`, only where
+the marker is valid -- the node never deletes files itself); the state is
+updated.  The user's environments are not listed.  Refinement: the marker
+records which computer's setup made the environment; the default selection
+(and the offer after `setup HOST`, default no) is only what *this* computer
+made, that no kernel here uses and that differs from this computer's
+kernel-side code -- another computer's kernels may be using what this one's
+state knows nothing about, so removing one of those needs a yes of its own.
 
 **Two-factor logins** (none now; announced for later).  A flag on the host
 (`--2fa`, name open) records that its login host asks for a second factor:

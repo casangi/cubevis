@@ -234,6 +234,11 @@ class BokehAppContext(LayoutDOM):
         # Save the plot
         save( self, filename=self.__htmlpath, resources=CDN, title=self.__title)
 
+        # Its local scripts beside it: Safari loads nothing from elsewhere
+        # for a file:// page (cubevis.bokeh.state._local_scripts).
+        from ..state._local_scripts import localize_scripts
+        localize_scripts( self.__htmlpath )
+
         # serialization done, free up application context
         BokehInit.clear_app_context(self)
 

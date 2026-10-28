@@ -1741,3 +1741,33 @@ depend on it), and `status` showed no kernel names.
 * `setup jupyter` says what cannot work (an unknown node, no launcher)
   before the wrapper step or the sshpyk offer.  Setup suite 140 pass with
   OpenSSH 9.6 and 8.0p1; `test_casa_optional.py` 3.
+
+## 39. Safari: a blank window (base `b3db19c`, 2026-10-27)
+
+Darrell, a fresh account with the setup working end to end: `visplot(...,
+kernel_name="cvpost")` connected, but Safari showed a white window with no
+error; "Open in Chrome" from Safari worked.  Safari's Sources pane listed
+all five scripts (casalib, bokeh, bokeh-widgets, bokeh-tables, cubevisjs)
+in red, "An error occurred trying to load the resource".
+
+* **Why.**  `BokehAppContext.show()` saves the page to a temporary
+  directory and opens it as `file:///private/var/folders/.../T/visibility.../
+  visibilityplotter-....html`; `resolve_js_library_paths` points its
+  scripts at `file://` URLs into the installed packages (site-packages).
+  Safari lets a local page read only its own directory and below, so none
+  of them loaded; Chrome and Firefox allow it.  Every cubevis application
+  is affected (visplot, iclean, createmask, createregion all show through
+  `BokehAppContext`).
+* **The fix** (`cubevis/bokeh/state/_local_scripts.py`, called by
+  `BokehAppContext.show` after `save`): every `file://` script the page
+  names is copied into `js/` beside the page and the page points at it
+  relatively; CDN scripts are left alone; a script that cannot be found or
+  copied is left as it was and logged; two files of one name get distinct
+  copies.  About 3 MB per page, removed with the page's temporary
+  directory.
+* **Checked** here (no Safari here): the rewritten page renders in
+  headless Chromium with every script from `js/`, no failed request, no
+  page error -- a test page (`tests/manual/visplot/test_local_scripts.py`,
+  which also checks that no `file://` script is left) and a real visplot
+  page on the TW Hya MS (field Ceres), screenshot with both panels drawn.
+  Darrell to confirm in Safari.

@@ -594,42 +594,77 @@ def write_and_test(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> t
     return True, f"starts in {rtilde(cwd, home)}" + (f"; {why}" if fp != local_fingerprint(c) else "")
 
 
+def default_kernel_name(st, n: dict, node: str, workdir: Optional[str]) -> str:
+    """A kernel is named for what it is for: its working directory's name
+    (``.../casa/visplot`` -> ``visplot``); in the home directory, the
+    cluster's name, or the host's for a host on its own.  Never a cluster
+    node's own name: reservations move, the kernel stays (2026-10-28)."""
+    base = None
+    if workdir:
+        base = re.sub(r"[^A-Za-z0-9_.-]", "-", posixpath.basename(workdir.rstrip("/")))
+        base = base.strip("-._") or None
+    base = base or n.get("cluster") or node
+    return _unique(base, st.section("kernels"))
+
+
 def kernel_step(c: Ctx, node: str, env: str, rep: dict, name: Optional[str],
                 host_text: str) -> bool:
+    """The kernel's working directory and variables, then its name (default
+    from the directory), its launcher written and run once.  *name* given
+    (``--kernel NAME``): that kernel, added or changed.  On a cluster, the
+    settings start from the cluster's defaults -- its first kernel's."""
     ui, st = c.ui, c.st
     n = st.nodes()[node]
     home = (rep.get("host") or {}).get("home") or "/"
     kernels = st.section("kernels")
-    ui.heading(f"A kernel on {node}")
-    ui.say("A kernel is what you choose when you plot: its name, the environment, and the "
-           "directory and variables it starts with. Several kernels can share one "
-           "environment (say tw-hya and hrs-imaging, each in its own directory).")
-    while True:
-        default = name or _unique(n.get("cluster") or node, kernels)
-        name = ui.ask("A name for the kernel", default, key="kernel")
-        try:
-            S.check_name("kernel", name)
-            old = kernels.get(name)
-            if old and old.get("environment") in st.section("environments") \
-                    and st.section("environments")[old["environment"]]["network"] != n["network"]:
-                raise S.StateError(f"kernel {name!r} is on another network already")
-            break
-        except S.StateError as exc:
-            ui.note(str(exc))
-            name = None
-            if ui.yes or "kernel" in ui.answers:
-                return False
-    k = dict(kernels.get(name) or {})
-    if k.get("environment") != env and k:
+    cl_name = n.get("cluster")
+    cl = st.section("clusters").get(cl_name) if cl_name else None
+    ui.heading(f"A kernel on {cl_name and f'cluster {cl_name}' or node}")
+    ui.say("A kernel is what you choose when you plot: the environment, the directory and "
+           "variables it starts with, and a name for them. Several kernels can share one "
+           "environment (say tw-hya and hrs-imaging, each in its own directory)"
+           + ("; on a cluster a kernel can run on any of its nodes."
+              if cl_name else "."))
+
+    def network_clash(nm):
+        old = kernels.get(nm)
+        oe = st.section("environments").get((old or {}).get("environment")) or {}
+        return old and oe and oe.get("network") != n["network"]
+
+    if name and network_clash(name):
+        ui.fail(f"kernel {name!r} is on another network already")
+        return False
+    k = dict(kernels.get(name) or {}) if name else {}
+    if k and k.get("environment") != env:
         ui.note(f"kernel {name} now uses environment {env} (it used {k.get('environment')})")
+    if not k and cl and (cl.get("workdir") or cl.get("env")):
+        k = {"workdir": cl.get("workdir"), "env": dict(cl.get("env") or {})}
+        ui.say(f"Cluster {cl_name}'s defaults are offered below (from its first kernel).")
     while True:
         _ask_settings(c, node, k, home)
+        while not name:
+            ans = ui.ask("A name for the kernel (you choose it by this name when you plot)",
+                         default_kernel_name(st, n, node, k.get("workdir")), key="kernel")
+            try:
+                S.check_name("kernel", ans)
+            except S.StateError as exc:
+                ui.note(str(exc))
+                if ui.yes or "kernel" in ui.answers:
+                    return False
+                continue
+            if ans in kernels:
+                ui.note(f"there is a kernel {ans!r} already (python -m cubevis.setup "
+                        f"{host_text} --kernel {ans} changes it): another name")
+                if ui.yes or "kernel" in ui.answers:
+                    return False
+                continue
+            name = ans
         is_new = name not in kernels
         st.add_kernel(name, environment=env, workdir=k.get("workdir"), env=k.get("env"),
                       launcher=k.get("launcher"), launch_timeout=k.get("launch_timeout") or 120,
                       replace=True)
         ui.record_change("added kernel" if is_new else "changed kernel",
-                         f"{name} ({env} on {n.get('cluster') or node}, starts in "
+                         f"{name} ({env} on {cl_name or node}, starts in "
                          f"{rtilde(k.get('workdir') or home, home)}"
                          + (", sets " + ", ".join(sorted(k['env'])) if k.get("env") else "") + ")")
         ui.say(f"Writing its launcher on {node} and starting it once ...")
@@ -642,6 +677,15 @@ def kernel_step(c: Ctx, node: str, env: str, rep: dict, name: Optional[str],
         if ui.yes or not ui.ask_yn("Change its settings and try again?", True):
             return False
         k = dict(kernels[name])
+    if cl is not None and "workdir" not in cl and "env" not in cl:
+        # The cluster's first kernel: its settings become the cluster's
+        # defaults for the next ones (status shows them).
+        kk = kernels[name]
+        cl["workdir"], cl["env"] = kk.get("workdir"), dict(kk.get("env") or {})
+        ui.record_change("cluster defaults", f"{cl_name}: starts in "
+                         f"{rtilde(kk.get('workdir') or home, home)}"
+                         + (", sets " + ", ".join(sorted(kk['env'])) if kk.get("env") else ""))
+        c.save()
     use_kernel(c, name, host_text)
     return True
 

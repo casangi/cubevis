@@ -87,6 +87,11 @@ def cmd_status(c: Ctx) -> int:
                 members = sorted(k for k, v in st.nodes(name).items() if v.get("cluster") == cl)
                 ui._p(f"      cluster {cl}: nodes {cr['pattern']}"
                       + (f" (set up: {', '.join(members)})" if members else ""))
+                if "workdir" in cr or "env" in cr:
+                    home = next((v.get("home") for v in st.nodes(name).values() if v.get("home")), None)
+                    ui._p(f"        new kernels start from: directory "
+                          f"{rtilde(cr.get('workdir'), home) if cr.get('workdir') else '~'}"
+                          + (", sets " + ", ".join(sorted(cr["env"])) if cr.get("env") else ""))
         for n, node in sorted(st.nodes(name).items()):
             flag = node.get("status") or "-"
             if flag == "flagged":

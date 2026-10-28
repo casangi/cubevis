@@ -1808,3 +1808,42 @@ in red, "An error occurred trying to load the resource".
   no configuration invents nothing; a failing store offers another; the
   Keychain check.
 * Setup suite 144 pass with OpenSSH 9.6 and 8.0p1.
+
+## 41. Kernels named for their purpose; cluster defaults (base `af0cae4`, 2026-10-28)
+
+Darrell's first fully successful run (remote kernel, plot in Safari) raised
+the default kernel name: `cvpost` named the cluster, the kernel and (as
+`cubevis-cvpost`) the Jupyter kernel at once, and said nothing about what
+the kernel was for.  Agreed with Darrell:
+
+* **A kernel's name says what it is for, never which node** (reservations
+  move; a node-named kernel would outlive its node).  `setup HOST` now asks
+  the working directory and variables first, then the name, defaulting to
+  the directory's name (`.../casa/visplot` -> `visplot`); in the home
+  directory, the cluster's name, or a lone host's; a taken name gets `-2`
+  (`hostsetup.default_kernel_name`).  A name that exists is refused there
+  (`--kernel NAME` changes it).
+* **Cluster defaults**: a cluster's first kernel's working directory and
+  variables become the cluster's (`clusters.NAME.workdir`, `.env`; changes
+  log "cluster defaults"); later kernels on the cluster start from them
+  ("Cluster cvpost's defaults are offered below"); `status` shows "new
+  kernels start from: directory ..., sets ...".
+* **The plan agreed for what remains** (design 7c, stage 3):
+  - the node is chosen when a session starts, not stored with the kernel:
+    `Session("visplot")` -> the node given, else the cluster's reservation
+    query (the per-network node query of design section 7, e.g. Slurm's
+    `squeue -h --me -o %N | xargs -r scontrol show hostnames`), else the
+    last node that answered; a node from an expired reservation fails at
+    once naming the reserved ones.  The reservation query moves into stage
+    3 (NRAO's clusters need it), and the Jupyter-kernel bridge, which pins
+    a node, goes with the Session;
+  - setup's own environments (step 3) are identified by network and path and
+    reused by every node or host that sees the same conda installation (the
+    marker records the fingerprint), so a new node of a cluster costs
+    nothing.
+* Tests: `test_hostsetup.py` (the name: directory, cluster, lone host,
+  taken, odd characters); `test_cli.py` -- the terminal run answers the
+  directory first and is offered `visplot-data`; the cluster test records
+  the cluster's defaults and a second kernel (`--kernel imaging`, nothing
+  answered) takes them.
+* Setup suite 145 pass with OpenSSH 9.6 and 8.0p1.

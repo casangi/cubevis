@@ -118,6 +118,12 @@ as ee125b6) and section 17 (the ssh wrapper).
 * **2026-10-28** (section 40): the Keychain checked before it is offered,
   another store offered when one fails; defaults (real names, users,
   ProxyJump) from the user's `ssh -G` -- the first part of step 4.
+* **Darrell's run of 2026-10-28 worked end to end** (remote kernel, plot in
+  Safari).  Then (section 41): kernels named for their working directory,
+  never a node; cluster defaults from the first kernel.  Agreed for stage
+  3: the node chosen per session (given, else the cluster's reservation
+  query -- moved into stage 3 -- else the last that answered), the
+  Jupyter-kernel bridge gone with the Session.
 * **Next: stage 2c step 3** (design 7c "Refinements", section 13): setup's
   own environments -- `envs_dirs` (discovery reports it) shown with the
   expected size, another place allowed; `<tool> create -y -n cubevis-<v>
@@ -172,7 +178,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 41).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 42).
 
 ## Test kit (rebuild after a sandbox restart)
 

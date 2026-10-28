@@ -228,3 +228,23 @@ def test_the_keychain_is_checked_before_it_is_offered(monkeypatch):
     monkeypatch.setattr(stores.subprocess, "run",
                         lambda cmd, **kw: sp.CompletedProcess(cmd, 1, "", "no default"))
     assert stores.keychain_problem() == "this account has no default keychain"
+
+
+def test_a_kernel_is_named_for_its_directory_not_a_node(ctx):
+    """2026-10-28: the working directory's name; in the home directory, the
+    cluster's name (never one of its nodes: reservations move) or a lone
+    host's; a taken name gets -2."""
+    c = ctx(via_login="n", user="jo")
+    st = c.st
+    n = H.locate(c, "cvpost140.cv.example.org", 22)
+    node = st.nodes()[n]
+    assert H.default_kernel_name(st, node, n, "/home/jo/casa/visplot/") == "visplot"
+    assert H.default_kernel_name(st, node, n, None) == "cvpost140"          # alone
+    st.add_cluster("cvpost", network=node["network"], pattern="cvpost*")
+    node["cluster"] = "cvpost"
+    assert H.default_kernel_name(st, node, n, None) == "cvpost"
+    assert H.default_kernel_name(st, node, n, "/lustre/aoc/my data!") == "my-data"
+    st.add_environment("e", network=node["network"], python="/e/bin/python", cluster="cvpost",
+                       hosts=[])
+    st.add_kernel("visplot", environment="e")
+    assert H.default_kernel_name(st, node, n, "/x/visplot") == "visplot-2"

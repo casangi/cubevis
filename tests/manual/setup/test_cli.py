@@ -270,9 +270,9 @@ def test_rig_interactive_host(home, alice_envs):
         (r"\[u\]se these, \[c\]hange them", "c"),
         (r"Ranges \(CIDR", "127.0.0.0/8"),
         (r"Environment \[1\]", ""),
-        (r"A name for the kernel \[compute\]", "tw-hya"),
         (r"Working directory \[~\]", "~/visplot-data"),
         (r"Variables \('none' for none\)", "OMP_NUM_THREADS=2"),
+        (r"A name for the kernel .*\[visplot-data\]", "tw-hya"),   # default: the directory
     ]
     for pat, ans in script:
         p.expect(pat)
@@ -362,15 +362,18 @@ def test_rig_environments_refused_and_the_mismatch_override(home, alice_envs):
 @needs_ssh
 @needs_kernel_py
 def test_rig_a_cluster_and_another_of_its_nodes(home, alice_envs):
-    """compute is set up as a node of cluster 'comp' (compute*); compute2
-    then joins it without a question about the route, and finds the
-    cluster's kernel there."""
+    """compute is set up as a node of cluster 'comp' (compute*); its first
+    kernel's settings become the cluster's defaults; compute2 then joins it
+    without a question about the route, finds the cluster's kernel there, and
+    a second kernel made from it starts from those defaults."""
     r = _host(home, "--answer", "cluster=y", "--answer", "cluster_name=comp",
               "--answer", "cluster_pattern=compute*", "--answer", "kernel=tw-hya",
-              "--answer", "workdir=~", "--answer", "env_vars=none")
+              "--answer", "workdir=~/visplot-data", "--answer", "env_vars=A=1")
     assert r.returncode == 0, r.stdout
     st = S.load()
-    assert st.section("clusters") == {"comp": {"network": "example", "pattern": "compute*"}}
+    assert st.section("clusters") == {"comp": {"network": "example", "pattern": "compute*",
+                                               "workdir": "/home/alice/visplot-data",
+                                               "env": {"A": "1"}}}
     e = st.section("environments")[st.section("kernels")["tw-hya"]["environment"]]
     assert e["cluster"] == "comp" and e["hosts"] == []
     r = _run(home, "--yes", "compute2.example.test:2202")
@@ -378,13 +381,21 @@ def test_rig_a_cluster_and_another_of_its_nodes(home, alice_envs):
     assert r.returncode == 0, r.stdout
     assert "added node: compute2 to cluster comp" in out
     assert "intermediate host" not in out and "cluster's nodes?" not in out
-    assert "kernel tw-hya: starts in ~" in out
+    assert "kernel tw-hya: starts in ~/visplot-data" in out
     st = S.load()
     assert st.nodes()["compute2"]["cluster"] == "comp" and st.nodes()["compute2"]["status"] == "ok"
     assert st.section("kernels")["tw-hya"]["checked_on"] == "compute2"
-    assert "cluster comp: nodes compute* (set up: compute, compute2)" in _run(home, "status").stdout
+    status = _run(home, "status").stdout
+    assert "cluster comp: nodes compute* (set up: compute, compute2)" in status
+    assert "new kernels start from: directory ~/visplot-data, sets A" in status
     rules = open(G.rules_path()).read()
     assert "*.example.test" in rules
+    # A second kernel, nothing answered: the cluster's defaults.
+    r = _run(home, "--yes", "compute2.example.test:2202", "--kernel", "imaging")
+    assert r.returncode == 0, r.stdout
+    assert "Cluster comp's defaults are offered" in _flat(r)
+    k = S.load().section("kernels")["imaging"]
+    assert k["workdir"] == "/home/alice/visplot-data" and k["env"] == {"A": "1"}
 
 
 @needs_rig

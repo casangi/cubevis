@@ -7,10 +7,13 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* main is at **e6f4fe9** (2c step 1 committed: the fingerprint, section 33,
-  and the lazy package `__init__`s, section 34).  Delivered on top of it,
-  not yet committed when this was written: **`remote_stage2c2_e6f4fe9.zip`**
-  (2c step 2: `setup HOST`, section 35).  Check `git log` first.
+* **main is at 8521c71** (2026-10-28): everything through notes section 42
+  is committed; nothing delivered is pending.  Check `git log` first.  The
+  next notes section is **43**.  **Start here: "Next: stage 2c step 3"**
+  below (setup's own environments), then stage 3 (the Session, with the
+  node chosen per session and the reservation query).  The test kit is
+  rebuilt from "Test kit" below (rig, venv-kernel, OpenSSH 8.0 build).
+* History, oldest first, follows (2c step 2 onwards).
 * **Stage 2c step 2 done** (2026-10-23, base `e6f4fe9`): `python -m
   cubevis.setup HOST [--kernel NAME]` as the one path; clusters; kernels
   with their directory, variables and a launcher per kernel on the node

@@ -476,3 +476,16 @@ def test_cleanup_needs_a_host_known_to_setup(ctx):
     c = ctx(via_login="n", user="jo")
     assert H.cmd_cleanup(c, "never-seen.example.org") == 1
     assert "setup does not know never-seen.example.org" in c.ui.out.getvalue()
+
+
+def test_asking_for_new_with_a_development_install_does_not_say_nothing_matches(ctx, monkeypatch):
+    """'new' while an environment is usable: setup says it cannot make one
+    for a development install, and does not claim no environment matches."""
+    monkeypatch.delenv("CUBEVIS_SETUP_TEST_INSTALL", raising=False)
+    monkeypatch.setattr(H, "local_is_development", lambda: (True, "version 1.0.97.dev3 is not a release"))
+    monkeypatch.setattr(H, "local_fingerprint", lambda c: "FP-HERE")
+    c = ctx(via_login="n", user="jo")
+    assert H.offer_creation(c, _node(c), _rep(), forced=True) is None
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "Setup cannot make an environment for this cubevis" in out
+    assert "No environment on" not in out and "Choose one of the environments listed" in out

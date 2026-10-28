@@ -268,7 +268,7 @@ The sandbox loses `/etc/hosts` edits and running daemons on restart.
   writable" cannot be seen (`os.access`): those assertions are skipped.
   Python 3.6 was rebuilt this session (below); the OpenSSH 8.0 client was
   not (nothing in step 3 touches the wrapper or ssh's options).  The full
-  setup suite needs about 7 minutes (2 CPUs).  Last run: 190 passed, 1 skipped (OpenSSH 9.6; test_envmake also under Python 3.6.15).
+  setup suite needs about 7 minutes (2 CPUs).  Last run: 191 passed, 1 skipped (OpenSSH 9.6; test_envmake also under Python 3.6.15).
 * **Python 3.6** (RHEL 8's python3), for `test_discover.py` and
   `test_envmake.py`: built from
   `github.com/python/cpython` tag `v3.6.15` (`./configure --prefix=/opt/py36

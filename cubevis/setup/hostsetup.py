@@ -406,12 +406,24 @@ def _rows(c: Ctx, rep: dict) -> list:
     return out
 
 
-def no_environment_advice(c: Ctx, node: str, rep: dict, declined: bool = False) -> None:
+def no_environment_advice(c: Ctx, node: str, rep: dict, declined: bool = False,
+                          asked: bool = False) -> None:
     """Why setup cannot (or was asked not to) make an environment, and what
     to do instead.  *declined*: it could have, and the user said no (or it
-    failed): the commands setup would have run."""
+    failed): the commands setup would have run.  *asked*: the user asked for
+    a new one although others are usable (so they are not "none")."""
     ui = c.ui
     here = local_fingerprint(c)
+    if asked:
+        dev, why = local_is_development()
+        if dev and not os.environ.get("CUBEVIS_SETUP_TEST_INSTALL"):
+            ui.say(f"Setup cannot make an environment for this cubevis: it is a development "
+                   f"install ({why}), which no package reproduces. Choose one of the "
+                   f"environments listed on {node}.")
+        else:
+            ui.say(f"Setup cannot make an environment on {node}: there is no conda there. "
+                   "Choose one of the environments listed.")
+        return
     if not declined:
         ui.say(f"No environment on {node} has the same kernel-side code as this computer "
                f"({here}): the code that runs in a kernel must be identical on both sides.")
@@ -511,7 +523,7 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Option
     dev, _why = local_is_development()
     tool = envmake.pick_tool(rep.get("tools"))
     if (dev and not test_install) or tool is None:
-        no_environment_advice(c, node, rep)
+        no_environment_advice(c, node, rep, asked=forced)
         return None
     import sys
     h = rep.get("host") or {}
@@ -698,6 +710,9 @@ def environment_step(c: Ctx, node: str, rep: dict, reuse: bool) -> Optional[str]
         if ui.yes or "environment" in ui.answers:
             return None
         pick = None
+        if usable and not ans.isdigit() and ans.lower() == "new":     # could not: back to the list
+            ans = ui.ask("Environment", str(usable[0]))
+            continue
         ans = ui.ask("Environment (empty: stop)", "")
         if not ans:
             return None

@@ -2008,7 +2008,12 @@ modified").
   the hook now sleeps *before*.  A window remains in principle -- between
   pip finishing and the marker, a rerun could list the environment as an
   ordinary usable one -- a few milliseconds; harmless (it is the same code).
-* **Suite**: setup suite 190 passed, 1 skipped with the rig and venv-kernel
+* **Fixed after Darrell's first real run** (cvpost106, development install):
+  answering `new` while an environment was already usable printed "No
+  environment on NODE has the same kernel-side code" (false: #1 was ok) and
+  then "Environment (empty: stop)".  Now it says setup cannot make an
+  environment for a development install, and asks again with the default.
+* **Suite**: setup suite 191 passed, 1 skipped with the rig and venv-kernel
   (OpenSSH 9.6 only: the 8.0 client was not rebuilt this session; step 3
   adds nothing to the wrapper or ssh's options).
 * **Not covered**: mamba and micromamba are driven the same way

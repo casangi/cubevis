@@ -40,8 +40,12 @@ def available(store: str) -> tuple:
     """``(usable, why)`` for *store* on this computer."""
     darwin = platform.system() == "Darwin"
     if store == "keychain":
-        return ((True, "macOS Keychain: encrypted, unlocked by your login")
-                if darwin and has("security") else (False, "macOS only"))
+        if not (darwin and has("security")):
+            return False, "macOS only"
+        why = keychain_problem()
+        if why:
+            return False, why
+        return True, "macOS Keychain: encrypted, unlocked by your login"
     if store == "secret-tool":
         if not has("secret-tool"):
             return False, "secret-tool is not installed"
@@ -65,6 +69,26 @@ def available(store: str) -> tuple:
         return True, ("your password manager's command that prints it (op, bw, ...); "
                       "how safe that is, is up to it")
     return False, "unknown"
+
+
+def keychain_problem() -> Optional[str]:
+    """Why this account's default keychain cannot take a password, or None.
+    An account whose first login did not complete (or whose home is not its
+    own) has none: ``security`` then fails, and macOS shows "Keychain Not
+    Found" -- so setup asks first instead (2026-10-28, a test account)."""
+    try:
+        r = subprocess.run(["security", "default-keychain", "-d", "user"], capture_output=True,
+                           text=True, timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"security cannot be run ({exc})"
+    path = r.stdout.strip().strip('"')
+    if r.returncode != 0 or not path:
+        return "this account has no default keychain"
+    if not os.path.exists(path):
+        return f"this account's default keychain is missing ({tilde(path)})"
+    if not os.access(path, os.W_OK):
+        return f"this account cannot write its default keychain ({tilde(path)})"
+    return None
 
 
 def default() -> str:
@@ -105,10 +129,11 @@ def has_entry(st: State, service: str, account: str) -> bool:
     return s == "command"
 
 
-def choose(ui: UI, st: State) -> bool:
-    """Choose the store (once).  False if none can be used."""
+def choose(ui: UI, st: State, exclude=()) -> bool:
+    """Choose the store (once).  False if none can be used.  *exclude*:
+    stores that just failed (offered again only if nothing else works)."""
     s = st.local.get("store")
-    if s and available(s)[0]:
+    if s and s not in exclude and available(s)[0]:
         return True
     ui.say("The password is never written to setup's files or logs. It is kept in an "
            "encrypted password store, from which the wrapper reads it only to log in. "
@@ -116,9 +141,17 @@ def choose(ui: UI, st: State) -> bool:
     usable = []
     for name in ALL:
         ok, why = available(name)
+        if ok and name in exclude:
+            ok, why = False, "failed just now"
         if ok:
             ui.say(f"  {name:<12} {why}")
             usable.append(name)
+        elif name == "keychain" and platform.system() == "Darwin":
+            ui.say(f"  ({name:<10} not usable: {why}. Keychain Access can make one, or log "
+                   "in to this account at the Mac once)")
+    if not usable:
+        ui.fail("no password store can be used here")
+        return False
     if platform.system() != "Darwin":
         ui.say("On Linux: if you use pass already, keep using it. secret-tool suits a "
                "desktop you log in to; it cannot be used over ssh or without a desktop "
@@ -251,9 +284,30 @@ def put(ui: UI, st: State, service: str, account: str, host: str) -> bool:
         ui.ask("Press Enter when it is stored", "")
         return True
     if r.returncode != 0:
+        ui.fail(f"the password was not stored in {where(st, service, account)} (the "
+                "message above is the store's)"
+                + (f": {keychain_problem()}" if s == "keychain" and keychain_problem() else ""))
         return False
     ui.record_change("stored a password", where(st, service, account))
     return True
+
+
+def put_or_switch(ui: UI, st: State, service: str, account: str, host: str) -> bool:
+    """``put``; when the store fails, offer another one (the Keychain of an
+    account that has none, say) instead of the same failure again."""
+    if put(ui, st, service, account, host):
+        return True
+    failed = st.local.get("store")
+    others = [n for n in ALL if n != failed and available(n)[0]]
+    if not others:
+        return False
+    if not ui.ask_yn(f"Use another password store ({', '.join(others)})?", True,
+                     key="switch_store"):
+        return False
+    st.local.pop("store", None)
+    if not choose(ui, st, exclude=(failed,)):
+        return False
+    return put(ui, st, service, account, host)
 
 
 def unlock(ui: UI, st: State, service: str, account: str) -> bool:

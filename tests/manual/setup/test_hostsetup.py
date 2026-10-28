@@ -152,3 +152,79 @@ def test_visplot_takes_a_setup_kernels_own_name(tmp_path, monkeypatch):
         V._resolve_kernel_name("tw")
     with pytest.raises(ValueError, match="set up with cubevis: tw"):
         V._resolve_kernel_name("nope")
+
+
+def test_defaults_come_from_the_users_ssh_configuration(ctx, tmp_path, monkeypatch):
+    """Darrell's ~/.ssh/config names the login host 'ssh' and the node by
+    short names, with his user: setup takes the real names, the user and
+    the route from it (ssh -G), asking only to confirm."""
+    import shutil as _sh
+    if not _sh.which("ssh"):
+        pytest.skip("needs ssh")
+    cfg = tmp_path / "ssh_config"
+    cfg.write_text("Host ssh\n    User dschieb\n    HostName ssh.cv.example.org\n"
+                   "Host cvpost106\n    User dschieb\n    HostName cvpost106.cv.example.org\n"
+                   "    ProxyJump dschieb@ssh\n")
+    monkeypatch.setenv("CUBEVIS_SETUP_USER_SSH_CONFIG", str(cfg))
+    c = ctx()                                   # every default taken
+    n = H.locate(c, "cvpost106", 22)
+    st = c.st
+    node = st.nodes()[n]
+    net = st.networks()[node["network"]]
+    assert node["hostname"] == "cvpost106.cv.example.org"
+    assert net["login"]["host"] == "ssh.cv.example.org" and net["login"]["user"] == "dschieb"
+    assert net["user"] == "dschieb" and net["domain"] == "cv.example.org"
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "Your ssh configuration has cvpost106 as dschieb@cvpost106.cv.example.org" in out
+    assert "ssh is ssh.cv.example.org (your ssh configuration)" in out
+    # Another node typed by its short name joins the same network, no questions.
+    cfg.write_text(cfg.read_text() + "Host cvpost107\n    HostName cvpost107.cv.example.org\n")
+    c2 = Ctx(UI(yes=True, out=io.StringIO()), st)
+    m = H.locate(c2, "cvpost107", 22)
+    assert st.nodes()[m]["network"] == node["network"]
+    assert "reached the same way" in " ".join(c2.ui.out.getvalue().split())
+
+
+def test_without_a_configuration_nothing_is_made_up(ctx, monkeypatch):
+    from cubevis.setup.steps import user_ssh, first_jump
+    import shutil as _sh
+    if not _sh.which("ssh"):
+        pytest.skip("needs ssh")
+    monkeypatch.setenv("CUBEVIS_SETUP_USER_SSH_CONFIG", "/dev/null")
+    g = user_ssh("node7.example.org")
+    assert g["hostname"] == "node7.example.org" and g["port"] == 22 and g["proxyjump"] is None
+    assert g["configured"] is False
+    assert first_jump("jo@gw.example.org:2222,inner") == ("gw.example.org", "jo", 2222)
+    assert first_jump("gw") == ("gw", None, 22)
+
+
+def test_a_store_that_fails_offers_another(ctx, monkeypatch):
+    """A Keychain that cannot store (an account without one) is not tried
+    again and again: setup says it failed and offers the other stores."""
+    from cubevis.setup import stores
+    c = ctx(store="command", store_command="op read op://v/@SERVICE@/@ACCOUNT@")
+    c.st.local["store"] = "keychain"
+    tried = []
+
+    def fake_put(ui, st, service, account, host):
+        tried.append(st.local.get("store"))
+        return st.local.get("store") == "command"
+    monkeypatch.setattr(stores, "put", fake_put)
+    monkeypatch.setattr(stores, "available", lambda name: (name in ("keychain", "command"), "x"))
+    assert stores.put_or_switch(c.ui, c.st, "cubevis-ssh", "jo", "gw") is True
+    assert tried == ["keychain", "command"] and c.st.local["store"] == "command"
+    out = c.ui.out.getvalue()
+    assert "Use another password store (command)?" in out and "failed just now" not in out
+
+
+def test_the_keychain_is_checked_before_it_is_offered(monkeypatch):
+    from cubevis.setup import stores
+    import subprocess as sp
+
+    def fake_run(cmd, **kw):
+        return sp.CompletedProcess(cmd, 0, '    "/Users/t/Library/Keychains/login.keychain-db"\n', "")
+    monkeypatch.setattr(stores.subprocess, "run", fake_run)
+    assert "missing" in stores.keychain_problem()
+    monkeypatch.setattr(stores.subprocess, "run",
+                        lambda cmd, **kw: sp.CompletedProcess(cmd, 1, "", "no default"))
+    assert stores.keychain_problem() == "this account has no default keychain"

@@ -82,6 +82,7 @@ def _env(home, **extra):
     env.pop("SSH_WRAPPER_DEBUG", None)       # its log is in the real ~/.ssh
     env.pop("CUBEVIS_ALLOW_MISMATCH", None)
     env["CUBEVIS_SETUP_ALLOW_PLAIN_COMMAND"] = "1"      # the rig's password: echo
+    env.setdefault("CUBEVIS_SETUP_USER_SSH_CONFIG", "/dev/null")   # not this machine's
     env.update(extra)
     return env
 

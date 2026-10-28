@@ -45,8 +45,8 @@ from typing import Optional
 from . import host_dir, host_id, launcher, envs
 from . import remote as R
 from . import state as S
-from .steps import (Ctx, hop_steps, inside_step, local_steps, parent_domain,
-                    split_port)
+from .steps import (Ctx, account_name, first_jump, hop_steps, inside_step, local_steps,
+                    parent_domain, split_port, user_ssh)
 from .ui import tilde
 
 
@@ -145,17 +145,35 @@ def new_network(c: Ctx, host: str) -> Optional[str]:
            "At some sites you first log in to another computer -- an intermediate host, "
            "often called a login host or bastion, like ssh.example.org -- and from there to "
            f"{host}.")
+    import getpass
+    me = getpass.getuser()
+    acct = account_name()            # ssh's own default User
+    # What the user's own ssh configuration says (ssh -G): defaults only.
+    g = user_ssh(host)
+    real = g.get("hostname") or host
+    pj = g.get("proxyjump")
+    if g.get("configured"):
+        ui.say(f"Your ssh configuration has {host} as {g.get('user')}@{real}"
+               + (f", port {g['port']}" if g.get("port", 22) != 22 else "")
+               + (f", through {pj}" if pj else "") + "; those are the defaults below.")
     via = ui.ask_yn(f"Do you log in to an intermediate host before logging in to {host}?",
                     True, key="via_login")
     login, lport, luser = None, 22, None
-    me = os.environ.get("USER") or ""
     if via:
+        jhost, juser, jport = first_jump(pj) if pj else (None, None, 22)
+        dflt = (jhost + (f":{jport}" if jport != 22 else "")) if jhost else ""
         while True:
-            text = ui.ask("The intermediate host's name (host, or host:port)", "",
+            text = ui.ask("The intermediate host's name (host, or host:port)", dflt,
                           key="login_host")
             if not text:
                 return None
             login, lport = split_port(text)
+            lg = user_ssh(login)
+            if lg.get("hostname") and lg["hostname"].lower() != login.lower():
+                ui.say(f"{login} is {lg['hostname']} (your ssh configuration).")
+                login = lg["hostname"]
+            if ":" not in text and lg.get("port", 22) != 22:
+                lport = lg["port"]
             try:
                 S.check_host(login)
                 break
@@ -163,12 +181,14 @@ def new_network(c: Ctx, host: str) -> Optional[str]:
                 ui.note(str(exc))
                 if ui.yes or "login_host" in ui.answers:
                     return None
-        luser = ui.ask(f"Your user name on {login}", st.local.get("last_user") or me,
+        cfg_user = juser or (lg.get("user") if lg.get("user") and lg.get("user") != acct else None)
+        luser = ui.ask(f"Your user name on {login}", cfg_user or st.local.get("last_user") or me,
                        key="login_user")
-    user = ui.ask(f"Your user name on {host}", luser or st.local.get("last_user") or me,
+    node_user = g.get("user") if g.get("user") and g.get("user") != acct else None
+    user = ui.ask(f"Your user name on {host}", node_user or luser or st.local.get("last_user") or me,
                   key="user")
     st.local["last_user"] = user
-    domain = None if is_address(host) else parent_domain(host)
+    domain = None if is_address(real) else parent_domain(real)
     base = (domain or (parent_domain(login) if login else None)
             or re.sub(r"[-_.]?\d+$", "", short_name(host)) or "net").split(".")[0]
     base = re.sub(r"[^A-Za-z0-9_.-]", "-", base).strip("-._") or "net"
@@ -202,7 +222,10 @@ def locate(c: Ctx, host: str, port: int) -> Optional[str]:
         ui.record_change("added node", f"{n} to cluster {cl} (it matches "
                          f"{st.section('clusters')[cl]['pattern']})")
         return n
-    dom = None if is_address(host) else parent_domain(host)
+    # The user's own ssh configuration (ssh -G): a short name's real one.
+    g = user_ssh(host)
+    real = g.get("hostname") or host
+    dom = None if is_address(real) else parent_domain(real)
     same = [k for k, v in sorted(st.networks().items())
             if dom and (v.get("domain") or "").lower() == dom.lower()]
     if same:
@@ -217,8 +240,15 @@ def locate(c: Ctx, host: str, port: int) -> Optional[str]:
     n = short_name(host)
     if n in st.nodes() or not re.match(r"^[A-Za-z0-9]", n):
         n = _unique(f"{n}-{net}", st.nodes())
+    # Its real name and port as the user's ssh configuration has them
+    # (Host cvpost106 / HostName cvpost106.cv.nrao.edu).
+    hostname = st.node_hostname(net, host)
+    if g.get("hostname") and g["hostname"].lower() != host.lower():
+        hostname = g["hostname"]
+    if port == 22 and g.get("port", 22) != 22:
+        port = g["port"]
     try:
-        st.add_node(n, network=net, hostname=st.node_hostname(net, host), port=port)
+        st.add_node(n, network=net, hostname=hostname, port=port)
     except S.StateError as exc:
         ui.fail(str(exc))
         return None

@@ -115,6 +115,9 @@ as ee125b6) and section 17 (the ssh wrapper).
 * **Safari** (2026-10-27, section 39): pages now load their scripts from
   `js/` beside them; Safari refused the `file://` scripts in site-packages
   (blank window).  To be confirmed by Darrell in Safari.
+* **2026-10-28** (section 40): the Keychain checked before it is offered,
+  another store offered when one fails; defaults (real names, users,
+  ProxyJump) from the user's `ssh -G` -- the first part of step 4.
 * **Next: stage 2c step 3** (design 7c "Refinements", section 13): setup's
   own environments -- `envs_dirs` (discovery reports it) shown with the
   expected size, another place allowed; `<tool> create -y -n cubevis-<v>
@@ -169,7 +172,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 40).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 41).
 
 ## Test kit (rebuild after a sandbox restart)
 

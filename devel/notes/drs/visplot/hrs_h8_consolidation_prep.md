@@ -1771,3 +1771,40 @@ in red, "An error occurred trying to load the resource".
   which also checks that no `file://` script is left) and a real visplot
   page on the TW Hya MS (field Ceres), screenshot with both panels drawn.
   Darrell to confirm in Safari.
+
+## 40. A test account without a keychain; defaults from the user's ssh configuration (base `f7e1ed6`, 2026-10-28)
+
+* **The Keychain is checked before it is offered** (`stores.keychain_problem`):
+  `security default-keychain -d user` must name a keychain file that exists
+  and this account can write.  Darrell's new test account (its creation
+  half-failed: no first-login "Welcome", the previous account's removal
+  failed) had none: `security add-generic-password` failed ("The
+  authorization was canceled by the user" / "Unable to obtain authorization"),
+  macOS showed "Keychain Not Found" (whose Reset to Defaults the account
+  was not allowed to do), and setup reported the *login* failure that
+  followed and offered the same store again on retry.  Now an unusable
+  Keychain is listed as not usable, with why and how one is made (Keychain
+  Access, or logging in to the account at the Mac once); a store that fails
+  says "the password was not stored in ..." (with the keychain's problem when
+  that is it), and `put_or_switch` offers the other stores (`choose(exclude=)`)
+  instead of the same one again.  No store usable: said so.
+* **Defaults from the user's ssh configuration** (Darrell: his
+  `~/.ssh/config` has `Host ssh / User dschieb / Hostname ssh.cv.nrao.edu`
+  and the same for the nodes, and setup asked for his user name with the
+  local one as the default).  `steps.user_ssh(HOST)` -- `ssh -G HOST`,
+  nothing connected -- gives the real host name, user, port and ProxyJump;
+  setup says what the configuration has for HOST, takes the ProxyJump's
+  first hop as the default intermediate host, resolves the intermediate host
+  (`ssh` -> `ssh.cv.nrao.edu`, its port) and the node (`cvpost106` ->
+  `cvpost106.cv.nrao.edu`) to their real names, defaults the user names to
+  the configured ones, and names the network from the real domain -- so a
+  later `setup cvpost107` (short name) joins it.  Still asked, only with
+  better defaults: the rest of step 4 (a generated configuration carrying the
+  user's login options, the login test, `diagnose`) is to come.
+  ``CUBEVIS_SETUP_USER_SSH_CONFIG`` points it at another file (ssh reads the
+  account's home, not `$HOME`); the rig tests use `/dev/null`.
+* Tests (`test_hostsetup.py`): Darrell's configuration shape (real names,
+  user, ProxyJump, the network from the domain; a second short name joins);
+  no configuration invents nothing; a failing store offers another; the
+  Keychain check.
+* Setup suite 144 pass with OpenSSH 9.6 and 8.0p1.

@@ -5,6 +5,7 @@ wrapper, logging in to each hop of a network, and the inside ranges.
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import shutil
 import subprocess
@@ -65,6 +66,60 @@ class Ctx:
         r = self.ui.run(cmd, show=False, timeout=timeout, input=input)
         self.last_out = (r.stdout or "") + (r.stderr or "")
         return r
+
+
+def user_ssh(host: str) -> dict:
+    """What the user's own ssh makes of *host* (``ssh -G``: their
+    ``~/.ssh/config``, nothing connected): ``hostname``, ``user``, ``port``,
+    ``proxyjump`` (None when none), and ``configured`` -- whether their
+    configuration says anything about it (a host name, user or port other
+    than ssh's defaults).  {} when ssh cannot say.
+
+    Only defaults come from it so far (design 7c, step 4 adopts the rest).
+    ``CUBEVIS_SETUP_USER_SSH_CONFIG`` names another file than
+    ``~/.ssh/config`` (ssh reads the account's home, not ``$HOME``: tests)."""
+    alt = os.environ.get("CUBEVIS_SETUP_USER_SSH_CONFIG")
+    cmd = ["ssh"] + (["-F", alt] if alt else []) + ["-G", host]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if r.returncode != 0:
+        return {}
+    g = {}
+    for line in r.stdout.splitlines():
+        k, _, v = line.partition(" ")
+        g.setdefault(k.lower(), v.strip())
+    pj = g.get("proxyjump")
+    out = {"hostname": g.get("hostname") or host, "user": g.get("user"),
+           "port": int(g.get("port") or 22),
+           "proxyjump": None if not pj or pj.lower() == "none" else pj}
+    out["configured"] = (out["hostname"].lower() != host.lower() or out["port"] != 22
+                         or (out["user"] or "") != account_name() or bool(out["proxyjump"]))
+    return out
+
+
+def account_name() -> str:
+    """This account's login name, as ssh takes it for its default User (the
+    password database, not ``$USER``)."""
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name
+    except Exception:
+        import getpass
+        return getpass.getuser()
+
+
+def first_jump(proxyjump: str) -> tuple:
+    """``(host, user or None, port)`` of the first hop of a ProxyJump value
+    (``[user@]host[:port][,next...]``)."""
+    hop = proxyjump.split(",")[0].strip()
+    if hop.startswith("ssh://"):
+        hop = hop[len("ssh://"):]
+    user, _, hp = hop.rpartition("@")
+    host, port = split_port(hp)
+    return host, (user or None), port
 
 
 def split_port(text: str) -> tuple:
@@ -230,7 +285,7 @@ def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
                    "again only when you are sure of it.")
             if not ui.ask_yn("Type the password again?", True):
                 return False
-            return stores.put(ui, st, rec["service"], h["user"], h["host"])
+            return stores.put_or_switch(ui, st, rec["service"], h["user"], h["host"])
         if rec.get("password"):
             ui.say(f"{h['host']} needs your password, and this computer has no password "
                    "store chosen yet (the network was set up from another computer sharing "
@@ -267,7 +322,7 @@ def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
                 if ui.ask_yn(f"There is a stored password '{svc}' for {h['user']} already. "
                              "Use it?", True):
                     need_put = False
-        if need_put and not stores.put(ui, st, svc, h["user"], h["host"]):
+        if need_put and not stores.put_or_switch(ui, st, svc, h["user"], h["host"]):
             return False
         rec["password"] = True
         rec["service"] = svc

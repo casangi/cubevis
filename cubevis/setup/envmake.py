@@ -96,7 +96,7 @@ def human_bytes(n) -> str:
 # --------------------------------------------------------------------------
 
 WORKER = r'''
-import json, os, subprocess, sys, tempfile, time
+import fcntl, json, os, re, shutil, subprocess, sys, tempfile, time
 
 class Failed(Exception):
     pass
@@ -130,25 +130,100 @@ env.update(PYTHONNOUSERSITE="1", PIP_NO_INPUT="1", PIP_DISABLE_PIP_VERSION_CHECK
 for k in ("PIP_REQUIRE_VIRTUALENV", "PYTHONHOME", "PYTHONPATH"):
     env.pop(k, None)
 
-def run(step, cmd, shell=False):
+def run(step, cmd, shell=False, extra=None):
+    """Run *cmd*; its exit code.  ``LAST`` is what it printed."""
+    global LAST
     put(step=step)
     say("$ " + (cmd if shell else " ".join(cmd)))
+    start = log.tell()
+    e = dict(env)
+    e.update(extra or {})
     rc = subprocess.call(cmd, shell=shell, stdin=subprocess.DEVNULL, stdout=log,
-                         stderr=subprocess.STDOUT, env=env)
+                         stderr=subprocess.STDOUT, env=e)
     say("-> exit %d" % rc)
+    try:
+        with open(job["log"], "rb") as f:
+            f.seek(start)
+            LAST = f.read().decode("utf-8", "replace")
+    except OSError:
+        LAST = ""
     return rc
+
+LAST = ""
+
+def job_reason():
+    try:
+        with open(STATUS) as f:
+            return json.load(f).get("reason")
+    except (OSError, ValueError):
+        return None
+
+def reason(text):
+    """The line that says why: the last error line of what a command printed."""
+    found = [l.strip() for l in text.splitlines()
+             if re.match(r"\s*(ERROR:|([A-Za-z_.]+\.)?[A-Za-z]*(Error|Exception)\b)", l)]
+    return found[-1][:300] if found else None
+
+def locks_work(d):
+    """Can a file in *d* be locked?  Some shared filesystems (Lustre mounted
+    without flock, NFS without a lock daemon) answer "No locks available";
+    conda locks its package cache and gives up."""
+    try:
+        with open(os.path.join(d, ".lock-test"), "w") as f:
+            fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.unlink(os.path.join(d, ".lock-test"))
+        return True
+    except OSError:
+        return False
+
+def scratch_pkgs():
+    """A fresh package cache where locking works and there is room, or None."""
+    for base in (os.environ.get("TMPDIR"), "/tmp", "/var/tmp", "/dev/shm"):
+        try:
+            if not base or not os.path.isdir(base):
+                continue
+            st = os.statvfs(base)
+            if st.f_bavail * st.f_frsize < 2 * 1024 ** 3:
+                continue
+            d = tempfile.mkdtemp(prefix="cubevis-pkgs-", dir=base)
+        except OSError:
+            continue
+        if locks_work(d):
+            return d
+        shutil.rmtree(d, ignore_errors=True)
+    return None
 
 done = list(job.get("done") or [])
 try:
-    put(state="running", pid=os.getpid(), step="starting", started=now(), error=None)
+    put(state="running", pid=os.getpid(), step="starting", started=now(), error=None, reason=None)
     if "create" not in done or not os.path.exists(PY):
         if os.path.lexists(PREFIX):           # what an unfinished earlier try left
             if run("removing an unfinished environment", [TOOL, "env", "remove", "-y", "-p", PREFIX]) \
                     or os.path.lexists(PREFIX):
                 raise Failed("cannot remove the unfinished environment %s" % PREFIX)
             done = []
-        if run("creating the environment (conda)",
-               [TOOL, "create", "-y", "-p", PREFIX, "python=" + job["python"], "pip"]):
+        cmd = [TOOL, "create", "-y", "-p", PREFIX, "python=" + job["python"], "pip"]
+        step = "creating the environment (conda)"
+        rc = run(step, cmd)
+        if rc and re.search(r"No locks available|Errno 37|ENOLCK", LAST):
+            # The package cache is on a filesystem without file locking: the
+            # packages for this one environment go through a scratch cache.
+            pkgs = scratch_pkgs()
+            if pkgs:
+                say("the package cache cannot be locked here; using %s for this" % pkgs)
+                put(step=step + ", package cache in " + pkgs)
+                if os.path.lexists(PREFIX):
+                    run("removing an unfinished environment", [TOOL, "env", "remove", "-y", "-p", PREFIX])
+                try:
+                    rc = run(step, cmd, extra={"CONDA_PKGS_DIRS": pkgs})
+                finally:
+                    shutil.rmtree(pkgs, ignore_errors=True)
+            else:
+                put(reason="its package cache is on a filesystem that cannot lock files (No locks "
+                           "available), and there is no local scratch directory with room for another")
+        if rc:
+            if not job_reason():
+                put(reason=reason(LAST))
             raise Failed("%s create failed" % os.path.basename(TOOL))
         done.append("create")
         put(done=done)
@@ -158,6 +233,7 @@ try:
         else:
             rc = run("installing cubevis (pip)", [PY, "-m", "pip", "install", job["spec"]])
         if rc:
+            put(reason=reason(LAST))
             raise Failed("pip install %s failed" % job["spec"])
         done.append("install")
         put(done=done)

@@ -29,6 +29,10 @@ from cubevis.setup import envmake as E
 FAKE_CONDA = r'''#!/bin/sh
 case "$1 $2" in
   "create -y")
+      [ "$FAKE_CONDA_FAIL" = locks ] && [ -z "$CONDA_PKGS_DIRS" ] && { mkdir -p "$4"
+          echo "    OSError: [Errno 37] No locks available" >&2; echo "Upload did not complete." >&2; exit 1; }
+      [ "$FAKE_CONDA_FAIL" = locks-always ] && { echo "    OSError: [Errno 37] No locks available" >&2; exit 1; }
+      [ -n "$CONDA_PKGS_DIRS" ] && echo "pkgs=$CONDA_PKGS_DIRS" > "$FAKE_CONDA_SEEN"
       [ "$FAKE_CONDA_FAIL" = create ] && { mkdir -p "$4"; echo "fake conda: solver failed" >&2; exit 1; }
       "%(py)s" -m venv --without-pip "$4" && mkdir -p "$4/conda-meta" ;;
   "env remove")
@@ -233,3 +237,27 @@ def test_remove_uses_the_tools_own_remove_and_clears_the_job(node):
     r = node.call("remove", prefix=prefix, tool=node.tool)
     assert r["ok"] and r["removed"] and not os.path.exists(prefix)
     assert node.call("status", name="cubevis-1.0.97")["status"] is None
+
+
+def test_a_package_cache_that_cannot_lock_gets_a_scratch_one(node):
+    """Lustre without flock: conda says "No locks available".  The create is
+    tried again with a scratch package cache, which is removed afterwards."""
+    seen = node.tmp / "seen"
+    node.start(env={"FAKE_CONDA_FAIL": "locks", "FAKE_CONDA_SEEN": str(seen)}, install_shell="true")
+    st = node.wait()
+    assert st["state"] == "ok", st
+    pkgs = seen.read_text().split("=", 1)[1].strip()
+    assert "cubevis-pkgs-" in pkgs and not os.path.exists(pkgs)
+    log = open(st["log"]).read()
+    assert "package cache cannot be locked here" in log and log.count("create -y -p") == 2
+    assert os.path.exists(f"{node.envs_dir}/cubevis-1.0.97/{E.MARKER_FILE}")
+
+
+def test_a_failure_says_why_in_one_line(node):
+    node.start(env={"FAKE_CONDA_FAIL": "locks-always"}, install_shell="true")
+    st = node.wait()
+    assert st["state"] == "failed"
+    assert st["reason"] == "OSError: [Errno 37] No locks available", st
+    node.start(install_shell="echo 'ERROR: no matching distribution' >&2; exit 1")
+    st = node.wait()
+    assert st["state"] == "failed" and st["reason"] == "ERROR: no matching distribution", st

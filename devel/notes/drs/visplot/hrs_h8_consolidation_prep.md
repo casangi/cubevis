@@ -2013,7 +2013,23 @@ modified").
   environment on NODE has the same kernel-side code" (false: #1 was ok) and
   then "Environment (empty: stop)".  Now it says setup cannot make an
   environment for a development install, and asks again with the default.
-* **Suite**: setup suite 191 passed, 1 skipped with the rig and venv-kernel
+* **Fixed after Darrell's second real run** (cvpost106, Lustre; log
+  `cubevis-1.0.99.log`): `conda create` died in the solver with
+  `OSError: [Errno 37] No locks available` -- conda locks its repodata
+  state file in the package cache (`/home/zuul06/conda/pkgs/cache`), and the
+  filesystem there does not lock.  The worker now notices that text in what
+  create printed and runs create once more with `CONDA_PKGS_DIRS` set to a
+  fresh scratch directory (first of `$TMPDIR`, `/tmp`, `/var/tmp`,
+  `/dev/shm` where `lockf` works and 2 GB are free; removed afterwards --
+  only python and pip go through conda's cache, the 1.5 GB is pip's).  No
+  such directory: the reason says so.  The status now has a one-line
+  `reason` (the last `...Error:`/`ERROR:` line of the failed command), shown
+  instead of the log's last lines, which were conda's boilerplate ("Upload
+  did not complete").  Tests: `test_a_package_cache_that_cannot_lock_...`,
+  `test_a_failure_says_why_in_one_line`.  Not seen on a real node: whether
+  mamba/micromamba behave the same with `CONDA_PKGS_DIRS`.  pip's own cache
+  (`~/.cache/pip`) is not locked with `lockf`, so it should be fine.
+* **Suite**: setup suite 195 passed, 1 skipped with the rig and venv-kernel
   (OpenSSH 9.6 only: the 8.0 client was not rebuilt this session; step 3
   adds nothing to the wrapper or ssh's options).
 * **Not covered**: mamba and micromamba are driven the same way

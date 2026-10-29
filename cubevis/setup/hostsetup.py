@@ -560,7 +560,7 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Option
         ui.heading(f"An environment stopped on {node}")
         ui.note(f"An earlier try to make {rtilde(prefix, home)} stopped at "
                 f"{j.get('step') or 'the start'}: {j.get('error') or 'no reason recorded'}")
-        for line in (j.get("log_tail") or [])[-6:]:
+        for line in ([j["reason"]] if j.get("reason") else (j.get("log_tail") or [])[-6:]):
             ui._p("    " + line)
         ui.say(f"(its log: {rtilde(j.get('log'), home)} on {node})")
         if not ui.ask_yn("Try again? It goes on from the step it stopped at.", True, key="make_env"):
@@ -625,8 +625,11 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Option
         return None
     if st["state"] != "ok":
         ui.fail(f"{rtilde(prefix, home)} could not be made: {st.get('error')}")
-        for line in (st.get("log_tail") or [])[-8:]:
-            ui._p("    " + line)
+        if st.get("reason"):
+            ui._p("    " + st["reason"])
+        else:
+            for line in (st.get("log_tail") or [])[-8:]:
+                ui._p("    " + line)
         ui.say(f"Its log is {rtilde(st.get('log'), home)} on {node}. Run this again to try again "
                "from the step that failed (nothing done is repeated).")
         return None

@@ -17,6 +17,8 @@
 # to sshpyk (--ssh), so only the kernels and setup use it. To use it for everything instead:
 #   cp ssh ~/bin/ssh && chmod +x ~/bin/ssh && ln -s ssh ~/bin/scp
 #   with ~/bin before /usr/bin in PATH.
+# README.md beside this file is the guide for that use (setup, rules,
+# the password, inside/outside routing, settings, troubleshooting).
 # Needs perl, OpenSSH 8.0 or later, and a password store (below).
 #
 # Rules: which hosts need the password
@@ -86,6 +88,27 @@
 # each one matches (or why none does), whether a password is stored, and
 # whether a shared connection is up. It logs in nowhere.
 #
+# Inside or outside: `ssh --reachable HOST [PORT]`, for a `Match exec` line
+# in ~/.ssh/config, exits 0 if HOST answers on PORT (default 22) directly
+# from here, 1 if not -- so ssh can go straight to a node when this computer
+# is on the site's network (or its VPN) and through the login host when it
+# is not:
+#
+#   Match host *.cv.example.org,!login.cv.example.org !exec "~/bin/ssh --reachable %h %p"
+#       ProxyJump login.cv.example.org
+#
+# ssh runs that test before every connection, so the answer is remembered:
+# per host (and port) and per *local source address* -- the address this computer
+# would send from to reach the host, which the system tells without sending
+# anything.  It changes whenever the network does (office, home, VPN up or
+# down, a hotel), so a move is never missed: a new network costs one
+# connection attempt (at most SSH_WRAPPER_REACHABLE_TIMEOUT seconds,
+# default 1) and a known one nothing.  A name that does not resolve is
+# "not reachable" at once.  Kept in $XDG_CACHE_HOME/ssh-wrapper/reachable
+# (default ~/.cache/...) for SSH_WRAPPER_REACHABLE_TTL seconds (default a
+# day); `ssh --reachable --forget` clears it, `-v` says why.
+# SSH_WRAPPER_ROUTE=direct or =jump decides without testing.
+#
 # Debugging: SSH_WRAPPER_DEBUG=1 logs to $SSH_WRAPPER_LOG
 # (default ~/.ssh/ssh-wrapper.log).
 #
@@ -122,6 +145,12 @@ my $VERIFY_DELAY    = $ENV{SSH_WRAPPER_VERIFY_DELAY} || 0.25;    # seconds
 # Stale shared connections (header, "Stale shared connections").
 my $STALE_AFTER   = exists $ENV{SSH_WRAPPER_STALE_AFTER} ? $ENV{SSH_WRAPPER_STALE_AFTER} : 300;
 my $PROBE_TIMEOUT = $ENV{SSH_WRAPPER_PROBE_TIMEOUT} || 10;
+
+# --reachable (header, "Inside or outside").
+my $REACH_TIMEOUT = $ENV{SSH_WRAPPER_REACHABLE_TIMEOUT} || 1;
+my $REACH_TTL     = $ENV{SSH_WRAPPER_REACHABLE_TTL} || 86400;
+my $REACH_CACHE   = ( $ENV{XDG_CACHE_HOME} || ( ( $ENV{HOME} || '/tmp' ) . '/.cache' ) )
+  . '/ssh-wrapper/reachable';
 
 sub logmsg {
     return unless $DEBUG;
@@ -237,6 +266,147 @@ sub hand_off {
 }
 
 logmsg( "invoked as $self_name: " . join( ' ', @ARGV ) );
+
+################################################################################
+# 1b. ssh --reachable [-v] HOST [PORT] | --reachable --forget: for `Match
+#     exec` (header, "Inside or outside").  Runs before every ssh connection
+#     that the Match line covers, so it stays light: no rules, no ssh.
+################################################################################
+use Socket qw(getaddrinfo getnameinfo SOCK_STREAM SOCK_DGRAM SOL_SOCKET SO_ERROR
+  NI_NUMERICHOST NIx_NOSERV AI_NUMERICHOST);
+use Fcntl qw(F_GETFL F_SETFL O_NONBLOCK);
+use POSIX ();
+
+# The host's numeric address and the local address the system would send
+# from to reach it: a UDP connect, which sends nothing.  In a child process,
+# so a resolver that hangs (an internal name, off-site) costs at most
+# $REACH_TIMEOUT -- a signal would not interrupt getaddrinfo.  () if the
+# name does not resolve or there is no route.
+sub route_of {
+    my ( $host, $port ) = @_;
+    pipe( my $r, my $w ) or return ();
+    my $pid = fork();
+    return () unless defined $pid;
+    if ( $pid == 0 ) {
+        close $r;
+        my ( $err, @ai ) = getaddrinfo( $host, $port, { socktype => SOCK_STREAM } );
+        for my $ai ( $err ? () : @ai ) {
+            socket( my $u, $ai->{family}, SOCK_DGRAM, 0 ) or next;
+            connect( $u, $ai->{addr} ) or next;
+            my ( $e1, $dst ) = getnameinfo( $ai->{addr}, NI_NUMERICHOST, NIx_NOSERV );
+            my ( $e2, $src ) = getnameinfo( getsockname($u), NI_NUMERICHOST, NIx_NOSERV );
+            next if $e1 || $e2;
+            print $w "$dst $src\n";
+            last;
+        }
+        close $w;
+        POSIX::_exit(0);
+    }
+    close $w;
+    my $rin = '';
+    vec( $rin, fileno($r), 1 ) = 1;
+    my $line = '';
+    if ( select( my $rout = $rin, undef, undef, $REACH_TIMEOUT ) > 0 ) { $line = <$r> // ''; }
+    close $r;
+    kill 'KILL', $pid;
+    waitpid( $pid, 0 );
+    return split ' ', $line;
+}
+
+# Does ADDR answer on PORT within $REACH_TIMEOUT?  A non-blocking connect.
+sub answers {
+    my ( $addr, $port ) = @_;
+    my ( $err, $ai ) = getaddrinfo( $addr, $port, { socktype => SOCK_STREAM, flags => AI_NUMERICHOST } );
+    return 0 if $err || !$ai;
+    socket( my $s, $ai->{family}, SOCK_STREAM, 0 ) or return 0;
+    fcntl( $s, F_SETFL, fcntl( $s, F_GETFL, 0 ) | O_NONBLOCK );
+    return 1 if connect( $s, $ai->{addr} );
+    return 0 unless $!{EINPROGRESS};
+    my $win = '';
+    vec( $win, fileno($s), 1 ) = 1;
+    return 0 unless select( undef, my $wout = $win, undef, $REACH_TIMEOUT ) > 0;
+    my $so = getsockopt( $s, SOL_SOCKET, SO_ERROR );
+    return defined $so && unpack( 'i', $so ) == 0 ? 1 : 0;
+}
+
+# The cache: "host:port source direct|jump time" per line.
+sub reach_cache_read {
+    my %c;
+    open( my $fh, '<', $REACH_CACHE ) or return \%c;
+    my $now = time();
+    while (<$fh>) {
+        my ( $h, $src, $ans, $t ) = split;
+        next unless defined $t && $now - $t < $REACH_TTL;
+        $c{"$h $src"} = [ $ans, $t ];
+    }
+    close $fh;
+    return \%c;
+}
+
+sub reach_cache_write {
+    my ($c) = @_;
+    my $dir = dirname($REACH_CACHE);
+    unless ( -d $dir ) {
+        mkdir( dirname($dir), 0700 );
+        mkdir( $dir, 0700 ) or return;
+    }
+    my $tmp = "$REACH_CACHE.$$";
+    open( my $fh, '>', $tmp ) or return;
+    print $fh "$_ $c->{$_}[0] $c->{$_}[1]\n" for sort keys %$c;
+    close $fh;
+    rename( $tmp, $REACH_CACHE ) or unlink $tmp;
+}
+
+sub reachable_main {
+    my @a = @_;
+    my ( $verbose, $forget ) = ( 0, 0 );
+    while ( @a && $a[0] =~ /^-/ ) {
+        my $o = shift @a;
+        if    ( $o eq '-v' )       { $verbose = 1; }
+        elsif ( $o eq '--forget' ) { $forget  = 1; }
+        else { @a = (); last; }
+    }
+    my $say = sub { print STDERR "[ssh-wrapper] @_\n" if $verbose; logmsg("reachable: @_"); };
+    if ($forget) {
+        unlink $REACH_CACHE;
+        print STDERR "[ssh-wrapper] forgot what was learned ($REACH_CACHE)\n";
+        return 0;
+    }
+    my ( $host, $port ) = @a;
+    unless ( defined $host && length $host ) {
+        print STDERR "usage: ssh --reachable [-v] HOST [PORT]  |  ssh --reachable --forget\n";
+        return 2;
+    }
+    $port = 22 unless defined $port && $port =~ /^\d+$/;
+    $host = lc $host;
+    my $route = lc( $ENV{SSH_WRAPPER_ROUTE} // '' );
+    if ( $route eq 'direct' || $route eq 'jump' ) {
+        $say->("$host: $route (SSH_WRAPPER_ROUTE)");
+        return $route eq 'direct' ? 0 : 1;
+    }
+    my ( $dst, $src ) = route_of( $host, $port );
+    unless ( defined $src ) {
+        $say->("$host: not reachable (the name does not resolve here, or no route to it)");
+        return 1;
+    }
+    my $c = reach_cache_read();
+    if ( my $hit = $c->{"$host:$port $src"} ) {
+        $say->( "$host: $hit->[0] (remembered for this network, local address $src, from "
+              . ( time() - $hit->[1] ) . "s ago)" );
+        return $hit->[0] eq 'direct' ? 0 : 1;
+    }
+    my $ok = answers( $dst, $port );
+    $c->{"$host:$port $src"} = [ $ok ? 'direct' : 'jump', time() ];
+    reach_cache_write($c);
+    $say->( "$host: " . ( $ok ? "direct ($dst port $port answered" : "jump (no answer from $dst port $port within ${REACH_TIMEOUT}s" )
+          . "; local address $src, now remembered)" );
+    return $ok ? 0 : 1;
+}
+
+if ( @ARGV && $ARGV[0] eq '--reachable' ) {
+    shift @ARGV;
+    exit reachable_main(@ARGV);
+}
 
 ################################################################################
 # 2. Rules. None -> nothing to do.
@@ -553,7 +723,6 @@ sub fetch_password {
 # actually asks. One password attempt only, so a wrong stored password
 # cannot lock the account.
 ################################################################################
-use POSIX ();
 use File::Temp ();
 
 # The login's stderr and the askpass call's report on the password lookup

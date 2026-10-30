@@ -2037,3 +2037,59 @@ modified").
   faked; a real conda on the real network is the first check -- ask Darrell
   how a `setup HOST` on a node with no usable environment goes (the
   question's wording, the directory default on NRAO's conda, the time).
+
+## 44. Real-node check of step 3; how the wait shows life (base `c405f16`, 2026-10-30)
+
+* **Real run** (Darrell, `try-007A`, cvpost106, cubevis 1.0.101): setup made
+  `/home/zuul06/conda/envs/cubevis-1.0.101` (the lock fallback of section 43
+  worked), the kernel started, and a visplot session ran.  Step 3 is
+  accepted as done.  It took **42 minutes** (conda 9, pip 33): the node's
+  filesystem is slow (autofs / Lustre).  The wait printed a line a minute
+  with the elapsed time and nothing else; it had two silent gaps (9->10 and
+  14->22 minutes) -- polls that did not come back (each `status` call can
+  take up to `CALL_TIMEOUT`, 120 s, and failures were not mentioned).
+* **Wanted** (Darrell): busy-type feedback during a long wait, but only if
+  it is tied to the real health and output of the remote work.
+* **Built**, on that rule -- nothing is shown that the node did not report:
+  * `envmake.activity_of` (in the node program's `status`): the log's size
+    and age, and over the worker's live descendants (`/proc`, Linux; left
+    out elsewhere) CPU seconds, bytes read and written (`rchar`+`wchar`, so
+    network reads count), process names, and how many are in state D
+    (uninterruptible disk wait -- what a stalled shared filesystem looks
+    like).  Only for a running job.  Standard library, Python 3.6.
+  * `hostsetup.Pulse`: compares two answers.  *moving* = CPU, data or the
+    log grew.  Words: `working (pip)`; `quiet for 1:20 (pip is running)`
+    after 20 s without movement; `waiting on NODE's disk for 5:00 (...)`
+    when some process is in state D; `no output, CPU or data for 6:00,
+    though pip is still running -- slow or stuck; it is not stopped` after
+    3 minutes.  No report (not Linux): no verdict, as before.
+  * `wait_for_job`: the minute line now carries the verdict (and the last
+    line of output when not "working"); a line is also printed when the
+    verdict turns to or from waiting/no-output; **a poll that does not come
+    back** says "NODE is slow to answer (...); the work goes on there" once,
+    and "answers again (after M:SS)" later (the give-up rule, 6 failed polls
+    in a row, is unchanged).  On a terminal, one line rewritten at each poll
+    (`ui.live`, `ui.live_clear`; any other message clears it first):
+    `| installing cubevis (pip)   14:03   working (pip)   Downloading ...`;
+    the spinner turns **only** when the node reported movement, so a frozen
+    spinner means nothing is happening.  Not a terminal: lines only.
+* **Brittleness**: `/proc` field positions (`stat`: state after the closing
+  parenthesis of the name; utime, stime, cutime, cstime = fields 14-17) and
+  `/proc/PID/io` are stable Linux interfaces; any failure leaves `activity`
+  smaller or absent, never an error.  Counters of finished children fold
+  into their parent's `cutime`, so CPU does not fall as pip's helpers exit;
+  `rchar`/`wchar` can, so only an increase counts as movement.  A process
+  that is slow but alive is reported as such ("slow or stuck"), not as a
+  failure: the verdict never stops the work or gives up.
+* **Suite**: setup suite 214 passed, 1 skipped (rig, venv-kernel, OpenSSH 9.6).
+* **Tests**: `test_envmake.py` (the activity of a running job: names,
+  CPU, data, disk wait 0, log age; gone when done; also under Python 3.6),
+  `test_hostsetup.py` (Pulse moving / not; the words for working, quiet,
+  waiting on disk, stuck; the lines of a wait; a node that stops answering
+  and returns; the live line on a terminal only).  Not tested: a real
+  state-D process (the wording is checked with the count as the node would
+  send it).
+* **Not covered**: pip's own progress (its output goes to the log; with no
+  terminal it prints "Downloading X (size)" lines, which the last-output
+  text shows); a verdict for macOS/BSD nodes; and whether 20 s / 3 min are
+  the right thresholds for NRAO's filesystems -- ask Darrell.

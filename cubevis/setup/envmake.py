@@ -299,6 +299,61 @@ def tail(p, n=12):
     except OSError:
         return []
 
+def activity_of(pid, log):
+    """What the worker and what it started are doing now, from the system
+    itself (Linux ``/proc``; anything missing is left out): the log's size
+    and age; and, over the worker's live descendants, CPU seconds used,
+    bytes read and written, process names, and how many are in
+    uninterruptible disk wait (state D -- what a stalled shared filesystem
+    looks like).  Counters only grow while the work does, so setup compares
+    two answers; they are not a measure of progress, only of life."""
+    out = {}
+    try:
+        st = os.stat(log)
+        out["log_size"], out["log_age"] = st.st_size, max(0, int(time.time() - st.st_mtime))
+    except OSError:
+        pass
+    try:
+        tick = float(os.sysconf("SC_CLK_TCK"))
+        procs, kids = {}, {}
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            try:
+                with open("/proc/%s/stat" % d) as f:
+                    raw = f.read()
+                rest = raw[raw.rindex(")") + 2:].split()
+                procs[int(d)] = (raw[raw.index("(") + 1:raw.rindex(")")], rest[0],
+                                 sum(int(x) for x in rest[11:15]) / tick)
+                kids.setdefault(int(rest[1]), []).append(int(d))
+            except (OSError, ValueError, IndexError):
+                continue
+        mine, todo = [], [int(pid)]
+        while todo:
+            q = todo.pop()
+            if q in procs:
+                mine.append(q)
+            todo.extend(kids.get(q, []))
+        io = 0
+        for q in mine:
+            try:
+                with open("/proc/%d/io" % q) as f:
+                    for line in f:
+                        if line.startswith(("rchar:", "wchar:")):
+                            io += int(line.split()[1])
+            except (OSError, ValueError):
+                pass
+        names = []
+        for q in mine:
+            if q != int(pid) and procs[q][0] not in ("sh", "bash", "csh", "tcsh", "zsh") \
+                    and procs[q][0] not in names:
+                names.append(procs[q][0])
+        out.update(cpu=round(sum(procs[q][2] for q in mine), 2), io=io, procs=names[:4],
+                   disk_wait=sum(1 for q in mine if procs[q][1] == "D"), alive=len(mine))
+    except (OSError, ValueError, AttributeError):
+        pass
+    return out
+
 def status_of(name):
     p = paths(name)
     st = read_json(p["status"])
@@ -314,6 +369,8 @@ def status_of(name):
     st["name"] = name
     st["log"] = p["log"]
     st["log_tail"] = tail(p["log"])
+    if st["state"] in ("running", "starting") and st.get("pid"):
+        st["activity"] = activity_of(st["pid"], p["log"])
     return st
 
 def nearest(d):

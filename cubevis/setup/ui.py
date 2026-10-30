@@ -62,6 +62,7 @@ class UI:
         self.answers = dict(answers or {})   # question key -> pre-filled answer
         self.out = out or sys.stdout
         self.inp = inp or sys.stdin
+        self._live = False                   # a line written in place is showing
         self.changes: list = []              # made in this run
         self.failed = 0
         self.home = host_dir()
@@ -76,7 +77,25 @@ class UI:
 
     # -- messages -----------------------------------------------------------
     def _p(self, s: str = "") -> None:
+        self.live_clear()
         print(s, file=self.out, flush=True)
+
+    def live(self, text: str) -> bool:
+        """Show *text* as one line rewritten in place (a terminal only; False
+        elsewhere, where nothing is written).  The next message replaces it."""
+        if not getattr(self.out, "isatty", lambda: False)():
+            return False
+        width = max(20, shutil.get_terminal_size((80, 24)).columns - 1)
+        self.out.write("\r\x1b[2K" + text[:width])
+        self.out.flush()
+        self._live = True
+        return True
+
+    def live_clear(self) -> None:
+        if self._live:
+            self.out.write("\r\x1b[2K")
+            self.out.flush()
+            self._live = False
 
     def say(self, text: str) -> None:
         for para in str(text).split("\n"):

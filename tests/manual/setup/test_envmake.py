@@ -261,3 +261,21 @@ def test_a_failure_says_why_in_one_line(node):
     node.start(install_shell="echo 'ERROR: no matching distribution' >&2; exit 1")
     st = node.wait()
     assert st["state"] == "failed" and st["reason"] == "ERROR: no matching distribution", st
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="needs Linux /proc")
+def test_status_of_a_running_job_says_what_it_is_doing(node):
+    """Life signs from the system, not from the worker's say-so: the log, and
+    the live processes under the worker (names, CPU, data moved)."""
+    node.start(install_shell="sleep 3")
+    st = node.wait(states=("running",))
+    for _ in range(30):                      # the sleep starts a moment after "running"
+        a = node.call("status", name="cubevis-1.0.97")["status"].get("activity") or {}
+        if "sleep" in (a.get("procs") or []):
+            break
+        time.sleep(0.1)
+    assert "sleep" in a["procs"], a
+    assert a["alive"] >= 2 and a["cpu"] >= 0 and a["io"] > 0 and a["disk_wait"] == 0
+    assert a["log_size"] > 0 and a["log_age"] >= 0
+    assert node.wait()["state"] == "ok"
+    assert "activity" not in node.call("status", name="cubevis-1.0.97")["status"]

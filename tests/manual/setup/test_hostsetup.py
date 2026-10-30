@@ -489,3 +489,76 @@ def test_asking_for_new_with_a_development_install_does_not_say_nothing_matches(
     out = " ".join(c.ui.out.getvalue().split())
     assert "Setup cannot make an environment for this cubevis" in out
     assert "No environment on" not in out and "Choose one of the environments listed" in out
+
+
+def _running(step="installing cubevis (pip)", **act):
+    base = dict(cpu=1.0, io=1000, log_size=100, log_age=1, procs=["pip"], disk_wait=0, alive=2)
+    base.update(act)
+    return {"state": "running", "step": step, "activity": base,
+            "log_tail": ["Collecting bokeh", "Downloading bokeh-3.10.0-py3-none-any.whl (6.6 MB)"]}
+
+
+def test_pulse_moves_only_when_the_node_says_the_work_moved():
+    p = H.Pulse()
+    assert p.update(_running()) is False                          # the first answer: nothing to compare
+    assert p.update(_running()) is False and p.spin == 0          # same counters: not moving
+    assert p.update(_running(cpu=2.0)) is True and p.spin == 1    # CPU grew
+    assert p.update(_running(cpu=2.0, io=5000)) is True           # data moved
+    assert p.update(_running(cpu=2.0, io=5000, log_size=300)) is True      # the log grew
+    assert p.update({"state": "running", "step": "x"}) is False   # no report (not Linux): no verdict
+    assert p.words({"state": "running"}, "node1") == ""
+
+
+def test_pulse_words_tell_quiet_from_waiting_on_the_disk_from_stuck():
+    p = H.Pulse()
+    st = _running()
+    p.update(st)
+    assert p.words(st, "node1").startswith("working (pip)")
+    p.last_move -= 60
+    assert p.words(st, "node1").startswith("quiet for 1:0")
+    p.last_move -= 300
+    assert "no output, CPU or data for 6:0" in p.words(st, "node1")
+    assert "not stopped" in p.words(st, "node1")
+    p.last_move += 300
+    words = p.words(_running(disk_wait=1), "node1")
+    assert words.startswith("waiting on node1's disk") and "slow shared filesystem" in words
+
+
+def test_waiting_says_how_it_is_going_from_what_the_node_reports(ctx, release, monkeypatch):
+    seq = iter([_running(), _running(cpu=2.0), _running(cpu=2.0, disk_wait=1),
+                {"state": "ok", "step": "done"}])
+    monkeypatch.setattr(H.envmake, "call", lambda *a, **k: {"ok": True, "status": next(seq)})
+    c = ctx(via_login="n", user="jo")
+    assert H.wait_for_job(c, _node(c), _rep(), "cubevis-1.0.97")["state"] == "ok"
+    out = c.ui.out.getvalue()
+    assert "installing cubevis (pip) ... working (pip)" in out
+    assert "\r" not in out                                           # not a terminal: lines only
+
+
+def test_a_node_that_stops_answering_is_said_to_be_slow_and_then_back(ctx, release, monkeypatch):
+    seq = iter([H.R.RemoteError("timed out"), H.R.RemoteError("timed out"),
+                {"ok": True, "status": _running()}, {"ok": True, "status": {"state": "ok", "step": "done"}}])
+
+    def call(*a, **k):
+        r = next(seq)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    monkeypatch.setattr(H.envmake, "call", call)
+    c = ctx(via_login="n", user="jo")
+    assert H.wait_for_job(c, _node(c), _rep(), "cubevis-1.0.97")["state"] == "ok"
+    out = " ".join(c.ui.out.getvalue().split())
+    assert out.count("node1 is slow to answer") == 1 and "node1 answers again" in out
+
+
+def test_the_live_line_is_rewritten_on_a_terminal_only(ctx, release, monkeypatch):
+    class Tty(__import__("io").StringIO):
+        def isatty(self):
+            return True
+    seq = iter([_running(), _running(cpu=3.0), {"state": "ok", "step": "done"}])
+    monkeypatch.setattr(H.envmake, "call", lambda *a, **k: {"ok": True, "status": next(seq)})
+    c = ctx(via_login="n", user="jo")
+    c.ui.out = Tty()
+    assert H.wait_for_job(c, _node(c), _rep(), "cubevis-1.0.97")["state"] == "ok"
+    out = c.ui.out.getvalue()
+    assert "\r\x1b[2K" in out and "installing cubevis (pip)" in out

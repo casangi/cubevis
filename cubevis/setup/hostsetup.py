@@ -468,26 +468,104 @@ def poll_seconds() -> float:
         return 5.0
 
 
+SPINNER = "|/-\\"      # turns only when the node reports the work moved
+
+
+def _clock(seconds: float) -> str:
+    seconds = int(seconds)
+    h, rest = divmod(seconds, 3600)
+    m, sec = divmod(rest, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+def _last_output(st: dict) -> str:
+    for line in reversed(st.get("log_tail") or []):
+        line = line.strip()
+        if line and not line.startswith(("$ ", "-> exit", "----")):
+            return line[:70]
+    return ""
+
+
+class Pulse:
+    """What the node says about the work, as plain words.  Only what the
+    node reports is used: the worker's log growing, CPU time or data moved
+    by it and what it started (``envmake.activity_of``).  ``moving``: any of
+    that grew since the last answer.  Without that report (not Linux) there
+    is no verdict, only the step and the time."""
+
+    def __init__(self):
+        self.prev = None
+        self.last_move = time.time()
+        self.spin = 0
+
+    def update(self, st: dict) -> bool:
+        a = st.get("activity") or {}
+        moving = False
+        if a and self.prev is not None:
+            moving = (a.get("cpu", 0) - self.prev.get("cpu", 0) > 0.05
+                      or a.get("io", 0) > self.prev.get("io", 0)
+                      or a.get("log_size", 0) > self.prev.get("log_size", 0))
+        if a:
+            self.prev = a
+        if moving or self.prev is None or not a:
+            self.last_move = time.time()
+        if moving:
+            self.spin += 1
+        return moving
+
+    def quiet(self) -> float:
+        return time.time() - self.last_move
+
+    def words(self, st: dict, node: str) -> str:
+        a = st.get("activity") or {}
+        if not a:
+            return ""
+        what = "/".join(a.get("procs") or []) or "setup's worker"
+        q = self.quiet()
+        if q < 20:
+            return f"working ({what})"
+        if a.get("disk_wait"):
+            return (f"waiting on {node}'s disk for {_clock(q)} ({what} cannot proceed until it "
+                    "answers; a slow shared filesystem looks like this)")
+        if q < 180:
+            return f"quiet for {_clock(q)} ({what} is running)"
+        return (f"no output, CPU or data for {_clock(q)}, though {what} is still running -- slow "
+                "or stuck; it is not stopped")
+
+
 def wait_for_job(c: Ctx, node: str, rep: dict, name: str) -> Optional[dict]:
     """Poll the environment being made on *node* until it is done: its
     status (``state`` ok, failed or died).  None when setup stops waiting
     (interrupted, or the node cannot be reached): the work goes on there,
-    and running setup again picks it up."""
+    and running setup again picks it up.
+
+    Shows how it is going from what the node reports (``Pulse``): a line
+    each minute, one when the verdict changes, and on a terminal a line
+    rewritten at each poll whose spinner turns only when the work moved."""
     ui = c.ui
     alias, python3, config_dir = _node_access(c, node, rep)
     home = (rep.get("host") or {}).get("home")
     interval, t0, last_say, step, errors = poll_seconds(), time.time(), time.time(), None, 0
+    pulse, stuck, slow_since, st = Pulse(), False, None, {}
     try:
         while True:
             try:
                 res = envmake.call(c, alias, python3, envmake.request("status", config_dir, name=name))
                 errors = 0
+                if slow_since is not None:
+                    ui.say(f"  {node} answers again (after {_clock(time.time() - slow_since)}).")
+                    slow_since = None
             except R.RemoteError as exc:
                 errors += 1
+                if slow_since is None:
+                    slow_since = time.time()
+                    ui.say(f"  {node} is slow to answer ({exc}); the work goes on there.")
                 if errors >= 6:
                     ui.fail(f"cannot reach {node} to see how it is going ({exc}); it goes on "
                             f"there -- run this again to pick it up")
                     return None
+                ui.live(f"  {step or 'waiting'}   {_clock(time.time() - t0)}   "
+                        f"no answer from {node} for {_clock(time.time() - slow_since)}")
                 time.sleep(interval)
                 continue
             st = res.get("status")
@@ -496,16 +574,27 @@ def wait_for_job(c: Ctx, node: str, rep: dict, name: str) -> Optional[dict]:
                 return None
             if st["state"] in ("ok", "failed", "died"):
                 return st
-            if st.get("step") != step or time.time() - last_say > 60:
-                step, last_say = st.get("step"), time.time()
+            moving = pulse.update(st)
+            words = pulse.words(st, node)
+            now_stuck = words.startswith(("waiting", "no output"))
+            if st.get("step") != step or time.time() - last_say > 60 or now_stuck != stuck:
+                step, last_say, stuck = st.get("step"), time.time(), now_stuck
                 mins = int((time.time() - t0) // 60)
-                ui.say(f"  {step} ..." + (f" ({mins} min so far)" if mins else ""))
+                last = _last_output(st)
+                ui.say(f"  {step} ..." + (f" ({mins} min so far)" if mins else "")
+                       + (f" {words}." if words else "")
+                       + (f" Last output: {last}" if last and not words.startswith("working") else ""))
+            ui.live(f"  {SPINNER[pulse.spin % 4] if pulse.spin else '.'} {step}   "
+                    f"{_clock(time.time() - t0)}   {words}"
+                    + (f"   {_last_output(st)}" if moving else ""))
             time.sleep(interval)
     except KeyboardInterrupt:
         ui._p()
         ui.say(f"Stopped waiting. The environment goes on being made on {node} (its log: "
                f"{rtilde(envmake_log(config_dir, name), home)}); run this again to pick it up.")
         return None
+    finally:
+        ui.live_clear()
 
 
 def envmake_log(config_dir: str, name: str) -> str:

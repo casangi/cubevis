@@ -1,4 +1,4 @@
-# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-10-28)
+# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-10-30)
 
 Read first: `devel/notes/drs/visplot/remote_session_design.md` (the
 design, agreed with Darrell 2026-10-17). Background: section 22 of
@@ -7,19 +7,20 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* **main is at 858e4d5** (2026-10-28; 8521c71 plus this file): everything
-  through notes section 42 is committed.  Delivered on top of it, not yet
-  committed when this was written: **`remote_stage2c3_858e4d5.zip`** (2c
-  step 3: setup's own environments, section 43).  Check `git log` first.
-  The next notes section is **44**.  **Start here: "Next: stage 2c step 4
-  and 2d"** below, then stage 3 (the Session, with the node chosen per
-  session and the reservation query).  The test kit is rebuilt from "Test
-  kit" below (rig, venv-kernel, OpenSSH 8.0 and Python 3.6 builds).
-* **Ask Darrell first**: how `setup HOST` went on a real node with no usable
-  environment (step 3 has only been run against the fake conda): the
-  question's wording, the default directory on NRAO's conda, how long the
-  create + pip install took, and whether the channels (his conda's own, not
-  forced to conda-forge) were a problem.
+* **main is at c405f16** (2026-10-30): stage 2c step 3 (sections 43) and the
+  wrapper's `--reachable` (his commit) are in.  Delivered on top of it, not yet
+  committed when this was written: **`remote_wait_c405f16.zip`** (how the wait
+  for a long environment shows life, section 44).  Check `git log` first.  The
+  next notes section is **45**.  **Start here: "Next: stage 2c step 4 and 2d"**
+  below, then stage 3 (the Session, with the node chosen per session and the
+  reservation query).  The test kit is rebuilt from "Test kit" below (rig,
+  venv-kernel, OpenSSH 8.0 and Python 3.6 builds).
+* **Ask Darrell first**: step 3 worked on cvpost106 (cubevis 1.0.101; 42
+  minutes on a slow filesystem; section 44) -- whether the new wait display
+  (working / quiet / waiting on the disk / stuck, and a poll that did not
+  come back) is useful, and whether 20 s and 3 min are the right thresholds
+  there.  Not yet tried on a real node: `--cleanup`, mamba/micromamba, a
+  second kernel with the same environment.
 * History, oldest first, follows (2c step 2 onwards).
 * **Stage 2c step 2 done** (2026-10-23, base `e6f4fe9`): `python -m
   cubevis.setup HOST [--kernel NAME]` as the one path; clusters; kernels
@@ -213,7 +214,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 44).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 45).
 
 ## Test kit (rebuild after a sandbox restart)
 

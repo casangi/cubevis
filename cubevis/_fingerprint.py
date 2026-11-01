@@ -21,7 +21,18 @@ too, and a forgotten bump is a silent mismatch).  It is *computed*:
   lines, docstrings and indentation width, so editing those does not
   change it; the tokenizer is the same from Python 3.12 (cubevis' minimum)
   on, unlike ``ast.dump``.
+* ``GENERATED`` modules are left out: files the build writes into the
+  package (``cubevis/__version__.py``, from ``pyproject.toml``'s
+  ``write_to``), which hold only the version.  A wheel has one and a
+  checkout does not, so with it every release differed from its own source
+  and from every other release (found 2026-11-01: ``k1``).
 * ``fingerprint`` hashes the modules, in name order, with ``ALGORITHM``.
+
+**Computed with one copy of this code** (``source()``): setup sends this
+module's text to the node and runs it there over the environment's files
+(``envcheck``, the launcher test), rather than that environment's own copy
+of it -- so a change to the rules here (like ``GENERATED``) applies to
+environments made before it, and both sides always hash the same way.
 
 The test ``tests/manual/setup/test_fingerprint.py`` imports the roots in a
 fresh interpreter and fails if a cubevis module was imported that the
@@ -43,7 +54,9 @@ import os
 import tokenize
 from typing import Iterable, Optional
 
-ALGORITHM = "k1"
+ALGORITHM = "k2"            # k1 (2026-10-23) counted cubevis/__version__.py
+# Written by the build into the package; not code (see the module docstring).
+GENERATED = frozenset({"cubevis.__version__"})
 ROOTS = (
     "cubevis.remote.worker_main",
     "cubevis.toolbox.visplot.remote_registrations",
@@ -120,7 +133,7 @@ def closure(roots: Iterable[str] = ROOTS, root: Optional[str] = None) -> list:
             parent = ".".join(parts[:i])
             if parent not in seen and _path_of(root, parent):
                 todo.append(parent)
-        if mod in seen or _path_of(root, mod) is None:
+        if mod in seen or mod in GENERATED or _path_of(root, mod) is None:
             continue
         seen.add(mod)
         todo.extend(_imports(root, mod) - seen)
@@ -154,8 +167,8 @@ def normalize(source: str) -> str:
 
 
 def fingerprint(roots: Iterable[str] = ROOTS, root: Optional[str] = None) -> str:
-    """``k1-<20 hex digits>`` for the kernel-side code installed at *root*
-    (default: this cubevis)."""
+    """``k2-<20 hex digits>`` for the kernel-side code installed at *root*
+    (the directory holding the ``cubevis`` package; default: this one's)."""
     root = root or package_root()
     h = hashlib.sha256(ALGORITHM.encode())
     for mod in closure(roots, root):
@@ -163,6 +176,14 @@ def fingerprint(roots: Iterable[str] = ROOTS, root: Optional[str] = None) -> str
             text = normalize(f.read())
         h.update(b"\0" + mod.encode() + b"\0" + text.encode())
     return f"{ALGORITHM}-{h.hexdigest()[:20]}"
+
+
+def source() -> str:
+    """This module's text, to run elsewhere: ``exec`` it in a fresh
+    namespace and call its ``fingerprint(root=...)`` with the directory
+    holding that environment's ``cubevis`` (Python 3.7 and later)."""
+    with open(os.path.abspath(__file__), encoding="utf-8") as f:
+        return f.read()
 
 
 def allow_mismatch(environ=None) -> bool:
@@ -181,6 +202,9 @@ def compatible(local: Optional[str], remote: Optional[str], *, allow: Optional[b
         allow = allow_mismatch(environ)
     if not remote:
         why = "it has no kernel-side fingerprint (a cubevis from before 2026-10-23)"
+    elif local and remote.split("-")[0] != local.split("-")[0]:
+        why = (f"its kernel-side fingerprint was computed another way (there {remote}, here "
+               f"{local}): run setup for this host again")
     else:
         why = f"its kernel-side code differs (there {remote}, here {local})"
     if allow:

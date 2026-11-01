@@ -2329,3 +2329,133 @@ got advice only ("install the same checkout there, then run this again").
 * **Not tried on a real network**: a real `pip install -e` of the copy with
   its dependencies on a node; macOS as the plotting computer (the tar stream
   is built in Python for that reason).
+
+## 47. A checkout and the release it equals: the fingerprint fixed (base `c78df91`, 2026-11-01)
+
+Darrell's first run of section 45/46 (macOS, cubevis used as a git clone
+without installing it: `tests/manual/visplot/cubevis -> ../../../cubevis`,
+at `v1.0.103`): setup listed `cvpost106`'s `cubevis-1.0.102` (made by setup
+from PyPI) as "kernel-side code differs (there k1-e222..., here
+k1-91e9...)", called the checkout "version unknown, not a release" and
+offered only `--sync-checkout` / `--wheel`.
+
+* **The cause was the fingerprint, not the checkout.**  The kernel-side
+  source of v1.0.100 through v1.0.103 is identical (fingerprinted from git:
+  all `k1-91e9...`, like the checkout), but the 1.0.102 *wheel* gave
+  `k1-e222...`: the import tracing counted `cubevis/__version__.py`, which
+  the build writes into the package (`pyproject.toml`, `write_to`) -- in
+  every wheel, never in a checkout, and different in every release.  So no
+  checkout ever matched a release, and no release matched another: section
+  7c's "a GUI-only release keeps the fingerprint and reuses environments"
+  never held.
+* **Fixed** (`cubevis/_fingerprint.py`): `GENERATED` modules
+  (`cubevis.__version__`) are left out; `ALGORITHM` is now `k2` (the same
+  files can hash differently from k1, so the two must not be compared as
+  equals; `compatible` says "computed another way ... run setup for this
+  host again").  Checkout, the 1.0.102 wheel and the 1.0.103 tag: all
+  `k2-67f9938a2b6ba9ce4a63`.
+* **The node computes with this computer's code** (`_fingerprint.source()`):
+  `envcheck` gets `FINGERPRINT_SOURCE` prepended (`discover.with_fingerprint`,
+  in the payload and when run by hand from an installed cubevis), runs it in a
+  fresh namespace over the environment's files (found with
+  `importlib.util.find_spec("cubevis")`; nothing of cubevis imported for
+  it); without it (an older setup), the environment's own copy as before.
+  The launcher test likewise: `TEST_CODE` is now `import
+  sys;exec(sys.stdin.read())` and `launcher.test_program()` (the kernel
+  imports, then the fingerprint with the sent code) goes on stdin -- a short
+  command line, nothing for csh to mangle.  So environments made before a
+  rule change (the 1.0.102 environment above) are judged by today's rules:
+  it is usable again with no change on the node.  **Stage 3**: the worker's
+  own run-time report must hash the same way -- a worker from before `k2`
+  reports `k1-...`, which `compatible` names.
+* **A checkout's version** (`hostsetup.local_version`): cubevis imported
+  from a checkout that is not installed (or installed from elsewhere) takes
+  its version from git, as the build names it (`sync.git_version`): at an
+  unchanged tag `1.0.103`; with uncommitted changes to tracked files
+  `1.0.103+gHASH.dYYYYMMDD`; N commits on `1.0.104.devN+gHASH`.  An
+  editable install of the checkout keeps the installed metadata's version.
+  `local_is_development`: a checkout is a release only at an exact,
+  unchanged release tag.
+* **A checkout with a release's kernel code** (`sync.release_with_same_code`,
+  `hostsetup.same_release`, once per run): the nearest tag's `cubevis/`
+  from `git archive`, fingerprinted here, compared with the checkout's.
+  Equal: setup's environment is that release from PyPI ("cubevis 1.0.103
+  (cubevis[visplot]==1.0.103, from PyPI; this checkout (...) has the same
+  kernel-side code)"), named `cubevis-1.0.103`, and the declined advice gives
+  its commands -- no copy, no "development install" message.  Different:
+  section 46's `--sync-checkout` / `--wheel` advice as before.  PyPI is never
+  asked for fingerprints (it has none to give): git has the release's code.
+* **Tests**: `test_fingerprint.py` (the build's version file does not count;
+  another algorithm said plainly; the sent source gives the same answer);
+  `test_discover.py` (an environment whose own `_fingerprint` answers
+  `k1-old` and that has a `__version__.py` is hashed with the code sent;
+  without it, its own answer; the csh launcher test with the program on
+  stdin); `test_launcher.py` (the program on stdin); `test_sync.py` (versions
+  from git at the tag, changed, one commit on; the release with the same
+  kernel code, and none after a kernel-side change); `test_hostsetup.py`
+  (an equal checkout gets the release from PyPI).
+
+## 48. Releases carry their fingerprint: pdm-backend and a build hook; setup reads PyPI (base `c78df91`, 2026-11-01)
+
+Agreed with Darrell after section 47: a release's kernel-side fingerprint
+should come from *what was published* (section 47's bug was exactly a
+difference between the published wheel and its tagged source), stamped by
+the build itself -- not by a CI step, which a local build would skip, and not
+by making the README a generated file (GitHub shows the committed README; a
+checkout's build or editable install needs the file; a stale copy would
+carry a wrong value).
+
+* **The build backend is now pdm-backend** (`pyproject.toml`:
+  `requires = ["pdm-backend>=2.4"]`, `build-backend = "pdm.backend"`).
+  pdm-pep517 (its predecessor, same project) has no build hooks.  The
+  `[tool.pdm.build]` excludes and `[tool.pdm.version]` (`source = "scm"`,
+  `write_to`, `write_template`) carry over unchanged; `publish.yml` runs
+  `pdm build` as before.  Compared by hand, `python -m build` of v1.0.103
+  with each backend: the wheel has the same 227 files (plus an empty
+  `entry_points.txt`), the same metadata fields (other order; `Author-Email`
+  spelled so), the description identical but for the stamp line.  The
+  sdist now also holds `cubevis/__version__.py` and `pdm_build.py`, and
+  `README.rst` only through `source-includes` (the readme travels as
+  metadata text).  Versions: at a tag `1.0.103`; two commits on
+  `1.0.104.dev2+gHASH`; uncommitted changes at a tag `1.0.103+dYYYYMMDD`
+  (`sync.git_version` now spells them the same way).  An editable install
+  of a copy without `.git` takes `PDM_BUILD_SCM_VERSION` (already among the
+  variables `--sync-checkout` passes).
+* **The hook** (`pdm_build.py`, repository root; pdm-backend runs it on every
+  build path -- CI, a local build, a wheel from the sdist, an editable
+  install): `pdm_build_initialize` reads the readme file (or, for a wheel
+  built from the sdist, the text the sdist's metadata already holds),
+  removes any earlier stamp, appends `.. cubevis-kernel-fingerprint: k2-...`
+  (a reST comment: not shown on PyPI) computed from the tree being built by
+  that tree's own `cubevis/_fingerprint.py` (loaded by path: standard
+  library only), and puts the result in the metadata as text.  The README
+  file is never changed.
+* **Setup reads it** (`cubevis/setup/releases.py`): PyPI's JSON
+  (`https://pypi.org/pypi/cubevis/json`, then `/<version>/json`'s
+  `info.description`) for the newest final, non-yanked releases (12 at
+  most), newest first, until one is stamped with this computer's
+  fingerprint.  No network or no answer: skipped.
+  `CUBEVIS_SETUP_PYPI` names a mirror, or `off`.  Releases from before the
+  hook carry no stamp; for them, section 47's git check (the checkout's
+  nearest tag, fingerprinted here) remains the fallback
+  (`hostsetup.same_release`: PyPI first, then git).
+* **Tests**: `test_build_hook.py` (the description stamped with the tree's
+  fingerprint, once; a wheel from the sdist re-stamped, not twice; the stamp
+  is what setup parses; the backend), `test_releases.py` (newest matching
+  release, stopping there; unstamped releases do not count; final,
+  non-yanked releases in numeric order; no network, `off`, a mirror).
+* **For Darrell**: the next release (1.0.104) is the first with a stamp;
+  until then setup relies on the git check.  Worth a look at
+  `https://pypi.org/project/cubevis/` after it: the page should look as
+  before.
+* **Suite** (sections 47 and 48): setup suite 262 passed, 1 skipped with
+  OpenSSH 9.6, run as `-n 2 --dist loadfile` (each file on one worker).
+  Plain `-n 2` now shows clashes between `test_cli.py` tests running
+  side by side -- they share alice's account and the computer id `gui1`:
+  kernel `compute`'s launcher rewritten by another test between a run and
+  its rerun ("Changed in this run: wrote launcher"), and environment
+  numbers shifted by another test's new environment (the mismatch test then
+  picks a usable one).  Old hazards that a new schedule exposed; each test
+  passes alone.  `--dist loadfile` keeps a file's tests in order on one
+  worker and costs nothing (7 minutes).
+

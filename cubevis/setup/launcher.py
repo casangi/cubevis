@@ -142,9 +142,23 @@ except Exception as exc:
 # Through the launcher: the kernel's directory, its imports, its fingerprint.
 # One line without quotes, '$' or '!', so that any login shell (csh too)
 # passes it through single quotes unchanged.
-TEST_CODE = ("import os,ipykernel,cubevis.remote.worker_main;"
-             "from cubevis._fingerprint import fingerprint as f;"
-             "print(chr(10)+\"CUBEVIS-LAUNCH-OK\",f(),os.getcwd())")
+# Run through a launcher once (``remote.test_launcher``): the program comes
+# on stdin (``test_program``), so the command line stays short and has no
+# newline for a csh to mangle.
+TEST_CODE = "import sys;exec(sys.stdin.read())"
+
+
+def test_program() -> str:
+    """What ``TEST_CODE`` runs: the kernel side imported as a kernel would,
+    then the fingerprint of the cubevis it found -- with this computer's
+    fingerprint code (``cubevis._fingerprint.source``), as ``envcheck`` does."""
+    from .. import _fingerprint
+    return ("import os, ipykernel, cubevis, cubevis.remote.worker_main\n"
+            f"FINGERPRINT_SOURCE = {_fingerprint.source()!r}\n"
+            "_ns = {'__name__': 'cubevis_setup_fingerprint'}\n"
+            "exec(compile(FINGERPRINT_SOURCE, 'cubevis/_fingerprint.py (sent by setup)', 'exec'), _ns)\n"
+            "_root = os.path.dirname(os.path.dirname(os.path.abspath(cubevis.__file__)))\n"
+            "print(chr(10) + 'CUBEVIS-LAUNCH-OK', _ns['fingerprint'](root=_root), os.getcwd())\n")
 
 
 def install_script(path: str, content: str) -> str:

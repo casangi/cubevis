@@ -103,6 +103,9 @@ visplot = ["cubevis[xarray,remote]"]
 [tool]
 [tool.pdm]
 [tool.pdm.build]
+# The readme goes into the metadata as text (pdm_build.py stamps it), so the
+# sdist would no longer carry the file by itself.
+source-includes = ["README.rst"]
 excludes = [ "cubevis/apps/*.mustache", "cubevis/private/casashell/*.mustache", "cubevis/private/casatasks/*.mustache", "**/*.xml", "**/*.py-*", "**/*~" ]
 
 [tool.pdm.version]
@@ -111,8 +114,10 @@ write_to = "cubevis/__version__.py"
 write_template = "__version__ = '{}'"  # optional, default to "{}"
 
 [build-system]
-requires = ["pdm-pep517>=0.12.0"]
-build-backend = "pdm.pep517.api"
+# pdm-backend (pdm-pep517's successor): its build hooks run pdm_build.py,
+# which stamps the description with the kernel-side fingerprint (2026-11-01).
+requires = ["pdm-backend>=2.4"]
+build-backend = "pdm.backend"
 
 [tool.pdm.scripts]
 #separate versions for casalib and cubevisjs are no longer

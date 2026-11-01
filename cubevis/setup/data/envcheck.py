@@ -79,13 +79,29 @@ except Exception:
     pass
 out["install"] = install
 
-# The kernel-side fingerprint, computed by this environment's own cubevis
-# from its own files (design 7c): what must equal the one on the computer
-# the plots are on.  Before the imports below, which it does not need.
+# The kernel-side fingerprint of this environment's files (design 7c): what
+# must equal the one on the computer the plots are on.  Computed with the
+# code setup sent (FINGERPRINT_SOURCE: cubevis._fingerprint from there), so
+# both sides hash the same way whatever cubevis this is; without it (run by
+# hand), with this environment's own.  Before the imports below, which it
+# does not need: nothing of cubevis is imported for it.
 out["fingerprint"] = None
 try:
-    from cubevis._fingerprint import fingerprint as _fp
-    out["fingerprint"] = _fp()
+    _fsrc = globals().get("FINGERPRINT_SOURCE")
+    if _fsrc:
+        import importlib.util
+        _spec = importlib.util.find_spec("cubevis")
+        if _spec is not None and _spec.origin:
+            _ns = {"__name__": "cubevis_setup_fingerprint"}
+            exec(compile(_fsrc, "cubevis/_fingerprint.py (sent by setup)", "exec"), _ns)
+            try:
+                out["fingerprint"] = _ns["fingerprint"](
+                    root=os.path.dirname(os.path.dirname(os.path.abspath(_spec.origin))))
+            except FileNotFoundError:
+                pass                         # no kernel side in this cubevis: none
+    else:
+        from cubevis._fingerprint import fingerprint as _fp
+        out["fingerprint"] = _fp()
 except ImportError:
     pass                                     # a cubevis from before it: none
 except Exception:

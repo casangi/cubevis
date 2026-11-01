@@ -48,7 +48,7 @@ def _install(path, text, python=sys.executable):
     return L.parse_install(r.stdout)
 
 
-def _launch(tmp_path, e, code, k=None):
+def _launch(tmp_path, e, code, k=None, input=None):
     k = k or {}
     p = tmp_path / ".config" / "cubevis" / L.relpath("gui1", "hrs")
     text = L.text("hrs", k, e, str(tmp_path), "gui1", "zuul06")
@@ -57,8 +57,10 @@ def _launch(tmp_path, e, code, k=None):
     assert stat.S_IMODE(p.stat().st_mode) == 0o700
     assert str(p).endswith(".config/cubevis/launch/gui1/hrs.sh")
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "VIRTUAL_ENV")}
+    if input is None and code == L.TEST_CODE:
+        input = L.test_program()                  # what remote.test_launcher sends
     return subprocess.run([str(p), "-c", code], capture_output=True, text=True, env=env,
-                          cwd="/")
+                          cwd="/", input=input)
 
 
 def test_venv_working_directory_and_variables(tmp_path):

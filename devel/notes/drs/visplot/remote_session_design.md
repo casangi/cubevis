@@ -598,6 +598,16 @@ the build), copied again on each run (pip only when `pyproject.toml`
 changed), the host's kernels offered the move to it; `--wheel PATH` (or the
 wheel cubevis was installed from) is what setup's environment is made from.
 
+**Fixed and extended 2026-11-01 (`hrs_h8_consolidation_prep.md` sections
+47, 48).**  The fingerprint left out nothing the build writes, so every
+wheel differed from its source and every release from the next: now
+`cubevis/__version__.py` does not count (algorithm `k2`), and the node
+computes with the code sent from here.  A release carries its own
+fingerprint, stamped into its PyPI description by a pdm-backend build hook
+(`pdm_build.py`); setup reads the stamps (`releases.py`), falling back to
+the checkout's nearest git tag, so a checkout whose kernel code is a
+release's is served by that release from PyPI.
+
 **Two-factor logins** (none now; announced for later).  A flag on the host
 (`--2fa`, name open) records that its login host asks for a second factor:
 no stored password is used for it; setup and sessions need the shared

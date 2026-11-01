@@ -567,3 +567,46 @@ def test_the_live_line_is_rewritten_on_a_terminal_only(ctx, release, monkeypatch
     assert H.wait_for_job(c, _node(c), _rep(), "cubevis-1.0.97")["state"] == "ok"
     out = c.ui.out.getvalue()
     assert "\r\x1b[2K" in out and "installing cubevis (pip)" in out
+
+
+def test_a_checkout_with_a_releases_kernel_code_gets_that_release(ctx, monkeypatch):
+    """A checkout used without installing it, past its tag (or with local
+    changes) whose kernel-side code is still that release's: setup makes the
+    release's environment from PyPI -- no copy, and not "a development
+    install no package reproduces" (2026-11-01)."""
+    monkeypatch.delenv("CUBEVIS_SETUP_TEST_INSTALL", raising=False)
+    monkeypatch.setattr(H, "local_is_development",
+                        lambda: (True, "a checkout at version 1.0.104.dev2+gabc, not a release"))
+    monkeypatch.setattr(H, "local_version", lambda: "1.0.104.dev2+gabc")
+    monkeypatch.setattr(H, "local_fingerprint", lambda c: "FP-HERE")
+    monkeypatch.setattr(H.sync, "checkout_root", lambda: "/src/cubevis")
+    monkeypatch.setattr(H.sync, "release_with_same_code", lambda root, fp: "1.0.103")
+    call, calls = _plan()
+    monkeypatch.setattr(H.envmake, "call", call)
+    c = ctx(via_login="n", user="jo", make_env="n")
+    assert H.offer_creation(c, _node(c), _rep()) is None
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "Making an environment for cubevis 1.0.103 on node1" in out
+    assert ("cubevis 1.0.103 (cubevis[visplot]==1.0.103, from PyPI; this checkout "
+            "(1.0.104.dev2+gabc) has the same kernel-side code)") in out
+    assert calls[0]["names"][0] == "cubevis-1.0.103"
+    assert "create -y -n cubevis-1.0.103" in out                   # declined: the commands
+    assert "no package on PyPI reproduces" not in out
+
+
+def test_a_published_stamp_comes_before_the_git_check(ctx, monkeypatch):
+    """same_release: a release whose PyPI description is stamped with this
+    computer's fingerprint wins; git is asked only when none is."""
+    from cubevis.setup import releases
+    monkeypatch.setattr(H, "local_fingerprint", lambda c: "FP-HERE")
+    asked = []
+    monkeypatch.setattr(H.sync, "checkout_root", lambda: "/src/cubevis")
+    monkeypatch.setattr(H.sync, "release_with_same_code", lambda root, fp: asked.append(fp) or "1.0.103")
+    monkeypatch.setattr(releases, "release_with_same_code", lambda fp: ("1.0.105", 2))
+    c = ctx()
+    assert H.same_release(c) == "1.0.105" and asked == []
+    monkeypatch.setattr(releases, "release_with_same_code", lambda fp: (None, 0))
+    c = ctx()
+    assert H.same_release(c) == "1.0.103" and asked == ["FP-HERE"]
+    H.same_release(c)
+    assert asked == ["FP-HERE"]                                     # once per run

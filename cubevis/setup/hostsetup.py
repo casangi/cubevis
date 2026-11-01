@@ -115,11 +115,32 @@ def local_fingerprint(c: Ctx) -> str:
 
 
 def local_version() -> str:
+    """This cubevis's version.  Imported from a checkout: the installed
+    package's when it is an editable install of that checkout, else from git
+    (``sync.git_version``: a checkout used without installing it --
+    ``PYTHONPATH``, a symbolic link beside a script); otherwise the installed
+    package's.  ``unknown`` when none says."""
+    from importlib.metadata import PackageNotFoundError, distribution
+    root = sync.checkout_root()
     try:
-        from importlib.metadata import version
-        return version("cubevis")
+        dist = distribution("cubevis")
+    except PackageNotFoundError:
+        dist = None
+    if root is not None and not (dist is not None and _dist_is_here(dist, root)):
+        return sync.git_version(root) or "unknown"
+    return dist.version if dist is not None else "unknown"
+
+
+def _dist_is_here(dist, root) -> bool:
+    """Whether the installed cubevis *dist* is an editable install of the
+    checkout at *root* (not another copy, found later on sys.path)."""
+    try:
+        import json
+        from pathlib import Path
+        url = json.loads(dist.read_text("direct_url.json") or "{}").get("url") or ""
+        return url.startswith("file://") and Path(url[len("file://"):]).resolve() == root.resolve()
     except Exception:
-        return "unknown"
+        return False
 
 
 def local_is_development() -> tuple:
@@ -127,6 +148,13 @@ def local_is_development() -> tuple:
     its version from PyPI -- an editable or local-directory install, or a
     version that is not a release (``1.0.97.dev22+g0a5b519``)."""
     v = local_version()
+    root = sync.checkout_root()
+    if root is not None:
+        # A checkout (installed editable or not): only an exact, unchanged
+        # release tag is that release.
+        if not re.match(r"^\d+(\.\d+)*$", v):
+            return True, f"a checkout at version {v}, not a release"
+        return False, ""
     try:
         import json
         from importlib.metadata import distribution
@@ -508,11 +536,12 @@ def no_environment_advice(c: Ctx, node: str, rep: dict, declined: bool = False,
         ui.say(f"No environment on {node} has the same kernel-side code as this computer "
                f"({here}): the code that runs in a kernel must be identical on both sides.")
     dev, why = local_is_development()
-    if dev and not os.environ.get("CUBEVIS_SETUP_TEST_INSTALL"):
+    same = same_release(c) if dev else None
+    if dev and not same and not os.environ.get("CUBEVIS_SETUP_TEST_INSTALL"):
         ui.say(f"cubevis here is a development install ({why}), which no package on PyPI "
                "reproduces. " + development_advice(c, node))
         return
-    v = local_version()
+    v = same or local_version()
     tool = envmake.pick_tool(rep.get("tools"))
     import sys
     py = f"{sys.version_info[0]}.{sys.version_info[1]}"      # the same Python as here
@@ -528,6 +557,24 @@ def no_environment_advice(c: Ctx, node: str, rep: dict, declined: bool = False,
     ui._p(f"    {t} create -y -n cubevis-{v} python={py} pip")
     ui._p(f"    {t} run -n cubevis-{v} python -m pip install \"cubevis[visplot]=={v}\"")
     ui.say("and run this again.")
+
+
+def same_release(c: Ctx) -> Optional[str]:
+    """For a development install here: a published release whose kernel-side
+    code is the same, whose PyPI package then serves its kernels; None
+    otherwise.  First what releases say they hold (their stamped description
+    on PyPI, ``releases``), then -- for releases from before the stamp, or no
+    network -- a checkout's nearest tag, from git (``sync.release_with_same_code``).
+    Once per run."""
+    if not hasattr(c, "_same_release"):
+        from . import releases
+        here = local_fingerprint(c)
+        found, _n = releases.release_with_same_code(here)
+        if found is None:
+            root = sync.checkout_root()
+            found = sync.release_with_same_code(root, here) if root is not None else None
+        c._same_release = found
+    return c._same_release
 
 
 def development_advice(c: Ctx, node: str) -> str:
@@ -725,7 +772,10 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False,
     dev, _why = local_is_development()
     tool = envmake.pick_tool(rep.get("tools"))
     source = creation_source(source)
-    if (dev and not test_install and not source) or tool is None:
+    # A checkout whose kernel-side code is that of its nearest release: the
+    # release from PyPI is the same code (no copy needed).
+    same = same_release(c) if dev and not source and not test_install else None
+    if (dev and not test_install and not source and not same) or tool is None:
         no_environment_advice(c, node, rep, asked=forced)
         return None
     import sys
@@ -745,8 +795,11 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False,
         what = f"cubevis {v} from the wheel {source['path']} (copied there)"
         spec_text = f"{os.path.basename(str(source['path']))}[visplot]"
     else:
+        v = same or v
         names = envmake.candidate_names(v)
-        what = f"cubevis {v} (cubevis[visplot]=={v}, from PyPI)"
+        what = (f"cubevis {v} (cubevis[visplot]=={v}, from PyPI"
+                + (f"; this checkout ({local_version()}) has the same kernel-side code"
+                   if same else "") + ")")
         spec_text = envmake.spec(v)
     alias, python3, config_dir = _node_access(c, node, rep)
     dirs = list((rep.get("envs_dirs") or {}).get(tool["path"]) or [])

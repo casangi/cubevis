@@ -391,8 +391,21 @@ def envcheck_source():
     for p in (os.path.join(here, "data", "envcheck.py"), os.path.join(here, "envcheck.py")):
         if os.path.isfile(p):
             with open(p) as f:
-                return f.read()
+                return with_fingerprint(f.read(), here)
     return None
+
+
+def with_fingerprint(env_src, here):
+    """envcheck's text, preceded by ``FINGERPRINT_SOURCE``: the fingerprint
+    code of the cubevis this file belongs to (``../_fingerprint.py``), with
+    which every environment's files are hashed -- not each environment's
+    own copy, which may be older.  Unchanged when it is not there."""
+    p = os.path.join(os.path.dirname(here), "_fingerprint.py")
+    try:
+        with open(p) as f:
+            return "FINGERPRINT_SOURCE = %r\n" % f.read() + env_src
+    except OSError:
+        return env_src
 
 
 def check(python, script, timeout=CHECK_TIMEOUT):
@@ -537,7 +550,7 @@ def payload():
     node's ``python3 -`` (and ``--bundle`` writes)."""
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "data", "envcheck.py")) as f:
-        env_src = f.read()
+        env_src = with_fingerprint(f.read(), here)
     with open(os.path.abspath(__file__)) as f:
         src = f.read()
     head = ("# cubevis setup's discovery script (cubevis/setup/discover.py), with\n"

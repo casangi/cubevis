@@ -212,7 +212,7 @@ def test_check_passes_for_a_kernel_environment(tmp_path):
     r = envs.check(os.path.join(e, "bin", "python"))
     assert r["ok"], r
     assert r["versions"]["cubevis"] and r["versions"]["ipykernel"] and r["kernel"] is True
-    assert r["prefix"] == e and r["fingerprint"].startswith("k1-")
+    assert r["prefix"] == e and r["fingerprint"].startswith("k2-")
     assert "cubevis" in envs.summary(r) and "visplot data" in envs.summary(r)
 
 
@@ -334,8 +334,35 @@ def test_the_remote_command_lines_survive_csh(tmp_path):
     lp = tmp_path / "l.sh"
     lp.write_text(f"#!/bin/bash\nexec {shlex.quote(sys.executable)} \"$@\"\n")
     lp.chmod(0o700)
-    code = launcher.TEST_CODE.replace("import os,ipykernel,cubevis.remote.worker_main;", "import os;")
-    code = code.replace("from cubevis._fingerprint import fingerprint as f;", "f=lambda: 'k1-t';")
-    r = subprocess.run(["tcsh", "-f", "-c", f"{shlex.quote(str(lp))} -c {shlex.quote(code)}"],
-                       capture_output=True, text=True, cwd=str(tmp_path))
-    assert launcher.parse_test(r.stdout) == ("k1-t", str(tmp_path)), r.stdout + r.stderr
+    # The program on stdin, as remote.test_launcher sends it (here without
+    # the kernel imports: this Python need not have ipykernel).
+    prog = launcher.test_program().replace("import os, ipykernel, cubevis, cubevis.remote.worker_main",
+                                           "import os, cubevis")
+    r = subprocess.run(["tcsh", "-f", "-c",
+                        f"{shlex.quote(str(lp))} -c {shlex.quote(launcher.TEST_CODE)}"],
+                       capture_output=True, text=True, cwd=str(tmp_path), input=prog)
+    from cubevis import _fingerprint
+    assert launcher.parse_test(r.stdout) == (_fingerprint.fingerprint(), str(tmp_path)), \
+        r.stdout + r.stderr
+
+
+def test_environments_are_fingerprinted_with_the_code_setup_sends(tmp_path, monkeypatch):
+    """envcheck hashes an environment's files with the fingerprint code it
+    was sent (this cubevis's), not the environment's own copy: an older
+    cubevis there whose own code would answer otherwise (here: 'k1-old')
+    is judged by today's rules -- and its build-written __version__.py
+    does not count."""
+    from cubevis import _fingerprint as F
+    old = tmp_path / "site"
+    shutil.copytree(os.path.join(ROOT, "cubevis"), old / "cubevis",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    (old / "cubevis" / "__version__.py").write_text("__version__ = '1.0.102'\n")
+    (old / "cubevis" / "_fingerprint.py").write_text("def fingerprint(*a, **k):\n    return 'k1-old'\n")
+    monkeypatch.setenv("PYTHONPATH", str(old))
+    src = D.envcheck_source()
+    assert src.startswith("FINGERPRINT_SOURCE = ")
+    r = D.check(sys.executable, src)
+    assert r.get("fingerprint") == F.fingerprint(root=ROOT), r
+    # Without the code sent (an older setup): the environment's own answer.
+    r = D.check(sys.executable, src.split("\n", 1)[1])
+    assert r.get("fingerprint") == "k1-old", r

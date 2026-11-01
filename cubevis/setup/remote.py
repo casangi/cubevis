@@ -76,11 +76,12 @@ def install_launcher(c, alias: str, python3: str, path: str, text: str) -> str:
 
 
 def test_launcher(c, alias: str, path: str) -> tuple:
-    """Run ``launcher.TEST_CODE`` through the launcher at *path* on *alias*:
+    """Run ``launcher.TEST_CODE`` (with ``launcher.test_program`` on its
+    stdin) through the launcher at *path* on *alias*:
     ``(fingerprint, cwd)``; RemoteError with the reason otherwise (the
     launcher's own message for a missing directory, the import error)."""
     r = c.ssh(alias, shlex.quote(path), "-c", shlex.quote(launcher.TEST_CODE),
-              timeout=TEST_TIMEOUT)
+              timeout=TEST_TIMEOUT, input=launcher.test_program())
     got = launcher.parse_test(r.stdout)
     if got:
         return got

@@ -75,7 +75,7 @@ def test_closure_follows_imports_relative_lazy_and_parents(tmp_path):
                    "cubevis.remote._a", "cubevis.remote._b", "cubevis.remote.worker",
                    "cubevis.utils", "cubevis.utils.conv"]
     fp = F.fingerprint(["cubevis.remote.worker"], root)
-    assert fp.startswith("k1-") and len(fp) == 23
+    assert fp.startswith(F.ALGORITHM + "-") and len(fp) == 23
     # A module the kernel side does not reach: no change.
     (tmp_path / "cubevis/gui/panel.py").write_text("X = 2\n")
     assert F.fingerprint(["cubevis.remote.worker"], root) == fp
@@ -186,3 +186,31 @@ def test_the_real_kernel_side_leaves_out_the_front_end():
     for front in ("cubevis.toolbox.visplot.visibility_plotter", "cubevis.toolbox._cube",
                   "cubevis.toolbox.visplot.flag_controls", "cubevis.toolbox._interactive_clean_ui"):
         assert front not in mods, front
+
+
+def test_the_version_file_the_build_writes_does_not_count(tmp_path):
+    """A wheel has cubevis/__version__.py (pyproject's write_to), a checkout
+    does not: the same code must give the same fingerprint (2026-11-01: the
+    1.0.102 wheel and its own source differed, k1)."""
+    files = {"cubevis/__init__.py": "try:\n    from .__version__ import __version__\nexcept ImportError:\n    pass\n",
+             "cubevis/remote/__init__.py": "", "cubevis/remote/worker_main.py": "import cubevis\n",
+             "cubevis/toolbox/__init__.py": "", "cubevis/toolbox/visplot/__init__.py": "",
+             "cubevis/toolbox/visplot/remote_registrations.py": "X = 1\n"}
+    checkout = _pkg(tmp_path / "checkout", files)
+    wheel = _pkg(tmp_path / "wheel", dict(files, **{"cubevis/__version__.py": "__version__ = '1.0.102'\n"}))
+    other = _pkg(tmp_path / "other", dict(files, **{"cubevis/__version__.py": "__version__ = '1.0.103'\n"}))
+    assert "cubevis.__version__" not in F.closure(root=wheel)
+    assert F.fingerprint(root=checkout) == F.fingerprint(root=wheel) == F.fingerprint(root=other)
+
+
+def test_another_algorithm_is_said_plainly():
+    ok, why = F.compatible("k2-a", "k1-a", environ={})
+    assert not ok and "computed another way" in why and "run setup for this host again" in why
+
+
+def test_the_source_runs_elsewhere(tmp_path):
+    """What setup sends to a node: this module's text, run in a fresh
+    namespace over another tree, gives what this module gives."""
+    ns = {"__name__": "x"}
+    exec(compile(F.source(), "sent", "exec"), ns)
+    assert ns["fingerprint"](root=ROOT) == F.fingerprint(root=ROOT)

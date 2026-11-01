@@ -578,6 +578,26 @@ made, that no kernel here uses and that differs from this computer's
 kernel-side code -- another computer's kernels may be using what this one's
 state knows nothing about, so removing one of those needs a yes of its own.
 
+**Built (stage 2c step 4, 2026-10-31; `hrs_h8_consolidation_prep.md`
+section 45).**  `sshopts.py`: the login options of the user's `ssh -G` that
+differ from ssh's defaults are copied into each generated host block, read
+at every write (never stored); a `ProxyJump` is adopted as the login host
+(several hops: the last), without questions; otherwise a non-interactive
+login with the user's ssh sets the default of the login-host question (still
+asked when reached directly: off site later).  The login is tested before
+anything is kept (a new host whose login fails is forgotten).  `setup
+diagnose HOST` (`diagnose.py`) as described above.  `--2fa`: a
+`twofactor=yes` rule; the wrapper lets the user log in in a terminal and
+otherwise stops naming the command.
+
+**Built (stage 2d, development installs, 2026-10-31; section 46).**
+`sync.py`: `--sync-checkout` copies the checkout cubevis is imported from
+(package + build files, a tar stream over setup's ssh, swapped in whole) to
+setup's `cubevis-dev-<computer>`, installed editable (the version given to
+the build), copied again on each run (pip only when `pyproject.toml`
+changed), the host's kernels offered the move to it; `--wheel PATH` (or the
+wheel cubevis was installed from) is what setup's environment is made from.
+
 **Two-factor logins** (none now; announced for later).  A flag on the host
 (`--2fa`, name open) records that its login host asks for a second factor:
 no stored password is used for it; setup and sessions need the shared
@@ -698,7 +718,10 @@ Each stage is one delivery (zip on the then-current main), with tests.
    (4) the ssh-configuration adoption with the login test, `diagnose
    HOST`, the `--2fa` flag.  Then 2d: `--sync-checkout`, `prune`,
    `setup --local`, the final kernel + plot test.  (1) and (2) done
-   2026-10-23 (`hrs_h8_consolidation_prep.md` sections 33-35).
+   2026-10-23 (`hrs_h8_consolidation_prep.md` sections 33-35), (3)
+   2026-10-28 (section 43), (4) 2026-10-31 (section 45); of 2d,
+   `--sync-checkout` and `--wheel` 2026-10-31 (section 46) -- `prune`,
+   `setup --local` and the final test left.
 3. **Session**: `cubevis/remote/session.py`, in-memory kernel spec,
    `RemoteReductionContext` factory, `VisibilityPlotter(session=)`,
    `check()`. Tests: local kernel; the rig with two nodes from one

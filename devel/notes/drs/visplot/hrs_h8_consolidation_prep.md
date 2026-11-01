@@ -2093,3 +2093,239 @@ modified").
   terminal it prints "Downloading X (size)" lines, which the last-output
   text shows); a verdict for macOS/BSD nodes; and whether 20 s / 3 min are
   the right thresholds for NRAO's filesystems -- ask Darrell.
+
+## 45. Stage 2c step 4: the user's ssh as the reference, `diagnose`, `--2fa` (base `d3c99fb`, 2026-10-31)
+
+Design 7c, "The user's ssh configuration is the reference", "Two-factor" and
+"Diagnostics, on both sides".  Section 40 had taken defaults from `ssh -G`;
+this is the rest.
+
+* **Login options copied** (`cubevis/setup/sshopts.py`, new).  `ssh -G NAME`
+  (the user's `~/.ssh/config` *and* `/etc/ssh/ssh_config`) against `ssh -F
+  /dev/null -G NAME` (ssh's own defaults); the options that differ, among
+  those that affect logging in, go into the host's block of the generated
+  `ssh/config` under `# from your ssh configuration (ssh -G NAME)`:
+  identity and certificate files, `IdentitiesOnly`, `IdentityAgent`,
+  `gssapi*` (Kerberos; Red Hat's extra GSSAPI options too), PKCS#11 and
+  security-key providers, the authentication methods and prompts, the
+  algorithm lists (RHEL's crypto policies arrive this way), known-hosts
+  files, `HostKeyAlias`, `CheckHostIP`, `VerifyHostKeyDNS`, `AddressFamily`;
+  `ProxyCommand` only where the route is the user's (a network without a
+  login host).  Never copied: host name, user, port (setup's fields),
+  `ProxyJump` (setup's login host), connection sharing and keep-alives
+  (setup's).  A path with spaces is quoted.
+  - **Nothing is stored**: the options are read from `ssh -G` each time the
+    file is written (every save; cached per process by the files' times), so
+    an edit to `~/.ssh/config` reaches it at the next setup run, and each
+    computer sharing a directory writes from its own ssh -- the option names
+    are that ssh's (OpenSSH 8.0 `pubkeyacceptedkeytypes`, 9.x
+    `pubkeyacceptedalgorithms`).
+  - **The names the user's ssh knows**: nodes and login hosts now record
+    `ssh_name` (what the user typed, or the ProxyJump hop's name: `cvpost106`,
+    `ssh`), and `ssh -G` is asked about that name (its port then comes from
+    the user's configuration too); without one, the real name and setup's
+    port.
+* **The route, adopted** (`hostsetup.new_network`).  A `ProxyJump` in the
+  user's configuration becomes the login host without questions (no
+  "intermediate host?", no user names: the configured ones), said in one
+  line.  Several hops (`gw,ssh`): the last is the login host, the earlier
+  ones its own `ProxyJump` (`login.via`), written as real `user@host:port`
+  (`sshopts.resolve_jump`: the generated file knows none of the user's
+  aliases; the user only when it is not ssh's default).  Earlier hops log in
+  by key or Kerberos only (no rules for them).
+  - **No ProxyJump**: a login with the user's ssh is tried
+    (`sshopts.try_login`: `BatchMode`, `ControlMaster=no`,
+    `StrictHostKeyChecking=yes` -- it never asks, never becomes a master,
+    never records a host key) and sorted into ok / answers (reachable, wants
+    something typed or an unknown key) / unreachable.  Reached: "Do you also
+    log in to HOST from elsewhere (off site, say) through an intermediate
+    host? [y/N]"; not reached: the old question, default yes.  Still asked
+    (not skipped) when reached: a laptop on site at setup time is off site
+    later -- the inside ranges then decide.  Skipped when `via_login` is
+    answered (tests).  With exactly one known login host, it is the default
+    name.
+  - **User names**: not asked when the user's configuration sets the host
+    (as `ssh -G` reports it); asked as before otherwise.
+* **The login is tested before anything is kept** (`hostsetup.forget_new`).
+  When the login to a host placed in this run fails, its node -- and its
+  network, when new and now empty -- are removed again and saved ("forgot:
+  node X, network Y (the login did not work)"; "Nothing about HOST was kept
+  ... asks again").  A password already stored stays in its store.  Not for
+  a two-factor network (the user logs in next, with the command setup
+  printed, which names the generated alias).  The old test
+  (`test_unattended_failure_...`) expected the node kept, flagged: changed.
+* **Your ssh logs in, setup's does not** (`steps.hop_steps`): before offering
+  to store a password, a hop without one tries the user's own ssh; when that
+  logs in without asking, setup says the generated file lacks something,
+  names `diagnose`, and offers no password.
+* **`python -m cubevis.setup diagnose HOST`** (`cubevis/setup/diagnose.py`,
+  new; read-only, one login attempt each way).  Sections: (1) what setup
+  knows (node, network, cluster, the user's names, how each hop logs in,
+  status); (2) per hop, the user's `ssh -G` and setup's `ssh -F ... -G
+  ALIAS` (route as decided now), the login options carried, differences in
+  host, user, port, and `PROBLEM: setup's lacks OPTION VALUE` with the
+  advice to run setup again; (3) the route (inside/outside and why, the
+  override variable); (4) the wrapper's `--explain` (rules, stored password,
+  shared connections); (5) a login with the user's ssh (never asking) and
+  with setup's -- on failure the wrapper's notes and the last 15 useful
+  `debug1:` lines of `ssh -v`; (6) the kernel-side code here and in each
+  environment recorded on the node (`discover --only`).  A host setup does
+  not know: only the user's view (exit 1 when it is not reachable).  Exit 0
+  when setup's login works.  Meant to be pasted to whoever helps (no
+  secrets: only whether a password is stored).
+* **`--2fa` / `--no-2fa`** (`setup HOST --2fa`): marks the hop whose login
+  asks for a second factor -- the network's login host, or its nodes when it
+  has none (`twofactor` in the record).
+  - **Rules**: `HOST  twofactor=yes` instead of a stored-password rule (the
+    password rule of a two-factor hop is left out; the "no store chosen yet"
+    case now still writes the other rules).
+  - **The wrapper**: a `twofactor=yes` hop is never logged in to with a
+    password.  When its shared connection is not up: with a terminal, it
+    runs `ssh -fN` there (BatchMode off, ControlMaster auto,
+    ControlPersist), so the user answers ssh's own prompts once, then goes
+    on; without one (sshpyk, setup's checks) it stops: "asks for a second
+    factor, and there is no shared connection to it now ... Log in once in a
+    terminal -- it is then shared:" and the command (`<wrapper> -F
+    <config> ALIAS true`).  `--explain` says "second factor: you log in".
+  - **Setup**: the hop step says why nothing is stored and runs that command
+    with the terminal (the user logs in); without a terminal, prints it and
+    stops (the network is kept).  `status` shows "login asks for a second
+    factor".  Opening it from a notebook stays a stage 3/5 question.
+* **Tests**: `test_sshopts.py` (new): which options are copied and which
+  never; nothing from an empty configuration; jumps to real names;
+  adoption, with the generated file checked by `ssh -F ... -G` (identity
+  file with a space, GSSAPI, setup's ControlPath and keep-alives); a changed
+  user configuration followed at the next write; several hops; a
+  ProxyCommand route on a direct network; `try_login` (refused, unresolvable;
+  the rig: answers); the direct-login default (rig); "your ssh logs in but
+  setup's does not".  `test_cli.py`: the route from a user configuration end
+  to end (no questions, the option carried, `ssh_name` kept); a failed login
+  keeps nothing; the two-factor login host (no terminal: setup and the
+  wrapper name the command; typed through a pseudo-terminal, the
+  connection is shared and setup and the node's stored-password login ride
+  on it; `--no-2fa`); `diagnose` (healthy, a user option added later, a
+  failing login, an unknown host; state and generated file unchanged); the
+  interactive run's question changed (the rig's node answers directly:
+  default no).  `conftest.py` (new): every setup test runs with
+  `CUBEVIS_SETUP_USER_SSH_CONFIG=/dev/null` unless it sets its own --
+  otherwise this machine's `/etc/ssh/ssh_config` (`GSSAPIAuthentication yes`
+  on Ubuntu) leaks into the generated files.
+* **Decisions beyond the design text -- for Darrell to confirm**:
+  1. A host reached directly is still asked about a login host (default
+     no), rather than recorded as direct.
+  2. A failed first login keeps nothing (instead of keeping it flagged).
+  3. Options are read from `ssh -G` at every write, never stored.
+  4. Several ProxyJump hops: the last is setup's login host; earlier hops
+     are key/Kerberos only.
+  5. With a terminal, the wrapper itself lets the user log in to a
+     two-factor hop (it is also the user's ssh in a terminal, when on PATH).
+* **macOS**: Apple's ssh prints `usekeychain` (a key's passphrase from the
+  Keychain, without an agent): copied too; other builds never print it.
+* **Found on the way**: section 42's stale-connection test froze, then
+  terminated, *every* `sshd: alice` session on the rig -- other tests'
+  connections too, when they ran alongside (`-n 2`); the new tests shifted
+  the schedule so the cluster test did, and failed at discovery with a bare
+  `ssh exit 255`.  It now freezes only its own master's session (the parent
+  of `echo $PPID` run over it).  The test kit's OpenSSH 8.0 client is built
+  without GSSAPI and prints no `gssapi*` options: the option tests use
+  `PreferredAuthentications` and check GSSAPI only where ssh has it.
+* **Not tried on a real network**: Kerberos (GSSAPI) logins at NRAO through
+  the generated file; macOS's ssh; a real second factor.
+
+## 46. Stage 2d: development installs -- `--sync-checkout`, `--wheel` (base `d3c99fb`, 2026-10-31)
+
+Design 7c, "Fingerprint override" (`--sync-checkout`) and section 37's plan
+(an environment from a local wheel).  Until now a development install here
+got advice only ("install the same checkout there, then run this again").
+
+* **What is copied** (`cubevis/setup/sync.py`, new): the checkout this cubevis
+  is *imported from* (`sync.checkout_root`: the directory above the package,
+  when its `pyproject.toml` names cubevis -- an editable install or
+  `PYTHONPATH`; not `direct_url.json`, so what is copied is the code that
+  runs here): the `cubevis` package, everything in it but byte code, caches,
+  dot-directories and editor files -- tracked by git or not (a module just
+  written is code the kernels may run) -- plus `pyproject.toml`,
+  `README.rst`, `LICENSE`.  This checkout: about 2 MB compressed.  Not
+  `casalib/`, `cubevisjs/`, docs, tests, demos.
+* **How**: a gzip tar stream (`tarfile` here: no AppleDouble files from
+  macOS's tar, owners blanked) on the stdin of setup's own ssh (the wrapper,
+  the generated configuration), unpacked on the node by one `/bin/sh` line
+  (`sync._PUSH_SCRIPT`, one line for csh, paths as arguments) into `DEST.new.$$`,
+  then `DEST` -> `DEST.old.$$`, `DEST.new` -> `DEST`, the old removed: never a
+  half-copied tree, and files deleted here are gone there.  It reports whether
+  `pyproject.toml` changed (`cmp`).  Needs `tar`, `sh`, `mv` there -- no rsync
+  (macOS's openrsync, and nodes without rsync).
+* **`setup HOST --sync-checkout`**:
+  - **First time**: setup's own environment `cubevis-dev-<this computer>`
+    (`envmake.dev_name`; `-2`... when taken), made like section 43's (the
+    same question, place, background job), from the copy: setup pushes the
+    code to `<envs dir>/.<name>.cubevis-src` (`envmake.staged_dir`: beside
+    the prefix, same filesystem) before starting; the worker, after
+    `create`, moves it to `PREFIX/cubevis-src` and runs `PREFIX/bin/python -m
+    pip install -e PREFIX/cubevis-src[visplot]`.  The build takes its
+    version from git, which the copy lacks: `PDM_PEP517_SCM_VERSION` (and
+    `PDM_BUILD_SCM_VERSION`, `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_CUBEVIS`, for
+    a later backend) = this cubevis's version (tested by hand: without it
+    pdm-pep517 says 0.0.0; the editable install is a plain `.pth` to the
+    directory, so later copies take effect at once, new modules included).
+    The marker gains `source: checkout` and `from: <checkout>`.
+  - **Again** (the environment is found by its marker: `source: checkout`,
+    made from this computer): the code is copied straight into
+    `PREFIX/cubevis-src`; pip runs again (in the foreground,
+    `sync.pip_install`) only when `pyproject.toml` changed; discovery checks
+    it (`--only`).  The one environment of setup's that changes after
+    creation -- by design.
+  - **The host's kernels**: each on another environment is offered the move
+    ("Kernel visplot uses cubevis-1.0.101, whose kernel-side code differs
+    from here. Use the checkout's environment ... for it?"; default yes when
+    its code differs, else no); then their launchers are rewritten and run,
+    as on any rerun.  On a host without kernels, the usual kernel questions.
+  - **Cleanup**: never offered as superseded (after a local edit it differs
+    until the next sync); `--cleanup` lists it as "a checkout's copy
+    (--sync-checkout brings it up to date)", not selected by default.
+  - Refused unless cubevis is imported from a checkout (argument error).
+* **`setup HOST --wheel PATH`**: the file (`cubevis-VERSION-...whl`, checked
+  by name) is copied to the staging directory, moved in by the worker, and
+  installed as `PREFIX/cubevis-src/FILE[visplot]`; the environment is named
+  for the wheel's version (`cubevis-1.0.103.dev7`), never changed afterwards
+  (a release-like environment); marker `source: wheel`.  Used when setup
+  makes an environment (none usable, or `new`).  **Without the flag**, a
+  development install that was installed *from a wheel still on disk*
+  (`direct_url.json`, same version) uses that wheel automatically.
+* **Advice** for a development install with neither now names both flags
+  (`hostsetup.development_advice`), and `CUBEVIS_ALLOW_MISMATCH`.
+* **envmake**: the start request may carry `source` (`kind`, `staged`,
+  `file`, `from`) and `pip_env`; a retry after an install failure takes the
+  newer staged copy (the old `cubevis-src` replaced); a staged copy that is
+  missing fails with a reason; `remove` also removes a staged copy a failed
+  try left beside the prefix (setup's own; never an environment).  The test
+  install hook sees the copy as `$SOURCE`.
+* **Tests**: `test_sync.py` (new): what a checkout's copy holds (and what
+  not), this checkout found, the tar stream, wheel versions, the node-side
+  line run here with `sh` (whole replacement, deleted files gone, nothing left
+  beside, the pyproject flag; a broken stream leaves the old copy), the pip
+  command after a dependency change.  `test_envmake.py`: a checkout moved in
+  and installed from there (`$SOURCE`, the version variable, the marker), a
+  wheel by its file with the extra (and no `-e`), a missing copy, a retry
+  taking the newer copy, `remove` taking a leftover copy (also under Python
+  3.6).  `test_cli.py` (rig): the development loop -- a kernel on `hrs`, the
+  code changed, `--sync-checkout` makes `cubevis-dev-gui1`, moves the
+  kernel, the kernel starts with the copied code; changed again, copied
+  again (same environment, no pip), the kernel matches; changed and not
+  copied, the kernel fails on the kernel-side code; `--cleanup` does not
+  select it -- and an environment from a wheel.  The rig's fake environments
+  have no pip: the real `pip install -e` of a copy was tried by hand only
+  (above), with `--no-deps`.
+* **Found on the way**: `python -m` puts the current directory first on
+  `sys.path`, ahead of `PYTHONPATH`: the rig test runs setup from its
+  temporary home, or the repository's own cubevis is imported (`_run(cwd=)`).
+* **Left from 2d** (design section 13): `prune`, `setup --local` (the plotting
+  computer's own kernels), and the final kernel + plot test -- ask Darrell
+  whether any is wanted before stage 3; `CUBEVIS_ALLOW_MISMATCH` /
+  `allow_mismatch=` at run time is stage 3's.
+* **Suite** (sections 45 and 46 together): setup suite 245 passed, 1 skipped,
+  with OpenSSH 9.6 and with the 8.0p1 client (rig, venv-kernel, `-n 2`);
+  `test_envmake.py` also under Python 3.6.15.
+* **Not tried on a real network**: a real `pip install -e` of the copy with
+  its dependencies on a node; macOS as the plotting computer (the tar stream
+  is built in Python for that reason).

@@ -68,35 +68,25 @@ class Ctx:
         return r
 
 
-def user_ssh(host: str) -> dict:
+def user_ssh(host: str, port: Optional[int] = None) -> dict:
     """What the user's own ssh makes of *host* (``ssh -G``: their
-    ``~/.ssh/config``, nothing connected): ``hostname``, ``user``, ``port``,
-    ``proxyjump`` (None when none), and ``configured`` -- whether their
-    configuration says anything about it (a host name, user or port other
-    than ssh's defaults).  {} when ssh cannot say.
-
-    Only defaults come from it so far (design 7c, step 4 adopts the rest).
-    ``CUBEVIS_SETUP_USER_SSH_CONFIG`` names another file than
-    ``~/.ssh/config`` (ssh reads the account's home, not ``$HOME``: tests)."""
-    alt = os.environ.get("CUBEVIS_SETUP_USER_SSH_CONFIG")
-    cmd = ["ssh"] + (["-F", alt] if alt else []) + ["-G", host]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
-                           stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError):
+    ``~/.ssh/config`` and the system's, nothing connected): ``hostname``,
+    ``user``, ``port``, ``proxyjump`` and ``proxycommand`` (None when none),
+    and ``configured`` -- whether their configuration says anything about
+    it (a host name, user or port other than ssh's defaults, or a proxy).
+    {} when ssh cannot say.  ``sshopts`` has the rest (the login options the
+    generated configuration copies)."""
+    from . import sshopts
+    g = sshopts.view(host, port)
+    if not g:
         return {}
-    if r.returncode != 0:
-        return {}
-    g = {}
-    for line in r.stdout.splitlines():
-        k, _, v = line.partition(" ")
-        g.setdefault(k.lower(), v.strip())
-    pj = g.get("proxyjump")
-    out = {"hostname": g.get("hostname") or host, "user": g.get("user"),
-           "port": int(g.get("port") or 22),
-           "proxyjump": None if not pj or pj.lower() == "none" else pj}
-    out["configured"] = (out["hostname"].lower() != host.lower() or out["port"] != 22
-                         or (out["user"] or "") != account_name() or bool(out["proxyjump"]))
+    out = {"hostname": sshopts.one(g, "hostname") or host, "user": sshopts.one(g, "user"),
+           "port": int(sshopts.one(g, "port") or 22),
+           "proxyjump": sshopts.one(g, "proxyjump"),
+           "proxycommand": sshopts.one(g, "proxycommand")}
+    out["configured"] = (out["hostname"].lower() != host.lower() or out["port"] != (port or 22)
+                         or (out["user"] or "") != account_name() or bool(out["proxyjump"])
+                         or bool(out["proxycommand"]))
     return out
 
 
@@ -226,11 +216,13 @@ def hop_info(st: S.State, network: str, node: Optional[str]) -> dict:
     net = st.networks()[network]
     if node is None:
         lg = net["login"]
+        name, port = sshgen.ssh_name(lg, "host")
         return {"alias": lg["alias"], "host": lg["host"], "user": lg["user"],
-                "rec": lg, "label": f"login host {lg['alias']}"}
+                "rec": lg, "label": f"login host {lg['alias']}", "name": name, "port": port}
     n = st.nodes()[node]
+    name, port = sshgen.ssh_name(n)
     return {"alias": n["alias"], "host": n["hostname"], "user": net["user"],
-            "rec": net, "label": f"node {node}"}
+            "rec": net, "label": f"node {node}", "name": name, "port": port}
 
 
 def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
@@ -240,13 +232,15 @@ def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
     def check():
         h.update(hop_info(st, network, node))
         rec = h["rec"]
-        if rec.get("password") and sys.stdin.isatty():
+        if rec.get("password") and not rec.get("twofactor") and sys.stdin.isatty():
             stores.unlock(ui, st, rec.get("service") or "cubevis-ssh", h["user"])
         r = c.ssh(h["alias"])
         if r.returncode == 0:
             if node:
                 st.mark_ok("nodes", node)
                 S.save(st)
+            if rec.get("twofactor"):
+                return True, "over the shared connection (second factor)"
             if rec.get("password"):
                 return True, "password from " + stores.where(st, rec.get("service"), h["user"])
             return True, "with an ssh key"
@@ -278,6 +272,19 @@ def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
                    "(~/.ssh/known_hosts). Ask whoever runs the host whether it changed; "
                    "setup does not override that.")
             return False
+        if rec.get("twofactor"):
+            return twofactor_login(c, h)
+        if not rec.get("password") and not rec.get("twofactor"):
+            # A host the user's own ssh logs in to by key (or Kerberos) needs
+            # no password: the generated configuration is what lacks something.
+            from . import sshopts
+            verdict, _w = sshopts.try_login(h["name"], h["port"])
+            if verdict == "ok":
+                ui.say(f"Your own ssh logs in to {h['name']} without a password, but setup's "
+                       f"configuration does not ({why}). python -m cubevis.setup diagnose "
+                       f"{h['name']} shows how the two differ; please send its output to "
+                       "cubevis's developers.")
+                return False
         if rec.get("password") and st.local.get("store"):
             ui.say(f"Logging in with the stored password failed: {why}")
             ui.say("The wrapper tries a stored password once per login, so a wrong one does "
@@ -332,6 +339,34 @@ def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
 
     return c.step(f"Log in to the {h['label']} ({h['user']}@{h['host']}) without typing",
                   check, do)
+
+
+def twofactor_command(alias: str) -> str:
+    """What opens the shared connection to a two-factor hop, by hand."""
+    import shlex
+    return " ".join(shlex.quote(str(x)) for x in
+                    (sshgen.wrapper_path(), "-F", sshgen.config_path(), alias, "true"))
+
+
+def twofactor_login(c: Ctx, h: dict) -> bool:
+    """A hop whose login asks for a second factor (``--2fa``): nothing is
+    stored for it; the user logs in once, here, and the connection is shared
+    (``ControlPersist``) -- setup and the kernels ride on it.  Without a
+    terminal: the command to run in one."""
+    ui = c.ui
+    cmd = twofactor_command(h["alias"])
+    ui.say(f"{h['host']} asks for a second factor (a code, a push), so setup stores no password "
+           f"for it: you log in once, and the connection is shared for {sshgen.CONTROL_PERSIST} "
+           "-- setup and the kernels use it. When it has closed (after that, or when this "
+           "computer sleeps or changes networks), starting a kernel stops and names the "
+           f"command that opens it again: {cmd}")
+    if not sys.stdin.isatty():
+        ui.say("There is no terminal here to log in with: run that command in one, then this "
+               "again.")
+        return False
+    r = ui.run([sshgen.wrapper_path(), "-F", sshgen.config_path(),
+                "-o", "StrictHostKeyChecking=accept-new", h["alias"], "true"], tty=True)
+    return r.returncode == 0
 
 
 def diagnose_behind_login(c: Ctx, network: str, node: str, why: str) -> str:

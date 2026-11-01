@@ -179,8 +179,14 @@ def test_stale_master_is_replaced(d):
     answers a command -- as after sleep or a dropped link."""
     r, _ = _run_logged(d)
     assert r.returncode == 0, r.stderr
-    frozen = _session_pids()
-    assert frozen
+    # Only this master's remote session (the parent of a shell run over it):
+    # other tests, in parallel, have sessions of alice's of their own.
+    r = subprocess.run([str(data_file("ssh")), "-F", f"{d}/config", "-o", "BatchMode=yes",
+                        "gw", "echo", "$PPID"], capture_output=True, text=True, timeout=60,
+                       stdin=subprocess.DEVNULL,
+                       env=dict(os.environ, SSH_WRAPPER_RULES=f"{d}/rules", TMPDIR=d))
+    frozen = {int(r.stdout.strip())} & _session_pids()
+    assert frozen, (r.stdout, r.stderr, _session_pids())
     for p in frozen:
         os.kill(p, 19)                          # SIGSTOP
     try:

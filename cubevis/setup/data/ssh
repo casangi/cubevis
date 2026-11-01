@@ -52,6 +52,12 @@
 #   command=CMD    for backend=command: a shell command that prints the
 #                  password (e.g. a password manager's CLI); the rest of
 #                  the line
+#   twofactor=yes  the host asks for a second factor (a code, a push): the
+#                  wrapper never logs in to it with a stored password.
+#                  With a terminal you log in once, and the connection is
+#                  shared (ControlPersist); without one (sshpyk, scripts)
+#                  the wrapper stops when that connection is not up and
+#                  names the command to run in a terminal.
 #
 # Storing the password
 # --------------------
@@ -642,7 +648,12 @@ if ($EXPLAIN) {
         printf "hop %d: %s -> %s (user %s, port %s)\n", ++$n, $hop->{target},
             $c->{hostname} // '?', $c->{user} // '?', $c->{port} // 22;
         my $r = $hop->{rule};
-        if ($r) {
+        if ( $r && $r->{twofactor} ) {
+            print "  rule: $r->{text} ($r->{file} line $r->{line}), second factor: you log in"
+              . " (in a terminal); no stored password\n";
+            print "  ControlPath: " . ( $c->{controlpath} // 'none' )
+              . ( lc( $c->{controlpath} // 'none' ) eq 'none' ? '  <- needed to share the login' : '' ) . "\n";
+        } elsif ($r) {
             my $be = eval { resolve_backend($r) } // "? ($@)";
             chomp $be;
             print "  rule: $r->{text} ($r->{file} line $r->{line}), backend $be\n";
@@ -839,6 +850,44 @@ for my $hop (@need) {
            . " session is gone: sleep, a network drop, a user switch); logging in again");
         run_redirected( [ $SSH, @$args, '-O', 'exit', $target ], quiet => 1, null_stdin => 1 );
         # On to a fresh login, as for a connection that was not up.
+    }
+    if ( $hop->{rule}{twofactor} ) {
+        # A second factor: only the user can log in (header, "Keys").
+        my $persist = $cfg->{controlpersist};
+        $persist = $PERSIST_DEFAULT if !defined $persist || $persist =~ /^(no|false|0)$/i;
+        my $cmd = join( ' ', $self_path, @cfg_only, $target, 'true' );
+        if ( lc $cp eq 'none' ) {
+            note("'$target' ($cfg->{hostname}) asks for a second factor but has no ControlPath"
+               . " in your ssh config, so a login cannot be shared -- add one for it");
+            next;
+        }
+        unless ( -t STDIN ) {
+            note("'$target' ($cfg->{hostname}) asks for a second factor, and there is no shared"
+               . " connection to it now (it closes after $persist, or when the computer sleeps"
+               . " or changes networks). Log in once in a terminal -- it is then shared:");
+            note("    $cmd");
+            exit 255;
+        }
+        {
+            my $dir = dirname($cp);
+            if ( !-d $dir ) {
+                my $parent = dirname($dir);
+                mkdir( $parent, 0700 ) if !-d $parent;
+                mkdir( $dir, 0700 ) or logmsg("cannot create $dir: $!");
+            }
+        }
+        note("'$target' ($cfg->{hostname}) asks for a second factor: log in (it is then shared"
+           . " for $persist)");
+        my $rc = system( $SSH, '-T', '-x', '-o', 'BatchMode=no', '-o', 'ControlMaster=auto',
+            '-o', "ControlPersist=$persist", '-o', 'ConnectTimeout=30', @$args, '-fN', $target ) >> 8;
+        if ( $rc != 0 || run_redirected( [ $SSH, @$args, '-O', 'check', $target ],
+                quiet => 1, null_stdin => 1 ) != 0 ) {
+            note("login to '$target' ($cfg->{hostname}) failed (ssh exit $rc)");
+            exit 255;
+        }
+        mark_verified($cp);
+        note("shared connection to '$target' is up");
+        next;
     }
     if ( lc $cp eq 'none' ) {
         note("'$target' ($cfg->{hostname}) needs a password but has no ControlPath in your"

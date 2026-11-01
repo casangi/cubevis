@@ -7,12 +7,17 @@ routes and launchers are setup's own bookkeeping.  In order:
 1. **Where HOST is.**  A node setup knows (by name, alias or full name); a
    node of a known cluster (its name matches the cluster's pattern: added
    without a question); a host in the domain of a known network (it joins
-   it: same route); else a new network, for which setup asks the route --
-   directly, or through a login host -- and names it from the domain.
-   (Stage 2c step 4 takes the route from the user's own ssh configuration
-   instead of asking.)
+   it: same route); else a new network, named from the domain, whose route
+   comes from the user's own ssh configuration (``ssh -G``; stage 2c step
+   4): a ``ProxyJump`` there is adopted as the login host, with the users
+   and real names configured, and nothing is asked.  Without one, a login
+   with the user's ssh is tried (never asking): reached directly, the
+   question about a login host defaults to no, else to yes.  The generated
+   configuration copies the user's login options (``sshopts``).
 2. **Logging in**, each hop: the login host, then HOST, with a stored
-   password where one is asked for (``steps.hop_steps``).
+   password where one is asked for (``steps.hop_steps``), or -- a hop marked
+   ``--2fa`` -- by the user, once, in a terminal.  When the login of a
+   host placed in this run fails, nothing about it is kept.
 3. **Looking around** (``discover``, over ssh, read-only): HOST's full
    name, addresses and home; its conda tools; its environments, each with
    cubevis checked by running it.  The node's domain fills in the
@@ -34,6 +39,12 @@ routes and launchers are setup's own bookkeeping.  In order:
    its launcher on HOST and runs it once (directory, activation, imports,
    fingerprint) before recording it.
 
+A development install here (stage 2d, ``sync``): ``--sync-checkout`` copies
+this checkout to HOST into setup's ``cubevis-dev-<computer>`` (installed
+editable; copied again on each ``--sync-checkout``, and the host's kernels
+offered the move to it); ``--wheel PATH`` (or the wheel this cubevis was
+installed from) is what setup's environment is made from.
+
 ``--kernel NAME`` adds (or changes) one kernel for a host already set up,
 without the environment questions.  Run again without it, setup checks the
 host's kernels (and rewrites their launchers when they changed); ``--redo``
@@ -48,7 +59,7 @@ import re
 import time
 from typing import Optional
 
-from . import host_dir, host_id, launcher, envs, envmake
+from . import host_dir, host_id, launcher, envs, envmake, sync
 from . import remote as R
 from . import state as S
 from .steps import (Ctx, account_name, first_jump, hop_steps, inside_step, local_steps,
@@ -141,58 +152,119 @@ def _unique(base: str, taken) -> str:
 # 1. Where HOST is
 # --------------------------------------------------------------------------
 
-def new_network(c: Ctx, host: str) -> Optional[str]:
+def _route_from_jump(pj: str) -> tuple:
+    """A ProxyJump value from the user's configuration as setup's route:
+    ``(login host as named there, its port, its user or None, the hops
+    before it or None)``.  Setup keeps one login host per network, the last
+    hop (the one that reaches the nodes); earlier hops become its own
+    ProxyJump."""
+    hops = [h.strip() for h in pj.split(",") if h.strip()]
+    host, user, port = first_jump(hops[-1])
+    return host, port, user, (",".join(hops[:-1]) or None)
+
+
+def new_network(c: Ctx, host: str, port: int = 22) -> Optional[str]:
     """Questions for a host setup knows nothing about: the route.  Returns
     the new network's name (made from the domain; the user sees clusters
-    and kernels, not networks)."""
+    and kernels, not networks).
+
+    The user's own ssh configuration decides first (design 7c, step 4): a
+    ``ProxyJump`` there is adopted as the login host, its users and names as
+    configured, without questions.  Otherwise a login with the user's ssh is
+    tried (never asking, never recording anything): reached directly, the
+    question about a login host defaults to no -- one is still worth giving
+    when this computer is sometimes off site --, not reached, to yes."""
     ui, st = c.ui, c.st
     ui.heading(f"How this computer reaches {host}")
-    ui.say(f"Kernels on {host} are started from here over ssh, the way you log in to it. "
-           "At some sites you first log in to another computer -- an intermediate host, "
-           "often called a login host or bastion, like ssh.example.org -- and from there to "
-           f"{host}.")
     import getpass
     me = getpass.getuser()
     acct = account_name()            # ssh's own default User
-    # What the user's own ssh configuration says (ssh -G): defaults only.
-    g = user_ssh(host)
+    g = user_ssh(host, port if port != 22 else None)
     real = g.get("hostname") or host
     pj = g.get("proxyjump")
-    if g.get("configured"):
-        ui.say(f"Your ssh configuration has {host} as {g.get('user')}@{real}"
-               + (f", port {g['port']}" if g.get("port", 22) != 22 else "")
-               + (f", through {pj}" if pj else "") + "; those are the defaults below.")
-    via = ui.ask_yn(f"Do you log in to an intermediate host before logging in to {host}?",
-                    True, key="via_login")
-    login, lport, luser = None, 22, None
-    if via:
-        jhost, juser, jport = first_jump(pj) if pj else (None, None, 22)
-        dflt = (jhost + (f":{jport}" if jport != 22 else "")) if jhost else ""
-        while True:
-            text = ui.ask("The intermediate host's name (host, or host:port)", dflt,
-                          key="login_host")
-            if not text:
-                return None
-            login, lport = split_port(text)
-            lg = user_ssh(login)
-            if lg.get("hostname") and lg["hostname"].lower() != login.lower():
-                ui.say(f"{login} is {lg['hostname']} (your ssh configuration).")
-                login = lg["hostname"]
-            if ":" not in text and lg.get("port", 22) != 22:
-                lport = lg["port"]
-            try:
-                S.check_host(login)
-                break
-            except S.StateError as exc:
-                ui.note(str(exc))
-                if ui.yes or "login_host" in ui.answers:
+    login, lport, luser, lname, via = None, 22, None, None, None
+    if pj and "via_login" not in ui.answers:
+        jname, lport, luser, via = _route_from_jump(pj)
+        lg = user_ssh(jname, lport if lport != 22 else None)
+        login, lname = lg.get("hostname") or jname, jname
+        if lport == 22 and lg.get("port", 22) != 22:
+            lport = lg["port"]
+        luser = luser or lg.get("user") or acct
+        ui.say(f"Your ssh configuration reaches {host} ({real}) through {pj}; setup does the "
+               f"same: {luser}@{login}" + (f":{lport}" if lport != 22 else "")
+               + (f" (itself reached through {via})" if via else "")
+               + f" is the login host, and {host} is reached directly whenever this computer "
+               "is inside the network (that is asked below).")
+        try:
+            S.check_host(login)
+        except S.StateError as exc:
+            ui.fail(f"the login host from your ssh configuration: {exc}")
+            return None
+    else:
+        ui.say(f"Kernels on {host} are started from here over ssh, the way you log in to it. "
+               "At some sites you first log in to another computer -- an intermediate host, "
+               "often called a login host or bastion, like ssh.example.org -- and from there "
+               f"to {host}.")
+        if g.get("configured"):
+            ui.say(f"Your ssh configuration has {host} as {g.get('user')}@{real}"
+                   + (f", port {g['port']}" if g.get("port", 22) != 22 else "")
+                   + ("" if not g.get("proxycommand") else
+                      f", through the command {g['proxycommand']} (kept)")
+                   + "; those are the defaults below.")
+        direct = None
+        if "via_login" not in ui.answers and not g.get("proxycommand"):
+            ui.say(f"Trying ssh {host} from here (never asking for anything) ...")
+            from . import sshopts
+            verdict, why = sshopts.try_login(host, port if port != 22 else None)
+            ui.log(f"direct login to {host}: {verdict} ({why})")
+            if verdict in ("ok", "answers"):
+                direct = True
+                ui.ok(f"this computer reaches {host} directly"
+                      + ("" if verdict == "ok" else f" ({why})"))
+            elif verdict == "unreachable":
+                direct = False
+                ui.note(f"this computer does not reach {host} directly ({why})")
+        if direct:
+            q = (f"Do you also log in to {host} from elsewhere (off site, say) through an "
+                 f"intermediate host?")
+        else:
+            q = f"Do you log in to an intermediate host before logging in to {host}?"
+        via_login = ui.ask_yn(q, direct is not True and not g.get("proxycommand"), key="via_login")
+        if via_login:
+            dflt = ""
+            others = sorted({(n["login"]["host"], n["login"]["port"]) for n in st.networks().values()
+                             if n.get("login")})
+            if len(others) == 1:
+                dflt = others[0][0] + (f":{others[0][1]}" if others[0][1] != 22 else "")
+            while True:
+                text = ui.ask("The intermediate host's name (host, or host:port)", dflt,
+                              key="login_host")
+                if not text:
                     return None
-        cfg_user = juser or (lg.get("user") if lg.get("user") and lg.get("user") != acct else None)
-        luser = ui.ask(f"Your user name on {login}", cfg_user or st.local.get("last_user") or me,
-                       key="login_user")
-    node_user = g.get("user") if g.get("user") and g.get("user") != acct else None
-    user = ui.ask(f"Your user name on {host}", node_user or luser or st.local.get("last_user") or me,
-                  key="user")
+                login, lport = split_port(text)
+                lname = login
+                lg = user_ssh(login, lport if lport != 22 else None)
+                if lg.get("hostname") and lg["hostname"].lower() != login.lower():
+                    ui.say(f"{login} is {lg['hostname']} (your ssh configuration).")
+                    login = lg["hostname"]
+                if ":" not in text and lg.get("port", 22) != 22:
+                    lport = lg["port"]
+                try:
+                    S.check_host(login)
+                    break
+                except S.StateError as exc:
+                    ui.note(str(exc))
+                    if ui.yes or "login_host" in ui.answers:
+                        return None
+            cfg_user = lg.get("user") if lg.get("configured") or (lg.get("user") or acct) != acct else None
+            luser = ui.ask(f"Your user name on {login}", cfg_user or st.local.get("last_user") or me,
+                           key="login_user")
+    node_user = g.get("user") if g.get("user") and (g.get("configured") or g["user"] != acct) else None
+    if node_user and g.get("configured") and "user" not in ui.answers:
+        user = node_user                  # the user's configuration says: not asked
+    else:
+        user = ui.ask(f"Your user name on {host}", node_user or luser or st.local.get("last_user")
+                      or me, key="user")
     st.local["last_user"] = user
     domain = None if is_address(real) else parent_domain(real)
     base = (domain or (parent_domain(login) if login else None)
@@ -205,6 +277,12 @@ def new_network(c: Ctx, host: str) -> Optional[str]:
     except S.StateError as exc:
         ui.fail(str(exc))
         return None
+    lrec = st.networks()[name].get("login")
+    if lrec is not None:
+        if lname and lname.lower() != login.lower():
+            lrec["ssh_name"] = lname
+        if via:
+            lrec["via"] = via
     ui.record_change("added network", f"{name} ({'through ' + login if login else 'direct'}"
                      + (f", domain {domain}" if domain else "") + ")")
     return name
@@ -229,7 +307,7 @@ def locate(c: Ctx, host: str, port: int) -> Optional[str]:
                          f"{st.section('clusters')[cl]['pattern']})")
         return n
     # The user's own ssh configuration (ssh -G): a short name's real one.
-    g = user_ssh(host)
+    g = user_ssh(host, port if port != 22 else None)
     real = g.get("hostname") or host
     dom = None if is_address(real) else parent_domain(real)
     same = [k for k, v in sorted(st.networks().items())
@@ -240,7 +318,7 @@ def locate(c: Ctx, host: str, port: int) -> Optional[str]:
         ui.say(f"{host} is in {dom}, as the nodes setup knows in network {net} are: it is "
                "reached the same way" + (f" (through {lg['host']})." if lg else " (directly)."))
     else:
-        net = new_network(c, host)
+        net = new_network(c, host, port)
         if not net:
             return None
     n = short_name(host)
@@ -259,6 +337,8 @@ def locate(c: Ctx, host: str, port: int) -> Optional[str]:
         ui.fail(str(exc))
         return None
     node = st.nodes()[n]
+    if host.lower() != node["hostname"].lower():
+        node["ssh_name"] = host          # what the user's ssh configuration knows it by
     ui.record_change("added node", f"{n} ({node['hostname']}, ssh name {node['alias']})")
     return n
 
@@ -417,9 +497,9 @@ def no_environment_advice(c: Ctx, node: str, rep: dict, declined: bool = False,
     if asked:
         dev, why = local_is_development()
         if dev and not os.environ.get("CUBEVIS_SETUP_TEST_INSTALL"):
-            ui.say(f"Setup cannot make an environment for this cubevis: it is a development "
-                   f"install ({why}), which no package reproduces. Choose one of the "
-                   f"environments listed on {node}.")
+            ui.say(f"Setup cannot make an environment from PyPI for this cubevis: it is a "
+                   f"development install ({why}). " + development_advice(c, node)
+                   + f" Or choose one of the environments listed on {node}.")
         else:
             ui.say(f"Setup cannot make an environment on {node}: there is no conda there. "
                    "Choose one of the environments listed.")
@@ -429,11 +509,8 @@ def no_environment_advice(c: Ctx, node: str, rep: dict, declined: bool = False,
                f"({here}): the code that runs in a kernel must be identical on both sides.")
     dev, why = local_is_development()
     if dev and not os.environ.get("CUBEVIS_SETUP_TEST_INSTALL"):
-        ui.say(f"cubevis here is a development install ({why}), which no package "
-               f"reproduces. Install the same checkout in an environment on {node} (pip "
-               "install -e on a checkout both computers see), then run this again; or, to "
-               "use a different one anyway, set CUBEVIS_ALLOW_MISMATCH=1 (kernels may fail at "
-               "any message).")
+        ui.say(f"cubevis here is a development install ({why}), which no package on PyPI "
+               "reproduces. " + development_advice(c, node))
         return
     v = local_version()
     tool = envmake.pick_tool(rep.get("tools"))
@@ -451,6 +528,36 @@ def no_environment_advice(c: Ctx, node: str, rep: dict, declined: bool = False,
     ui._p(f"    {t} create -y -n cubevis-{v} python={py} pip")
     ui._p(f"    {t} run -n cubevis-{v} python -m pip install \"cubevis[visplot]=={v}\"")
     ui.say("and run this again.")
+
+
+def development_advice(c: Ctx, node: str) -> str:
+    """What makes a development install's code reach *node* (stage 2d)."""
+    host_text = c.st.nodes()[node].get("ssh_name") or node
+    root = sync.checkout_root()
+    out = []
+    if root:
+        out.append(f"python -m cubevis.setup {host_text} --sync-checkout copies this checkout "
+                   f"({root}) to {node} and installs it there in an environment of setup's own "
+                   "(again after each change: only the code is copied again).")
+    out.append(f"python -m cubevis.setup {host_text} --wheel PATH makes one from a wheel you "
+               "built (pdm build, say).")
+    out.append("To use a different environment anyway, set CUBEVIS_ALLOW_MISMATCH=1 (kernels "
+               "may fail at any message).")
+    return " ".join(out)
+
+
+def creation_source(source: Optional[dict]) -> Optional[dict]:
+    """What setup's environment is made from: *source* (``--sync-checkout``,
+    ``--wheel``), else, for a development install here that was installed
+    from a wheel still on disk, that wheel; else None (PyPI)."""
+    if source:
+        return source
+    dev, _why = local_is_development()
+    if dev:
+        w = sync.installed_wheel()
+        if w and sync.wheel_version(w) == local_version():
+            return {"kind": "wheel", "path": w}
+    return None
 
 
 def _node_access(c: Ctx, node: str, rep: dict) -> tuple:
@@ -601,17 +708,24 @@ def envmake_log(config_dir: str, name: str) -> str:
     return posixpath.join(config_dir, "make", name + ".log")
 
 
-def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Optional[tuple]:
+def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False,
+                   source: Optional[dict] = None) -> Optional[tuple]:
     """Make setup's own environment on *node* (``envmake``): where, how big,
     asked once; then made in the background and waited for.  Continues one
     already being made, or one that stopped (it goes on from the step it
     reached).  Returns the new environment's row ``(cand, report, usable,
-    why)``, checked, or None when none was made (the reason has been said)."""
+    why)``, checked, or None when none was made (the reason has been said).
+
+    From PyPI by this cubevis's version; or (stage 2d, ``creation_source``)
+    from code copied from here: this checkout (``{"kind": "checkout",
+    "root": DIR}``: ``cubevis-dev-<computer>``, editable), or a wheel
+    (``{"kind": "wheel", "path": FILE}``: named for its version)."""
     ui = c.ui
     test_install = os.environ.get("CUBEVIS_SETUP_TEST_INSTALL")
     dev, _why = local_is_development()
     tool = envmake.pick_tool(rep.get("tools"))
-    if (dev and not test_install) or tool is None:
+    source = creation_source(source)
+    if (dev and not test_install and not source) or tool is None:
         no_environment_advice(c, node, rep, asked=forced)
         return None
     import sys
@@ -619,7 +733,21 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Option
     home = h.get("home") or "/"
     v = local_version()
     py = f"{sys.version_info[0]}.{sys.version_info[1]}"
-    names = envmake.candidate_names(v)
+    kind = (source or {}).get("kind")
+    if kind == "checkout":
+        names = envmake.dev_names(host_id())
+        what = (f"cubevis from this checkout ({source['root']}), installed editable -- the "
+                "code is copied there now, and again by each --sync-checkout")
+        spec_text = f"checkout {source['root']}"
+    elif kind == "wheel":
+        v = sync.wheel_version(source["path"]) or v
+        names = envmake.candidate_names(v)
+        what = f"cubevis {v} from the wheel {source['path']} (copied there)"
+        spec_text = f"{os.path.basename(str(source['path']))}[visplot]"
+    else:
+        names = envmake.candidate_names(v)
+        what = f"cubevis {v} (cubevis[visplot]=={v}, from PyPI)"
+        spec_text = envmake.spec(v)
     alias, python3, config_dir = _node_access(c, node, rep)
     dirs = list((rep.get("envs_dirs") or {}).get(tool["path"]) or [])
     if not dirs:        # the tool would not say: next to its own, where conda keeps them
@@ -662,10 +790,12 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Option
         ui.say(("You asked for one of setup's own. " if forced else
                 f"No environment on {node} has the same kernel-side code as this computer "
                 f"({local_fingerprint(c)}), so ") + "setup makes its own there: a minimal conda "
-               f"environment with Python {py} and cubevis {v} (cubevis[visplot]=={v}, from "
-               f"PyPI), {envmake.EXPECTED_SIZE}. It is made in the background on {node}, so "
-               "closing the laptop does not lose it; setup never changes it afterwards (a "
-               "later cubevis gets a new one) and never touches your own environments.")
+               f"environment with Python {py} and {what}, {envmake.EXPECTED_SIZE}. It is made "
+               f"in the background on {node}, so closing the laptop does not lose it; setup "
+               + ("changes nothing in it afterwards but the copied code"
+                  if kind == "checkout" else
+                  "never changes it afterwards (a later cubevis gets a new one)")
+               + " and never touches your own environments.")
         default = next((d for d in dirs if (facts.get(d) or {}).get("writable")), dirs[0])
         ui.say(f"{os.path.basename(tool['path'])} keeps environments in {rtilde(dirs[0], home)}"
                f" ({envmake.human_bytes(first.get('free'))} free there). Another directory is fine"
@@ -683,7 +813,7 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Option
             if not f.get("writable"):
                 ui.note(f"cannot write in {rtilde(d, home)} on {node}")
             elif free_name is None:
-                ui.note(f"every name cubevis-{v}... is taken in {rtilde(d, home)}")
+                ui.note(f"every name {names[0]}... is taken in {rtilde(d, home)}")
             else:
                 break
             if ui.yes or "env_dir" in ui.answers:
@@ -695,9 +825,28 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Option
             no_environment_advice(c, node, rep, declined=True)
             return None
     if not live:
+        src_req, pip_env = None, {}
+        if source:
+            staged = envmake.staged_dir(prefix)
+            files = (sync.checkout_files(source["root"]) if kind == "checkout"
+                     else [(os.path.basename(str(source["path"])), source["path"])])
+            ui.say(f"Copying {'the checkout' if kind == 'checkout' else 'the wheel'} to {node} ...")
+            try:
+                got = sync.push(c, alias, files, staged)
+            except (sync.SyncError, OSError) as exc:
+                ui.fail(f"cannot copy it to {node}: {exc}")
+                return None
+            ui.ok(f"copied ({envmake.human_bytes(got['bytes'])})")
+            src_req = {"kind": kind, "staged": staged,
+                       "from": str(source.get("root") or source.get("path"))}
+            if kind == "wheel":
+                src_req["file"] = os.path.basename(str(source["path"]))
+            else:
+                pip_env = sync.scm_env(v)
         req = envmake.request("start", config_dir, name=name, prefix=prefix, tool=tool["path"],
-                              python=py, spec=envmake.spec(v), version=v,
-                              setup={"cubevis": v, "host": host_id()}, install_shell=test_install)
+                              python=py, spec=spec_text, version=v,
+                              setup={"cubevis": v, "host": host_id()}, install_shell=test_install,
+                              source=src_req, pip_env=pip_env)
         try:
             res = envmake.call(c, alias, python3, req)
         except R.RemoteError as exc:
@@ -706,8 +855,10 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Option
         if not res.get("ok"):
             ui.fail(f"cannot start it on {node}: {res.get('error')}")
             return None
-        ui.record_change("started environment", f"{node}:{rtilde(prefix, home)} (cubevis {v}, "
-                         f"made in the background; log {rtilde(envmake_log(config_dir, name), home)})")
+        ui.record_change("started environment", f"{node}:{rtilde(prefix, home)} ("
+                         + ("this checkout" if kind == "checkout" else f"cubevis {v}")
+                         + f", made in the background; log "
+                         f"{rtilde(envmake_log(config_dir, name), home)})")
         ui.say("Started; setup waits for it (Ctrl-C stops waiting, not the work).")
     st = wait_for_job(c, node, rep, name)
     if st is None:
@@ -731,9 +882,93 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Option
     return got[0]
 
 
-def environment_step(c: Ctx, node: str, rep: dict, reuse: bool) -> Optional[str]:
-    """Choose the environment for the node's kernel; its record's name."""
+def own_checkout_env(c: Ctx, rep: dict) -> Optional[dict]:
+    """This computer's checkout environment in discovery's report: setup's
+    marker, ``source: checkout``, made from here."""
+    for cand in rep.get("environments") or []:
+        m = cand.get("marker")
+        if (isinstance(m, dict) and m.get("schema") == 1 and m.get("source") == "checkout"
+                and (m.get("setup") or {}).get("host") == host_id()):
+            return cand
+    return None
+
+
+def sync_checkout_step(c: Ctx, node: str, rep: dict, source: dict) -> Optional[str]:
+    """``--sync-checkout``: this checkout's code in this computer's checkout
+    environment on *node* -- copied again into the one there is (pip again
+    only when pyproject.toml changed), or a new one made.  Its record's name."""
+    ui = c.ui
+    home = (rep.get("host") or {}).get("home")
+    ui.heading(f"This checkout on {node}")
+    cand = own_checkout_env(c, rep)
+    if cand is None:
+        row = offer_creation(c, node, rep, forced=True, source=source)
+        if row is None:
+            return None
+    else:
+        prefix = cand["prefix"]
+        dest = posixpath.join(prefix, sync.SRC_DIR)
+        alias = c.st.nodes()[node]["alias"]
+        ui.say(f"Copying {source['root']} to {node}:{rtilde(dest, home)} (the environment "
+               f"{rtilde(prefix, home)} installs it editable) ...")
+        try:
+            got = sync.push(c, alias, sync.checkout_files(source["root"]), dest)
+        except (sync.SyncError, OSError) as exc:
+            ui.fail(f"cannot copy it to {node}: {exc}")
+            return None
+        ui.ok(f"copied ({envmake.human_bytes(got['bytes'])})")
+        ui.record_change("copied checkout", f"{source['root']} -> {node}:{rtilde(dest, home)}")
+        if got["deps_changed"]:
+            ui.say("pyproject.toml changed (dependencies, perhaps): installing it again there "
+                   "(pip) ...")
+            ok, why = sync.pip_install(c, alias, prefix, ["-e", dest + "[visplot]"],
+                                       sync.scm_env(local_version()))
+            if not ok:
+                ui.fail(f"pip install -e failed on {node}: {why}")
+                return None
+            ui.ok("installed again")
+        more = discover_step(c, node, [prefix], only=True, python3=rep.get("python_exe"))
+        got_rows = _rows(c, more) if more else []
+        if not got_rows:
+            ui.fail(f"{rtilde(prefix, home)} cannot be checked")
+            return None
+        row = got_rows[0]
+    cand, r, usable, why = row
+    if not usable:
+        ui.fail(f"{rtilde(cand['prefix'], home)} cannot be used: {why}")
+        return None
+    ui.ok(f"{rtilde(cand['prefix'], home)}: {why}")
+    return record_environment(c, node, cand, r)
+
+
+def move_kernels_step(c: Ctx, node: str, env: str) -> None:
+    """After ``--sync-checkout``: the node's kernels on another environment
+    -- moved to the checkout's when the user says so (by default when theirs
+    differs from this computer's kernel-side code)."""
     ui, st = c.ui, c.st
+    here = local_fingerprint(c)
+    for name in st.kernels_on(node):
+        k = st.section("kernels")[name]
+        if k.get("environment") == env:
+            continue
+        e = st.section("environments").get(k.get("environment")) or {}
+        stale = e.get("fingerprint") != here
+        if ui.ask_yn(f"Kernel {name} uses {k.get('environment')}"
+                     + (", whose kernel-side code differs from here" if stale else "")
+                     + f". Use the checkout's environment {env} for it?", stale,
+                     key=f"move_{name}"):
+            k["environment"] = env
+            ui.record_change("changed kernel", f"{name}: environment {env}")
+
+
+def environment_step(c: Ctx, node: str, rep: dict, reuse: bool,
+                     source: Optional[dict] = None) -> Optional[str]:
+    """Choose the environment for the node's kernel; its record's name.
+    *source*: ``--sync-checkout`` (this checkout's environment, synced) or
+    ``--wheel`` (what setup's environment is made from, when one is made)."""
+    ui, st = c.ui, c.st
+    if source and source.get("kind") == "checkout":
+        return sync_checkout_step(c, node, rep, source)
     n = st.nodes()[node]
     net = n["network"]
     home = (rep.get("host") or {}).get("home")
@@ -755,7 +990,7 @@ def environment_step(c: Ctx, node: str, rep: dict, reuse: bool) -> Optional[str]
     usable = [i for i, x in enumerate(rows, 1) if x[2]]
     created, ans = None, ""
     if not usable:
-        created = offer_creation(c, node, rep)
+        created = offer_creation(c, node, rep, source=source)
         if created is None:
             ans = ui.ask(f"Or give the path of an environment on {node} to check (empty: stop)",
                          "", key="environment")
@@ -778,7 +1013,7 @@ def environment_step(c: Ctx, node: str, rep: dict, reuse: bool) -> Optional[str]
         if ans.lower() in ("none", "-"):
             return None
         if ans.lower() == "new":
-            pick = offer_creation(c, node, rep, forced=True)
+            pick = offer_creation(c, node, rep, forced=True, source=source)
             if pick is not None and not pick[2]:
                 ui.note(f"{rtilde(pick[0]['prefix'], home)} cannot be used: {pick[3]}")
                 return None
@@ -895,6 +1130,7 @@ def offer_cleanup(c: Ctx, node: str, rep: dict, host_text: str, keep_python: str
     net = c.st.nodes()[node]["network"]
     old = [x for x in own_environments(c, rep, net)
            if x["mine"] and not x["used_by"] and not x["current"]
+           and x["marker"].get("source") != "checkout"          # brought up to date by a sync
            and x["cand"]["python"] != keep_python]
     if not old:
         return
@@ -952,10 +1188,15 @@ def cmd_cleanup(c: Ctx, text: str) -> int:
             what, good = "not used by a kernel here; same kernel-side code as here", True
         else:
             what, good = "not used by a kernel here; its kernel-side code differs from here", False
+        if x["marker"].get("source") == "checkout":
+            what += "; a checkout's copy (--sync-checkout brings it up to date)"
+        elif x["marker"].get("source") == "wheel":
+            what += "; made from a wheel"
         if not x["mine"]:
             what += f"; made from {(x['marker'].get('setup') or {}).get('host') or 'another computer'}"
         (ui.ok if good else ui.note)(f"{i:>2}. {rtilde(x['cand']['prefix'], home)}  (cubevis {v}): {what}")
-        if x["mine"] and not x["used_by"] and not x["current"]:
+        if x["mine"] and not x["used_by"] and not x["current"] \
+                and x["marker"].get("source") != "checkout":
             default.append(str(i))
     ans = ui.ask("Remove which? (numbers separated by spaces; 'none' for none)",
                  " ".join(default), key="remove")
@@ -1225,7 +1466,52 @@ def check_kernels(c: Ctx, node: str, rep: dict, host_text: str) -> bool:
 # The command
 # --------------------------------------------------------------------------
 
-def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None) -> int:
+def forget_new(c: Ctx, node: str, network: str, had_nodes: set, had_nets: set,
+               host: str) -> None:
+    """The login to a host placed in this run failed: nothing about it is
+    kept (design 7c: the login is tested before anything is saved), so the
+    next run asks again -- after the user has fixed what was wrong, or with
+    other answers.  A stored password stays in its store."""
+    ui, st = c.ui, c.st
+    net = st.networks().get(network) or {}
+    if net.get("twofactor") or (net.get("login") or {}).get("twofactor"):
+        return          # the user logs in (a terminal, a command): kept for that
+    gone = []
+    if node not in had_nodes and node in st.nodes():
+        st.remove_node(node)
+        gone.append(f"node {node}")
+    if network not in had_nets and network in st.networks() and not st.nodes(network):
+        try:
+            st.remove_network(network)
+            gone.append(f"network {network}")
+        except S.StateError:
+            pass
+    if gone:
+        c.save()
+        ui.record_change("forgot", ", ".join(gone) + " (the login did not work)")
+        ui.say(f"Nothing about {host} was kept, since logging in did not work; "
+               f"python -m cubevis.setup {host} asks again.")
+
+
+def set_twofactor(c: Ctx, network: str, on: bool) -> None:
+    """``--2fa`` / ``--no-2fa``: the hop of *network* whose login asks for a
+    second factor -- its login host when it has one, else its nodes.  No
+    stored password is used for it; its shared connection is opened by the
+    user, in a terminal (``steps.hop_steps``)."""
+    ui, st = c.ui, c.st
+    net = st.networks()[network]
+    rec = net.get("login") or net
+    what = f"login host {rec['host']}" if net.get("login") else f"the nodes of network {network}"
+    if bool(rec.get("twofactor")) == on:
+        return
+    rec["twofactor"] = on
+    ui.record_change("second factor", f"{what}: {'asks for one' if on else 'does not ask for one'}")
+
+
+def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None,
+             twofactor: Optional[bool] = None, source: Optional[dict] = None) -> int:
+    """*source* (stage 2d): ``{"kind": "checkout", "root": DIR}`` for
+    ``--sync-checkout``, ``{"kind": "wheel", "path": FILE}`` for ``--wheel``."""
     ui, st = c.ui, c.st
     if kernel is not None:
         try:
@@ -1241,17 +1527,20 @@ def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None) -> int:
         return 1
     if not local_steps(c):
         return 1
+    had_nets, had_nodes = set(st.networks()), set(st.nodes())
     node = locate(c, host, port)
     if not node:
         return 1
-    c.save()
     n = st.nodes()[node]
+    if twofactor is not None:
+        set_twofactor(c, n["network"], twofactor)
+    c.save()
     net = st.networks()[n["network"]]
     ui.heading(f"{host}: node {node}" + (f" of cluster {n['cluster']}" if n.get("cluster") else "")
                + (f", through {net['login']['host']}" if net.get("login") else ", reached directly"))
-    if net.get("login") and not hop_steps(c, n["network"], None):
-        return 1
-    if not hop_steps(c, n["network"], node):
+    if not ((not net.get("login") or hop_steps(c, n["network"], None))
+            and hop_steps(c, n["network"], node)):
+        forget_new(c, node, n["network"], had_nodes, had_nets, host)
         return 1
     rep = discover_step(c, node)
     if rep is None:
@@ -1261,9 +1550,16 @@ def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None) -> int:
     c.save()
     if net.get("login"):
         inside_step(c, n["network"], node)
+    syncing = bool(source and source.get("kind") == "checkout")
     if kernel is None and st.kernels_on(node):
+        if syncing:
+            env = environment_step(c, node, rep, reuse=False, source=source)
+            c.save()
+            if env is None:
+                return 1
+            move_kernels_step(c, node, env)
         return 0 if check_kernels(c, node, rep, text) else 1
-    env = environment_step(c, node, rep, reuse=kernel is not None)
+    env = environment_step(c, node, rep, reuse=kernel is not None and not syncing, source=source)
     c.save()
     if env is None:
         return 1

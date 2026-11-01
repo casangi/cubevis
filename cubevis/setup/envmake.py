@@ -32,9 +32,22 @@ later, like ``discover``), sent as ``python3 -`` with the request filled in
 (``payload``); its answer is one line, ``CUBEVIS-ENVMAKE {json}``
 (``call``).  Nothing needs cubevis there.
 
+A development install here (stage 2d, ``sync``) makes the same kind of
+environment from code copied from this computer: the request's ``source``
+(``{"kind": "checkout" | "wheel", "staged": DIR, "file": WHEEL, "from":
+...}``) names a directory setup filled beside the environment before
+starting; after ``create`` the worker moves it to ``PREFIX/cubevis-src`` and
+installs from there (``pip install -e`` for a checkout, the wheel's file
+otherwise), with ``pip_env`` set (the version for a build without ``.git``).
+The marker then says ``source``.  A checkout's environment
+(``cubevis-dev-<computer>``) is the one setup's environment that changes
+afterwards: ``sync.push`` replaces its ``cubevis-src`` on each
+``--sync-checkout``.
+
 Test hooks (the environment of the setup run, never set in normal use):
 ``CUBEVIS_SETUP_TEST_INSTALL`` -- a shell command that replaces the pip
-install (``$PREFIX`` is the new environment) and allows a development
+install (``$PREFIX`` is the new environment, ``$SOURCE`` the copied code
+when there is one) and allows a development
 version here; ``CUBEVIS_SETUP_POLL_SECONDS`` -- the polling interval.
 """
 from __future__ import annotations
@@ -68,6 +81,24 @@ def candidate_names(version: str) -> list:
 
 def spec(version: str) -> str:
     return f"cubevis[visplot]=={version}"
+
+
+def dev_name(host: str) -> str:
+    """The name of this computer's checkout environment: ``cubevis-dev-<host>``."""
+    return "cubevis-dev-" + re.sub(r"[^A-Za-z0-9_.-]", "-", host)
+
+
+def dev_names(host: str) -> list:
+    b = dev_name(host)
+    return [b] + [f"{b}-{i}" for i in range(2, 10)]
+
+
+def staged_dir(prefix: str) -> str:
+    """Where setup puts copied code before the environment *prefix* exists
+    (beside it: the same filesystem, so the worker moves it in at once)."""
+    import posixpath
+    p = prefix.rstrip("/")
+    return posixpath.join(posixpath.dirname(p), "." + posixpath.basename(p) + ".cubevis-src")
 
 
 def pick_tool(tools) -> Optional[dict]:
@@ -228,10 +259,30 @@ try:
         done.append("create")
         put(done=done)
     if "install" not in done:
+        src = job.get("source")
+        extra = dict(job.get("pip_env") or {})
+        target = job["spec"]
+        if src:
+            # The code copied from setup's computer (a checkout, a wheel):
+            # staged beside the environment, moved into it now.
+            dest = os.path.join(PREFIX, "cubevis-src")
+            if os.path.isdir(src["staged"]):
+                if os.path.lexists(dest):
+                    shutil.rmtree(dest)
+                os.rename(src["staged"], dest)
+            elif not os.path.isdir(dest):
+                put(reason="the copy of the code sent from setup's computer is not on the node")
+                raise Failed("%s is missing" % src["staged"])
+            extra["SOURCE"] = dest
+            if src["kind"] == "wheel":
+                target = os.path.join(dest, src["file"]) + "[visplot]"
+            else:
+                target = dest + "[visplot]"
         if job.get("install_shell"):
-            rc = run("installing cubevis (pip)", job["install_shell"], shell=True)
+            rc = run("installing cubevis (pip)", job["install_shell"], shell=True, extra=extra)
         else:
-            rc = run("installing cubevis (pip)", [PY, "-m", "pip", "install", job["spec"]])
+            rc = run("installing cubevis (pip)", [PY, "-m", "pip", "install"]
+                     + (["-e"] if src and src["kind"] == "checkout" else []) + [target], extra=extra)
         if rc:
             put(reason=reason(LAST))
             raise Failed("pip install %s failed" % job["spec"])
@@ -239,6 +290,10 @@ try:
         put(done=done)
     marker = {"schema": 1, "name": job["name"], "version": job["version"], "spec": job["spec"],
               "python": job["python"], "tool": TOOL, "created": now(), "setup": job.get("setup") or {}}
+    if job.get("source"):
+        marker["source"] = job["source"]["kind"]           # checkout | wheel (else: PyPI)
+        if job["source"].get("from"):
+            marker["from"] = job["source"]["from"]
     fd, tmp = tempfile.mkstemp(dir=PREFIX, prefix=".marker.")
     with os.fdopen(fd, "w") as f:
         json.dump(marker, f, indent=1)
@@ -428,6 +483,7 @@ def act_start():
     job = {"name": name, "prefix": prefix, "tool": tool, "python": REQUEST["python"],
            "spec": REQUEST["spec"], "version": REQUEST["version"], "marker": REQUEST["marker"],
            "setup": REQUEST.get("setup") or {}, "install_shell": REQUEST.get("install_shell"),
+           "source": REQUEST.get("source"), "pip_env": REQUEST.get("pip_env") or {},
            "done": done, "status": p["status"], "log": p["log"]}
     with open(p["job"], "w") as f:
         json.dump(job, f)
@@ -454,6 +510,11 @@ def act_remove():
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out = r.stdout.decode("utf-8", "replace").strip().splitlines()[-6:]
     gone = not os.path.lexists(prefix)
+    staged = os.path.join(os.path.dirname(prefix.rstrip("/")),
+                          "." + os.path.basename(prefix.rstrip("/")) + ".cubevis-src")
+    if gone and os.path.isdir(staged):
+        import shutil
+        shutil.rmtree(staged, ignore_errors=True)      # setup's own copy, never an environment
     if gone:
         for n in (marker["name"],):
             for p in paths(n).values():

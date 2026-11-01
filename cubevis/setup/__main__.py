@@ -3,6 +3,12 @@
     python -m cubevis.setup HOST                  make kernels work on HOST (the computer
                                                   your data is on); again: check them
     python -m cubevis.setup HOST --kernel NAME    add (or change) a kernel on HOST
+    python -m cubevis.setup HOST --2fa            HOST's login asks for a second factor
+    python -m cubevis.setup HOST --sync-checkout  copy this checkout to HOST and use it
+                                                  there (development); again after changes
+    python -m cubevis.setup HOST --wheel PATH     make setup's environment there from a wheel
+    python -m cubevis.setup diagnose HOST         how ssh reaches HOST, side by side with
+                                                  setup's configuration; change nothing
     python -m cubevis.setup                       the same, asking for the host
     python -m cubevis.setup status                what is set up
     python -m cubevis.setup check [NAME]          test logins and kernels; change nothing
@@ -26,7 +32,9 @@ nodes, environments, kernels: shared), and per computer in ``hosts/<id>/``:
 in ``bin/``, ``changes.log`` (every change) and ``setup.log`` (every
 command).  ssh's connection sockets are on local disk
 (``/tmp/cubevis-<uid>``).  On the nodes it writes only the kernels'
-launchers (``~/.config/cubevis/launch/<id>/``).
+launchers (``~/.config/cubevis/launch/<id>/``), its own environments (with
+their jobs and logs in ``~/.config/cubevis/make/``), and -- for a
+development install, on request -- a copy of the code in one of them.
 """
 from __future__ import annotations
 
@@ -41,7 +49,7 @@ from .hostsetup import check_kernel, cmd_cleanup, cmd_host, rtilde
 from .steps import Ctx, last_line, local_steps, network_steps
 from .ui import UI, Quit, tilde
 
-COMMANDS = ("status", "check", "network", "jupyter")
+COMMANDS = ("status", "check", "network", "jupyter", "diagnose")
 
 
 # ==========================================================================
@@ -65,7 +73,9 @@ def cmd_status(c: Ctx) -> int:
         ui._p(f"    network {name}" + (f" ({net['domain']})" if net.get("domain") else "") + ": "
               + (f"through {lg['user']}@{lg['host']}"
                  f"{':' + str(lg['port']) if lg['port'] != 22 else ''} ({lg['alias']})"
-                 if lg else "direct"))
+                 if lg else "direct")
+              + (", login asks for a second factor" if (lg or {}).get("twofactor") else "")
+              + (", nodes ask for a second factor" if net.get("twofactor") else ""))
         r = net.get("inside")
         forced, why = _in.override(name)
         if lg and forced is not None:
@@ -322,6 +332,14 @@ def main(argv=None) -> int:
     p.add_argument("--kernel", metavar="NAME", help="with HOST: add or change this kernel there")
     p.add_argument("--cleanup", action="store_true",
                    help="with HOST: remove environments setup made there (nothing else)")
+    p.add_argument("--2fa", dest="twofactor", action="store_const", const=True,
+                   help="with HOST: its login asks for a second factor (a code, a push)")
+    p.add_argument("--no-2fa", dest="twofactor", action="store_const", const=False,
+                   help="with HOST: its login does not ask for a second factor")
+    p.add_argument("--sync-checkout", action="store_true",
+                   help="with HOST: copy this checkout there and use it (editable)")
+    p.add_argument("--wheel", metavar="PATH",
+                   help="with HOST: make setup's environment there from this wheel")
     sub = p.add_subparsers(dest="cmd")
     ph = sub.add_parser("host", help="make kernels work on HOST (the default command)")
     ph.add_argument("host")
@@ -329,7 +347,20 @@ def main(argv=None) -> int:
                     help="add or change this kernel there")
     ph.add_argument("--cleanup", dest="cleanup_after", action="store_true",
                     help="remove environments setup made there (nothing else)")
+    ph.add_argument("--2fa", dest="twofactor_after", action="store_const", const=True,
+                    help="its login asks for a second factor: no stored password; you log in "
+                         "in a terminal and the connection is shared")
+    ph.add_argument("--no-2fa", dest="twofactor_after", action="store_const", const=False,
+                    help="its login does not ask for a second factor (any more)")
+    ph.add_argument("--sync-checkout", dest="sync_after", action="store_true",
+                    help="copy this checkout there and use it (editable), in setup's own "
+                         "environment; again after each change")
+    ph.add_argument("--wheel", dest="wheel_after", metavar="PATH",
+                    help="make setup's environment there from this wheel")
     sub.add_parser("status", help="what is set up")
+    pd = sub.add_parser("diagnose", help="how ssh reaches HOST, next to setup's configuration; "
+                                         "one login attempt, nothing changed")
+    pd.add_argument("dhost", metavar="host")
     pc = sub.add_parser("check", help="test logins and kernels; change nothing")
     pc.add_argument("target", nargs="?", help="a kernel, node, cluster or network (default: all)")
     pn = sub.add_parser("network", help="go through a network's logins and inside ranges again")
@@ -342,7 +373,7 @@ def main(argv=None) -> int:
                     help="add where this computer is now to the network's inside ranges, "
                          "after checking that its nodes answer directly from here")
     # Anything that is not a command (or an option) is a host.
-    takes_value = {"--answer", "--kernel"}
+    takes_value = {"--answer", "--kernel", "--wheel"}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -358,6 +389,32 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     a.kernel = getattr(a, "kernel_after", None) or a.kernel
     a.cleanup = a.cleanup or getattr(a, "cleanup_after", False)
+    if getattr(a, "twofactor_after", None) is not None:
+        a.twofactor = a.twofactor_after
+    if a.twofactor is not None and a.cmd != "host":
+        p.error("--2fa goes with a host: python -m cubevis.setup HOST --2fa")
+    a.sync_checkout = a.sync_checkout or getattr(a, "sync_after", False)
+    a.wheel = getattr(a, "wheel_after", None) or a.wheel
+    source = None
+    if (a.sync_checkout or a.wheel) and a.cmd != "host":
+        p.error("--sync-checkout and --wheel go with a host: python -m cubevis.setup HOST "
+                "--sync-checkout")
+    if a.sync_checkout and a.wheel:
+        p.error("--sync-checkout and --wheel do not go together")
+    if a.sync_checkout:
+        from . import sync
+        root = sync.checkout_root()
+        if root is None:
+            p.error("--sync-checkout needs cubevis imported from a checkout (pip install -e "
+                    "DIR, or PYTHONPATH=DIR); this one is not")
+        source = {"kind": "checkout", "root": root}
+    elif a.wheel:
+        from . import sync
+        from pathlib import Path
+        w = Path(a.wheel).expanduser().resolve()
+        if not w.is_file() or not sync.wheel_version(w):
+            p.error(f"--wheel: {a.wheel} is not a cubevis wheel file (cubevis-VERSION-...whl)")
+        source = {"kind": "wheel", "path": w}
     if a.kernel and a.cmd != "host":
         p.error("--kernel goes with a host: python -m cubevis.setup HOST --kernel NAME")
     if a.cleanup and a.cmd != "host":
@@ -381,12 +438,16 @@ def main(argv=None) -> int:
             return cmd_status(c)
         if a.cmd == "check":
             return cmd_check(c, a.target)
+        if a.cmd == "diagnose":
+            from .diagnose import cmd_diagnose
+            return cmd_diagnose(c, a.dhost)
         if a.cmd == "network":
             rc = cmd_inside_here(c, a.name) if a.inside_here else cmd_network(c, a.name)
         elif a.cmd == "jupyter":
             rc = cmd_jupyter(c, a.jkernel, a.node)
         elif a.cmd == "host":
-            rc = cmd_cleanup(c, a.host) if a.cleanup else cmd_host(c, a.host, a.kernel)
+            rc = (cmd_cleanup(c, a.host) if a.cleanup
+                  else cmd_host(c, a.host, a.kernel, twofactor=a.twofactor, source=source))
         else:
             rc = cmd_walk(c)
         ui.show_changes()

@@ -157,7 +157,7 @@ def test_visplot_takes_a_setup_kernels_own_name(tmp_path, monkeypatch):
 def test_defaults_come_from_the_users_ssh_configuration(ctx, tmp_path, monkeypatch):
     """Darrell's ~/.ssh/config names the login host 'ssh' and the node by
     short names, with his user: setup takes the real names, the user and
-    the route from it (ssh -G), asking only to confirm."""
+    the route from it (ssh -G), adopting its ProxyJump without questions."""
     import shutil as _sh
     if not _sh.which("ssh"):
         pytest.skip("needs ssh")
@@ -175,8 +175,10 @@ def test_defaults_come_from_the_users_ssh_configuration(ctx, tmp_path, monkeypat
     assert net["login"]["host"] == "ssh.cv.example.org" and net["login"]["user"] == "dschieb"
     assert net["user"] == "dschieb" and net["domain"] == "cv.example.org"
     out = " ".join(c.ui.out.getvalue().split())
-    assert "Your ssh configuration has cvpost106 as dschieb@cvpost106.cv.example.org" in out
-    assert "ssh is ssh.cv.example.org (your ssh configuration)" in out
+    assert ("Your ssh configuration reaches cvpost106 (cvpost106.cv.example.org) through "
+            "dschieb@ssh; setup does the same: dschieb@ssh.cv.example.org is the login host") in out
+    assert "intermediate host" not in out and "user name" not in out      # nothing asked
+    assert net["login"]["ssh_name"] == "ssh" and node["ssh_name"] == "cvpost106"
     # Another node typed by its short name joins the same network, no questions.
     cfg.write_text(cfg.read_text() + "Host cvpost107\n    HostName cvpost107.cv.example.org\n")
     c2 = Ctx(UI(yes=True, out=io.StringIO()), st)
@@ -298,8 +300,11 @@ def test_a_development_install_is_not_made_elsewhere(ctx, monkeypatch):
     node = _node(c)
     assert H.offer_creation(c, node, _rep()) is None
     out = " ".join(c.ui.out.getvalue().split())
-    assert "development install" in out and "no package reproduces" in out
+    assert "development install" in out and "no package on PyPI reproduces" in out
     assert "create -y" not in out                                    # nothing to run for it
+    # What does make it work there (stage 2d).
+    assert "python -m cubevis.setup node1 --sync-checkout copies this checkout" in out
+    assert "--wheel PATH makes one from a wheel you built" in out
 
 
 def test_no_conda_says_how_to_get_one(ctx, release):
@@ -487,8 +492,8 @@ def test_asking_for_new_with_a_development_install_does_not_say_nothing_matches(
     c = ctx(via_login="n", user="jo")
     assert H.offer_creation(c, _node(c), _rep(), forced=True) is None
     out = " ".join(c.ui.out.getvalue().split())
-    assert "Setup cannot make an environment for this cubevis" in out
-    assert "No environment on" not in out and "Choose one of the environments listed" in out
+    assert "Setup cannot make an environment from PyPI for this cubevis" in out
+    assert "No environment on" not in out and "choose one of the environments listed" in out
 
 
 def _running(step="installing cubevis (pip)", **act):

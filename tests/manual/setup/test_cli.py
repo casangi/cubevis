@@ -92,13 +92,14 @@ def _env(home, **extra):
     return env
 
 
-def _run(home, *args, input=None, timeout=300, host=None, **extra):
+def _run(home, *args, input=None, timeout=300, host=None, cwd=None, **extra):
     # Another computer: its own name and its own local disk for sockets (on
     # one machine, it would otherwise ride on the first one's connections).
+    # *cwd*: python -m puts it first on sys.path (default: here, the checkout).
     if host:
         extra.update(CUBEVIS_HOST_ID=host, CUBEVIS_RUNTIME_DIR=f"{home}/run-{host}")
     return subprocess.run([sys.executable, "-m", "cubevis.setup", *args], capture_output=True,
-                          text=True, env=_env(home, **extra), timeout=timeout,
+                          text=True, env=_env(home, **extra), timeout=timeout, cwd=cwd,
                           input=input if input is not None else "")
 
 
@@ -142,7 +143,8 @@ def test_unknown_network_bad_state_and_arguments(home):
 @needs_ssh
 def test_unattended_failure_skips_and_old_layout_is_left_alone(home):
     """--yes on a host that cannot be reached: the step fails once and is
-    skipped (no retry loop); the node is kept, flagged.  The earlier
+    skipped (no retry loop); nothing about the host is kept (stage 2c step 4:
+    the login is tested before anything is saved).  The earlier
     layout's ssh/config (here the bash setup's) is mentioned, not touched:
     another computer sharing the directory may still use it."""
     sshd = os.path.join(home, "cubevis", "ssh")
@@ -158,10 +160,11 @@ def test_unattended_failure_skips_and_old_layout_is_left_alone(home):
     assert "FAIL" in out and "cannot find" in out
     assert r.returncode == 1
     st = S.load()
-    assert st.nodes()["nosuch"]["status"] == "flagged"
-    assert list(st.networks()) == ["example"]                 # named from the domain
-    assert st.networks()["example"]["domain"] == "example.invalid"
-    assert "example-nosuch" in open(G.config_path()).read()
+    assert not st.nodes() and not st.networks()
+    assert "added network: example (direct, domain example.invalid)" in out   # named from the domain
+    assert "forgot: node nosuch, network example (the login did not work)" in out
+    assert "Nothing about nosuch.example.invalid was kept" in out
+    assert "example-nosuch" not in open(G.config_path()).read()
     assert str(G.config_path()).endswith("cubevis/hosts/gui1/ssh/config")
 
 
@@ -267,7 +270,10 @@ def test_rig_interactive_host(home, alice_envs):
     p = _spawn(home, HOST)
     script = [
         (r"Go ahead\?", ""),                                         # the wrapper
-        (r"intermediate host before logging in to compute.example.test\? \[Y/n\]", "y"),
+        # The rig's node answers directly from here (it asks for a password):
+        # a login host is still asked for -- off site -- with no as the default.
+        (r"this computer reaches compute.example.test directly", None),
+        (r"from elsewhere \(off site, say\) through an intermediate host\? \[y/N\]", "y"),
         (r"The intermediate host's name", "login.example.test:2201"),
         (r"Your user name on login.example.test", "alice"),
         (r"Your user name on compute.example.test", ""),             # alice (default)
@@ -288,7 +294,8 @@ def test_rig_interactive_host(home, alice_envs):
     ]
     for pat, ans in script:
         p.expect(pat)
-        p.sendline(ans)
+        if ans is not None:
+            p.sendline(ans)
     p.expect(r"Changed in this run")
     p.expect(pexpect.EOF)
     out = " ".join(p.before.split())
@@ -559,6 +566,170 @@ def test_rig_inside_here_records_only_after_a_direct_connection(home, alice_envs
     out = _flat(r)
     assert r.returncode == 1 and "no direct connection from here" in out, r.stdout
     assert "Nothing recorded" in out and S.load().networks()["example"]["inside"] == []
+
+
+@needs_rig
+@needs_ssh
+def test_rig_the_route_comes_from_the_users_ssh_configuration(home, alice_envs):
+    """Stage 2c step 4: a user whose ~/.ssh/config has the node under a short
+    name, behind a ProxyJump, with a login option of its own.  Setup asks
+    nothing about the route, logs in through the generated file -- which
+    carries the option -- and keeps the user's names for the next run."""
+    cfg = os.path.join(home, "user_ssh_config")
+    with open(cfg, "w") as f:
+        f.write("Host gate\n    HostName login.example.test\n    Port 2201\n    User alice\n"
+                "Host compute\n    HostName compute.example.test\n    Port 2202\n    User alice\n"
+                "    ProxyJump gate\n    PreferredAuthentications password,keyboard-interactive\n"
+                f"Host *\n    UserKnownHostsFile {home}/known_hosts\n")
+    r = _run(home, "--yes", *STORE, "--answer", "inside=none", "--answer", "environment=none",
+             "compute", CUBEVIS_SETUP_USER_SSH_CONFIG=cfg)
+    out = _flat(r)
+    assert "Your ssh configuration reaches compute (compute.example.test) through gate; setup " \
+           "does the same: alice@login.example.test:2201 is the login host" in out, r.stdout
+    assert "intermediate host" not in out and "Your user name" not in out
+    st = S.load()
+    net = st.networks()["example"]
+    assert net["login"]["ssh_name"] == "gate" and st.nodes()["compute"]["ssh_name"] == "compute"
+    assert st.nodes()["compute"]["status"] == "ok", r.stdout
+    text = open(G.config_path()).read()
+    assert "    # from your ssh configuration (ssh -G compute)\n" in text
+    assert "    PreferredAuthentications password,keyboard-interactive\n" in text
+    # UserKnownHostsFile is a login option too: carried for both hosts (the
+    # third is the tests' own Host * block, CUBEVIS_SETUP_KNOWN_HOSTS).
+    hosts_part = text.split("# CUBEVIS_SETUP_KNOWN_HOSTS")[0]
+    assert hosts_part.count(f"    UserKnownHostsFile {home}/known_hosts") == 2
+
+
+@needs_rig
+@needs_ssh
+def test_rig_a_login_that_fails_keeps_nothing(home):
+    """The login is tested before anything is kept (design 7c): a login host
+    that does not answer leaves no network and no node behind."""
+    r = _run(home, "--yes", "--answer", "via_login=y", "--answer",
+             "login_host=login.example.test:2299", "--answer", "login_user=alice",
+             "--answer", "user=alice", *STORE, HOST)
+    out = _flat(r)
+    assert r.returncode == 1, r.stdout
+    assert "Nothing about compute.example.test was kept, since logging in did not work" in out
+    st = S.load()
+    assert not st.networks() and not st.nodes(), r.stdout
+    assert "forgot: node compute, network example" in out
+
+
+@needs_rig
+@needs_ssh
+def test_rig_a_login_host_with_a_second_factor(home, alice_envs):
+    """``--2fa`` (design 7c, "Two-factor"): no password is stored for the
+    login host.  Without a terminal, setup (and the wrapper, for kernels)
+    stops and names the command; typed in a terminal, that command logs in
+    once, and setup and the node's own stored-password login ride on it.
+    (The rig's password prompt stands in for the second factor: what matters
+    is that only the user can answer it.)"""
+    pexpect = pytest.importorskip("pexpect")
+    r = _run(home, "--yes", *LOGIN, *STORE, "--2fa", "--answer", "environment=none", HOST)
+    out = _flat(r)
+    assert r.returncode == 1, r.stdout
+    assert "login.example.test asks for a second factor (a code, a push), so setup stores no " \
+           "password for it" in out
+    assert "There is no terminal here to log in with" in out
+    st = S.load()                                  # kept: the user logs in next
+    assert st.networks()["example"]["login"]["twofactor"] is True
+    rules = open(G.rules_path()).read()
+    assert "login.example.test  twofactor=yes" in rules and "service=" not in rules.split(
+        "twofactor=yes")[0].splitlines()[-1]
+    assert "login asks for a second factor" in _run(home, "status").stdout
+    wrapper, cfg = str(G.wrapper_path()), str(G.config_path())
+    cmd = f"{wrapper} -F {cfg} example-login true"
+    assert cmd in out
+    # A kernel (no terminal) going to the node: the wrapper names the command.
+    k = subprocess.run([wrapper, "-F", cfg, "-o", "BatchMode=yes", "example-compute", "true"],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, env=_env(home))
+    assert k.returncode == 255
+    assert "asks for a second factor, and there is no shared connection to it now" in k.stderr
+    assert cmd in k.stderr
+    ex = subprocess.run([wrapper, "--explain", "-F", cfg, "example-login"], capture_output=True,
+                        text=True, env=_env(home))
+    assert "second factor: you log in (in a terminal); no stored password" in ex.stdout
+    # The user runs the command in a terminal and answers the prompt.
+    p = pexpect.spawn(wrapper, ["-F", cfg, "example-login", "true"], env=_env(home),
+                      encoding="utf-8", timeout=60)
+    p.expect("asks for a second factor: log in")
+    p.expect("password:")
+    p.sendline("s3cret pw!")
+    p.expect(pexpect.EOF)
+    p.close()
+    assert p.exitstatus == 0, p.before
+    # Now setup goes on, over that connection; the node logs in with its
+    # stored password through it.
+    r = _run(home, "--yes", *STORE, "--answer", "inside=none", "--answer", "environment=none",
+             HOST)
+    out = _flat(r)
+    assert "over the shared connection (second factor)" in out, r.stdout
+    assert S.load().nodes()["compute"]["status"] == "ok", r.stdout
+    # --no-2fa takes it back: a stored password rule again.
+    r = _run(home, "--yes", *STORE, "--no-2fa", "--answer", "inside=none",
+             "--answer", "environment=none", HOST)
+    assert "twofactor" not in open(G.rules_path()).read(), r.stdout
+    assert "second factor: the login host login.example.test does not ask for one" in _flat(r) \
+        or "does not ask for one" in _flat(r)
+
+
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_diagnose(home, alice_envs):
+    """``setup diagnose HOST``: what setup knows, the two configurations side
+    by side, the route, the wrapper's view, a login each way, the kernel-side
+    code there -- and the problems each shows when something is wrong.
+    Nothing it does changes what setup keeps."""
+    cfg = os.path.join(home, "user_ssh_config")
+    base = (f"Host compute\n    HostName compute.example.test\n    Port 2202\n    User alice\n"
+            f"Host *\n    UserKnownHostsFile {home}/known_hosts\n")
+    with open(cfg, "w") as f:
+        f.write(base)
+    r = _run(home, "--yes", *STORE, "--answer", "via_login=n", "--answer", "workdir=~",
+             "--answer", "env_vars=none", "compute", CUBEVIS_SETUP_USER_SSH_CONFIG=cfg)
+    assert r.returncode == 0, r.stdout
+    state_before = open(S.state_path()).read()
+    config_before = open(G.config_path()).read()
+    r = _run(home, "diagnose", "compute", CUBEVIS_SETUP_USER_SSH_CONFIG=cfg)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    for part in ("1. What setup knows", "node compute of network example",
+                 "2. Your ssh configuration and setup's",
+                 "your ssh (ssh -G compute): alice@compute.example.test:2202, directly",
+                 "setup's carries every login option yours has",
+                 "4. The wrapper", "password: stored", "ok: setup's (the wrapper and its "
+                 "configuration, as kernels do): logged in", "6. The kernel-side code",
+                 "kernels compute", "kernel-side code identical"):
+        assert part in out, (part, r.stdout)
+    assert "PROBLEM" not in out, r.stdout
+    assert "3. The route" not in out                     # no login host: nothing to decide
+    # The user's configuration gains a login option after setup ran.
+    with open(cfg, "w") as f:
+        f.write(base.replace("User alice\n", "User alice\n    PubkeyAuthentication no\n"))
+    r = _run(home, "diagnose", "compute", CUBEVIS_SETUP_USER_SSH_CONFIG=cfg)
+    out = _flat(r)
+    assert "PROBLEM: setup's lacks PubkeyAuthentication " in out, r.stdout   # no / false
+    assert "your configuration has changed since, or this is a bug" in out
+    # Read-only: the state and the generated file are as they were.
+    assert open(S.state_path()).read() == state_before
+    assert open(G.config_path()).read() == config_before
+    # A login that fails: the end of ssh's verbose output.
+    st = S.load()
+    st.nodes()["compute"]["port"] = 2299
+    S.save(st)
+    G.write(S.load())
+    r = _run(home, "diagnose", "compute", CUBEVIS_SETUP_USER_SSH_CONFIG=cfg)
+    out = _flat(r)
+    assert r.returncode == 1, r.stdout
+    assert "PROBLEM: setup's (the wrapper and its configuration, as kernels do)" in out
+    assert "the end of ssh -v" in out and "6. The kernel-side code" not in out, r.stdout
+    assert "differs: port is 2202 in yours, 2299 in setup's" in out
+    # A host setup does not know.
+    r = _run(home, "diagnose", "elsewhere.example.test")
+    out = _flat(r)
+    assert "setup does not know elsewhere.example.test" in out and r.returncode == 1, r.stdout
 
 
 @needs_rig
@@ -890,3 +1061,120 @@ def test_cleanup_goes_with_a_host_only(home):
     assert r.returncode == 2 and "do not go together" in r.stderr
     r = _run(home, "--yes", "--cleanup", "unknown.example.org")
     assert r.returncode == 1 and "setup does not know unknown.example.org" in _flat(r)
+
+
+# ---------------------------------------------------------------------- #
+# Development installs (stage 2d): a checkout copied, a wheel             #
+# ---------------------------------------------------------------------- #
+
+def _checkout_copy(home):
+    """A checkout of this cubevis to edit: what a developer's tree is.
+    Setup runs with it first on PYTHONPATH, so it is the code here."""
+    t = os.path.join(home, "dev-checkout")
+    os.makedirs(t)
+    for name in ("pyproject.toml", "README.rst", "LICENSE"):
+        shutil.copy(os.path.join(ROOT, name), t)
+    shutil.copytree(os.path.join(ROOT, "cubevis"), os.path.join(t, "cubevis"),
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    return t
+
+
+def _dev_env(t):
+    return {"PYTHONPATH": os.pathsep.join([t, ROOT] + [p for p in sys.path if p])}
+
+
+def _source_hook(check=""):
+    """The pip install on the rig, for copied code: the new environment
+    imports cubevis from the copy ($SOURCE) -- what ``pip install -e`` of
+    the copy gives -- and its dependencies from the kernel venv."""
+    ksite = subprocess.run([KERNEL_PY, "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+                           capture_output=True, text=True).stdout.strip()
+    return ((f"{check} && " if check else "") +
+            'SITE=$("$PREFIX/bin/python" -c "import sysconfig; print(sysconfig.get_paths()[\'purelib\'])")'
+            f' && cp -r {shlex.quote(ksite)}/cubevis-*.dist-info "$SITE"/'
+            f' && printf "%s\\n%s\\n" "$SOURCE" {shlex.quote(ksite)} > "$SITE/kernel.pth"')
+
+
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_a_checkout_synced_and_synced_again(home, alice_tidy):
+    """The development loop (design 7c, 2d): a kernel on a release
+    environment; the code here changes, so that environment no longer
+    matches; --sync-checkout copies this checkout to the node into setup's
+    cubevis-dev-<computer>, installed editable, and moves the kernel to it;
+    the code changes again, and --sync-checkout copies it again -- the same
+    environment, no new one, and the kernel matches again."""
+    t = _checkout_copy(home)
+    dev = dict(_dev_env(t), CUBEVIS_SETUP_TEST_INSTALL=_source_hook('test -f "$SOURCE/pyproject.toml"'),
+               cwd=home, **FAST)
+    r = _host(home, "--answer", "workdir=~", "--answer", "env_vars=none", route=DIRECT, **dev)
+    assert r.returncode == 0, r.stdout
+    st = S.load()
+    assert st.section("kernels")["compute"]["environment"].startswith("hrs"), r.stdout
+    # A change to code that runs in kernels.
+    with open(os.path.join(t, "cubevis", "remote", "worker_main.py"), "a") as f:
+        f.write("\nDEV_CHANGE = 1\n")
+    r = _run(home, "--yes", *STORE, "--sync-checkout", HOST, **dev)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert f"cubevis from this checkout ({t}), installed editable" in out, r.stdout
+    assert "Copying the checkout to compute" in out
+    made = _made()
+    assert made == [f"{ENVS}/cubevis-dev-gui1"], (made, r.stdout)
+    assert "Kernel compute uses hrs-compute, whose kernel-side code differs from here. Use the " \
+           "checkout's environment" in out
+    assert "kernel compute: starts in ~" in out, r.stdout
+    k = S.load().section("kernels")["compute"]
+    assert k["environment"].startswith("cubevis-dev-gui1") and k["status"] == "ok"
+    src = f"{ENVS}/cubevis-dev-gui1/cubevis-src"
+    assert "DEV_CHANGE = 1" in _as_alice(f"cat {src}/cubevis/remote/worker_main.py").stdout
+    marker = json.loads(_as_alice(f"cat {ENVS}/cubevis-dev-gui1/cubevis-setup.json").stdout)
+    assert marker["source"] == "checkout" and marker["from"] == t
+    # Changed again: copied again into the same environment; pip not run
+    # (pyproject.toml is the same); the kernel matches the new code.
+    with open(os.path.join(t, "cubevis", "remote", "worker_main.py"), "a") as f:
+        f.write("DEV_CHANGE_2 = 1\n")
+    r = _run(home, "--yes", *STORE, "--sync-checkout", HOST, **dev)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert f"Copying {t} to compute:~/miniforge3/envs/cubevis-dev-gui1/cubevis-src" in out
+    assert "installing it again" not in out and "Making an environment" not in out
+    assert _made() == [f"{ENVS}/cubevis-dev-gui1"]
+    assert "DEV_CHANGE_2 = 1" in _as_alice(f"cat {src}/cubevis/remote/worker_main.py").stdout
+    assert "kernel compute: starts in ~" in out, r.stdout
+    # Changed once more but not copied: the kernel no longer matches, and
+    # setup says how to fix that.
+    with open(os.path.join(t, "cubevis", "remote", "worker_main.py"), "a") as f:
+        f.write("DEV_CHANGE_3 = 1\n")
+    r = _run(home, "--yes", *STORE, HOST, **dev)
+    assert r.returncode == 1 and "kernel-side code" in _flat(r), r.stdout
+    # The checkout's environment is never offered for removal as superseded.
+    r = _run(home, "--yes", "--cleanup", HOST, **dev)
+    out = _flat(r)
+    assert "a checkout's copy (--sync-checkout brings it up to date)" in out, r.stdout
+    assert "Nothing removed" in out
+
+
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_an_environment_from_a_wheel(home, alice_tidy):
+    """--wheel PATH: setup's environment is made from that file, copied to
+    the node, named for the wheel's version, with the marker saying so."""
+    wd = os.path.join(home, "dist")
+    os.makedirs(wd)
+    whl = os.path.join(wd, "cubevis-1.0.103.dev7-py3-none-any.whl")
+    with open(whl, "w") as f:
+        f.write("stands in for a wheel")
+    hook = _install_hook(before='test -f "$SOURCE/cubevis-1.0.103.dev7-py3-none-any.whl"')
+    r = _host(home, "--answer", "environment=new", "--answer", "workdir=~", "--answer",
+              "env_vars=none", "--wheel", whl, route=DIRECT, CUBEVIS_SETUP_TEST_INSTALL=hook, **FAST)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert f"cubevis 1.0.103.dev7 from the wheel {whl} (copied there)" in out
+    assert _made() == [f"{ENVS}/cubevis-1.0.103.dev7"], r.stdout
+    marker = json.loads(_as_alice(f"cat {ENVS}/cubevis-1.0.103.dev7/cubevis-setup.json").stdout)
+    assert marker["source"] == "wheel" and marker["spec"] == "cubevis-1.0.103.dev7-py3-none-any.whl[visplot]"
+    r = _run(home, "--yes", "--wheel", os.path.join(wd, "nothing.whl"), HOST)
+    assert r.returncode == 2 and "is not a cubevis wheel file" in r.stderr

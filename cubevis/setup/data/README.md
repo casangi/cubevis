@@ -147,9 +147,20 @@ password; key-only hosts (a git server) need no rule.  Keys, all optional:
 | `backend=` | `security` (macOS), `secret-tool`, `pass` or `command` | Keychain on macOS; `secret-tool` if installed, else `pass` |
 | `pass_name=` | the entry name for `pass` | the service |
 | `command=` | for `backend=command`: a shell command that prints the password; the rest of the line | |
+| `twofactor=yes` | the host asks for a second factor (a code, a push): no stored password is used; see below | |
 
 `account=` matters when the user name you stored the password under is not
 the one ssh logs in as.
+
+A host with `twofactor=yes` is logged in to only by you.  In a terminal, when
+its shared connection is not up, the wrapper runs ssh there so you answer its
+prompts once; the connection is then shared for `ControlPersist`.  Without a
+terminal (a kernel, a script) the wrapper stops instead, and names the
+command to run in one:
+
+```
+login.example.org   twofactor=yes
+```
 
 ## Day to day
 

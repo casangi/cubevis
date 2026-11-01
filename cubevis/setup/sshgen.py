@@ -107,12 +107,17 @@ def rule_keys(local: dict, service: str, account: str) -> str:
 # --------------------------------------------------------------------------
 
 def _host_block(alias: str, hostname: str, user: str, port: Optional[int],
-                proxy_jump: Optional[str]) -> list:
+                proxy_jump: Optional[str], extra=(), source: Optional[str] = None) -> list:
+    """One ``Host`` block.  *extra*: ``(Option, value)`` pairs copied from the
+    user's ssh configuration for *source* (``sshopts.login_options``)."""
     lines = [f"Host {alias}", f"    HostName {hostname}", f"    User {user}"]
     if port and int(port) != 22:
         lines.append(f"    Port {int(port)}")
     if proxy_jump:
         lines.append(f"    ProxyJump {proxy_jump}")
+    if extra:
+        lines.append(f"    # from your ssh configuration (ssh -G {source})")
+        lines += [f"    {k} {v}" for k, v in extra]
     lines += ["    ControlMaster auto",
               f"    ControlPath {cm_dir()}/%C",
               f"    ControlPersist {CONTROL_PERSIST}",
@@ -121,9 +126,33 @@ def _host_block(alias: str, hostname: str, user: str, port: Optional[int],
     return lines
 
 
+def ssh_name(rec: dict, hostname_key: str = "hostname") -> tuple:
+    """``(name, port)`` to ask the user's ssh about for a login host or
+    node record: the name the user gave setup (``ssh_name``: ``cvpost106``,
+    matched by their ``Host cvpost*``; its port too), else its real name and
+    setup's port."""
+    if rec.get("ssh_name"):
+        return rec["ssh_name"], None          # the user's configuration has its port
+    port = rec.get("port")
+    return rec[hostname_key], (int(port) if port and int(port) != 22 else None)
+
+
+def login_jump(login: dict) -> Optional[str]:
+    """The login host's own ProxyJump (several hops in the user's route:
+    the earlier ones), as real ``user@host:port``."""
+    from . import sshopts
+    via = login.get("via")
+    if not via:
+        name, port = ssh_name(login, "host")
+        via = sshopts.one(sshopts.view(name, port), "proxyjump")
+    return sshopts.resolve_jump(via) if via else None
+
+
 def config_text(st: State) -> str:
     """``ssh/config`` for *st*: networks in name order, each login host
-    then its nodes in name order."""
+    then its nodes in name order.  Each block carries the login options the
+    user's own ssh uses for that host (``sshopts``), read now."""
+    from . import sshopts
     out = ["# Written by cubevis setup from state.json; changes made here are",
            "# lost when it is written again (use python -m cubevis.setup).",
            "# The kernels use this file directly; your ~/.ssh/config includes it",
@@ -135,8 +164,10 @@ def config_text(st: State) -> str:
         out.append("")
         out.append(f"# network {name}" + ("" if login else " (nodes reached directly)"))
         if login:
+            name_, port_ = ssh_name(login, "host")
             out += _host_block(login["alias"], login["host"], login["user"],
-                               login.get("port"), None)
+                               login.get("port"), login_jump(login),
+                               sshopts.login_options(name_, port_, route=True), name_)
         # Never through the login host (none), or through it when this
         # computer is outside the network: a Match block decided at each
         # connection -- also without inside ranges (then "outside" unless
@@ -146,8 +177,10 @@ def config_text(st: State) -> str:
             node = st.nodes()[nname]
             aliases.append(node["alias"])
             out.append("")
+            name_, port_ = ssh_name(node)
             out += _host_block(node["alias"], node["hostname"], net["user"],
-                               node.get("port"), None)
+                               node.get("port"), None,
+                               sshopts.login_options(name_, port_, route=not login), name_)
         if login and aliases:
             from .inside import route_var
             out.append("")
@@ -176,48 +209,61 @@ def inside_command(st: State, network: str) -> str:
 
 
 def _password_hosts(st: State) -> list:
-    """Names of the networks with a host that asks for a password."""
+    """Names of the networks with a host that asks for a (stored) password."""
     return [n for n, net in sorted(st.networks().items())
-            if net.get("password") or (net.get("login") or {}).get("password")]
+            if (net.get("password") and not net.get("twofactor"))
+            or ((net.get("login") or {}).get("password")
+                and not (net.get("login") or {}).get("twofactor"))]
 
 
 def rules_text(st: State) -> str:
     """``ssh/rules`` for *st*: login hosts first (see module docstring),
     then each network's nodes -- by ``node_pattern`` and the clusters'
-    patterns, and by name the nodes none of them covers."""
+    patterns, and by name the nodes none of them covers.
+
+    A hop marked ``twofactor`` (``setup HOST --2fa``) gets ``twofactor=yes``
+    instead of a stored password: the wrapper never logs in to it itself;
+    with a terminal it lets the user log in once (shared for
+    ``ControlPersist``), without one it stops, naming the command."""
+    import fnmatch
     out = ["# Written by cubevis setup from state.json: the hosts that ask for a",
            "# password, and where the wrapper finds it. Real host names, not aliases."]
-    if not st.local.get("store") and _password_hosts(st):
+    store = bool(st.local.get("store"))
+    if not store and _password_hosts(st):
         # Another computer sharing this directory set these networks up;
         # this one has not chosen its password store yet (setup asks at
         # the first login that needs it).
         out.append("# No password store chosen on this computer yet: "
                    + ", ".join(_password_hosts(st)) + " left out.")
-        return "\n".join(out) + "\n"
     lines_login, lines_nodes = [], []
     for name in sorted(st.networks()):
         net = st.networks()[name]
         login = net.get("login") or {}
-        if login.get("password"):
+        if login.get("twofactor"):
+            lines_login.append(f"{login['host']}  twofactor=yes")
+        elif login.get("password") and store:
             svc = login.get("service") or net.get("service") or "cubevis-ssh"
             lines_login.append(f"{login['host']}  {rule_keys(st.local, svc, login['user'])}")
-        if net.get("password"):
+        if net.get("twofactor"):
+            keys = "twofactor=yes"
+        elif net.get("password") and store:
             svc = net.get("service") or login.get("service") or "cubevis-ssh"
             keys = rule_keys(st.local, svc, net["user"])
-            # The network's pattern (``*.<domain>``) and its clusters' (a node
-            # added later needs no new rule), then the nodes no pattern
-            # covers -- one typed by its short name, say.
-            import fnmatch
-            pats = ([net["node_pattern"]] if net.get("node_pattern") else []) + sorted(
-                {c["pattern"] for c in st.section("clusters").values() if c.get("network") == name}
-                - {net.get("node_pattern")})
-            hosts = sorted(n["hostname"] for n in st.nodes(name).values()
-                           if not any(fnmatch.fnmatchcase(n["hostname"].lower(), p.lower())
-                                      for p in pats))
-            if pats:
-                lines_nodes.append(f"{','.join(pats)}  {keys}")
-            if hosts:
-                lines_nodes.append(f"{','.join(hosts)}  {keys}")
+        else:
+            continue
+        # The network's pattern (``*.<domain>``) and its clusters' (a node
+        # added later needs no new rule), then the nodes no pattern covers
+        # -- one typed by its short name, say.
+        pats = ([net["node_pattern"]] if net.get("node_pattern") else []) + sorted(
+            {c["pattern"] for c in st.section("clusters").values() if c.get("network") == name}
+            - {net.get("node_pattern")})
+        hosts = sorted(n["hostname"] for n in st.nodes(name).values()
+                       if not any(fnmatch.fnmatchcase(n["hostname"].lower(), p.lower())
+                                  for p in pats))
+        if pats:
+            lines_nodes.append(f"{','.join(pats)}  {keys}")
+        if hosts:
+            lines_nodes.append(f"{','.join(hosts)}  {keys}")
     return "\n".join(out + lines_login + lines_nodes) + "\n"
 
 

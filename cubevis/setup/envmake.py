@@ -96,7 +96,7 @@ def human_bytes(n) -> str:
 # --------------------------------------------------------------------------
 
 WORKER = r'''
-import fcntl, json, os, re, shutil, subprocess, sys, tempfile, time
+import fcntl, glob, json, os, re, shutil, subprocess, sys, tempfile, time
 
 class Failed(Exception):
     pass
@@ -228,10 +228,18 @@ try:
         done.append("create")
         put(done=done)
     if "install" not in done:
+        # The new environment is a Python installation of its own: PYTHONHOME
+        # spares pip's interpreters (it starts several) the search for it,
+        # which on autofs takes most of a minute each (notes section 53).
+        home = None
+        if not os.path.isfile(os.path.join(PREFIX, "pyvenv.cfg")) and \
+                glob.glob(os.path.join(PREFIX, "lib", "python3*", "os.py")):
+            home = {"PYTHONHOME": PREFIX}
         if job.get("install_shell"):
-            rc = run("installing cubevis (pip)", job["install_shell"], shell=True)
+            rc = run("installing cubevis (pip)", job["install_shell"], shell=True, extra=home)
         else:
-            rc = run("installing cubevis (pip)", [PY, "-m", "pip", "install", job["spec"]])
+            rc = run("installing cubevis (pip)", [PY, "-m", "pip", "install", job["spec"]],
+                     extra=home)
         if rc:
             put(reason=reason(LAST))
             raise Failed("pip install %s failed" % job["spec"])

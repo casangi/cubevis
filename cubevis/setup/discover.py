@@ -408,13 +408,38 @@ def with_fingerprint(env_src, here):
         return env_src
 
 
-def check(python, script, timeout=CHECK_TIMEOUT):
+def own_home(prefix):
+    """*prefix* when it is a Python installation of its own -- its standard
+    library is there (``lib/pythonX.Y/os.py``, the landmark CPython looks
+    for) and it is not a venv -- so that ``PYTHONHOME=prefix`` only spares
+    Python the search for it (slow on autofs: notes section 53); else None."""
+    if not prefix or os.path.isfile(os.path.join(prefix, "pyvenv.cfg")):
+        return None
+    if glob.glob(os.path.join(prefix, "lib", "python3*", "os.py")):
+        return prefix
+    return None
+
+
+def check(python, script, timeout=CHECK_TIMEOUT, home=None):
     """envcheck's report for *python*, or ``{"error": ...}`` when it gives
     none.  Run in an empty temporary directory (no planted modules), without
-    ``PYTHONHOME``."""
+    the caller's ``PYTHONHOME``; with *home* (``own_home``) as
+    ``PYTHONHOME`` -- and again without it if it gives no report that way."""
+    if home:
+        rep = _check(python, script, timeout, home)
+        if "error" not in rep or rep.get("error_kind") in ("missing", "permission"):
+            if "error" not in rep:
+                rep["pythonhome"] = home         # checked with it: the start was not timed
+            return rep
+    return _check(python, script, timeout, None)
+
+
+def _check(python, script, timeout, home):
     d = tempfile.mkdtemp(prefix="cubevis-envcheck-")
     env = dict(os.environ)
     env.pop("PYTHONHOME", None)
+    if home:
+        env["PYTHONHOME"] = home
     try:
         try:
             r = subprocess.run([python, "-c", script], cwd=d, stdout=subprocess.PIPE,
@@ -484,7 +509,7 @@ def discover(paths=(), only=False, run_checks=True):
     for c in cands:
         c["check"] = None
         if script and (c.get("cubevis") or c.get("given") or c.get("marker")):
-            c["check"] = check(c["python"], script)
+            c["check"] = check(c["python"], script, home=own_home(c.get("prefix")))
     rep["environments"] = cands
     return rep
 

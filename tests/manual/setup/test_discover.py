@@ -206,6 +206,30 @@ def test_check_reports_why_not(tmp_path):
     assert envs.interpret(None)["ok"] is False
 
 
+def test_own_home_and_a_check_with_pythonhome(tmp_path):
+    """Conda environments are Python installations of their own: discovery
+    checks them with PYTHONHOME=prefix (Python's search for itself is slow on
+    autofs, notes section 53), and without it when that gives no report."""
+    import sysconfig
+    base = sys.base_prefix
+    if not os.path.isfile(os.path.join(sysconfig.get_paths()["stdlib"], "os.py")):
+        pytest.skip("this Python's standard library has no os.py")
+    assert D.own_home(base) == base
+    v = make_env(tmp_path / "v")                         # a venv: not its own installation
+    assert D.own_home(v) is None and D.own_home(None) is None
+    assert D.own_home(str(tmp_path / "nothing")) is None
+    py = os.path.realpath(sys.executable) if base == sys.prefix else os.path.join(base, "bin", "python3")
+    script = ("import json, os, sys; print('CUBEVIS-ENVCHECK ' + json.dumps("
+              "{'home': os.environ.get('PYTHONHOME'), 'prefix': sys.base_prefix}))")
+    r = D.check(py, script, home=base)
+    assert r["home"] == base and r["pythonhome"] == base, r
+    r = D.check(py, script)
+    assert r["home"] is None and "pythonhome" not in r
+    # A wrong home: Python cannot start that way; checked again without it.
+    r = D.check(py, script, home=str(tmp_path / "nothing"))
+    assert r["home"] is None and "pythonhome" not in r, r
+
+
 @needs_kernel_py
 def test_check_passes_for_a_kernel_environment(tmp_path):
     e = make_env(tmp_path / "k", kernel=True)

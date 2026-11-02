@@ -2725,3 +2725,54 @@ need it unset) -- hence off by default.
   `--no-pythonhome`), and `--pythonhome` refused without a host.
 * **Suite** (2026-11-02, sections 51 and 52): 257 passed, 1 skipped with
   OpenSSH 9.6 and with the 8.0p1 client (`-n 2 --dist loadfile`).
+
+## 53. PYTHONHOME when the start is slow, and in setup's own Python runs (base `eaa9dd2`, 2026-11-02)
+
+Darrell's `try-013A` (`setup zuul06` from a fresh state, then `diagnose
+zuul06`): the launcher test took 52 s and setup named `--pythonhome`;
+`diagnose` timed the environment's python at **49.3 s without
+`PYTHONHOME`, 0.0 s with it**.  Two more pauses in that run had the same
+cause: "Looking at zuul06 ..." (discovery starts each environment with
+cubevis once: three there, ~50 s each) and `diagnose`'s section 6 (its own
+check of the kernel's environment, then the timing).  Darrell: set it when
+a slow start is detected.  Agreed: the one cost (processes the kernel
+starts inherit `PYTHONHOME`) is not worth a minute per kernel start.
+
+* **Kernels: tried when slow** (`write_and_test`): a launcher test slower
+  than 15 s (`SLOW_START`) without `PYTHONHOME` is run again with it
+  (setup says so); kept when it at least halves the time ("with PYTHONHOME
+  it starts in 0.6 s: kernel K sets it (... --no-pythonhome takes it
+  out)", recorded as a change), else taken out again and the launcher
+  rewritten.  The kernel's record says who chose (`pythonhome_by`:
+  `setup` or `you`); setup never overrides `--pythonhome` /
+  `--no-pythonhome`.  Applies on every `setup HOST` run, so a kernel made
+  before (Darrell's zuul06 one) gets it at the next run.
+* **Discovery's checks** (`discover.check(..., home=)`): an environment
+  that is a Python installation of its own -- its standard library there
+  (`lib/python3*/os.py`, CPython's landmark) and no `pyvenv.cfg` -- is
+  checked with `PYTHONHOME=prefix` (`discover.own_home`), which is exactly
+  what Python would find by searching; if that gives no report, it is
+  checked again without.  The report then carries `pythonhome`.  venvs and
+  odd layouts are checked as before.  This removes the "Looking at ..."
+  pause on autofs (and `diagnose`'s own check, which uses discovery).
+* **Setup's own environments** (`envmake`'s worker): the pip install runs
+  with `PYTHONHOME=PREFIX` (the same test: a new conda environment
+  always passes it).  pip starts several interpreters; on cvpost106 the
+  pip step took 32 of the 37-42 minutes (section 44's "slow filesystem"),
+  probably this.  To be seen in the next environment setup makes there.
+* **`diagnose`**: says, while it times ("timing Python's start there,
+  without PYTHONHOME and with it (a slow start takes up to a minute)"),
+  and which kernels set it and why ("set by setup, the start being slow" /
+  "your choice").  The timing without `PYTHONHOME` still costs its minute:
+  it is the measurement.
+* Not changed: the node's own `python3` that runs discovery, envmake and
+  the launcher-install program (zuul06: 3.8.17, presumably the system's,
+  not on autofs).
+* **Tests**: `test_discover.py` (`own_home`; a check with `PYTHONHOME`, and
+  again without it when a wrong one stops Python); `test_hostsetup.py` (a
+  slow start tried with `PYTHONHOME` and kept; dropped when it does not
+  help; `--no-pythonhome` not overridden; a fast start left alone -- a
+  fake clock).  envmake's use is not exercised (the rig's fake conda makes
+  venvs).
+* **Suite** (2026-11-02): 261 passed, 1 skipped with OpenSSH 9.6 and with
+  the 8.0p1 client (`-n 2 --dist loadfile`).

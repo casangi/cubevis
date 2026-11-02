@@ -312,6 +312,8 @@ def startup(c, alias: str, rec: dict, kernels: list, text: str) -> None:
     home = launcher.home_of(rec)
     if not home:
         return
+    ui.live(f"        timing Python's start there, without PYTHONHOME and with it "
+            "(a slow start takes up to a minute) ...")
     r = c.ssh(alias, "python3", "-", shlex.quote(rec["python"]), shlex.quote(home),
               timeout=300, input=_STARTUP)
     line = [l for l in (r.stdout or "").splitlines() if l.startswith("CUBEVIS-STARTUP ")]
@@ -323,7 +325,9 @@ def startup(c, alias: str, rec: dict, kernels: list, text: str) -> None:
     using = [k for k in kernels if st.section("kernels")[k].get("pythonhome")]
     ui._p(f"        Python starts in {plain:.1f} s there; with PYTHONHOME={home} in {withh:.1f} s"
           + ("" if hrc == 0 else " (but it fails then)")
-          + (f"; kernel {', '.join(using)} set{'s' if len(using) == 1 else ''} it" if using else ""))
+          + (f"; kernel {', '.join(using)} set{'s' if len(using) == 1 else ''} it" if using else "")
+          + "".join(f" ({k}: {'your choice' if st.section('kernels')[k].get('pythonhome_by') == 'you' else 'set by setup, the start being slow'})"
+                    for k in using))
     if plain > SLOW and hrc == 0 and withh < plain / 3 and len(using) < len(kernels):
         _mark(ui, False, f"slow without PYTHONHOME: python -m cubevis.setup {text} --pythonhome")
 

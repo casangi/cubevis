@@ -32,7 +32,9 @@ it
    (sshpyk's ``remote_pythonhome`` / ``remote_kernel_pythonhome`` are for
    when they differ) and it works with any sshpyk.  Like sshpyk's kernel
    setting, it stays in the kernel's environment: processes the kernel
-   starts inherit it;
+   starts inherit it.  Setup turns it on by itself when a kernel's start
+   is slow and it helps (``hostsetup.write_and_test``, notes section 53);
+   ``--pythonhome`` / ``--no-pythonhome`` decide instead;
 4. sets the kernel's variables (after activation, so they win -- a
    ``PYTHONHOME`` given there too);
 5. ``exec``s the python with the arguments it was given.

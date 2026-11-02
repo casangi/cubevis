@@ -615,3 +615,65 @@ def test_a_published_stamp_comes_before_the_git_check(ctx, monkeypatch):
     assert H.same_release(c) == "1.0.103" and asked == ["FP-HERE"]
     H.same_release(c)
     assert asked == ["FP-HERE"]                                     # once per run
+
+
+class _Clock:
+    """``time.monotonic`` for ``write_and_test``: each launcher test takes
+    the next of *seconds*."""
+    def __init__(self, seconds):
+        self.seconds, self.t, self.started = list(seconds), 0.0, False
+
+    def monotonic(self):
+        if self.started:
+            self.t += self.seconds.pop(0)
+        self.started = not self.started
+        return self.t
+
+
+def _slow_kernel(ctx, monkeypatch, seconds, **record):
+    """A kernel whose launcher tests take *seconds* in turn; the launcher
+    texts written, in order."""
+    monkeypatch.setattr(H, "local_fingerprint", lambda c: "FP")
+    monkeypatch.setattr(H, "time", _Clock(seconds))
+    written = []
+    monkeypatch.setattr(H.R, "install_launcher", lambda c, a, py, path, text: written.append(text) or "written")
+    monkeypatch.setattr(H.R, "test_launcher", lambda c, a, path: ("FP", "/home/jo"))
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    net = c.st.nodes()[node]["network"]
+    c.st.add_environment("e", network=net, python="/c/envs/x/bin/python", kind="conda",
+                         prefix="/c/envs/x", hosts=[node])
+    k = c.st.add_kernel("k", environment="e")
+    k.update(record)
+    return c, node, written
+
+
+def test_a_slow_start_is_tried_with_pythonhome_and_kept_when_it_helps(ctx, monkeypatch):
+    c, node, written = _slow_kernel(ctx, monkeypatch, [52.0, 0.6])
+    ok, msg = H.write_and_test(c, node, "k", _rep(), "zuul06")
+    assert ok, msg
+    k = c.st.section("kernels")["k"]
+    assert k["pythonhome"] is True and k["pythonhome_by"] == "setup"
+    assert "PYTHONHOME" not in written[0] and "export PYTHONHOME=/c/envs/x" in written[1]
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "Starting it took 52 s; trying again with PYTHONHOME=/c/envs/x" in out
+    assert "with PYTHONHOME it starts in 0.6 s: kernel k sets it" in out
+    assert "--no-pythonhome takes it out" in out
+
+
+def test_pythonhome_is_dropped_when_it_does_not_help(ctx, monkeypatch):
+    c, node, written = _slow_kernel(ctx, monkeypatch, [30.0, 29.0, 30.0])
+    ok, msg = H.write_and_test(c, node, "k", _rep(), "zuul06")
+    assert ok, msg
+    k = c.st.section("kernels")["k"]
+    assert not k["pythonhome"] and len(written) == 3 and "PYTHONHOME" not in written[2]
+    assert "PYTHONHOME does not help here (29 s): not set" in " ".join(c.ui.out.getvalue().split())
+
+
+def test_your_no_pythonhome_is_not_overridden(ctx, monkeypatch):
+    c, node, written = _slow_kernel(ctx, monkeypatch, [52.0], pythonhome=False, pythonhome_by="you")
+    ok, msg = H.write_and_test(c, node, "k", _rep(), "zuul06")
+    assert ok and len(written) == 1 and not c.st.section("kernels")["k"]["pythonhome"]
+    # and a fast start is left alone
+    c, node, written = _slow_kernel(ctx, monkeypatch, [1.0])
+    assert H.write_and_test(c, node, "k", _rep(), "zuul06")[0] and len(written) == 1

@@ -1274,28 +1274,62 @@ def write_and_test(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> t
     alias = st.nodes()[node]["alias"]
     path = posixpath.join(h.get("config_dir") or posixpath.join(home, ".config", "cubevis"),
                           launcher.relpath(host_id(), name))
-    text = launcher.text(name, k, e, home, host_id(), host=host_text)
+
+    def write_test():
+        """Write the launcher (when its text changed) and run it once:
+        ``(fp, cwd, seconds)``; RemoteError."""
+        text = launcher.text(name, k, e, home, host_id(), host=host_text)
+        try:
+            did = R.install_launcher(c, alias, rep.get("python_exe") or "python3", path, text)
+        except R.RemoteError as exc:
+            raise R.RemoteError(f"cannot write its launcher on {node}: {exc}") from None
+        if did == "written":
+            ui.record_change("wrote launcher", f"{node}:{rtilde(path, home)}")
+        k["launcher"] = path
+        t0 = time.monotonic()
+        try:
+            fp_, cwd_ = R.test_launcher(c, alias, path)
+        except R.RemoteError as exc:
+            raise R.RemoteError(f"on {node}: {exc}") from None
+        took_ = time.monotonic() - t0
+        ui.log(f"kernel {name}: the launcher test took {took_:.1f} s"
+               + (" (PYTHONHOME set)" if k.get("pythonhome") else ""))
+        return fp_, cwd_, took_
+
     try:
-        did = R.install_launcher(c, alias, rep.get("python_exe") or "python3", path, text)
+        fp, cwd, took = write_test()
     except R.RemoteError as exc:
-        st.flag("kernels", name, f"cannot write its launcher on {node}: {exc}")
+        st.flag("kernels", name, str(exc))
         return False, st.section("kernels")[name]["last_error"]
-    if did == "written":
-        ui.record_change("wrote launcher", f"{node}:{rtilde(path, home)}")
-    k["launcher"] = path
-    t0 = time.monotonic()
-    try:
-        fp, cwd = R.test_launcher(c, alias, path)
-    except R.RemoteError as exc:
-        st.flag("kernels", name, f"on {node}: {exc}")
-        return False, st.section("kernels")[name]["last_error"]
-    took = time.monotonic() - t0
-    ui.log(f"kernel {name}: the launcher test took {took:.1f} s")
-    if took > SLOW_START and not k.get("pythonhome") and launcher.home_of(e):
-        ui.note(f"starting kernel {name}'s Python on {node} took {took:.0f} s. On automounted "
-                "filesystems (autofs) most of that can be Python looking for its own "
-                f"installation; python -m cubevis.setup {host_text} --pythonhome tells it "
-                f"({launcher.home_of(e)}), and diagnose {host_text} measures both.")
+    if (took > SLOW_START and not k.get("pythonhome") and launcher.home_of(e)
+            and k.get("pythonhome_by") != "you"):
+        # Slow: most likely Python's search for its own installation on an
+        # automounted filesystem (notes sections 52, 53).  Try PYTHONHOME;
+        # keep it only when it helps.
+        ui.say(f"Starting it took {took:.0f} s; trying again with PYTHONHOME="
+               f"{launcher.home_of(e)} (it spares Python the search for its own installation, "
+               "slow on automounted filesystems) ...")
+        k["pythonhome"], k["pythonhome_by"] = True, "setup"
+        try:
+            fp2, cwd2, took2 = write_test()
+        except R.RemoteError as exc:
+            fp2, took2 = None, None
+            ui.log(f"kernel {name}: with PYTHONHOME: {exc}")
+        if took2 is not None and took2 < took / 2:
+            fp, cwd = fp2, cwd2
+            ui.ok(f"with PYTHONHOME it starts in {took2:.1f} s: kernel {name} sets it "
+                  f"(python -m cubevis.setup {host_text} --no-pythonhome takes it out)")
+            ui.record_change("PYTHONHOME", f"kernel {name}: set ({launcher.home_of(e)}; "
+                             f"start {took:.0f} s -> {took2:.1f} s)")
+        else:
+            ui.note("PYTHONHOME does not help here" + (f" ({took2:.0f} s)" if took2 else "")
+                    + ": not set")
+            k["pythonhome"], k["pythonhome_by"] = False, None
+            try:
+                fp, cwd, _t = write_test()
+            except R.RemoteError as exc:
+                st.flag("kernels", name, str(exc))
+                return False, st.section("kernels")[name]["last_error"]
     usable, why = _fingerprint.compatible(local_fingerprint(c), fp)
     if not usable:
         st.flag("kernels", name, f"on {node}: {why}")
@@ -1304,13 +1338,15 @@ def write_and_test(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> t
     return True, f"starts in {rtilde(cwd, home)}" + (f"; {why}" if fp != local_fingerprint(c) else "")
 
 
-# A launcher test slower than this (seconds) suggests --pythonhome.
+# A launcher test slower than this (seconds): PYTHONHOME is tried.
 SLOW_START = 15.0
 
 
 def set_pythonhome(c: Ctx, names, on: bool) -> None:
     """``--pythonhome`` / ``--no-pythonhome``: kernels *names* set
-    ``PYTHONHOME`` in their launchers (rewritten by the run), or not."""
+    ``PYTHONHOME`` in their launchers (rewritten by the run), or not -- your
+    choice (``pythonhome_by``), which setup's own trying when a start is
+    slow (``write_and_test``) never overrides."""
     ui, st = c.ui, c.st
     for name in names:
         k = st.section("kernels")[name]
@@ -1318,6 +1354,7 @@ def set_pythonhome(c: Ctx, names, on: bool) -> None:
         if on and not launcher.home_of(e):
             ui.note(f"kernel {name}: its environment's Python installation is not known yet "
                     "(checked before 2026-11-02): run setup again to set PYTHONHOME")
+        k["pythonhome_by"] = "you"
         if bool(k.get("pythonhome")) != on:
             k["pythonhome"] = on
             ui.record_change("PYTHONHOME", f"kernel {name}: "
@@ -1394,6 +1431,7 @@ def kernel_step(c: Ctx, node: str, env: str, rep: dict, name: Optional[str],
                       launcher=k.get("launcher"), launch_timeout=k.get("launch_timeout") or 120,
                       pythonhome=(k.get("pythonhome") if c.pythonhome is None else c.pythonhome),
                       replace=True)
+        kernels[name]["pythonhome_by"] = k.get("pythonhome_by") if c.pythonhome is None else "you"
         ui.record_change("added kernel" if is_new else "changed kernel",
                          f"{name} ({env} on {cl_name or node}, starts in "
                          f"{rtilde(k.get('workdir') or home, home)}"

@@ -175,6 +175,20 @@ def normalize_ranges(ranges) -> list:
     return out
 
 
+def collapse_ranges(ranges) -> list:
+    """*ranges* (canonical CIDR strings) without those inside another one
+    of them (``10.7.7.0/24`` beside ``10.7.0.0/16``), in their order."""
+    import ipaddress
+    nets = [ipaddress.ip_network(r, strict=False) for r in ranges or []]
+    out = []
+    for i, n in enumerate(nets):
+        inside = any(j != i and m.version == n.version and n != m and n.subnet_of(m)
+                     for j, m in enumerate(nets))
+        if not inside and str(n) not in out:
+            out.append(str(n))
+    return out
+
+
 def check_user(user: str) -> str:
     if not isinstance(user, str) or not _USER_RE.match(user):
         raise StateError(f"user name {user!r}: letters, digits, '.', '_', '-', '@' only")
@@ -592,6 +606,11 @@ class State:
              "status": "new", "last_checked": None, "last_error": None}
         self.section("kernels")[name] = k
         return k
+
+    def remove_kernel(self, name: str) -> None:
+        """Forget kernel *name* (its launcher on the node is not touched)."""
+        self.get("kernels", name)
+        del self.section("kernels")[name]
 
     def kernels_on(self, node: str) -> list:
         """Names of the kernels whose environment is on *node*."""

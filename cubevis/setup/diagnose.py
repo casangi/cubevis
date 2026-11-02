@@ -180,7 +180,7 @@ def cmd_diagnose(c: Ctx, text: str) -> int:
         else:
             ok, why = _in.decide(_in.network_hosts(net, st.nodes(n["network"])), net.get("inside") or [])
             ui._p(f"      {'inside: directly' if ok else 'outside: through the login host'} -- {why}")
-            ui._p(f"      inside ranges: {', '.join(net.get('inside') or []) or 'none'}; "
+            ui._p(f"      inside ranges: {', '.join(S.collapse_ranges(net.get('inside'))) or 'none'}; "
                   f"{_in.route_var(n['network'])}=direct or =jump decides instead")
     # 4. The wrapper.
     ok = None
@@ -257,7 +257,12 @@ def cmd_diagnose(c: Ctx, text: str) -> int:
             kernels = [k for k, kr in sorted(st.section("kernels").items()) if kr.get("environment") == e]
             cand = got.get(rec.get("prefix")) or got.get(rec.get("python")) or {}
             if cand.get("check") is None:
-                _mark(ui, False, f"{e} ({rec.get('prefix') or rec['python']}): not found on {node}")
+                _mark(ui, False, f"{e} ({rec.get('prefix') or rec['python']}"
+                      + (f"; kernels {', '.join(kernels)}" if kernels else "")
+                      + f"): not found on {node} -- removed?"
+                      + (f" python -m cubevis.setup {text} offers to give "
+                         + ("them" if len(kernels) > 1 else "it") + " another" if kernels
+                         else " no kernel uses it"))
                 continue
             from . import envs as E
             r = E.interpret(cand["check"])

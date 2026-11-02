@@ -12,6 +12,9 @@ Before Python starts -- which matters: ``OMP_NUM_THREADS``,
 ``HDF5_USE_FILE_LOCKING`` and the like are read when the libraries load --
 it
 
+0. stops with a message when the environment's python is gone (removed by
+   hand, or by setup from another computer): ``ENV_GONE`` -- setup offers
+   to give the kernel another environment;
 1. changes to the kernel's working directory (default: the home
    directory), so that relative paths (``ms="sis14.ms"``) are found there;
    a directory that is gone stops the kernel with a message, rather than
@@ -41,6 +44,9 @@ import shlex
 import tempfile
 from pathlib import Path
 from typing import Optional
+
+# In the launcher's message when the environment's python is gone.
+ENV_GONE = "is gone from this node"
 
 _VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Set by the launcher itself; a user value for them would break activation.
@@ -91,6 +97,7 @@ def text(kernel: str, k: dict, e: dict, home: str, gui: str, host: str = "HOST")
         f"# run (change it there: python -m cubevis.setup {host} --kernel {kernel}).",
         "# A kernel's ssh runs this instead of python: working directory, activation,",
         "# environment variables, then the environment's python with the arguments given.",
+        f"[ -x {q(e['python'])} ] || {{ echo {q(f'cubevis: the environment of kernel {kernel}, {prefix}, {ENV_GONE} (removed?): python -m cubevis.setup {host} gives the kernel another')} >&2; exit 1; }}",
         f"cd {q(workdir)} || {{ echo {q(f'cubevis: cannot change to {workdir}, the working directory of kernel {kernel} (python -m cubevis.setup {host} --kernel {kernel} changes it)')} >&2; exit 1; }}",
     ]
     if e.get("kind") == "conda":

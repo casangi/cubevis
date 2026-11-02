@@ -92,6 +92,14 @@ def test_ranges_are_normalized():
         S.normalize_ranges(["10.7/xx"])
 
 
+def test_ranges_inside_another_are_dropped():
+    """Darrell's cvpost106 (2026-11-02): the node's /24s and the /16 around them."""
+    assert S.collapse_ranges(["10.7.7.0/24", "10.7.17.0/24", "10.7.0.0/16"]) == ["10.7.0.0/16"]
+    assert S.collapse_ranges(["10.2.0.0/16", "10.7.0.0/16", "10.2.0.0/16", "fd00::/8"]) == \
+        ["10.2.0.0/16", "10.7.0.0/16", "fd00::/8"]
+    assert S.collapse_ranges([]) == [] and S.collapse_ranges(None) == []
+
+
 def test_network_hosts_default_first():
     net = {"default_node": "b"}
     nodes = {n: {"hostname": f"{n}.x"} for n in "abcde"}

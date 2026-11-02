@@ -188,7 +188,8 @@ def test_a_host_reached_directly_defaults_to_no_login_host(tmp_path, monkeypatch
     assert n and not c.st.networks()[c.st.nodes()[n]["network"]].get("login")
     out = " ".join(c.ui.out.getvalue().split())
     assert "this computer reaches compute.example.test directly" in out
-    assert "from elsewhere (off site, say) through an intermediate host? [y/N]" in out
+    assert "When this computer is away from" in out and "through an intermediate host? [y/N]" in out
+    assert "used only when this computer is away from" in out
 
 
 def test_your_ssh_logs_in_but_setups_does_not(tmp_path, monkeypatch):

@@ -59,8 +59,10 @@ cubevis/remote/session.py      Session
 One JSON file (readable, diffable, standard library only), written to a
 temporary file and renamed. `schema` allows migrations. Passwords are
 never in it (they stay in the password stores). Problems are *flagged*,
-not deleted: `status`, `last_checked`, `last_error`; `setup prune` offers
-to remove what is flagged.
+not deleted: `status`, `last_checked`, `last_error`; ~~`setup prune` offers
+to remove what is flagged~~ (dropped 2026-11-02: `status` and `diagnose`
+flag what is gone, and `setup HOST` offers to replace or forget a kernel
+whose environment is gone).
 
 ```json
 {
@@ -194,7 +196,7 @@ python -m cubevis.setup network [NAME]         # add/change a network (login hos
 python -m cubevis.setup node NETWORK [NAME...] # add nodes (typed, or from the query)
 python -m cubevis.setup kernel [NAME]          # environment + kernel on a network
 python -m cubevis.setup upgrade [KERNEL]       # versions; prints the commands for the node
-python -m cubevis.setup prune                  # offer to remove flagged nodes / sessions
+# (prune: dropped 2026-11-02 -- setup HOST and status cover it)
 ```
 
 Steps carried over from `setup/lib/*.sh`: tools check, wrapper install,
@@ -480,8 +482,9 @@ points reviewed that day; where they differ from the text above, they win):
   need there -- launchers and setup's environments (with their markers).
   `envs.py`, `hostinfo.py`, `launcher.py` and `envcheck.py` live on as the
   pieces of the discovery script and of what setup writes on the node.
-  The plotting computer's own kernels: `setup --local`, the same flow
-  without ssh.
+  ~~The plotting computer's own kernels: `setup --local`, the same flow
+  without ssh.~~  Dropped 2026-11-02 (never built): visplot already runs
+  on the plotting computer without a kernel or setup.
 * **Clusters** are what the user names and sees ("network" stays
   internal): a name (`cvpost`), a node-name pattern (`cvpost*`), the
   route (login host), and the cluster's kernels.  `setup cvpost140` asks
@@ -739,12 +742,18 @@ Each stage is one delivery (zip on the then-current main), with tests.
    shown, detached resumable creation, reuse by marker, `--cleanup HOST`;
    (4) the ssh-configuration adoption with the login test, `diagnose
    HOST`, the `--2fa` flag.  Then 2d: ~~`--sync-checkout`~~ (built, then
-   removed 2026-11-02), `prune`, `setup --local`, the final kernel + plot
-   test.  (1) and (2) done
+   removed 2026-11-02), ~~`prune`, `setup --local`, the final kernel + plot
+   test~~ (dropped 2026-11-02: `status`/`diagnose`/`setup HOST` cover
+   what is gone; nothing needs local kernels; setup already runs each
+   kernel's launcher and compares fingerprints).  (1) and (2) done
    2026-10-23 (`hrs_h8_consolidation_prep.md` sections 33-35), (3)
    2026-10-28 (section 43), (4) 2026-10-31 (section 45); of 2d,
-   `--sync-checkout` and `--wheel` 2026-10-31 (section 46) -- `prune`,
-   `setup --local` and the final test left.
+   `--sync-checkout` and `--wheel` 2026-10-31 (section 46).  **Wrapping
+   up setup** (agreed 2026-11-02, notes section 51 on): (a) the open
+   decisions settled and small fixes (section 51); (b) the ssh records --
+   options stored per host with changes reported, each jump host its own
+   entry, setup's own `known_hosts` with strict checking for kernels; (c) a
+   dead worker reported instead of waited for.  Then stage 3.
 3. **Session**: `cubevis/remote/session.py`, in-memory kernel spec,
    `RemoteReductionContext` factory, `VisibilityPlotter(session=)`,
    `check()`. Tests: local kernel; the rig with two nodes from one

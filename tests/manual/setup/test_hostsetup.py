@@ -441,7 +441,8 @@ def test_which_environments_are_setups_and_which_may_go(ctx, release, monkeypatc
     assert own["cubevis-0.9"]["used_by"] == ["tw-hya"] and not own["cubevis-0.8"]["used_by"]
     assert own["cubevis-1.0.97"]["current"] and not own["cubevis-0.8"]["current"]
     assert own["cubevis-0.8"]["mine"] and not own["cubevis-0.7"]["mine"]
-    # What is offered after choosing: mine, unused, not current, not the one just chosen.
+    # What is offered after choosing: unused, not current, not the one just chosen --
+    # from any computer (Darrell 2026-11-02), each saying which made it.
     removed = []
     c2 = ctx(via_login="n", user="jo", cleanup="y")
     c2.st = c.st
@@ -449,9 +450,11 @@ def test_which_environments_are_setups_and_which_may_go(ctx, release, monkeypatc
                         lambda c_, n_, r_, items: removed.extend(i["marker"]["name"] for i in items)
                         or len(items))
     H.offer_cleanup(c2, node, rep, "node1.example.org", keep_python="/opt/c/envs/cubevis-1.0.97/bin/python")
-    assert removed == ["cubevis-0.8"]
-    out = c2.ui.out.getvalue()
-    assert "cubevis-0.8" in out and "cubevis-0.7" not in out and "cubevis-0.9" not in out
+    assert removed == ["cubevis-0.8", "cubevis-0.7"]
+    out = " ".join(c2.ui.out.getvalue().split())
+    assert "cubevis-0.9" not in out and "cubevis-1.0.97" not in out
+    assert "cubevis-0.8 (cubevis 0.8; made from this computer)" in out
+    assert "cubevis-0.7 (cubevis 0.7; made from gui2)" in out
 
 
 def test_older_environments_are_offered_not_removed_by_default(ctx, release):

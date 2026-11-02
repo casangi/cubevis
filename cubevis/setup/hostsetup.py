@@ -17,7 +17,9 @@ routes and launchers are setup's own bookkeeping.  In order:
 2. **Logging in**, each hop: the login host, then HOST, with a stored
    password where one is asked for (``steps.hop_steps``), or -- a hop marked
    ``--2fa`` -- by the user, once, in a terminal.  When the login of a
-   host placed in this run fails, nothing about it is kept.
+   host placed in this run fails, nothing about it is kept -- but the
+   answers are, as a draft that the next run offers (``forget_new``,
+   ``draft_network``).
 3. **Looking around** (``discover``, over ssh, read-only): HOST's full
    name, addresses and home; its conda tools; its environments, each with
    cubevis checked by running it.  The node's domain fills in the
@@ -253,8 +255,10 @@ def new_network(c: Ctx, host: str, port: int = 22) -> Optional[str]:
                 direct = False
                 ui.note(f"this computer does not reach {host} directly ({why})")
         if direct:
-            q = (f"Do you also log in to {host} from elsewhere (off site, say) through an "
-                 f"intermediate host?")
+            ui.say(f"An intermediate host is used only when this computer is away from {host}'s "
+                   "network; from inside it, kernels go straight to the node.")
+            q = (f"When this computer is away from {host}'s network (off site, a visitor network), "
+                 f"do you reach {host} through an intermediate host?")
         else:
             q = f"Do you log in to an intermediate host before logging in to {host}?"
         via_login = ui.ask_yn(q, direct is not True and not g.get("proxycommand"), key="via_login")
@@ -316,6 +320,61 @@ def new_network(c: Ctx, host: str, port: int = 22) -> Optional[str]:
     return name
 
 
+def _draft_key(host: str) -> str:
+    return host.lower()
+
+
+def save_draft(c: Ctx, host: str, network: str) -> None:
+    """Keep the answers about *network* (its record: route, users, login
+    options) as a draft for *host*, in this computer's file -- not a
+    network setup uses."""
+    rec = c.st.networks().get(network)
+    if not rec:
+        return
+    import copy
+    drafts = dict(c.st.local.get("drafts") or {})
+    drafts[_draft_key(host)] = {"saved": S.now(), "name": network, "network": copy.deepcopy(rec)}
+    c.st.local["drafts"] = drafts
+
+
+def drop_draft(c: Ctx, host: str) -> None:
+    drafts = dict(c.st.local.get("drafts") or {})
+    if drafts.pop(_draft_key(host), None) is not None:
+        c.st.local["drafts"] = drafts
+
+
+def draft_network(c: Ctx, host: str) -> Optional[str]:
+    """A host whose first login failed in an earlier run: offer its answers
+    from then (default yes), instead of asking them all again.  Returns the
+    network made from them, or None (no draft, declined, or its name since
+    taken: the questions are asked)."""
+    ui, st = c.ui, c.st
+    d = (st.local.get("drafts") or {}).get(_draft_key(host))
+    if not d or not isinstance(d.get("network"), dict):
+        return None
+    name, rec = d.get("name"), d["network"]
+    login = rec.get("login")
+    route = (f"through {(login.get('user') + '@') if login.get('user') else ''}{login.get('host')}"
+             + (f" (port {login['port']})" if int(login.get('port') or 22) != 22 else "")
+             if login else "directly")
+    ui.heading(f"How this computer reaches {host}")
+    ui.say(f"Logging in to {host} did not work when it was set up on "
+           f"{str(d.get('saved') or '')[:10] or 'an earlier run'}; nothing was kept but the "
+           f"answers: {route}, user {rec.get('user')} on {host}.")
+    use = ui.ask_yn("Use those answers again?", True, key="use_draft")
+    drop_draft(c, host)
+    if not use:
+        return None
+    if not name or name in st.networks():
+        ui.note(f"network {name} exists now: the questions are asked again")
+        return None
+    import copy
+    st.networks()[name] = copy.deepcopy(rec)
+    ui.record_change("added network", f"{name} ({route}; the answers of "
+                     f"{str(d.get('saved') or '')[:10]})")
+    return name
+
+
 def locate(c: Ctx, host: str, port: int) -> Optional[str]:
     """The node for *host*, added when setup does not know it yet."""
     ui, st = c.ui, c.st
@@ -346,7 +405,7 @@ def locate(c: Ctx, host: str, port: int) -> Optional[str]:
         ui.say(f"{host} is in {dom}, as the nodes setup knows in network {net} are: it is "
                "reached the same way" + (f" (through {lg['host']})." if lg else " (directly)."))
     else:
-        net = new_network(c, host, port)
+        net = draft_network(c, host) or new_network(c, host, port)
         if not net:
             return None
     n = short_name(host)
@@ -1035,23 +1094,34 @@ def remove_environments(c: Ctx, node: str, rep: dict, items: list) -> int:
     return gone
 
 
+def made_by(x: dict) -> str:
+    """Which computer's setup made environment *x* (``own_environments``),
+    and when: ``this computer, 2026-10-28`` / ``zuul06, 2026-10-28``."""
+    m = x["marker"]
+    who = "this computer" if x["mine"] else ((m.get("setup") or {}).get("host") or "another computer")
+    when = str(m.get("created") or "")[:10]
+    return who + (f", {when}" if when else "")
+
+
 def offer_cleanup(c: Ctx, node: str, rep: dict, host_text: str, keep_python: str) -> None:
-    """After an environment is chosen: setup's own older ones on *node*,
-    made from this computer, that differ from this computer's kernel-side
-    code and that no kernel here uses -- offered for removal (not by
-    default)."""
+    """After an environment is chosen: setup's own older ones on *node* --
+    made from any computer (their marker says), since an environment can
+    vanish anyway (removed by hand, or from another computer) and kernels
+    are ready for that (Darrell 2026-11-02) -- that differ from this
+    computer's kernel-side code and that no kernel here uses: offered for
+    removal (not by default)."""
     ui = c.ui
     home = (rep.get("host") or {}).get("home")
     net = c.st.nodes()[node]["network"]
     old = [x for x in own_environments(c, rep, net)
-           if x["mine"] and not x["used_by"] and not x["current"]
-           and x["cand"]["python"] != keep_python]
+           if not x["used_by"] and not x["current"] and x["cand"]["python"] != keep_python]
     if not old:
         return
     ui.heading(f"Older environments setup made on {node}")
     ui.say("These differ from this computer's kernel-side code, and no kernel here uses them:")
     for x in old:
-        ui._p(f"    {rtilde(x['cand']['prefix'], home)}  (cubevis {x['marker'].get('version')})")
+        ui._p(f"    {rtilde(x['cand']['prefix'], home)}  (cubevis {x['marker'].get('version')}; "
+              f"made from {made_by(x)})")
     if ui.ask_yn("Remove them?", False, key="cleanup"):
         remove_environments(c, node, rep, old)
     else:
@@ -1059,9 +1129,10 @@ def offer_cleanup(c: Ctx, node: str, rep: dict, host_text: str, keep_python: str
 
 
 def cmd_cleanup(c: Ctx, text: str) -> int:
-    """``--cleanup HOST``: list the environments setup made on HOST, with
-    what uses them, and remove the ones chosen.  The user's own are never
-    listed."""
+    """``--cleanup HOST``: list the environments setup made on HOST (from
+    any computer), with what uses them here, and remove the ones chosen.
+    The user's own are never listed; one a kernel here uses is never
+    removed."""
     ui, st = c.ui, c.st
     host, port = split_port(text)
     try:
@@ -1102,10 +1173,9 @@ def cmd_cleanup(c: Ctx, text: str) -> int:
             what, good = "not used by a kernel here; same kernel-side code as here", True
         else:
             what, good = "not used by a kernel here; its kernel-side code differs from here", False
-        if not x["mine"]:
-            what += f"; made from {(x['marker'].get('setup') or {}).get('host') or 'another computer'}"
+        what += f"; made from {made_by(x)}"
         (ui.ok if good else ui.note)(f"{i:>2}. {rtilde(x['cand']['prefix'], home)}  (cubevis {v}): {what}")
-        if x["mine"] and not x["used_by"] and not x["current"]:
+        if not x["used_by"] and not x["current"]:
             default.append(str(i))
     ans = ui.ask("Remove which? (numbers separated by spaces; 'none' for none)",
                  " ".join(default), key="remove")
@@ -1118,10 +1188,6 @@ def cmd_cleanup(c: Ctx, text: str) -> int:
         if x["used_by"]:
             ui.note(f"{rtilde(x['cand']['prefix'], home)} is used by kernel "
                     f"{', '.join(x['used_by'])}: not removed")
-            continue
-        if not x["mine"] and not ui.ask_yn(
-                f"{rtilde(x['cand']['prefix'], home)} was made from another computer, whose "
-                "kernels may use it. Remove it anyway?", False):
             continue
         if x not in chosen:
             chosen.append(x)
@@ -1346,6 +1412,63 @@ def use_kernel(c: Ctx, name: str, host_text: str) -> bool:
     return True
 
 
+def forget_kernel(c: Ctx, name: str) -> None:
+    """Forget kernel *name*: its record, the Jupyter kernels here that start
+    it, and its environment's record when no other kernel uses it.  Nothing
+    on the node is touched."""
+    ui, st = c.ui, c.st
+    from . import jupyterspec as J
+    env = st.section("kernels")[name].get("environment")
+    for jname, _node in J.specs_for(st, name):
+        try:
+            from jupyter_client.kernelspec import KernelSpecManager
+            KernelSpecManager().remove_kernel_spec(jname)
+            ui.record_change("removed jupyter kernel", jname)
+        except Exception as exc:
+            ui.note(f"Jupyter kernel {jname}: {exc}")
+    st.remove_kernel(name)
+    ui.record_change("forgot kernel", name)
+    if env in st.section("environments"):
+        try:
+            st.remove_environment(env)
+            ui.record_change("forgot environment", env)
+        except S.StateError:
+            pass
+
+
+def environment_gone(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> bool:
+    """Kernel *name*'s environment is gone from *node* (removed by hand, or
+    by setup from another computer): give the kernel another one (its name,
+    working directory and variables stay), forget it, or keep it flagged.
+    True when the kernel works again."""
+    ui, st = c.ui, c.st
+    k = st.section("kernels")[name]
+    old = k.get("environment")
+    a = ui.ask_choice(f"Kernel {name}: [r]eplace its environment (choose another; the kernel's "
+                      "name, directory and variables stay), [f]orget the kernel, or [k]eep it "
+                      "as it is?", "r", ("r", "f", "k"), key="env_gone")
+    if a == "f":
+        forget_kernel(c, name)
+        ui.ok(f"kernel {name} forgotten")
+        return True
+    if a == "k":
+        return False
+    env = environment_step(c, node, rep, reuse=False)
+    if env is None:
+        return False
+    k["environment"] = env
+    ui.record_change("kernel environment", f"{name}: {env} (was {old}, gone)")
+    if old in st.section("environments") and old != env:
+        try:
+            st.remove_environment(old)
+            ui.record_change("forgot environment", f"{old} (gone)")
+        except S.StateError:
+            pass
+    ok, msg = write_and_test(c, node, name, rep, host_text)
+    (ui.ok if ok else ui.fail)(f"kernel {name}: {msg}")
+    return ok
+
+
 def check_kernels(c: Ctx, node: str, rep: dict, host_text: str) -> bool:
     """A host set up before: rewrite its kernels' launchers when they
     changed (or were never written) and run each once."""
@@ -1361,10 +1484,12 @@ def check_kernels(c: Ctx, node: str, rep: dict, host_text: str) -> bool:
             _ask_settings(c, node, k, home)
         ok, msg = write_and_test(c, node, name, rep, host_text)
         (ui.ok if ok else ui.fail)(f"kernel {name}: {msg}")
+        if not ok and launcher.ENV_GONE in (msg or ""):
+            ok = environment_gone(c, node, name, rep, host_text)
         good = good and ok
     c.save()
     for name in names:
-        if st.section("kernels")[name].get("status") == "ok":
+        if name in st.section("kernels") and st.section("kernels")[name].get("status") == "ok":
             use_kernel(c, name, host_text)
     if not c.redo:
         ui.say(f"python -m cubevis.setup --redo {host_text} asks the kernels' settings again.")
@@ -1389,17 +1514,22 @@ def forget_new(c: Ctx, node: str, network: str, had_nodes: set, had_nets: set,
     if node not in had_nodes and node in st.nodes():
         st.remove_node(node)
         gone.append(f"node {node}")
+    drafted = False
     if network not in had_nets and network in st.networks() and not st.nodes(network):
         try:
+            save_draft(c, host, network)
             st.remove_network(network)
             gone.append(f"network {network}")
+            drafted = True
         except S.StateError:
-            pass
+            drop_draft(c, host)
     if gone:
         c.save()
         ui.record_change("forgot", ", ".join(gone) + " (the login did not work)")
-        ui.say(f"Nothing about {host} was kept, since logging in did not work; "
-               f"python -m cubevis.setup {host} asks again.")
+        ui.say(f"Nothing about {host} was kept, since logging in did not work"
+               + ("; your answers were, and python -m cubevis.setup "
+                  f"{host} offers them again." if drafted else
+                  f"; python -m cubevis.setup {host} asks again."))
 
 
 def set_twofactor(c: Ctx, network: str, on: bool) -> None:
@@ -1449,6 +1579,9 @@ def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None,
             and hop_steps(c, n["network"], node)):
         forget_new(c, node, n["network"], had_nodes, had_nets, host)
         return 1
+    if (st.local.get("drafts") or {}).get(_draft_key(host)) is not None:
+        drop_draft(c, host)
+        c.save()
     rep = discover_step(c, node)
     if rep is None:
         return 1

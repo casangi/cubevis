@@ -477,6 +477,9 @@ def inside_step(c: Ctx, network: str, node: str) -> bool:
         r = net.get("inside")
         if r is None:
             return False, "not decided yet"
+        if S.collapse_ranges(r) != r and not getattr(c, "check_only", False):
+            net["inside"] = r = S.collapse_ranges(r)      # recorded before 2026-11-02
+            ui.record_change("simplified inside ranges", f"{network}: {', '.join(r)}")
         return True, (f"direct from inside {', '.join(r)}" if r
                       else "always through the login host")
 
@@ -496,6 +499,8 @@ def inside_step(c: Ctx, network: str, node: str) -> bool:
         for rng in suggest_ranges(addrs):
             if rng not in [f[0] for f in found]:
                 found.append((rng, "a wider guess around it"))
+        keep = S.collapse_ranges([f[0] for f in found])   # nothing inside another
+        found = [f for f in found if f[0] in keep]
         ranges = None
         if "inside" in ui.answers:                    # scripts and tests: the ranges given
             ranges = _parse_ranges(ui, ui.answers["inside"])
@@ -530,7 +535,7 @@ def inside_step(c: Ctx, network: str, node: str) -> bool:
                     text = ui.ask("Ranges (CIDR, separated by spaces; 'none' for none)",
                                   " ".join(f[0] for f in found))
                     ranges = _parse_ranges(ui, text)
-        net["inside"] = ranges
+        net["inside"] = ranges = S.collapse_ranges(ranges)
         ui.record_change("set inside ranges", f"{network}: {', '.join(ranges) or 'none'}")
         c.save()
         return True

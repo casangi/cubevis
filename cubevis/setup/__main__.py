@@ -74,6 +74,8 @@ def cmd_status(c: Ctx) -> int:
               + (", login asks for a second factor" if (lg or {}).get("twofactor") else "")
               + (", nodes ask for a second factor" if net.get("twofactor") else ""))
         r = net.get("inside")
+        if r:
+            r = S.collapse_ranges(r)
         forced, why = _in.override(name)
         if lg and forced is not None:
             ui._p(f"      {why} is set here: {'direct' if forced else 'through the login host'}, "
@@ -250,7 +252,7 @@ def cmd_inside_here(c: Ctx, name: str) -> int:
             ui.note(str(exc))
             if ui.yes:
                 return 1
-    net["inside"] = ranges + [r_ for r_ in new if r_ not in ranges]
+    net["inside"] = S.collapse_ranges(ranges + [r_ for r_ in new if r_ not in ranges])
     ui.record_change("added inside range", f"{name}: {', '.join(new)}")
     c.save()
     return 0

@@ -2577,3 +2577,90 @@ Darrell's decision, after section 46 was built and used once on the rig only:
   Proposed: dropped from the plan (nothing to remove); Darrell to confirm.
 * **Suite** (2026-11-02): 252 passed, 1 skipped with OpenSSH 9.6 and with
   the 8.0p1 client (`-n 2 --dist loadfile`).
+
+## 51. Wrapping up setup, round 1: the open decisions (base `4037f02`, 2026-11-02)
+
+Darrell's `try-012A`: `python -m cubevis.setup diagnose cvpost106` from his
+Mac -- every section as expected (route adopted from his `ProxyJump`,
+setup's configuration carrying all his login options, both logins working,
+`cubevis-1.0.102` identical by fingerprint to his 1.0.107 checkout).  The
+PyPI stamp (section 48) is on 1.0.104 and 1.0.107
+(`k2-67f9938a2b6ba9ce4a63`).  The release run of 1.0.104 waited about
+20 minutes for a GitHub runner ("Starting job"): GitHub's side.
+
+**Decisions of sections 43 and 45, settled with Darrell:**
+
+* *A host reached directly is still asked about a login host*: kept, the
+  question reworded -- "When this computer is away from HOST's network
+  (off site, a visitor network), do you reach HOST through an intermediate
+  host?", after a line saying it is used only from outside.
+* *A failed first login keeps nothing*: kept for the state and the ssh
+  files, but the answers are now kept as a **draft** (the network's
+  record, in this computer's `local.json` under `drafts`, by host name);
+  the next `setup HOST` shows them and asks "Use those answers again?"
+  (default yes; `--answer use_draft=n` declines); a successful login, or
+  declining, drops it.  `hostsetup.save_draft` / `draft_network` /
+  `drop_draft`.
+* *ssh options read fresh at every write*: to change (round 2): stored per
+  host, a fresh `ssh -G` compared with them at each run, a difference
+  reported (log, `status`, `diagnose`) and adopted only by `setup HOST`.
+  Comparing `ssh -G`'s output rather than `~/.ssh/config`'s time stamp:
+  it also sees `Include`d files, `/etc/ssh/ssh_config` and agent or
+  Kerberos changes.
+* *Several ProxyJump hops*: to change (round 2): each jump host its own
+  entry, with its login and its route; the generated configuration builds
+  the chain.
+* *`create -p` with an explicit path*, *the user's conda channels*,
+  *unpinned dependencies*: kept as they are.
+* *Removal only for environments this computer made*: **changed** -- any
+  environment with setup's marker, from any computer, is offered
+  (`offer_cleanup`) and listed with the default to remove when unused and
+  superseded (`--cleanup HOST`), each with which computer made it and when
+  (`made_by`: "made from gui2, 2026-10-22").  Never one a kernel here uses.
+  Darrell: environments can vanish anyway (removed by hand, or by setup
+  from another computer), so kernels must cope with that -- next item.
+* *The host-key question* (a node reached straight away on a new account
+  or from another computer sharing the configuration): round 2 -- setup
+  keeps its own `known_hosts` in the configuration directory, filled while
+  the user runs setup (fingerprints shown), listed in the generated
+  configuration beside the user's; kernels connect with strict checking,
+  and an unknown or changed key stops them with a message naming `setup
+  HOST` / `diagnose`.
+* *A dead worker leaves the plotter waiting forever*: round 3 (it is in
+  `cubevis.remote`): reproduce on the rig (the worker, the kernel, the ssh
+  connection killed), report in the GUI and the terminal within seconds.
+* `prune`, `setup --local`, the final kernel + plot test: **dropped**
+  (design section 13).
+
+**Built in this round:**
+
+* **A kernel whose environment is gone**: the launcher checks the
+  environment's python first and stops with `cubevis: the environment of
+  kernel K, PREFIX, is gone from this node (removed?): python -m
+  cubevis.setup HOST gives the kernel another` (`launcher.ENV_GONE`);
+  `setup check` flags the kernel with it, `diagnose` says "not found on
+  NODE -- removed?" with the same advice.  `setup HOST` then asks "[r]eplace
+  its environment (choose another; the kernel's name, directory and
+  variables stay), [f]orget the kernel, or [k]eep it as it is?" (default
+  r; key `env_gone`): replace runs the usual environment choice (making
+  setup's own when nothing is usable) and re-tests the kernel; forget
+  removes the kernel's record, its Jupyter kernels here and its
+  environment's record (`forget_kernel`, `State.remove_kernel`); nothing
+  on the node is touched.
+* **Inside ranges** contained in another are dropped
+  (`state.collapse_ranges`): in what `setup HOST` finds and offers, in what
+  it records, in `--inside-here`, in `status` and `diagnose`; ranges
+  recorded before are simplified at the next `setup HOST` ("simplified
+  inside ranges").  Darrell's cvpost106: `10.7.7.0/24, 10.7.17.0/24,
+  10.7.0.0/16` -> `10.7.0.0/16`.
+* `cubevis/setup/sync.py` and `tests/manual/setup/test_sync.py`, still in
+  `4037f02` (a zip cannot delete), are deleted again in this round's list.
+* **Tests**: `test_inside.py` (collapsing); `test_hostsetup.py` (the
+  removal offer from any computer); `test_cli.py` -- the failed first
+  login keeps a draft, which is offered and reused (rig) or declined; the
+  cleanup of environments made from two computers; a kernel whose
+  environment is gone: check, keep, diagnose, replace (setup's own made),
+  forget; the reworded question (`test_sshopts.py` too).
+* **Suite** (2026-11-02): 254 passed, 1 skipped with OpenSSH 9.6 and with
+  the 8.0p1 client (`-n 2 --dist loadfile`; the rig rebuilt after a sandbox
+  restart).

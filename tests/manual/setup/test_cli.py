@@ -166,6 +166,16 @@ def test_unattended_failure_skips_and_old_layout_is_left_alone(home):
     assert "Nothing about nosuch.example.invalid was kept" in out
     assert "example-nosuch" not in open(G.config_path()).read()
     assert str(G.config_path()).endswith("cubevis/hosts/gui1/ssh/config")
+    # The answers are kept as a draft (this computer's file only), offered next time.
+    assert "your answers were" in out
+    assert "nosuch.example.invalid" in (S.load().local.get("drafts") or {})
+    r = _run(home, "--yes", "--answer", "use_draft=n", "--answer", "via_login=n", "--answer", "user=jo",
+             "nosuch.example.invalid", timeout=120)
+    out = _flat(r)
+    assert "nothing was kept but the answers: directly, user jo on nosuch.example.invalid" in out
+    assert "Use those answers again? [Y/n] n" in out
+    assert "Do you log in to an intermediate host before" in out             # asked again
+    assert r.returncode == 1 and not S.load().networks()
 
 
 def test_bad_names_are_refused(home):
@@ -273,7 +283,7 @@ def test_rig_interactive_host(home, alice_envs):
         # The rig's node answers directly from here (it asks for a password):
         # a login host is still asked for -- off site -- with no as the default.
         (r"this computer reaches compute.example.test directly", None),
-        (r"from elsewhere \(off site, say\) through an intermediate host\? \[y/N\]", "y"),
+        (r"through an intermediate host\? \[y/N\]", "y"),
         (r"The intermediate host's name", "login.example.test:2201"),
         (r"Your user name on login.example.test", "alice"),
         (r"Your user name on compute.example.test", ""),             # alice (default)
@@ -614,6 +624,16 @@ def test_rig_a_login_that_fails_keeps_nothing(home):
     st = S.load()
     assert not st.networks() and not st.nodes(), r.stdout
     assert "forgot: node compute, network example" in out
+    # The next run offers the answers (Enter: yes) instead of asking them again.
+    r = _run(home, "--yes", *STORE, HOST)
+    out = _flat(r)
+    assert r.returncode == 1, r.stdout
+    assert ("nothing was kept but the answers: through alice@login.example.test (port 2299), "
+            "user alice on compute.example.test") in out
+    assert "Use those answers again? [Y/n]" in out
+    assert "intermediate host" not in out                                    # not asked again
+    assert "added network: example (through alice@login.example.test (port 2299); the answers of" in out
+    assert not S.load().networks()
 
 
 @needs_rig
@@ -744,7 +764,7 @@ def test_rig_found_ranges_are_the_default_answer(home, alice_envs):
     out = _flat(r)
     if want:
         assert "Found, from compute:" in out and "[u]se these" in out, r.stdout
-        assert st.networks()["example"]["inside"] == want
+        assert st.networks()["example"]["inside"] == S.collapse_ranges(want)
     else:
         assert "Nothing found to recognise the site by" in out, r.stdout
     assert "Give the site's address ranges" not in out
@@ -956,36 +976,74 @@ def test_rig_none_usable_is_made_without_asking_and_older_ones_are_offered_for_r
 @needs_ssh
 @needs_kernel_py
 def test_rig_cleanup_removes_what_is_chosen_and_only_setups_own(home, alice_tidy):
-    """--cleanup HOST: setup's environments by their markers, with what uses
-    them; the default is the ones that are mine, unused and superseded.
-    Another computer's needs a yes of its own; a user's environment is never
+    """--cleanup HOST: setup's environments by their markers, from any
+    computer, with what uses them and which computer made them; the default
+    is the unused and superseded ones; a user's environment is never
     listed."""
     r = _host(home, "--answer", "workdir=~", "--answer", "env_vars=none", route=DIRECT)
     assert r.returncode == 0, r.stdout                                     # hrs: a kernel exists
     for n, host in (("0.0.1", "gui1"), ("0.0.2", "gui2")):
         _as_alice(f"cp -a ~/miniforge3/envs/alt ~/miniforge3/envs/cubevis-{n} && "
                   f"printf '{{\"schema\":1,\"name\":\"cubevis-{n}\",\"version\":\"{n}\","
+                  f"\"created\":\"2026-10-2{n[-1]}T10:00:00\","
                   f"\"setup\":{{\"host\":\"{host}\"}}}}' > ~/miniforge3/envs/cubevis-{n}/cubevis-setup.json")
     r = _run(home, "--yes", "--answer", "remove=none", "--cleanup", HOST)
     out = _flat(r)
     assert r.returncode == 0 and "Nothing removed" in out, r.stdout
-    assert "Remove which? (numbers separated by spaces; 'none' for none) [1]" in out   # Enter: the default
-    assert "cubevis-0.0.1" in out and "cubevis-0.0.2" in out and "made from gui2" in out
+    assert "Remove which? (numbers separated by spaces; 'none' for none) [1 2]" in out   # Enter: the default
+    assert "cubevis-0.0.1" in out and "cubevis-0.0.2" in out
+    assert "made from this computer, 2026-10-21" in out and "made from gui2, 2026-10-22" in out
     assert "envs/alt" not in out and "envs/hrs" not in out and "envs/plain" not in out
     assert len(_made()) == 2
-    # The default: only the one that is mine, superseded and unused.
-    r = _run(home, "--yes", "--cleanup", HOST)
+    r = _run(home, "--yes", "--answer", "remove=2", "--cleanup", HOST)
     assert r.returncode == 0, r.stdout
-    assert [os.path.basename(p) for p in _made()] == ["cubevis-0.0.2"]
-    # The other computer's one: removed only when chosen and confirmed; refused without the yes.
-    r = _run(home, "--yes", "--answer", "remove=1", "--cleanup", HOST)
-    assert r.returncode == 0 and "Nothing removed" in _flat(r) and len(_made()) == 1
-    assert "whose kernels may use it" in _flat(r)
-    r = _run(home, "--answer", "remove=1", "--cleanup", HOST, input="y\ny\n")   # "anyway?" and "remove 1?"
+    assert [os.path.basename(p) for p in _made()] == ["cubevis-0.0.1"]
+    r = _run(home, "--yes", "--cleanup", HOST)                            # the default
     assert r.returncode == 0, r.stdout
     assert _made() == []
     r = _run(home, "--yes", "--cleanup", HOST)
     assert r.returncode == 0 and "setup has made no environment on compute" in _flat(r)
+
+
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_a_kernel_whose_environment_is_gone(home, alice_tidy):
+    """A kernel's environment removed on the node (by hand, or by setup from
+    another computer): the launcher says so, and setup HOST offers to give
+    the kernel another (default; name, directory and variables kept), to
+    forget it, or to keep it flagged."""
+    r = _host(home, "--answer", "workdir=~", "--answer", "env_vars=OMP_NUM_THREADS=2", route=DIRECT)
+    assert r.returncode == 0, r.stdout                                     # kernel compute on hrs
+    _as_alice("mv ~/miniforge3/envs/hrs ~/hrs.off")
+    # setup check: flagged, with the launcher's own message.
+    r = _run(home, "check")
+    assert r.returncode == 1
+    out = _flat(r)
+    assert "is gone from this node (removed?)" in out and "gives the kernel another" in out
+    # Keep: still flagged; diagnose says the same.
+    r = _host(home, "--answer", "env_gone=k", route=DIRECT)
+    assert r.returncode == 1 and "[r]eplace its environment" in _flat(r)
+    assert S.load().section("kernels")["compute"]["status"] != "ok"
+    r = _run(home, "diagnose", HOST)
+    assert "not found on compute -- removed? python -m cubevis.setup" in _flat(r)
+    # Replace (the default): setup makes its own (nothing else is usable), the kernel keeps its settings.
+    r = _host(home, route=DIRECT, CUBEVIS_SETUP_TEST_INSTALL=_install_hook(), **FAST)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert "kernel environment: compute:" in out and "gone)" in out
+    st = S.load()
+    k = st.section("kernels")["compute"]
+    assert k["status"] == "ok" and k["env"] == {"OMP_NUM_THREADS": "2"}
+    assert "cubevis-" in st.section("environments")[k["environment"]]["prefix"]
+    assert not any("/envs/hrs" in (e.get("prefix") or "") for e in st.section("environments").values())
+    # Forget: that one gone too, the kernel and its environment's record go.
+    _as_alice("rm -rf ~/miniforge3/envs/cubevis-*")
+    r = _host(home, "--answer", "env_gone=f", route=DIRECT)
+    out = _flat(r)
+    assert "forgot kernel: compute" in out, r.stdout
+    st = S.load()
+    assert "compute" not in st.section("kernels") and not st.section("environments")
 
 
 def _stop_waiting_for_a_making(home, seconds):

@@ -1070,7 +1070,14 @@ def test_rig_pythonhome_for_a_hosts_kernels(home, alice_envs):
     assert f"export PYTHONHOME={base}" in launcher_text()
     assert S.load().section("kernels")["compute"]["status"] == "ok"
     assert "sets PYTHONHOME" in _flat(_run(home, "status"))
+    # diagnose does not time the start again (a minute where it is slow) ...
     r = _run(home, "diagnose", HOST)
+    out = _flat(r)
+    assert f"kernel compute sets PYTHONHOME={base} (compute: your choice); Python's start not " \
+           f"timed again (diagnose {HOST} --full does)" in out, r.stdout
+    assert "Python starts in" not in out
+    # ... unless asked.
+    r = _run(home, "diagnose", HOST, "--full")
     out = _flat(r)
     assert f"Python starts in" in out and f"with PYTHONHOME={base} in" in out, r.stdout
     assert "kernel compute sets it" in out

@@ -1317,6 +1317,7 @@ def write_and_test(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> t
             ui.log(f"kernel {name}: with PYTHONHOME: {exc}")
         if took2 is not None and took2 < took / 2:
             fp, cwd = fp2, cwd2
+            k["pythonhome_times"] = [round(took, 1), round(took2, 1)]
             ui.ok(f"with PYTHONHOME it starts in {took2:.1f} s: kernel {name} sets it "
                   f"(python -m cubevis.setup {host_text} --no-pythonhome takes it out)")
             ui.record_change("PYTHONHOME", f"kernel {name}: set ({launcher.home_of(e)}; "
@@ -1357,6 +1358,7 @@ def set_pythonhome(c: Ctx, names, on: bool) -> None:
         k["pythonhome_by"] = "you"
         if bool(k.get("pythonhome")) != on:
             k["pythonhome"] = on
+            k.pop("pythonhome_times", None)
             ui.record_change("PYTHONHOME", f"kernel {name}: "
                              + (f"set ({launcher.home_of(e) or 'when known'})" if on else "not set"))
 

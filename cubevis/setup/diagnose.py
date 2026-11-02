@@ -120,7 +120,7 @@ def compare(ui, label: str, name: str, port: Optional[int], alias: Optional[str]
     return missing
 
 
-def cmd_diagnose(c: Ctx, text: str) -> int:
+def cmd_diagnose(c: Ctx, text: str, full: bool = False) -> int:
     ui, st = c.ui, c.st
     host, port = split_port(text)
     p = port if port != 22 else None
@@ -276,7 +276,7 @@ def cmd_diagnose(c: Ctx, text: str) -> int:
                   + (f"{fp}, " if fp else "") + why)
             if kernels:
                 startup(c, n["alias"], dict(rec, base_prefix=(cand.get("check") or {}).get("base_prefix")
-                                            or rec.get("base_prefix")), kernels, text)
+                                            or rec.get("base_prefix")), kernels, text, full)
     ui._p("")
     ui.say("On the node itself, python3 -m cubevis.setup.discover (where cubevis is installed) "
            "shows what setup sees there; read-only.")
@@ -302,15 +302,29 @@ print("CUBEVIS-STARTUP " + json.dumps(out))
 SLOW = 5.0          # seconds: worth --pythonhome
 
 
-def startup(c, alias: str, rec: dict, kernels: list, text: str) -> None:
+def startup(c, alias: str, rec: dict, kernels: list, text: str, full: bool = False) -> None:
     """How long environment *rec*'s python takes to start on the node,
-    without ``PYTHONHOME`` and with it (``launcher.home_of``)."""
+    without ``PYTHONHOME`` and with it (``launcher.home_of``).  Not timed
+    again when every kernel of it sets ``PYTHONHOME`` already -- the slow
+    start, a minute, is what was diagnosed -- unless *full*."""
     import json
     import shlex
     from . import launcher
     ui, st = c.ui, c.st
     home = launcher.home_of(rec)
     if not home:
+        return
+    ks = st.section("kernels")
+    if not full and all(ks[k].get("pythonhome") for k in kernels):
+        why = []
+        for k in kernels:
+            t = ks[k].get("pythonhome_times")
+            why.append(f"{k}: " + ("your choice" if ks[k].get("pythonhome_by") == "you" else
+                                   "set by setup, the start being slow")
+                       + (f", {t[0]:.0f} s -> {t[1]:.1f} s" if t else ""))
+        ui._p(f"        kernel{'s' if len(kernels) > 1 else ''} {', '.join(kernels)} "
+              f"set{'' if len(kernels) > 1 else 's'} PYTHONHOME={home} ({'; '.join(why)}); "
+              f"Python's start not timed again (diagnose {text} --full does)")
         return
     ui.live(f"        timing Python's start there, without PYTHONHOME and with it "
             "(a slow start takes up to a minute) ...")

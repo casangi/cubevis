@@ -7,14 +7,13 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* **Main is `eaa9dd2`** (through section 52, committed by Darrell).
-  **Delivered after it, as a zip on `eaa9dd2`** (not committed by Claude):
-  section 53 -- `PYTHONHOME` tried automatically when a kernel's start is
-  slow (kept when it halves it; `pythonhome_by` records who chose), and
-  used by discovery's checks and envmake's pip install for environments
-  that are Python installations of their own (zuul06: 49 s -> 0 s per
-  Python start, Darrell's `try-013A`).  Check `git log` first.  The next
-  notes section is **54**.
+* **Main is `a12adbe`** (through section 53, committed by Darrell;
+  `try-014A` confirmed it on zuul06: launcher test 52 s -> 2.6 s with
+  `PYTHONHOME`, visplot's kernel start 2.1 s).  **Delivered after it, as a
+  zip on `a12adbe`** (not committed by Claude): section 54 -- `diagnose`
+  does not time a slow start again where the kernels set `PYTHONHOME`
+  (`--full` does).  Check `git log` first.  The next notes section is
+  **55**.
 * **Start here: round 2** (agreed 2026-11-02, section 51): ssh options
   stored per host, a fresh `ssh -G` compared at each run and differences
   reported (log, `status`, `diagnose`), adopted only by `setup HOST`; each
@@ -22,7 +21,8 @@ as ee125b6) and section 17 (the ssh wrapper).
   generated configuration -- a state schema change, with migration;
   setup's own `known_hosts` in the configuration directory (filled while
   the user runs setup, fingerprints shown), listed beside the user's,
-  strict checking for kernels with a message naming `setup HOST`.  **Round
+  strict checking for kernels with a message naming `setup HOST`; sshpyk's
+  `batchmode` warning (section 54).  **Round
   3**: the dead worker (cubevis.remote): reproduce on the rig, report in
   the GUI and the terminal within seconds.  Then setup is done: stage 3.
 * **Darrell's `try-012A`** (2026-11-02): `diagnose cvpost106` correct
@@ -60,7 +60,7 @@ as ee125b6) and section 17 (the ssh wrapper).
      the eye, and does `.../pypi/cubevis/1.0.104/json` carry the stamp line?
   3. Still open from section 45/46: the real-network questions in the
      previous handoff (`hrs_handoff_2026-10-31_step4_2d.md`, "Ask Darrell").
-* **Suite** (2026-11-02, section 53): 261 passed, 1 skipped with OpenSSH 9.6
+* **Suite** (2026-11-02, sections 53, 54): 261 passed, 1 skipped with OpenSSH 9.6
   and with the 8.0p1 client.
 * **Suite** (2026-11-02, section 50): 252 passed, 1 skipped with OpenSSH
   9.6 and with the 8.0p1 client (fewer: the development-install tests went).
@@ -300,7 +300,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 54).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 55).
 
 ## Test kit (rebuild after a sandbox restart)
 

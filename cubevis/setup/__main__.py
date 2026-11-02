@@ -6,7 +6,7 @@
     python -m cubevis.setup HOST --2fa            HOST's login asks for a second factor
     python -m cubevis.setup HOST --pythonhome     HOST's kernels set PYTHONHOME (Python
                                                   starts slowly there: autofs)
-    python -m cubevis.setup diagnose HOST         how ssh reaches HOST, side by side with
+    python -m cubevis.setup diagnose HOST [--full] how ssh reaches HOST, side by side with
                                                   setup's configuration; change nothing
     python -m cubevis.setup                       the same, asking for the host
     python -m cubevis.setup status                what is set up
@@ -364,6 +364,9 @@ def main(argv=None) -> int:
     pd = sub.add_parser("diagnose", help="how ssh reaches HOST, next to setup's configuration; "
                                          "one login attempt, nothing changed")
     pd.add_argument("dhost", metavar="host")
+    pd.add_argument("--full", action="store_true",
+                    help="also time Python's start where the kernels already set PYTHONHOME "
+                         "(up to a minute on a slow filesystem)")
     pc = sub.add_parser("check", help="test logins and kernels; change nothing")
     pc.add_argument("target", nargs="?", help="a kernel, node, cluster or network (default: all)")
     pn = sub.add_parser("network", help="go through a network's logins and inside ranges again")
@@ -425,7 +428,7 @@ def main(argv=None) -> int:
             return cmd_check(c, a.target)
         if a.cmd == "diagnose":
             from .diagnose import cmd_diagnose
-            return cmd_diagnose(c, a.dhost)
+            return cmd_diagnose(c, a.dhost, full=a.full)
         if a.cmd == "network":
             rc = cmd_inside_here(c, a.name) if a.inside_here else cmd_network(c, a.name)
         elif a.cmd == "jupyter":

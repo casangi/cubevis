@@ -2776,3 +2776,33 @@ starts inherit `PYTHONHOME`) is not worth a minute per kernel start.
   venvs).
 * **Suite** (2026-11-02): 261 passed, 1 skipped with OpenSSH 9.6 and with
   the 8.0p1 client (`-n 2 --dist loadfile`).
+
+## 54. `diagnose` does not time a slow start again (base `a12adbe`, 2026-11-02)
+
+Darrell's `try-014A` (from an empty `~/.config/cubevis`: `setup zuul06`,
+then visplot, then `diagnose zuul06`): discovery no longer paused; the
+launcher test took 52 s, setup tried `PYTHONHOME`, 2.6 s, kept it ("start
+52 s -> 2.6 s"); visplot started the kernel in 2.1 s and plotted.  The one
+pause left was `diagnose`'s timing of the start without `PYTHONHOME`
+(49.3 s), which tells nothing new once the kernels set it.
+
+* `diagnose HOST` times Python's start only for environments with a
+  kernel that does not set `PYTHONHOME`; otherwise it says "kernel K sets
+  PYTHONHOME=... (K: set by setup, the start being slow, 52 s -> 2.6 s);
+  Python's start not timed again (diagnose HOST --full does)".
+  `diagnose HOST --full` times it as before.
+* The times setup measured when it chose `PYTHONHOME` are kept on the
+  kernel (`pythonhome_times`, a check field), dropped when the user decides
+  with `--pythonhome` / `--no-pythonhome`.
+* Seen in the same run, for round 2 (the ssh records): sshpyk warns
+  `[SSHPYK144] ... batchmode: Recommended to be 'yes', not 'no'` for both
+  hosts of setup's generated configuration -- it reads `ssh -G` of the
+  aliases, and the generated blocks do not set `BatchMode` (setup's own
+  calls pass `-o BatchMode=yes`; the wrapper passes `BatchMode=no` where it
+  logs in with a stored password or lets the user log in).  `BatchMode yes`
+  in the generated blocks would silence it; to be checked against the
+  wrapper's and `--2fa`'s own logins first.
+* **Tests**: `test_cli.py`'s `--pythonhome` rig test (not timed, then
+  `--full`); `test_hostsetup.py` (the times kept).
+* **Suite** (2026-11-02): 261 passed, 1 skipped with OpenSSH 9.6 and with
+  the 8.0p1 client (`-n 2 --dist loadfile`).

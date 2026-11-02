@@ -654,6 +654,7 @@ def test_a_slow_start_is_tried_with_pythonhome_and_kept_when_it_helps(ctx, monke
     assert ok, msg
     k = c.st.section("kernels")["k"]
     assert k["pythonhome"] is True and k["pythonhome_by"] == "setup"
+    assert k["pythonhome_times"] == [52.0, 0.6]                  # diagnose shows them
     assert "PYTHONHOME" not in written[0] and "export PYTHONHOME=/c/envs/x" in written[1]
     out = " ".join(c.ui.out.getvalue().split())
     assert "Starting it took 52 s; trying again with PYTHONHOME=/c/envs/x" in out

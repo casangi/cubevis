@@ -7,11 +7,21 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* **Delivered 2026-11-01 as a zip on main `c78df91`** (= v1.0.103, which
-  holds step 4 and 2d's development installs; not committed by Claude):
-  notes sections 47 and 48.  Check `git log` first.  The next notes
-  section is **49**.  **Start here: ask how Darrell's rerun went** (below),
-  then what is left of 2d, then stage 3 (the Session).
+* **Main is `98fda78`** (sections 47, 48, committed by Darrell).  **Delivered
+  after it, as a zip on `98fda78`** (not committed by Claude): notes section
+  49 -- visplot checks the kernel it starts by fingerprint, not by version
+  (`visibility_plotter.kernel_code_check`,
+  `RemoteReductionContext.kernel_fingerprint`), which removes the false
+  "kernel cubevis 1.0.102 differs from local unknown" warning of Darrell's
+  `try-009A` run.  Check `git log` first.  The next notes section is **50**.
+  **Start here: ask whether visplot now starts against `cubevis-1.0.102`
+  without the warning**, then what is left of 2d, then stage 3 (the
+  Session; its run-time check can be section 49's request).
+* **Darrell's `try-009A` (2026-11-01)**: from a fresh `~/.config/cubevis`,
+  `setup cvpost106` adopted the ssh route, logged in by key, found
+  `cubevis-1.0.102` usable by fingerprint, made kernel `visplot`, and
+  visplot plotted -- sections 45 to 48 confirmed on the real network, but
+  for the warning fixed in section 49.
 * **Section 47, the fingerprint fixed**: the build-written
   `cubevis/__version__.py` no longer counts (`GENERATED`; algorithm `k2`),
   so a checkout and the releases with the same kernel code (v1.0.100 --
@@ -27,7 +37,7 @@ as ee125b6) and section 17 (the ssh wrapper).
   the stamps from PyPI's JSON (`releases.py`), newest first, and falls back
   to the git-tag check for releases from before the stamp (all of them
   until 1.0.104).
-* **Ask Darrell**:
+* **Asked after section 48** (item 1 answered by `try-009A`: yes):
   1. Rerun `setup cvpost106` from the checkout (symlinked into
      `tests/manual/visplot`): the existing `cubevis-1.0.102` should be listed
      usable ("kernel-side code identical (k2-67f9...)"), the version shown
@@ -36,7 +46,9 @@ as ee125b6) and section 17 (the ssh wrapper).
      the eye, and does `.../pypi/cubevis/1.0.104/json` carry the stamp line?
   3. Still open from section 45/46: the real-network questions in the
      previous handoff (`hrs_handoff_2026-10-31_step4_2d.md`, "Ask Darrell").
-* **Suite** (2026-11-01): 262 passed, 1 skipped with OpenSSH 9.6 and
+* **Suite** (2026-11-01, section 49): 266 passed, 1 skipped with OpenSSH
+  9.6 and with the 8.0p1 client (`-n 2 --dist loadfile`).  Earlier the same
+  day: 262 passed, 1 skipped with OpenSSH 9.6 and
   with the 8.0p1 client.  **Run it with `-n 2 --dist loadfile`**: plain
   `-n 2` lets `test_cli.py` tests clash in alice's shared account (notes
   section 48).
@@ -270,11 +282,14 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 49).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 50).
 
 ## Test kit (rebuild after a sandbox restart)
 
-The sandbox loses `/etc/hosts` edits and running daemons on restart.
+The sandbox loses `/etc/hosts` edits and running daemons on restart (it
+restarted twice during the 2026-11-01 session: a burst of rig failures --
+"ssh cannot find 'compute.example.test'" -- means rerun `ssh_rig.sh`;
+`/opt` and `/home` survive).
 
 * **ssh rig**: `sudo devel/tools/ssh_rig.sh` (idempotent; `stop` to stop).
   It adds `login.example.test` / `compute.example.test` /

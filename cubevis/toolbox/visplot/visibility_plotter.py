@@ -2412,6 +2412,40 @@ try {
 """
 
 
+
+def kernel_code_check(remote) -> tuple:
+    """``(kernel versions, warning or None)`` for a remote kernel.
+
+    What must match is the code that runs in the kernel, not the version
+    (2026-11-01): a checkout, or a release whose kernel side did not change,
+    has the same code under another version.  So the kernel-side
+    fingerprints decide (``remote.kernel_fingerprint()``, computed there with
+    this computer's code); the versions are compared only when the kernel's
+    fingerprint cannot be had (the 2026-10-12 check)."""
+    from .plot_summary import software_versions, version_mismatch
+    versions = warning = None
+    try:
+        versions = remote.software_versions()
+    except Exception:
+        log.debug("kernel version check failed", exc_info=True)
+    try:
+        from cubevis import _fingerprint
+        there = (remote.kernel_fingerprint()
+                 if hasattr(remote, "kernel_fingerprint") else None)
+        if there:
+            here = _fingerprint.fingerprint()
+            if there == here:
+                log.info("visplot: kernel-side code identical to here (%s)", here)
+            else:
+                _ok, why = _fingerprint.compatible(here, there)
+                warning = (f"{why}; results may differ or calls fail. python -m "
+                           "cubevis.setup HOST makes or chooses a matching environment")
+        elif versions:
+            warning = version_mismatch(software_versions(), versions)
+    except Exception:
+        log.debug("kernel fingerprint check failed", exc_info=True)
+    return versions, warning
+
 class VisibilityPlotter:
     """Combined raster + scatter visibility inspection and flagging tool.
 
@@ -3223,13 +3257,7 @@ class VisibilityPlotter:
         _remote = next((o for o in (self._context, self._reader)
                         if type(o).__name__ == "RemoteReductionContext"), None)
         if _remote is not None:
-            from .plot_summary import software_versions, version_mismatch
-            try:
-                self._kernel_versions = _remote.software_versions()
-                self._version_warning = version_mismatch(
-                    software_versions(), self._kernel_versions)
-            except Exception:
-                log.debug("kernel version check failed", exc_info=True)
+            self._kernel_versions, self._version_warning = kernel_code_check(_remote)
             if self._version_warning:
                 log.warning("visplot: %s", self._version_warning)
 

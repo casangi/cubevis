@@ -811,6 +811,37 @@ def test_rig_jupyter_kernel_and_a_remote_plotter(home, alice_envs):
     assert "PLOTTER RemoteReductionContext" in r.stdout, r.stdout[-2000:] + r.stderr[-3000:]
 
 
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_visplot_asks_the_kernel_for_its_fingerprint(home, alice_envs):
+    """What visplot checks when it starts a remote kernel (2026-11-01): the
+    kernel's fingerprint, computed in the kernel with this computer's code
+    (``RemoteReductionContext.kernel_fingerprint``), through setup's Jupyter
+    kernel -- sshpyk, the wrapper, the launcher.  No measurement set needed:
+    only the kernel is started."""
+    r = _host(home, "--answer", "kernel=fp", "--answer", "workdir=~",
+              "--answer", "env_vars=none", route=DIRECT)
+    assert r.returncode == 0, r.stdout
+    code = ("from cubevis.toolbox.visplot.remote_reduction_context import RemoteReductionContext\n"
+            "from cubevis.remote import SyncBridge\n"
+            "from jupyter_client import AsyncKernelManager\n"
+            "from cubevis import _fingerprint\n"
+            "c = RemoteReductionContext.__new__(RemoteReductionContext)\n"
+            "c._bridge = SyncBridge(name='fp-test'); c._bridge.start()\n"
+            "c._km = AsyncKernelManager(kernel_name='cubevis-fp')\n"
+            "c._bridge.run(c._km.start_kernel(), timeout=180)\n"
+            "try:\n"
+            "    print('THERE', c.kernel_fingerprint()); print('HERE', _fingerprint.fingerprint())\n"
+            "finally:\n"
+            "    c._bridge.run(c._km.shutdown_kernel(now=True), timeout=60)\n")
+    env = {k: v for k, v in _env(home).items() if k != "PYTHONPATH"}
+    r = subprocess.run([KERNEL_PY, "-c", code], capture_output=True, text=True, timeout=400,
+                       env=env, cwd="/tmp")
+    got = dict(l.split(" ", 1) for l in r.stdout.splitlines() if l.startswith(("THERE ", "HERE ")))
+    assert got.get("THERE") and got.get("THERE") == got.get("HERE"), r.stdout[-2000:] + r.stderr[-3000:]
+
+
 # ---------------------------------------------------------------------- #
 # Setup's own environments (stage 2c step 3), over the rig                  #
 # ---------------------------------------------------------------------- #

@@ -185,6 +185,7 @@ def test_stale_master_is_replaced(d):
                         "gw", "echo", "$PPID"], capture_output=True, text=True, timeout=60,
                        stdin=subprocess.DEVNULL,
                        env=dict(os.environ, SSH_WRAPPER_RULES=f"{d}/rules", TMPDIR=d))
+    assert r.stdout.strip().isdigit(), (r.returncode, r.stdout, r.stderr)
     frozen = {int(r.stdout.strip())} & _session_pids()
     assert frozen, (r.stdout, r.stderr, _session_pids())
     for p in frozen:

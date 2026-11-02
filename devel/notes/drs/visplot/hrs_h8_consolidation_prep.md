@@ -2459,3 +2459,44 @@ carry a wrong value).
   passes alone.  `--dist loadfile` keeps a file's tests in order on one
   worker and costs nothing (7 minutes).
 
+
+## 49. visplot checks the kernel by fingerprint, not by version (base `98fda78`, 2026-11-01)
+
+Darrell's rerun after sections 47/48 (`try-009A`): setup found
+`cvpost106`'s `cubevis-1.0.102` usable ("same kernel-side code as here"),
+made kernel `visplot` on it, and visplot plotted -- but the terminal and the
+status line said "kernel cubevis 1.0.102 differs from local unknown (git
+98fda78373+dirty); results may differ.  Install the same version where the
+kernel runs".  That is the 2026-10-12 check (`plot_summary.version_mismatch`),
+which compares version strings: a checkout used without installing it has
+none, and a release whose kernel side did not change has another.
+
+* **Now** (`visibility_plotter.kernel_code_check`, local side only): the
+  kernel-side fingerprints decide.  `RemoteReductionContext.kernel_fingerprint()`
+  runs, in the Jupyter kernel, this computer's `_fingerprint` code sent as
+  text over the kernel's cubevis files (as setup's `envcheck` does on the
+  node), on a client of its own that reads only the replies to its own
+  request (comm traffic on the same kernel cannot end it early).  Same:
+  nothing said (an INFO line in the log); different: "its kernel-side code
+  differs (there ..., here ...); results may differ or calls fail.  python -m
+  cubevis.setup HOST makes or chooses a matching environment".  The
+  versions are compared, as before, only when the kernel's fingerprint
+  cannot be had.  The kernel's versions are still collected for the plot
+  summary.
+* **Why not a worker method**: `plot_summary`, `remote_registrations` and
+  `cubevis.remote._link` are kernel-side (in the fingerprint); adding a
+  method there would change the fingerprint and make every existing
+  environment -- Darrell's 1.0.102 among them -- a mismatch.  Asking the
+  Jupyter kernel itself needs no kernel-side change: the fingerprint is
+  still `k2-67f9938a2b6ba9ce4a63`.  (Design 7c's "the kernel side reports
+  its fingerprint in the opening configure round trip" for stage 3 can be
+  this same request.)
+* **Tests**: `test_kernel_check.py` (same code under another version: no
+  warning; other code: warned by fingerprint; no fingerprint from the
+  kernel, or a context from before: the versions decide);
+  `test_cli.py::test_rig_visplot_asks_the_kernel_for_its_fingerprint` (a
+  kernel set up on the rig, started through its Jupyter kernel definition --
+  sshpyk, the wrapper, the launcher -- reports the fingerprint of here).
+  The rig's test measurement set was not in this sandbox (it restarted
+  twice), so the plotter itself was not started here; the round trip it
+  uses was.

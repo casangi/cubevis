@@ -832,6 +832,59 @@ class RemoteReductionContext(ReductionContext):
         """``"msv2"`` or ``"msv4"`` (resolved by the worker for ``"auto"``)."""
         return self._backend_kind
 
+    def kernel_fingerprint(self, timeout: float = 60.0) -> Optional[str]:
+        """The kernel-side fingerprint (``cubevis._fingerprint``) of the
+        cubevis the kernel imports, or None when it cannot be had.
+
+        Computed in the Jupyter kernel with *this* computer's fingerprint
+        code, sent as text -- as ``python -m cubevis.setup`` does on the node
+        -- so both sides hash the same way whatever cubevis the kernel has,
+        and nothing of the kernel side changes for it (a new worker
+        method would itself change the fingerprint).  Run on a client of its
+        own; only the replies to its own request are read."""
+        from cubevis import _fingerprint
+        code = (f"_cubevis_fp_src = {_fingerprint.source()!r}\n"
+                "def _cubevis_fp():\n"
+                "    import importlib.util, os\n"
+                "    ns = {'__name__': 'cubevis_fingerprint_from_client'}\n"
+                "    exec(compile(_cubevis_fp_src, 'cubevis/_fingerprint.py (sent)', 'exec'), ns)\n"
+                "    spec = importlib.util.find_spec('cubevis')\n"
+                "    root = os.path.dirname(os.path.dirname(os.path.abspath(spec.origin)))\n"
+                "    return ns['fingerprint'](root=root)\n"
+                "print('CUBEVIS-FINGERPRINT ' + _cubevis_fp())\n"
+                "del _cubevis_fp_src, _cubevis_fp\n")
+
+        async def run():
+            client = self._km.client()
+            client.start_channels()
+            try:
+                await client.wait_for_ready(timeout=timeout)
+                msg_id = client.execute(code, silent=False, store_history=False)
+                out = []
+                while True:
+                    msg = await client.get_iopub_msg(timeout=timeout)
+                    if msg.get("parent_header", {}).get("msg_id") != msg_id:
+                        continue                   # another request's traffic
+                    kind = msg["msg_type"]
+                    if kind == "stream":
+                        out.extend(msg["content"]["text"].splitlines())
+                    elif kind == "error":
+                        raise RuntimeError(msg["content"].get("evalue") or "error")
+                    elif kind == "status" and msg["content"]["execution_state"] == "idle":
+                        return out
+            finally:
+                client.stop_channels()
+
+        try:
+            lines = self._bridge.run(run(), timeout=timeout + 10)
+        except Exception as exc:
+            log.debug("kernel_fingerprint failed: %s", exc)
+            return None
+        for line in lines:
+            if line.startswith("CUBEVIS-FINGERPRINT "):
+                return line.split(" ", 1)[1].strip() or None
+        return None
+
     def software_versions(self, timeout: Optional[float] = None) -> list:
         """``[(package, version), ...]`` in the worker.  A worker whose
         cubevis predates this method answers with an error: reported as

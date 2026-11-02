@@ -4,6 +4,8 @@
                                                   your data is on); again: check them
     python -m cubevis.setup HOST --kernel NAME    add (or change) a kernel on HOST
     python -m cubevis.setup HOST --2fa            HOST's login asks for a second factor
+    python -m cubevis.setup HOST --pythonhome     HOST's kernels set PYTHONHOME (Python
+                                                  starts slowly there: autofs)
     python -m cubevis.setup diagnose HOST         how ssh reaches HOST, side by side with
                                                   setup's configuration; change nothing
     python -m cubevis.setup                       the same, asking for the host
@@ -131,6 +133,7 @@ def cmd_status(c: Ctx) -> int:
             ui._p(f"      kernel {kn}: environment {k.get('environment')}, starts in "
                   f"{rtilde(k.get('workdir'), home) if k.get('workdir') else '~'}"
                   + (", sets " + ", ".join(sorted(k["env"])) if k.get("env") else "")
+                  + (", sets PYTHONHOME" if k.get("pythonhome") else "")
                   + f", {state_}"
                   + (f" (on {k['checked_on']}, {k['last_checked']})" if k.get("checked_on") else ""))
             specs = J.specs_for(st, kn)
@@ -335,6 +338,11 @@ def main(argv=None) -> int:
                    help="with HOST: its login asks for a second factor (a code, a push)")
     p.add_argument("--no-2fa", dest="twofactor", action="store_const", const=False,
                    help="with HOST: its login does not ask for a second factor")
+    p.add_argument("--pythonhome", dest="pythonhome", action="store_const", const=True,
+                   help="with HOST: its kernels (or --kernel NAME) set PYTHONHOME, so that "
+                        "Python does not search for its installation (slow on autofs)")
+    p.add_argument("--no-pythonhome", dest="pythonhome", action="store_const", const=False,
+                   help="with HOST: its kernels (or --kernel NAME) do not set PYTHONHOME")
     sub = p.add_subparsers(dest="cmd")
     ph = sub.add_parser("host", help="make kernels work on HOST (the default command)")
     ph.add_argument("host")
@@ -347,6 +355,11 @@ def main(argv=None) -> int:
                          "in a terminal and the connection is shared")
     ph.add_argument("--no-2fa", dest="twofactor_after", action="store_const", const=False,
                     help="its login does not ask for a second factor (any more)")
+    ph.add_argument("--pythonhome", dest="pythonhome_after", action="store_const", const=True,
+                    help="its kernels (or --kernel NAME) set PYTHONHOME: Python skips the "
+                         "search for its installation (slow on autofs)")
+    ph.add_argument("--no-pythonhome", dest="pythonhome_after", action="store_const",
+                    const=False, help="its kernels (or --kernel NAME) do not set PYTHONHOME")
     sub.add_parser("status", help="what is set up")
     pd = sub.add_parser("diagnose", help="how ssh reaches HOST, next to setup's configuration; "
                                          "one login attempt, nothing changed")
@@ -381,6 +394,10 @@ def main(argv=None) -> int:
     a.cleanup = a.cleanup or getattr(a, "cleanup_after", False)
     if getattr(a, "twofactor_after", None) is not None:
         a.twofactor = a.twofactor_after
+    if getattr(a, "pythonhome_after", None) is not None:
+        a.pythonhome = a.pythonhome_after
+    if a.pythonhome is not None and (a.cmd != "host" or a.cleanup):
+        p.error("--pythonhome goes with a host: python -m cubevis.setup HOST --pythonhome")
     if a.twofactor is not None and a.cmd != "host":
         p.error("--2fa goes with a host: python -m cubevis.setup HOST --2fa")
     if a.kernel and a.cmd != "host":
@@ -415,7 +432,8 @@ def main(argv=None) -> int:
             rc = cmd_jupyter(c, a.jkernel, a.node)
         elif a.cmd == "host":
             rc = (cmd_cleanup(c, a.host) if a.cleanup
-                  else cmd_host(c, a.host, a.kernel, twofactor=a.twofactor))
+                  else cmd_host(c, a.host, a.kernel, twofactor=a.twofactor,
+                                pythonhome=a.pythonhome))
         else:
             rc = cmd_walk(c)
         ui.show_changes()

@@ -1228,7 +1228,8 @@ def record_environment(c: Ctx, node: str, cand: dict, r: dict) -> str:
              prefix=r.get("prefix") or cand["prefix"], versions=r.get("versions") or {},
              cubevis=(r.get("versions") or {}).get("cubevis"), python_version=r.get("python"),
              visplot=r.get("visplot"), cubevis_via=via, tool=tool,
-             fingerprint=r.get("fingerprint"), marker=cand.get("marker"), checked_on=node)
+             fingerprint=r.get("fingerprint"), marker=cand.get("marker"), checked_on=node,
+             base_prefix=r.get("base_prefix"))
     st.mark_ok("environments", name)
     return name
 
@@ -1282,17 +1283,45 @@ def write_and_test(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> t
     if did == "written":
         ui.record_change("wrote launcher", f"{node}:{rtilde(path, home)}")
     k["launcher"] = path
+    t0 = time.monotonic()
     try:
         fp, cwd = R.test_launcher(c, alias, path)
     except R.RemoteError as exc:
         st.flag("kernels", name, f"on {node}: {exc}")
         return False, st.section("kernels")[name]["last_error"]
+    took = time.monotonic() - t0
+    ui.log(f"kernel {name}: the launcher test took {took:.1f} s")
+    if took > SLOW_START and not k.get("pythonhome") and launcher.home_of(e):
+        ui.note(f"starting kernel {name}'s Python on {node} took {took:.0f} s. On automounted "
+                "filesystems (autofs) most of that can be Python looking for its own "
+                f"installation; python -m cubevis.setup {host_text} --pythonhome tells it "
+                f"({launcher.home_of(e)}), and diagnose {host_text} measures both.")
     usable, why = _fingerprint.compatible(local_fingerprint(c), fp)
     if not usable:
         st.flag("kernels", name, f"on {node}: {why}")
         return False, st.section("kernels")[name]["last_error"]
     st.mark_ok("kernels", name, fingerprint=fp, checked_on=node)
     return True, f"starts in {rtilde(cwd, home)}" + (f"; {why}" if fp != local_fingerprint(c) else "")
+
+
+# A launcher test slower than this (seconds) suggests --pythonhome.
+SLOW_START = 15.0
+
+
+def set_pythonhome(c: Ctx, names, on: bool) -> None:
+    """``--pythonhome`` / ``--no-pythonhome``: kernels *names* set
+    ``PYTHONHOME`` in their launchers (rewritten by the run), or not."""
+    ui, st = c.ui, c.st
+    for name in names:
+        k = st.section("kernels")[name]
+        e = st.section("environments").get(k.get("environment")) or {}
+        if on and not launcher.home_of(e):
+            ui.note(f"kernel {name}: its environment's Python installation is not known yet "
+                    "(checked before 2026-11-02): run setup again to set PYTHONHOME")
+        if bool(k.get("pythonhome")) != on:
+            k["pythonhome"] = on
+            ui.record_change("PYTHONHOME", f"kernel {name}: "
+                             + (f"set ({launcher.home_of(e) or 'when known'})" if on else "not set"))
 
 
 def default_kernel_name(st, n: dict, node: str, workdir: Optional[str]) -> str:
@@ -1363,6 +1392,7 @@ def kernel_step(c: Ctx, node: str, env: str, rep: dict, name: Optional[str],
         is_new = name not in kernels
         st.add_kernel(name, environment=env, workdir=k.get("workdir"), env=k.get("env"),
                       launcher=k.get("launcher"), launch_timeout=k.get("launch_timeout") or 120,
+                      pythonhome=(k.get("pythonhome") if c.pythonhome is None else c.pythonhome),
                       replace=True)
         ui.record_change("added kernel" if is_new else "changed kernel",
                          f"{name} ({env} on {cl_name or node}, starts in "
@@ -1474,6 +1504,8 @@ def check_kernels(c: Ctx, node: str, rep: dict, host_text: str) -> bool:
     changed (or were never written) and run each once."""
     ui, st = c.ui, c.st
     names = st.kernels_on(node)
+    if c.pythonhome is not None:
+        set_pythonhome(c, names, c.pythonhome)
     ui.heading(f"Kernels on {node}")
     home = (rep.get("host") or {}).get("home") or "/"
     good = True
@@ -1548,8 +1580,9 @@ def set_twofactor(c: Ctx, network: str, on: bool) -> None:
 
 
 def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None,
-             twofactor: Optional[bool] = None) -> int:
+             twofactor: Optional[bool] = None, pythonhome: Optional[bool] = None) -> int:
     ui, st = c.ui, c.st
+    c.pythonhome = pythonhome
     if kernel is not None:
         try:
             S.check_name("kernel", kernel)

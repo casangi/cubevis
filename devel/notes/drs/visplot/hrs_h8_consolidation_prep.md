@@ -2664,3 +2664,64 @@ PyPI stamp (section 48) is on 1.0.104 and 1.0.107
 * **Suite** (2026-11-02): 254 passed, 1 skipped with OpenSSH 9.6 and with
   the 8.0p1 client (`-n 2 --dist loadfile`; the rig rebuilt after a sandbox
   restart).
+
+## 52. `--pythonhome`: Python's slow start on autofs (base `4037f02`, after section 51; 2026-11-02)
+
+Darrell: sshpyk now lets `PYTHONHOME` be set before the remote Pythons
+start (casangi/sshpyk PR 13, in sshpyk 1.25; PR 12 the first attempt).
+Without it, CPython looks for its own installation by probing landmark
+files up the directory tree; on an automounted `/home` (zuul06) a probe
+such as `/home/lib/python312.zip` blocks for up to ~50 s.  sshpyk has two
+settings because its launcher Python (`remote_python`, running
+`SSHKernelApp`) and the kernel's (the remote kernelspec's `argv`) may be
+different installations: `remote_pythonhome` (set while the launcher
+starts, then restored) and `remote_kernel_pythonhome` (kept for the
+kernel and its children).
+
+**For setup's kernels both are the same environment** -- `remote_python`
+is setup's launcher, which activates the environment and `exec`s its
+python; the remote kernelspec is `python3`, ipykernel's native one
+(`sys.executable`).  So setup sets it **in its own launcher**, once, and
+both processes get it, with any sshpyk (no new minimum version); setup's
+own launcher test (the slow start shows there first) benefits too.  The
+cost is the same as sshpyk's kernel setting: processes the kernel starts
+inherit `PYTHONHOME` (a different Python started from the kernel would
+need it unset) -- hence off by default.
+
+* **The value**: the interpreter's own `sys.base_prefix`, as its check
+  reports it (`envcheck` already did; now recorded on the environment,
+  `base_prefix`, a check field).  For conda environments that is the
+  prefix; a venv's is the Python it was made from, and the venv still works
+  with it (tested: its `sys.prefix` and packages stay).  For a conda
+  environment checked before this, its prefix (`launcher.home_of`).
+* **Per kernel** (kernels carry the launch settings, design 7c 4a):
+  `pythonhome` in the kernel's record (default off).  `setup HOST
+  --pythonhome` / `--no-pythonhome` sets it for the host's kernels (with
+  `--kernel NAME`, that one); the launchers are rewritten and tested in the
+  same run.  The line is `export PYTHONHOME=...` after activation and before
+  the kernel's own variables (a `PYTHONHOME` among those still wins -- that
+  was already a way to do this by hand).
+* **Found, not guessed**: setup times its launcher test; slower than 15 s
+  (`SLOW_START`) without the setting, it says so and names `--pythonhome`.
+  `diagnose HOST` (section 6) now times the environment's python on the
+  node twice, without and with `PYTHONHOME`, prints both, and says
+  "slow without PYTHONHOME: python -m cubevis.setup HOST --pythonhome" when
+  the first is over 5 s and the second under a third of it.  `status`
+  shows "sets PYTHONHOME" on such kernels.
+* Not used: sshpyk's own two settings (they would need sshpyk >= 1.25, and
+  for setup's kernels say the same thing twice).  Stage 3's in-memory
+  kernel spec can pass them through if a kernel ever runs from an
+  environment other than its launcher's.
+* Not covered: discovery's checks of the node's environments (each python
+  started once by `setup HOST`) still pay the slow start; they run once
+  per setup, not per kernel.  The setting could be applied there too
+  (conda environments only) if zuul06's setup runs are too slow.
+* **Also in this round** (the launcher): a gone environment's message
+  (section 51) is now tested in `test_launcher.py` too.
+* **Tests**: `test_launcher.py` -- the value is the base prefix, the venv
+  still works with it, off by default, the kernel's own variable wins,
+  unknown -> not set; `test_cli.py` -- `--pythonhome` on the rig (launcher
+  line, kernel still starts, `status`, `diagnose`'s timings, then
+  `--no-pythonhome`), and `--pythonhome` refused without a host.
+* **Suite** (2026-11-02, sections 51 and 52): 257 passed, 1 skipped with
+  OpenSSH 9.6 and with the 8.0p1 client (`-n 2 --dist loadfile`).

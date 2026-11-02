@@ -15,8 +15,11 @@ as ee125b6) and section 17 (the ssh wrapper).
   removal of setup's environments from any computer; a kernel whose
   environment is gone (launcher message; replace / forget / keep);
   nested inside ranges collapsed.  `prune`, `setup --local` and the final
-  kernel + plot test dropped.  Check `git log` first.  The next notes
-  section is **52**.
+  kernel + plot test dropped.  Section 52 (same zip): `setup HOST
+  --pythonhome` -- the launcher sets `PYTHONHOME` (the environment's base
+  prefix) for zuul06's slow Python start on autofs (sshpyk PR 13's case);
+  setup and `diagnose` time Python's start and suggest it.  Check `git log`
+  first.  The next notes section is **53**.
 * **Start here: round 2** (agreed 2026-11-02, section 51): ssh options
   stored per host, a fresh `ssh -G` compared at each run and differences
   reported (log, `status`, `diagnose`), adopted only by `setup HOST`; each
@@ -62,7 +65,7 @@ as ee125b6) and section 17 (the ssh wrapper).
      the eye, and does `.../pypi/cubevis/1.0.104/json` carry the stamp line?
   3. Still open from section 45/46: the real-network questions in the
      previous handoff (`hrs_handoff_2026-10-31_step4_2d.md`, "Ask Darrell").
-* **Suite** (2026-11-02, section 51): 254 passed, 1 skipped with OpenSSH 9.6
+* **Suite** (2026-11-02, sections 51, 52): 257 passed, 1 skipped with OpenSSH 9.6
   and with the 8.0p1 client.
 * **Suite** (2026-11-02, section 50): 252 passed, 1 skipped with OpenSSH
   9.6 and with the 8.0p1 client (fewer: the development-install tests went).
@@ -302,7 +305,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 52).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 53).
 
 ## Test kit (rebuild after a sandbox restart)
 

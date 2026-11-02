@@ -122,7 +122,7 @@ STORES = ("keychain", "secret-tool", "pass", "gpg-file", "command")
 # another run removed nor stops this run's removal of it (``merge``).
 HEALTH_FIELDS = {"status", "last_checked", "last_error", "checked_on", "cubevis",
                  "versions", "python_version", "visplot", "cubevis_via", "tool", "kind",
-                 "fingerprint", "marker", "fqdn", "ranges", "home"}
+                 "fingerprint", "marker", "fqdn", "ranges", "home", "base_prefix"}
 KINDS = ("conda", "venv", "python")
 
 LOCK_TIMEOUT = 30.0      # seconds to wait for another run's lock
@@ -590,10 +590,12 @@ class State:
 
     def add_kernel(self, name: str, *, environment: str, workdir: Optional[str] = None,
                    env: Optional[dict] = None, launcher: Optional[str] = None,
-                   launch_timeout: int = 120, replace: bool = False) -> dict:
+                   launch_timeout: int = 120, pythonhome: bool = False,
+                   replace: bool = False) -> dict:
         """A kernel: environment *environment*, started in *workdir* (None:
         the home directory) with the variables *env*, through *launcher*
-        (its path on the node)."""
+        (its path on the node); *pythonhome*: the launcher sets
+        ``PYTHONHOME`` (``launcher.text``)."""
         check_name("kernel", name)
         self.get("environments", environment)
         if name in self.section("kernels") and not replace:
@@ -602,7 +604,7 @@ class State:
             raise StateError(f"kernel {name!r}: the working directory must be an absolute path")
         k = {"environment": environment, "workdir": workdir, "env": dict(env or {}),
              "launcher": launcher, "launch_timeout": int(launch_timeout),
-             "fingerprint": None, "checked_on": None,
+             "pythonhome": bool(pythonhome), "fingerprint": None, "checked_on": None,
              "status": "new", "last_checked": None, "last_error": None}
         self.section("kernels")[name] = k
         return k

@@ -17,7 +17,9 @@ itself:
    shared connection);
 5. a login: with the user's ssh (never asking), then with setup's -- and on
    failure the end of ssh's verbose output;
-6. the kernel-side code here and in the environments of the kernels there.
+6. the kernel-side code here and in the environments of the kernels there,
+   and how long their Python takes to start, with and without
+   ``PYTHONHOME`` (``--pythonhome``: slow on automounted filesystems).
 
 It changes nothing setup keeps: the state, the generated files and the
 node are left as they are.  The logins may open a shared connection, as any
@@ -272,10 +274,58 @@ def cmd_diagnose(c: Ctx, text: str) -> int:
             _mark(ui, usable, f"{e} ({rec.get('prefix') or rec['python']}"
                   + (f"; kernels {', '.join(kernels)}" if kernels else "") + "): "
                   + (f"{fp}, " if fp else "") + why)
+            if kernels:
+                startup(c, n["alias"], dict(rec, base_prefix=(cand.get("check") or {}).get("base_prefix")
+                                            or rec.get("base_prefix")), kernels, text)
     ui._p("")
     ui.say("On the node itself, python3 -m cubevis.setup.discover (where cubevis is installed) "
            "shows what setup sees there; read-only.")
     return 0 if (ok or ok is None and verdict in ("ok", "answers")) else 1
+
+
+# Run by the node's python3 (3.6+): how long the environment's python takes
+# to start, without PYTHONHOME and with it.
+_STARTUP = r'''
+import json, os, subprocess, sys, time
+py, home = sys.argv[1], sys.argv[2]
+out = {}
+for label, extra in (("plain", {}), ("home", {"PYTHONHOME": home})):
+    env = dict(os.environ)
+    env.pop("PYTHONHOME", None)
+    env.update(extra)
+    t = time.time()
+    r = subprocess.run([py, "-c", "pass"], env=env, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+    out[label] = [round(time.time() - t, 2), r.returncode]
+print("CUBEVIS-STARTUP " + json.dumps(out))
+'''
+SLOW = 5.0          # seconds: worth --pythonhome
+
+
+def startup(c, alias: str, rec: dict, kernels: list, text: str) -> None:
+    """How long environment *rec*'s python takes to start on the node,
+    without ``PYTHONHOME`` and with it (``launcher.home_of``)."""
+    import json
+    import shlex
+    from . import launcher
+    ui, st = c.ui, c.st
+    home = launcher.home_of(rec)
+    if not home:
+        return
+    r = c.ssh(alias, "python3", "-", shlex.quote(rec["python"]), shlex.quote(home),
+              timeout=300, input=_STARTUP)
+    line = [l for l in (r.stdout or "").splitlines() if l.startswith("CUBEVIS-STARTUP ")]
+    if not line:
+        _mark(ui, False, f"timing Python's start there failed: {last_line(c.last_out) or 'no answer'}")
+        return
+    got = json.loads(line[-1].split(" ", 1)[1])
+    (plain, prc), (withh, hrc) = got["plain"], got["home"]
+    using = [k for k in kernels if st.section("kernels")[k].get("pythonhome")]
+    ui._p(f"        Python starts in {plain:.1f} s there; with PYTHONHOME={home} in {withh:.1f} s"
+          + ("" if hrc == 0 else " (but it fails then)")
+          + (f"; kernel {', '.join(using)} set{'s' if len(using) == 1 else ''} it" if using else ""))
+    if plain > SLOW and hrc == 0 and withh < plain / 3 and len(using) < len(kernels):
+        _mark(ui, False, f"slow without PYTHONHOME: python -m cubevis.setup {text} --pythonhome")
 
 
 def _how(st, rec: dict, user: str) -> str:

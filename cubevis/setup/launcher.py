@@ -23,8 +23,19 @@ it
    ``CONDA_PREFIX`` / ``VIRTUAL_ENV``, and, for conda, the environment's
    ``etc/conda/activate.d/*.sh`` scripts (their output goes to stderr:
    sshpyk reads the launcher's stdout);
-3. sets the kernel's variables (after activation, so they win);
-4. ``exec``s the python with the arguments it was given.
+3. with the kernel's ``pythonhome`` setting, sets ``PYTHONHOME`` to the
+   environment's base prefix (``home_of``): Python then skips the search
+   for its own installation, which on an automounted filesystem (autofs:
+   ``/home/lib/python312.zip`` looked up) can take most of a minute
+   (zuul06, sshpyk PR 13).  For setup's kernels the launcher's Python and
+   the kernel's are the same environment's, so one value serves both
+   (sshpyk's ``remote_pythonhome`` / ``remote_kernel_pythonhome`` are for
+   when they differ) and it works with any sshpyk.  Like sshpyk's kernel
+   setting, it stays in the kernel's environment: processes the kernel
+   starts inherit it;
+4. sets the kernel's variables (after activation, so they win -- a
+   ``PYTHONHOME`` given there too);
+5. ``exec``s the python with the arguments it was given.
 
 Only what the kernel's record holds goes in; nothing else comes from the
 computer the plots are on (developers pass that explicitly, stage 3).
@@ -78,6 +89,18 @@ def format_vars(env: dict) -> str:
     return " ".join(f"{k}={shlex.quote(v)}" for k, v in sorted((env or {}).items()))
 
 
+def home_of(e: dict) -> Optional[str]:
+    """The ``PYTHONHOME`` for environment record *e*: its interpreter's
+    ``sys.base_prefix`` as its check reported it (a venv's is the Python it
+    was made from); for a conda environment checked before that was
+    recorded, its prefix.  None when unknown."""
+    if e.get("base_prefix"):
+        return e["base_prefix"]
+    if e.get("kind") == "conda" and e.get("prefix"):
+        return e["prefix"]
+    return None
+
+
 def relpath(gui: str, kernel: str) -> str:
     """Where a kernel's launcher goes, relative to the node's configuration
     directory (``~/.config/cubevis``)."""
@@ -114,6 +137,9 @@ def text(kernel: str, k: dict, e: dict, home: str, gui: str, host: str = "HOST")
             f"export VIRTUAL_ENV={q(prefix)}",
             f"export PATH={q(prefix + '/bin')}:\"$PATH\"",
         ]
+    if k.get("pythonhome") and home_of(e):
+        lines.append(f"export PYTHONHOME={q(home_of(e))}   # python -m cubevis.setup {host} "
+                     "--no-pythonhome removes it")
     for name, v in sorted((k.get("env") or {}).items()):
         lines.append(f"export {check_var(name)}={q(v)}")
     lines.append(f"exec {q(e['python'])} \"$@\"")

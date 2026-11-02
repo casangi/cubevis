@@ -29,6 +29,7 @@ class Ctx:
         self.ui, self.st, self.check_only, self.redo = ui, st, check_only, redo
         self.step_n = 0
         self.last_out = ""
+        self.pythonhome = None       # setup HOST --pythonhome / --no-pythonhome
         self.warned: set = set()
 
     def save(self) -> None:

@@ -1046,6 +1046,41 @@ def test_rig_a_kernel_whose_environment_is_gone(home, alice_tidy):
     assert "compute" not in st.section("kernels") and not st.section("environments")
 
 
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_pythonhome_for_a_hosts_kernels(home, alice_envs):
+    """``setup HOST --pythonhome`` (sshpyk PR 13's autofs case): the host's
+    kernels' launchers set PYTHONHOME to their environment's base prefix,
+    the kernel still starts; status says so, diagnose times Python's start
+    with and without it; ``--no-pythonhome`` takes it out."""
+    r = _host(home, "--answer", "workdir=~", "--answer", "env_vars=none", route=DIRECT)
+    assert r.returncode == 0, r.stdout
+    st = S.load()
+    k = st.section("kernels")["compute"]
+    assert not k["pythonhome"]
+    base = st.section("environments")[k["environment"]]["base_prefix"]
+    assert base
+    launcher_text = lambda: _as_alice(f"cat {k['launcher']}").stdout
+    assert "PYTHONHOME" not in launcher_text()
+    r = _host(home, "--pythonhome", route=DIRECT)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert f"PYTHONHOME: kernel compute: set ({base})" in out
+    assert f"export PYTHONHOME={base}" in launcher_text()
+    assert S.load().section("kernels")["compute"]["status"] == "ok"
+    assert "sets PYTHONHOME" in _flat(_run(home, "status"))
+    r = _run(home, "diagnose", HOST)
+    out = _flat(r)
+    assert f"Python starts in" in out and f"with PYTHONHOME={base} in" in out, r.stdout
+    assert "kernel compute sets it" in out
+    r = _host(home, "--no-pythonhome", route=DIRECT)
+    assert r.returncode == 0 and "PYTHONHOME: kernel compute: not set" in _flat(r)
+    assert "PYTHONHOME" not in launcher_text()
+    r = _run(home, "--pythonhome", "status")
+    assert r.returncode == 2 and "--pythonhome goes with a host" in r.stderr
+
+
 def _stop_waiting_for_a_making(home, seconds):
     """Setup, with nothing usable on the node (hrs set aside, out of conda's
     list), starts an environment that takes *seconds* to make and is

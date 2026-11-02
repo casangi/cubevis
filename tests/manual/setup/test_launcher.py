@@ -102,6 +102,39 @@ def test_conda_activation_scripts_run_and_their_output_goes_to_stderr(tmp_path):
     assert "activating" in r.stderr and "activating" not in r.stdout   # sshpyk reads stdout
 
 
+def test_pythonhome_is_the_environments_base_prefix_and_the_kernel_works(tmp_path):
+    """``pythonhome`` (sshpyk PR 13's autofs case, zuul06): PYTHONHOME is
+    the interpreter's own base prefix -- a venv's is the Python it was made
+    from, and the venv still works (its packages, its prefix)."""
+    e = _env(tmp_path, "venv")
+    base = subprocess.run([e["python"], "-c", "import sys; print(sys.base_prefix)"],
+                          capture_output=True, text=True).stdout.strip()
+    e["base_prefix"] = base
+    code = "import os, sys; print(os.environ.get('PYTHONHOME')); print(sys.prefix)"
+    r = _launch(tmp_path, e, code)
+    assert r.returncode == 0 and r.stdout.splitlines()[0] == "None", r.stderr   # off by default
+    r = _launch(tmp_path, e, code, {"pythonhome": True})
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == [base, e["prefix"]]
+    text = L.text("hrs", {"pythonhome": True}, e, str(tmp_path), "gui1", "zuul06")
+    assert "python -m cubevis.setup zuul06 --no-pythonhome removes it" in text
+    # The kernel's own variable wins (set after).
+    r = _launch(tmp_path, e, code, {"pythonhome": True, "env": {"PYTHONHOME": base + "/"}})
+    assert r.stdout.splitlines()[0] == base + "/"
+    # Unknown (a venv checked before the base prefix was recorded): not set.
+    assert "PYTHONHOME" not in L.text("hrs", {"pythonhome": True}, dict(e, base_prefix=None),
+                                      str(tmp_path), "gui1", "zuul06")
+    assert L.home_of({"kind": "conda", "prefix": "/c/envs/x"}) == "/c/envs/x"
+
+
+def test_a_gone_environment_stops_the_launcher_with_a_message(tmp_path):
+    e = _env(tmp_path, "conda")
+    e["python"] = str(tmp_path / "env" / "bin" / "python-gone")
+    r = _launch(tmp_path, e, "print('ran')")
+    assert r.returncode == 1 and "ran" not in r.stdout
+    assert L.ENV_GONE in r.stderr and "python -m cubevis.setup zuul06 gives the kernel another" in r.stderr
+
+
 def test_install_refuses_quietly_and_parsing(tmp_path):
     """A launcher that cannot be written says why (a file where its
     directory should be); the parsers read only their marker lines."""

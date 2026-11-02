@@ -750,7 +750,8 @@ Each stage is one delivery (zip on the then-current main), with tests.
    2026-10-28 (section 43), (4) 2026-10-31 (section 45); of 2d,
    `--sync-checkout` and `--wheel` 2026-10-31 (section 46).  **Wrapping
    up setup** (agreed 2026-11-02, notes section 51 on): (a) the open
-   decisions settled and small fixes (section 51); (b) the ssh records --
+   decisions settled and small fixes (section 51), `--pythonhome` for
+   Python's slow start on autofs (section 52); (b) the ssh records --
    options stored per host with changes reported, each jump host its own
    entry, setup's own `known_hosts` with strict checking for kernels; (c) a
    dead worker reported instead of waited for.  Then stage 3.

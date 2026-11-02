@@ -855,7 +855,17 @@ class RemoteReductionContext(ReductionContext):
                 "del _cubevis_fp_src, _cubevis_fp\n")
 
         async def run():
-            client = self._km.client()
+            # A Session of its own (same key): ``km.client()`` would share
+            # the manager's Session with the link's client, and a Session
+            # rejects a message whose signature it has seen (its replay
+            # check, ``digest_history``) -- every iopub message reaches both
+            # clients, so the link then lost the worker's replies and the
+            # next call hung (Darrell's try-010A, 2026-11-01).
+            from jupyter_client.session import Session
+            ks = self._km.session
+            client = self._km.client(session=Session(key=ks.key,
+                                                     signature_scheme=ks.signature_scheme,
+                                                     username=ks.username))
             client.start_channels()
             try:
                 await client.wait_for_ready(timeout=timeout)

@@ -2500,3 +2500,32 @@ none, and a release whose kernel side did not change has another.
   The rig's test measurement set was not in this sandbox (it restarted
   twice), so the plotter itself was not started here; the round trip it
   uses was.
+* **Found in Darrell's next run (`try-010A`)**: the check passed ("kernel-side
+  code identical") and then visplot hung on its first worker call
+  (`axis_info`).  Reproduced with a local kernel and the real worker
+  (`cubevis.remote._test_registrations`, `Counter`): even a second client
+  that only ran `wait_for_ready()` made the next worker reply vanish; a
+  second client in another process, or one with a `Session` of its own, did
+  not.  `km.client()` gives every client the manager's own `Session`
+  object, and a Session rejects a message whose signature it has already
+  seen (its replay check, `digest_history`): iopub messages reach both
+  clients, so the link's client dropped the worker's replies.  Fixed:
+  `kernel_fingerprint` makes its client with a new `Session` (same key,
+  signature scheme and user name).  Test:
+  `tests/manual/remote/test_kernel_fingerprint.py` (a local kernel, a real
+  worker: calls before, between and after two fingerprint requests; it
+  times out without the fix).  The rest of `tests/manual/remote`: 40 passed
+  (`test_query_raster*.py` need a Jupyter kernel definition this sandbox
+  lacks; not run).  **For stage 3**: anything else that talks to a kernel
+  beside the link must not share the kernel manager's Session either.
+* **Cost of the check** (asked by Darrell): measured with a local kernel,
+  `kernel_fingerprint()` takes 0.8 s (2.6 s on a kernel's first request,
+  while it warms up): 0.2 s for the extra client (connect, ready; no new
+  kernel, no new ssh login -- the tunnels sshpyk opened are reused) and the
+  rest hashing the ~80 kernel-side modules in the kernel, which on
+  cvpost106's filesystem may take longer.  Agreed: the local fingerprint is
+  now computed once per Python session (`visibility_plotter.local_fingerprint`;
+  it was ~0.7 s per plotter), and the check's time is logged ("kernel-side
+  code check took N s (kernel N s, here N s)") so a real run shows it.
+  Running the check alongside `create_object` stays possible if the real
+  number turns out to matter.

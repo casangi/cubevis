@@ -2413,6 +2413,21 @@ try {
 
 
 
+_LOCAL_FINGERPRINT = None
+
+
+def local_fingerprint() -> str:
+    """This computer's kernel-side fingerprint, computed once per Python
+    session (~0.7 s: every kernel-side module read and tokenized).  The code
+    a session has imported does not change under it; a new session computes
+    it again."""
+    global _LOCAL_FINGERPRINT
+    if _LOCAL_FINGERPRINT is None:
+        from cubevis import _fingerprint
+        _LOCAL_FINGERPRINT = _fingerprint.fingerprint()
+    return _LOCAL_FINGERPRINT
+
+
 def kernel_code_check(remote) -> tuple:
     """``(kernel versions, warning or None)`` for a remote kernel.
 
@@ -2429,11 +2444,17 @@ def kernel_code_check(remote) -> tuple:
     except Exception:
         log.debug("kernel version check failed", exc_info=True)
     try:
+        import time
         from cubevis import _fingerprint
+        t0 = time.perf_counter()
         there = (remote.kernel_fingerprint()
                  if hasattr(remote, "kernel_fingerprint") else None)
+        t1 = time.perf_counter()
         if there:
-            here = _fingerprint.fingerprint()
+            here = local_fingerprint()
+            t2 = time.perf_counter()
+            log.info("visplot: kernel-side code check took %.1fs (kernel %.1fs, here %.1fs)",
+                     t2 - t0, t1 - t0, t2 - t1)
             if there == here:
                 log.info("visplot: kernel-side code identical to here (%s)", here)
             else:

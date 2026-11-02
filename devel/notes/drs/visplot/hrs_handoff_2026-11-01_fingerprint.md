@@ -15,8 +15,11 @@ as ee125b6) and section 17 (the ssh wrapper).
   "kernel cubevis 1.0.102 differs from local unknown" warning of Darrell's
   `try-009A` run.  Check `git log` first.  The next notes section is **50**.
   **Start here: ask whether visplot now starts against `cubevis-1.0.102`
-  without the warning**, then what is left of 2d, then stage 3 (the
-  Session; its run-time check can be section 49's request).
+  without the warning and without hanging** (`try-010A` hung after the
+  check: a second kernel client sharing the manager's `Session`; fixed, end
+  of section 49), then what is left of 2d, then stage 3 (the Session; its
+  run-time check can be section 49's request -- on a client with its own
+  `Session`).
 * **Darrell's `try-009A` (2026-11-01)**: from a fresh `~/.config/cubevis`,
   `setup cvpost106` adopted the ssh route, logged in by key, found
   `cubevis-1.0.102` usable by fingerprint, made kernel `visplot`, and

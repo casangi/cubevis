@@ -52,3 +52,20 @@ def test_without_the_kernels_fingerprint_the_versions_decide(monkeypatch):
         def software_versions(self):
             return [("cubevis", "1.0.103")]
     assert VP.kernel_code_check(Old()) == ([("cubevis", "1.0.103")], None)
+
+
+def test_the_local_fingerprint_is_computed_once(monkeypatch):
+    calls = []
+    monkeypatch.setattr(VP, "_LOCAL_FINGERPRINT", None)
+    monkeypatch.setattr(F, "fingerprint", lambda *a, **k: calls.append(1) or HERE)
+    VP.kernel_code_check(Remote(HERE))
+    VP.kernel_code_check(Remote(HERE))
+    assert len(calls) == 1 and VP.local_fingerprint() == HERE
+
+
+def test_the_time_the_check_took_is_logged(caplog):
+    import logging
+    with caplog.at_level(logging.INFO):
+        VP.kernel_code_check(Remote(HERE))
+    assert any("kernel-side code check took" in r.getMessage() and "(kernel " in r.getMessage()
+               for r in caplog.records), [r.getMessage() for r in caplog.records]

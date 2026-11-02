@@ -302,9 +302,11 @@ def test_a_development_install_is_not_made_elsewhere(ctx, monkeypatch):
     out = " ".join(c.ui.out.getvalue().split())
     assert "development install" in out and "no package on PyPI reproduces" in out
     assert "create -y" not in out                                    # nothing to run for it
-    # What does make it work there (stage 2d).
-    assert "python -m cubevis.setup node1 --sync-checkout copies this checkout" in out
-    assert "--wheel PATH makes one from a wheel you built" in out
+    # What makes it work there: an environment of the user's with the same
+    # code, found by its fingerprint (copying was removed, notes section 50).
+    assert "install it in an environment there (pip install -e DIR" in out
+    assert "python -m cubevis.setup node1 again: setup finds the environment" in out
+    assert "--sync-checkout" not in out and "--wheel" not in out
 
 
 def test_no_conda_says_how_to_get_one(ctx, release):
@@ -579,8 +581,8 @@ def test_a_checkout_with_a_releases_kernel_code_gets_that_release(ctx, monkeypat
                         lambda: (True, "a checkout at version 1.0.104.dev2+gabc, not a release"))
     monkeypatch.setattr(H, "local_version", lambda: "1.0.104.dev2+gabc")
     monkeypatch.setattr(H, "local_fingerprint", lambda c: "FP-HERE")
-    monkeypatch.setattr(H.sync, "checkout_root", lambda: "/src/cubevis")
-    monkeypatch.setattr(H.sync, "release_with_same_code", lambda root, fp: "1.0.103")
+    monkeypatch.setattr(H.checkout, "checkout_root", lambda: "/src/cubevis")
+    monkeypatch.setattr(H.checkout, "release_with_same_code", lambda root, fp: "1.0.103")
     call, calls = _plan()
     monkeypatch.setattr(H.envmake, "call", call)
     c = ctx(via_login="n", user="jo", make_env="n")
@@ -600,8 +602,8 @@ def test_a_published_stamp_comes_before_the_git_check(ctx, monkeypatch):
     from cubevis.setup import releases
     monkeypatch.setattr(H, "local_fingerprint", lambda c: "FP-HERE")
     asked = []
-    monkeypatch.setattr(H.sync, "checkout_root", lambda: "/src/cubevis")
-    monkeypatch.setattr(H.sync, "release_with_same_code", lambda root, fp: asked.append(fp) or "1.0.103")
+    monkeypatch.setattr(H.checkout, "checkout_root", lambda: "/src/cubevis")
+    monkeypatch.setattr(H.checkout, "release_with_same_code", lambda root, fp: asked.append(fp) or "1.0.103")
     monkeypatch.setattr(releases, "release_with_same_code", lambda fp: ("1.0.105", 2))
     c = ctx()
     assert H.same_release(c) == "1.0.105" and asked == []

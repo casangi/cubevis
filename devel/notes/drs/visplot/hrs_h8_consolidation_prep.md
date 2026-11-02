@@ -2529,3 +2529,51 @@ none, and a release whose kernel side did not change has another.
   code check took N s (kernel N s, here N s)") so a real run shows it.
   Running the check alongside `create_object` stays possible if the real
   number turns out to matter.
+* **Darrell's `try-011A` (2026-11-01)**: with the v3 zip, `setup cvpost106`
+  chose `cubevis-1.0.102` by fingerprint and visplot plotted on it: "kernel-
+  side code check took 1.1s (kernel 0.9s, here 0.3s)", "identical", no
+  warning, no hang.  Section 49 confirmed on the real network.  A long
+  pause follows the check: the first build of the plots (`_build_panels`:
+  axis_info, the first raster and scatter queries and renders), which logs
+  no timing -- not the check.  Phase timing for it offered, not yet asked.
+
+## 50. `--sync-checkout` and `--wheel` removed (base `940c10b`, 2026-11-02)
+
+Darrell's decision, after section 46 was built and used once on the rig only:
+
+* **Why** (his reasons, which Claude agreed with): configuring a node over
+  ssh is error-prone; it is one more configuration path, orthogonal to the
+  rest; its users are the few developers of the kernel side, who are also
+  the ones best able to set up a compatible conda environment that setup
+  then finds by fingerprint; it would see little use and so drift out of
+  date (its riskiest part, the real `pip install -e` of a copy, could not even
+  be tested on the rig); and on NRAO's cluster nodes, conda on an
+  autofs-mounted drive is very slow anyway.  `--wheel` falls under the same
+  reasoning.
+* **Removed**: the `--sync-checkout` and `--wheel` options; in `hostsetup`
+  `sync_checkout_step`, `move_kernels_step`, `own_checkout_env`,
+  `creation_source` (also the automatic use of the wheel cubevis was
+  installed from) and `offer_creation`'s `source`; the cleanup labels for a
+  checkout's or a wheel's environment; `sync.py`'s copying (tar stream,
+  `push`, `pip_install`, staging).  `envmake.py` and `test_envmake.py` are back
+  to their `d3c99fb` text (their only changes since were these).  Tests:
+  `test_sync.py` and the two rig tests (the development loop, the wheel).
+* **Kept**: `checkout.py` (new; from `sync.py`): `checkout_root`,
+  `git_version`, `release_with_same_code` -- a checkout used without
+  installing it gets its version from git, and one whose kernel-side code
+  is a release's is served by that release from PyPI (sections 47, 48); its
+  tests in `test_checkout.py` (plus: a package without a cubevis
+  `pyproject.toml` above it is not a checkout).
+* **Instead, when nothing on the node matches a development install**:
+  `hostsetup.development_advice` says to put this checkout (a clone of the
+  same commit, or a copy) where the node sees it, `pip install -e` it in a
+  conda environment there, and run `setup HOST` again -- setup finds the
+  environment by its kernel-side code; or `CUBEVIS_ALLOW_MISMATCH=1`.
+* **`setup --local`** (design 7c, "the plotting computer's own kernels";
+  never built): raised by Darrell as possibly of the same flavor.  Claude's
+  view: yes -- visplot already runs on the plotting computer without a
+  kernel or setup; a local kernel would only serve a backend in a
+  *different* local Python environment, which nothing needs today.
+  Proposed: dropped from the plan (nothing to remove); Darrell to confirm.
+* **Suite** (2026-11-02): 252 passed, 1 skipped with OpenSSH 9.6 and with
+  the 8.0p1 client (`-n 2 --dist loadfile`).

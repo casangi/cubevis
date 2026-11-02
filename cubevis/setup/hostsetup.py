@@ -39,11 +39,11 @@ routes and launchers are setup's own bookkeeping.  In order:
    its launcher on HOST and runs it once (directory, activation, imports,
    fingerprint) before recording it.
 
-A development install here (stage 2d, ``sync``): ``--sync-checkout`` copies
-this checkout to HOST into setup's ``cubevis-dev-<computer>`` (installed
-editable; copied again on each ``--sync-checkout``, and the host's kernels
-offered the move to it); ``--wheel PATH`` (or the wheel this cubevis was
-installed from) is what setup's environment is made from.
+A development install here (a checkout, or a version not on PyPI) is served by
+a release from PyPI when its kernel-side code is that release's
+(``same_release``); otherwise setup says how to make an environment there
+(``development_advice``) -- copying code to the node (``--sync-checkout``,
+``--wheel``) was removed on 2026-11-02 (notes section 50).
 
 ``--kernel NAME`` adds (or changes) one kernel for a host already set up,
 without the environment questions.  Run again without it, setup checks the
@@ -59,7 +59,7 @@ import re
 import time
 from typing import Optional
 
-from . import host_dir, host_id, launcher, envs, envmake, sync
+from . import host_dir, host_id, launcher, envs, envmake, checkout
 from . import remote as R
 from . import state as S
 from .steps import (Ctx, account_name, first_jump, hop_steps, inside_step, local_steps,
@@ -117,17 +117,17 @@ def local_fingerprint(c: Ctx) -> str:
 def local_version() -> str:
     """This cubevis's version.  Imported from a checkout: the installed
     package's when it is an editable install of that checkout, else from git
-    (``sync.git_version``: a checkout used without installing it --
+    (``checkout.git_version``: a checkout used without installing it --
     ``PYTHONPATH``, a symbolic link beside a script); otherwise the installed
     package's.  ``unknown`` when none says."""
     from importlib.metadata import PackageNotFoundError, distribution
-    root = sync.checkout_root()
+    root = checkout.checkout_root()
     try:
         dist = distribution("cubevis")
     except PackageNotFoundError:
         dist = None
     if root is not None and not (dist is not None and _dist_is_here(dist, root)):
-        return sync.git_version(root) or "unknown"
+        return checkout.git_version(root) or "unknown"
     return dist.version if dist is not None else "unknown"
 
 
@@ -148,7 +148,7 @@ def local_is_development() -> tuple:
     its version from PyPI -- an editable or local-directory install, or a
     version that is not a release (``1.0.97.dev22+g0a5b519``)."""
     v = local_version()
-    root = sync.checkout_root()
+    root = checkout.checkout_root()
     if root is not None:
         # A checkout (installed editable or not): only an exact, unchanged
         # release tag is that release.
@@ -564,47 +564,32 @@ def same_release(c: Ctx) -> Optional[str]:
     code is the same, whose PyPI package then serves its kernels; None
     otherwise.  First what releases say they hold (their stamped description
     on PyPI, ``releases``), then -- for releases from before the stamp, or no
-    network -- a checkout's nearest tag, from git (``sync.release_with_same_code``).
+    network -- a checkout's nearest tag, from git (``checkout.release_with_same_code``).
     Once per run."""
     if not hasattr(c, "_same_release"):
         from . import releases
         here = local_fingerprint(c)
         found, _n = releases.release_with_same_code(here)
         if found is None:
-            root = sync.checkout_root()
-            found = sync.release_with_same_code(root, here) if root is not None else None
+            root = checkout.checkout_root()
+            found = checkout.release_with_same_code(root, here) if root is not None else None
         c._same_release = found
     return c._same_release
 
 
 def development_advice(c: Ctx, node: str) -> str:
-    """What makes a development install's code reach *node* (stage 2d)."""
+    """What makes a development install's code usable on *node*: an
+    environment there with the same code installed, which setup then finds
+    by its fingerprint like any other (notes section 50)."""
     host_text = c.st.nodes()[node].get("ssh_name") or node
-    root = sync.checkout_root()
-    out = []
-    if root:
-        out.append(f"python -m cubevis.setup {host_text} --sync-checkout copies this checkout "
-                   f"({root}) to {node} and installs it there in an environment of setup's own "
-                   "(again after each change: only the code is copied again).")
-    out.append(f"python -m cubevis.setup {host_text} --wheel PATH makes one from a wheel you "
-               "built (pdm build, say).")
-    out.append("To use a different environment anyway, set CUBEVIS_ALLOW_MISMATCH=1 (kernels "
-               "may fail at any message).")
-    return " ".join(out)
-
-
-def creation_source(source: Optional[dict]) -> Optional[dict]:
-    """What setup's environment is made from: *source* (``--sync-checkout``,
-    ``--wheel``), else, for a development install here that was installed
-    from a wheel still on disk, that wheel; else None (PyPI)."""
-    if source:
-        return source
-    dev, _why = local_is_development()
-    if dev:
-        w = sync.installed_wheel()
-        if w and sync.wheel_version(w) == local_version():
-            return {"kind": "wheel", "path": w}
-    return None
+    root = checkout.checkout_root()
+    what = (f"this checkout ({root}) -- a clone of the same commit, or a copy --" if root
+            else "the same cubevis")
+    return (f"To use it on {node}, put {what} where {node} sees it, install it in an "
+            f"environment there (pip install -e DIR in a conda environment of yours), and run "
+            f"python -m cubevis.setup {host_text} again: setup finds the environment by its "
+            "kernel-side code.  To use a different environment anyway, set "
+            "CUBEVIS_ALLOW_MISMATCH=1 (kernels may fail at any message).")
 
 
 def _node_access(c: Ctx, node: str, rep: dict) -> tuple:
@@ -755,27 +740,23 @@ def envmake_log(config_dir: str, name: str) -> str:
     return posixpath.join(config_dir, "make", name + ".log")
 
 
-def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False,
-                   source: Optional[dict] = None) -> Optional[tuple]:
+def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Optional[tuple]:
     """Make setup's own environment on *node* (``envmake``): where, how big,
     asked once; then made in the background and waited for.  Continues one
     already being made, or one that stopped (it goes on from the step it
     reached).  Returns the new environment's row ``(cand, report, usable,
     why)``, checked, or None when none was made (the reason has been said).
 
-    From PyPI by this cubevis's version; or (stage 2d, ``creation_source``)
-    from code copied from here: this checkout (``{"kind": "checkout",
-    "root": DIR}``: ``cubevis-dev-<computer>``, editable), or a wheel
-    (``{"kind": "wheel", "path": FILE}``: named for its version)."""
+    From PyPI: this cubevis's version, or -- for a development install here
+    -- the release with the same kernel-side code (``same_release``)."""
     ui = c.ui
     test_install = os.environ.get("CUBEVIS_SETUP_TEST_INSTALL")
     dev, _why = local_is_development()
     tool = envmake.pick_tool(rep.get("tools"))
-    source = creation_source(source)
     # A checkout whose kernel-side code is that of its nearest release: the
     # release from PyPI is the same code (no copy needed).
-    same = same_release(c) if dev and not source and not test_install else None
-    if (dev and not test_install and not source and not same) or tool is None:
+    same = same_release(c) if dev and not test_install else None
+    if (dev and not test_install and not same) or tool is None:
         no_environment_advice(c, node, rep, asked=forced)
         return None
     import sys
@@ -783,24 +764,12 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False,
     home = h.get("home") or "/"
     v = local_version()
     py = f"{sys.version_info[0]}.{sys.version_info[1]}"
-    kind = (source or {}).get("kind")
-    if kind == "checkout":
-        names = envmake.dev_names(host_id())
-        what = (f"cubevis from this checkout ({source['root']}), installed editable -- the "
-                "code is copied there now, and again by each --sync-checkout")
-        spec_text = f"checkout {source['root']}"
-    elif kind == "wheel":
-        v = sync.wheel_version(source["path"]) or v
-        names = envmake.candidate_names(v)
-        what = f"cubevis {v} from the wheel {source['path']} (copied there)"
-        spec_text = f"{os.path.basename(str(source['path']))}[visplot]"
-    else:
-        v = same or v
-        names = envmake.candidate_names(v)
-        what = (f"cubevis {v} (cubevis[visplot]=={v}, from PyPI"
-                + (f"; this checkout ({local_version()}) has the same kernel-side code"
-                   if same else "") + ")")
-        spec_text = envmake.spec(v)
+    v = same or v
+    names = envmake.candidate_names(v)
+    what = (f"cubevis {v} (cubevis[visplot]=={v}, from PyPI"
+            + (f"; this checkout ({local_version()}) has the same kernel-side code"
+               if same else "") + ")")
+    spec_text = envmake.spec(v)
     alias, python3, config_dir = _node_access(c, node, rep)
     dirs = list((rep.get("envs_dirs") or {}).get(tool["path"]) or [])
     if not dirs:        # the tool would not say: next to its own, where conda keeps them
@@ -845,10 +814,8 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False,
                 f"({local_fingerprint(c)}), so ") + "setup makes its own there: a minimal conda "
                f"environment with Python {py} and {what}, {envmake.EXPECTED_SIZE}. It is made "
                f"in the background on {node}, so closing the laptop does not lose it; setup "
-               + ("changes nothing in it afterwards but the copied code"
-                  if kind == "checkout" else
-                  "never changes it afterwards (a later cubevis gets a new one)")
-               + " and never touches your own environments.")
+               "never changes it afterwards (a later cubevis gets a new one) and never touches "
+               "your own environments.")
         default = next((d for d in dirs if (facts.get(d) or {}).get("writable")), dirs[0])
         ui.say(f"{os.path.basename(tool['path'])} keeps environments in {rtilde(dirs[0], home)}"
                f" ({envmake.human_bytes(first.get('free'))} free there). Another directory is fine"
@@ -878,28 +845,9 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False,
             no_environment_advice(c, node, rep, declined=True)
             return None
     if not live:
-        src_req, pip_env = None, {}
-        if source:
-            staged = envmake.staged_dir(prefix)
-            files = (sync.checkout_files(source["root"]) if kind == "checkout"
-                     else [(os.path.basename(str(source["path"])), source["path"])])
-            ui.say(f"Copying {'the checkout' if kind == 'checkout' else 'the wheel'} to {node} ...")
-            try:
-                got = sync.push(c, alias, files, staged)
-            except (sync.SyncError, OSError) as exc:
-                ui.fail(f"cannot copy it to {node}: {exc}")
-                return None
-            ui.ok(f"copied ({envmake.human_bytes(got['bytes'])})")
-            src_req = {"kind": kind, "staged": staged,
-                       "from": str(source.get("root") or source.get("path"))}
-            if kind == "wheel":
-                src_req["file"] = os.path.basename(str(source["path"]))
-            else:
-                pip_env = sync.scm_env(v)
         req = envmake.request("start", config_dir, name=name, prefix=prefix, tool=tool["path"],
                               python=py, spec=spec_text, version=v,
-                              setup={"cubevis": v, "host": host_id()}, install_shell=test_install,
-                              source=src_req, pip_env=pip_env)
+                              setup={"cubevis": v, "host": host_id()}, install_shell=test_install)
         try:
             res = envmake.call(c, alias, python3, req)
         except R.RemoteError as exc:
@@ -908,10 +856,8 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False,
         if not res.get("ok"):
             ui.fail(f"cannot start it on {node}: {res.get('error')}")
             return None
-        ui.record_change("started environment", f"{node}:{rtilde(prefix, home)} ("
-                         + ("this checkout" if kind == "checkout" else f"cubevis {v}")
-                         + f", made in the background; log "
-                         f"{rtilde(envmake_log(config_dir, name), home)})")
+        ui.record_change("started environment", f"{node}:{rtilde(prefix, home)} (cubevis {v}, "
+                         f"made in the background; log {rtilde(envmake_log(config_dir, name), home)})")
         ui.say("Started; setup waits for it (Ctrl-C stops waiting, not the work).")
     st = wait_for_job(c, node, rep, name)
     if st is None:
@@ -935,93 +881,9 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False,
     return got[0]
 
 
-def own_checkout_env(c: Ctx, rep: dict) -> Optional[dict]:
-    """This computer's checkout environment in discovery's report: setup's
-    marker, ``source: checkout``, made from here."""
-    for cand in rep.get("environments") or []:
-        m = cand.get("marker")
-        if (isinstance(m, dict) and m.get("schema") == 1 and m.get("source") == "checkout"
-                and (m.get("setup") or {}).get("host") == host_id()):
-            return cand
-    return None
-
-
-def sync_checkout_step(c: Ctx, node: str, rep: dict, source: dict) -> Optional[str]:
-    """``--sync-checkout``: this checkout's code in this computer's checkout
-    environment on *node* -- copied again into the one there is (pip again
-    only when pyproject.toml changed), or a new one made.  Its record's name."""
-    ui = c.ui
-    home = (rep.get("host") or {}).get("home")
-    ui.heading(f"This checkout on {node}")
-    cand = own_checkout_env(c, rep)
-    if cand is None:
-        row = offer_creation(c, node, rep, forced=True, source=source)
-        if row is None:
-            return None
-    else:
-        prefix = cand["prefix"]
-        dest = posixpath.join(prefix, sync.SRC_DIR)
-        alias = c.st.nodes()[node]["alias"]
-        ui.say(f"Copying {source['root']} to {node}:{rtilde(dest, home)} (the environment "
-               f"{rtilde(prefix, home)} installs it editable) ...")
-        try:
-            got = sync.push(c, alias, sync.checkout_files(source["root"]), dest)
-        except (sync.SyncError, OSError) as exc:
-            ui.fail(f"cannot copy it to {node}: {exc}")
-            return None
-        ui.ok(f"copied ({envmake.human_bytes(got['bytes'])})")
-        ui.record_change("copied checkout", f"{source['root']} -> {node}:{rtilde(dest, home)}")
-        if got["deps_changed"]:
-            ui.say("pyproject.toml changed (dependencies, perhaps): installing it again there "
-                   "(pip) ...")
-            ok, why = sync.pip_install(c, alias, prefix, ["-e", dest + "[visplot]"],
-                                       sync.scm_env(local_version()))
-            if not ok:
-                ui.fail(f"pip install -e failed on {node}: {why}")
-                return None
-            ui.ok("installed again")
-        more = discover_step(c, node, [prefix], only=True, python3=rep.get("python_exe"))
-        got_rows = _rows(c, more) if more else []
-        if not got_rows:
-            ui.fail(f"{rtilde(prefix, home)} cannot be checked")
-            return None
-        row = got_rows[0]
-    cand, r, usable, why = row
-    if not usable:
-        ui.fail(f"{rtilde(cand['prefix'], home)} cannot be used: {why}")
-        return None
-    ui.ok(f"{rtilde(cand['prefix'], home)}: {why}")
-    return record_environment(c, node, cand, r)
-
-
-def move_kernels_step(c: Ctx, node: str, env: str) -> None:
-    """After ``--sync-checkout``: the node's kernels on another environment
-    -- moved to the checkout's when the user says so (by default when theirs
-    differs from this computer's kernel-side code)."""
+def environment_step(c: Ctx, node: str, rep: dict, reuse: bool) -> Optional[str]:
+    """Choose the environment for the node's kernel; its record's name."""
     ui, st = c.ui, c.st
-    here = local_fingerprint(c)
-    for name in st.kernels_on(node):
-        k = st.section("kernels")[name]
-        if k.get("environment") == env:
-            continue
-        e = st.section("environments").get(k.get("environment")) or {}
-        stale = e.get("fingerprint") != here
-        if ui.ask_yn(f"Kernel {name} uses {k.get('environment')}"
-                     + (", whose kernel-side code differs from here" if stale else "")
-                     + f". Use the checkout's environment {env} for it?", stale,
-                     key=f"move_{name}"):
-            k["environment"] = env
-            ui.record_change("changed kernel", f"{name}: environment {env}")
-
-
-def environment_step(c: Ctx, node: str, rep: dict, reuse: bool,
-                     source: Optional[dict] = None) -> Optional[str]:
-    """Choose the environment for the node's kernel; its record's name.
-    *source*: ``--sync-checkout`` (this checkout's environment, synced) or
-    ``--wheel`` (what setup's environment is made from, when one is made)."""
-    ui, st = c.ui, c.st
-    if source and source.get("kind") == "checkout":
-        return sync_checkout_step(c, node, rep, source)
     n = st.nodes()[node]
     net = n["network"]
     home = (rep.get("host") or {}).get("home")
@@ -1043,7 +905,7 @@ def environment_step(c: Ctx, node: str, rep: dict, reuse: bool,
     usable = [i for i, x in enumerate(rows, 1) if x[2]]
     created, ans = None, ""
     if not usable:
-        created = offer_creation(c, node, rep, source=source)
+        created = offer_creation(c, node, rep)
         if created is None:
             ans = ui.ask(f"Or give the path of an environment on {node} to check (empty: stop)",
                          "", key="environment")
@@ -1066,7 +928,7 @@ def environment_step(c: Ctx, node: str, rep: dict, reuse: bool,
         if ans.lower() in ("none", "-"):
             return None
         if ans.lower() == "new":
-            pick = offer_creation(c, node, rep, forced=True, source=source)
+            pick = offer_creation(c, node, rep, forced=True)
             if pick is not None and not pick[2]:
                 ui.note(f"{rtilde(pick[0]['prefix'], home)} cannot be used: {pick[3]}")
                 return None
@@ -1183,7 +1045,6 @@ def offer_cleanup(c: Ctx, node: str, rep: dict, host_text: str, keep_python: str
     net = c.st.nodes()[node]["network"]
     old = [x for x in own_environments(c, rep, net)
            if x["mine"] and not x["used_by"] and not x["current"]
-           and x["marker"].get("source") != "checkout"          # brought up to date by a sync
            and x["cand"]["python"] != keep_python]
     if not old:
         return
@@ -1241,15 +1102,10 @@ def cmd_cleanup(c: Ctx, text: str) -> int:
             what, good = "not used by a kernel here; same kernel-side code as here", True
         else:
             what, good = "not used by a kernel here; its kernel-side code differs from here", False
-        if x["marker"].get("source") == "checkout":
-            what += "; a checkout's copy (--sync-checkout brings it up to date)"
-        elif x["marker"].get("source") == "wheel":
-            what += "; made from a wheel"
         if not x["mine"]:
             what += f"; made from {(x['marker'].get('setup') or {}).get('host') or 'another computer'}"
         (ui.ok if good else ui.note)(f"{i:>2}. {rtilde(x['cand']['prefix'], home)}  (cubevis {v}): {what}")
-        if x["mine"] and not x["used_by"] and not x["current"] \
-                and x["marker"].get("source") != "checkout":
+        if x["mine"] and not x["used_by"] and not x["current"]:
             default.append(str(i))
     ans = ui.ask("Remove which? (numbers separated by spaces; 'none' for none)",
                  " ".join(default), key="remove")
@@ -1562,9 +1418,7 @@ def set_twofactor(c: Ctx, network: str, on: bool) -> None:
 
 
 def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None,
-             twofactor: Optional[bool] = None, source: Optional[dict] = None) -> int:
-    """*source* (stage 2d): ``{"kind": "checkout", "root": DIR}`` for
-    ``--sync-checkout``, ``{"kind": "wheel", "path": FILE}`` for ``--wheel``."""
+             twofactor: Optional[bool] = None) -> int:
     ui, st = c.ui, c.st
     if kernel is not None:
         try:
@@ -1603,16 +1457,9 @@ def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None,
     c.save()
     if net.get("login"):
         inside_step(c, n["network"], node)
-    syncing = bool(source and source.get("kind") == "checkout")
     if kernel is None and st.kernels_on(node):
-        if syncing:
-            env = environment_step(c, node, rep, reuse=False, source=source)
-            c.save()
-            if env is None:
-                return 1
-            move_kernels_step(c, node, env)
         return 0 if check_kernels(c, node, rep, text) else 1
-    env = environment_step(c, node, rep, reuse=kernel is not None and not syncing, source=source)
+    env = environment_step(c, node, rep, reuse=kernel is not None)
     c.save()
     if env is None:
         return 1

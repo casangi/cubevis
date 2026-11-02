@@ -506,10 +506,11 @@ points reviewed that day; where they differ from the text above, they win):
 * **Fingerprint override.**  Only the local side compares (the node
   reports), so one local setting covers setup and sessions:
   `CUBEVIS_ALLOW_MISMATCH=1` or `Session(..., allow_mismatch=True)`, loud
-  each time it acts.  For development, `setup HOST --sync-checkout` copies
-  the local checkout to the node and uses it there (editable), so the
-  fingerprints match again -- the updated code being usually what is
-  wanted.
+  each time it acts.  For development, the developer installs the same
+  code in an environment on the node (`pip install -e` of a clone or copy),
+  and setup finds it by its fingerprint.  (`setup HOST --sync-checkout`,
+  which copied the checkout there, was built and then removed on
+  2026-11-02 -- see "Built (stage 2d ...)" below.)
 * **The user's ssh configuration is the reference** (what `ssh HOST`
   does); the configuration actually used is the minimal one setup
   generates from it and from the user's answers.  Minimal still carries
@@ -590,13 +591,24 @@ diagnose HOST` (`diagnose.py`) as described above.  `--2fa`: a
 `twofactor=yes` rule; the wrapper lets the user log in in a terminal and
 otherwise stops naming the command.
 
-**Built (stage 2d, development installs, 2026-10-31; section 46).**
+**Built (stage 2d, development installs, 2026-10-31; section 46) -- and
+removed (2026-11-02, Darrell; section 50).**
 `sync.py`: `--sync-checkout` copies the checkout cubevis is imported from
 (package + build files, a tar stream over setup's ssh, swapped in whole) to
 setup's `cubevis-dev-<computer>`, installed editable (the version given to
 the build), copied again on each run (pip only when `pyproject.toml`
 changed), the host's kernels offered the move to it; `--wheel PATH` (or the
 wheel cubevis was installed from) is what setup's environment is made from.
+Removed: copying code over ssh is error-prone, the feature is one more
+configuration path orthogonal to the rest, its users are the few developers
+of the kernel side -- who are also the ones best able to install the code in
+an environment of their own, which setup then finds by fingerprint -- it
+would see little use and so drift, and on NRAO's autofs/Lustre nodes the
+environment creation it relied on is slow anyway.  Kept from it: a checkout
+without an installed version gets one from git, and a checkout whose
+kernel-side code is a release's is served by that release (`checkout.py`,
+`releases.py`).  When nothing matches, setup says how to make an
+environment with the same code.
 
 **Fixed and extended 2026-11-01 (`hrs_h8_consolidation_prep.md` sections
 47, 48).**  The fingerprint left out nothing the build writes, so every
@@ -726,8 +738,9 @@ Each stage is one delivery (zip on the then-current main), with tests.
    script (also runnable by hand); (3) setup's own environments: location
    shown, detached resumable creation, reuse by marker, `--cleanup HOST`;
    (4) the ssh-configuration adoption with the login test, `diagnose
-   HOST`, the `--2fa` flag.  Then 2d: `--sync-checkout`, `prune`,
-   `setup --local`, the final kernel + plot test.  (1) and (2) done
+   HOST`, the `--2fa` flag.  Then 2d: ~~`--sync-checkout`~~ (built, then
+   removed 2026-11-02), `prune`, `setup --local`, the final kernel + plot
+   test.  (1) and (2) done
    2026-10-23 (`hrs_h8_consolidation_prep.md` sections 33-35), (3)
    2026-10-28 (section 43), (4) 2026-10-31 (section 45); of 2d,
    `--sync-checkout` and `--wheel` 2026-10-31 (section 46) -- `prune`,

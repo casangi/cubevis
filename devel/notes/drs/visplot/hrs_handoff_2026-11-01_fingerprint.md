@@ -1,4 +1,4 @@
-# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-11-01)
+# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-11-02)
 
 Read first: `devel/notes/drs/visplot/remote_session_design.md` (the
 design, agreed with Darrell 2026-10-17). Background: section 22 of
@@ -7,19 +7,25 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* **Main is `98fda78`** (sections 47, 48, committed by Darrell).  **Delivered
-  after it, as a zip on `98fda78`** (not committed by Claude): notes section
-  49 -- visplot checks the kernel it starts by fingerprint, not by version
-  (`visibility_plotter.kernel_code_check`,
-  `RemoteReductionContext.kernel_fingerprint`), which removes the false
-  "kernel cubevis 1.0.102 differs from local unknown" warning of Darrell's
-  `try-009A` run.  Check `git log` first.  The next notes section is **50**.
-  **Confirmed by Darrell's `try-011A`** (end of section 49): setup chose
-  `cubevis-1.0.102` by fingerprint, visplot's check took 1.1 s and passed,
-  no warning, no hang.  **Start here**: whether Darrell wants timing for the
-  first build of the plots (the long, silent pause after the check), then
-  what is left of 2d, then stage 3 (the Session; its run-time check can be
+* **Main is `940c10b`** (through section 49 and `try-011A`, committed by
+  Darrell).  **Delivered after it, as a zip on `940c10b`** (not committed by
+  Claude): notes section 50 -- `--sync-checkout` and `--wheel` removed
+  (Darrell's decision, 2026-11-02); what served ordinary users kept in
+  `checkout.py` (a checkout's version from git; a checkout whose kernel code
+  is a release's is served by that release); when nothing matches, setup
+  says how to install the same code in an environment there.  `setup
+  --local` (never built): proposed dropped from the plan, Darrell to
+  confirm.  Check `git log` first.  The next notes section is **51**.
+* **Start here**: the remaining setup items (Claude's list of 2026-11-01:
+  a real `diagnose cvpost106`; the decisions of sections 43 and 45; the
+  host-key question for a node reached straight away; the dead worker that
+  leaves a plotter waiting forever; `prune` and the final kernel + plot
+  test, if wanted), then stage 3 (the Session; its run-time check can be
   section 49's request -- on a client with its own `Session`).
+* **Confirmed by Darrell's `try-011A`** (end of section 49): setup chose
+  `cubevis-1.0.102` by fingerprint, visplot's check took 1.1 s and passed,
+  no warning, no hang; the long pause after it is the first build of the
+  plots (optimisation left for later, Darrell 2026-11-01).
 * **Darrell's `try-009A` (2026-11-01)**: from a fresh `~/.config/cubevis`,
   `setup cvpost106` adopted the ssh route, logged in by key, found
   `cubevis-1.0.102` usable by fingerprint, made kernel `visplot`, and
@@ -49,6 +55,8 @@ as ee125b6) and section 17 (the ssh wrapper).
      the eye, and does `.../pypi/cubevis/1.0.104/json` carry the stamp line?
   3. Still open from section 45/46: the real-network questions in the
      previous handoff (`hrs_handoff_2026-10-31_step4_2d.md`, "Ask Darrell").
+* **Suite** (2026-11-02, section 50): 252 passed, 1 skipped with OpenSSH
+  9.6 and with the 8.0p1 client (fewer: the development-install tests went).
 * **Suite** (2026-11-01, section 49): 266 passed, 1 skipped with OpenSSH
   9.6 and with the 8.0p1 client (`-n 2 --dist loadfile`).  Earlier the same
   day: 262 passed, 1 skipped with OpenSSH 9.6 and
@@ -68,7 +76,7 @@ as ee125b6) and section 17 (the ssh wrapper).
   --2fa` / `--no-2fa` (rules `twofactor=yes`; the wrapper lets the user log
   in in a terminal, else stops naming the command).  Five decisions to
   confirm are listed in section 45.
-* **2d, development installs (section 46)**: `setup HOST --sync-checkout`
+* **2d, development installs (section 46; removed 2026-11-02, section 50)**: `setup HOST --sync-checkout`
   copies the checkout cubevis is imported from (a tar stream over setup's
   ssh, swapped in whole) into setup's `cubevis-dev-<computer>` (installed
   editable, version given to the build), copies again on each run (pip only
@@ -285,7 +293,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 50).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 51).
 
 ## Test kit (rebuild after a sandbox restart)
 
@@ -363,11 +371,10 @@ restarted twice during the 2026-11-01 session: a burst of rig failures --
   set its own (setup now reads `ssh -G` for the generated file: this
   machine's `/etc/ssh/ssh_config` would leak in).  The kit's OpenSSH 8.0 is
   built without GSSAPI (prints no `gssapi*` options).
-* **Development installs in tests**: `test_cli.py`'s `_checkout_copy` (a
-  copy of the checkout to edit), `_dev_env` (it first on `PYTHONPATH`) and
-  `_run(cwd=home)` -- `python -m` puts the current directory, the
-  repository, ahead of `PYTHONPATH`; `_source_hook` (the install hook for
-  copied code: `$SOURCE`).
+* **`python -m` and `PYTHONPATH`**: `python -m` puts the current directory
+  (the repository, where pytest runs) ahead of `PYTHONPATH`; `test_cli.py`'s
+  `_run(cwd=...)` runs setup from elsewhere when a test needs another cubevis
+  first (the development-install tests that used it went with section 50).
 * **Several computers in one directory** (tests): `CUBEVIS_HOST_ID` names
   the computer, `CUBEVIS_RUNTIME_DIR` gives each its own socket directory
   (otherwise one rides on another's shared connections).

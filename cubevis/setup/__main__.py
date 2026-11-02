@@ -4,9 +4,6 @@
                                                   your data is on); again: check them
     python -m cubevis.setup HOST --kernel NAME    add (or change) a kernel on HOST
     python -m cubevis.setup HOST --2fa            HOST's login asks for a second factor
-    python -m cubevis.setup HOST --sync-checkout  copy this checkout to HOST and use it
-                                                  there (development); again after changes
-    python -m cubevis.setup HOST --wheel PATH     make setup's environment there from a wheel
     python -m cubevis.setup diagnose HOST         how ssh reaches HOST, side by side with
                                                   setup's configuration; change nothing
     python -m cubevis.setup                       the same, asking for the host
@@ -336,10 +333,6 @@ def main(argv=None) -> int:
                    help="with HOST: its login asks for a second factor (a code, a push)")
     p.add_argument("--no-2fa", dest="twofactor", action="store_const", const=False,
                    help="with HOST: its login does not ask for a second factor")
-    p.add_argument("--sync-checkout", action="store_true",
-                   help="with HOST: copy this checkout there and use it (editable)")
-    p.add_argument("--wheel", metavar="PATH",
-                   help="with HOST: make setup's environment there from this wheel")
     sub = p.add_subparsers(dest="cmd")
     ph = sub.add_parser("host", help="make kernels work on HOST (the default command)")
     ph.add_argument("host")
@@ -352,11 +345,6 @@ def main(argv=None) -> int:
                          "in a terminal and the connection is shared")
     ph.add_argument("--no-2fa", dest="twofactor_after", action="store_const", const=False,
                     help="its login does not ask for a second factor (any more)")
-    ph.add_argument("--sync-checkout", dest="sync_after", action="store_true",
-                    help="copy this checkout there and use it (editable), in setup's own "
-                         "environment; again after each change")
-    ph.add_argument("--wheel", dest="wheel_after", metavar="PATH",
-                    help="make setup's environment there from this wheel")
     sub.add_parser("status", help="what is set up")
     pd = sub.add_parser("diagnose", help="how ssh reaches HOST, next to setup's configuration; "
                                          "one login attempt, nothing changed")
@@ -373,7 +361,7 @@ def main(argv=None) -> int:
                     help="add where this computer is now to the network's inside ranges, "
                          "after checking that its nodes answer directly from here")
     # Anything that is not a command (or an option) is a host.
-    takes_value = {"--answer", "--kernel", "--wheel"}
+    takes_value = {"--answer", "--kernel"}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -393,28 +381,6 @@ def main(argv=None) -> int:
         a.twofactor = a.twofactor_after
     if a.twofactor is not None and a.cmd != "host":
         p.error("--2fa goes with a host: python -m cubevis.setup HOST --2fa")
-    a.sync_checkout = a.sync_checkout or getattr(a, "sync_after", False)
-    a.wheel = getattr(a, "wheel_after", None) or a.wheel
-    source = None
-    if (a.sync_checkout or a.wheel) and a.cmd != "host":
-        p.error("--sync-checkout and --wheel go with a host: python -m cubevis.setup HOST "
-                "--sync-checkout")
-    if a.sync_checkout and a.wheel:
-        p.error("--sync-checkout and --wheel do not go together")
-    if a.sync_checkout:
-        from . import sync
-        root = sync.checkout_root()
-        if root is None:
-            p.error("--sync-checkout needs cubevis imported from a checkout (pip install -e "
-                    "DIR, or PYTHONPATH=DIR); this one is not")
-        source = {"kind": "checkout", "root": root}
-    elif a.wheel:
-        from . import sync
-        from pathlib import Path
-        w = Path(a.wheel).expanduser().resolve()
-        if not w.is_file() or not sync.wheel_version(w):
-            p.error(f"--wheel: {a.wheel} is not a cubevis wheel file (cubevis-VERSION-...whl)")
-        source = {"kind": "wheel", "path": w}
     if a.kernel and a.cmd != "host":
         p.error("--kernel goes with a host: python -m cubevis.setup HOST --kernel NAME")
     if a.cleanup and a.cmd != "host":
@@ -447,7 +413,7 @@ def main(argv=None) -> int:
             rc = cmd_jupyter(c, a.jkernel, a.node)
         elif a.cmd == "host":
             rc = (cmd_cleanup(c, a.host) if a.cleanup
-                  else cmd_host(c, a.host, a.kernel, twofactor=a.twofactor, source=source))
+                  else cmd_host(c, a.host, a.kernel, twofactor=a.twofactor))
         else:
             rc = cmd_walk(c)
         ui.show_changes()

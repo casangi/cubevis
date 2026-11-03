@@ -1506,17 +1506,24 @@ def forget_kernel(c: Ctx, name: str) -> None:
             pass
 
 
-def environment_gone(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> bool:
+def environment_gone(c: Ctx, node: str, name: str, rep: dict, host_text: str,
+                     gone: bool = True) -> bool:
     """Kernel *name*'s environment is gone from *node* (removed by hand, or
-    by setup from another computer): give the kernel another one (its name,
-    working directory and variables stay), forget it, or keep it flagged.
-    True when the kernel works again."""
+    by setup from another computer) -- or, *gone* false, its kernel-side
+    code differs from this computer's (cubevis changed here, or there):
+    give the kernel another environment (its name, working directory and
+    variables stay), forget it, or keep it flagged.  True when the kernel
+    works again."""
     ui, st = c.ui, c.st
     k = st.section("kernels")[name]
     old = k.get("environment")
+    if not gone:
+        ui.say(f"Kernel {name}'s environment has other kernel-side code than this computer's "
+               "cubevis. Choosing another lists the environments there with theirs -- one you "
+               "installed this cubevis in, or setup's own for a release.")
     a = ui.ask_choice(f"Kernel {name}: [r]eplace its environment (choose another; the kernel's "
                       "name, directory and variables stay), [f]orget the kernel, or [k]eep it "
-                      "as it is?", "r", ("r", "f", "k"), key="env_gone")
+                      "as it is?", "r", ("r", "f", "k"), key="env_gone" if gone else "env_differs")
     if a == "f":
         forget_kernel(c, name)
         ui.ok(f"kernel {name} forgotten")
@@ -1527,8 +1534,9 @@ def environment_gone(c: Ctx, node: str, name: str, rep: dict, host_text: str) ->
     if env is None:
         return False
     k["environment"] = env
-    ui.record_change("kernel environment", f"{name}: {env} (was {old}, gone)")
-    if old in st.section("environments") and old != env:
+    ui.record_change("kernel environment", f"{name}: {env} (was {old}"
+                     + (", gone)" if gone else ", other kernel-side code)"))
+    if gone and old in st.section("environments") and old != env:
         try:
             st.remove_environment(old)
             ui.record_change("forgot environment", f"{old} (gone)")
@@ -1558,6 +1566,8 @@ def check_kernels(c: Ctx, node: str, rep: dict, host_text: str) -> bool:
         (ui.ok if ok else ui.fail)(f"kernel {name}: {msg}")
         if not ok and launcher.ENV_GONE in (msg or ""):
             ok = environment_gone(c, node, name, rep, host_text)
+        elif not ok and "kernel-side code differs" in (msg or ""):
+            ok = environment_gone(c, node, name, rep, host_text, gone=False)
         good = good and ok
     c.save()
     for name in names:

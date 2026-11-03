@@ -258,8 +258,8 @@ class UI:
 
 class Step:
     """A step: ``title``, ``check() -> (done, message)``, ``do() -> bool``.
-    ``look_only`` steps ask and change nothing; ``--redo`` does not repeat
-    them."""
+    ``look_only`` steps have nothing to ask when their check passes (the
+    tools, the logins): ``--redo`` does not repeat them."""
     look_only = False
 
     def title(self) -> str:
@@ -297,6 +297,9 @@ def run_step(ui: UI, step: Step, *, check_only: bool = False, redo: bool = False
                 return True
         else:
             done, msg = step.check()
+            if done:                   # nothing done, and nothing needed doing
+                ui.ok(title + (f" -- {msg}" if msg else ""))
+                return True
         ui.fail(title + (f" -- {msg}" if msg else ""))
         # Unattended (--yes), a retry would only fail again: skip.
         c = ui.ask_choice("[r]etry this step, [s]kip it, or [q]uit?",

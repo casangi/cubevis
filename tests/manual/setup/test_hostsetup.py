@@ -678,3 +678,38 @@ def test_your_no_pythonhome_is_not_overridden(ctx, monkeypatch):
     # and a fast start is left alone
     c, node, written = _slow_kernel(ctx, monkeypatch, [1.0])
     assert H.write_and_test(c, node, "k", _rep(), "zuul06")[0] and len(written) == 1
+
+
+def test_redo_does_not_redo_a_working_key_login(ctx, monkeypatch):
+    """``--redo`` (Darrell 2026-11-03, zuul06): a node logged in to by key
+    was put through the repair of a failed login -- "Your own ssh logs in
+    ... but setup's configuration does not" -- and reported FAIL, though
+    the login worked.  Logins are checked under --redo, not redone."""
+    import subprocess
+    from cubevis.setup import steps
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    c.redo = True
+    calls = []
+
+    def ssh(alias, *remote, **kw):
+        calls.append(alias)
+        c.last_out = ""
+        return subprocess.CompletedProcess(["ssh"], 0, "", "")
+    monkeypatch.setattr(c, "ssh", ssh)
+    from cubevis.setup import sshopts
+    monkeypatch.setattr(sshopts, "try_login",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("repair ran")))
+    net = c.st.nodes()[node]["network"]
+    assert steps.hop_steps(c, net, node)
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "FAIL" not in out and "ok Log in to the node node1" in out and "with an ssh key" in out
+    assert calls                                          # checked
+
+
+def test_a_step_whose_check_passes_after_a_declined_do_is_done(ctx):
+    from cubevis.setup.ui import FuncStep, run_step
+    c = ctx()
+    assert run_step(c.ui, FuncStep("Thing", lambda: (True, "fine"), lambda: False), redo=True)
+    out = c.ui.out.getvalue()
+    assert "ok    Thing -- fine" in out and "FAIL" not in out

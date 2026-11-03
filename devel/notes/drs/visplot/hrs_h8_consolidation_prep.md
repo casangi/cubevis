@@ -3009,3 +3009,45 @@ to the test's own 120 s timeout).
 * **Suite** (2026-11-02): setup 264 passed, 1 skipped with OpenSSH 9.6 and
   with the 8.0p1 client; remote 46 passed; visplot's remote tests 35
   passed, 13 skipped (no MS).
+
+## 57. `--redo` and a kernel whose code differs (base `ec6dd8b`, 2026-11-03)
+
+Darrell, after section 56 (its kernel-side change moved the fingerprint
+from `k2-67f9938a2b6ba9ce4a63` to `k2-d19f4c5e00b7234d880a`):
+`setup zuul06` found the kernel's environment (`cubevis-1.0.102`) with
+other kernel-side code and suggested `--redo`; `setup --redo zuul06` then
+failed at the logins: "Your own ssh logs in to ssh.cv.nrao.edu without a
+password, but setup's configuration does not (it refused the login)",
+`FAIL ... -- with an ssh key` -- a working login reported refused.
+
+* **Why**: `--redo` skips each step's check and runs its `do()`; a login
+  step's `do()` repairs a login that failed, reading the last ssh output
+  -- here there was no failure (and stale output), so for a key login it
+  took the "your ssh works, setup's does not" branch and returned False;
+  `run_step` then reported FAIL even though the check that followed
+  passed (the message after FAIL was the check's own "with an ssh key").
+* **Fixes**: the login steps are `look_only` (never redone: a working
+  login has nothing to ask; a changed stored password shows as a failing
+  login, whose repair runs as before); and `run_step` reports a step whose
+  `do()` declined but whose check passes as done, not FAIL.  `--redo` still
+  asks the wrapper, the inside ranges and the kernels' settings again.
+* **The real need behind it**: moving an existing kernel to an
+  environment with this computer's kernel-side code.  `setup HOST` now
+  offers, for a kernel whose code differs, the same choice as for one
+  whose environment is gone (section 51): "[r]eplace its environment
+  (choose another; the kernel's name, directory and variables stay),
+  [f]orget the kernel, or [k]eep it" (key `env_differs`; default replace),
+  after saying that the list shows each environment's code -- one the user
+  installed this cubevis in, or setup's own for a release.  The old
+  environment's record stays (it still exists).
+* For Darrell's test of section 56 on zuul06: install the checkout at
+  that commit in an environment there (`pip install -e`), run `setup
+  zuul06`, answer `r` and choose it.
+* **Tests**: `test_hostsetup.py` -- a working key login under `--redo`
+  passes without the repair (failed before the fix); a step whose `do()`
+  declines but whose check passes is done.  `test_cli.py` (rig) -- `--redo`
+  on a set-up host asks the kernel's settings and no login; the mismatch
+  test goes on to `setup HOST`, which replaces the kernel's environment
+  (alt -> hrs) and keeps alt's record.
+* **Suite** (2026-11-03): 267 passed, 1 skipped with OpenSSH 9.6 and with
+  the 8.0p1 client (`-n 2 --dist loadfile`).

@@ -385,6 +385,18 @@ def test_rig_environments_refused_and_the_mismatch_override(home, alice_envs):
     r = _run(home, "check")                                   # without the override: flagged
     assert r.returncode == 1 and "its kernel-side code differs" in _flat(r)
     assert S.load().section("kernels")["compute"]["status"] == "flagged"
+    # setup HOST then offers another environment (Darrell 2026-11-03, after
+    # a kernel-side change here): the default, the first usable (hrs).
+    r = _host(home, route=DIRECT)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert "has other kernel-side code than this computer's cubevis" in out
+    assert "kernel environment: compute:" in out and "other kernel-side code)" in out
+    st = S.load()
+    k = st.section("kernels")["compute"]
+    assert k["status"] == "ok" and st.section("environments")[k["environment"]]["prefix"] \
+        .endswith("/envs/hrs")
+    assert any(e["prefix"].endswith("/envs/alt") for e in st.section("environments").values())
 
 
 @needs_rig
@@ -1142,6 +1154,25 @@ def test_rig_a_changed_host_key_is_refused_and_named(home, alice_envs, tmp_path)
                        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60,
                        env=_env(home))
     assert "is not the one recorded (known_hosts)" in " ".join(w.stderr.split()), w.stderr
+
+
+@needs_rig
+@needs_ssh
+@needs_kernel_py
+def test_rig_redo_asks_the_settings_again_not_the_logins(home, alice_envs):
+    """``--redo HOST`` on a host set up before: the kernels' settings are
+    asked again; the logins, which work, are checked, not redone (Darrell
+    2026-11-03: a working key login was reported refused under --redo)."""
+    r = _host(home, "--answer", "workdir=~", "--answer", "env_vars=none", route=DIRECT)
+    assert r.returncode == 0, r.stdout
+    r = _run(home, "--yes", "--redo", *DIRECT, *STORE, "--answer", "workdir=~",
+             "--answer", "env_vars=OMP_NUM_THREADS=3", HOST)
+    out = _flat(r)
+    assert r.returncode == 0, r.stdout
+    assert "FAIL" not in out and "does not accept a key" not in out
+    assert "ok Log in to the node compute (alice@compute.example.test) without typing" in out
+    assert "Kernel compute:" in out                                    # its settings, asked
+    assert S.load().section("kernels")["compute"]["env"] == {"OMP_NUM_THREADS": "3"}
 
 
 def _stop_waiting_for_a_making(home, seconds):

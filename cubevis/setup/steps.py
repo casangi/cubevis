@@ -385,8 +385,13 @@ def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
         ui.say("Trying the login (one attempt) ...")
         return True
 
+    # Never redone (--redo): a login that works has nothing to ask again --
+    # its do() only knows how to repair one that does not (Darrell's
+    # `--redo zuul06`, 2026-11-03: it ran with nothing failed and reported
+    # a working key login as refused).  A stored password that changed
+    # shows as a failing login, which does run do().
     return c.step(f"Log in to the {h['label']} ({h['user']}@{h['host']}) without typing",
-                  check, do)
+                  check, do, look_only=True)
 
 
 def twofactor_command(alias: str) -> str:

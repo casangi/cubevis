@@ -152,8 +152,69 @@ def test_several_hops_keep_the_last_as_the_login_host(cfg, tmp_path):
     lg = st.networks()[st.nodes()[n]["network"]]["login"]
     assert lg["host"] == "ssh.cv.example.org" and lg["via"] == "gw"
     text = sshgen.config_text(st)
-    assert "    ProxyJump jo@gw.example.org:2222\n" in text
+    # Each hop its own entry (notes section 55): far-login-hop1 is gw, with
+    # its real name, user and port; the login host jumps through it.
+    hop = parses(text, tmp_path, "far-login-hop1")
+    assert hop["hostname"] == ["gw.example.org"] and hop["user"] == ["jo"] and hop["port"] == ["2222"]
+    assert "/rt/cm/" in hop["controlpath"][0] and hop["batchmode"] == ["yes"]
+    login = parses(text, tmp_path, "far-login")
+    assert login["proxyjump"] == ["far-login-hop1"]
     assert "(itself reached through gw)" in " ".join(c.ui.out.getvalue().split())
+    # Recorded at the first save: then the hops no longer follow the user's file.
+    c.save()
+    assert st.networks()["far"]["login"]["hops"][0]["host"] == "gw.example.org"
+    cfg.write_text(CONFIG.replace("    Port 2222\n", ""))
+    assert "    Port 2222\n" in sshgen.config_text(st)
+    ch = sshgen.changes(st)
+    assert [x["hops"] for x in ch if "hops" in x] == [("jo@gw.example.org:2222", "jo@gw.example.org")]
+    sshgen.adopt(st, ["far-login"])
+    assert "    Port 2222\n" not in sshgen.config_text(st) and not sshgen.changes(st)
+
+
+def test_options_are_recorded_and_changes_reported_not_followed(cfg, tmp_path):
+    """Darrell 2026-11-02: what the user's ssh said when a host was set up
+    is what the generated file carries; a change since is reported
+    (``changes``) and adopted only on request (``adopt``)."""
+    c = ctx()
+    n = H.locate(c, "cvpost106", 22)
+    st = c.st
+    c.save()
+    node = st.nodes()[n]["alias"]
+    rec = sshgen.recorded(st, node)
+    assert ["PreferredAuthentications", "publickey,password"] in rec["options"]
+    assert rec["from"] == "cvpost106" and rec["saved"]
+    assert not sshgen.changes(st)
+    cfg.write_text(CONFIG.replace("    PreferredAuthentications publickey,password\n",
+                                  "    PreferredAuthentications publickey\n"))
+    text = sshgen.config_text(st)
+    assert "PreferredAuthentications publickey,password" in text        # still the recorded one
+    assert "recorded " in text                                          # the block says when
+    ch = [x for x in sshgen.changes(st) if x["alias"] == node]
+    assert ch and ch[0]["added"] == ["PreferredAuthentications publickey"]
+    assert ch[0]["removed"] == ["PreferredAuthentications publickey,password"]
+    sshgen.adopt(st, sshgen.network_aliases(st, st.nodes()[n]["network"], n))
+    assert "PreferredAuthentications publickey\n" in sshgen.config_text(st)
+    assert not sshgen.changes(st)
+
+
+def test_known_hosts_and_batchmode_in_every_block(cfg, tmp_path, monkeypatch):
+    """Setup's own known-hosts file first (shared by the computers sharing
+    the configuration directory; new keys go there), then the user's;
+    accept-new: a host never seen is recorded, a changed key refused.
+    BatchMode yes: nothing in a kernel's ssh can ask (sshpyk's advice)."""
+    monkeypatch.delenv("CUBEVIS_SETUP_KNOWN_HOSTS", raising=False)
+    c = ctx()
+    n = H.locate(c, "cvpost106", 22)
+    text = sshgen.config_text(c.st)
+    node = parses(text, tmp_path, c.st.nodes()[n]["alias"])
+    files = node["userknownhostsfile"][0].split()
+    assert files[0] == str(tmp_path / "xdg" / "cubevis" / "ssh_known_hosts")
+    assert files[1:] == sshopts.known_hosts("cvpost106") and files[1:]
+    assert node["stricthostkeychecking"] == ["accept-new"] and node["batchmode"] == ["yes"]
+    # The tests' own file: only that one, unless the user configured others.
+    monkeypatch.setenv("CUBEVIS_SETUP_KNOWN_HOSTS", str(tmp_path / "kh"))
+    node = parses(sshgen.config_text(c.st), tmp_path, c.st.nodes()[n]["alias"])
+    assert node["userknownhostsfile"] == [str(tmp_path / "kh")]
 
 
 def test_a_proxycommand_route_is_kept_on_a_direct_network(cfg, tmp_path):

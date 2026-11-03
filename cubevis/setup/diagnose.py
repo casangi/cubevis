@@ -79,9 +79,10 @@ def setup_view(alias: str) -> dict:
 
 
 def compare(ui, label: str, name: str, port: Optional[int], alias: Optional[str],
-            route_is_users: bool) -> list:
+            route_is_users: bool, st=None, text: str = "") -> list:
     """The user's ssh and setup's for one hop; returns the login options
-    setup's configuration lacks (``[(option, value)]``)."""
+    setup's configuration lacks (``[(option, value)]``).  With *st*: what
+    changed in the user's since setup recorded it (``sshgen.changes``)."""
     mine = sshopts.view(name, port)
     ui._p(f"    {label}")
     if not mine:
@@ -113,9 +114,19 @@ def compare(ui, label: str, name: str, port: Optional[int], alias: Optional[str]
         if a and b and a.lower() != b.lower():
             ui._p(f"      differs: {what} is {a} in yours, {b} in setup's"
                   + (" (setup asked you for it)" if what == "user" else ""))
+    changed = sshgen.changes(st, [alias]) if st is not None else []
+    rec = sshgen.recorded(st, alias) if st is not None else None
+    if rec:
+        ui._p(f"      setup recorded yours on {str(rec.get('saved') or '?')[:10]}")
+    explained = {a for x in changed for a in x.get("added") or []}
+    for x in changed:
+        from .hostsetup import describe_change
+        _mark(ui, False, "changed since: " + describe_change(x).split(": ", 1)[-1]
+              + f" -- python -m cubevis.setup {text} asks to take it over")
+    missing = [(k, v) for k, v in missing if f"{k} {v}" not in explained]
     for k, v in missing:
         _mark(ui, False, f"setup's lacks {k} {v}")
-    if opts and not missing:
+    if opts and not missing and not changed:
         ui._p("      setup's carries every login option yours has")
     return missing
 
@@ -161,16 +172,18 @@ def cmd_diagnose(c: Ctx, text: str, full: bool = False) -> int:
     missing = []
     if net and net.get("login"):
         h = hop_info(st, n["network"], None)
-        missing += compare(ui, f"login host {h['host']}", h["name"], h["port"], h["alias"], True)
+        missing += compare(ui, f"login host {h['host']}", h["name"], h["port"], h["alias"], True,
+                           st, text)
     if node:
         h = hop_info(st, n["network"], node)
-        missing += compare(ui, f"node {node}", h["name"], h["port"], h["alias"], not net.get("login"))
+        missing += compare(ui, f"node {node}", h["name"], h["port"], h["alias"], not net.get("login"),
+                           st, text)
     else:
         compare(ui, host, host, p, None, True)
     if missing:
-        ui.say("Setup writes its configuration from your ssh's (ssh -G) each time it saves: "
-               f"your configuration has changed since, or this is a bug. python -m cubevis.setup "
-               f"{text} writes it again.")
+        ui.say("Setup's configuration carries what your ssh (ssh -G) said when the host was "
+               "set up, and nothing explains these: this is a bug -- please send this output "
+               "to cubevis's developers.")
     # 3. The route.
     if net and net.get("login"):
         from . import inside as _in

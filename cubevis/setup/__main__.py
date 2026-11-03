@@ -147,6 +147,14 @@ def cmd_status(c: Ctx) -> int:
                       f"jupyter {kn}")
     if st.section("sessions"):
         ui._p(f"    sessions: {', '.join(sorted(st.section('sessions')))}")
+    from .hostsetup import describe_change
+    ch = sshgen.changes(st)
+    if ch:
+        ui._p("")
+        ui._p("    your ssh configuration changed since setup recorded it (setup's keeps the "
+              "recorded; python -m cubevis.setup HOST, or network NAME, asks to take it over):")
+        for x in ch:
+            ui._p("      " + describe_change(x))
     ui._p("")
     ui._p(f"    ssh config  {tilde(sshgen.config_path())}")
     ui._p(f"    wrapper     {tilde(sshgen.wrapper_path())}")
@@ -196,6 +204,8 @@ def cmd_network(c: Ctx, name: str) -> int:
     c.st.get("networks", name)
     if not local_steps(c):
         return 1
+    from .hostsetup import adopt_step
+    adopt_step(c, name)
     return 0 if network_steps(c, name) else 1
 
 

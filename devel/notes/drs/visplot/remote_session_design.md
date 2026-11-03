@@ -753,7 +753,9 @@ Each stage is one delivery (zip on the then-current main), with tests.
    decisions settled and small fixes (section 51), `--pythonhome` for
    Python's slow start on autofs (section 52); (b) the ssh records --
    options stored per host with changes reported, each jump host its own
-   entry, setup's own `known_hosts` with strict checking for kernels; (c) a
+   entry, setup's own `known_hosts` (`accept-new` for kernels, so a
+   cluster's node never visited still works; a changed key refused),
+   `BatchMode yes` (section 55); (c) a
    dead worker reported instead of waited for.  Then stage 3.
 3. **Session**: `cubevis/remote/session.py`, in-memory kernel spec,
    `RemoteReductionContext` factory, `VisibilityPlotter(session=)`,

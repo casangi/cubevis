@@ -16,12 +16,18 @@ route is the user's own.  Host name, user and port are setup's own fields;
 ``ProxyJump`` becomes setup's login host (``hostsetup.new_network``);
 connection sharing and keep-alives are setup's.
 
-Nothing is stored: the generated file is written from ``ssh -G`` each time
-the state is saved, so a change to ``~/.ssh/config`` reaches it at the next
-setup run, and each computer sharing a configuration directory writes its
-own file from its own ssh (the option names are those of that ssh: OpenSSH
-8.0 prints ``pubkeyacceptedkeytypes`` where 9.x prints
-``pubkeyacceptedalgorithms``).
+**Recorded per host, changes reported** (Darrell 2026-11-02, notes section
+55): what ``ssh -G`` gave when a host was set up is kept in this computer's
+file (``local.json``, ``ssh_options``, by setup's alias: ``snapshot``), and
+the generated file is written from that -- not from whatever the user's
+configuration says today, which may be a slip.  Each run compares
+(``changes``): a difference is logged, shown by ``status`` and
+``diagnose``, and adopted only by ``setup HOST`` (or ``network NAME``),
+after asking (``hostsetup.adopt_step``).  A host recorded before this is
+recorded at the next save, as it is then (``fill_missing``).  Each computer
+sharing a configuration directory keeps its own (the option names are
+those of its ssh: OpenSSH 8.0 prints ``pubkeyacceptedkeytypes`` where 9.x
+prints ``pubkeyacceptedalgorithms``).
 
 ``CUBEVIS_SETUP_USER_SSH_CONFIG`` names another file than ``~/.ssh/config``
 (and leaves out the system's: ``-F``) -- ssh reads the account's home, not
@@ -56,7 +62,9 @@ _ONE_PATH = ("identityfile", "certificatefile", "identityagent", "pkcs11provider
              "securitykeyprovider")
 # Fields setup keeps itself, and never copies.
 OWN_KEYS = ("hostname", "user", "port", "proxyjump", "controlmaster", "controlpath",
-            "controlpersist", "serveraliveinterval", "serveralivecountmax", "batchmode")
+            "controlpersist", "serveraliveinterval", "serveralivecountmax", "batchmode",
+            # setup's own known-hosts file first, the user's after it (``known_hosts``)
+            "userknownhostsfile", "stricthostkeychecking")
 # How they are written (ssh does not mind the case; people reading the file do).
 _PRETTY = {k: k for k in LOGIN_KEYS}
 _PRETTY.update({
@@ -167,13 +175,54 @@ def login_options(name: str, port: Optional[int] = None, *, route: bool = False)
     return out
 
 
-def resolve_jump(spec: str) -> str:
-    """A ProxyJump value whose hops may be the user's aliases, as real
-    ``user@host:port`` -- the generated configuration (``-F``) knows none of
-    the user's names."""
+def known_hosts(name: str, port: Optional[int] = None) -> list:
+    """The user's known-hosts files for *name* (``ssh -G``: by default
+    ``~/.ssh/known_hosts ~/.ssh/known_hosts2``), listed after setup's own
+    in the generated file.  With ``CUBEVIS_SETUP_KNOWN_HOSTS`` (the tests)
+    only files the user configured -- not ssh's defaults, the account's."""
+    mine = " ".join(view(name, port).get("userknownhostsfile") or []).split()
+    if os.environ.get("CUBEVIS_SETUP_KNOWN_HOSTS"):
+        base = " ".join(view(name, port, defaults=True).get("userknownhostsfile") or []).split()
+        if mine == base:
+            return []
+    return mine
+
+
+def snapshot(name: str, port: Optional[int] = None, *, route: bool = False) -> dict:
+    """What setup records for a host (module docstring): its login options
+    and the user's known-hosts files, as the user's ssh gives them now."""
+    import datetime as _dt
+    return {"from": name + (f":{port}" if port else ""),
+            "options": [list(x) for x in login_options(name, port, route=route)],
+            "known_hosts": known_hosts(name, port),
+            "saved": _dt.datetime.now().astimezone().isoformat(timespec="minutes")}
+
+
+def differ(old: dict, new: dict) -> Optional[dict]:
+    """``{"added": [...], "removed": [...]}`` between two snapshots (options
+    as ``"Option value"``, known-hosts files as ``UserKnownHostsFile ...``),
+    None when they agree."""
+    def items(s):
+        out = [f"{k} {v}" for k, v in s.get("options") or []]
+        if s.get("known_hosts"):
+            out.append("UserKnownHostsFile " + " ".join(s["known_hosts"]))
+        return out
+    a, b = items(old), items(new)
+    added = [x for x in b if x not in a]
+    removed = [x for x in a if x not in b]
+    return {"added": added, "removed": removed} if added or removed else None
+
+
+def parse_hops(spec: str) -> list:
+    """A ProxyJump value as hops, each ``{"ssh_name", "ssh_port", "host",
+    "user", "port"}`` -- the name (and port) as the user wrote it (their
+    alias), the real name, user and port from their ssh (``user`` None:
+    ssh's own default)."""
     hops = []
     for hop in spec.split(","):
         hop = hop.strip()
+        if not hop:
+            continue
         if hop.startswith("ssh://"):
             hop = hop[len("ssh://"):]
         user, _, hp = hop.rpartition("@")
@@ -185,8 +234,17 @@ def resolve_jump(spec: str) -> str:
         if not user and one(v, "user") != one(view(host, port, defaults=True), "user"):
             user = one(v, "user")             # only when not ssh's own default
         p = port or int(one(v, "port") or 22)
-        hops.append((f"{user}@" if user else "") + real + (f":{p}" if p != 22 else ""))
-    return ",".join(hops)
+        hops.append({"ssh_name": host, "ssh_port": port, "host": real,
+                     "user": user or None, "port": p})
+    return hops
+
+
+def resolve_jump(spec: str) -> str:
+    """A ProxyJump value whose hops may be the user's aliases, as real
+    ``user@host:port`` -- the generated configuration (``-F``) knows none of
+    the user's names."""
+    return ",".join((f"{h['user']}@" if h["user"] else "") + h["host"]
+                    + (f":{h['port']}" if h["port"] != 22 else "") for h in parse_hops(spec))
 
 
 # What a direct, non-interactive login with the user's own ssh says.

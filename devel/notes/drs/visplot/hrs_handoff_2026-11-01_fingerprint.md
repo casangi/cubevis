@@ -7,24 +7,23 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* **Main is `a12adbe`** (through section 53, committed by Darrell;
-  `try-014A` confirmed it on zuul06: launcher test 52 s -> 2.6 s with
-  `PYTHONHOME`, visplot's kernel start 2.1 s).  **Delivered after it, as a
-  zip on `a12adbe`** (not committed by Claude): section 54 -- `diagnose`
-  does not time a slow start again where the kernels set `PYTHONHOME`
-  (`--full` does).  Check `git log` first.  The next notes section is
-  **55**.
-* **Start here: round 2** (agreed 2026-11-02, section 51): ssh options
-  stored per host, a fresh `ssh -G` compared at each run and differences
-  reported (log, `status`, `diagnose`), adopted only by `setup HOST`; each
-  ProxyJump hop its own entry (login, route), the chain built by the
-  generated configuration -- a state schema change, with migration;
-  setup's own `known_hosts` in the configuration directory (filled while
-  the user runs setup, fingerprints shown), listed beside the user's,
-  strict checking for kernels with a message naming `setup HOST`; sshpyk's
-  `batchmode` warning (section 54).  **Round
-  3**: the dead worker (cubevis.remote): reproduce on the rig, report in
-  the GUI and the terminal within seconds.  Then setup is done: stage 3.
+* **Main is `7d551ef`** (through section 54, committed by Darrell).
+  **Delivered after it, as a zip on `7d551ef`** (not committed by Claude):
+  section 55 -- round 2, the ssh records: setup's own shared
+  `ssh_known_hosts` (first in every block, `accept-new`, keys shown when
+  recorded, a changed key refused and named), `BatchMode yes`, the user's
+  ssh options recorded per host in `local.json` (changes logged, listed by
+  `status`, shown by `diagnose`, adopted by `setup HOST` / `network NAME`
+  after asking), each ProxyJump hop its own entry (`login.hops`).  Check
+  `git log` first.  The next notes section is **56**.
+* **Start here: round 3** (agreed 2026-11-02, section 51): the dead worker
+  (cubevis.remote) -- reproduce on the rig (the worker, the kernel, the ssh
+  connection killed), report in the GUI and the terminal within seconds.
+  Then setup is done: stage 3.  To try on the real network after section
+  55: a run of `setup cvpost106` (the options recorded, the keys noted on
+  first contact -- `~/.config/cubevis/ssh_known_hosts` starts empty, the
+  old keys in `~/.ssh/known_hosts` still count), and no SSHPYK144 warning
+  in visplot.
 * **Darrell's `try-012A`** (2026-11-02): `diagnose cvpost106` correct
   throughout; its redundant inside ranges led to the collapsing.
 * **Confirmed by Darrell's `try-011A`** (end of section 49): setup chose
@@ -60,7 +59,7 @@ as ee125b6) and section 17 (the ssh wrapper).
      the eye, and does `.../pypi/cubevis/1.0.104/json` carry the stamp line?
   3. Still open from section 45/46: the real-network questions in the
      previous handoff (`hrs_handoff_2026-10-31_step4_2d.md`, "Ask Darrell").
-* **Suite** (2026-11-02, sections 53, 54): 261 passed, 1 skipped with OpenSSH 9.6
+* **Suite** (2026-11-02, section 55): 264 passed, 1 skipped with OpenSSH 9.6
   and with the 8.0p1 client.
 * **Suite** (2026-11-02, section 50): 252 passed, 1 skipped with OpenSSH
   9.6 and with the 8.0p1 client (fewer: the development-install tests went).
@@ -300,7 +299,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 55).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 56).
 
 ## Test kit (rebuild after a sandbox restart)
 
@@ -317,11 +316,10 @@ restarted twice during the 2026-11-01 session: a burst of rig failures --
   with `CUBEVIS_SSH_RIG=1`.  Disposable container or VM only.  (The bash
   setup's older end-to-end runs also used a key-only git host on 2203 and
   the user `carol`; not needed by the Python tests, not in the script.)
-* **Host keys in tests**: `CUBEVIS_SETUP_KNOWN_HOSTS=<file>` makes
-  `sshgen.config_text` end with `Host *` / `UserKnownHostsFile <file>` /
-  `StrictHostKeyChecking accept-new`.  The test fixtures set it; never set
-  in normal use.  Without it the rig tests depend on keys already in
-  `~/.ssh/known_hosts` (that is how they passed before 2026-10-19).
+* **Host keys in tests**: `CUBEVIS_SETUP_KNOWN_HOSTS=<file>` is setup's
+  own known-hosts file (normally `~/.config/cubevis/ssh_known_hosts`), and
+  the account's default files are then left out of the generated blocks
+  (section 55).  The test fixtures set it; never set in normal use.
 * **pytest here**: `/home/claude/venv/bin/python -m pytest` (the system
   python has none).
 * **OpenSSH 8.0 client** (RHEL 8's): built from `openssh-portable` tag
@@ -431,7 +429,8 @@ restarted twice during the 2026-11-01 session: a burst of rig failures --
   `/tmp/cubevis-<uid>/cm` are only live connections: losing them (logout,
   reboot) costs one wrapper login per hop, nothing else.
 
-* **First contact with a login host, straight to a node.**  When the
+* ~~**First contact with a login host, straight to a node.**~~ Settled by
+  section 55 (setup's own shared known-hosts file, `accept-new`).  When the
   wrapper logs in to a password login host as a hop of its own, it passes
   only `-F` and the config's options, not the caller's `-o
   StrictHostKeyChecking=accept-new`; a login host ssh has never seen then

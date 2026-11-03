@@ -1604,6 +1604,38 @@ def forget_new(c: Ctx, node: str, network: str, had_nodes: set, had_nets: set,
                   f"; python -m cubevis.setup {host} asks again."))
 
 
+def describe_change(ch: dict) -> str:
+    """One change of ``sshgen.changes`` in words."""
+    if ch.get("hops"):
+        return (f"{ch['label']}: your ssh now reaches it {('through ' + ch['hops'][1]) if ch['hops'][1] != 'directly' else 'directly'}"
+                f" (setup recorded {('through ' + ch['hops'][0]) if ch['hops'][0] != 'directly' else 'directly'})")
+    parts = [f"now {x}" for x in ch["added"]] + [f"no longer {x}" for x in ch["removed"]]
+    return f"{ch['label']} (ssh -G {ch['name']}): " + "; ".join(parts)
+
+
+def adopt_step(c: Ctx, network: str, node: Optional[str] = None) -> None:
+    """``setup HOST`` (and ``network NAME``): what changed in the user's ssh
+    configuration for this network's hosts since setup recorded it is shown,
+    and taken over on a yes (default yes) -- the login tests that follow
+    try it at once.  Never silently (notes section 55)."""
+    from . import sshgen
+    ui, st = c.ui, c.st
+    ch = sshgen.changes(st, sshgen.network_aliases(st, network, node))
+    if not ch:
+        return
+    ui.heading("Your ssh configuration changed")
+    ui.say("Setup's ssh configuration carries what your own said when these hosts were set "
+           "up; since then:")
+    for x in ch:
+        ui._p("    " + describe_change(x))
+    if ui.ask_yn("Use your ssh configuration as it is now for them?", True, key="adopt_ssh"):
+        sshgen.adopt(st, sorted({x["alias"] for x in ch}))
+        for x in ch:
+            ui.record_change("adopted ssh options", describe_change(x))
+    else:
+        ui.say("Kept as recorded; python -m cubevis.setup status lists the differences.")
+
+
 def set_twofactor(c: Ctx, network: str, on: bool) -> None:
     """``--2fa`` / ``--no-2fa``: the hop of *network* whose login asks for a
     second factor -- its login host when it has one, else its nodes.  No
@@ -1637,6 +1669,9 @@ def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None,
         return 1
     if not local_steps(c):
         return 1
+    from . import sshgen
+    for x in sshgen.changes(st):
+        ui.log(f"ssh configuration changed: {describe_change(x)}")
     had_nets, had_nodes = set(st.networks()), set(st.nodes())
     node = locate(c, host, port)
     if not node:
@@ -1644,6 +1679,8 @@ def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None,
     n = st.nodes()[node]
     if twofactor is not None:
         set_twofactor(c, n["network"], twofactor)
+    if n["network"] in had_nets:
+        adopt_step(c, n["network"], node)
     c.save()
     net = st.networks()[n["network"]]
     ui.heading(f"{host}: node {node}" + (f" of cluster {n['cluster']}" if n.get("cluster") else "")

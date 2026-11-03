@@ -2806,3 +2806,110 @@ pause left was `diagnose`'s timing of the start without `PYTHONHOME`
   `--full`); `test_hostsetup.py` (the times kept).
 * **Suite** (2026-11-02): 261 passed, 1 skipped with OpenSSH 9.6 and with
   the 8.0p1 client (`-n 2 --dist loadfile`).
+
+## 55. Round 2, the ssh records: host keys, recorded options, hops (base `7d551ef`, 2026-11-02)
+
+The three ssh decisions of section 51, and sshpyk's `batchmode` warning
+(section 54).  No state schema change: the new fields are optional, and an
+older cubevis sharing the directory ignores them (`via` is kept).
+
+**Host keys** (the open point "first contact with a login host, straight
+to a node", 2026-10-19; Darrell 2026-11-02: the best experience without a
+security issue):
+
+* Setup keeps its own known-hosts file, `~/.config/cubevis/ssh_known_hosts`
+  (`sshgen.known_hosts_path`) -- in the configuration directory, so the
+  computers sharing it share the keys: a key recorded from one is known to
+  all, and a kernel started from a second laptop or a new account no
+  longer fails with "Host key verification failed".
+* Every generated block: `UserKnownHostsFile <setup's> <the user's>` (the
+  user's from `ssh -G`, by default `~/.ssh/known_hosts
+  ~/.ssh/known_hosts2`, so keys the user accepted before still count) and
+  `StrictHostKeyChecking accept-new`.  New keys go to setup's file (ssh
+  writes to the first).
+* **accept-new rather than `yes`** (a change from what I proposed on
+  2026-11-02, and why): a cluster's node is usable without running setup
+  for it (design 7c), so a kernel may well be the first to reach
+  cvpost107; with `yes` it would fail until setup visited it.
+  `accept-new` is what OpenSSH added for unattended use: a host never seen
+  is recorded on first contact, a *changed* key is refused -- the attack
+  `StrictHostKeyChecking` exists for.  The first contact itself is
+  trust-on-first-use either way (the user would type "yes" just as
+  blindly).
+* Shown when recorded: setup's login step notes the keys its file gained
+  ("first contact with HOST from setup's configuration: its host key was
+  recorded (ED25519 SHA256:...) in ~/.config/cubevis/ssh_known_hosts, which
+  kernels check from now on ...") and records the change.
+* A changed key: setup names the files ssh named (or setup's and
+  `~/.ssh/known_hosts`), says to ask the host's administrators and how to
+  remove the old key (`ssh-keygen -R HOST -f FILE`), and never overrides
+  it; the wrapper says "the host key of ... is not the one recorded
+  (known_hosts) ... `python -m cubevis.setup diagnose HOST` names the
+  file" instead of "check the host name, the network".
+* Tests: `CUBEVIS_SETUP_KNOWN_HOSTS` now *is* setup's file (the tests'
+  own), and the user's files are added only when the user configured
+  them -- the `Host *` block the tests appended is gone (a per-host
+  `UserKnownHostsFile` would have overridden it anyway).
+
+**`BatchMode yes`** in every generated block (sshpyk's
+`[SSHPYK144] batchmode: Recommended to be 'yes'`): nothing in a kernel's ssh
+can answer a question.  The wrapper's own logins (stored password, the
+`--2fa` terminal login) already pass `-o BatchMode=no` ahead of everything
+(ssh keeps the first value), and setup's checks pass `BatchMode=yes`.
+
+**Recorded options** (Darrell: stored per host, a change "considered but
+not taken for truth"):
+
+* Per computer, in `local.json` (`ssh_options`, by setup's alias): what
+  the user's `ssh -G` gave -- the login options (`sshopts.login_options`),
+  the user's known-hosts files, the name asked about and when
+  (`sshopts.snapshot`).  The generated file is written from that
+  (`sshgen.options_for`; the block's comment says "recorded DATE").  A host
+  without a record (all, after upgrading) is recorded at the next save as
+  it is then (`sshgen.fill_missing`, from `Ctx.save`).
+* Compared with `ssh -G` now (`sshgen.changes`, `sshopts.differ`), not with
+  `~/.ssh/config`'s time stamp: that also sees `Include`d files,
+  `/etc/ssh/ssh_config` and Match blocks.  A difference is logged at each
+  `setup HOST` run, listed by `status` ("your ssh configuration changed
+  since setup recorded it ... : node compute (ssh -G compute): now X; no
+  longer Y"), and shown by `diagnose` (section 2: "setup recorded yours
+  on DATE", "PROBLEM: changed since: ... -- python -m cubevis.setup HOST
+  asks to take it over"); what nothing explains is now called a bug.
+* Adopted only by `setup HOST` (that network's hops, login host and the
+  node) or `network NAME` (the whole network), after showing it: "Your ssh
+  configuration changed ... Use your ssh configuration as it is now for
+  them? [Y/n]" (key `adopt_ssh`); the login tests that follow try it at
+  once (`hostsetup.adopt_step`, `sshgen.adopt`).
+
+**Hops** (Darrell: "each jump host has its own entry and each includes the
+jumps to get there ... about the correct record keeping"):
+
+* The login host's earlier hops are recorded in the shared state
+  (`login.hops`: `ssh_name`, `ssh_port` as the user wrote them; real
+  `host`, `user`, `port`), from `via` or the user's own ProxyJump for the
+  login host (`sshgen.live_hops`, `sshopts.parse_hops`).  A route change
+  there is reported and adopted like the options.
+* Each hop is a block of its own, `<login alias>-hop1`, `-hop2`, ... with
+  its own recorded options, known hosts, BatchMode and shared connection,
+  each `ProxyJump` the one before; the login host jumps through the last
+  (`sshgen.entries`, which `config_text`, `fill_missing`, `changes` and
+  `adopt` all walk).  Before, the hops were a resolved `ProxyJump`
+  string on the login host, read from the user's ssh at every write.
+* Still key/Kerberos only for the earlier hops (no password rules for
+  them): NRAO's routes have one hop.
+
+* **Tests**: `test_sshopts.py` -- several hops as entries (real name, user,
+  port; the chain), recorded at the first save and then not following the
+  user's file, a route change reported and adopted; options recorded,
+  a change reported not followed, adopted; known hosts and BatchMode in
+  every block (setup's file first, the user's after; the tests' file
+  alone).  `test_cli.py` (rig) -- the route test: both blocks carry the
+  known hosts, accept-new and BatchMode; the first contact's keys shown;
+  then the user's file changed: `status` lists it, `diagnose` shows it,
+  the generated file keeps the recorded value, `setup HOST` asks and
+  adopts; a changed host key refused, with setup's and the wrapper's
+  messages.
+* `test_rig_diagnose` follows: "setup recorded yours on", and a later
+  change shown as "changed since ... asks to take it over" (not "lacks").
+* **Suite** (2026-11-02): 264 passed, 1 skipped with OpenSSH 9.6 and with
+  the 8.0p1 client (`-n 2 --dist loadfile`).

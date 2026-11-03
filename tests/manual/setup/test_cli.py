@@ -596,18 +596,44 @@ def test_rig_the_route_comes_from_the_users_ssh_configuration(home, alice_envs):
     out = _flat(r)
     assert "Your ssh configuration reaches compute (compute.example.test) through gate; setup " \
            "does the same: alice@login.example.test:2201 is the login host" in out, r.stdout
+    # First contact: the host keys are recorded in setup's file, and shown.
+    assert "first contact with login.example.test from setup's configuration: its host key " \
+           "was recorded (" in out and "SHA256:" in out
     assert "intermediate host" not in out and "Your user name" not in out
     st = S.load()
     net = st.networks()["example"]
     assert net["login"]["ssh_name"] == "gate" and st.nodes()["compute"]["ssh_name"] == "compute"
     assert st.nodes()["compute"]["status"] == "ok", r.stdout
     text = open(G.config_path()).read()
-    assert "    # from your ssh configuration (ssh -G compute)\n" in text
+    assert "    # from your ssh configuration (ssh -G compute, recorded " in text
     assert "    PreferredAuthentications password,keyboard-interactive\n" in text
-    # UserKnownHostsFile is a login option too: carried for both hosts (the
-    # third is the tests' own Host * block, CUBEVIS_SETUP_KNOWN_HOSTS).
-    hosts_part = text.split("# CUBEVIS_SETUP_KNOWN_HOSTS")[0]
-    assert hosts_part.count(f"    UserKnownHostsFile {home}/known_hosts") == 2
+    # The user's known-hosts file follows setup's own (here the tests' --
+    # the same file, so once), in both blocks.
+    assert text.count(f"    UserKnownHostsFile {home}/known_hosts\n") == 2
+    assert text.count("    StrictHostKeyChecking accept-new\n") == 2
+    assert text.count("    BatchMode yes\n") == 2
+    # The user's file changes: reported, not followed; setup HOST asks.
+    with open(cfg, "w") as f:
+        f.write("Host gate\n    HostName login.example.test\n    Port 2201\n    User alice\n"
+                "Host compute\n    HostName compute.example.test\n    Port 2202\n    User alice\n"
+                "    ProxyJump gate\n    PreferredAuthentications keyboard-interactive,password\n"
+                f"Host *\n    UserKnownHostsFile {home}/known_hosts\n")
+    r = _run(home, "status", CUBEVIS_SETUP_USER_SSH_CONFIG=cfg)
+    out = _flat(r)
+    assert "your ssh configuration changed since setup recorded it" in out
+    assert ("node compute (ssh -G compute): now PreferredAuthentications keyboard-interactive,password; "
+            "no longer PreferredAuthentications password,keyboard-interactive") in out, r.stdout
+    assert "PreferredAuthentications password,keyboard-interactive" in open(G.config_path()).read()
+    r = _run(home, "diagnose", "compute", CUBEVIS_SETUP_USER_SSH_CONFIG=cfg)
+    assert "PROBLEM: changed since: now PreferredAuthentications keyboard-interactive" in _flat(r)
+    assert "this is a bug" not in _flat(r)
+    r = _run(home, "--yes", *STORE, "--answer", "environment=none", "compute",
+             CUBEVIS_SETUP_USER_SSH_CONFIG=cfg)
+    out = _flat(r)
+    assert "Your ssh configuration changed" in out and "Use your ssh configuration as it is now" in out
+    assert "adopted ssh options: node compute" in out
+    assert "PreferredAuthentications keyboard-interactive,password" in open(G.config_path()).read()
+    assert "your ssh configuration changed" not in _flat(_run(home, "status", CUBEVIS_SETUP_USER_SSH_CONFIG=cfg))
 
 
 @needs_rig
@@ -718,7 +744,7 @@ def test_rig_diagnose(home, alice_envs):
     for part in ("1. What setup knows", "node compute of network example",
                  "2. Your ssh configuration and setup's",
                  "your ssh (ssh -G compute): alice@compute.example.test:2202, directly",
-                 "setup's carries every login option yours has",
+                 "setup recorded yours on",
                  "4. The wrapper", "password: stored", "ok: setup's (the wrapper and its "
                  "configuration, as kernels do): logged in", "6. The kernel-side code",
                  "kernels compute", "kernel-side code identical"):
@@ -730,8 +756,9 @@ def test_rig_diagnose(home, alice_envs):
         f.write(base.replace("User alice\n", "User alice\n    PubkeyAuthentication no\n"))
     r = _run(home, "diagnose", "compute", CUBEVIS_SETUP_USER_SSH_CONFIG=cfg)
     out = _flat(r)
-    assert "PROBLEM: setup's lacks PubkeyAuthentication " in out, r.stdout   # no / false
-    assert "your configuration has changed since, or this is a bug" in out
+    assert "PROBLEM: changed since: now PubkeyAuthentication " in out, r.stdout   # no / false
+    assert "python -m cubevis.setup compute asks to take it over" in out
+    assert "this is a bug" not in out
     # Read-only: the state and the generated file are as they were.
     assert open(S.state_path()).read() == state_before
     assert open(G.config_path()).read() == config_before
@@ -1086,6 +1113,35 @@ def test_rig_pythonhome_for_a_hosts_kernels(home, alice_envs):
     assert "PYTHONHOME" not in launcher_text()
     r = _run(home, "--pythonhome", "status")
     assert r.returncode == 2 and "--pythonhome goes with a host" in r.stderr
+
+
+@needs_rig
+@needs_ssh
+def test_rig_a_changed_host_key_is_refused_and_named(home, alice_envs, tmp_path):
+    """Setup's known-hosts file is checked (accept-new: a changed key is
+    refused, never replaced): setup says which file, the wrapper why."""
+    r = _host(home, "--answer", "environment=none", route=DIRECT)
+    assert S.load().nodes()["compute"]["status"] == "ok", r.stdout
+    kh = os.environ["CUBEVIS_SETUP_KNOWN_HOSTS"]
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(tmp_path / "k")], check=True)
+    fake = (tmp_path / "k.pub").read_text().split()[:2]
+    with open(kh) as f:
+        lines = f.read().splitlines()
+    with open(kh, "w") as f:
+        for l in lines:
+            parts = l.split()
+            f.write(" ".join([parts[0], *fake]) + "\n" if "2202" in parts[0] else l + "\n")
+    subprocess.run(["ssh", "-O", "exit", "-F", str(G.config_path()), "example-compute"],
+                   capture_output=True)                                # a fresh login
+    r = _host(home, "--answer", "environment=none", route=DIRECT)
+    out = _flat(r)
+    assert r.returncode == 1
+    assert "does not match the one recorded before" in out and "ssh-keygen -R compute.example.test" in out, r.stdout
+    assert f"(~/known_hosts" in out or f"({kh}" in out or "known_hosts" in out
+    w = subprocess.run([str(G.wrapper_path()), "-F", str(G.config_path()), "example-compute", "true"],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60,
+                       env=_env(home))
+    assert "is not the one recorded (known_hosts)" in " ".join(w.stderr.split()), w.stderr
 
 
 def _stop_waiting_for_a_making(home, seconds):

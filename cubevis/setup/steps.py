@@ -37,6 +37,8 @@ class Ctx:
         if self.check_only:
             S.save(self.st)          # flags only
             return
+        for alias in sshgen.fill_missing(self.st):
+            self.ui.log(f"recorded the ssh options for {alias}")
         S.save(self.st)
         try:
             res = sshgen.write(self.st)
@@ -211,6 +213,36 @@ def local_steps(c: Ctx) -> bool:
 
 # -- logging in, one hop at a time ------------------------------------------
 
+def _known_lines() -> set:
+    try:
+        return set(sshgen.known_hosts_path().read_text().splitlines())
+    except OSError:
+        return set()
+
+
+def recorded_keys(before: set) -> str:
+    """The host keys setup's known-hosts file gained since *before*
+    (``_known_lines``), as ssh-keygen fingerprints: "" for none."""
+    new = [l for l in _known_lines() - before if l.strip() and not l.startswith("#")]
+    if not new:
+        return ""
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".keys") as f:
+        f.write("\n".join(new) + "\n")
+        f.flush()
+        try:
+            r = subprocess.run(["ssh-keygen", "-l", "-f", f.name], capture_output=True,
+                               text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    fps = []
+    for line in r.stdout.splitlines():        # "256 SHA256:xxx host (ED25519)"
+        parts = line.split()
+        if len(parts) >= 4:
+            fps.append(f"{parts[-1].strip('()')} {parts[1]}")
+    return ", ".join(fps)
+
+
 def hop_info(st: S.State, network: str, node: Optional[str]) -> dict:
     """alias / host / user / password flag / service record for a hop: the
     login host (node None) or a node."""
@@ -235,7 +267,15 @@ def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
         rec = h["rec"]
         if rec.get("password") and not rec.get("twofactor") and sys.stdin.isatty():
             stores.unlock(ui, st, rec.get("service") or "cubevis-ssh", h["user"])
+        before = _known_lines()
         r = c.ssh(h["alias"])
+        keys = recorded_keys(before)
+        if keys:
+            ui.note(f"first contact with {h['host']} from setup's configuration: its host key "
+                    f"was recorded ({keys}) in {tilde(sshgen.known_hosts_path())}, which kernels "
+                    "check from now on. If you have reason to doubt it, compare it with what "
+                    "the host's administrators publish.")
+            ui.record_change("recorded host key", f"{h['host']}: {keys}")
         if r.returncode == 0:
             if node:
                 st.mark_ok("nodes", node)
@@ -269,9 +309,12 @@ def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
                    "may be needed.")
             return False
         if re.search(r"HOST IDENTIFICATION HAS CHANGED|Host key verification failed", out):
-            ui.say(f"The host key of {h['host']} does not match the one saved before "
-                   "(~/.ssh/known_hosts). Ask whoever runs the host whether it changed; "
-                   "setup does not override that.")
+            files = re.findall(r"in (\S+known_hosts\S*):\d+", out) or [
+                tilde(sshgen.known_hosts_path()), "~/.ssh/known_hosts"]
+            ui.say(f"The host key of {h['host']} does not match the one recorded before "
+                   f"({', '.join(dict.fromkeys(files))}). Ask whoever runs the host whether it "
+                   "changed; setup does not override that. If it did, remove the old key -- "
+                   f"ssh-keygen -R {h['host']} -f FILE -- and run setup again.")
             return False
         if rec.get("twofactor"):
             return twofactor_login(c, h)

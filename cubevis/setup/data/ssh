@@ -936,6 +936,10 @@ for my $hop (@need) {
         } elsif ( $asked =~ /^found/m ) {
             note("the stored password was refused (one attempt only, so a wrong one"
                . " cannot lock the account): store it again if it changed");
+        } elsif ( $last =~ /Host key verification failed|IDENTIFICATION HAS CHANGED/ ) {
+            note("the host key of '$target' ($cfg->{hostname}) is not the one recorded"
+               . " (known_hosts): ask whoever runs the host whether it changed."
+               . " `python -m cubevis.setup diagnose $cfg->{hostname}` names the file.");
         } else {
             note("ssh failed before asking for a password: check the host name, the"
                . " network (VPN), and that you can ssh to it by hand");

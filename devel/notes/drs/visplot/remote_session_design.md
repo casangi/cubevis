@@ -756,7 +756,10 @@ Each stage is one delivery (zip on the then-current main), with tests.
    entry, setup's own `known_hosts` (`accept-new` for kernels, so a
    cluster's node never visited still works; a changed key refused),
    `BatchMode yes` (section 55); (c) a
-   dead worker reported instead of waited for.  Then stage 3.
+   dead worker reported instead of waited for (section 56: the
+   supervisor races requests against the worker's exit, the plotter
+   watches the kernel's liveness and heartbeat).  Setup's wrap-up done
+   2026-11-02.  Then stage 3.
 3. **Session**: `cubevis/remote/session.py`, in-memory kernel spec,
    `RemoteReductionContext` factory, `VisibilityPlotter(session=)`,
    `check()`. Tests: local kernel; the rig with two nodes from one

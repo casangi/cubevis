@@ -109,6 +109,7 @@ Package location (proposed)
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -205,6 +206,22 @@ DATA_METHODS = frozenset({
 })
 
 
+# How often a call in flight checks that the kernel is still there
+# (seconds), and how long its heartbeat may be silent before the
+# connection counts as lost (notes section 56).  CUBEVIS_REMOTE_LIVENESS
+# overrides the interval.
+LIVENESS_INTERVAL = 5.0
+HEARTBEAT_GRACE = 30.0
+
+
+def _liveness_interval() -> float:
+    v = os.environ.get("CUBEVIS_REMOTE_LIVENESS", "").strip()
+    try:
+        return max(0.2, float(v)) if v else LIVENESS_INTERVAL
+    except ValueError:
+        return LIVENESS_INTERVAL
+
+
 def _data_call_timeout() -> float:
     v = os.environ.get("CUBEVIS_REMOTE_TIMEOUT", "").strip()
     try:
@@ -239,6 +256,50 @@ class RemoteBackendError(RuntimeError):
         if self.remote_traceback:
             msg += f"\n--- remote traceback ---\n{self.remote_traceback}"
         super().__init__(msg)
+
+
+class _QuietIdentityFileHint(logging.Filter):
+    """Drops sshpyk's ``[SSHPYK640] ... identityfile: Likely missing in your
+    ssh config. Multiple values: [...]`` for kernels setup made: their ssh
+    configuration is setup's own, which leaves ssh's default identity
+    files in place on purpose (one would stop ssh trying the others; ``none``
+    is an error to sshpyk), and for a host logged in to by password the
+    hint is noise (Darrell's try-015A, notes section 56)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        return not ("[SSHPYK640]" in msg and "identityfile" in msg)
+
+
+def _quiet_setup_kernel_hints(km) -> None:
+    """``_QuietIdentityFileHint`` on the kernel manager's logger (the one
+    sshpyk's provisioner logs through), when the kernel's ssh
+    configuration is cubevis setup's; once per logger."""
+    try:
+        from cubevis.setup import sshgen
+        cfg = ((km.kernel_spec.metadata or {}).get("kernel_provisioner") or {}).get("config") or {}
+        if str(cfg.get("ssh_config") or "") != str(sshgen.config_path()):
+            return
+        lg = km.log
+        if not any(isinstance(f, _QuietIdentityFileHint) for f in lg.filters):
+            lg.addFilter(_QuietIdentityFileHint())
+    except Exception:
+        log.debug("could not quiet sshpyk's identityfile hint", exc_info=True)
+
+
+class RemoteWorkerDiedError(RuntimeError):
+    """The worker process holding the data on the remote host is gone
+    (killed -- most often by the system's memory limit --, crashed or
+    exited): reported by the kernel at once, with the reason.  The next
+    call starts a new worker (notes section 56)."""
+
+
+class RemoteKernelLostError(RuntimeError):
+    """The remote kernel stopped, or the connection to it was lost, while
+    a call was waiting for it (notes section 56)."""
 
 
 class RemoteReductionContext(ReductionContext):
@@ -345,6 +406,7 @@ class RemoteReductionContext(ReductionContext):
         # rather than re-deriving it from raw sshpyk log timestamps by
         # hand every time, as this number was.
         t0 = time.perf_counter()
+        _quiet_setup_kernel_hints(self._km)
         self._bridge.run(self._km.start_kernel())
         t1 = time.perf_counter()
         log.info("RemoteReductionContext: start_kernel() took %.1fs", t1 - t0)
@@ -358,21 +420,20 @@ class RemoteReductionContext(ReductionContext):
             )
             t2 = time.perf_counter()
             log.info("RemoteReductionContext: RemoteAppLink.open() took %.1fs", t2 - t1)
+            self._context_config = {
+                "register_function": register_function,
+                "wire_types": ["cubevis.toolbox.visplot._wire_types"],
+            }
+            # Same reasoning as register_function, one layer up: the
+            # supervisor relays every message between P_local and the
+            # worker and must be able to deserialize() them to do so,
+            # including this application's own wire types (xr.DataArray)
+            # -- see _supervisor.py's _handle_create_context and
+            # _wire_types.py's own docstring.  Kept: a dead worker's
+            # replacement is made with the same (_arestart_worker).
             self._ctx = self._bridge.run(
                 self._link.create_context(
-                    config={
-                        "register_function": register_function,
-                        # Same reasoning as register_function, one layer
-                        # up: the supervisor relays every message between
-                        # P_local and the worker and must be able to
-                        # deserialize() them to do so, including this
-                        # application's own wire types (xr.DataArray) --
-                        # see _supervisor.py's _handle_create_context and
-                        # _wire_types.py's own docstring for why this
-                        # can't just be hardcoded into the generic
-                        # supervisor instead.
-                        "wire_types": ["cubevis.toolbox.visplot._wire_types"],
-                    },
+                    config=self._context_config,
                     timeout=create_context_timeout,
                 )
             )
@@ -441,18 +502,95 @@ class RemoteReductionContext(ReductionContext):
             {"class_name": class_name, "args": args or [], "kwargs": kwargs or {}},
         )
         if isinstance(reply, dict) and "error" in reply:
+            self._raise_if_worker_died(reply)
             raise RemoteBackendError(f"create_object({class_name!r})", reply)
         return reply["handle"]
 
+    def _raise_if_worker_died(self, reply: Dict[str, Any]) -> None:
+        """A ``WorkerDiedError`` reply (the supervisor's, ``_supervisor.relay``):
+        a clear exception; the next call starts a new worker."""
+        if "WorkerDiedError" not in str(reply.get("traceback", "")):
+            return
+        self._worker_dead = True
+        raise RemoteWorkerDiedError(
+            f"{reply.get('error')}. The data's worker on kernel {self._kernel_name!r} is "
+            "gone; the next Plot starts a new one (state held only by the old one, "
+            "such as flags not yet saved, is lost).")
+
+    async def _watched(self, aw):
+        """Await *aw* (a call to the kernel) while checking, every
+        ``LIVENESS_INTERVAL`` seconds, that the kernel is still running
+        and still answering its heartbeat: a kernel that stopped, or a
+        connection lost for ``HEARTBEAT_GRACE`` seconds, ends the wait at
+        once with ``RemoteKernelLostError`` instead of after the call's
+        whole budget (up to ten minutes for data)."""
+        task = asyncio.ensure_future(aw)
+        interval = _liveness_interval()
+        silent_since = None
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=interval)
+                if task in done:
+                    return task.result()
+                try:
+                    alive = await asyncio.wait_for(self._km.is_alive(), timeout=30)
+                except Exception:
+                    alive = True                        # cannot tell: keep waiting
+                if not alive:
+                    raise RemoteKernelLostError(
+                        f"the kernel {self._kernel_name!r} has stopped (its process is gone: "
+                        "killed, or its computer restarted). Close this visplot and start "
+                        "it again.")
+                hb = getattr(getattr(getattr(self, "_link", None), "transport", None),
+                             "_client", None)
+                hb = getattr(hb, "hb_channel", None)
+                beating = True
+                try:
+                    beating = hb is None or bool(hb.is_beating())
+                except Exception:
+                    pass
+                now = time.monotonic()
+                if beating:
+                    silent_since = None
+                elif silent_since is None:
+                    silent_since = now
+                elif now - silent_since >= HEARTBEAT_GRACE:
+                    raise RemoteKernelLostError(
+                        f"no answer from the kernel {self._kernel_name!r} for "
+                        f"{now - silent_since:.0f} s: the connection to it was lost (the "
+                        "network or VPN, or this computer slept). Close this visplot and "
+                        "start it again.")
+        finally:
+            if not task.done():
+                task.cancel()
+
+    async def _arestart_worker(self) -> None:
+        """A new worker in place of a dead one: a new execution context,
+        the backend object opened again on it (same path and kind)."""
+        log.warning("RemoteReductionContext: starting a new worker on kernel %r "
+                    "(the previous one is gone)", self._kernel_name)
+        try:
+            await self._ctx.shutdown(timeout=10)
+        except Exception:
+            pass
+        self._ctx = await self._link.create_context(
+            config=self._context_config, timeout=DEFAULT_CREATE_CONTEXT_TIMEOUT)
+        self._handle = await self._acreate_object(
+            _BACKEND_CLASS_NAME, kwargs={"path": self._path, "backend_kind": self._backend_kind})
+        self._worker_dead = False
+
     async def _acall(self, method: str, *, timeout: Optional[float] = None,
                       **kwargs: Any) -> Any:
-        reply = await self._ctx.dispatch_fast(
+        if getattr(self, "_worker_dead", False):
+            await self._watched(self._arestart_worker())
+        reply = await self._watched(self._ctx.dispatch_fast(
             "call_method",
             {"handle": self._handle, "method": method, "args": [], "kwargs": kwargs,
              "pre_encoded": True},
             timeout=timeout,
-        )
+        ))
         if isinstance(reply, dict) and "error" in reply:
+            self._raise_if_worker_died(reply)
             # The memory guard's refusal (2026-10-18) is a message for the
             # user, not a fault: raised here as the same local type, so
             # the plotter treats it as it does locally (panel left empty

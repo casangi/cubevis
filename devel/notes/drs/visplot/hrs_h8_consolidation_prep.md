@@ -2913,3 +2913,99 @@ jumps to get there ... about the correct record keeping"):
   change shown as "changed since ... asks to take it over" (not "lacks").
 * **Suite** (2026-11-02): 264 passed, 1 skipped with OpenSSH 9.6 and with
   the 8.0p1 client (`-n 2 --dist loadfile`).
+
+## 56. Round 3: a dead worker or kernel is reported, not waited for (base `45f403c`, 2026-11-02)
+
+Darrell's `try-015A` (a new macOS account, `setup cvpost106` from
+nothing: login host by password into the Keychain, the same password for
+the node, the cluster, `cubevis-1.0.102` by fingerprint, sshpyk installed,
+visplot plotted; the kernel started in 2.5 s): section 55 as intended --
+cvpost106's host key recorded and shown, ssh.cv.nrao.edu's found in the
+account's own `known_hosts`; no SSHPYK144.  Two small things from it are
+below (the note's place, SSHPYK640).
+
+**The problem** (section 36, found 2026-10-26): a worker killed by the
+memory limit during a big scatter left the plotter waiting.  The chain:
+the plotter's call (`RemoteReductionContext._call`, data budget 600 s) ->
+`dispatch_fast` to the kernel -> the supervisor's
+`_handle_dispatch_fast` -> `request()` to the worker, whose reply never
+comes; the supervisor never looked at the worker process, so it never
+answered, and the plotter waited out its 600 s for a bare timeout.
+Reproduced first (`test_worker_death.py`: SIGKILL mid-call -> the wait ran
+to the test's own 120 s timeout).
+
+**Kernel side** (`cubevis/remote`):
+
+* `WorkerProcessTransport` notes when the worker's stdout closes
+  (`wait_exited`) and can say why (`exit_reason`): pid and host, the exit
+  status or the signal -- SIGKILL "most often the system's memory limit
+  (the out-of-memory killer); a narrower selection (one field, fewer
+  SPWs) needs less" -- and its last stderr lines ("Its last words: ...").
+  An unexpected exit is also logged in the kernel.
+* `_supervisor.relay` races each relayed request against the worker's
+  exit; the worker gone (before or during the request) raises
+  `WorkerDiedError`, which `CommMgr` answers as an `{'error', 'traceback'}`
+  reply -- at once.  A reply that arrived before the exit still counts.
+  `dispatch_fast` and create_context's opening `configure` use it (a
+  worker that dies on start-up -- a broken import, say -- is now reported
+  with its last words instead of after the 90 s configure budget).
+
+**Plotter side** (`RemoteReductionContext`):
+
+* A `WorkerDiedError` reply becomes `RemoteWorkerDiedError`: the reason,
+  then "the data's worker on kernel K is gone; the next Plot starts a new
+  one (state held only by the old one, such as flags not yet saved, is
+  lost)".  The next call does that (`_arestart_worker`: a new execution
+  context with the same configuration, the backend object opened again
+  on the same path and kind; the cached metadata stays), so after an
+  out-of-memory kill the user narrows the selection and presses Plot.
+  The Plot handler's existing error path shows the message (notify +
+  status, "⚠ Panel N ... error: ...") and logs the traceback.
+* Every call in flight is watched (`_watched`): every 5 s
+  (`LIVENESS_INTERVAL`, `CUBEVIS_REMOTE_LIVENESS`) the kernel manager's
+  `is_alive()` (sshpyk: the remote kernel process, over ssh; it reopens
+  the tunnels too) and the kernel's heartbeat (the transport's client's
+  `hb_channel`, answered by ipykernel's own heartbeat thread, so a busy
+  kernel still beats).  A kernel that stopped: `RemoteKernelLostError`
+  "the kernel K has stopped (its process is gone: killed, or its computer
+  restarted). Close this visplot and start it again."; a heartbeat silent
+  for 30 s (`HEARTBEAT_GRACE`): "no answer from the kernel K for 30 s:
+  the connection to it was lost (the network or VPN, or this computer
+  slept) ...".  sshpyk's poll says "alive" when it cannot reach the host
+  (it assumes the best), hence the heartbeat for a lost connection.  Not
+  restarted automatically: a new kernel means a new link (stage 3's
+  Session can, with detach/reattach in stage 5).
+* Not covered: `dispatch_async` / `job_status` (unused by visplot; its
+  `JobRegistry` already reports a dead worker as `died`).
+
+**From try-015A**:
+
+* The host-key note now comes when the login step succeeds, beside its
+  "ok" line: setup's first, silent try of a step was recording the key,
+  and the note came before the step's heading ("4. Log in to the node
+  ...") -- it looked as if it belonged to the step before.
+* sshpyk's `[SSHPYK640] ... identityfile: Likely missing in your ssh
+  config. Multiple values: [...]` is dropped for kernels whose ssh
+  configuration is setup's (`_quiet_setup_kernel_hints`, a logging filter
+  on the kernel manager's logger, which sshpyk's provisioner logs
+  through): setup leaves ssh's default identity files on purpose (one
+  `IdentityFile` would stop ssh trying the others; `none` is an error to
+  sshpyk), and for a password host the hint is noise.  Other kernels keep
+  it.  (Alternatively sshpyk could log it at debug level when only ssh's
+  defaults are in effect; Darrell's call -- the filter can then go.)
+
+* **Tests**: `tests/manual/remote/test_worker_death.py` (local `python3`
+  kernel): a worker SIGKILLed mid-call is reported within seconds, with
+  SIGKILL, "memory" and its pid, and later calls too; a worker that exits
+  says its status and its last stderr line; the kernel SIGKILLed mid-call
+  ends the plotter's wait (`RemoteKernelLostError`); a silent heartbeat
+  counts as a lost connection, a beating one does not; a dead worker's
+  `RemoteWorkerDiedError` and the new worker on the next call (fakes);
+  the SSHPYK640 filter only for setup's kernels.  The remote suite: 46
+  passed (40 before) without the two files that need Darrell's kernel.
+  Not tried with an MS here (none in the sandbox): on cvpost106,
+  `pkill -9 -f cubevis.remote.worker_main` while a Plot runs should show
+  the message at once, and the next Plot should work.
+* **Suite** (2026-11-02): setup 264 passed, 1 skipped with OpenSSH 9.6 and
+  with the 8.0p1 client; remote 46 passed; visplot's remote tests 35
+  passed, 13 skipped (no MS).

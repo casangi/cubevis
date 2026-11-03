@@ -99,6 +99,36 @@ class WorkerDelegate:
         self.config = config
 
 
+class WorkerDiedError(RuntimeError):
+    """A context's worker process is gone (killed, crashed, exited): raised
+    by the relaying handlers, so the caller's request is answered at once
+    with the reason (``WorkerProcessTransport.exit_reason``) -- an
+    ``{'error': ..., 'traceback': ...}`` reply naming this class -- instead
+    of never (notes section 56)."""
+
+
+async def relay(delegate: "WorkerDelegate", message_id: str, payload: Dict[str, Any]) -> Any:
+    """``request()`` to a context's worker, raced against its exit: the
+    worker's reply, or ``WorkerDiedError`` as soon as the worker is gone
+    (before the request, or while it is being handled)."""
+    transport = delegate.transport
+    if not transport.is_connected():
+        raise WorkerDiedError(await transport.exit_reason())
+    req = asyncio.ensure_future(request(delegate.comm, message_id, payload))
+    gone = asyncio.ensure_future(transport.wait_exited())
+    try:
+        done, _ = await asyncio.wait({req, gone}, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+        req.cancel()
+        gone.cancel()
+        raise
+    if req in done:                    # a reply that came just before the exit still counts
+        gone.cancel()
+        return req.result()
+    req.cancel()
+    raise WorkerDiedError(await transport.exit_reason())
+
+
 class UnknownContextError(KeyError):
     """Raised (and turned into an `{'error': ...}` wire reply by
     `CommMgr._handle_request`, same as any other handler exception) when
@@ -179,8 +209,9 @@ class ExecutionContextPool:
         # this and returning immediately) is what guarantees ordering --
         # this is genuinely the *first* message the worker processes,
         # not merely the first one intended to be.
+        probe = WorkerDelegate(worker_mgr, comm, transport, registry, worker_module, config)
         configure_reply = await asyncio.wait_for(
-            request(comm, "configure", config or {}), timeout=_CONFIGURE_TIMEOUT
+            relay(probe, "configure", config or {}), timeout=_CONFIGURE_TIMEOUT
         )
 
         context_id = str(uuid4())
@@ -200,7 +231,7 @@ class ExecutionContextPool:
         _async_dispatch.py's module docstring for why a long command
         here would stall this CommMgr's own receive loop."""
         delegate = self._get(msg["context_id"])
-        return await request(delegate.comm, msg["message_id"], msg.get("payload", {}))
+        return await relay(delegate, msg["message_id"], msg.get("payload", {}))
 
     async def _handle_dispatch_async(self, msg):
         delegate = self._get(msg["context_id"])

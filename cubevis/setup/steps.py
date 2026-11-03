@@ -271,11 +271,15 @@ def hop_steps(c: Ctx, network: str, node: Optional[str]) -> bool:
         r = c.ssh(h["alias"])
         keys = recorded_keys(before)
         if keys:
-            ui.note(f"first contact with {h['host']} from setup's configuration: its host key "
-                    f"was recorded ({keys}) in {tilde(sshgen.known_hosts_path())}, which kernels "
-                    "check from now on. If you have reason to doubt it, compare it with what "
-                    "the host's administrators publish.")
             ui.record_change("recorded host key", f"{h['host']}: {keys}")
+            h["keys"] = keys
+        if r.returncode == 0 and h.get("keys"):
+            # Said when the step succeeds (a first try that fails is silent
+            # until the step's heading, so the note would come before it).
+            ui.note(f"first contact with {h['host']} from setup's configuration: its host key "
+                    f"was recorded ({h.pop('keys')}) in {tilde(sshgen.known_hosts_path())}, "
+                    "which kernels check from now on. If you have reason to doubt it, compare "
+                    "it with what the host's administrators publish.")
         if r.returncode == 0:
             if node:
                 st.mark_ok("nodes", node)

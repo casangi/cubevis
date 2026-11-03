@@ -161,6 +161,12 @@ class WorkerProcessTransport(TransportBase):
         self._connected = False
         self._stderr_task: Optional[asyncio.Task] = None
         self._last_stderr_lines: List[str] = []  # small ring buffer for diagnosis
+        # Set when the worker's stdout closes (it died or is exiting):
+        # what the supervisor races every relayed request against
+        # (``wait_exited``), so a dead worker is reported at once instead
+        # of leaving the request unanswered (notes section 56).
+        self._exited = asyncio.Event()
+        self._closing = False
 
     @property
     def pid(self) -> Optional[int]:
@@ -223,9 +229,47 @@ class WorkerProcessTransport(TransportBase):
                 break
             if self._callback is not None:
                 await self._callback(message)
+        self._exited.set()
+        if not self._closing:
+            logger.warning(f"WorkerProcessTransport: worker {await self.exit_reason()}")
+
+    async def wait_exited(self) -> None:
+        """Returns once the worker's stdout has closed (it died, or was
+        told to exit)."""
+        await self._exited.wait()
+
+    async def exit_reason(self, wait: float = 5.0) -> str:
+        """Why the worker is gone, for a person: its pid and host, how it
+        ended (an exit status, or the signal -- SIGKILL most often being
+        the system's memory limit), and its last stderr lines."""
+        import signal
+        import socket
+        rc = self.returncode
+        if rc is None and self._proc is not None:
+            try:
+                rc = await asyncio.wait_for(self._proc.wait(), timeout=wait)
+            except asyncio.TimeoutError:
+                rc = None
+        who = f"the worker process (pid {self.pid} on {socket.gethostname()})"
+        if rc is None:
+            how = "stopped answering (its output closed; the process is still there)"
+        elif rc < 0:
+            try:
+                name = signal.Signals(-rc).name
+            except ValueError:
+                name = f"signal {-rc}"
+            how = f"was killed ({name})"
+            if -rc == signal.SIGKILL:
+                how += (" -- most often the system's memory limit (the out-of-memory "
+                        "killer); a narrower selection (one field, fewer SPWs) needs less")
+        else:
+            how = f"exited with status {rc}"
+        last = [l for l in self._last_stderr_lines[-5:] if l.strip()]
+        return f"{who} {how}" + (f". Its last words: {' | '.join(last)}" if last else "")
 
     async def close(self, timeout: float = 10.0) -> None:
         self._connected = False
+        self._closing = True
         if self._proc is None:
             return
 

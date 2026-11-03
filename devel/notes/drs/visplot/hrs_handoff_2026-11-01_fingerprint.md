@@ -1,4 +1,4 @@
-# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-11-02, round 1)
+# Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-11-02, rounds 1-3)
 
 Read first: `devel/notes/drs/visplot/remote_session_design.md` (the
 design, agreed with Darrell 2026-10-17). Background: section 22 of
@@ -7,23 +7,26 @@ as ee125b6) and section 17 (the ssh wrapper).
 
 ## Where things stand
 
-* **Main is `7d551ef`** (through section 54, committed by Darrell).
-  **Delivered after it, as a zip on `7d551ef`** (not committed by Claude):
-  section 55 -- round 2, the ssh records: setup's own shared
-  `ssh_known_hosts` (first in every block, `accept-new`, keys shown when
-  recorded, a changed key refused and named), `BatchMode yes`, the user's
-  ssh options recorded per host in `local.json` (changes logged, listed by
-  `status`, shown by `diagnose`, adopted by `setup HOST` / `network NAME`
-  after asking), each ProxyJump hop its own entry (`login.hops`).  Check
-  `git log` first.  The next notes section is **56**.
-* **Start here: round 3** (agreed 2026-11-02, section 51): the dead worker
-  (cubevis.remote) -- reproduce on the rig (the worker, the kernel, the ssh
-  connection killed), report in the GUI and the terminal within seconds.
-  Then setup is done: stage 3.  To try on the real network after section
-  55: a run of `setup cvpost106` (the options recorded, the keys noted on
-  first contact -- `~/.config/cubevis/ssh_known_hosts` starts empty, the
-  old keys in `~/.ssh/known_hosts` still count), and no SSHPYK144 warning
-  in visplot.
+* **Main is `45f403c`** (through section 55, committed by Darrell;
+  `try-015A`: a new account from nothing to a plot on cvpost106).
+  **Delivered after it, as a zip on `45f403c`** (not committed by Claude):
+  section 56 -- round 3: a worker that dies is reported at once with the
+  reason (the supervisor races each relayed request against the worker's
+  exit; SIGKILL named as the likely memory limit), the next Plot starts a
+  new worker; a kernel that stops or a connection lost ends the
+  plotter's wait within seconds (`is_alive` and the heartbeat, every 5 s);
+  the host-key note beside its step's "ok"; sshpyk's SSHPYK640
+  identityfile hint quiet for setup's kernels.  Check `git log` first.
+  The next notes section is **57**.
+* **Start here**: setup's wrap-up rounds are done (sections 51-56).  To
+  try: during a remote Plot on cvpost106, `pkill -9 -f
+  cubevis.remote.worker_main` there -- the message should come at once,
+  and the next Plot work.  Then **stage 3, the Session** (design section
+  13; the node chosen per session, the cluster's reservation query, the
+  Jupyter-kernel bridge gone; `CUBEVIS_ALLOW_MISMATCH` at run time;
+  reconnection files under `hosts/<id>/sessions/`).  Open for Darrell:
+  sshpyk could log SSHPYK640 at debug level instead of cubevis filtering
+  it (section 56).
 * **Darrell's `try-012A`** (2026-11-02): `diagnose cvpost106` correct
   throughout; its redundant inside ranges led to the collapsing.
 * **Confirmed by Darrell's `try-011A`** (end of section 49): setup chose
@@ -59,7 +62,7 @@ as ee125b6) and section 17 (the ssh wrapper).
      the eye, and does `.../pypi/cubevis/1.0.104/json` carry the stamp line?
   3. Still open from section 45/46: the real-network questions in the
      previous handoff (`hrs_handoff_2026-10-31_step4_2d.md`, "Ask Darrell").
-* **Suite** (2026-11-02, section 55): 264 passed, 1 skipped with OpenSSH 9.6
+* **Suite** (2026-11-02, sections 55, 56): setup 264 passed, 1 skipped with OpenSSH 9.6
   and with the 8.0p1 client.
 * **Suite** (2026-11-02, section 50): 252 passed, 1 skipped with OpenSSH
   9.6 and with the 8.0p1 client (fewer: the development-install tests went).
@@ -299,7 +302,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 56).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 57).
 
 ## Test kit (rebuild after a sandbox restart)
 

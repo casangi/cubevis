@@ -490,6 +490,27 @@ class RemoteReductionContext(ReductionContext):
                 )
             self._bridge.stop()
             raise
+        self._session_id = self._record_session()
+
+    def _record_session(self) -> Optional[str]:
+        """This computer's record of the session (``cubevis.setup.sessions``:
+        what a later reconnect or reattach needs), for a kernel sshpyk
+        started; None for a local kernel or when it cannot be written."""
+        try:
+            from cubevis.setup import sessions as _sessions
+            facts = _sessions.kernel_facts(self._km)
+            if not facts:
+                return None
+            return _sessions.record(app="visplot", jupyter_kernel=self._kernel_name,
+                                    data=self._path, context_id=self._context_id_of(),
+                                    handle=getattr(self, "_handle", None), **facts)
+        except Exception:
+            log.debug("RemoteReductionContext: session not recorded", exc_info=True)
+            return None
+
+    def _context_id_of(self) -> Optional[str]:
+        cid = getattr(getattr(self, "_ctx", None), "context_id", None)
+        return str(cid) if cid is not None else None
 
     # ------------------------------------------------------------------ #
     # Internal call plumbing -- see module docstring, point 2            #
@@ -579,6 +600,13 @@ class RemoteReductionContext(ReductionContext):
         self._handle = await self._acreate_object(
             _BACKEND_CLASS_NAME, kwargs={"path": self._path, "backend_kind": self._backend_kind})
         self._worker_dead = False
+        if getattr(self, "_session_id", None):
+            try:
+                from cubevis.setup import sessions as _sessions
+                _sessions.update(self._session_id, context_id=self._context_id_of(),
+                                 handle=self._handle)
+            except Exception:
+                pass
 
     async def _acall(self, method: str, *, timeout: Optional[float] = None,
                       _cv_resent: bool = False, **kwargs: Any) -> Any:
@@ -1217,6 +1245,11 @@ class RemoteReductionContext(ReductionContext):
                         exc_info=True)
         self._bridge.stop()
         self._closed = True
+        try:
+            from cubevis.setup import sessions as _sessions
+            _sessions.forget(getattr(self, "_session_id", None))
+        except Exception:
+            pass
 
     def __repr__(self) -> str:  # pragma: no cover
         return (

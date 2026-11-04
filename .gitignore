@@ -114,3 +114,6 @@ test/ic2233_1.ms/
 
 # generated version files:
 cubevis/_js_versions.py
+
+# written by the build (pdm_build.py), also by pip install -e
+cubevis/__version__.py

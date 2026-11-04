@@ -1,8 +1,11 @@
 # Remote sessions and `python -m cubevis.setup` -- design
 
-Status: proposal, 2026-10-17. Supersedes the bash `setup/cubevis-setup`
-(section 22 of `hrs_h8_consolidation_prep.md`) once its stages land; that
-script stays until stage 4.
+Status: proposal, 2026-10-17; stages 1-2 built (to 2026-11-03), then
+parked 2026-11-04 -- what is left, with estimates:
+`hrs_handoff_2026-11-04_sessions.md` (and, for iclean,
+`hrs_handoff_2026-11-04_iclean_remote.md`).  Supersedes the bash
+`setup/cubevis-setup` (section 22 of `hrs_h8_consolidation_prep.md`) once
+its stages land; that script stays until stage 4.
 
 ## 1. Goals
 
@@ -150,6 +153,14 @@ Session.attach("b3f1")                # later (section 10)
   can change without changing callers.
 
 ## 5. Starting a kernel for a session
+
+*As built (stage 2c-2d):* setup writes, on the node, a **launcher** per
+kernel (`~/.config/cubevis/launch/<computer>/<kernel>.sh`: working
+directory, variables, PYTHONHOME, a check that the environment is still
+there) and gives its path as `remote_python`; here, `python -m
+cubevis.setup jupyter` writes an ordinary Jupyter kernel definition
+(`cubevis-<kernel>`) per kernel (and node).  The in-memory spec below is
+still the plan for stage 3 (the node chosen per session).
 
 No kernel definition file per node. The Session builds one in memory and
 gives it to jupyter_client through its public trait:
@@ -632,6 +643,13 @@ is a stage 3/5 question.
 
 ## 8. Versions and upgrades
 
+*Superseded (2026-10-23 on, notes sections 33-49):* kernels are matched by
+the **fingerprint of the kernel-side code** (`cubevis/_fingerprint.py`),
+not by version; releases carry theirs in the PyPI description; an
+environment with other kernel-side code is replaced by one setup makes
+for the matching release (never upgraded in place).  The text below is
+the original proposal.
+
 `check` compares the local cubevis with each environment's (one command
 on any node of the network). On a difference it does not change the
 remote side; it prints what to run there and writes it as a script beside
@@ -665,6 +683,14 @@ releases it after a crash; other installers ignore it) and is not planned.
 
 ## 9. Health and diagnostics
 
+*As built:* `setup HOST` checks each step as it goes (logins, the
+environment's fingerprint, the launcher started once); `status` lists
+networks, nodes, environments, kernels and this computer's sessions
+(running or left over, section 59); `diagnose HOST [--full]` times the
+route, logins and Python's start and compares with what was recorded.
+visplot checks the fingerprint at connect and watches the kernel
+(section 56).  No `Session.check()` yet (stage 3).
+
 `Session.check()` and `setup check` share one checker, returning
 structured results (and printing PASS/FAIL lines in setup):
 
@@ -680,6 +706,14 @@ structured results (and printing PASS/FAIL lines in setup):
 Failures update the node's or environment's `status` / `last_error`.
 
 ## 10. Detach and reattach (later stage)
+
+*2026-11-04:* two different things.  **Scenario A** -- the same Python
+and browser carry on after the laptop changes networks -- needs no
+reattach, only a plotter that survives its ssh connections being
+replaced; tried on zuul06, it hangs today (sshpyk reconnects with a
+blocking call on the event loop; notes section 59).  **Reattach from a
+new Python** is what this section describes; the session records
+(`hosts/<id>/local.json` `sessions`, section 59) hold what it needs.
 
 sshpyk keeps a `persistent_file` per kernel and can reattach with
 `AsyncKernelManager(kernel_name=..., existing=...)`;
@@ -700,6 +734,10 @@ then run `python -m cubevis.setup`. Someone with a suitable Python
 already just does the pip install.
 
 ## 12. Open questions
+
+*Proposed 2026-11-04 (Darrell to confirm):* one kernel per plotter, as
+today, behind the Session interface; start fresh rather than import the
+bash setup's state; networks without a shared filesystem deferred.
 
 * Several plotters in one Python session: one kernel with a worker each
   (needs a look at how `RemoteReductionContext` spawns its worker), or a
@@ -759,7 +797,9 @@ Each stage is one delivery (zip on the then-current main), with tests.
    dead worker reported instead of waited for (section 56: the
    supervisor races requests against the worker's exit, the plotter
    watches the kernel's liveness and heartbeat).  Setup's wrap-up done
-   2026-11-02.  Then stage 3.
+   2026-11-02.  Parked 2026-11-04 (section 59: session records, the quick
+   tests in GitHub Actions); next, Scenario A before stage 3
+   (`hrs_handoff_2026-11-04_sessions.md`).
 3. **Session**: `cubevis/remote/session.py`, in-memory kernel spec,
    `RemoteReductionContext` factory, `VisibilityPlotter(session=)`,
    `check()`. Tests: local kernel; the rig with two nodes from one

@@ -1,0 +1,58 @@
+# The quick tests: what tests/ci/run.py runs, locally and in GitHub
+# Actions (.github/workflows/quick-tests.yml).  Each [[suite]] runs on its
+# own (its own pytest, with the pytest.ini of its directory), so suites
+# with different configurations do not disturb each other.
+#
+# To add tests: add a [[suite]] -- a pytest directory or file list
+# ("pytest"), or any command ("command").  Keep the whole run to minutes
+# and free of real networks, real clusters and data that is not made here.
+#
+#   name        what run.py --only / --skip and the summary call it
+#   pytest      paths for pytest (with "args": pytest options)
+#   command     a command (a list), instead of pytest
+#   requires    Python modules the suite needs; missing -> skipped
+#               (a failure with --strict, as in GitHub Actions)
+#   env         extra environment variables
+#   timeout     seconds (default 900)
+#   after       a suite this one needs (skipped unless that one passed)
+#
+# In "command" and "args", {tmp} is a temporary directory shared by the
+# suites of one run, {python} this Python, {root} the repository.
+
+[[suite]]
+name = "setup"
+# python -m cubevis.setup without the ssh test rig (the rig's tests skip)
+pytest = ["tests/manual/setup"]
+args = ["-q", "-n", "2", "--dist", "loadfile"]
+requires = ["pexpect", "xdist"]
+
+[[suite]]
+name = "remote"
+# the remote layer against a kernel on this computer: transport, worker,
+# objects, eval/exec, a dead worker reported (test_worker_death)
+pytest = ["tests/manual/remote"]
+args = ["-q", "--ignore=tests/manual/remote/test_query_raster.py",
+        "--ignore=tests/manual/remote/test_query_raster_small.py"]
+requires = ["ipykernel", "jupyter_client", "pytest_asyncio"]
+
+[[suite]]
+name = "tiny-ms"
+# a 3 MB MSv2 for the next suite
+command = ["{python}", "tests/ci/make_tiny_ms.py", "{tmp}/ci.ms"]
+requires = ["xradio", "casacore"]
+
+[[suite]]
+name = "visplot-remote"
+# visplot local and with backend="remote" (a kernel on this computer),
+# driven through the GUI's handlers and compared step by step
+command = ["{python}", "tests/manual/visplot/remote_visplot_check.py", "--ms", "{tmp}/ci.ms"]
+requires = ["xradio", "casacore", "ipykernel", "xarray_ms"]
+after = "tiny-ms"
+
+[[lint]]
+name = "syntax"
+# Lenient on purpose: only what cannot run.  A stricter checker can be
+# added here as another [[lint]] (ruff, say: "ruff check --select
+# E9,F63,F7,F82 cubevis" is syntax errors and undefined names only); the
+# JavaScript kept in Python strings is not looked at by either.
+command = ["{python}", "-m", "compileall", "-q", "cubevis"]

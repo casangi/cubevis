@@ -1,5 +1,9 @@
 # Handoff: remote sessions and `python -m cubevis.setup` (2026-10-17, updated 2026-11-02, rounds 1-3)
 
+**Superseded 2026-11-04** by `hrs_handoff_2026-11-04_sessions.md` (and
+`hrs_handoff_2026-11-04_iclean_remote.md`); kept for its history and its
+**Test kit** section.
+
 Read first: `devel/notes/drs/visplot/remote_session_design.md` (the
 design, agreed with Darrell 2026-10-17). Background: section 22 of
 `hrs_h8_consolidation_prep.md` (the bash `setup/cubevis-setup`, committed

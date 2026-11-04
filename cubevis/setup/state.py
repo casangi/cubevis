@@ -74,8 +74,15 @@ environment variables its kernels start with, and the path of its
     {"schema": 2,
      "local":        {"python", "store", "store_command", "gpg_uid",
                       "last_user"},
-     "sessions":     {ID:   {"kernel", "node", "local_pid", "started",
-                             "persistent_file"}}}
+     "sessions":     {ID:   {"app", "kernel", "jupyter_kernel", "node",
+                             "local_pid", "started", "persistent_file",
+                             "remote_pid", "data", "context_id", "handle",
+                             "cubevis"}}}
+
+``sessions``: the remote sessions this computer's Pythons started, written
+when one connects and removed when it closes (``sessions.py``, from
+2026-11-04); the kernel's connection and key stay in sshpyk's
+``persistent_file``.
 
 Schema 1 (stage 2a) was one ``state.json`` with ``local`` and
 ``sessions`` in it; ``load`` moves them to this computer's file (written at

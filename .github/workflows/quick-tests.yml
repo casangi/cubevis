@@ -1,0 +1,43 @@
+###
+### The quick tests (tests/ci/suites.toml, run by tests/ci/run.py): setup
+### without the ssh test rig, the remote layer and visplot with
+### backend="remote" against a kernel on the runner itself, on a tiny MS
+### made on the spot.  About five minutes.  No real network, no cluster.
+###
+### Adding tests: a [[suite]] in tests/ci/suites.toml, nothing here.
+###
+
+name: Quick tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  quick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0              # the version comes from git tags
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        run: |
+          sudo apt-get install -y tcsh
+          python -m pip install --upgrade pip
+          pip install -e ".[visplot]" -r tests/ci/requirements.txt
+          mkdir -p ~/.local/share/jupyter/runtime
+
+      - name: What will run
+        run: python tests/ci/run.py --list
+
+      - name: Quick tests
+        run: python tests/ci/run.py --strict

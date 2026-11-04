@@ -1,0 +1,7 @@
+# What the quick tests need beyond pip install -e ".[visplot]" (tests/ci/run.py)
+pytest
+pytest-asyncio
+pytest-xdist
+pexpect
+xradio
+python-casacore

@@ -146,7 +146,11 @@ def cmd_status(c: Ctx) -> int:
                 ui._p(f"        no Jupyter kernel for it here: python -m cubevis.setup "
                       f"jupyter {kn}")
     if st.section("sessions"):
-        ui._p(f"    sessions: {', '.join(sorted(st.section('sessions')))}")
+        from . import sessions as _sessions
+        ui._p("")
+        ui._p("    remote sessions started on this computer:")
+        for sid, rec, live in _sessions.listing(st):
+            ui._p("      " + _sessions.describe(sid, rec, live))
     from .hostsetup import describe_change
     ch = sshgen.changes(st)
     if ch:

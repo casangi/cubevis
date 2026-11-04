@@ -3087,3 +3087,80 @@ new worker; plotting continued.  Two refinements, agreed:
   that met a gone worker to a new one, and reports a second death at
   once; `_last_words` leaves out warnings.  Remote suite 48 passed;
   visplot's remote tests 35 passed, 13 skipped; setup (no rig) 223 passed.
+
+## 59. Parking remote sessions: the Scenario A experiment, session records, the quick tests (base `3a5d69b`, 2026-11-04)
+
+**Scenario A tried** (Darrell's `try-016A`, zuul06, cubevis 1.0.111,
+`k2-8c32a07ef87455eb3cd6`).  A laptop asleep overnight with a remote
+session open carried on when opened again (same network).  Started on the
+VPN (setup's route: direct, "inside cv"), plotting, then the VPN
+disconnected: the next GUI update hung with no message, the spinner on,
+until after 600 s "the kernel 'cubevis-zuul06' did not answer query_raster
+within 600 s"; every later request the same; the Plot button stayed orange
+after the failure.  (The two SIGKILLs at the start of that session were
+Darrell's own `pkill`.)
+
+Why no "connection lost" (section 56's watch) came: `_watched` asks
+`km.is_alive()` every 5 s, and sshpyk's `_poll` first re-opens the
+kernel's tunnels; with the control socket gone it calls
+`check_control_sockets`, which runs **`verify_ssh_connection` -- a
+blocking `subprocess.run`** -- inside the event loop, with
+`timeout=launch_timeout` (setup writes 120 s), up to 3 tries.  That loop
+is the one every remote call and the watch itself run on, so all of it
+stops; `asyncio.wait_for(..., 30)` cannot fire either.  Only the 600 s
+limit, measured from the calling thread (`SyncBridge.run`), ends the
+wait.  (sshpyk also answers "alive" whenever its `ps` over ssh fails:
+`_poll` returns None on `not success`.)  The heartbeat itself is fine:
+with a local kernel stopped by SIGSTOP, `hb_channel.is_beating()` went
+false within 2 s and true again after SIGCONT (jupyter_client 8.10).
+Unknown still: whether ssh reconnected through the outside route at all,
+and whether the kernel survived -- Darrell's three checks for the next
+try are in the session-management handoff
+(`hrs_handoff_2026-11-04_sessions.md`).
+
+**Session records** (`cubevis/setup/sessions.py`, new): the `sessions`
+section of `hosts/<id>/local.json`, reserved since stage 2a, is now
+written.  `RemoteReductionContext` records a session after it connects to
+a kernel that sshpyk started (`kernel_facts`: the provisioner's
+`ssh_host_alias`, `persistent_file`, `rem_pid_k`; local kernels are not
+recorded) and forgets it in `close()`:
+`{app, kernel, jupyter_kernel, node, local_pid, started, persistent_file,
+remote_pid, data, context_id, handle, cubevis}` (the last two updated when a new worker replaces a dead one).  The kernel's ports and signing key are not
+copied: sshpyk keeps them in its `persistent_file` (Jupyter's runtime
+directory, mode 600), which is what its reattach (`existing=`) reads; it
+deletes it on a clean shutdown, keeps it when the Python dies.  `status`
+lists the records, each "running here" or "left over" (its Python gone;
+the kernel may still run on the node).  Recording never fails a session
+(errors logged at debug).  Decided with this: no `persistent` flag in the
+Jupyter kernel definitions (decided per session at run time, when a later
+stage needs it); `KernelPersistenceManifest` (`cubevis/remote/_persistence.py`,
+one unlocked file in the runtime directory) is superseded by these records
+but left in place; the user-facing call `visplot(..., backend="remote",
+kernel_name=...)` is the contract later stages keep.  Kernel-side code
+unchanged (`k2-8c32a07ef87455eb3cd6`).
+
+**The quick tests** (`tests/ci/`, `.github/workflows/quick-tests.yml`):
+`run.py` runs the entries of `suites.toml` one by one (each its own
+pytest, with its directory's `pytest.ini`), skips a suite whose modules
+are missing (fails it with `--strict`, as in Actions), and summarises;
+adding tests is adding a `[[suite]]`.  Today: `setup` (no rig), `remote`
+(local kernel, `test_query_raster*` left out: they need zuul06),
+`tiny-ms` + `visplot-remote` (`make_tiny_ms.py`: xradio's generator, then
+real integrations, UVWs, data, flags and channel frequencies -- the
+generator's own data are mostly zero and all its channels at 10 Hz, which
+drew empty panels; `remote_visplot_check.py` on it: 22 steps, local
+against `backend="remote"`), and a `[[lint]]` hook (`compileall` only;
+a stricter checker is one more entry).  A fresh Python 3.12 venv with `pip
+install -e ".[visplot]" -r tests/ci/requirements.txt`: all five passed in
+about 4 minutes.  `.gitignore` gains `cubevis/__version__.py` (an editable
+install writes it).
+
+**Tests**: `tests/manual/setup/test_sessions.py` (record, list, forget,
+left over, `status`, `kernel_facts`, recording never fails,
+`RemoteReductionContext` records only sshpyk kernels).  Setup (no rig)
+228 passed, 45 skipped; remote 48 passed; the quick tests 5 of 5.
+
+**Parked**: what is left is in two handoffs, both 2026-11-04 --
+`hrs_handoff_2026-11-04_sessions.md` (remote session management:
+Scenario A first) and `hrs_handoff_2026-11-04_iclean_remote.md` (iclean
+with `gclean` and the image backend on the remote).

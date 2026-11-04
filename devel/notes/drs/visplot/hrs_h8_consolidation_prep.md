@@ -3051,3 +3051,39 @@ password, but setup's configuration does not (it refused the login)",
   (alt -> hrs) and keeps alt's record.
 * **Suite** (2026-11-03): 267 passed, 1 skipped with OpenSSH 9.6 and with
   the 8.0p1 client (`-n 2 --dist loadfile`).
+
+## 58. A worker gone between calls: the call goes to a new one; quieter reasons (base `ec6dd8b`, after section 57; 2026-11-03)
+
+Darrell's test of section 56 on zuul06 (`cubevis-1.0.109`, fingerprint
+`k2-d19f4c5e00b7234d880a`): the worker SIGKILLed while idle; the next
+call (`axis_info`) was answered at once with the reason, the plot went on
+with "unresolved labels" (that call failed), and the call after started a
+new worker; plotting continued.  Two refinements, agreed:
+
+* **A call that never reached the worker is sent to a new one.** The
+  supervisor tells the two cases apart: a worker already gone when the
+  request comes raises `WorkerGoneError` (a subclass of
+  `WorkerDiedError`); one that dies while handling it, `WorkerDiedError`.
+  For `WorkerGoneError` the plotter (`RemoteReductionContext._acall`)
+  starts a new worker and sends the same call to it -- once -- logging
+  "visplot: <reason>; starting a new worker on kernel K and sending
+  <method> to it"; the plot comes out whole.  A death during a call is
+  still reported (`RemoteWorkerDiedError`, shown by Plot): that is most
+  often the call itself running out of memory, and sending it again
+  would do the same.  A new worker that is gone again at once is
+  reported, not retried.
+* **The reason without noise.** Darrell's "last words" were xarray-ms's
+  warnings from opening the MS (`IrregularSubtableGridWarning`,
+  `FrameConversionWarning`, the `warnings.warn(` lines).  A process killed
+  by a signal said nothing about it, so for a signal none is shown; for
+  a worker that exited by itself, its last stderr lines other than
+  Python's warnings (`_worker_transport._last_words`).
+* The kernel-side code changed again (`_supervisor.py`,
+  `_worker_transport.py`): fingerprint `k2-8c32a07ef87455eb3cd6`.
+* **Tests** (`tests/manual/remote/test_worker_death.py`): a worker killed
+  during a call is reported without last words and not as gone; later
+  requests are marked `WorkerGoneError`; a worker that exits gives its
+  last line but not a warning written after it; the plotter sends a call
+  that met a gone worker to a new one, and reports a second death at
+  once; `_last_words` leaves out warnings.  Remote suite 48 passed;
+  visplot's remote tests 35 passed, 13 skipped; setup (no rig) 223 passed.

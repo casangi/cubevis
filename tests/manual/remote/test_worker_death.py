@@ -51,10 +51,14 @@ async def test_a_worker_killed_mid_request_is_reported_at_once():
         assert "WorkerDiedError" in reply.get("traceback", "")
         assert "SIGKILL" in reply["error"] and "memory" in reply["error"], reply["error"]
         assert f"pid {ctx.pid}" in reply["error"]
-        # And every later request to it: at once, the same reason.
+        assert "last words" not in reply["error"]          # a killed process said nothing
+        assert "WorkerGoneError" not in reply["traceback"]  # it died during this request
+        # And every later request to it: at once, the same reason -- marked
+        # as gone before the request (the plotter sends it to a new worker).
         t0 = time.monotonic()
         again = await ctx.dispatch_fast("ping", {}, timeout=120)
         assert time.monotonic() - t0 < 5 and "SIGKILL" in again["error"]
+        assert "WorkerGoneError" in again["traceback"]
     finally:
         await link.close(timeout=20)
         await km.shutdown_kernel(now=True)
@@ -65,11 +69,14 @@ async def test_a_worker_that_exits_says_its_status_and_last_words():
     km, link = await _link("test-worker-death-2")
     try:
         ctx = await link.create_context()
-        await ctx.exec_code("import sys; sys.stderr.write('about to go\\n'); sys.stderr.flush()")
+        await ctx.exec_code("import sys; sys.stderr.write('about to go\\n'); "
+                            "sys.stderr.write('/x/y.py:181: SomeWarning: noise\\n'); "
+                            "sys.stderr.write('  warnings.warn(\\n'); sys.stderr.flush()")
         req = asyncio.ensure_future(ctx.exec_code("import os; os._exit(3)"))
         reply = await asyncio.wait_for(req, 30)
         assert "exited with status 3" in reply["error"], reply
         assert "about to go" in reply["error"]
+        assert "noise" not in reply["error"] and "warnings.warn" not in reply["error"]
     finally:
         await link.close(timeout=20)
         await km.shutdown_kernel(now=True)
@@ -213,3 +220,42 @@ def test_sshpyks_identityfile_hint_is_quiet_for_setups_kernels(monkeypatch, tmp_
     spec2 = type("S", (), {"metadata": {"kernel_provisioner": {"config": {"ssh_config": "/x"}}}})()
     R._quiet_setup_kernel_hints(type("K", (), {"kernel_spec": spec2, "log": other})())
     assert not other.filters
+
+
+@pytest.mark.asyncio
+async def test_a_worker_gone_between_calls_gets_the_call_sent_to_a_new_one():
+    """Darrell 2026-11-03: a worker killed while idle made the next call
+    (axis_info) fail, and the plot went without its labels.  A call that
+    never reached the worker is sent to a new one instead -- once."""
+    gone = {"error": "the worker process (pid 7 on node) was killed (SIGKILL)",
+            "traceback": "...WorkerGoneError: ..."}
+    old = _Ctx([gone])
+    new = _Ctx([{"handle": "h2"}, {"labels": ["a"]}])
+    link = _Link()
+
+    async def create_context(config=None, timeout=None):
+        return new
+    link.create_context = create_context
+    rrc = _bare(_Alive(True), link)
+    rrc._ctx, rrc._handle = old, "h1"
+    assert await rrc._acall("axis_info") == {"labels": ["a"]}
+    assert rrc._ctx is new and not rrc._worker_dead
+    assert [m for m, _ in new.calls] == ["create_object", "call_method"]
+    # Gone again at once: reported, not resent forever.
+    rrc._ctx = _Ctx([gone])
+    rrc._ctx.calls = []
+    newer = _Ctx([{"handle": "h3"}, gone])
+    async def create_context2(config=None, timeout=None):
+        return newer
+    link.create_context = create_context2
+    with pytest.raises(R.RemoteWorkerDiedError):
+        await rrc._acall("axis_info")
+
+
+def test_last_words_leave_out_pythons_warnings():
+    from cubevis.remote._worker_transport import _last_words
+    lines = ["Traceback (most recent call last):", "ValueError: bad", "",
+             "/e/xarray_ms/subtable_grid.py:181: IrregularSubtableGridWarning: 55 / 324 cells",
+             "  warnings.warn(",
+             "/e/entrypoint.py:557: FrameConversionWarning: UVW coordinate frame", "  warnings.warn("]
+    assert _last_words(lines) == ["Traceback (most recent call last):", "ValueError: bad"]

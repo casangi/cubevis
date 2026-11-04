@@ -107,13 +107,20 @@ class WorkerDiedError(RuntimeError):
     of never (notes section 56)."""
 
 
+class WorkerGoneError(WorkerDiedError):
+    """The worker was already gone when the request came (it died between
+    requests): the request itself was never started, so the caller can
+    start a new worker and send it again (``RemoteReductionContext``
+    does, once)."""
+
+
 async def relay(delegate: "WorkerDelegate", message_id: str, payload: Dict[str, Any]) -> Any:
     """``request()`` to a context's worker, raced against its exit: the
     worker's reply, or ``WorkerDiedError`` as soon as the worker is gone
     (before the request, or while it is being handled)."""
     transport = delegate.transport
     if not transport.is_connected():
-        raise WorkerDiedError(await transport.exit_reason())
+        raise WorkerGoneError(await transport.exit_reason())
     req = asyncio.ensure_future(request(delegate.comm, message_id, payload))
     gone = asyncio.ensure_future(transport.wait_exited())
     try:

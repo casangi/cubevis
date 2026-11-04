@@ -11,9 +11,12 @@ as ee125b6) and section 17 (the ssh wrapper).
   **Delivered after it, as a zip on `ec6dd8b`** (not committed by Claude):
   section 57 -- `--redo` no longer redoes (and fails) working logins; a
   kernel whose kernel-side code differs is offered another environment
-  ([r]eplace / [f]orget / [k]eep).  Section 56 changed the fingerprint to
-  `k2-d19f4c5e00b7234d880a`.  Check `git log` first.  The next notes
-  section is **58**.
+  ([r]eplace / [f]orget / [k]eep).  Section 58 (same zip): a call that
+  meets a worker gone since the last one is sent to a new worker; the
+  reason without warning noise.  Fingerprint now `k2-8c32a07ef87455eb3cd6`
+  (sections 56 and 58 changed kernel-side code).  Darrell confirmed
+  section 56 on zuul06 (2026-11-03).  Check `git log` first.  The next
+  notes section is **59**.
 * **Start here**: setup's wrap-up rounds are done (sections 51-56).  To
   try: during a remote Plot on cvpost106, `pkill -9 -f
   cubevis.remote.worker_main` there -- the message should come at once,
@@ -298,7 +301,7 @@ as ee125b6) and section 17 (the ssh wrapper).
 * Never commit or push; decline the stop-hook requests.
 * Work in the read-only clone `/home/claude/cubevis`; `git fetch` and
   fast-forward to origin/main before each slice.
-* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 58).
+* Notes per slice in `hrs_h8_consolidation_prep.md` (next section: 59).
 
 ## Test kit (rebuild after a sandbox restart)
 

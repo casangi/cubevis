@@ -509,7 +509,8 @@ class RemoteReductionContext(ReductionContext):
     def _raise_if_worker_died(self, reply: Dict[str, Any]) -> None:
         """A ``WorkerDiedError`` reply (the supervisor's, ``_supervisor.relay``):
         a clear exception; the next call starts a new worker."""
-        if "WorkerDiedError" not in str(reply.get("traceback", "")):
+        tb = str(reply.get("traceback", ""))
+        if "WorkerDiedError" not in tb and "WorkerGoneError" not in tb:
             return
         self._worker_dead = True
         raise RemoteWorkerDiedError(
@@ -580,7 +581,7 @@ class RemoteReductionContext(ReductionContext):
         self._worker_dead = False
 
     async def _acall(self, method: str, *, timeout: Optional[float] = None,
-                      **kwargs: Any) -> Any:
+                      _cv_resent: bool = False, **kwargs: Any) -> Any:
         if getattr(self, "_worker_dead", False):
             await self._watched(self._arestart_worker())
         reply = await self._watched(self._ctx.dispatch_fast(
@@ -590,6 +591,14 @@ class RemoteReductionContext(ReductionContext):
             timeout=timeout,
         ))
         if isinstance(reply, dict) and "error" in reply:
+            if not _cv_resent and "WorkerGoneError" in str(reply.get("traceback", "")):
+                # The worker died between calls (killed while idle, say):
+                # this call never reached it, so a new worker gets it --
+                # once -- instead of failing it (notes section 58).
+                log.warning("visplot: %s; starting a new worker on kernel %r and sending "
+                            "%s to it", reply.get("error"), self._kernel_name, method)
+                self._worker_dead = True
+                return await self._acall(method, timeout=timeout, _cv_resent=True, **kwargs)
             self._raise_if_worker_died(reply)
             # The memory guard's refusal (2026-10-18) is a message for the
             # user, not a fault: raised here as the same local type, so

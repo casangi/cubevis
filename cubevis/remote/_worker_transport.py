@@ -28,6 +28,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import struct
 import time
 import sys
@@ -132,6 +133,25 @@ async def _read_frame(reader: asyncio.StreamReader) -> Optional[Dict[str, Any]]:
     FRAME_STATS["frames_in"] += 1
     FRAME_STATS["bytes_in"] += n + sum(len(b) for b in segments)
     return result
+
+
+_WARNING_LINE = re.compile(r"Warning: |^\s*warnings\.warn\(")
+
+
+def _last_words(lines: List[str], n: int = 5) -> List[str]:
+    """The last *n* stderr lines that are not Python warnings (a warning
+    is two lines: ``file:line: SomethingWarning: ...`` and the source line,
+    often ``warnings.warn(``)."""
+    out: List[str] = []
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        if _WARNING_LINE.search(line):
+            continue
+        out.append(line)
+        if len(out) >= n:
+            break
+    return list(reversed(out))
 
 
 # ============================================================================
@@ -241,7 +261,11 @@ class WorkerProcessTransport(TransportBase):
     async def exit_reason(self, wait: float = 5.0) -> str:
         """Why the worker is gone, for a person: its pid and host, how it
         ended (an exit status, or the signal -- SIGKILL most often being
-        the system's memory limit), and its last stderr lines."""
+        the system's memory limit), and, when it exited by itself, its
+        last stderr lines other than Python's warnings.  A process killed
+        by a signal said nothing about it: what it wrote before is only
+        noise there (Darrell's try, 2026-11-03: xarray-ms's warnings from
+        opening the MS), so none is shown."""
         import signal
         import socket
         rc = self.returncode
@@ -264,7 +288,7 @@ class WorkerProcessTransport(TransportBase):
                         "killer); a narrower selection (one field, fewer SPWs) needs less")
         else:
             how = f"exited with status {rc}"
-        last = [l for l in self._last_stderr_lines[-5:] if l.strip()]
+        last = [] if (rc is not None and rc < 0) else _last_words(self._last_stderr_lines)
         return f"{who} {how}" + (f". Its last words: {' | '.join(last)}" if last else "")
 
     async def close(self, timeout: float = 10.0) -> None:

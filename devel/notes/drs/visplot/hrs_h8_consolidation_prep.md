@@ -3260,3 +3260,38 @@ registration module).
 
 **Next** (design §4): 1b, the coordinate description; 2, `edit_mask`
 operations in place of `CubeMask`'s per-channel `mask`/`put_mask` loops.
+
+## 61. iclean step 1, follow-up: templates, the notebook bridge, organization (base `ff0d810` + §60, 2026-11-05)
+
+* **Templates.**  `_interactive_clean_ui.py`, `_interactiveclean.py` and
+  `_interactivecleannotebook.py` are generated (`scripts/expand_templates`)
+  from `.mustache` files; §60 edited only the `.py` files, so the next
+  expansion would have undone step 1.  The three templates now carry the
+  same changes.  Checked: `expand_templates` on a checkout of `ff0d810`
+  reproduces the committed `.py` files byte for byte, and on this tree
+  reproduces the §60 `.py` files byte for byte.  (The UI's template has no
+  tags at all: design §6 proposes dropping it.)
+* **JupyterLab "display_bridge() must be called before connect()".**  Not
+  step 1: reproduced on `ff0d810` without it, in a kernel with no
+  `anywidget`.  The bridge is displayed by a preflight callable at the end
+  of the cell that constructs the application; `run_preflight_callables`
+  catches its exception and logs only a WARNING there, then `show()` fails
+  in the next cell with the message above.  `anywidget` is the optional
+  `cubevis[notebook]` extra.  With `anywidget` installed, both the base and
+  step 1 run the notebook's whole sequence (construct, show, get_result,
+  construct, show) to the bridge display and the connect.
+  `tests/manual/iclean-imaging/notebook_check.py` runs those cells in a
+  real kernel, no browser.
+* **Better message (separate patch, `cubevis-ff0d8108-bridge-error.zip`).**
+  `CommsTransport.display_bridge` records why it failed; `connect()`
+  raises "the notebook bridge could not be displayed: The 'anywidget'
+  package is required ... pip install 'cubevis[notebook]'" from that
+  cause.  `_low_level_transport.py` is in the kernel-side closure, so this
+  changes the fingerprint (`k2-8c32a07ef87455eb3cd6` ->
+  `k2-97336d2e11f1cef86a2d`): kept out of the main zip so that it can go
+  with the next release.
+* **Organization**: design §6 (proposal, not yet done): `cubevis/toolbox/
+  iclean/` like `toolbox/visplot/` (one app template with the notebook class
+  as a subclass, the UI as plain source, the widgets); `cubevis/imaging`
+  stays top level with a no-Bokeh/no-CASA-at-import rule; old pieces
+  removed.  Step 1c, before 1b.

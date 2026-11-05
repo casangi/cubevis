@@ -33,7 +33,6 @@ import os
 import sys
 import copy
 import asyncio
-import shutil
 import logging
 import websockets
 from os.path import basename, abspath, exists, join
@@ -57,8 +56,8 @@ from cubevis.bokeh import BokehInit
 from cubevis.utils import resource_manager, reset_resource_manager, is_interactive_jupyter, find_pkg, load_pkg
 from cubevis.utils import MutualExclusionManager
 
-from cubevis.utils import convert_masks
 from cubevis.toolbox import CubeMask
+from cubevis.imaging import as_imaging_session
 from cubevis.bokeh.utils import svg_icon
 from cubevis.utils import DocEnum
 from cubevis import exe
@@ -127,53 +126,10 @@ class InteractiveCleanUI:
         self.__result = None
         self.__result_from_gui = None
 
-    '''
-        _gen_port_fwd_cmd()
-
-    Create an SSH port-forwarding command to create the tunnels necessary for remote connection.
-    NOTE: This assumes that the same remote ports are also available locally - which may
-        NOT always be true.
-    '''
-    def _gen_port_fwd_cmd(self):
-        hostname = os.uname()[1]
-
-        ###
-        ### need to add extra cube ports here for multifield imaging
-        ###
-        ports = [ self._pipe['control'].address[1], self._clean['converge']['pipe'].address[1] ]
-
-        for imid, imdetails in self._clean_targets.items( ):
-            ports.append( imdetails['gui']['cube']._pipe['image'].address[1] )
-            ports.append( imdetails['gui']['cube']._pipe['control'].address[1] )
-
-        # Also forward http port if serving webpage
-        #if not self._is_notebook:
-        #    ports.append(self._http_port)
-
-        cmd = 'ssh'
-        for port in ports:
-            cmd += (' -L ' + str(port) + ':localhost:' + str(port))
-
-        cmd += ' ' + str(hostname)
-        return cmd
-
-    def _residual_path( self, gclean, imid ):
-        if self._clean['gclean_paths'] is None:
-            raise RuntimeError( f'''gclean paths are not available for {imid}''' )
-        for p in self._clean['gclean_paths']:
-            if p['name'] == imid:
-                return f"{p['imagepath']}/{p['residualname']}"
-        raise RuntimeError( f'''gclean residual path not found for {imid}''' )
-
-    def _mask_path( self, gclean, imid ):
-        if self._clean['gclean_paths'] is None:
-            raise RuntimeError( f'''gclean paths are not available for {imid}''' )
-        for p in self._clean['gclean_paths']:
-            if p['name'] == imid:
-                return f"{p['imagepath']}/{p['maskname']}"
-        raise RuntimeError( f'''gclean mask path not found for {imid}''' )
-
-    def __init__( self, gclean, user_args ):
+    def __init__( self, session, user_args ):
+        '''``session`` is the imaging layer (``cubevis.imaging.ImagingSession``):
+        the imager and the images of each field.  A gclean-like object is
+        accepted too and wrapped in a ``LocalImagingSession``.'''
 
         ###
         ### With Bokeh 3.2.2, the spectrum and convergence plots extend beyond the edge of the
@@ -182,12 +138,6 @@ class InteractiveCleanUI:
         ### the image display.
         ###
         self._conv_spect_plot_width = 450
-
-        ###
-        ### Whether or not the Interactive Clean session is running remotely
-        ###
-        #self._is_remote = remote
-        self._is_remote = False
 
         ###
         ### whether or not the session is being run from a jupyter notebook or script
@@ -236,6 +186,11 @@ class InteractiveCleanUI:
         self._last_mask_breadcrumbs = ''
 
         ###
+        ### masks drawn without a mask cube (see masks( )); nothing appends to it today
+        ###
+        self._mask_history = [ ]
+
+        ###
         ### Set up dictionary of javascript code snippets
         ###
         self._initialize_javascript( )
@@ -246,7 +201,7 @@ class InteractiveCleanUI:
         ###
         ### create clean interface -- final version will have only one gclean object
         ###
-        self._init_values = { "deconvolver": user_args['deconvolver'],          ### used by _residual_path( )
+        self._init_values = { "deconvolver": user_args['deconvolver'],
                               "cycleniter": user_args['cycleniter'],            ### used by _setup( )
                               "threshold": user_args['threshold'],              ### used by _setup( )
                               "cyclefactor": user_args['cyclefactor'],          ### used by _setup( )
@@ -306,10 +261,14 @@ class InteractiveCleanUI:
         ## side running forever.
         self._comm_mgr.reconnect_timeout = None
 
-        self._clean['gclean'] = gclean
+        ###
+        ### the imaging layer: the imager (gclean) and the images of each field
+        ###
+        self._clean['session'] = as_imaging_session( session )
+        self._stop_descriptions = self._clean['session'].stop_descriptions( )
 
-        self._clean['gclean_paths'] = { prod['name']: prod for prod in self._clean['gclean'].image_products( ) }
-        self._clean['imid'] = [ name for name,prod in self._clean['gclean_paths'].items( ) ]
+        self._clean['fields'] = { f['id']: f for f in self._clean['session'].fields( ) }
+        self._clean['imid'] = [ name for name in self._clean['fields'].keys( ) ]
         self._clean_targets = { id: { } for id in  self._clean['imid'] }
         self._clean['gclean_rest'] = [ ]
         self._initial_clean_params = { }
@@ -331,9 +290,8 @@ class InteractiveCleanUI:
             ### Residual path...
             ###
             if 'path' not in imdetails: imdetails['path'] = { }
-            output_dir = self._clean['gclean_paths'][imid]['imagepath']
-            imdetails['path']['residual'] = join( output_dir, self._clean['gclean_paths'][imid]['residualname'] )
-            imdetails['path']['mask'] = join( output_dir, self._clean['gclean_paths'][imid]['maskname'] )
+            imdetails['path']['residual'] = self._clean['fields'][imid]['residual']
+            imdetails['path']['mask'] = self._clean['fields'][imid]['mask']
 
         ###
         ### There is one set of tclean controls for all images/outlier/etc. because
@@ -362,7 +320,7 @@ class InteractiveCleanUI:
             ###
             ### Only the first image should initialize the initial convergence state
             ###
-            imdetails['gui']['cube'] = CubeMask( imdetails['path']['residual'], mask=imdetails['path']['mask'],
+            imdetails['gui']['cube'] = CubeMask( self._clean['session'].cube( imid ), mask=imdetails['path']['mask'],
                                                  init_script=CustomJS( args=dict( initial_convergence_state=self._init_values["convergence_state"],
                                                                                   clean_ctrl=self._control['iteration'],
                                                                                   name=imid ),
@@ -406,9 +364,7 @@ class InteractiveCleanUI:
             imdetails['gui']['cube']._init_pipes( )
 
     def _create_convergence_gui( self, imdetails, orient='horizontal', sizing_mode='stretch_width', **kw ):
-        # pylint: disable=no-name-in-module
-        from casatasks.private.imagerhelpers.imager_return_dict import ImagingDict
-
+        stopdesc = self._stop_descriptions.__getitem__
         
         TOOLTIPS='''<div>
                         <div>
@@ -435,11 +391,11 @@ class InteractiveCleanUI:
         imdetails['converge-data'] = { }
         imdetails['converge-data']['flux']     = ColumnDataSource( data=dict( values=convergence['modelFlux'], iterations=convergence['iterations'],
                                                                               cyclethreshold=convergence['cycleThresh'],
-                                                                              stopDesc=list( map( ImagingDict.get_summaryminor_stopdesc, convergence['stopCode'] ) ),
+                                                                              stopDesc=list( map( stopdesc, convergence['stopCode'] ) ),
                                                                               type=['flux'] * len(convergence['iterations']) ) )
         imdetails['converge-data']['residual'] = ColumnDataSource( data=dict( values=convergence['peakRes'],   iterations=convergence['iterations'],
                                                                               cyclethreshold=convergence['cycleThresh'],
-                                                                              stopDesc=list( map( ImagingDict.get_summaryminor_stopdesc, convergence['stopCode'] ) ),
+                                                                              stopDesc=list( map( stopdesc, convergence['stopCode'] ) ),
                                                                               type=['residual'] * len(convergence['iterations'])) )
         imdetails['converge-data']['cyclethreshold'] = ColumnDataSource( data=dict( values=convergence['cycleThresh'], iterations=convergence['iterations'] ) )
 
@@ -583,9 +539,6 @@ class InteractiveCleanUI:
     def _build_bokeh( self ):
         '''create and show GUI
         '''
-        # pylint: disable=no-name-in-module
-        from casatasks.private.imagerhelpers.imager_return_dict import ImagingDict
-
         ###
         ### Will contain the top level GUI
         ###
@@ -597,39 +550,21 @@ class InteractiveCleanUI:
         async def clean_handler( msg, context, self=self ):
             if msg['action'] == 'next' or msg['action'] == 'finish':
 
-                if 'mask' in msg['value']:
-                    ###
-                    ### >>HERE>> breadcrumbs must be specific to the field they are related to...
-                    ###
-                    if 'breadcrumbs' in msg['value'] and msg['value']['breadcrumbs'] is not None and msg['value']['breadcrumbs'] != self._last_mask_breadcrumbs:
-                        self._last_mask_breadcrumbs = msg['value']['breadcrumbs']
-                        mask_dir = "%s.mask" % self._imagename
-                        shutil.rmtree(mask_dir)
-                        new_mask = imdetails['gui']['cube'].jsmask_to_raw(msg['value']['mask'])
-                        self._mask_history.append(new_mask)
-
-                        msg['value']['mask'] = convert_masks(masks=new_mask, coord='pixel', cdesc=imdetails['gui']['cube'].coorddesc())
-
-                    else:
-                        ##### seemingly the mask path used to be spliced in?
-                        #msg['value']['mask'] = self._mask_path
-                        pass
-                else:
-                    ##### seemingly the mask path used to be spliced in?
-                    #msg['value']['mask'] = self._mask_path
-                    pass
-
                 ###
-                ### In the final implementation, there will only be one gclean object...
+                ### The browser's mask edits are already in the mask cube (CubeMask's 'mask-mod'
+                ### handler writes them through the field's ImageCube), so only the iteration
+                ### and automask settings go to the imager. (Until 2026-11 a branch here, for
+                ### msg['value']['mask'], deleted '<imagename>.mask' and converted drawn regions;
+                ### the browser never sends 'mask' -- it sends 'masks' -- so it never ran.)
                 ###
                 convergence_state={ 'convergence': {}, 'cyclethreshold': {} }
-                err,errmsg = self._clean['gclean'].update( dict( **msg['value']['iteration'],
+                err,errmsg = self._clean['session'].update( dict( **msg['value']['iteration'],
                                                                  **msg['value']['automask'] ) )
 
                 iteration_limit = int(msg['value']['iteration']['niter'])
-                stopdesc, stopcode, majordone, majorleft, iterleft, self._convergence_data = await self._clean['gclean'].__anext__( )
+                stopdesc, stopcode, majordone, majorleft, iterleft, self._convergence_data = await self._clean['session'].arun_cycle( )
 
-                clean_cmds = self._clean['gclean']._log( )
+                clean_cmds = self._clean['session'].log( )
 
                 for key, value in self._convergence_data.items( ):
 
@@ -748,7 +683,7 @@ class InteractiveCleanUI:
                                                                                                                           'cyclethreshold': imdetails['converge-data']['cyclethreshold'] },
                                                                                                               imid=imid,
                                                                                                               ctrl={ 'converge': self._clean['converge'] },
-                                                                                                              stopdescmap=ImagingDict.get_summaryminor_stopdesc( ) ),
+                                                                                                              stopdescmap=self._stop_descriptions ),
                                                                                                    code=self._js['update-converge'] +
                                                                                                         '''update_convergence_single( img_state, cb_obj._appstate.convergence_data.convergence[imid] )''' ) )
 
@@ -880,7 +815,7 @@ class InteractiveCleanUI:
                                                                 ctrl_pipe=self._pipe['control'],
                                                                 ids=self._clean_ids,
                                                                 logbutton=self._log_button,
-                                                                stopdescmap=ImagingDict.get_summaryminor_stopdesc( )
+                                                                stopdescmap=self._stop_descriptions
                                                               ),
                                                  code="const appstate = Bokeh.find.appState(cb_obj.origin);" +
                                                       self._js['update-converge'] + self._js['clean-refresh'] + self._js['clean-disable'] +
@@ -998,7 +933,7 @@ class InteractiveCleanUI:
         ### Setup script that will be called when the user closes the
         ### browser tab that is running interactive clean
         ###
-        initial_log = self._clean['gclean']._log( )
+        initial_log = self._clean['session'].log( )
 
         self._pipe['control'].add_init_script( args=dict( ctrl_pipe=self._pipe['control'],
                                                           ids=self._clean_ids,
@@ -1148,18 +1083,9 @@ class InteractiveCleanUI:
 
         self._setup()
 
-        # If Interactive Clean is being run remotely, print helper info for port tunneling
-        if self._is_remote:
-            # Tunnel ports for Jupyter kernel connection
-            print("\nImportant: Copy the following line and run in your local terminal to establish port forwarding.\
-                You may need to change the last argument to align with your ssh config.\n")
-            print(self._gen_port_fwd_cmd())
-
-            # TODO: Include?
-            # VSCode will auto-forward ports that appear in well-formatted addresses.
-            # Printing this line will cause VSCode to autoforward the ports
-            # print("Cmd: " + str(repr(self.auto_fwd_ports_vscode())))
-            input("\nPress enter when port forwarding is setup...")
+        # (Until 2026-11 an "if self._is_remote:" block printed ssh port forwarding
+        # commands here; it was never enabled.  Remote interactive clean goes through
+        # the imaging layer, cubevis.imaging, instead.)
 
         ###
         ### cubevis.exe subpkg supports adding a stop condition to allow for interrupt,
@@ -1203,9 +1129,9 @@ class InteractiveCleanUI:
     def _setup( self ):
         self.__reset( )
 
-        def initialize_tclean( gclean ):
+        def initialize_tclean( session ):
 
-            stopdesc, stopcode, majordone, majorleft, iterleft, all_converge = next(gclean)
+            stopdesc, stopcode, majordone, majorleft, iterleft, all_converge = session.start( )
 
             for imid, converge  in all_converge.items( ):
                 #######################################################################################################
@@ -1226,7 +1152,7 @@ class InteractiveCleanUI:
                     ###
                     raise RuntimeError(f'''gclean failure "%s" not returned: {imdetails["converge"]}''' % ('major' if imdetails['converge']['major'] is None else 'chan'))
 
-            self._clean['cmds'].extend(self._clean['gclean']._log( ))
+            self._clean['cmds'].extend(self._clean['session'].log( ))
 
             self._initial_clean_params['nmajor'] = majorleft
             self._initial_clean_params['niter'] = iterleft
@@ -1244,7 +1170,7 @@ class InteractiveCleanUI:
 
         self._clean['cmds'] = []
 
-        stopdesc, stopcode, majordone, majorleft, iterleft = initialize_tclean(self._clean['gclean'])
+        stopdesc, stopcode, majordone, majorleft, iterleft = initialize_tclean(self._clean['session'])
 
 
         self._clean['last-success'] = dict( result='converged' if stopcode[0] else 'update', stopcode=stopcode, cmd=self._clean['cmds'],
@@ -1275,7 +1201,7 @@ class InteractiveCleanUI:
         if self.__result is None:
             ### restore returns full return dictionary
             self.__result_from_gui = self.__result_future.result( )
-            self.__result = self._clean['gclean'].restore( )
+            self.__result = self._clean['session'].restore( )
 
         return self.__result
 
@@ -1310,7 +1236,7 @@ class InteractiveCleanUI:
         -------
         list[str]  tclean calls made during the interactive clean session.
         '''
-        return self._clean['gclean']._log( True )
+        return self._clean['session'].log( True )
 
     def _initialize_javascript( self ):
         self._js = { ### initialize state

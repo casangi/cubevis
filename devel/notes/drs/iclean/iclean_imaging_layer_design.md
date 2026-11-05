@@ -239,7 +239,7 @@ current one. This comparison is part of step 1's tests.
 
 ## 3. Remote shape (reusing visplot's machinery)
 
-* Registration module `cubevis.toolbox.iclean.remote_registrations` registers
+* Registration module `cubevis.imaging.remote_registrations` (§6) registers
   `LocalImagingSession`. It is added to `_fingerprint.ROOTS`, so every
   fingerprint changes and a release follows.
 * `RemoteImagingSession` (laptop) uses one handle. Cube proxies call
@@ -266,6 +266,7 @@ current one. This comparison is part of step 1's tests.
 | 4. `run_cycle` as an async job; stop and progress semantics | 1 |
 | 5. `iclean(kernel_name=)`, the shared connection base, setup environments with casatasks (`cubevis[visplot,iclean]`, discovery reports it), fingerprint roots, release | 1 |
 | 6. Parity tests (local kernel, small MS, local vs remote), quick tests, rounds with Darrell | 1 + 2–3 rounds |
+| 1c. Package organization (§6): `toolbox/iclean/`, one app template, dependency rule | 1 |
 | Later: coordtxl taking the description natively, with a spectral axis (§2.5); `XarrayImageStore` over arcae; notebook variant; remove `tests/manual/iclean-remote/` and `_gen_port_fwd_cmd` | — |
 
 Steps 1–2 are useful without any remote work: the CASA dependency in the GUI
@@ -302,3 +303,85 @@ becomes explicit, and mask editing becomes faster for cubes.
   tests.
 * **Naming**: `ImagingSession` / `ImageCube` / `ImageStore` / `Deconvolver`
   are placeholders.
+
+## 6. Package organization (proposal, 2026-11-05)
+
+Step 1 added `cubevis.imaging` but left interactive clean spread where it
+grew: the application classes are generated into `cubevis/private/apps/`,
+the GUI and its widgets are in `cubevis/toolbox/`, and the casatasks
+wrappers are in `cubevis/private/casatasks/`.  visplot, the newest
+application, keeps everything of its own under `cubevis/toolbox/visplot/`
+(GUI, readers, local and remote reduction context, registrations), with a
+thin task wrapper in `private/casatasks/visplot.py`.  The proposal is to
+give iclean the same shape, with one rule for dependencies.
+
+### 6.1 What is there now
+
+| What | Where | Note |
+|---|---|---|
+| task wrappers `iclean`, `iclean_notebook` | `private/casatasks/iclean{,_notebook}.{mustache,py}` | generated from tclean's XML; the two templates differ in 36 lines |
+| casashell binding | `private/casashell/iclean.{mustache,py}` | generated; also named by `cubevis.mustache_interface_templates()` |
+| `InteractiveClean`, `InteractiveCleanNotebook` | `private/apps/_interactiveclean{,notebook}.{mustache,py}` | generated; 84-line templates, identical except the notebook's display (`DisplayContext`, `__call__`, `get_future`) |
+| `InteractiveCleanUI` | `toolbox/_interactive_clean_ui.{mustache,py}` | the `.mustache` has **no tags**: it is a hand-kept copy of the `.py` (one header line different). Step 1 edited only the `.py`; fixed in §61 |
+| `SharedWidgets` | `toolbox/_interactiveclean_wrappers.py` | used only by the UI |
+| `CubeMask` | `toolbox/_cube.py` (3.6k lines) | shared with createmask and createregion |
+| `ImagePipe` | `bokeh/sources/_image_pipe.py` | since step 1, Bokeh model + messages only |
+| imaging layer | `cubevis/imaging/` | step 1 |
+| old copy of gclean | `private/_gclean.py` | unused, pre-`image_products` |
+| pre-multiplexing remote test | `tests/manual/iclean-remote/` | the ssh-port webserver approach |
+
+### 6.2 Proposed layout
+
+```
+cubevis/imaging/                    the imaging layer: no Bokeh, no CASA at import
+    __init__.py                     ImagingSession, Deconvolver, ImageCube, ImageStore, CycleResult, ...
+    _protocols.py
+    _image_cube.py                  ImageCube (numpy)
+    _casatools_store.py             CasatoolsImageStore      (later _xarray_store.py: arcae)
+    _coordinates.py                 the coordinate description, astropy_wcs()        (step 1b)
+    _session.py                     LocalImagingSession
+    _remote_session.py              RemoteImagingSession (laptop)                    (step 3)
+    remote_registrations.py         worker side; a _fingerprint root                 (step 3)
+
+cubevis/toolbox/iclean/             the application, like cubevis/toolbox/visplot/
+    __init__.py                     InteractiveClean, InteractiveCleanNotebook, InteractiveCleanUI
+    _app.mustache -> _app.py        ONE template: InteractiveClean, and
+                                    InteractiveCleanNotebook(InteractiveClean) adding only its display
+    _ui.py                          InteractiveCleanUI       (from toolbox/_interactive_clean_ui.py;
+                                                              plain source, the tag-free .mustache dropped)
+    _widgets.py                     SharedWidgets            (from toolbox/_interactiveclean_wrappers.py)
+
+cubevis/private/casatasks/iclean{,_notebook}.*   unchanged (task wrappers, generated)
+cubevis/toolbox/_cube.py, bokeh/sources/_image_pipe.py   stay: shared with createmask/createregion
+```
+
+Dependency rule (checked by a quick test): `cubevis.imaging` imports
+neither Bokeh nor CASA at import time, so a remote worker, an RADPS
+implementation or a test can use it without the GUI;
+`toolbox/iclean` and `bokeh/sources` depend on `imaging`, never the reverse.
+
+Names that keep working: `cubevis.iclean`, `cubevis.toolbox.InteractiveCleanUI`,
+`cubevis.private.apps.InteractiveClean` / `InteractiveCleanNotebook` /
+`iclean_notebook` (the lazy tables point to the new modules).  The
+underscore module paths (`toolbox._interactive_clean_ui`,
+`private.apps._interactiveclean`) go away; three tests and
+`toolbox/visplot/visibility_plot.py` (a comment) refer to them.
+
+Removed: `private/_gclean.py`; `tests/manual/iclean-remote/` once step 3
+works (the design already planned this).
+
+### 6.3 Why the imaging layer stays a top-level package
+
+visplot keeps its reduction context inside `toolbox/visplot/`, so the
+mirror image would be `toolbox/iclean/session.py`.  It is kept separate
+because it is the API outside imagers implement (an RADPS deconvolver, an
+xradio store), because the remote worker loads it without the GUI (and
+`toolbox/iclean/__init__` would pull the GUI in), and because `ImageCube`
+already serves createmask and createregion through `CubeMask`.
+
+### 6.4 When
+
+As its own slice, now, before 1b/2/3, so that those land in their final
+places: moves and import changes only, verified by the before/after
+handler records, the notebook run (`nb` check, §61), and the quick tests.
+About one slice.

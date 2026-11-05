@@ -3164,3 +3164,99 @@ left over, `status`, `kernel_facts`, recording never fails,
 `hrs_handoff_2026-11-04_sessions.md` (remote session management:
 Scenario A first) and `hrs_handoff_2026-11-04_iclean_remote.md` (iclean
 with `gclean` and the image backend on the remote).
+
+## 60. iclean on remote kernels, step 1: the imaging layer, local (base `ff0d810`, 2026-11-04)
+
+Design: `devel/notes/drs/iclean/iclean_imaging_layer_design.md` (step 1 of
+its §4).  Interactive clean's GUI now reaches the imager and its images
+only through an `ImagingSession`; nothing remote yet, and no change in
+behaviour.
+
+* **New package `cubevis.imaging`** (imports no CASA; casatools when a
+  store first opens an image, casatasks when a session is made from
+  iclean's arguments):
+  * `_protocols.py`: `ImagingSession`, `ImageCube` (exported as
+    `ImageCubeProtocol`), `ImageStore`, `Deconvolver` (runtime-checkable
+    `Protocol`s); `CycleResult` (a `NamedTuple`, so the UI's six-value
+    unpacking of gclean's tuple is unchanged).
+  * `CasatoolsImageStore`: every casatools call `ImagePipe` made, moved
+    unchanged (getchunk/putchunk, `pixelvalue`, mask0 by `getregion`, the
+    one-use image tool for statistics -- CAS-13625 -- and for `coordsys`).
+    Opens the image on first use: iclean makes its cubes before gclean has
+    written the residual.  Reopens itself (mask included) after `close()`.
+  * `ImageCube`: `ImagePipe`'s numpy logic, moved unchanged (plane cache,
+    quantization to uint8, histogram, spectrum, statistics and their
+    sorting, mask planes, mask0 cache), plus `channel_reply` (plane, mask,
+    mask0, histogram and statistics in one call: one round trip per
+    channel step when remote).  Colormap bounds/transfer are passed in
+    (`quant`), not kept.  Freshness: `track="generation"` for cubes a
+    session serves (the session increments `generation` after `start`
+    and each cycle -- no ctime polling), `track="ctime"` for cubes opened
+    from a path (createmask, createregion: as before).
+  * `LocalImagingSession`: a gclean (`resolve_deconvolver(iclean_backend)`
+    -- "PROD" or `_gclean_NAME`, the logic that was in both iclean entry
+    points) and a cube per field; `start`, `update`, `run_cycle`,
+    `arun_cycle` (gclean's own `__anext__`, its thread), `has_next`,
+    `log`, `restore`, `stop_descriptions` (the deconvolver's own if it has
+    one, else casatasks' `ImagingDict`), `fields`, `cube`, `close`.
+    `as_imaging_session` wraps a bare gclean; `open_image_cube(path, mask)`.
+* **`ImagePipe`** keeps the Bokeh model, the browser's messages and the
+  colormap state; takes `cube=` (or a path, as before, for which it makes
+  one).  Its public methods are unchanged and delegate.
+* **`CubeMask`** takes a path (as before) or an `ImageCube`; "does the mask
+  exist" asks the pipe (`have_mask`) instead of `os.path.isdir` on the
+  path; `path()` fixed (it returned `self._image_papth`: `AttributeError`).
+* **`InteractiveCleanUI(session, user_args)`** (a gclean is still accepted,
+  wrapped): fields from `session.fields()`, each `CubeMask` built on
+  `session.cube(field)`, `session.start/update/arun_cycle/log/restore`,
+  stop descriptions from the session -- the UI no longer imports casatasks.
+  Removed, all dead: the `msg['value']['mask']` branch of `clean_handler`
+  (the browser sends `masks`; the branch used `self._imagename` and
+  `self._mask_history`, never set, and its `rmtree` ran on the laptop),
+  `_gen_port_fwd_cmd` and `_is_remote` (the pre-multiplexing port
+  forwarding, design §3 of the remote design), `_residual_path` /
+  `_mask_path` (never called; would have failed on the dict they scan).
+  `masks()` returns `[]` instead of raising `AttributeError`.
+* **Both entry points** (`_interactiveclean.py`,
+  `_interactivecleannotebook.py`) make a
+  `LocalImagingSession.from_args(args, iclean_backend)`; `_gclean` and
+  `_gclean_paths` are kept (from the session).
+
+Kernel-side code unchanged (`k2-8c32a07ef87455eb3cd6`): nothing in
+`_fingerprint.ROOTS` imports `cubevis.imaging` yet (step 5 adds the
+registration module).
+
+**Tests**:
+* `tests/manual/iclean-imaging/test_imaging_layer.py` (13, no CASA): the
+  import pulls in no CASA; the protocols; quantization (linear, log with
+  bounds) against `quantize`; generation vs ctime rereads; mask planes
+  (bool -> uint8, display transpose, `mask_value` -1 on error); spectra
+  (clipping, one channel); statistics (mask only with a mask path, blc/trc
+  last); `channel_reply`; the session over a scripted gclean (fields,
+  cubes made once, `CycleResult` unpacking, a cycle rereads the residual,
+  log, restore, stop descriptions, close); `as_imaging_session`;
+  `resolve_deconvolver`/`from_args` with a `_gclean_NAME` module.  A
+  quick-test suite, `imaging` (`tests/ci/suites.toml`).
+* **Before/after, with CASA** (`record_iclean_handlers.py`,
+  `compare_records.py`, `make_sim_ms.py` in the same directory): iclean
+  driven headlessly through the browser's handlers -- 5 channel replies,
+  spectrum, colormap log/sqrt/reset, pixel value, statistics, histogram,
+  9 mask edits (chan/cube add and subtract by polygon and by source
+  channel, invert twice, delete) with the whole mask cube saved after
+  each, masked statistics, the spectrum fetch, two clean cycles (46 and 34
+  iterations) with the plane and statistics after each, status, the
+  convergence pipe -- 56 records.  Base `ff0d810` against this zip:
+  identical (floats to 1e-6; two runs of the base were identical apart
+  from FITS DATE/MEMAVAIL/IMAGENME/HISTORY cards, which are ignored).
+  Also: `CubeMask` from paths, with and without a mask (createmask and
+  createregion's use); the notebook entry point to a built GUI.
+* The data: casa.nrao.edu is not reachable from where this was done, so
+  `make_sim_ms.py` simulates an MS like `refim_point_withline.ms`
+  (VLA D, five channels from 1 GHz by 0.2 GHz, two sources).  Worth
+  repeating the before/after with `refim_point_withline.ms` itself.
+  (Environment note: the casatools 6.7.6 wheel's bundled libssl and
+  libldap need RHEL's OpenSSL; on Ubuntu 24.04 they were replaced by the
+  system's for this test.)
+
+**Next** (design §4): 1b, the coordinate description; 2, `edit_mask`
+operations in place of `CubeMask`'s per-channel `mask`/`put_mask` loops.

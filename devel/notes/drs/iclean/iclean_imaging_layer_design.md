@@ -25,6 +25,11 @@ are not independent of each other:
   passes them to `gclean.update(mask=...)`. Remotely, the rmtree would point
   at the wrong machine. Deleting and recreating the mask belongs to the
   imaging side: `set_mask_regions(field, regions)`.
+  *Found in step 1 (2026-11-04, notes §60):* that branch never ran -- the
+  browser sends `masks`, not `mask`, and the branch used attributes that
+  were never set (`_imagename`, `_mask_history`).  It was removed;
+  `set_mask_regions` waits until masks drawn without a mask cube are
+  wanted (it is not in step 1's protocol).
 * **Convergence vocabulary.** The UI imports
   `casatasks...imager_return_dict.ImagingDict` (lines 409, 586) only for
   `get_summaryminor_stopdesc`. That is backend knowledge and should be served
@@ -73,7 +78,7 @@ class ImagingSession(Protocol):
     # images
     def fields(self) -> list[dict]             # id, imagename, host paths (informational)
     def cube(self, field: str) -> "ImageCube"  # local: the object; remote: a proxy bound to field
-    def set_mask_regions(self, field: str, regions) -> None   # replaces rmtree + update(mask=)
+    def set_mask_regions(self, field: str, regions) -> None   # deferred (see §1, mask lifecycle)
     def close(self) -> None
 ```
 
@@ -254,7 +259,7 @@ current one. This comparison is part of step 1's tests.
 
 | Step | Slices |
 |---|---|
-| 1. Protocols; `LocalImagingSession` = gclean + `CasatoolsImageStore` + `ImageCube` extracted from `ImagePipe`; UI and `CubeMask` go through it (field ids, `stop_descriptions`, `set_mask_regions`, generation instead of ctime). Local only, no behaviour change; tests against today | 1.5 |
+| 1. Protocols; `LocalImagingSession` = gclean + `CasatoolsImageStore` + `ImageCube` extracted from `ImagePipe`; UI and `CubeMask` go through it (field ids, `stop_descriptions`, generation instead of ctime). Local only, no behaviour change; tests against today. **Done: notes §60** | 1.5 |
 | 1b. Coordinate description (§2.5): casatools store builds it; `coords_json` + `DescriptionKeywordProvider` in cubevisjs; `astropy_wcs()` replaces the two coordsys→WCS helpers; parity against the FITS-header path | 0.5–1 |
 | 2. `edit_mask` operations replace `CubeMask`'s per-channel loops | 0.5 |
 | 3. Registration + `RemoteImagingSession`; remote display (channel, spectrum, stats, histogram) and mask edits | 1–2 |

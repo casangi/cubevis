@@ -86,10 +86,13 @@ class CubeMask:
 
         Parameters
         ----------
-        image: str
-            path to CASA image for which interactive masks will be drawn
+        image: str or ImageCube
+            path to CASA image for which interactive masks will be drawn, or an
+            ``ImageCube`` (``cubevis.imaging``) providing the image and its mask,
+            e.g. one served by interactive clean's ``ImagingSession``
         mask: str or None
-            If provided, this shifts the masking to bitmask operation. In
+            If provided, this shifts the masking to bitmask operation.  With an
+            ``ImageCube``, the cube's own ``mask_path`` is used when this is ``None``. In
             bitmask operation, the drawn regions are used to add or subtract
             from a bitmask cube image instead of being the union of all drawn
             regions. This is the standard mode of operation for interactive clean.
@@ -151,7 +154,14 @@ class CubeMask:
                                         hover_line_alpha="Line alpha for region with cursor focus",
                                         hover_line_dash="Line dash for region with cursor focus" )
 
-        self._image_path = image                               # path to image cube to be displayed
+        if isinstance( image, str ):
+            self._cube = None                                  # ImageCube made by the ImagePipe from the path
+            self._image_path = image                           # path to image cube to be displayed
+        else:
+            self._cube = image                                 # ImageCube (cubevis.imaging), e.g. from an ImagingSession
+            self._image_path = image.image_path                # informational: the path where the image is
+            if mask is None:
+                mask = image.mask_path
         self._mask_path = mask                                 # path to bitmask cube (if any)
         self._region_controls={'coord':{'initialized': False}, # ONLY USED WITH NO MASK CUBE
                                'tracking': {} }                # gui styling for regions
@@ -272,7 +282,7 @@ class CubeMask:
             ### operation to all channel operation                                                                              ###
             #######################################################################################################################
             self._pipe['image'] = ImagePipe( image=self._image_path, mask=self._mask_path, stats=True,
-                                             lock=self._render_lock )
+                                             lock=self._render_lock, cube=self._cube )
             if self._mask_path:
                 self._pipe['image'].add_init_script( args=self._mask_add_sub,
                                                      code=self._js['cube-init'],
@@ -293,7 +303,7 @@ class CubeMask:
     def path( self ):
         '''return path to CASA image
         '''
-        return self._image_papth
+        return self._image_path
 
     def shape( self ):
         '''return shape of image cube
@@ -571,7 +581,7 @@ class CubeMask:
                                dw=shape[0], dh=shape[1],
                                palette=default_palette( True ), level="image",
                                source=self._image_source )
-            if self._mask_path is not None and path.isdir(self._mask_path):
+            if self._mask_path is not None and self._pipe['image'].have_mask( ):
                 ##
                 ## LinearColorMapper must be used because otherwise a bitmask that is
                 ## all true or all false is colored with self._color by default because

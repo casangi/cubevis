@@ -41,6 +41,7 @@ from cubevis.utils import MutualExclusionManager
 from cubevis.bokeh.models import Showable
 from cubevis.utils import find_pkg, load_pkg
 from cubevis.toolbox import InteractiveCleanUI
+from cubevis.imaging import LocalImagingSession
 from cubevis import exe
 
 class DisplayContext:
@@ -1833,26 +1834,16 @@ class InteractiveCleanNotebook:
         ### to enable a backend with extended features or it could be used to select a stub backend designed
         ### for testing
         ###
-        mod_specs = None
-        self._gclean_module = None
-        if iclean_backend == 'PROD':
-            mod_specs = find_pkg( "casatasks.private.imagerhelpers._gclean" )
-        else:
-            mod_specs = find_pkg( f"_gclean_{iclean_backend}" )
-
-        if mod_specs:
-            self._gclean_module = load_pkg(mod_specs[0])
-        else:
-            raise ImportError(f"Could not locate {iclean_backend} kind of iclean backend")
-
         self._args = {'vis': vis, 'selectdata': selectdata, 'field': field, 'spw': spw, 'timerange': timerange, 'uvrange': uvrange, 'antenna': antenna, 'scan': scan, 'observation': observation, 'intent': intent, 'datacolumn': datacolumn, 'imagename': imagename, 'imsize': imsize, 'cell': cell, 'phasecenter': phasecenter, 'stokes': stokes, 'projection': projection, 'startmodel': startmodel, 'specmode': specmode, 'reffreq': reffreq, 'nchan': nchan, 'start': start, 'width': width, 'outframe': outframe, 'veltype': veltype, 'restfreq': restfreq, 'interpolation': interpolation, 'perchanweightdensity': perchanweightdensity, 'gridder': gridder, 'facets': facets, 'psfphasecenter': psfphasecenter, 'wprojplanes': wprojplanes, 'vptable': vptable, 'mosweight': mosweight, 'aterm': aterm, 'psterm': psterm, 'wbawp': wbawp, 'conjbeams': conjbeams, 'cfcache': cfcache, 'usepointing': usepointing, 'computepastep': computepastep, 'rotatepastep': rotatepastep, 'pointingoffsetsigdev': pointingoffsetsigdev, 'pblimit': pblimit, 'normtype': normtype, 'deconvolver': deconvolver, 'scales': scales, 'nterms': nterms, 'smallscalebias': smallscalebias, 'fusedthreshold': fusedthreshold, 'largestscale': largestscale, 'restoration': restoration, 'restoringbeam': restoringbeam, 'pbcor': pbcor, 'outlierfile': outlierfile, 'weighting': weighting, 'robust': robust, 'noise': noise, 'npixels': npixels, 'uvtaper': uvtaper, 'niter': niter, 'gain': gain, 'threshold': threshold, 'nsigma': nsigma, 'cycleniter': cycleniter, 'cyclefactor': cyclefactor, 'minpsffraction': minpsffraction, 'maxpsffraction': maxpsffraction, 'nmajor': nmajor, 'usemask': usemask, 'mask': mask, 'pbmask': pbmask, 'sidelobethreshold': sidelobethreshold, 'noisethreshold': noisethreshold, 'lownoisethreshold': lownoisethreshold, 'negativethreshold': negativethreshold, 'smoothfactor': smoothfactor, 'minbeamfrac': minbeamfrac, 'cutthreshold': cutthreshold, 'growiterations': growiterations, 'dogrowprune': dogrowprune, 'minpercentchange': minpercentchange, 'verbose': verbose, 'fastnoise': fastnoise, 'restart': restart, 'savemodel': savemodel, 'calcres': calcres, 'calcpsf': calcpsf, 'psfcutoff': psfcutoff, 'parallel': parallel}
-        self._gclean = self._gclean_module.gclean( **self._args )
-        self._gclean_paths = self._gclean.image_products( )
-        #self._residual_path = self._residual_path(self._clean['gclean'],imid)
-        #self._mask_path = self._mask_path(self._clean['gclean'],imid)
+        ###
+        ### The imaging layer (cubevis.imaging): the imager -- casatasks' gclean, or the module
+        ### _gclean_NAME that iclean_backend names -- and the images of each field
+        ###
+        self._session = LocalImagingSession.from_args( self._args, iclean_backend )
+        self._gclean = self._session.deconvolver
+        self._gclean_paths = self._session.image_products( )
 
-        self._future = None
-        self._ui = InteractiveCleanUI(self._gclean, self._args)
+        self._ui = InteractiveCleanUI(self._session, self._args)
 
     def get_future(self):
         if self._future is None:

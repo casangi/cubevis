@@ -36,6 +36,8 @@ iclean_imaging_layer_design.md``).
 * ``ImageStore`` (protocol) -- primitive image access for one format;
   ``CasatoolsImageStore`` for CASA images.
 * ``Deconvolver`` (protocol) -- the gclean surface.
+* the coordinate description (``_coordinates``): ``ImageStore.coordinates()``,
+  ``from_casa_coordsys``, ``astropy_wcs``.
 
 Importing this package imports no CASA module; casatools is imported when
 a ``CasatoolsImageStore`` first opens an image, casatasks when a
@@ -47,7 +49,9 @@ from ._protocols import ImageCube as ImageCubeProtocol
 from ._image_cube import ImageCube, quantize
 from ._casatools_store import CasatoolsImageStore
 from ._session import LocalImagingSession, resolve_deconvolver, as_imaging_session, open_image_cube
+from ._coordinates import astropy_wcs, from_casa_coordsys
 
 __all__ = ['CycleResult', 'Deconvolver', 'ImageStore', 'ImagingSession', 'ImageCubeProtocol',
            'ImageCube', 'quantize', 'CasatoolsImageStore', 'LocalImagingSession',
-           'resolve_deconvolver', 'as_imaging_session', 'open_image_cube']
+           'resolve_deconvolver', 'as_imaging_session', 'open_image_cube',
+           'astropy_wcs', 'from_casa_coordsys']

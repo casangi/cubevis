@@ -3345,3 +3345,92 @@ Design `devel/notes/drs/iclean/iclean_imaging_layer_design.md` §6 (as done:
 * **Fingerprint** `k2-8c32a07ef87455eb3cd6` -> `k2-e38a583701fa4183c928` (this slice:
   `cubevis/toolbox/__init__.py` is in the closure; plus §61's bridge-error
   patch, now included).  Needs a release before remote sessions match.
+
+## 63. iclean step 1b: the coordinate description (base `99116cd`, 2026-11-06)
+
+Design `devel/notes/drs/iclean/iclean_imaging_layer_design.md` §2.5, as done
+§2.5.1.  World coordinates come from a coordinate description (plain,
+JSON-safe, independent of the image format) instead of the FITS header (in
+the browser) and a casatools `coordsys` (in Python).  No change in what the
+GUI shows.
+
+* **`cubevis/imaging/_coordinates.py`** (new): `from_casa_coordsys`,
+  `astropy_wcs`, `beam_from_casa`, frame table; no CASA, astropy only
+  inside `astropy_wcs`.  `CasatoolsImageStore.coordinates()`,
+  `ImageCube.coordinates()` (once), in the `ImageStore`/`ImageCube`
+  protocols; `cubevis.imaging` exports `astropy_wcs`, `from_casa_coordsys`.
+  The record's `pc` is the transpose of FITS `PCi_j`; the description
+  follows FITS.
+* **Browser**: `ImagePipe.coords_json` (Python and TS) replaces
+  `fits_header_json`; new `cubevisjs/src/bokeh/util/coordinate_description.ts`
+  (`description_keywords`: the keywords coordtxl reads, `CD` matrix for a
+  rotated image); `image_pipe.ts` builds the `WCSTransform` from it and
+  adds `coordinates()`.  coordtxl unchanged.  `ImagePipe.fits_header()`
+  (Python) is made on first use.
+* **cubevisjs builds** (`cubevis/__js__/bokeh-*/cubevisjs.min.js`):
+  first checked that this environment reproduces the committed files byte
+  for byte (bokeh 3.9.2 -> the 3.6-3.9 file, bokeh 3.10.0 -> the 3.10
+  file; `bokeh build` in `cubevisjs/`, `npm ci`), then rebuilt both.
+  (`cubevisjs/package.json` has no `scripts`, so the README's
+  `npm run build` is `bokeh build` + `node scripts/copy-versioned.js`.)
+* **Python**: `convert_masks(coord='world')`'s WCS from the description
+  (`ImageCube.coorddesc()` adds `coordinates`; a `coordsys`, its record or
+  a description in `csys` also work) -- the old helper put CASA's 0-based
+  reference pixel in FITS' 1-based `CRPIX` (one pixel off, 0.0044 deg on
+  the test image) and always used SIN; createregion's `RegionList` gets
+  `astropy_wcs(cube.coordinates())` (vertices as from the FITS header
+  string to 1e-8"); `bokeh/utils/_axes_labels.py` (never imported) deleted.
+  `CubeMask.coordinates()`.
+* **Checks**:
+  * `coordinates_parity.py` (new; casatools, node, tsc, the coordtxl npm
+    package): seven images made from the test residual -- its own frame,
+    ICRS, FK4/B1950, galactic, rotated 30°, TAN, 200×90 with an off-centre
+    reference pixel.  coordtxl from the old header keywords against coordtxl
+    from `description_keywords` (the compiled `.ts`), the GUI's strings,
+    `astropy_wcs` and the header's astropy WCS against casatools:
+
+    case                    coordtxl desc vs header  strings  astropy desc vs casatools  header WCS vs casatools
+    own_frame                                    0"    36/36                         0"                1.21e-08"
+    icrs                                         0"    36/36                         0"                1.21e-08"
+    fk4_b1950                                    0"    36/36                         0"                1.21e-08"
+    galactic                                     0"    36/36                         0"                1.21e-08"
+    rotated_30                                 540"     0/36                         0"                1.21e-08"
+    tan                                          0"    36/36                         0"                1.21e-08"
+    nonsquare_offcentre                          0"    36/36                         0"                1.21e-08"
+    
+    coordtxl vs casatools (1-based)   header, 0.1.4  desc, 0.1.4  header, fixed  desc, fixed
+    own_frame                                  190"         190"      1.66e-10"    1.66e-10"
+    icrs                                       190"         190"      1.66e-10"    1.66e-10"
+    fk4_b1950                                  190"         190"      2.97e+05"    2.97e+05"
+    galactic                                   190"         190"      1.66e-10"    1.66e-10"
+    rotated_30                                 683"         256"           571"    2.82e-10"
+    tan                                        190"         190"      2.86e-10"    2.86e-10"
+    nonsquare_offcentre                        546"         546"      2.94e-10"    2.94e-10"
+    
+
+    The rotated image differs by design: the header path never gave coordtxl
+    the rotation (it ignores `PC`).  The second table is coordtxl against
+    casatools; "fixed" is a copy of coordtxl with its projection parsing
+    corrected (below).
+  * `browser_check.py` (new; playwright with a Chrome): real iclean pages,
+    base `99116cd` and this tree, in headless Chrome: no console errors,
+    `ImagePipe.wcs()` world coordinates and strings identical, screenshots
+    identical (0 pixels differ), the page has the spectral values.
+  * Handler records against `ff0d810`: 54 identical, `fits_header_json`
+    -> `coords_json` the only difference; `notebook_check.py`: both rounds.
+  * `test_coordinates.py` (new, no CASA, 16) in the `imaging` suite:
+    record -> description (frames, pc orientation, spectral, beams,
+    JSON-safe), `astropy_wcs` against a FITS-built WCS (rotated too),
+    `ImageCube.coordinates`/`coorddesc`, `convert_masks`' helper with each
+    kind of `csys`, astropy not imported until used.  Single and per-plane
+    beams also checked on CASA images.
+* **coordtxl 0.1.4** (pre-existing, for the planned coordtxl change; design
+  §2.5.1): (1) `WCSTransform` parses the projection with
+  `wcstemp.substring(3, 7)` (`"--SI"`), so every image is linear: RA
+  offsets lack 1/cos(dec) (190" at the test image's corners);
+  `substring(4, 8)` fixes it.  (2) Then FK4 is ~82° off (its FK4
+  conversion).  (3) coordtxl pixels are 1-based; the GUI passes 0-based
+  indices.  (4) `NAXIS1` was 4 (the axis count) from the header path.
+* **Fingerprint**: `cubevis.utils` (in the kernel closure) now refers to
+  `cubevis.imaging._coordinates`, which brings `cubevis.imaging` into the
+  closure: `k2-19e170a674fe895b4d7d`.  Delete `cubevis/bokeh/utils/_axes_labels.py`.

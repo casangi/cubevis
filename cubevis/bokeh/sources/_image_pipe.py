@@ -47,7 +47,7 @@ from ..transport import Comm
 
 import numpy as np
 
-from ...utils import pack_arrays, resource_manager, strip_arrays
+from ...utils import pack_arrays, resource_manager
 
 class ImagePipe( Model ):
     """The `ImagePipe` allows for updates to Bokeh plots from a CASA or CNGI
@@ -63,7 +63,8 @@ class ImagePipe( Model ):
     comm = Instance(Comm)
     shape = Tuple( Int, Int, Int, Int, help="shape: [ RA, DEC, Stokes, Spectral ]" )
     dataid = String( )
-    fits_header_json = Nullable( String, help="""JSON representation of image FITS header for world coordinate labeling""" )
+    coords_json = Nullable( String, help="""JSON of the image's coordinate description (cubevis.imaging._coordinates)
+    for world coordinates in the browser: axis labels, cursor readout, regions""" )
     _histogram_source = Nullable(Instance(ColumnDataSource), help='''
     data source for (raw) image channel histogram of intensities used with a "figure.quad(...)"
     ''')
@@ -102,14 +103,15 @@ class ImagePipe( Model ):
         self.__cube = cube
 
         self.__fits_header = None
-        self.__fits_header_str = ''
         resource_manager( ).reg_at_exit( self, '__del__' )
         self._stats = stats
         self.shape = list(self.__cube.shape)
-        if not self.fits_header_json:
-            self.__fits_header, self.__fits_header_str = self.__cube.fits_header( )
-            if self.__fits_header:
-                self.fits_header_json = json.dumps(strip_arrays(self.__fits_header))
+        ###
+        ### world coordinates in the browser come from the coordinate description (until
+        ### 2026-11-06 from the image's FITS header, fits_header_json)
+        ###
+        if not self.coords_json:
+            self.coords_json = json.dumps( self.__cube.coordinates( ) )
 
         ###
         ### quantization controls to affect how pseudo colors are displayed
@@ -228,7 +230,14 @@ class ImagePipe( Model ):
             self.__cube = None
 
     def fits_header( self ):
-        return ( self.__fits_header, self.__fits_header_str )
+        '''``(dict, str)``: the FITS header, for stores that have one (made on first use)'''
+        if self.__fits_header is None:
+            self.__fits_header = self.__cube.fits_header( )
+        return self.__fits_header
+
+    def coordinates( self ):
+        '''the coordinate description (``cubevis.imaging._coordinates``)'''
+        return self.__cube.coordinates( )
 
     def coorddesc( self ):
         return self.__cube.coorddesc( )

@@ -156,6 +156,7 @@ class ImageCube:
         self._shape = None
         self._chan_shape = None
         self._stokes_labels = None
+        self._coordinates = None
         self._mask0_cache = None
         self._mask_statistics = False
         ###
@@ -456,15 +457,27 @@ class ImageCube:
 
     # ---- description ----------------------------------------------------
 
+    def coordinates(self):
+        '''The coordinate description (design §2.5; ``cubevis.imaging._coordinates``),
+        made once.'''
+        if self._coordinates is None:
+            self._coordinates = self._store.coordinates()
+        return self._coordinates
+
     def fits_header(self):
+        '''``(dict, str)``: the store's FITS header, for stores that have one
+        (display and export only; nothing in the GUI depends on it).'''
         return self._store.fits_header()
 
     def coorddesc(self):
-        '''``{'csys': ..., 'shape': ...}`` for ``convert_masks``.  ``csys`` is
-        the casatools ``coordsys`` when the store has one (as before), else
-        its record.  Replaced by the coordinate description (design §2.5).'''
-        csys = self._store.coordsys() if hasattr(self._store, 'coordsys') else self._store.coordsys_record()
-        return {'csys': csys, 'shape': tuple(self.shape)}
+        '''``{'csys': ..., 'shape': ..., 'coordinates': ...}`` for
+        ``convert_masks``.  ``coordinates`` is the coordinate description,
+        which ``convert_masks`` uses for world coordinates; ``csys`` is the
+        casatools ``coordsys`` when the store has one (as before: CASA
+        regions, ``format='region'``, need it), else the description.'''
+        desc = self.coordinates()
+        csys = self._store.coordsys() if hasattr(self._store, 'coordsys') else desc
+        return {'csys': csys, 'shape': tuple(self.shape), 'coordinates': desc}
 
     def close(self):
         self._stokes_labels = None

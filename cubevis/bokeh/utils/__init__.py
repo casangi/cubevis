@@ -28,7 +28,5 @@
 '''Functions use in the implementation of cubevis's Bokeh extensions.'''
 
 from ._svg_icon import svg_icon
-###
-### axes_labels has errors on import
-###
-#from .axes_labels import get_world_coordinates
+### (_axes_labels.py, casatools coordsys -> axis labels, was never imported and is gone
+### since 2026-11-06: world coordinates come from cubevis.imaging's coordinate description)

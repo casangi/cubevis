@@ -86,8 +86,9 @@ class NumpyStore:
     def fits_header(self):
         return ({'NAXIS': 4}, 'NAXIS = 4')
 
-    def coordsys_record(self):
-        return {'direction0': {}}
+    def coordinates(self):
+        return {'version': 1, 'shape': self.shape(), 'pixel_origin': 0, 'direction': None,
+                'spectral': None, 'stokes': ['I'], 'beam': None, 'brightness_unit': '', 'extra': {}}
 
     def close(self):
         self.closed += 1

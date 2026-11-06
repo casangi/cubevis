@@ -237,6 +237,50 @@ provider → coordtxl must equal today's results from FITS header → coordtxl
 (ticks, cursor readout, region corners), and the astropy WCS must match the
 current one. This comparison is part of step 1's tests.
 
+#### 2.5.1 As done (step 1b, 2026-11-06, notes §63)
+
+* `cubevis/imaging/_coordinates.py`: `from_casa_coordsys(record, shape,
+  spectral_values=, beam=, brightness_unit=)` and `astropy_wcs(desc,
+  naxis=4)`; `CasatoolsImageStore.coordinates()` (spectral values from
+  `toworldmany`: exact for tabular/non-linear axes), `ImageCube.coordinates()`
+  (made once).  `pc` follows FITS (`pc[i][j]` = `PC(i+1)_(j+1)`, i the world
+  axis): **the casatools record's `pc` is the transpose** (column-major).
+  Frames: J2000/JMEAN/JTRUE → FK5 2000, ICRS → ICRS, B1950(_VLA)/BMEAN/BTRUE
+  → FK4 1950, GALACTIC, ECLIPTIC, SUPERGAL → SUPERGALACTIC, others by name.
+* Browser: `ImagePipe.coords_json` replaces `fits_header_json`;
+  `cubevisjs/src/bokeh/util/coordinate_description.ts` (no imports)
+  `description_keywords(desc)` gives coordtxl's `MapKeywordProvider`:
+  `NAXIS1/2`, `CTYPE1/2`, `CRVAL1/2`, `CRPIX1/2` (+1), `EQUINOX` (null → 2000),
+  and `CDELT1/2` when `pc` is the identity, else the `CD` matrix
+  (`diag(CDELT)·PC`; coordtxl ignores `PC`, and reads `CD` only without
+  `CDELT1`).  No `RADECSYS`: the header had `RADESYS`, which coordtxl does not
+  read, so the frame came from `EQUINOX` and still does.
+  `ImagePipe.coordinates()` (TS) gives the parsed description (spectral
+  values for a later spectral axis).  coordtxl unchanged.
+* Python: `astropy_wcs` replaces `__get_wcs_object` (`convert_masks`,
+  `coord='world'`) and the dead `bokeh/utils/_axes_labels.py` (deleted);
+  createregion's `RegionList` gets `astropy_wcs(cube.coordinates())`.
+  `ImageCube.coorddesc()` keeps `csys` (the casatools `coordsys`, which
+  `format='region'` needs) and adds `coordinates`.
+* Findings about coordtxl 0.1.4, the same before and after (for the
+  "modified coordtxl"):
+  1. `WCSTransform` takes the projection from `CTYPE1` with
+     `wcstemp.substring(3, 7)` -- `"--SI"` for `RA---SIN` -- which matches
+     none of `-SIN`, `-TAN`, ...; every image is treated as **linear** (no
+     1/cos(dec) in RA: ~190" at the corners of the 128×128, 12"/pixel test
+     image at dec +40.7°).  With `substring(4, 8)` coordtxl agrees with
+     casatools to ~3e-10" (all projections, frames, rotation) except FK4.
+  2. FK4/B1950 (seen only once 1 is fixed): ~82° off, both ways --
+     coordtxl's FK4 conversion.
+  3. Pixels are 1-based (FITS); the GUI passes 0-based pixel indices
+     (`_cube.py`, `wcs_ticks.ts`): one pixel off.  The description could
+     carry the GUI's origin instead (`CRPIX` = reference pixel) once the
+     GUI's pixel convention (index vs. centre/edge in Bokeh coordinates) is
+     confirmed in a browser.
+  4. The FITS header's `NAXIS` array became `NAXIS1 = 4` (the number of
+     axes) in `MapKeywordProvider`; the description gives the true size.
+     coordtxl's pixel → world does not depend on it.
+
 ## 3. Remote shape (reusing visplot's machinery)
 
 * Registration module `cubevis.imaging.remote_registrations` (§6) registers
@@ -260,7 +304,7 @@ current one. This comparison is part of step 1's tests.
 | Step | Slices |
 |---|---|
 | 1. Protocols; `LocalImagingSession` = gclean + `CasatoolsImageStore` + `ImageCube` extracted from `ImagePipe`; UI and `CubeMask` go through it (field ids, `stop_descriptions`, generation instead of ctime). Local only, no behaviour change; tests against today. **Done: notes §60** | 1.5 |
-| 1b. Coordinate description (§2.5): casatools store builds it; `coords_json` + `DescriptionKeywordProvider` in cubevisjs; `astropy_wcs()` replaces the two coordsys→WCS helpers; parity against the FITS-header path | 0.5–1 |
+| 1b. Coordinate description (§2.5): casatools store builds it; `coords_json` + `DescriptionKeywordProvider` in cubevisjs; `astropy_wcs()` replaces the two coordsys→WCS helpers; parity against the FITS-header path. **Done: notes §63, §2.5.1** | 0.5–1 |
 | 2. `edit_mask` operations replace `CubeMask`'s per-channel loops | 0.5 |
 | 3. Registration + `RemoteImagingSession`; remote display (channel, spectrum, stats, histogram) and mask edits | 1–2 |
 | 4. `run_cycle` as an async job; stop and progress semantics | 1 |
@@ -274,7 +318,9 @@ becomes explicit, and mask editing becomes faster for cubes.
 
 ## 5. Things to verify / open questions
 
-* **Laptop without CASA.** §2.5 removes the `coordsys` uses. Also audit the
+* **Laptop without CASA.** §2.5 removes the `coordsys` uses (1b: the GUI
+  needs only the description; `coorddesc()['csys']` is still the casatools
+  `coordsys` locally, for `convert_masks(format='region')`). Also audit the
   imports in `_cube.py` and `ImageDataSource`.
 * **Coordinate description scope.** Does a per-plane beam belong in v1?
   Should `spectral.values` be required, or may it be linear (crval/cdelt)

@@ -59,7 +59,10 @@ async def main():
     put('shape', list(cube.shape()))
     hdr, hdr_str = cube.fits_header()
     put('fits_header', hdr); put('fits_header_str', hdr_str)
-    put('fits_header_json', pipe.fits_header_json)
+    if hasattr(pipe, 'fits_header_json'):                     # until 2026-11-06
+        put('fits_header_json', pipe.fits_header_json)
+    if hasattr(pipe, 'coords_json'):                          # the coordinate description, since
+        put('coords_json', pipe.coords_json)                  # 2026-11-06
     cd = cube.coorddesc()
     put('coorddesc_shape', cd['shape'])
     csys = cd['csys']

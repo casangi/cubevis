@@ -193,6 +193,33 @@ class CasatoolsImageStore:
     def coordsys_record(self) -> dict:
         return self.coordsys().torecord()
 
+    def coordinates(self) -> dict:
+        '''The coordinate description (``cubevis.imaging._coordinates``):
+        from the coordinate system record, with the spectral values of
+        every channel from the coordinate system itself (exact for tabular
+        and non-linear axes), the restoring beam and the brightness unit.'''
+        from ._coordinates import from_casa_coordsys
+        img = self._image()
+        shape = list(img.shape())
+        csys = img.coordsys()
+        try:
+            record = csys.torecord()
+            spectral_values = None
+            found = csys.findcoordinate('spectral')
+            if found.get('return') and len(found['pixel']) == 1 and len(found['world']) == 1:
+                pix_axis, world_axis = int(found['pixel'][0]), int(found['world'][0])
+                nchan = shape[pix_axis]
+                refpix = list(csys.referencepixel()['numeric'])
+                import numpy as np                  # pylint: disable=import-outside-toplevel
+                pixels = np.array([refpix] * nchan, dtype=float).transpose()
+                pixels[pix_axis, :] = np.arange(nchan, dtype=float)
+                world = csys.toworldmany(pixels)['numeric']
+                spectral_values = [float(v) for v in world[world_axis]]
+            return from_casa_coordsys(record, shape, spectral_values=spectral_values,
+                                      beam=img.restoringbeam(), brightness_unit=img.brightnessunit())
+        finally:
+            csys.done()
+
     def close(self) -> None:
         if self._rgn is not None:
             self._rgn.done()

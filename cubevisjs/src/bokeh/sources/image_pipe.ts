@@ -2,6 +2,7 @@ import {Model} from "@bokehjs/model"
 import { ColumnDataSource } from "@bokehjs/models/sources/column_data_source"
 import * as p from "@bokehjs/core/properties"
 import { Comm } from "../transport/comm_mgr"
+import { CoordinateDescription, description_keywords } from "../util/coordinate_description"
 
 // Data source where the data is defined column-wise, i.e. each key in the
 // the data attribute is a column name, and its value is an array of scalars.
@@ -13,7 +14,7 @@ export namespace ImagePipe {
         comm: p.Property<Comm>
         dataid: p.Property<string>
         shape: p.Property<[number,number,number,number]>
-        fits_header_json: p.Property<string | null>
+        coords_json: p.Property<string | null>      // the coordinate description (cubevis.imaging._coordinates)
         _histogram_source: p.Property<ColumnDataSource | null>     // source for histogram updates
     }
 }
@@ -27,6 +28,7 @@ export class ImagePipe extends Model {
 
     position: {[key: string]: any} = { }
     _wcs: {[key: string]: any} | null = null
+    _coordinates: CoordinateDescription | null = null
 
     constructor(attrs?: Partial<ImagePipe.Attrs>) {
         super(attrs)
@@ -38,8 +40,14 @@ export class ImagePipe extends Model {
 
     initialize(): void {
         super.initialize();
-        if ( this.fits_header_json ) {
-            this._wcs = new casalib.coordtxl.WCSTransform( new casalib.coordtxl.MapKeywordProvider(JSON.parse(this.fits_header_json)) )
+        if ( this.coords_json ) {
+            // world coordinates from the coordinate description (until 2026-11-06, from
+            // the image's FITS header, fits_header_json): coordtxl gets the keywords it reads
+            this._coordinates = JSON.parse(this.coords_json) as CoordinateDescription
+            const keywords = description_keywords( this._coordinates )
+            if ( 'CTYPE1' in keywords ) {
+                this._wcs = new casalib.coordtxl.WCSTransform( new casalib.coordtxl.MapKeywordProvider(keywords) )
+            }
         }
     }
 
@@ -91,12 +99,17 @@ export class ImagePipe extends Model {
         return this._wcs
     }
 
+    // the coordinate description (spectral values, Stokes labels, beam, ...)
+    coordinates( ): CoordinateDescription | null {
+        return this._coordinates
+    }
+
     static {
         this.define<ImagePipe.Props>(({Number, Nullable, String, Tuple, Ref }) => ({
             comm: [ Ref(Comm) ],
             dataid: [ String ],
             shape: [ Tuple(Number,Number,Number,Number) ],
-            fits_header_json: [ Nullable(String), null ],
+            coords_json: [ Nullable(String), null ],
             _histogram_source: [ Nullable(Ref(ColumnDataSource)), null ]
         }));
     }

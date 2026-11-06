@@ -312,7 +312,15 @@ class CubeMask:
         return self._pipe['image'].shape
 
     def fits_header( self ):
+        '''``(dict, str)``: the image's FITS header, when its store has one
+        (display and export only; world coordinates come from ``coordinates``)'''
         return self._pipe['image'].fits_header( )
+
+    def coordinates( self ):
+        '''the coordinate description of the image (``cubevis.imaging._coordinates``;
+        an astropy WCS: ``cubevis.imaging.astropy_wcs( cube.coordinates( ) )``)'''
+        self._init_pipes( )
+        return self._pipe['image'].coordinates( )
 
     def channel( self, pixel_type=np.float64 ):
         '''return array for the current channel

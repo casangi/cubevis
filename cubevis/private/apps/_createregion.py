@@ -507,9 +507,12 @@ class CreateRegion:
         if not self.__result_future.done( ):
             raise RuntimeError( 'regions not yet available to be returned' )
 
+        from cubevis.imaging import astropy_wcs
         result = { }
         for img, regions in self.__result_future.result( ).items( ):
-            _, fits_header = self._region_state[img]['gui']['cube'].fits_header( )
-            result[img] = RegionList( regions, fits_header )
+            ### the WCS comes from the image's coordinate description (until 2026-11-06,
+            ### from its FITS header string); RegionList uses its direction axes
+            wcs = astropy_wcs( self._region_state[img]['gui']['cube'].coordinates( ) )
+            result[img] = RegionList( regions, wcs )
 
         return result

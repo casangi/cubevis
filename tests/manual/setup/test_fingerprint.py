@@ -184,7 +184,7 @@ def test_imports_only_for_type_checkers_do_not_count(tmp_path):
 def test_the_real_kernel_side_leaves_out_the_front_end():
     mods = set(F.closure())
     for front in ("cubevis.toolbox.visplot.visibility_plotter", "cubevis.toolbox._cube",
-                  "cubevis.toolbox.visplot.flag_controls", "cubevis.toolbox._interactive_clean_ui"):
+                  "cubevis.toolbox.visplot.flag_controls", "cubevis.toolbox.iclean._ui"):
         assert front not in mods, front
 
 

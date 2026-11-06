@@ -90,5 +90,5 @@ def test_the_kernel_side_no_longer_loads_the_front_end():
                "import cubevis.remote.worker_main, cubevis.toolbox.visplot.remote_registrations\n"
                "print(json.dumps(sorted(m for m in sys.modules if m.startswith('cubevis'))))")
     for heavy in ("cubevis.toolbox.visplot.visibility_plotter", "cubevis.toolbox._cube",
-                  "cubevis.toolbox._interactive_clean_ui", "cubevis.toolbox.visplot.flag_controls"):
+                  "cubevis.toolbox.iclean._ui", "cubevis.toolbox.visplot.flag_controls"):
         assert heavy not in got, heavy

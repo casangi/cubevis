@@ -106,7 +106,7 @@ visplot = ["cubevis[xarray,remote]"]
 # The readme goes into the metadata as text (pdm_build.py stamps it), so the
 # sdist would no longer carry the file by itself.
 source-includes = ["README.rst"]
-excludes = [ "cubevis/apps/*.mustache", "cubevis/private/casashell/*.mustache", "cubevis/private/casatasks/*.mustache", "**/*.xml", "**/*.py-*", "**/*~" ]
+excludes = [ "cubevis/toolbox/iclean/*.mustache", "cubevis/private/casashell/*.mustache", "cubevis/private/casatasks/*.mustache", "**/*.xml", "**/*.py-*", "**/*~" ]
 
 [tool.pdm.version]
 source = "scm"

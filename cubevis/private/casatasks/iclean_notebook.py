@@ -36,7 +36,7 @@ from casatools.errors import create_error_string
 from casatasks.private.task_logging import start_log as _start_log
 from casatasks.private.task_logging import end_log as _end_log
 from casatasks.private.task_logging import except_log as _except_log
-from cubevis.private.apps import InteractiveCleanNotebook
+from cubevis.toolbox.iclean import InteractiveCleanNotebook
 
 def _iclean_notebook_t( *args, **kwargs ):
     ic = InteractiveCleanNotebook( *args, **kwargs )

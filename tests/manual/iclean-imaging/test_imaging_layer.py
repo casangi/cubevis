@@ -100,14 +100,32 @@ def cube_data(nx=8, ny=6, nchan=3, seed=1):
 
 # ---------------------------------------------------------------------------
 
-def test_import_does_not_load_casa():
-    code = textwrap.dedent('''
-        import sys, cubevis.imaging
-        bad = [m for m in ("casatools", "casatasks") if m in sys.modules]
-        print(",".join(bad))
+def _modules_after(statement):
+    code = textwrap.dedent(f'''
+        import sys, json
+        {statement}
+        print(json.dumps(sorted(sys.modules)))
     ''')
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
-    assert out.stdout.strip() == ''
+    import json
+    return set(json.loads(out.stdout.strip().splitlines()[-1]))
+
+
+def test_dependency_rule_imaging_imports_no_bokeh_no_casa():
+    '''design §6.2: the imaging layer imports neither Bokeh nor CASA (nor the
+    rest of cubevis.utils, which brings Bokeh, astropy and regions), so the
+    remote worker, an RADPS implementation or a test can use it without the GUI.'''
+    mods = _modules_after("import cubevis.imaging")
+    heavy = {m.split('.')[0] for m in mods} & {"bokeh", "casatools", "casatasks", "astropy", "regions"}
+    assert not heavy, heavy
+    assert not [m for m in mods if m.startswith("cubevis.") and not m.startswith("cubevis.imaging")]
+
+
+def test_toolbox_iclean_is_lazy():
+    '''importing the application package loads none of its modules (nor CASA)
+    until a name is used'''
+    mods = _modules_after("import cubevis.toolbox.iclean")
+    assert not {"cubevis.toolbox.iclean._app", "cubevis.toolbox.iclean._ui", "casatools", "casatasks"} & mods
 
 
 def test_protocols():

@@ -3295,3 +3295,53 @@ operations in place of `CubeMask`'s per-channel `mask`/`put_mask` loops.
   as a subclass, the UI as plain source, the widgets); `cubevis/imaging`
   stays top level with a no-Bokeh/no-CASA-at-import rule; old pieces
   removed.  Step 1c, before 1b.
+
+## 62. iclean step 1c: package organization (base `ff0d810` + §60, §61, 2026-11-05)
+
+Design `devel/notes/drs/iclean/iclean_imaging_layer_design.md` §6 (as done:
+§6.5).  Interactive clean now has visplot's shape:
+
+* **`cubevis/toolbox/iclean/`** (new; lazy `__init__` like `cubevis.toolbox`):
+  * `_app.mustache` -> `_app.py` (generated): ONE template for
+    `InteractiveClean` and `InteractiveCleanNotebook(InteractiveClean)`,
+    which adds only its display (`DisplayContext`, `get_future`, its
+    `__call__`).  Was `private/apps/_interactiveclean{,notebook}.mustache`.
+    The notebook class now sets `_future = None` (`get_future()` before
+    launch raised `AttributeError`, not its `RuntimeError`); its unused
+    module-level imports (`ImagerParameters` from casatasks,
+    `output_notebook`, `pprint`, `find_pkg`/`load_pkg`) are gone.
+  * `_ui.py`: `InteractiveCleanUI`, plain source (was
+    `toolbox/_interactive_clean_ui.py`; its tag-free `.mustache` deleted).
+  * `_widgets.py`: `SharedWidgets` (was `toolbox/_interactiveclean_wrappers.py`).
+* **Pointers**: `cubevis.toolbox` (`InteractiveCleanUI`) and
+  `cubevis.private.apps` (`InteractiveClean`, `InteractiveCleanNotebook`)
+  lazy tables; the three task-wrapper templates import from
+  `cubevis.toolbox.iclean` (regenerated: one line each changed).
+  `pyproject.toml` excludes: `cubevis/apps/*.mustache` (a directory that
+  no longer exists, so the app and UI templates shipped in the wheel) ->
+  `cubevis/toolbox/iclean/*.mustache`.
+* **Removed**: `private/apps/_interactiveclean{,notebook}.{mustache,py}`,
+  `toolbox/_interactive_clean_ui.mustache`, `private/_gclean.py` (unused,
+  pre-`image_products` copy).  `tests/manual/iclean-remote/` stays until
+  remote iclean works (design §6.2).
+* **`cubevis.imaging` dependency rule**: it imports no other `cubevis`
+  module at import (own `partition`; `cubevis.utils._casa` when a store
+  first opens an image), so not Bokeh, astropy, regions or CASA.
+* **Tests**: `test_imaging_layer.py` gains the dependency rule and the
+  laziness of `cubevis.toolbox.iclean` (14).  `test_lazy_packages.py` and
+  `test_fingerprint.py` name `cubevis.toolbox.iclean._ui` as front end the
+  kernel side must not load.  `record_iclean_handlers.py` imports the
+  public `cubevis.private.apps.InteractiveClean`.
+* **Checks**: `expand_templates` regenerates `_app.py` and the three
+  wrappers (and nothing else changes); before/after handler records,
+  base `ff0d810` against this tree: identical, 56 of 56;
+  `notebook_check.py`: both rounds reach the bridge and connect;
+  public names (`cubevis.iclean`, `.notebook`, `cubevis.toolbox.InteractiveCleanUI`,
+  `cubevis.private.apps.*`, the casashell layer with casashell installed)
+  resolve, `InteractiveCleanNotebook` a subclass.  Quick tests: remote,
+  imaging, syntax pass; setup 180 pass, 11 fail only for want of an
+  `ssh` binary where this was run (`test_wrapper_reachable`, the CLI's
+  tools check); tiny-ms skipped (no xradio/casacore here).
+* **Fingerprint** `k2-8c32a07ef87455eb3cd6` -> `k2-e38a583701fa4183c928` (this slice:
+  `cubevis/toolbox/__init__.py` is in the closure; plus §61's bridge-error
+  patch, now included).  Needs a release before remote sessions match.

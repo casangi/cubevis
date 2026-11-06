@@ -29,7 +29,7 @@
 ##################### 214e4c0dbbbeb35a4a041ccbbea77d9a ##############################
 from __future__ import absolute_import
 import numpy
-from cubevis.private.apps import InteractiveClean
+from cubevis.toolbox.iclean import InteractiveClean
 
 def _iclean_t( *args, **kwargs ):
     ic = InteractiveClean( *args, **kwargs )

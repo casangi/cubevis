@@ -266,7 +266,7 @@ current one. This comparison is part of step 1's tests.
 | 4. `run_cycle` as an async job; stop and progress semantics | 1 |
 | 5. `iclean(kernel_name=)`, the shared connection base, setup environments with casatasks (`cubevis[visplot,iclean]`, discovery reports it), fingerprint roots, release | 1 |
 | 6. Parity tests (local kernel, small MS, local vs remote), quick tests, rounds with Darrell | 1 + 2–3 rounds |
-| 1c. Package organization (§6): `toolbox/iclean/`, one app template, dependency rule | 1 |
+| 1c. Package organization (§6): `toolbox/iclean/`, one app template, dependency rule. **Done: notes §62** | 1 |
 | Later: coordtxl taking the description natively, with a spectral axis (§2.5); `XarrayImageStore` over arcae; notebook variant; remove `tests/manual/iclean-remote/` and `_gen_port_fwd_cmd` | — |
 
 Steps 1–2 are useful without any remote work: the CASA dependency in the GUI
@@ -297,14 +297,12 @@ becomes explicit, and mask editing becomes faster for cubes.
   full state snapshot (generation, last `CycleResult`) rather than replaying
   queued messages.
 * **Multi-field**: one `ImageCube` per field in the one session. Check the
-  per-field loops in `_interactive_clean_ui.py`.
-* **`cubevis/private/_gclean.py`** is an older, unused copy (it has no
-  `image_products`/`_log`). Delete it, or turn it into the stub backend for
-  tests.
+  per-field loops in `toolbox/iclean/_ui.py`.
+* ~~`cubevis/private/_gclean.py`~~: deleted in 1c (notes §62).
 * **Naming**: `ImagingSession` / `ImageCube` / `ImageStore` / `Deconvolver`
   are placeholders.
 
-## 6. Package organization (proposal, 2026-11-05)
+## 6. Package organization (2026-11-05; done, notes §62)
 
 Step 1 added `cubevis.imaging` but left interactive clean spread where it
 grew: the application classes are generated into `cubevis/private/apps/`,
@@ -385,3 +383,28 @@ As its own slice, now, before 1b/2/3, so that those land in their final
 places: moves and import changes only, verified by the before/after
 handler records, the notebook run (`nb` check, §61), and the quick tests.
 About one slice.
+
+### 6.5 As done (notes §62)
+
+As §6.2, plus:
+* The dependency rule needed one change: importing anything from
+  `cubevis.utils` runs its `__init__` (Bokeh, astropy, regions: ~0.6 s), so
+  `cubevis.imaging` has its own `partition` and imports `cubevis.utils._casa`
+  only when a store first opens an image.  Tested: importing
+  `cubevis.imaging` loads no other `cubevis` module and none of Bokeh,
+  casatools, casatasks, astropy, regions; importing `cubevis.toolbox.iclean`
+  loads none of its modules.
+* The task wrappers (`private/casatasks/iclean{,_notebook}.mustache`,
+  `private/casashell/iclean.mustache`) import from `cubevis.toolbox.iclean`
+  (visplot's import from `cubevis.toolbox.visplot` the same way).
+* Two kinds of template, for the record: the `.mustache` templates carry
+  tclean's parameters, types and documentation from its task XML
+  (`scripts/expand_templates`); `scripts/sync_layers` expands Jinja2
+  templates from `VisibilityPlotter.__call__`'s signature and docstrings
+  for visplot's task and casashell layers (`inp`/`go`).  iclean's
+  application keeps the first kind, now one template (`toolbox/iclean/
+  _app.mustache`); its UI is plain source.
+* Kernel side: `cubevis/toolbox/__init__.py` is in the fingerprint closure
+  (the worker imports `cubevis.toolbox.visplot`), and its lazy table names
+  the UI's module, so this slice changes the fingerprint; the bridge-error
+  patch (§61) is in the same release.

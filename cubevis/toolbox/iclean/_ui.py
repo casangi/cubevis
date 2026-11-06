@@ -61,7 +61,7 @@ from cubevis.bokeh.utils import svg_icon
 from cubevis.utils import DocEnum
 from cubevis import exe
 
-from ._interactiveclean_wrappers import SharedWidgets
+from ._widgets import SharedWidgets
 
 USE_MULTIPLE_GCLEAN_HACK=False
 

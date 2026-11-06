@@ -36,7 +36,13 @@ clean makes its cubes before gclean has written the residual.'''
 import os
 from typing import List, Optional
 
-from ..utils._casa import casatools_available, imagetool, regionmanager
+
+def _casa():
+    '''casatools, imported when an image is first opened: importing
+    ``cubevis.utils`` loads Bokeh, and this package imports neither Bokeh
+    nor CASA when it is imported.'''
+    from ..utils._casa import casatools_available, imagetool, regionmanager
+    return casatools_available, imagetool, regionmanager
 
 
 class CasatoolsImageStore:
@@ -55,6 +61,7 @@ class CasatoolsImageStore:
 
     def _image(self):
         if self._img is None:
+            casatools_available, imagetool, regionmanager = _casa()
             if not casatools_available():
                 raise RuntimeError('cannot open an image because casatools is not available')
             img = imagetool()
@@ -78,6 +85,7 @@ class CasatoolsImageStore:
             return
         if self._msk is not None:
             self._msk.close()
+        _, imagetool, _ = _casa()
         self._msk = imagetool()
         try:
             self._msk.open(path)
@@ -152,6 +160,7 @@ class CasatoolsImageStore:
         ###
         ### but it does not so we have to create a one-use image tool (see CAS-13625)
         ###
+        _, imagetool, _ = _casa()
         ia = imagetool()
         ia.open(self.image_path)
         try:
@@ -173,6 +182,7 @@ class CasatoolsImageStore:
 
     def coordsys(self):
         '''The casatools ``coordsys`` (a one-use image tool, as before).'''
+        _, imagetool, _ = _casa()
         ia = imagetool()
         ia.open(self.image_path)
         try:

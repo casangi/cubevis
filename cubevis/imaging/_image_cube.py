@@ -50,7 +50,16 @@ from typing import List, Optional
 
 import numpy as np
 
-from ..utils import partition
+
+def partition(pred, iterable):
+    '''Split ``iterable`` into two lists based on ``pred`` (as
+    ``cubevis.utils.partition``; not imported from there because importing
+    ``cubevis.utils`` loads Bokeh, astropy and regions, and this package
+    imports neither Bokeh nor CASA).'''
+    trues, falses = [], []
+    for item in iterable:
+        (trues if pred(item) else falses).append(item)
+    return trues, falses
 
 LINEAR = {'bounds': [[], []], 'transfer': {'scaling': 'linear'}}
 

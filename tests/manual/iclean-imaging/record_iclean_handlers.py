@@ -18,7 +18,7 @@ import sys, os, asyncio, pickle, copy
 import numpy as np
 
 ms, out = sys.argv[1], sys.argv[2]
-from cubevis.private.apps._interactiveclean import InteractiveClean as IClean
+from cubevis.private.apps import InteractiveClean as IClean      # the public name (works before and after design §6)
 from casatools import image as _ia
 
 ARGS = dict(vis=ms, imagename='bl', imsize=128, cell='12.0arcsec', specmode='cube',

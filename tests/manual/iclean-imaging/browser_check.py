@@ -2,7 +2,17 @@
 page in a headless Chrome: console errors, the world coordinates the GUI
 computes (ImagePipe.wcs(), as the axis labels and cursor readout do) for some
 pixels, the spectral values of the coordinate description when there is one,
-and a screenshot.  Two runs (two checkouts) can then be compared:
+and a screenshot.
+
+The GUI's transform works in Bokeh data space (the image glyph is drawn at
+x=0, y=0, so pixel index i covers [i, i+1]); the page is asked for the world
+coordinates of each pixel's center, (i + 0.5, j + 0.5), as the cursor readout
+does since 2026-11-06, and these are compared with casatools' own pixel ->
+world for the residual image (``--tolerance`` arcsec, default 0.01).  Before
+2026-11-06 the readout was one pixel off and coordtxl treated every image as
+linear, so an older checkout fails this check; ``--no-casatools`` skips it.
+
+Two runs (two checkouts) can then be compared:
 
     python browser_check.py REPO_A MS WORKDIR_A
     python browser_check.py REPO_B MS WORKDIR_B
@@ -27,7 +37,7 @@ PAGE_JS = """(pixels) => {
                     wcs: wcs != null, world: [], text: []}
       if (wcs) {
         for (const [x, y] of pixels) {
-          const pt = new casalib.coordtxl.Point2D(x, y)
+          const pt = new casalib.coordtxl.Point2D(x + 0.5, y + 0.5)
           wcs.imageToWorldCoords(pt, false)
           item.world.push([pt.getX(), pt.getY()])
           item.text.push(new casalib.coordtxl.WorldCoords(pt.getX(), pt.getY()).format(2000.0))
@@ -55,6 +65,7 @@ print('result', ic())
 
 def run(repo, ms, work, chrome):
     from playwright.sync_api import sync_playwright
+    work = os.path.abspath(work)
     os.makedirs(work, exist_ok=True)
     url_log = os.path.join(work, 'urls.txt')
     if os.path.exists(url_log):
@@ -111,6 +122,46 @@ def run(repo, ms, work, chrome):
     return 1 if errors or not result or not any(pp.get('wcs') for pp in result.get('pipes', [])) else 0
 
 
+def casatools_world(work, pixels):
+    '''(ra, dec) in degrees of the residual image's 0-based pixels, from casatools'''
+    import math
+    from casatools import image as _image
+    ia = _image(); ia.open(os.path.join(work, 'br.residual'))
+    try:
+        cs = ia.coordsys()
+        out = []
+        for x, y in pixels:
+            w = cs.toworld([x, y, 0, 0], 'n')['numeric']
+            out.append([math.degrees(w[0]) % 360.0, math.degrees(w[1])])
+        cs.done()
+        return out
+    finally:
+        ia.close()
+
+
+def separation_arcsec(a, b):
+    import math
+    ra1, de1, ra2, de2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    h = math.sin((de2 - de1) / 2) ** 2 + math.cos(de1) * math.cos(de2) * math.sin((ra2 - ra1) / 2) ** 2
+    return math.degrees(2 * math.asin(min(1.0, math.sqrt(h)))) * 3600.0
+
+
+def check_casatools(work, result, tolerance):
+    '''compare the page's world coordinates with casatools; 0 if all agree'''
+    truth = casatools_world(work, PIXELS)
+    status = 0
+    for pp in (result or {}).get('pipes', []):
+        seps = [separation_arcsec(w, t) for w, t in zip(pp['world'], truth)]
+        worst = max(seps) if seps else float('inf')
+        print(f'    vs casatools: max separation {worst:.3g} arcsec over {len(seps)} pixels '
+              f'(tolerance {tolerance})')
+        if not worst <= tolerance:
+            for (x, y), w, t, sp in zip(PIXELS, pp['world'], truth, seps):
+                print(f'      pixel ({x},{y}): page {w[0]:.7f} {w[1]:.7f}  casatools {t[0]:.7f} {t[1]:.7f}  {sp:.3g}"')
+            status = 1
+    return status
+
+
 def compare(a, b):
     import numpy as np
     from PIL import Image
@@ -130,10 +181,16 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--compare', nargs=2, metavar=('WORKDIR_A', 'WORKDIR_B'))
     ap.add_argument('--chrome', default='/usr/bin/google-chrome')
+    ap.add_argument('--tolerance', type=float, default=0.01, help='arcsec, against casatools')
+    ap.add_argument('--no-casatools', action='store_true', help='skip the comparison with casatools')
     ap.add_argument('args', nargs='*', metavar='REPO MS WORKDIR')
     ns = ap.parse_args()
     if ns.compare:
         sys.exit(compare(*ns.compare))
     if len(ns.args) != 3:
         ap.error('REPO MS WORKDIR')
-    sys.exit(run(*ns.args, ns.chrome))
+    status = run(*ns.args, ns.chrome)
+    if not ns.no_casatools:
+        page = json.load(open(os.path.join(ns.args[2], 'page.json')))['result']
+        status = check_casatools(ns.args[2], page, ns.tolerance) or status
+    sys.exit(status)

@@ -3042,7 +3042,9 @@ class CubeMask:
                                                       return String(x)
                                                   }
                                                   if ( world_coord ) {
-                                                      const pt = new casalib.coordtxl.Point2D( Number(index[0]), Number(index[1]) )
+                                                      // isource.wcs( ) works in Bokeh data space, where the center
+                                                      // of pixel index i is at i + 0.5 (coordinate_description.ts)
+                                                      const pt = new casalib.coordtxl.Point2D( Number(index[0]) + 0.5, Number(index[1]) + 0.5 )
                                                       isource.wcs( ).imageToWorldCoords(pt,false)
                                                       let wcstr = new casalib.coordtxl.WorldCoords(pt.getX(),pt.getY()).toString( )
                                                       pixlabel.text = '<p ALIGN=RIGHT>' + wcstr + "</p><p ALIGN=RIGHT>" + exponential(intensity) +

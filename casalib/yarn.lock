@@ -2,7 +2,7 @@
 # Manual changes might be lost - proceed with caution!
 
 __metadata:
-  version: 8
+  version: 10
   cacheKey: 10c0
 
 "@aashutoshrathi/word-wrap@npm:^1.2.3":
@@ -1611,7 +1611,7 @@ __metadata:
     "@types/node": "npm:^17.0.22"
     "@typescript-eslint/eslint-plugin": "npm:^5.16.0"
     "@typescript-eslint/parser": "npm:^5.16.0"
-    coordtxl: "npm:^0.1.4"
+    coordtxl: "npm:^0.1.6"
     d3-contour: "npm:^4.0.2"
     d3-polygon: "npm:^3.0.1"
     esbuild: "npm:^0.14.27"
@@ -1769,10 +1769,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"coordtxl@npm:^0.1.4":
-  version: 0.1.5
-  resolution: "coordtxl@npm:0.1.5"
-  checksum: 10c0/1458012653430ac8c38eeeb4aabd2b9f26bfbcba70c680994b848d58e3a62d0dc28c44f644d4470faa27efab1be7c0dc64dd0ec6368d6a0c304a3b66398710d0
+"coordtxl@npm:^0.1.6":
+  version: 0.1.6
+  resolution: "coordtxl@npm:0.1.6"
+  checksum: 10c0/5df6a6279f264fb1fdc5626d449218083b31959c292481c56a7d59e16d36d97d56bf122c891fb53779872ac247fa606eaf0f92aef9c2ed5d250dbb39aec9cf6b
   languageName: node
   linkType: hard
 
@@ -4474,14 +4474,14 @@ __metadata:
 
 "resolve@patch:resolve@npm%3A^1.1.6#optional!builtin<compat/resolve>, resolve@patch:resolve@npm%3A^1.20.0#optional!builtin<compat/resolve>":
   version: 1.22.8
-  resolution: "resolve@patch:resolve@npm%3A1.22.8#optional!builtin<compat/resolve>::version=1.22.8&hash=c3c19d"
+  resolution: "resolve@patch:resolve@npm%3A1.22.8#optional!builtin<compat/resolve>::version=1.22.8&hash=9bd1a5"
   dependencies:
     is-core-module: "npm:^2.13.0"
     path-parse: "npm:^1.0.7"
     supports-preserve-symlinks-flag: "npm:^1.0.0"
   bin:
     resolve: bin/resolve
-  checksum: 10c0/0446f024439cd2e50c6c8fa8ba77eaa8370b4180f401a96abf3d1ebc770ac51c1955e12764cde449fde3fff480a61f84388e3505ecdbab778f4bef5f8212c729
+  checksum: 10c0/4bc6de64a713422234e0e773bff296767d77d6e545b98042ff90a796d356f2b131853f4fa1d54e2c415aa6efa6dc2eed5b3f501f63164f834619fda900e33b8e
   languageName: node
   linkType: hard
 

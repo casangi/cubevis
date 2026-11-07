@@ -3434,3 +3434,80 @@ GUI shows.
 * **Fingerprint**: `cubevis.utils` (in the kernel closure) now refers to
   `cubevis.imaging._coordinates`, which brings `cubevis.imaging` into the
   closure: `k2-19e170a674fe895b4d7d`.  Delete `cubevis/bokeh/utils/_axes_labels.py`.
+
+## 64. iclean step 1d: coordinate defects (base `9ba6093`, 2026-11-06)
+
+Fixes two of the four coordtxl findings of §63: the projection parsing (in
+coordtxl, released as 0.1.6) and the GUI's pixel convention.  FK4 waits for
+the coordtxl feature work.  Design §2.5.2.
+
+* **coordtxl** (casangi/coordtxl, separate change, for 0.1.6):
+  `WCSTransform.java` parsed the projection with `wcstemp.substring(3, 7)`
+  (`"--SI"`), so every image was treated as linear.  Now it skips the run
+  of dashes after the axis name and takes the next three letters (`-SIN`,
+  `-TAN` from `RA---TAN-SIP`, `GLON-SIN`).  New `ProjectionTypeTest`
+  (seven CTYPEs, a SIN corner against astropy); the expected label in
+  `CasaImageLabelTest` and `tstest.ts` becomes the SIN value
+  `20:03:56.406, +39:52:17.78 J2000` (astropy; was the linear
+  `20:02:54.100, +39:52:37.50`).  `package.json` 0.1.6.  The Java compiles
+  and gives the same results as the JS patch and astropy; Gradle/JSweet
+  could not run here (no Maven Central), so it is not built.  Two stray
+  tracked files to delete there: `src/main/java/coordtxl/fits/.#KeywordProvider.java`
+  (an Emacs lock file, which javac trips over) and
+  `src/test/java/coordtxl/CasaImageLabelTest.java~`.
+* **casalib**: with `node_modules` at the versions in `yarn.lock` (yarn 1
+  resolves newer d3/hotkeys-js; corepack could not fetch Berry), the build
+  reproduces the committed `casalib.min.js` byte for byte apart from the
+  version string.  Two pre-existing bugs in `scripts/build-browser.js`:
+  `__VERSION__` (read by `src/browser.ts`) was never defined, so a fresh
+  bundle throws a ReferenceError on load; and the copy step looked for
+  `dist/esbuild/casalib.min.js`, which the build does not write (it writes
+  `casalib-<version>.min.js`), so nothing reached `cubevis/__js__`.  Now
+  `define: {__VERSION__}` and the copy takes the versioned output.
+  `cubevis/__js__/casalib.min.js` is rebuilt with coordtxl 0.1.5 plus the
+  0.1.6 change applied by hand to its JS (what JSweet makes of the Java);
+  it embeds version `1.0.113` (the highest git tag) where the old one had
+  `0.0.8`.  `package.json` keeps `coordtxl ^0.1.4` until 0.1.6 is
+  published: then `yarn up coordtxl@^0.1.6` and rebuild.
+* **Pixel convention**: the image glyph is drawn at `x=0, y=0`, `dw, dh` =
+  shape, so pixel i covers [i, i+1] and its centre is i + 0.5 in Bokeh data
+  space.  Axis ticks and region centres (`to_world`/`from_world`) convert
+  data-space positions; the cursor readout converted `Math.floor(x)`.
+  coordtxl takes 1-based FITS pixels, so the axes were half a pixel off and
+  the readout one pixel.  `coordinate_description.ts`: `FITS_PIXEL_CENTER`
+  (1, the default) and `BOKEH_PIXEL_CENTER` (0.5);
+  `description_keywords(desc, pixel_center)` gives CRPIX = reference pixel
+  − origin + pixel_center.  `ImagePipe` builds its transform with
+  `BOKEH_PIXEL_CENTER`; `_cube.py`'s `refresh_pixel_display` converts
+  index + 0.5.  cubevisjs rebuilt (Bokeh 3.9.2 → 3.6–3.9, 3.10.0 → 3.10).
+  Note: `scripts/copy-versioned.js` names the target from the `bokeh` on
+  PATH, not the one that built; put the build's venv first on PATH.
+* **Checks**:
+  * `browser_check.py`: probes the page at pixel centres (i + 0.5, as the
+    readout now does) and compares with casatools' `toworld` for the
+    residual (`--tolerance`, default 0.01"; `--no-casatools`); absolute
+    work paths.  This tree: max separation 2.8e-10" over 5 pixels, no
+    console errors, axis labels consistent (first tick at the pixel corner,
+    half a pixel from pixel 0's centre).  Base `9ba6093`: 189" at the
+    corner, 7.5" at the reference pixel (the readout there was a further
+    pixel off).
+  * `coordinates_parity.py`: the "fixed" copy now gets the 0.1.6 change
+    (FIXED_PARSE, as JSweet writes it) instead of `substring(4, 8)`, or is
+    used as is when the coordtxl given already parses the projection; a
+    "GUI (bokeh)" column (`BOKEH_PIXEL_CENTER` at the pixel centres); with
+    the projection parsed, description and GUI must equal casatools to
+    1e-3" except the known FK4 defect (then: no worse than the header).
+    With 0.1.5 and with the patched copy: all checks pass.
+
+    coordtxl vs casatools  header, as given desc, as given  header, fixed  desc, fixed  GUI (bokeh), fixed
+    own_frame                         190"          190"      1.66e-10"    1.66e-10"           1.66e-10"
+    icrs                              190"          190"      1.66e-10"    1.66e-10"           1.66e-10"
+    fk4_b1950                         190"          190"      2.97e+05"    2.97e+05"           2.97e+05"   (known coordtxl defect)
+    galactic                          190"          190"      1.66e-10"    1.66e-10"           1.66e-10"
+    rotated_30                        683"          256"           571"    2.82e-10"           2.82e-10"
+    tan                               190"          190"      2.86e-10"    2.86e-10"           2.86e-10"
+    nonsquare_offcentre               546"          546"      2.94e-10"    2.94e-10"           2.94e-10"
+
+  * `imaging` suite (30) and `test_fingerprint.py` pass; the fingerprint
+    is unchanged (`k2-19e170a674fe895b4d7d`: none of the changed files is
+    in the kernel closure).

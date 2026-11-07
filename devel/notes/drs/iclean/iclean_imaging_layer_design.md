@@ -262,24 +262,46 @@ current one. This comparison is part of step 1's tests.
   createregion's `RegionList` gets `astropy_wcs(cube.coordinates())`.
   `ImageCube.coorddesc()` keeps `csys` (the casatools `coordsys`, which
   `format='region'` needs) and adds `coordinates`.
-* Findings about coordtxl 0.1.4, the same before and after (for the
+* Findings about coordtxl 0.1.4/0.1.5, the same before and after (for the
   "modified coordtxl"):
   1. `WCSTransform` takes the projection from `CTYPE1` with
      `wcstemp.substring(3, 7)` -- `"--SI"` for `RA---SIN` -- which matches
      none of `-SIN`, `-TAN`, ...; every image is treated as **linear** (no
      1/cos(dec) in RA: ~190" at the corners of the 128×128, 12"/pixel test
-     image at dec +40.7°).  With `substring(4, 8)` coordtxl agrees with
-     casatools to ~3e-10" (all projections, frames, rotation) except FK4.
+     image at dec +40.7°).  **Fixed in coordtxl 0.1.6 (§2.5.2).**
   2. FK4/B1950 (seen only once 1 is fixed): ~82° off, both ways --
-     coordtxl's FK4 conversion.
-  3. Pixels are 1-based (FITS); the GUI passes 0-based pixel indices
-     (`_cube.py`, `wcs_ticks.ts`): one pixel off.  The description could
-     carry the GUI's origin instead (`CRPIX` = reference pixel) once the
-     GUI's pixel convention (index vs. centre/edge in Bokeh coordinates) is
-     confirmed in a browser.
+     coordtxl's FK4 conversion.  **Open** (with the coordtxl feature work).
+  3. Pixels are 1-based (FITS); the GUI passed 0-based pixel indices.
+     **Fixed (§2.5.2).**
   4. The FITS header's `NAXIS` array became `NAXIS1 = 4` (the number of
      axes) in `MapKeywordProvider`; the description gives the true size.
      coordtxl's pixel → world does not depend on it.
+
+#### 2.5.2 Coordinate defects fixed (2026-11-06, notes §64)
+
+* **coordtxl 0.1.6** (`WCSTransform.java`): the projection is the three
+  letters after the run of dashes that follows the axis name (`RA---SIN`,
+  `DEC--SIN`, `GLON-SIN`, `RA---TAN-SIP` → `-TAN`), not characters 3..6.
+  `ProjectionTypeTest` (new) and the expected label in `CasaImageLabelTest`
+  / `tstest.ts` (now the SIN value, checked with astropy).  casalib's
+  bundle (`cubevis/__js__/casalib.min.js`) is built with the fix; casalib's
+  `package.json` still says `coordtxl ^0.1.4` until 0.1.6 is published
+  (then `yarn up coordtxl@^0.1.6` and rebuild).
+* **Pixel convention**: the image glyph is drawn at `x=0, y=0` with
+  `dw, dh` = shape, so pixel index i covers [i, i+1] in Bokeh data space and
+  its centre is i + 0.5.  Axis ticks (`wcs_ticks.ts`) and region centres
+  (`to_world`/`from_world` in `_cube.py`) convert data-space positions; the
+  cursor readout converted the (floored) pixel index.  So the browser's
+  transform now works in data space: `description_keywords(desc,
+  pixel_center)` with `BOKEH_PIXEL_CENTER` = 0.5 (CRPIX = reference pixel +
+  0.5; `FITS_PIXEL_CENTER` = 1 gives a FITS CRPIX and is the default), and
+  the cursor readout converts the pixel centre, index + 0.5.
+* Result: the page's coordinates equal casatools' to ~3e-10" for SIN, TAN,
+  galactic, ICRS, rotated and off-centre images (before: up to 190" from
+  1, plus one pixel at the cursor and half a pixel on the axes from 3).
+* casalib's `scripts/build-browser.js` never defined `__VERSION__` (the
+  bundle would throw on load) and copied a file the build does not write;
+  both fixed.
 
 ## 3. Remote shape (reusing visplot's machinery)
 
@@ -305,13 +327,14 @@ current one. This comparison is part of step 1's tests.
 |---|---|
 | 1. Protocols; `LocalImagingSession` = gclean + `CasatoolsImageStore` + `ImageCube` extracted from `ImagePipe`; UI and `CubeMask` go through it (field ids, `stop_descriptions`, generation instead of ctime). Local only, no behaviour change; tests against today. **Done: notes §60** | 1.5 |
 | 1b. Coordinate description (§2.5): casatools store builds it; `coords_json` + `DescriptionKeywordProvider` in cubevisjs; `astropy_wcs()` replaces the two coordsys→WCS helpers; parity against the FITS-header path. **Done: notes §63, §2.5.1** | 0.5–1 |
+| 1d. Coordinate defects (§2.5.2): coordtxl projection parsing (0.1.6), the GUI's pixel convention. FK4 stays for the coordtxl feature work. **Done: notes §64** | 0.5 |
 | 2. `edit_mask` operations replace `CubeMask`'s per-channel loops | 0.5 |
 | 3. Registration + `RemoteImagingSession`; remote display (channel, spectrum, stats, histogram) and mask edits | 1–2 |
 | 4. `run_cycle` as an async job; stop and progress semantics | 1 |
 | 5. `iclean(kernel_name=)`, the shared connection base, setup environments with casatasks (`cubevis[visplot,iclean]`, discovery reports it), fingerprint roots, release | 1 |
 | 6. Parity tests (local kernel, small MS, local vs remote), quick tests, rounds with Darrell | 1 + 2–3 rounds |
 | 1c. Package organization (§6): `toolbox/iclean/`, one app template, dependency rule. **Done: notes §62** | 1 |
-| Later: coordtxl taking the description natively, with a spectral axis (§2.5); `XarrayImageStore` over arcae; notebook variant; remove `tests/manual/iclean-remote/` and `_gen_port_fwd_cmd` | — |
+| Later: coordtxl taking the description natively, with ICRS, a spectral axis and correct FK4 (§2.5); `XarrayImageStore` over arcae; notebook variant; remove `tests/manual/iclean-remote/` and `_gen_port_fwd_cmd` | — |
 
 Steps 1–2 are useful without any remote work: the CASA dependency in the GUI
 becomes explicit, and mask editing becomes faster for cubes.

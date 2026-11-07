@@ -2,7 +2,7 @@ import {Model} from "@bokehjs/model"
 import { ColumnDataSource } from "@bokehjs/models/sources/column_data_source"
 import * as p from "@bokehjs/core/properties"
 import { Comm } from "../transport/comm_mgr"
-import { CoordinateDescription, description_keywords } from "../util/coordinate_description"
+import { CoordinateDescription, description_keywords, BOKEH_PIXEL_CENTER } from "../util/coordinate_description"
 
 // Data source where the data is defined column-wise, i.e. each key in the
 // the data attribute is a column name, and its value is an array of scalars.
@@ -44,7 +44,7 @@ export class ImagePipe extends Model {
             // world coordinates from the coordinate description (until 2026-11-06, from
             // the image's FITS header, fits_header_json): coordtxl gets the keywords it reads
             this._coordinates = JSON.parse(this.coords_json) as CoordinateDescription
-            const keywords = description_keywords( this._coordinates )
+            const keywords = description_keywords( this._coordinates, BOKEH_PIXEL_CENTER )
             if ( 'CTYPE1' in keywords ) {
                 this._wcs = new casalib.coordtxl.WCSTransform( new casalib.coordtxl.MapKeywordProvider(keywords) )
             }

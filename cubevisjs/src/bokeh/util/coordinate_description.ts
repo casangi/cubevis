@@ -64,14 +64,34 @@ export function fits_ctype( name: string, projection: string ): string {
 }
 
 /**
+ * Where the center of (0-based) pixel 0 lies in the pixel coordinates a
+ * WCSTransform is built for:
+ *
+ *   FITS_PIXEL_CENTER   1.0  FITS / coordtxl convention (1-based pixels)
+ *   BOKEH_PIXEL_CENTER  0.5  Bokeh data space: the image glyph is drawn at
+ *                            x=0, y=0 with dw, dh equal to the shape, so pixel
+ *                            i covers [i, i+1] and its center is i + 0.5
+ *
+ * The browser converts Bokeh data-space positions (axis ticks, region
+ * centers), so ImagePipe builds its transform with BOKEH_PIXEL_CENTER, and a
+ * pixel index i is converted at i + 0.5.
+ */
+export const FITS_PIXEL_CENTER = 1.0
+export const BOKEH_PIXEL_CENTER = 0.5
+
+/**
  * The keywords coordtxl's WCSTransform reads, from a description:
- * NAXIS1/2, CTYPE1/2, CRVAL1/2, CRPIX1/2 (1-based), EQUINOX, and either
+ * NAXIS1/2, CTYPE1/2, CRVAL1/2, CRPIX1/2, EQUINOX, and either
  * CDELT1/2 (no rotation) or the CD matrix (CD = diag(CDELT) * PC).  The
  * reference frame is given by EQUINOX, as the FITS header did (coordtxl reads
  * RADECSYS, which CASA's header does not write: it writes RADESYS): 2000 ->
  * FK5 (ICRS is treated as FK5/J2000 by coordtxl), 1950 -> FK4.
+ *
+ * `pixel_center` chooses the pixel coordinates the transform uses (see
+ * FITS_PIXEL_CENTER); the default gives a FITS header's CRPIX.
  */
-export function description_keywords( desc: CoordinateDescription ): {[key: string]: number | string} {
+export function description_keywords( desc: CoordinateDescription,
+                                      pixel_center: number = FITS_PIXEL_CENTER ): {[key: string]: number | string} {
     const d = desc.direction
     if ( d == null ) return { }
     const [ lon, lat ] = celestial_axis_names( d.frame )
@@ -83,8 +103,8 @@ export function description_keywords( desc: CoordinateDescription ): {[key: stri
         CTYPE2: fits_ctype( lat, d.projection ),
         CRVAL1: d.reference_value[0],
         CRVAL2: d.reference_value[1],
-        CRPIX1: d.reference_pixel[0] + 1 - origin,
-        CRPIX2: d.reference_pixel[1] + 1 - origin,
+        CRPIX1: d.reference_pixel[0] - origin + pixel_center,
+        CRPIX2: d.reference_pixel[1] - origin + pixel_center,
         EQUINOX: d.equinox ?? 2000.0,
     }
     const pc = d.pc

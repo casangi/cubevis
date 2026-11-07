@@ -17,14 +17,16 @@ copy, and a non-square one with an off-centre reference pixel) it compares
 
     python coordinates_parity.py IMAGE WORKDIR COORDTXL_DIR TSC
 
-COORDTXL_DIR: an unpacked coordtxl npm package (``npm pack coordtxl@0.1.4``);
+COORDTXL_DIR: an unpacked coordtxl npm package (``npm pack coordtxl@0.1.5``, or a
+build with the projection parsing fixed, 0.1.6);
 TSC: a TypeScript compiler (``npx tsc`` from ``npm install typescript``).
 Needs casatools.  Exit status 1 if a check fails.
 """
 import sys, os, json, math, shutil, subprocess
 import numpy as np
 
-image_path, work, coordtxl_dir, tsc = sys.argv[1:5]
+image_path, work, coordtxl_dir = (os.path.abspath(a) for a in sys.argv[1:4])
+tsc = sys.argv[4]
 here = os.path.dirname(os.path.abspath(__file__))
 repo = os.path.abspath(os.path.join(here, '..', '..', '..'))
 os.makedirs(work, exist_ok=True)
@@ -96,19 +98,36 @@ with open(os.path.join(work, 'cases.json'), 'w') as f:
 ts = os.path.join(repo, 'cubevisjs', 'src', 'bokeh', 'util', 'coordinate_description.ts')
 subprocess.run([tsc, '--module', 'commonjs', '--target', 'ES2019', '--strict', '--outDir', work, ts], check=True)
 
-# coordtxl 0.1.4 reads the projection from CTYPE1 with substring(3, 7) ("--SI" for
-# "RA---SIN"), so it never recognizes one and treats every image as linear; a copy with
-# substring(4, 8) shows what the description gives once that is fixed
+# coordtxl up to 0.1.5 reads the projection from CTYPE1 with substring(3, 7) ("--SI" for
+# "RA---SIN"), so it never recognizes one and treats every image as linear.  The fix
+# (coordtxl's WCSTransform.java, 2026-11-06) takes the three letters after the run of
+# dashes; FIXED_PARSE is what JSweet makes of it.  A coordtxl that already has it is
+# used as it is for both columns.
+OLD_PARSE = 'this.ptype = wcstemp.substring(3, 7);'
+FIXED_PARSE = """let p = wcstemp.indexOf('-');
+                        while ((p >= 0 && p < wcstempLength && (c => c.charCodeAt == null ? c : c.charCodeAt(0))(wcstemp.charAt(p)) == '-'.charCodeAt(0))) {
+                            {
+                                p++;
+                            }
+                        }
+                        ;
+                        this.ptype = (p > 0 && p < wcstempLength) ? "-" + wcstemp.substring(p, Math.min(p + 3, wcstempLength)) : "";"""
 fixed_dir = os.path.join(work, 'coordtxl_fixed')
 if os.path.exists(fixed_dir):
     shutil.rmtree(fixed_dir)
 shutil.copytree(coordtxl_dir, fixed_dir)
 wcs_js = os.path.join(fixed_dir, 'coords', 'WCSTransform.js')
 src = open(wcs_js).read()
-if src.count('this.ptype = wcstemp.substring(3, 7);') == 1:
-    open(wcs_js, 'w').write(src.replace('this.ptype = wcstemp.substring(3, 7);', 'this.ptype = wcstemp.substring(4, 8);'))
+if src.count(OLD_PARSE) == 1:
+    open(wcs_js, 'w').write(src.replace(OLD_PARSE, FIXED_PARSE))
+    given = 'as given'
 else:
-    print('note: coordtxl does not have the substring(3, 7) projection parsing; the "fixed" copy is unchanged')
+    print('note: this coordtxl already parses the projection; the "fixed" columns use it unchanged')
+    given = 'fixed'
+
+# coordtxl's FK4 (B1950) handling is wrong by itself (about 82 degrees here, from the
+# header keywords as much as from the description): known, reported, not a failure
+KNOWN_COORDTXL_DEFECTS = {'fk4_b1950'}
 
 
 def run_node(cdir, out):
@@ -150,30 +169,34 @@ for name in cases:
     if a_vs_t > 1e-6:
         failures.append(f'{name}: astropy_wcs(description) differs from casatools by {a_vs_t}"')
 
-# coordtxl against casatools.  coordtxl's pixels are 1-based (FITS): its (x+1, y+1) is
-# casatools' (x, y); the GUI passes 0-based pixel indices.
+# coordtxl against casatools.  The cases' pixels are FITS (1-based): coordtxl's (x, y)
+# is casatools' (x-1, y-1).  "bokeh" is the GUI's transform (BOKEH_PIXEL_CENTER) at the
+# same pixels' centers in Bokeh data space.
 print()
-print(f"{'coordtxl vs casatools (1-based)':32} {'header, 0.1.4':>14} {'desc, 0.1.4':>12} {'header, fixed':>14} {'desc, fixed':>12}")
+print(f"{'coordtxl vs casatools':22} {'header, '+given:>15} {'desc, '+given:>13} {'header, fixed':>14} "
+      f"{'desc, fixed':>12} {'GUI (bokeh), fixed':>19}")
 for name in cases:
     ia = _image(); ia.open(cases[name]); cs = ia.coordsys()
     t1 = [list(cs.toworld([x - 1, y - 1, 0, 0])['numeric'][:2] * R2D) for x, y in exported[name]['pixels']]
     ia.close()
-    cols = []
-    for result in (js, js_fixed):
-        for way in ('header', 'description'):
+    seps = {}
+    for label, result in (('given', js), ('fixed', js_fixed)):
+        for way in ('header', 'description', 'bokeh'):
             w = result[name][way]
-            cols.append('error' if 'error' in w else f"{sep_arcsec(w['world'], t1):.3g}\"")
-    print(f"{name:32} {cols[0]:>14} {cols[1]:>12} {cols[2]:>14} {cols[3]:>12}")
-    # with the projection parsed, the description must be exact wherever the header
-    # keywords are, and never worse (FK4: coordtxl itself differs, both ways)
-    wd, wh = js_fixed[name]['description'], js_fixed[name]['header']
-    if 'error' in wd:
-        failures.append(f'{name}: coordtxl (projection parsing fixed) cannot use the description')
-    else:
-        dd = sep_arcsec(wd['world'], t1)
-        dh = float('inf') if 'error' in wh else sep_arcsec(wh['world'], t1)
-        if dd > 1e-3 and dd > dh + 1e-3:
-            failures.append(f'{name}: coordtxl (projection parsing fixed): description {dd}" vs header {dh}"')
+            seps[label, way] = float('inf') if 'error' in w else sep_arcsec(w['world'], t1)
+    show = lambda v: 'error' if v == float('inf') else f'{v:.3g}"'
+    print(f"{name:22} {show(seps['given', 'header']):>15} {show(seps['given', 'description']):>13} "
+          f"{show(seps['fixed', 'header']):>14} {show(seps['fixed', 'description']):>12} "
+          f"{show(seps['fixed', 'bokeh']):>19}" + ('   (known coordtxl defect)' if name in KNOWN_COORDTXL_DEFECTS else ''))
+    # with the projection parsed, coordtxl from the description must give casatools'
+    # coordinates, in FITS pixels and in the GUI's Bokeh data space alike
+    for way in ('description', 'bokeh'):
+        d = seps['fixed', way]
+        if name in KNOWN_COORDTXL_DEFECTS:
+            if d > seps['fixed', 'header'] + 1e-3:
+                failures.append(f'{name}: coordtxl ({way}) is worse than from the header: {d}"')
+        elif d > 1e-3:
+            failures.append(f'{name}: coordtxl with the projection parsed ({way}) differs from casatools by {d}"')
 
 print()
 print('FAILED:\n  ' + '\n  '.join(failures) if failures else 'all checks passed')

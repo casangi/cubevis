@@ -12,7 +12,7 @@
 const fs = require('fs')
 const [ coordtxlDir, describeJs, casesPath, outPath ] = process.argv.slice(2)
 const coordtxl = require(coordtxlDir + '/coordtxl.js')
-const { description_keywords } = require(describeJs)
+const { description_keywords, BOKEH_PIXEL_CENTER } = require(describeJs)
 
 function transform( keywords ) {
     try {
@@ -22,11 +22,11 @@ function transform( keywords ) {
     }
 }
 
-function world( wcs, pixels ) {
+function world( wcs, pixels, shift = 0 ) {
     if ( wcs.error ) return { error: wcs.error }
     const out = [], text = []
     for ( const [ x, y ] of pixels ) {
-        const pt = new coordtxl.Point2D( x, y )
+        const pt = new coordtxl.Point2D( x + shift, y + shift )
         wcs.imageToWorldCoords( pt, false )
         out.push( [ pt.getX( ), pt.getY( ) ] )
         text.push( new coordtxl.WorldCoords( pt.getX( ), pt.getY( ) ).format( 2000.0 ) )
@@ -42,6 +42,9 @@ for ( const [ name, c ] of Object.entries( cases ) ) {
         keywords,
         header: world( transform( c.header_map ), c.pixels ),
         description: world( transform( keywords ), c.pixels ),
+        // what the GUI does: the transform in Bokeh data space, where the center of
+        // 0-based pixel i is i + 0.5, i.e. FITS pixel x is at x - 0.5
+        bokeh: world( transform( description_keywords( c.description, BOKEH_PIXEL_CENTER ) ), c.pixels, -0.5 ),
     }
 }
 fs.writeFileSync( outPath, JSON.stringify( result ) )

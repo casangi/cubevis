@@ -333,8 +333,13 @@ class WorkerCommTransport(TransportBase):
     """Worker-side leg. Reads/writes its own `sys.stdin.buffer`/
     `sys.stdout.buffer` directly -- the worker process has no other job."""
 
-    def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None):
+    def __init__(self, comm_mgr_id: str, abort: Optional[Callable] = None, wire_out=None):
+        """``wire_out``: the binary stream frames are written to -- by default
+        ``sys.stdout.buffer``; ``worker_main`` passes the stdout it kept for
+        the protocol after pointing file descriptor 1 at stderr
+        (``protect_wire``)."""
         super().__init__(comm_mgr_id, abort=abort)
+        self._wire_out = wire_out
         self._reader: Optional[asyncio.StreamReader] = None
         self._writer: Optional[asyncio.StreamWriter] = None
         self._callback: Optional[Callable[[Dict[str, Any]], Any]] = None
@@ -348,7 +353,8 @@ class WorkerCommTransport(TransportBase):
         await loop.connect_read_pipe(lambda: reader_protocol, sys.stdin.buffer)
 
         writer_transport, writer_protocol = await loop.connect_write_pipe(
-            asyncio.streams.FlowControlMixin, sys.stdout.buffer
+            asyncio.streams.FlowControlMixin,
+            self._wire_out if self._wire_out is not None else sys.stdout.buffer
         )
         writer = asyncio.StreamWriter(writer_transport, writer_protocol, reader, loop)
 

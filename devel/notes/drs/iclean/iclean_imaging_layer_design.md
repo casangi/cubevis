@@ -343,6 +343,29 @@ current one. This comparison is part of step 1's tests.
 * `iclean(..., kernel_name=)`: `vis`/`imagename` are interpreted on the host,
   relative to the kernel's working directory, as visplot's `ms=` is.
 
+### 3.1 As done (step 3, 2026-11-07, notes §67)
+
+* `cubevis.remote.RemoteObjectConnection` (`_remote_object.py`): the generic
+  connection -- one bridge loop, kernel, link, context, one object; `call`,
+  `acall`, `submit`; liveness, remote errors with tracebacks, a dead worker
+  (not restarted for iclean), the session record.  Lifted from visplot's
+  `RemoteReductionContext`, which moves onto it in step 5.
+* Worker: `cubevis.imaging.remote_registrations.ImagingSessionBackend` over a
+  `LocalImagingSession`; cycles run in a thread (`start_cycle` /
+  `cycle_status`) so the worker keeps answering the GUI; cube methods by name
+  (`cube_call`, the GUI's set only).  Laptop: `RemoteImagingSession` and
+  `RemoteImageCube` with `LocalImagingSession`'s and `ImageCube`'s surface;
+  `arun_cycle` polls on the connection's loop and is awaited without blocking
+  Bokeh's.  One worker and one object per interactive clean; cube calls name
+  the field.
+* Found: the worker's stdout is the wire and tclean prints to it
+  (`worker_main.protect_wire` moves the wire to its own descriptor); an
+  `imagename` with a directory never worked (convergence re-keyed to field
+  ids); a cubevis without the new root now fingerprints as different rather
+  than failing.
+* Verified: real tclean through a local kernel gives the same handler
+  records as locally; the page from a remote session in headless Chrome.
+
 ## 4. Steps (revised)
 
 | Step | Slices |
@@ -352,7 +375,7 @@ current one. This comparison is part of step 1's tests.
 | 1d. Coordinate defects (§2.5.2): coordtxl projection parsing (0.1.6), the GUI's pixel convention. FK4 stays for the coordtxl feature work. **Done: notes §64** | 0.5 |
 | 2. `edit_mask` operations replace `CubeMask`'s per-channel loops. **Done: notes §65, §2.2.1** | 0.5 |
 | 2b. Region selection by pixel centre, the mask outline on pixel edges (§2.2.1). **Done: notes §66** | 0.5 |
-| 3. Registration + `RemoteImagingSession`; remote display (channel, spectrum, stats, histogram) and mask edits | 1–2 |
+| 3. Registration + `RemoteImagingSession`; remote display (channel, spectrum, stats, histogram) and mask edits. **Done: notes §67, §3.1** | 1–2 |
 | 4. `run_cycle` as an async job; stop and progress semantics | 1 |
 | 5. `iclean(kernel_name=)`, the shared connection base, setup environments with casatasks (`cubevis[visplot,iclean]`, discovery reports it), fingerprint roots, release | 1 |
 | 6. Parity tests (local kernel, small MS, local vs remote), quick tests, rounds with Darrell | 1 + 2–3 rounds |

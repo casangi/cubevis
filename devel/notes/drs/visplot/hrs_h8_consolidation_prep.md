@@ -3639,3 +3639,110 @@ on the right and top.  The convention is §64's: the image glyph is drawn at
 * `tests/ci/README.md`: says that the tests stay with their subject under
   `tests/manual/` and `tests/ci/` holds the runner, the suite list and
   CI-only helpers (Darrell asked whether the tests belong under `tests/ci/`).
+
+## 67. iclean step 3: the imaging layer on a Jupyter kernel (base `4eca91f`, 2026-11-07)
+
+Design §3 and step 3: `RemoteImagingSession` (`cubevis/imaging/_remote_session.py`)
+has `LocalImagingSession`'s surface, so `InteractiveCleanUI`, `CubeMask` and
+`ImagePipe` run unchanged on it; everything runs in a worker on the kernel's
+host.  Not yet in it: `iclean(kernel_name=)` and closing the session from the
+GUI (step 5), stopping/progress/reattach during a cycle (step 4).
+
+* **`cubevis/remote/_remote_object.py`** (new, exported by `cubevis.remote`):
+  `RemoteObjectConnection(kernel_name, class_name, kwargs, register_function=,
+  wire_types=, app=, data=, ...)` -- one object in a worker on a kernel: the one
+  `SyncBridge` loop, kernel start, `RemoteAppLink.open`, `create_context`,
+  `create_object`; `call` (blocking), `acall` (a coroutine on the bridge's loop),
+  `submit` (a `concurrent.futures.Future` another loop awaits with
+  `asyncio.wrap_future`), `run`; liveness (`_watched`: kernel stopped or
+  heartbeat silent -> `RemoteKernelLostError`), error replies ->
+  `RemoteCallError` with the remote traceback, a dead worker ->
+  `RemoteWorkerDiedError` (restarted only with `restart_worker=True`), timeouts
+  (`DEFAULT_CALL_TIMEOUT`, `data_methods` with `CUBEVIS_REMOTE_TIMEOUT`), the
+  session record (`app=`), `eval_code`/`exec_code`, `close` (idempotent).  The
+  method name is positional-only (`cube_call` has its own `method`).  It is
+  the generic half of visplot's `RemoteReductionContext`, lifted: visplot
+  moves onto it in step 5 -- until then the two carry the same logic.
+* **`cubevis/imaging/remote_registrations.py`** (new; a fingerprint root):
+  `ImagingSessionBackend(args, iclean_backend, deconvolver=, store=)` holds a
+  plain `LocalImagingSession`.  Cycles run in a thread (`start_cycle(kind)`,
+  `cycle_status(number)`), as `arun_cycle` does locally, because a worker
+  answers one call at a time and the GUI keeps asking for channels during a
+  cycle; `cube_info(field, image=)`, `cube_call(field, method, args, kwargs)`
+  for the `CUBE_METHODS` the GUI uses (`coorddesc` without its casatools
+  coordsys; `channel`'s dtype sent by name); `update`, `has_next`, `log`,
+  `restore`, `stop_descriptions`, `fields`, `image_products`, `close`,
+  `runtime_info`.  `CycleResult` travels as a list; `StopCodes` arrives as a
+  plain tuple (the GUI indexes it).
+* **`RemoteImagingSession(args, kernel_name, iclean_backend=, deconvolver=,
+  store=)`**: `start`/`run_cycle` block the calling thread while polling the
+  worker (`CYCLE_POLL` 0.25 s, no budget for a cycle as a whole; the
+  connection watches the kernel); `arun_cycle` awaits on the caller's loop
+  without blocking it; a dead worker is not replaced (tclean's state was in
+  it).  `cube(field)` is a `RemoteImageCube`: paths at once, shape /
+  coordinates / stokes labels on first use (the GUI makes its cubes before
+  `start()` writes the images), everything else forwarded; `coorddesc()['csys']`
+  is None.  `deconvolver` is None.
+* **`cubevis/imaging/testing.py`** (new): `ScriptedDeconvolver` (gclean's
+  surface; each cycle halves the residual; `cycle_seconds`, `fail_at`) and
+  `numpy_store` (an in-memory `ImageStore` with the ranged mask primitives),
+  importable by name in a worker.
+* **Found and fixed on the way**:
+  1. **The worker's stdout is its wire** to the supervisor, and tclean prints
+     to stdout from Python and C++ (`Running initial major cycle ...`): the
+     bytes corrupted the frame stream and the first cycle never answered.
+     `worker_main.protect_wire()`: the wire gets a descriptor of its own,
+     descriptor 1 and `sys.stdout` go to stderr (relayed);
+     `WorkerCommTransport(wire_out=)`.  Applies to every worker, visplot's
+     too (nothing it prints reaches the wire any more).  tclean in a thread
+     does not hold the GIL (measured: the main thread's longest wait 0.1 s).
+  2. **An `imagename` with a directory** (an absolute path -- what a remote
+     kernel's paths usually are) failed at start-up, locally too and before
+     the imaging layer: gclean keys its convergence record by `imagename` as
+     given, `image_products()` names the field by its base name.
+     `LocalImagingSession._result` re-keys the record to field ids.
+  3. **Fingerprint of a cubevis without one of the roots** (any release
+     before this one, now that interactive clean's is a root): `closure`
+     raised there, `kernel_fingerprint` returned None and the check said "no
+     kernel-side fingerprint (a cubevis from before 2026-10-23)".
+     `fingerprint` now hashes a missing root as a marker: the value differs
+     and the message is "kernel-side code differs".  Complete trees hash as
+     before (`k2`).
+* **Checks**:
+  * `test_remote_session.py` (new, 7; quick suite **`imaging-remote`**, kernel
+    "python3", no CASA): the scripted clean in the kernel and in this process
+    compared call by call -- fields, products, stop descriptions, start, two
+    cycles, update (accepted and refused), log, restore, and every cube call
+    the GUI makes (channel replies with statistics and histograms, quantized,
+    float and uint8 channels, spectrum, histogram, pixel and mask values,
+    statistics with and without mask, six mask edits, `put_mask`) before and
+    after editing and after each cycle; the worker answering during a
+    2-second cycle (>= 10 calls, each < 1 s); a failing cycle raising
+    `RemoteCallError` with the remote traceback, the session still usable;
+    cube methods outside `CUBE_METHODS` refused; a killed worker reported as
+    `RemoteWorkerDiedError` and not replaced; `close` idempotent.
+  * Real tclean through kernel "python3": `record_iclean_handlers.py
+    --kernel python3` against a local run with `--absolute` in the same
+    directory (84 entries): identical except `coorddesc_csys` (None remotely,
+    by design), the remote run's own `remote_call_stats`, and
+    `fetch_spectrum`'s mask flags (numpy bool locally, bool remotely: the
+    browser's JSON is identical).  The recorder reads the mask cube through
+    the session's cube: casatools in another process waits for ever on the
+    worker's lock.  The recorder and `browser_check.py` replace
+    `InteractiveClean`'s `LocalImagingSession` with the remote one
+    (`iclean(kernel_name=)` is step 5).
+  * `browser_check.py --kernel python3`: the page from a remote session --
+    image, axes, convergence plot -- no console errors, coordinates equal
+    casatools' (2.8e-10"), the mask outline on the pixel edges.
+  * Local iclean against step 2b's record: identical (84 entries).
+  * Quick tests: `remote` (worker_main changed), `imaging`, `imaging-remote`,
+    `syntax` pass; `setup` fails only the 11 tests that need `ssh`, as on
+    the base; `test_fingerprint.py`, `test_checkout.py`,
+    `test_lazy_packages.py` pass with `CUBEVIS_TEST_KERNEL_PYTHON` set
+    (the roots-cover-the-imports check included); their small trees gain
+    the new root, and a test for a tree without it.  `tiny-ms` and
+    `visplot-remote` skip here (no xradio/casacore).
+  * Timing, kernel on this computer: connect 4–7 s; a cube call ~5 ms; start
+    of the 128×128×5 test 2.3 s with every poll answered within 10 ms.
+* **Fingerprint** `k2-46c7c0ba50891e6131d4` (new root, `worker_main`,
+  `_worker_transport`); the pending release takes it.

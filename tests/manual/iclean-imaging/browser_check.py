@@ -69,17 +69,28 @@ PAGE_JS = """(pixels) => {
   return out
 }"""
 
-APP = """import sys
+APP = """import sys, os
 sys.path.insert(0, sys.argv[1])
 from cubevis.private.apps import InteractiveClean
-ic = InteractiveClean(vis=sys.argv[2], imagename='br', imsize=128, cell='12.0arcsec', specmode='cube',
+kernel = sys.argv[3] if len(sys.argv) > 3 else ''
+if kernel:
+    ### the imaging layer on a Jupyter kernel (RemoteImagingSession; iclean(kernel_name=) is
+    ### design step 5).  The kernel's cubevis is its own environment's.
+    import cubevis.toolbox.iclean._app as app
+    from cubevis.imaging import RemoteImagingSession
+    class Remote:
+        @staticmethod
+        def from_args(args, iclean_backend='PROD'):
+            return RemoteImagingSession(args, kernel, iclean_backend=iclean_backend)
+    app.LocalImagingSession = Remote
+ic = InteractiveClean(vis=sys.argv[2], imagename=os.path.abspath('br'), imsize=128, cell='12.0arcsec', specmode='cube',
                       interpolation='nearest', nchan=5, start='1.0GHz', width='0.2GHz', pblimit=-1e-05,
                       deconvolver='hogbom', threshold='0.001Jy', cyclefactor=3, niter=50, cycleniter=10)
 print('result', ic())
 """
 
 
-def run(repo, ms, work, chrome):
+def run(repo, ms, work, chrome, kernel=None):
     from playwright.sync_api import sync_playwright
     work = os.path.abspath(work)
     os.makedirs(work, exist_ok=True)
@@ -94,7 +105,8 @@ def run(repo, ms, work, chrome):
     with open(app, 'w') as f:
         f.write(APP)
     env = dict(os.environ, BROWSER=recorder)
-    proc = subprocess.Popen([sys.executable, '-I', app, os.path.abspath(repo), os.path.abspath(ms)], cwd=work,
+    proc = subprocess.Popen([sys.executable, '-I', app, os.path.abspath(repo), os.path.abspath(ms)] +
+                            ([kernel] if kernel else []), cwd=work,
                             env=env, stdout=open(os.path.join(work, 'iclean.log'), 'w'), stderr=subprocess.STDOUT)
     try:
         for _ in range(120):
@@ -203,13 +215,14 @@ if __name__ == '__main__':
     ap.add_argument('--chrome', default='/usr/bin/google-chrome')
     ap.add_argument('--tolerance', type=float, default=0.01, help='arcsec, against casatools')
     ap.add_argument('--no-casatools', action='store_true', help='skip the comparison with casatools')
+    ap.add_argument('--kernel', help='run the imaging layer on this Jupyter kernel (RemoteImagingSession)')
     ap.add_argument('args', nargs='*', metavar='REPO MS WORKDIR')
     ns = ap.parse_args()
     if ns.compare:
         sys.exit(compare(*ns.compare))
     if len(ns.args) != 3:
         ap.error('REPO MS WORKDIR')
-    status = run(*ns.args, ns.chrome)
+    status = run(*ns.args, ns.chrome, kernel=ns.kernel)
     contour = json.load(open(os.path.join(ns.args[2], 'page.json')))['result'].get('contour')
     if contour is not None and (contour['x'] != [3, 6] or contour['y'] != [2, 4]):
         print('    the mask outline is not on the pixel edges')      # before 2026-11-07 (notes §66)

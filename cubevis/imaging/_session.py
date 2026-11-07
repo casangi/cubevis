@@ -32,7 +32,7 @@ names) and an ``ImageCube`` per field over a ``CasatoolsImageStore``.
 The same class is what a remote worker will hold; "remote" only puts a
 proxy in front of it.'''
 
-from os.path import join
+from os.path import abspath, basename, join
 from typing import Callable, Dict, List, Optional
 
 from ._protocols import CycleResult
@@ -88,9 +88,31 @@ class LocalImagingSession:
         for cube in self._cubes.values():
             cube.touch()
 
+    def _result(self, values) -> CycleResult:
+        '''gclean's six values as a ``CycleResult`` whose convergence record
+        is keyed by field id.
+
+        gclean keys the record by ``imagename`` as given, while its
+        ``image_products()`` names a field by the image's base name
+        (``basename(abspath(imagename))``): with an imagename that has a
+        directory -- an absolute path, as a remote kernel's paths usually are
+        -- the GUI found no field for the record and interactive clean failed
+        at start-up (before this layer too; notes §67).'''
+        result = CycleResult(*values)
+        conv = result.convergence
+        if isinstance(conv, dict):
+            ids = {f['id'] for f in self.fields()}
+            if any(k not in ids for k in conv):
+                rekeyed = {}
+                for k, v in conv.items():
+                    base = basename(abspath(k)) if isinstance(k, str) else k
+                    rekeyed[k if k in ids or base not in ids else base] = v
+                result = result._replace(convergence=rekeyed)
+        return result
+
     def start(self) -> CycleResult:
         '''The first step: the dirty image (``next(gclean)``).'''
-        result = CycleResult(*next(self._dec))
+        result = self._result(next(self._dec))
         self._touch()
         return result
 
@@ -99,14 +121,14 @@ class LocalImagingSession:
 
     def run_cycle(self) -> CycleResult:
         '''One major cycle and its minor cycles; blocks (minutes).'''
-        result = CycleResult(*next(self._dec))
+        result = self._result(next(self._dec))
         self._touch()
         return result
 
     async def arun_cycle(self) -> CycleResult:
         '''``run_cycle`` without blocking the event loop (gclean runs it in
         a thread: ``gclean.__anext__``).'''
-        result = CycleResult(*(await self._dec.__anext__()))
+        result = self._result(await self._dec.__anext__())
         self._touch()
         return result
 

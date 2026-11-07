@@ -60,6 +60,7 @@ GENERATED = frozenset({"cubevis.__version__"})
 ROOTS = (
     "cubevis.remote.worker_main",
     "cubevis.toolbox.visplot.remote_registrations",
+    "cubevis.imaging.remote_registrations",          # interactive clean (2026-11-07)
 )
 TOP = "cubevis"
 
@@ -168,13 +169,25 @@ def normalize(source: str) -> str:
 
 def fingerprint(roots: Iterable[str] = ROOTS, root: Optional[str] = None) -> str:
     """``k2-<20 hex digits>`` for the kernel-side code installed at *root*
-    (the directory holding the ``cubevis`` package; default: this one's)."""
+    (the directory holding the ``cubevis`` package; default: this one's).
+
+    A root that is not there counts as missing (a marker in the hash), so a
+    cubevis older than one of the roots -- before interactive clean's,
+    2026-11-07 -- has a fingerprint that differs, and is reported as kernel-side
+    code that differs, rather than raising there (which reached the user as "no
+    kernel-side fingerprint").  With every root present the value is what it
+    was."""
     root = root or package_root()
+    roots = list(roots)
+    present = [r for r in roots if _path_of(root, r) is not None]
     h = hashlib.sha256(ALGORITHM.encode())
-    for mod in closure(roots, root):
+    for mod in closure(present, root):
         with open(_path_of(root, mod), encoding="utf-8") as f:
             text = normalize(f.read())
         h.update(b"\0" + mod.encode() + b"\0" + text.encode())
+    for r in roots:
+        if r not in present:
+            h.update(b"\0missing root\0" + r.encode())
     return f"{ALGORITHM}-{h.hexdigest()[:20]}"
 
 

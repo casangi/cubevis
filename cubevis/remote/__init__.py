@@ -9,6 +9,12 @@ from ._link import (
 )
 from ._object_registry import ObjectRegistry, UnknownClassError, UnknownHandleError
 from ._persistence import KernelPersistenceManifest
+from ._remote_object import (
+    RemoteObjectConnection,
+    RemoteCallError,
+    RemoteWorkerDiedError,
+    RemoteKernelLostError,
+)
 
 __all__ = [
     "request",
@@ -25,4 +31,8 @@ __all__ = [
     "UnknownClassError",
     "UnknownHandleError",
     "KernelPersistenceManifest",
+    "RemoteObjectConnection",
+    "RemoteCallError",
+    "RemoteWorkerDiedError",
+    "RemoteKernelLostError",
 ]

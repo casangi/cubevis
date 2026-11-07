@@ -17,11 +17,21 @@ Needs casatools and casatasks.
 import sys, os, asyncio, pickle, copy
 import numpy as np
 
-ms, out = sys.argv[1], sys.argv[2]
+import argparse
+ap = argparse.ArgumentParser()
+ap.add_argument('ms'); ap.add_argument('out')
+ap.add_argument('--kernel', help='run the imaging layer on this Jupyter kernel (RemoteImagingSession, '
+                                 'design step 3) instead of in this process; paths are made absolute, '
+                                 'so compare with a local run made in the same directory with --absolute')
+ap.add_argument('--absolute', action='store_true', help='absolute paths, as --kernel uses')
+opts = ap.parse_args()
+ms, out = opts.ms, opts.out
 from cubevis.private.apps import InteractiveClean as IClean      # the public name (works before and after design §6)
 from casatools import image as _ia
 
-ARGS = dict(vis=ms, imagename='bl', imsize=128, cell='12.0arcsec', specmode='cube',
+ABS = bool(opts.kernel or opts.absolute)
+IMAGENAME = os.path.abspath('bl') if ABS else 'bl'
+ARGS = dict(vis=os.path.abspath(ms) if ABS else ms, imagename=IMAGENAME, imsize=128, cell='12.0arcsec', specmode='cube',
             interpolation='nearest', nchan=5, start='1.0GHz', width='0.2GHz', pblimit=-1e-05,
             deconvolver='hogbom', threshold='0.001Jy', cyclefactor=3, niter=60, cycleniter=10)
 
@@ -29,7 +39,16 @@ rec = {}
 def put(k, v):
     rec[k] = copy.deepcopy(v)
 
-def mask_cube(name='bl.mask'):
+CUBE = []                                       # the field's cube (ImageCube, or the remote proxy)
+def mask_cube(name=IMAGENAME + '.mask'):
+    '''the whole mask, [x, y, stokes, chan] -- read through the session's cube
+    when there is one: the remote worker holds the mask open, and casatools in
+    this process would wait for its lock for ever'''
+    if CUBE:
+        cube = CUBE[0]
+        nx, ny, ns, nc = cube.shape
+        return np.stack([np.stack([np.asarray(cube.mask([s, c], True)).reshape(nx, ny)
+                                   for c in range(nc)], axis=-1) for s in range(ns)], axis=2)
     ia = _ia(); ia.open(name); v = ia.getchunk(); ia.close(); return v
 
 def handlers(comm_mgr):
@@ -46,16 +65,32 @@ async def call(h, msg):
         r = await r
     return r
 
+def make_app():
+    if not opts.kernel:
+        return IClean(**ARGS)
+    ### InteractiveClean with a RemoteImagingSession in place of its LocalImagingSession
+    ### (iclean(kernel_name=) is design step 5)
+    import cubevis.toolbox.iclean._app as app
+    from cubevis.imaging import RemoteImagingSession
+
+    class Remote:
+        @staticmethod
+        def from_args(args, iclean_backend='PROD'):
+            return RemoteImagingSession(args, opts.kernel, iclean_backend=iclean_backend)
+    app.LocalImagingSession = Remote
+    return IClean(**ARGS)
+
 async def main():
-    ic = IClean(**ARGS)
+    ic = make_app()
     ui = ic._ui
     ui._setup()
     ui._build_bokeh()
     put('last_success_initial', ui._clean['last-success'])
     targets = ui._clean_targets
     put('fields', list(targets.keys()))
-    cube = targets['bl']['gui']['cube']
+    cube = targets[list(targets)[0]]['gui']['cube']
     pipe = cube._pipe['image']
+    CUBE.append(pipe.cube)
     put('shape', list(cube.shape()))
     hdr, hdr_str = cube.fits_header()
     put('fits_header', hdr); put('fits_header_str', hdr_str)
@@ -66,7 +101,7 @@ async def main():
     cd = cube.coorddesc()
     put('coorddesc_shape', cd['shape'])
     csys = cd['csys']
-    put('coorddesc_csys', csys if isinstance(csys, dict) else csys.torecord())
+    put('coorddesc_csys', csys if csys is None or isinstance(csys, dict) else csys.torecord())   # None remotely
     put('stokes_labels', list(pipe.stokes_labels()))
     put('have_mask0', pipe.have_mask0())
 
@@ -150,6 +185,9 @@ async def main():
     return ui
 
 ui = asyncio.run(main())
+if opts.kernel:
+    put('remote_call_stats', {k: v[0] for k, v in ui._clean['session'].connection.call_stats.items()})
+    ui._clean['session'].close()
 with open(out, 'wb') as f:
     pickle.dump(rec, f)
 print('wrote', out, len(rec), 'entries')

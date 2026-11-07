@@ -119,9 +119,16 @@ def exercise_controls(page, timeout=180):
     page.evaluate(CONTROLS_JS['set'], ['threshold', '0.001Jy'])
     page.evaluate(CONTROLS_JS['click'], 'continue')
     ### the cycle's own result in the status line, the buttons enabled again (with no mask
-    ### drawn tclean ends the cycle with "Zero mask" and adds no convergence point)
-    good = wait(lambda st: st.get('status') not in (bad.get('status'), '<p>Running one set of deconvolution iterations</p>')
-                and not st.get('continue_disabled'))
+    ### drawn tclean ends the cycle with "Zero mask" and adds no convergence point); the
+    ### status lines seen meanwhile are the cycle's progress (design step 4b)
+    seen = []
+    def cycle_done(st):
+        if not seen or seen[-1] != st.get('status'):
+            seen.append(st.get('status'))
+        return (st.get('status') not in (bad.get('status'), '<p>Running one set of deconvolution iterations</p>')
+                and not st.get('continue_disabled') and '·' not in st.get('status', ''))
+    good = wait(cycle_done)
+    good['seen'] = seen
     ok = (clicked == 'clicked' and 'threshold must be' in bad.get('status', '') and not bad.get('continue_disabled')
           and not good.get('continue_disabled') and 'error' not in good.get('status', '').lower()
           and good.get('status') not in (bad.get('status'), before.get('status')))
@@ -132,7 +139,23 @@ APP = """import sys, os
 sys.path.insert(0, sys.argv[1])
 from cubevis.private.apps import InteractiveClean
 kernel = sys.argv[3] if len(sys.argv) > 3 else ''
-if kernel:
+scripted = float(sys.argv[4]) if len(sys.argv) > 4 else 0.0
+if scripted:
+    ### the scripted imager (cubevis.imaging.testing), each cycle taking that long, here or
+    ### in the kernel's worker: progress can be watched in the page
+    import cubevis.toolbox.iclean._app as app
+    from cubevis.imaging import LocalImagingSession, RemoteImagingSession
+    from cubevis.imaging import testing as T
+    class Scripted:
+        @staticmethod
+        def from_args(args, iclean_backend='PROD'):
+            args = dict(args, cycle_seconds=scripted, nchan=5)
+            if kernel:
+                return RemoteImagingSession(args, kernel, deconvolver='cubevis.imaging.testing:ScriptedDeconvolver',
+                                            store='cubevis.imaging.testing:numpy_store')
+            return LocalImagingSession(T.ScriptedDeconvolver(**args), store_factory=T.numpy_store)
+    app.LocalImagingSession = Scripted
+elif kernel:
     ### the imaging layer on a Jupyter kernel (RemoteImagingSession; iclean(kernel_name=) is
     ### design step 5).  The kernel's cubevis is its own environment's.
     import cubevis.toolbox.iclean._app as app
@@ -149,7 +172,7 @@ print('result', ic())
 """
 
 
-def run(repo, ms, work, chrome, kernel=None, controls=False):
+def run(repo, ms, work, chrome, kernel=None, controls=False, scripted=0.0):
     from playwright.sync_api import sync_playwright
     work = os.path.abspath(work)
     os.makedirs(work, exist_ok=True)
@@ -165,7 +188,7 @@ def run(repo, ms, work, chrome, kernel=None, controls=False):
         f.write(APP)
     env = dict(os.environ, BROWSER=recorder)
     proc = subprocess.Popen([sys.executable, '-I', app, os.path.abspath(repo), os.path.abspath(ms)] +
-                            ([kernel] if kernel else []), cwd=work,
+                            ([kernel or '', str(scripted)] if (kernel or scripted) else []), cwd=work,
                             env=env, stdout=open(os.path.join(work, 'iclean.log'), 'w'), stderr=subprocess.STDOUT)
     try:
         for _ in range(120):
@@ -280,13 +303,18 @@ if __name__ == '__main__':
     ap.add_argument('--no-casatools', action='store_true', help='skip the comparison with casatools')
     ap.add_argument('--kernel', help='run the imaging layer on this Jupyter kernel (RemoteImagingSession)')
     ap.add_argument('--controls', action='store_true', help='also press continue: a refused threshold, then a cycle')
+    ap.add_argument('--scripted', type=float, default=0.0, metavar='SECONDS',
+                    help='the scripted imager (no tclean), each cycle taking SECONDS: progress shows; '
+                         'no comparison with casatools')
     ap.add_argument('args', nargs='*', metavar='REPO MS WORKDIR')
     ns = ap.parse_args()
     if ns.compare:
         sys.exit(compare(*ns.compare))
     if len(ns.args) != 3:
         ap.error('REPO MS WORKDIR')
-    status = run(*ns.args, ns.chrome, kernel=ns.kernel, controls=ns.controls)
+    status = run(*ns.args, ns.chrome, kernel=ns.kernel, controls=ns.controls, scripted=ns.scripted)
+    if ns.scripted:
+        ns.no_casatools = True
     page_result = json.load(open(os.path.join(ns.args[2], 'page.json')))['result']
     if 'controls' in page_result:
         c = page_result['controls']
@@ -295,6 +323,12 @@ if __name__ == '__main__':
               f"{c['cycle'].get('status')!r} (continue disabled: {c['cycle'].get('continue_disabled')}), "
               f"convergence points {c['before'].get('points')} -> {c['cycle'].get('points')}: "
               f"{'ok' if c['ok'] else 'FAILED'}")
+        progress = [t for t in c['cycle'].get('seen', []) if t and '·' in t]
+        print(f"    progress lines during the cycle: {len(progress)}" +
+              ''.join(f"\n      {t}" for t in progress[:6]))
+        if ns.scripted and len(progress) < 2:
+            print('    expected progress in the status line during the cycle')
+            c['ok'] = False
         status = status or (0 if c['ok'] else 1)
     contour = page_result.get('contour')
     if contour is not None and (contour['x'] != [3, 6] or contour['y'] != [2, 4]):

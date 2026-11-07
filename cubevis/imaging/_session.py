@@ -38,6 +38,7 @@ from typing import Callable, Dict, List, Optional
 from ._protocols import CycleResult
 from ._image_cube import ImageCube
 from ._casatools_store import CasatoolsImageStore
+from ._progress import CycleProgress
 
 
 def resolve_deconvolver(iclean_backend: str = 'PROD'):
@@ -66,11 +67,16 @@ class LocalImagingSession:
         for one field; ``CasatoolsImageStore`` by default
     '''
 
-    def __init__(self, deconvolver, *, store_factory: Callable = CasatoolsImageStore):
+    def __init__(self, deconvolver, *, store_factory: Callable = CasatoolsImageStore,
+                 log_path: Optional[Callable] = None):
         self._dec = deconvolver
         self._store_factory = store_factory
         self._cubes: Dict[str, ImageCube] = {}
         self._products = None
+        ### the running cycle's progress, from the imager's log: the deconvolver's own
+        ### (log_path(), e.g. a stand-in's), else casalog's (design step 4b)
+        own = getattr(deconvolver, 'log_path', None)
+        self._progress = CycleProgress(log_path or (own if callable(own) else None))
 
     @classmethod
     def from_args(cls, args: dict, iclean_backend: str = 'PROD', **kwargs) -> 'LocalImagingSession':
@@ -110,27 +116,45 @@ class LocalImagingSession:
                 result = result._replace(convergence=rekeyed)
         return result
 
-    def start(self) -> CycleResult:
-        '''The first step: the dirty image (``next(gclean)``).'''
-        result = self._result(next(self._dec))
+    def _step(self, kind: str) -> CycleResult:
+        self._progress.begin(kind)
+        ok = False
+        try:
+            result = self._result(next(self._dec))
+            ok = True
+        finally:
+            self._progress.end(ok)
         self._touch()
         return result
+
+    def start(self) -> CycleResult:
+        '''The first step: the dirty image (``next(gclean)``).'''
+        return self._step('start')
 
     def update(self, params: dict):
         return self._dec.update(params)
 
     def run_cycle(self) -> CycleResult:
         '''One major cycle and its minor cycles; blocks (minutes).'''
-        result = self._result(next(self._dec))
-        self._touch()
-        return result
+        return self._step('run')
 
     async def arun_cycle(self) -> CycleResult:
         '''``run_cycle`` without blocking the event loop (gclean runs it in
         a thread: ``gclean.__anext__``).'''
-        result = self._result(await self._dec.__anext__())
+        self._progress.begin('run')
+        ok = False
+        try:
+            result = self._result(await self._dec.__anext__())
+            ok = True
+        finally:
+            self._progress.end(ok)
         self._touch()
         return result
+
+    def progress(self) -> dict:
+        '''Where the running (or last) cycle stands, from the imager's log
+        (``CycleProgress.snapshot``): cheap, any thread, any time.'''
+        return self._progress.snapshot()
 
     def has_next(self) -> bool:
         return self._dec.has_next()

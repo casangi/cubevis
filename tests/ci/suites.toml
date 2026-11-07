@@ -39,10 +39,12 @@ requires = ["ipykernel", "jupyter_client", "pytest_asyncio"]
 name = "imaging"
 # interactive clean's imaging layer (cubevis.imaging) without CASA: an
 # ImageCube over numpy, a LocalImagingSession over a scripted gclean, the
-# coordinate description and its astropy WCS, mask edits (edit_mask)
+# coordinate description and its astropy WCS, mask edits (edit_mask), a
+# cycle's progress from tclean's log
 pytest = ["tests/manual/iclean-imaging/test_imaging_layer.py",
           "tests/manual/iclean-imaging/test_coordinates.py",
-          "tests/manual/iclean-imaging/test_masks.py"]
+          "tests/manual/iclean-imaging/test_masks.py",
+          "tests/manual/iclean-imaging/test_progress.py"]
 args = ["-q"]
 
 [[suite]]
@@ -52,7 +54,8 @@ name = "imaging-remote"
 # this process, a cycle that leaves the worker answering, failures, a dead
 # worker; and (design step 4) the GUI's clean controls -- continue, finish,
 # stop, refused values, failing cycles, a dead worker -- through the handlers
-# the browser uses, here and on the kernel.  No CASA.
+# the browser uses, here and on the kernel, with the progress pushed during a
+# cycle.  No CASA.
 pytest = ["tests/manual/iclean-imaging/test_remote_session.py",
           "tests/manual/iclean-imaging/test_clean_controls.py"]
 args = ["-q"]

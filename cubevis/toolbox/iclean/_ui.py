@@ -351,6 +351,12 @@ class InteractiveCleanUI:
             self.__pipes_initialized = True
             self._pipe['control'] = self._comm_mgr.open( description="interactive clean control" )
             ###
+            ### Progress of a running cycle, pushed to the browser (design step 4b): squashed,
+            ### so a slow link holds at most the newest update rather than a backlog.
+            ###
+            self._pipe['progress'] = self._comm_mgr.open( description="cycle progress", squash_queue=True )
+            self._progress_id = str(uuid4( ))
+            ###
             ### One pipe for updating the convergence plots.
             ###
             self._clean['converge'] = { 'state': None }
@@ -572,7 +578,13 @@ class InteractiveCleanUI:
                         return self._cycle_error( errmsg or f'the imager refused the new values (code {err})' )
 
                     iteration_limit = int(msg['value']['iteration']['niter'])
-                    stopdesc, stopcode, majordone, majorleft, iterleft, self._convergence_data = await self._clean['session'].arun_cycle( )
+                    reporter = asyncio.ensure_future( self._report_progress(
+                                   'Running multiple iterations' if msg['action'] == 'finish' else
+                                   'Running one set of deconvolution iterations' ) )
+                    try:
+                        stopdesc, stopcode, majordone, majorleft, iterleft, self._convergence_data = await self._clean['session'].arun_cycle( )
+                    finally:
+                        reporter.cancel( )
 
                     clean_cmds = self._clean['session'].log( )
                 except Exception as exc:
@@ -823,8 +835,11 @@ class InteractiveCleanUI:
                                                                                for k,v in self._clean_targets.items( ) },
                                                                 ctrl={ 'converge': self._clean['converge'] },
                                                                 clean_ctrl=self._control['iteration'],
-                                                                state=dict( mode='interactive', stopped=False, awaiting_stop=False, mask="" ),
+                                                                state=dict( mode='interactive', stopped=False, awaiting_stop=False, mask="",
+                                                                            cycle_running=False, progress_registered=False ),
                                                                 ctrl_pipe=self._pipe['control'],
+                                                                progress_pipe=self._pipe['progress'],
+                                                                progress_id=self._progress_id,
                                                                 ids=self._clean_ids,
                                                                 logbutton=self._log_button,
                                                                 stopdescmap=self._stop_descriptions
@@ -832,7 +847,7 @@ class InteractiveCleanUI:
                                                  code="const appstate = Bokeh.find.appState(cb_obj.origin);" +
                                                       self._js['update-converge'] + self._js['clean-refresh'] + self._js['clean-disable'] +
                                                       self._js['clean-enable'] + self._js['clean-status-update'] +
-                                                      self._js['iter-gui-update'] + self._js['clean-wait'] +
+                                                      self._js['iter-gui-update'] + self._js['clean-wait'] + self._js['clean-progress'] +
                                                       '''function invalid_niter( s ) {
                                                              let v = parseInt( s )
                                                              if ( v > 0 ) return ''
@@ -850,6 +865,7 @@ class InteractiveCleanUI:
                                                                  disable( false )
                                                                  clean_ctrl.stop.button_type = "warning"
                                                                  const thevalue = get_update_dictionary( )
+                                                                 progress_watch( )
                                                                  ctrl_pipe.send( ids[cb_obj.origin.name],
                                                                                  { action: 'finish',
                                                                                    value: thevalue },
@@ -866,6 +882,7 @@ class InteractiveCleanUI:
                                                                  // only send message for button that was pressed
                                                                  // it's unclear whether 'this.origin.' or 'cb_obj.origin.' should be used
                                                                  // (or even if 'XXX.origin.' is public)...
+                                                                 progress_watch( )
                                                                  ctrl_pipe.send( ids[cb_obj.origin.name],
                                                                                  { action: 'next',
                                                                                    value: get_update_dictionary( ) },
@@ -1137,6 +1154,31 @@ class InteractiveCleanUI:
             #await self.__result_future
 
         return self.result( )
+
+    #: seconds between progress updates while a cycle runs
+    PROGRESS_INTERVAL = 1.0
+
+    async def _report_progress( self, label ):
+        '''While a cycle runs: every ``PROGRESS_INTERVAL`` seconds the session's
+        progress (``ImagingSession.progress``: tclean's log, read where the
+        imager runs) is sent to the browser for the status line.  The elapsed
+        time changes every update, so the line shows that the cycle is being
+        followed; the log's phase, channels, iterations and peak residual show
+        that tclean works.  Cancelled when the cycle ends.'''
+        session = self._clean['session']
+        progress = getattr( session, 'progress', None )
+        from cubevis.imaging import describe_progress
+        while True:
+            await asyncio.sleep( self.PROGRESS_INTERVAL )
+            try:
+                snapshot = progress( ) if callable( progress ) else None
+                await self._pipe['progress'].send( self._progress_id,
+                                                   { 'text': html_escape( describe_progress( snapshot, label ) ),
+                                                     'progress': snapshot } )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug( "interactive clean: progress update failed", exc_info=True )
 
     def _cycle_error( self, failure ):
         '''The reply to a clean button when the cycle could not run or failed:
@@ -1534,6 +1576,7 @@ class InteractiveCleanUI:
                                                }
                                            }
                                            function update_gui( msg ) {
+                                               state.cycle_running = false        // the cycle's own result: no more progress
                                                const itobj = Object.entries(images_state)[0][1].iteration
                                                if ( msg.result === 'error' ) {
                                                    // ************************************************************************************
@@ -1589,6 +1632,7 @@ class InteractiveCleanUI:
                                                            // ******** 'niter.value > 0 so continue with one more iteration                      ********
                                                            // ******** 'nmajor.value' == -1 implies do not consider nmajor in stop consideration ********
                                                            // *******************************************************************************************
+                                                           progress_watch( )
                                                            ctrl_pipe.send( ids[cb_obj.origin.name],
                                                                            { action: 'finish',
                                                                              value: get_update_dictionary( ) },
@@ -1624,10 +1668,25 @@ class InteractiveCleanUI:
                                            }''',
 
                        'clean-wait':    '''function wait_for_tclean_stop( msg ) {
+                                               state.cycle_running = false
                                                state.mode = 'interactive'
                                                clean_ctrl.stop.button_type = "danger"
                                                enable( false )
                                                state.awaiting_stop = false
                                                update_status( 'user requested stop' )
+                                           }''',
+
+                       ### progress of a running cycle (design step 4b): Python pushes the status line
+                       ### about once a second while a cycle runs (_report_progress); shown only while
+                       ### a cycle runs, so an update arriving after the cycle's result is dropped
+                       'clean-progress': '''function progress_watch( ) {
+                                               state.cycle_running = true
+                                               if ( ! state.progress_registered && progress_pipe ) {
+                                                   state.progress_registered = true
+                                                   progress_pipe.register( progress_id, ( msg ) => {
+                                                       if ( state.cycle_running && msg && msg.text ) update_status( msg.text )
+                                                       return { }
+                                                   } )
+                                               }
                                            }''',
         }

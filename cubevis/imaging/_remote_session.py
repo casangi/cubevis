@@ -70,6 +70,8 @@ class RemoteImagingSession:
         self._cubes: Dict[str, 'RemoteImageCube'] = {}
         self._fields = None
         self._products = None
+        self._polling = False
+        self._last_progress = None
 
     @property
     def connection(self):
@@ -86,11 +88,16 @@ class RemoteImagingSession:
     async def _acycle(self, kind: str) -> CycleResult:
         conn = self._conn
         number = await conn.acall('start_cycle', kind=kind)
-        while True:
-            status = await conn.acall('cycle_status', number=number)
-            if status.get('done'):
-                break
-            await asyncio.sleep(CYCLE_POLL)
+        self._polling = True
+        try:
+            while True:
+                status = await conn.acall('cycle_status', number=number)
+                self._last_progress = status.get('progress')
+                if status.get('done'):
+                    break
+                await asyncio.sleep(CYCLE_POLL)
+        finally:
+            self._polling = False
         if status.get('error'):
             from cubevis.remote import RemoteCallError
             raise RemoteCallError('run_cycle' if kind == 'run' else 'start',
@@ -108,6 +115,14 @@ class RemoteImagingSession:
     async def arun_cycle(self) -> CycleResult:
         '''``run_cycle`` awaited on the caller's loop without blocking it.'''
         return await asyncio.wrap_future(self._conn.submit(self._acycle('run')))
+
+    def progress(self) -> dict:
+        '''Where the running (or last) cycle stands (``LocalImagingSession.
+        progress``, in the worker): while this session polls a cycle, the
+        last poll's -- no extra round trip --, else asked for.'''
+        if self._polling and self._last_progress is not None:
+            return dict(self._last_progress)
+        return self._conn.call('progress')
 
     def update(self, params: dict):
         return tuple(self._conn.call('update', params=params))

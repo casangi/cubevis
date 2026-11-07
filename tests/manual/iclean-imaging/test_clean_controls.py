@@ -191,3 +191,44 @@ def test_a_dead_worker_is_an_error_the_gui_shows(monkeypatch):
         assert r['result'] == 'error' and 'gone' in r['stopdesc']
     finally:
         close(ic)
+
+
+def test_progress_is_pushed_while_a_cycle_runs(where, monkeypatch):
+    '''while a cycle runs Python sends the status line about once a second
+    (design step 4b): the elapsed time goes up and tclean's log is read --
+    here the scripted imager's lines, in this process or in the worker'''
+    ic, ui = make_ui(where, monkeypatch, imagename=f'prog-{where}', cycle_seconds=3.0)
+    sent = []
+
+    progress_comm = ui._pipe['progress']
+    real_send = type(progress_comm).send
+
+    async def record(comm, message_id, message, callback=None):
+        '''the Comm class's send: the progress comm's messages recorded, every other
+        comm's -- the remote connection's own included -- sent'''
+        if comm is progress_comm:
+            sent.append((message_id, message))
+            return None
+        return await real_send(comm, message_id, message, callback)
+    monkeypatch.setattr(type(progress_comm), 'send', record)
+    monkeypatch.setattr(type(ui), 'PROGRESS_INTERVAL', 0.4)
+    try:
+        r = asyncio.run(button(ui, 'next'))
+        assert r['result'] == 'update'
+        assert len(sent) >= 4 and all(mid == ui._progress_id for mid, _ in sent)
+        texts = [m['text'] for _, m in sent]
+        assert all(t.startswith('Running one set of deconvolution iterations · 0:0') for t in texts), texts
+        assert any('minor cycles (Hogbom)' in t and 'of 4 channels' in t for t in texts), texts
+        seconds = [m['progress']['seconds'] for _, m in sent]
+        assert seconds == sorted(seconds) and seconds[-1] > seconds[0]
+        done = [m['progress']['channels_done'] for _, m in sent]
+        assert len(set(done)) >= 2, done                                  # tclean moved meanwhile
+        n = len(sent)
+        time.sleep(1.0)
+        assert len(sent) == n                                             # nothing after the cycle
+        p = ui._clean['session'].progress()
+        assert not p['running'] and p['ok'] and p['channels_done'] == 4   # still there afterwards
+        r = asyncio.run(button(ui, 'finish'))                             # 'finish' has its own label
+        assert any(m['text'].startswith('Running multiple iterations') for _, m in sent[n:])
+    finally:
+        close(ic)

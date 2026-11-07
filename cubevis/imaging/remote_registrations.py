@@ -17,8 +17,8 @@ A worker answers one call at a time.  A major cycle takes minutes, and while
 it runs the GUI still asks for channels, spectra and statistics (it only
 stops mask edits).  So a cycle runs in a thread, as ``arun_cycle`` does
 locally (gclean's ``__anext__``): ``start_cycle`` begins it and returns,
-``cycle_status`` reports it; the laptop polls (step 4 adds stopping,
-progress and reattaching on top of this).
+``cycle_status`` reports it, with the cycle's progress (tclean's log, read
+here: ``LocalImagingSession.progress``); the laptop polls.
 
 Values on the wire
 ------------------
@@ -117,10 +117,16 @@ class ImagingSessionBackend:
             return {'number': number, 'done': True, 'error': f'no cycle {number}', 'traceback': ''}
         out = {k: cycle[k] for k in ('number', 'kind', 'done')}
         out['seconds'] = cycle['seconds'] if cycle['done'] else time.monotonic() - cycle['started']
+        out['progress'] = self._session.progress()
         if cycle['done']:
             for k in ('result', 'error', 'traceback'):
                 out[k] = cycle[k]
         return out
+
+    def progress(self) -> dict:
+        '''the running (or last) cycle's progress (``LocalImagingSession.progress``)
+        -- also for a GUI that was not polling, e.g. one reconnecting'''
+        return self._session.progress()
 
     def run_cycle(self) -> list:
         '''One cycle, blocking the worker (tests; the GUI uses start_cycle).'''

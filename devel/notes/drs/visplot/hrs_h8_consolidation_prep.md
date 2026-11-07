@@ -3820,3 +3820,87 @@ happens around it.
     again from a new process would need the session record
     (`cubevis.setup.sessions`, written with `app="iclean"`) plus a way to
     rebuild the GUI's state from the worker.  Not needed for parity.
+
+## 69. iclean step 4b: progress of a running cycle (base `ad4ac0f` + §68, 2026-11-07)
+
+Darrell (on §68's questions): progress feedback for local and remote tclean
+runs -- the GUI is disabled during a cycle, so a busy cursor says little;
+progress that changes shows that tclean runs and is being followed.  And
+session management (a later session) will let a user start iclean on a
+cluster node, close the laptop, and reconnect from elsewhere with the GUI
+showing the clean's current state: support it where it is cheap now, leave
+the significant work for that session.
+
+* **What there is to show** (measured): tclean writes to casalog *while* a
+  cycle runs -- `Begin Task: deconvolve` / `tclean`, `Run Hogbom minor-cycle
+  on 5 chans`, one line per channel as it finishes (`[bl:C2] iters=18->33
+  [15], ... peakres=1.00951->0.42671`), `Completed 51 iterations`,
+  `Run Major Cycle 2`.
+* **`cubevis/imaging/_progress.py`** (new): `CycleProgress(log_path)` --
+  `begin(kind)` / `end(ok)` around a cycle, `snapshot()` reads what the log
+  gained since (whole lines, at most 256 kB a time, a log that starts again
+  read from its start) and returns the state: `running`, `number`, `kind`,
+  `seconds`, `phase` ('minor cycles' / 'major cycle'), `algorithm`,
+  `channels` / `channels_done`, `iterations`, `peak_residual`,
+  `major_cycle`, `activity` (lines read), `quiet_seconds`, `ok`.
+  `describe(snapshot, label)` makes the status line: "Running one set of
+  deconvolution iterations · 0:42 · minor cycles (Hogbom): 3 of 5 channels,
+  33 iterations, peak residual 0.4267" (and "· tclean quiet for N s" after
+  30 s without a line).  The log is casalog's (`casatasks`, imported when
+  first needed), or a deconvolver's own `log_path()`; without one, only the
+  elapsed time.
+* **Progress is state, kept where the imager runs** -- what a reconnecting GUI
+  will need: `LocalImagingSession.progress()` (begin/end around `start`,
+  `run_cycle`, `arun_cycle`; `log_path=` or the deconvolver's own);
+  the worker's `cycle_status` carries it and `ImagingSessionBackend.progress()`
+  answers it at any time; `RemoteImagingSession.progress()` returns the last
+  poll's while it polls a cycle (no extra round trip), else asks the worker.
+* **The GUI** (`_ui.py`): a third comm, "cycle progress", opened with
+  `squash_queue=True` (a slow link holds the newest update, not a backlog);
+  `_report_progress(label)` runs while `clean_handler` awaits the cycle and
+  every `PROGRESS_INTERVAL` (1 s) sends `{'text', 'progress'}`; cancelled
+  when the cycle ends.  Browser (`'clean-progress'` snippet):
+  `progress_watch()` -- called before each 'next'/'finish' is sent, the
+  automatic 'finish' repeats included -- registers the handler once and sets
+  `state.cycle_running`; the handler writes the text to the status line only
+  while `cycle_running` (`update_gui` and `wait_for_tclean_stop` clear it), so
+  an update arriving after the cycle's result is dropped.  Labels: "Running
+  one set of deconvolution iterations" (continue), "Running multiple
+  iterations" (finish), as the browser's own.
+* **`ScriptedDeconvolver`** writes those casalog lines into its own log
+  (`log_path()`) while it works, spread over `cycle_seconds`; names its field
+  by the image's base name, as gclean does.
+* **Checks**:
+  * `test_progress.py` (new, 7; `imaging` suite): real tclean lines read as
+    they are written (phase, algorithm, channels 3 of 5, iterations 33, peak
+    residual, then the major cycle, totals), what came before the cycle
+    skipped, a line written in two pieces read once, a log that starts again,
+    no log (time only; a failing log source), the "quiet" note, the session
+    following its cycles while they run, a failed cycle marked.
+  * `test_clean_controls.py` (+2, 13): during a 3 s cycle, here and in the
+    worker, at least four updates, the elapsed time rising, the channels
+    moving, "minor cycles (Hogbom) ... of 4 channels"; none after the cycle;
+    `progress()` still answers after it; 'finish' with its own label.
+  * Real tclean (1024², 5 channels, a mask): snapshots every 0.1 s showed
+    "minor cycles (Hogbom): 1 / 3 / 5 of 5 channels, 9 / 33 / 51
+    iterations, peak residual ..." then "major cycle (51 iterations so far)",
+    for two cycles.
+  * `browser_check.py --controls --scripted 4` (headless Chrome), here and
+    with `--kernel python3`: the status line showed 3 (local) and 4
+    (remote) progress lines during the cycle -- "... · 0:01 · minor cycles
+    (Hogbom): 1 of 5 channels, 2 iterations, peak residual 1.924", "... ·
+    0:03 · major cycle (10 iterations so far)" -- then the cycle's result.
+    `--scripted SECONDS` runs the scripted imager (no tclean, no casatools
+    comparison).  Real tclean `--controls`, both ways: as §68.
+  * Handler records: local and remote identical to step 4's.
+  * Quick tests: `remote`, `imaging`, `imaging-remote`, `syntax` pass
+    (without `BROWSER`); `test_fingerprint.py` with a kernel Python passes.
+* **For reattach, in place**: a cycle's state and progress live in the
+  worker (`cycle_status()` without a number answers the latest cycle, with
+  its result once done; `progress()` at any time), so a new laptop process
+  could learn what runs and what came of it.  **Left for the session work**:
+  adopting a running worker (the session record, `app="iclean"`, has the
+  kernel, context and handle), rebuilding the GUI (convergence history, the
+  last `CycleResult`, the controls' state) from it, the browser registering
+  the progress handler at page load rather than at the first click.
+* **Fingerprint** `k2-eefb1f77fd564a7cf7ee` (session, `_progress`, the worker).

@@ -365,6 +365,10 @@ current one. This comparison is part of step 1's tests.
   than failing.
 * Verified: real tclean through a local kernel gives the same handler
   records as locally; the page from a remote session in headless Chrome.
+* Step 4 (§68, §69): stop is after the running cycle (gclean cannot
+  interrupt one); any failure is an 'error' the GUI shows; progress
+  (`progress()`, read from tclean's log in the worker) rides on the cycle
+  polls and is pushed to the status line.
 
 ## 4. Steps (revised)
 
@@ -377,6 +381,7 @@ current one. This comparison is part of step 1's tests.
 | 2b. Region selection by pixel centre, the mask outline on pixel edges (§2.2.1). **Done: notes §66** | 0.5 |
 | 3. Registration + `RemoteImagingSession`; remote display (channel, spectrum, stats, histogram) and mask edits. **Done: notes §67, §3.1** | 1–2 |
 | 4. `run_cycle` as an async job; stop and progress semantics. **Done: notes §68** (the job in step 3; stop after the cycle; failures shown in the GUI; progress and reattach open, §5) | 1 |
+| 4b. Progress of a running cycle, local and remote: tclean's log followed where the imager runs (`CycleProgress`), kept as session state (`progress()`), pushed to the status line about once a second. **Done: notes §69** | 0.5 |
 | 5. `iclean(kernel_name=)`, the shared connection base, setup environments with casatasks (`cubevis[visplot,iclean]`, discovery reports it), fingerprint roots, release | 1 |
 | 6. Parity tests (local kernel, small MS, local vs remote), quick tests, rounds with Darrell | 1 + 2–3 rounds |
 | 1c. Package organization (§6): `toolbox/iclean/`, one app template, dependency rule. **Done: notes §62** | 1 |
@@ -407,14 +412,18 @@ becomes explicit, and mask editing becomes faster for cubes.
 * ~~**Stop during a cycle**~~: "stop after this cycle" is the contract
   (step 4, notes §68): gclean cannot interrupt a cycle, and the GUI's orange
   stop already waits for the running one; the same remotely.
-* **Progress during a cycle** (open): none locally either.  Options: the
-  elapsed time in the status line, pushed by Python while it waits; or
-  minor-cycle lines from tclean's log relayed by the worker.
-* **Reattach** after a disconnect (hours of cleaning; open): a lost kernel
-  now ends the session with a message in the GUI (§68).  Picking a running
-  clean up from a new process needs the session record (`app="iclean"`) and
-  the GUI's state rebuilt from the worker (generation, last `CycleResult`),
-  rather than replaying queued messages.
+* ~~**Progress during a cycle**~~ (done, step 4b, notes §69): tclean's log
+  is followed where the imager runs (`CycleProgress`: phase, channels done,
+  iterations, peak residual, elapsed time, how long tclean has been quiet);
+  `ImagingSession.progress()` gives it as state, any time; the GUI pushes it
+  to the status line about once a second during a cycle, local and remote.
+* **Reattach** after a disconnect (hours of cleaning; for the session-
+  management work): a lost kernel now ends the session with a message in the
+  GUI (§68).  In place (§69): the cycle's state and progress live in the
+  worker and can be asked for at any time (`cycle_status()`, `progress()`).
+  To do: adopt a running worker from the session record (`app="iclean"`),
+  rebuild the GUI's state from it (convergence history, last `CycleResult`,
+  controls), register the browser's progress handler at page load.
 * **Failures** (done, §68): any failure of a cycle -- the imager, a value it
   refuses, the worker or kernel gone -- is an 'error' reply the browser shows
   with the controls enabled again.

@@ -10,6 +10,7 @@ gives the in-memory ``ImageStore`` for a path, the same one the deconvolver
 changes (one registry per process).  Not imported by ``cubevis.imaging``.
 '''
 
+import os
 import time
 import zlib
 from typing import Dict, List, Optional
@@ -140,7 +141,8 @@ class ScriptedDeconvolver:
                  threshold='0.0Jy', cycle_seconds=0.0, fail_at=None, **ignored):
         nx, ny = (imsize, imsize) if isinstance(imsize, int) else tuple(imsize)
         nchan = max(1, int(nchan))
-        self._name = imagename
+        self._name = os.path.basename(os.path.abspath(imagename))   # as gclean names a field
+        imagename = self._name
         self._niter = int(niter)
         self._iterleft = int(niter)
         self._cycleniter = int(cycleniter) if int(cycleniter) > 0 else int(niter)
@@ -155,6 +157,9 @@ class ScriptedDeconvolver:
         self.mask_path = f'/scripted/{imagename}.mask'
         STORES[self.residual_path] = NumpyImageStore(image, np.zeros_like(image),
                                                      self.residual_path, self.mask_path)
+        import tempfile
+        fd, self._log_file = tempfile.mkstemp(prefix=f'scripted-{imagename}-', suffix='.log')
+        os.close(fd)
         self._cyclethreshold: List[float] = []
         self._chan = {c: {0: {'modelFlux': [], 'iterations': np.zeros(0), 'peakRes': [],
                               'stopCode': [], 'cycleThresh': []}} for c in range(nchan)}
@@ -199,11 +204,45 @@ class ScriptedDeconvolver:
     def has_next(self):
         return self._iterleft > 0
 
+    def log_path(self):
+        '''the log this stand-in writes, in casalog's format (``CycleProgress``)'''
+        return self._log_file
+
+    def _write(self, origin, message):
+        stamp = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())
+        with open(self._log_file, 'a') as f:
+            f.write(f'{stamp}\tINFO\t{origin}\t{message}\n')
+
+    def _logged_work(self, done):
+        '''what tclean logs during a cycle, spread over ``cycle_seconds``'''
+        store = STORES[self.residual_path]
+        nchan = store.image.shape[3]
+        if self._major == 0:
+            self._write('tclean::::casa', '##### Begin Task: tclean             #####')
+            self._write('task_tclean::SynthesisImager::executeMajorCycle', '----- Run Major Cycle 1 -----')
+            if self._cycle_seconds:
+                time.sleep(self._cycle_seconds)
+            return
+        self._write('deconvolve::::casa', '##### Begin Task: deconvolve         #####')
+        self._write('SDAlgorithmBase::deconvolve', f'[{self._name}] Run Hogbom minor-cycle on {nchan} chans | '
+                                                   f'CycleNiter={self._cycleniter}')
+        per = done // nchan
+        for c in range(nchan):
+            if self._cycle_seconds:
+                time.sleep(self._cycle_seconds / (nchan + 1))
+            peak = float(np.abs(store.image[:, :, 0, c]).max())
+            self._write('SDAlgorithmBase::deconvolve',
+                        f'[{self._name}:C{c}] iters={c * per}->{(c + 1) * per} [{per}], model=0->1, '
+                        f'peakres={2 * peak:.6g}->{peak:.6g}, Reached cyclethreshold')
+        self._write('grpcInteractiveCleanManager::mergeIterDone', f'Completed {done} iterations.')
+        self._write('tclean::::casa', '##### Begin Task: tclean             #####')
+        self._write('task_tclean::SynthesisImager::executeMajorCycle', f'----- Run Major Cycle {self._major + 1} -----')
+        if self._cycle_seconds:
+            time.sleep(self._cycle_seconds / (nchan + 1))
+
     def _step(self):
         if self._fail_at is not None and self._major == int(self._fail_at):
             raise RuntimeError(f'scripted failure in cycle {self._major}')
-        if self._cycle_seconds:
-            time.sleep(self._cycle_seconds)
         store = STORES[self.residual_path]
         done = 0
         if self._major > 0:
@@ -211,6 +250,7 @@ class ScriptedDeconvolver:
             store.mtime += 1.0
             done = max(0, min(self._cycleniter, self._iterleft))
             self._iterleft -= done
+        self._logged_work(done)
         peak = float(np.abs(store.image).max())
         reached = self._major > 0 and (self._iterleft <= 0 or peak <= self._threshold)
         self._cyclethreshold.append(max(self._threshold, 0.1 * peak) if self._major else self._threshold)

@@ -5,8 +5,6 @@ design step 2) without CASA.
 '''
 import sys
 import subprocess
-from itertools import product
-from math import floor, ceil
 
 import numpy as np
 import pytest
@@ -15,20 +13,23 @@ from cubevis.imaging import ImageCube, polygon_pixels
 from cubevis.imaging import _masks
 
 
-def polygon_indexes_before(xs, ys, shape):
-    '''cubevis.utils.polygon_indexes as it was until 2026-11-07 (the reference)'''
-    from matplotlib.path import Path
-    if len(xs) == 4 and len(ys) == 4:
-        uniqx = sorted(set(xs))
-        uniqy = sorted(set(ys))
-        if len(uniqx) == 2 and len(uniqy) == 2:
-            return product(range(max(floor(uniqx[0]), 0), min(ceil(uniqx[1]), shape[0] - 1)),
-                           range(max(floor(uniqy[0]), 0), min(ceil(uniqy[1]), shape[1] - 1)))
-    path = Path(list(zip(xs, ys)))
-    xmin, xmax = max([0, min(xs) - 1]), max(xs) + 1
-    ymin, ymax = max([0, min(ys) - 1]), max(ys) + 1
-    return filter(path.contains_point, product(range(max(floor(xmin), 0), min(ceil(xmax), shape[0] - 1)),
-                                               range(max(floor(ymin), 0), min(ceil(ymax), shape[1] - 1))))
+def inside(px, py, xs, ys):
+    '''even-odd ray casting, independent of matplotlib (the reference)'''
+    n, c = len(xs), False
+    for k in range(n):
+        x0, y0, x1, y1 = xs[k], ys[k], xs[(k + 1) % n], ys[(k + 1) % n]
+        if (y0 > py) != (y1 > py) and px < x0 + (py - y0) * (x1 - x0) / (y1 - y0):
+            c = not c
+    return c
+
+
+def centre_pixels(xs, ys, shape):
+    '''the pixels whose centre (i + 0.5, j + 0.5) is inside, one by one'''
+    if len(xs) == 4 and len(set(xs)) == 2 and len(set(ys)) == 2:
+        (x0, x1), (y0, y1) = sorted(set(xs)), sorted(set(ys))
+        return {(i, j) for i in range(shape[0]) for j in range(shape[1])
+                if x0 <= i + 0.5 < x1 and y0 <= j + 0.5 < y1}
+    return {(i, j) for i in range(shape[0]) for j in range(shape[1]) if inside(i + 0.5, j + 0.5, xs, ys)}
 
 
 def as_set(ix, iy):
@@ -37,11 +38,11 @@ def as_set(ix, iy):
 
 # ---- rasterization ------------------------------------------------------
 
-def test_polygon_pixels_match_the_old_selection():
+def test_polygon_pixels_select_pixel_centres():
     rng = np.random.default_rng(20261107)
     shape = (60, 45)
     cases = []
-    for _ in range(400):                                      # polygons, some leaving the plane
+    for _ in range(300):                                      # polygons, some leaving the plane
         n = int(rng.integers(3, 9))
         cases.append((list(rng.uniform(-10, 70, n)), list(rng.uniform(-10, 55, n))))
     for _ in range(200):                                      # boxes, some tiny, some at the edges
@@ -49,30 +50,51 @@ def test_polygon_pixels_match_the_old_selection():
         w, h = rng.choice([0.3, 1.0, 4.5, 30.0]), rng.choice([0.4, 1.0, 7.25, 50.0])
         cases.append(([x0, x0 + w, x0 + w, x0], [y0, y0, y0 + h, y0 + h]))
     cases += [([0, 60, 60, 0], [0, 0, 45, 45]),                # the whole plane
-              ([10, 20, 20], [10, 10, 30]),                    # integer vertices on pixel corners
+              ([10, 20, 20], [10, 10, 30]),                    # vertices on pixel corners
               ([5.5, 5.5, 5.5, 5.5], [3.2, 3.2, 3.2, 3.2])]    # degenerate
     for xs, ys in cases:
-        assert as_set(*polygon_pixels(xs, ys, shape)) == set(polygon_indexes_before(xs, ys, shape)), (xs, ys)
+        assert as_set(*polygon_pixels(xs, ys, shape)) == centre_pixels(xs, ys, shape), (xs, ys)
 
 
-def test_polygon_pixels_edges_kept_as_they_were():
-    ''''the last column and row are never selected (the old behaviour, kept)'''
-    ix, iy = polygon_pixels([0, 10, 10, 0], [0, 0, 8, 8], (10, 8))
-    assert ix.max() == 8 and iy.max() == 6
+def test_whole_plane_and_its_edges():
+    '''the last column and row can be selected (they never could before §66)'''
+    assert as_set(*polygon_pixels([0, 10, 10, 0], [0, 0, 8, 8], (10, 8))) == \
+        {(i, j) for i in range(10) for j in range(8)}
+    ix, iy = polygon_pixels([100.0, 128.0, 128.0], [128.0, 100.0, 128.0], (128, 128))
+    assert ix.max() == 127 and iy.max() == 127
     assert polygon_pixels([], [], (10, 8))[0].size == 0
+
+
+def test_a_box_selects_the_pixels_whose_centres_it_holds():
+    assert as_set(*polygon_pixels([2.3, 5.7, 5.7, 2.3], [1.0, 1.0, 2.0, 2.0], (10, 8))) == \
+        {(2, 1), (3, 1), (4, 1), (5, 1)}
+    assert as_set(*polygon_pixels([2.7, 5.2, 5.2, 2.7], [1.0, 1.0, 2.0, 2.0], (10, 8))) == {(3, 1), (4, 1)}
+
+
+def test_a_region_on_the_mask_contour_gives_back_its_pixels():
+    '''the outline the browser draws (d3-contour at threshold 0.5: pixel edges,
+    corners cut by half a pixel), drawn back as a region, selects the same pixels'''
+    block = {(i, j) for i in range(3, 6) for j in range(2, 4)}
+    xs = [6, 6, 5.5, 4.5, 3.5, 3, 3, 3.5, 4.5, 5.5]          # d3-contour's ring for this block
+    ys = [3.5, 2.5, 2, 2, 2, 2.5, 3.5, 4, 4, 4]
+    assert as_set(*polygon_pixels(xs, ys, (10, 8))) == block
 
 
 def test_utils_polygon_indexes_delegates():
     from cubevis.utils import polygon_indexes
     xs, ys = [3.2, 17.9, 11.1], [2.5, 4.0, 19.3]
     got = list(polygon_indexes(xs, ys, (30, 30)))
-    assert set(got) == set(polygon_indexes_before(xs, ys, (30, 30)))
+    assert set(got) == centre_pixels(xs, ys, (30, 30))
     assert all(type(i) is int and type(j) is int for i, j in got)
 
 
-def test_region_within_one_pixel_selects_it():
-    ix, iy = _masks.region_pixels([40.2, 40.8, 40.8, 40.2], [10.3, 10.3, 10.7, 10.7], (64, 64))
-    assert as_set(ix, iy) == {(40, 10)}
+@pytest.mark.parametrize('xs,ys,want', [
+    ([40.2, 40.8, 40.8, 40.2], [10.3, 10.3, 10.7, 10.7], {(40, 10)}),     # inside one pixel
+    ([40.7, 41.3, 41.3, 40.7], [10.1, 10.1, 10.4, 10.4], {(41, 10)}),     # straddling two, no centre
+    ([200.0, 201.0, 201.0, 200.0], [1.0, 1.0, 1.2, 1.2], set()),          # off the plane
+])
+def test_a_region_without_a_pixel_centre_selects_the_pixel_under_its_middle(xs, ys, want):
+    assert as_set(*_masks.region_pixels(xs, ys, (64, 64))) == want
 
 
 # ---- edits ----------------------------------------------------------------
@@ -133,7 +155,7 @@ def expected(mask, op, scope, index, polygon=None, src=None):
     s, c = index
     chans = [c] if scope == 'chan' else range(m.shape[3])
     if op in ('add', 'subtract') and polygon is not None:
-        pix = tuple(np.array(list(polygon_indexes_before(polygon['xs'], polygon['ys'], m.shape[:2]))).T)
+        pix = tuple(np.array(sorted(centre_pixels(polygon['xs'], polygon['ys'], m.shape[:2]))).T)
         for ch in chans:
             m[:, :, s, ch][pix] = 1 if op == 'add' else 0
     elif op in ('add', 'subtract'):

@@ -9,7 +9,13 @@ and by hand:
 
 What runs is listed in `suites.toml`; adding tests means adding a
 `[[suite]]` there (a pytest path, or any command) -- the workflow does not
-change.  Today:
+change.
+
+The tests themselves stay with their subject under `tests/manual/` (e.g.
+`tests/manual/iclean-imaging/`, next to that subject's demos and slower
+checks), where they can be run by hand on their own; `tests/ci/` holds only
+the runner, the list of suites and what exists for CI alone (`make_tiny_ms.py`).
+A test is a quick test because a suite names it, not because of where it is.  Today:
 
 * **setup** -- `python -m cubevis.setup` without the ssh test rig (the
   rig's tests skip themselves).

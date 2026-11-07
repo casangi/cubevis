@@ -12,6 +12,10 @@ world for the residual image (``--tolerance`` arcsec, default 0.01).  Before
 2026-11-06 the readout was one pixel off and coordtxl treated every image as
 linear, so an older checkout fails this check; ``--no-casatools`` skips it.
 
+The page's mask outline (ImageDataSource._mask_contour, d3-contour) is
+checked on a 3x2 block of pixels: it must run along their edges, as it does
+since 2026-11-07.
+
 Two runs (two checkouts) can then be compared:
 
     python browser_check.py REPO_A MS WORKDIR_A
@@ -48,6 +52,18 @@ PAGE_JS = """(pixels) => {
         item.spectral = c && c.spectral ? c.spectral.values : null
       }
       out.pipes.push(item)
+    }
+    // the mask outline: ImageDataSource._mask_contour on a 3x2 block of pixels
+    // x 3..5, y 2..3 should run along their edges, x 3..6, y 2..4 (Bokeh data space)
+    for (const m of doc._all_models.values()) {
+      if (typeof m._mask_contour !== 'function' || !m.image_source) continue
+      const [nx, ny] = m.image_source.shape.slice(0, 2)
+      const mask = new Uint8Array(nx * ny)
+      for (let x = 3; x <= 5; x++) for (let y = 2; y <= 3; y++) mask[y * nx + x] = 1
+      const c = m._mask_contour([mask])
+      const xs = c.xs.flat(3), ys = c.ys.flat(3)
+      out.contour = {x: [Math.min(...xs), Math.max(...xs)], y: [Math.min(...ys), Math.max(...ys)]}
+      break
     }
   }
   return out
@@ -111,6 +127,10 @@ def run(repo, ms, work, chrome):
     finally:
         proc.kill()
     json.dump({'result': result, 'console': console}, open(os.path.join(work, 'page.json'), 'w'), indent=1)
+    contour = (result or {}).get('contour')
+    if contour is not None:
+        print(f'    mask outline of pixels x 3..5, y 2..3: x {contour["x"]}, y {contour["y"]} '
+              f'(pixel edges: x [3, 6], y [2, 4])')
     errors = [c for c in console if c.startswith(('error', 'pageerror'))]
     print(f'{work}: {len((result or {}).get("pipes", []))} ImagePipe(s), {len(errors)} console error(s)')
     for e in errors[:8]:
@@ -190,6 +210,10 @@ if __name__ == '__main__':
     if len(ns.args) != 3:
         ap.error('REPO MS WORKDIR')
     status = run(*ns.args, ns.chrome)
+    contour = json.load(open(os.path.join(ns.args[2], 'page.json')))['result'].get('contour')
+    if contour is not None and (contour['x'] != [3, 6] or contour['y'] != [2, 4]):
+        print('    the mask outline is not on the pixel edges')      # before 2026-11-07 (notes §66)
+        status = 1
     if not ns.no_casatools:
         page = json.load(open(os.path.join(ns.args[2], 'page.json')))['result']
         status = check_casatools(ns.args[2], page, ns.tolerance) or status

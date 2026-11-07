@@ -3585,3 +3585,57 @@ messages are unchanged (no cubevisjs rebuild).
 * **Fingerprint**: `cubevis.utils._regions` now imports
   `cubevis.imaging._masks`, which is in the closure: `k2-c82e095772c5b36bec49`
   (release still pending).
+
+## 66. iclean step 2b: drawn regions and the mask outline on the pixel grid (base `6da8526`, 2026-11-07)
+
+The two selection defects measured in §65, fixed at Darrell's request, and
+the cause of the long-standing "mask contour off by one pixel on one side":
+the outline the browser draws was half a pixel inside the mask, and drawn
+polygons selected pixels half a pixel down and left of the polygon, so the
+outline met the drawn line on the left and bottom and was one pixel inside it
+on the right and top.  The convention is §64's: the image glyph is drawn at
+`x=0, y=0`, pixel i covers [i, i+1] and its centre is i + 0.5.
+
+* **Selection** (`cubevis/imaging/_masks.py`, `polygon_pixels`): a pixel is
+  selected when its centre is inside the region, for every shape.  Boxes:
+  `x0 <= i + 0.5 < x1` exactly (was every pixel the box overlapped,
+  `floor(x0) <= i < ceil(x1)`); other polygons: `Path.contains_points` at
+  `(i + 0.5, j + 0.5)` (was the corner `(i, j)`).  The last column and row
+  can be selected (the ranges stopped at `nx - 1`, exclusive).  A region
+  holding no pixel centre selects the pixel under the middle of its bounding
+  box when that is on the plane (`region_pixels`; was: only when all
+  vertices fell in one pixel, so a sliver across two pixels selected
+  nothing).  `cubevis.utils.polygon_indexes` follows (it calls
+  `polygon_pixels`).
+* **Outline** (`cubevisjs/src/bokeh/sources/image_data_source.ts`,
+  `_mask_contour`): d3-contour puts mask value i at i + 0.5 -- the pixel's
+  centre in Bokeh space -- and the mask is 0/1, so `thresholds([1])` drew the
+  outline through the centres of the edge pixels.  `thresholds([0.5])` puts
+  it on the pixel edges, corners cut by half a pixel (marching squares; a
+  single pixel is a diamond inside its square).  Drawn back as a region (the
+  "copy the contour" path), that outline selects the same pixels by the
+  centre rule (test).  cubevisjs rebuilt (Bokeh 3.9.2 → 3.6–3.9, 3.10.0 →
+  3.10).
+* **Checks**:
+  * `test_masks.py` (50): `polygon_pixels` against a brute-force centre test
+    with its own even-odd ray casting (no matplotlib) on 500 random polygons
+    and boxes plus edge cases (replaces the old-selection reference); the
+    whole plane including its last column/row; boxes by their centres; the
+    d3 outline of a block gives the block back; the no-centre fallback (one
+    pixel, a sliver across two, off the plane); the 17 edits × 2 stores now
+    against the centre rule.
+  * Handler records against step 2 (`6da8526`): only mask cubes differ (10
+    entries, from the first non-box polygon on); every reply is unchanged.
+    Replaying each recorded edit against the centre rule: all 23 steps match
+    now; before, 3 did not -- the triangle (51 pixels), the box to the
+    image's edge (37) and the triangle in the corner (405 over 5 channels).
+  * `browser_check.py` now also hands the page's `_mask_contour` a 3×2 block
+    (x 3..5, y 2..3) and fails unless the outline is x [3, 6], y [2, 4]:
+    this tree x [3, 6], y [2, 4]; `6da8526` x [3.5, 5.5], y [2.5, 3.5].  No
+    console errors, coordinates as §64.
+  * `imaging`, `syntax`, `remote` suites, `test_fingerprint.py`,
+    `test_lazy_packages.py` pass.  Fingerprint `k2-f28e9989ade14c5f8b72`
+    (`_masks.py` is in the closure; release still pending).
+* `tests/ci/README.md`: says that the tests stay with their subject under
+  `tests/manual/` and `tests/ci/` holds the runner, the suite list and
+  CI-only helpers (Darrell asked whether the tests belong under `tests/ci/`).

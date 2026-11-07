@@ -7,10 +7,9 @@ channel at a time through ``ImagePipe``.  ``ImageCube.edit_mask`` now does the
 whole edit where the mask is stored: one call per edit, the region sent as its
 vertices.  Remotely that is one round trip instead of two per channel.
 
-``polygon_pixels`` is ``cubevis.utils.polygon_indexes`` as arrays, with the
-same selection (kept as it was; see the notes on its edges below), computed
-in one vectorized pass.  It is here because ``cubevis.imaging`` must not
-import ``cubevis.utils`` (Bokeh); ``polygon_indexes`` now calls it.
+``polygon_pixels`` selects a region's pixels by their centres, in one
+vectorized pass.  It is here because ``cubevis.imaging`` must not import
+``cubevis.utils`` (Bokeh); ``cubevis.utils.polygon_indexes`` calls it.
 
 Pixel layout is the store's: planes are ``[x, y]`` (not the transposed
 display layout), indices are 0-based.
@@ -30,15 +29,22 @@ CHUNK_BYTES = 64 * 1024 * 1024
 
 
 def polygon_pixels(xs: Sequence[float], ys: Sequence[float], shape: Sequence[int]) -> Tuple[np.ndarray, np.ndarray]:
-    '''``(ix, iy)``: the pixels of a ``shape`` (``[nx, ny]``) plane that the
-    polygon with vertices ``xs``, ``ys`` (Bokeh data coordinates) selects.
+    '''``(ix, iy)``: the pixels of a ``shape`` (``[nx, ny]``) plane whose
+    **centre** lies inside the polygon with vertices ``xs``, ``ys`` (Bokeh data
+    coordinates).
 
-    The same pixels as ``polygon_indexes`` has always given (checked against
-    it): an axis-aligned box (four vertices, two distinct x and two distinct
-    y) selects ``floor(x0) <= i < ceil(x1)``; any other polygon selects the
-    pixels whose *corner* ``(i, j)`` is inside it (matplotlib's
-    ``Path.contains_points``).  In both cases the last column and row
-    (``nx - 1``, ``ny - 1``) are never selected.
+    The image glyph is drawn at ``x=0, y=0`` with ``dw, dh`` equal to the shape,
+    so pixel ``i`` covers ``[i, i+1]`` and its centre is ``i + 0.5`` (the same
+    convention as the browser's world coordinates, design §2.5.2).  An
+    axis-aligned box selects ``x0 <= i + 0.5 < x1`` (and the same in y),
+    computed exactly; any other polygon uses matplotlib's
+    ``Path.contains_points`` at the centres.  Every pixel of the plane can be
+    selected, the last column and row included.
+
+    Until 2026-11-07 (notes §66) non-box polygons tested the pixel's corner
+    ``(i, j)``, which moved the selection half a pixel down and to the left of
+    the drawn region, boxes took every pixel they overlapped, and the last
+    column and row could never be selected.
     '''
     assert len(shape) == 2, 'contains only works for 2D shapes, so "shape" should have length equal to two'
     assert len(xs) == len(ys), 'to specify a polygon the number of X values must equal the number of Y values'
@@ -46,9 +52,11 @@ def polygon_pixels(xs: Sequence[float], ys: Sequence[float], shape: Sequence[int
     if len(xs) == 0:
         return empty
 
-    def grid(x0, x1, y0, y1):
-        ix = np.arange(max(floor(x0), 0), min(ceil(x1), shape[0] - 1), dtype=np.intp)
-        iy = np.arange(max(floor(y0), 0), min(ceil(y1), shape[1] - 1), dtype=np.intp)
+    def centres(lo, hi, n):
+        '''the indices i, 0 <= i < n, with lo <= i + 0.5 < hi'''
+        return np.arange(max(ceil(lo - 0.5), 0), min(ceil(hi - 0.5), n), dtype=np.intp)
+
+    def grid(ix, iy):
         gx, gy = np.meshgrid(ix, iy, indexing='ij')
         return gx.ravel(), gy.ravel()
 
@@ -56,27 +64,27 @@ def polygon_pixels(xs: Sequence[float], ys: Sequence[float], shape: Sequence[int
         uniqx = sorted(set(xs))
         uniqy = sorted(set(ys))
         if len(uniqx) == 2 and len(uniqy) == 2:
-            ### a proper box (Path.contains_point errs slightly with very small regions)
-            return grid(uniqx[0], uniqx[1], uniqy[0], uniqy[1])
+            ### a proper box: exact, no point-in-polygon test
+            return grid(centres(uniqx[0], uniqx[1], shape[0]), centres(uniqy[0], uniqy[1], shape[1]))
 
-    gx, gy = grid(max(0, min(xs) - 1), max(xs) + 1, max(0, min(ys) - 1), max(ys) + 1)
+    gx, gy = grid(centres(min(xs), max(xs) + 1, shape[0]), centres(min(ys), max(ys) + 1, shape[1]))
     if gx.size == 0:
         return empty
     from matplotlib.path import Path        # not at import: cubevis.imaging stays light
-    inside = Path(list(zip(xs, ys))).contains_points(np.column_stack((gx, gy)))
+    inside = Path(list(zip(xs, ys))).contains_points(np.column_stack((gx + 0.5, gy + 0.5)))
     return gx[inside], gy[inside]
 
 
 def region_pixels(xs: Sequence[float], ys: Sequence[float], shape: Sequence[int]) -> Tuple[np.ndarray, np.ndarray]:
-    '''The pixels a drawn region edits: ``polygon_pixels``, or, when that is
-    empty because the whole region lies within one pixel, that pixel (as
-    ``CubeMask``'s handler did).'''
+    '''The pixels a drawn region edits: ``polygon_pixels``, or, when the region
+    holds no pixel centre (it is smaller than a pixel, or a thin sliver), the
+    pixel under the middle of its bounding box, if that is on the plane.'''
     ix, iy = polygon_pixels(xs, ys, shape)
     if ix.size == 0 and len(xs) > 0 and len(xs) == len(ys):
-        ux = set(map(int, xs))
-        uy = set(map(int, ys))
-        if len(ux) == len(uy) == 1:
-            return np.array([ux.pop()], dtype=np.intp), np.array([uy.pop()], dtype=np.intp)
+        x = floor((min(xs) + max(xs)) / 2)
+        y = floor((min(ys) + max(ys)) / 2)
+        if 0 <= x < shape[0] and 0 <= y < shape[1]:
+            return np.array([x], dtype=np.intp), np.array([y], dtype=np.intp)
     return ix, iy
 
 

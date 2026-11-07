@@ -129,9 +129,13 @@ Two changes compared with what `ImagePipe` does today:
   chunks of at most 64 MB, else plane by plane.
 * `CubeMask`'s `mask-mod` handler maps the browser's messages onto it;
   the browser is unchanged.  Before/after: identical mask cubes and replies.
-* Kept as they were, pending a decision: the selection never includes the
-  last column/row, and non-box polygons test pixel corners rather than
-  centres (notes §65).
+* Pixel selection and the mask outline follow §2.5.2's grid (step 2b,
+  notes §66): a region selects the pixels whose **centre** it holds (every
+  shape, the last column/row included; a region holding no centre selects the
+  pixel under its middle), and the browser's outline (d3-contour at threshold
+  0.5) runs along the pixel edges.  Before, polygons tested pixel corners and
+  the outline went through the edge pixels' centres: together, the
+  one-sided off-by-one-pixel outline.
 
 ### 2.3 `ImageStore` (primitives; this is what a new image format implements)
 
@@ -347,6 +351,7 @@ current one. This comparison is part of step 1's tests.
 | 1b. Coordinate description (§2.5): casatools store builds it; `coords_json` + `DescriptionKeywordProvider` in cubevisjs; `astropy_wcs()` replaces the two coordsys→WCS helpers; parity against the FITS-header path. **Done: notes §63, §2.5.1** | 0.5–1 |
 | 1d. Coordinate defects (§2.5.2): coordtxl projection parsing (0.1.6), the GUI's pixel convention. FK4 stays for the coordtxl feature work. **Done: notes §64** | 0.5 |
 | 2. `edit_mask` operations replace `CubeMask`'s per-channel loops. **Done: notes §65, §2.2.1** | 0.5 |
+| 2b. Region selection by pixel centre, the mask outline on pixel edges (§2.2.1). **Done: notes §66** | 0.5 |
 | 3. Registration + `RemoteImagingSession`; remote display (channel, spectrum, stats, histogram) and mask edits | 1–2 |
 | 4. `run_cycle` as an async job; stop and progress semantics | 1 |
 | 5. `iclean(kernel_name=)`, the shared connection base, setup environments with casatasks (`cubevis[visplot,iclean]`, discovery reports it), fingerprint roots, release | 1 |

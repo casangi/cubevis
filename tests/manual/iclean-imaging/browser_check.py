@@ -12,6 +12,10 @@ world for the residual image (``--tolerance`` arcsec, default 0.01).  Before
 2026-11-06 the readout was one pixel off and coordtxl treated every image as
 linear, so an older checkout fails this check; ``--no-casatools`` skips it.
 
+``--controls`` also presses continue: a refused threshold must show gclean's
+message with the buttons enabled again, then a good one must run a cycle
+(design step 4).
+
 The page's mask outline (ImageDataSource._mask_contour, d3-contour) is
 checked on a 3x2 block of pixels: it must run along their edges, as it does
 since 2026-11-07.
@@ -69,6 +73,61 @@ PAGE_JS = """(pixels) => {
   return out
 }"""
 
+#: the clean controls through the page (``--controls``): set a TextInput by
+#: title, click a named button (its view, found from the roots), read the
+#: status line, the buttons' state and the convergence data's length
+CONTROLS_JS = {
+    'set': """([title, value]) => { for (const m of Bokeh.documents[0]._all_models.values())
+                if (m.constructor.name === 'TextInput' && m.title === title) { m.value = value; return true }
+              return false }""",
+    'click': """(name) => {
+                const find = (v, m, seen) => { if (!v || seen.has(v)) return null; seen.add(v); if (v.model === m) return v
+                    const kids = typeof v.children === 'function' ? [...v.children()] : [...(v.child_views ?? [])]
+                    for (const c of kids) { const f = find(c, m, seen); if (f) return f } return null }
+                const roots = typeof Bokeh.index.roots === 'function' ? Bokeh.index.roots() : Bokeh.index.roots
+                for (const m of Bokeh.documents[0]._all_models.values()) if (m.name === name) {
+                    for (const r of roots) { const v = find(r, m, new Set()); if (v) { v.click(); return 'clicked' } }
+                    return 'no view' }
+                return 'no model' }""",
+    'state': """() => { const out = {points: 0}
+                for (const m of Bokeh.documents[0]._all_models.values()) {
+                    if (m.constructor.name === 'Div' && /^<p>/.test(m.text || '')) out.status = m.text
+                    if (m.name === 'continue' || m.name === 'finish') out[m.name + '_disabled'] = m.disabled
+                    if (m.constructor.name === 'ColumnDataSource' && m.data && m.data.type &&
+                        m.data.type[0] === 'residual') out.points = Math.max(out.points, m.data.values.length)
+                }
+                return out }""",
+}
+
+
+def exercise_controls(page, timeout=180):
+    '''``--controls``: a refused threshold is shown as gclean's message with the
+    buttons enabled (design step 4, notes §68); then a good one runs a cycle.
+    Returns (ok, what happened).'''
+    def wait(pred):
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            time.sleep(0.5)
+            st = page.evaluate(CONTROLS_JS['state'])
+            if pred(st):
+                return st
+        return page.evaluate(CONTROLS_JS['state'])
+    before = page.evaluate(CONTROLS_JS['state'])
+    page.evaluate(CONTROLS_JS['set'], ['threshold', 'abc'])
+    clicked = page.evaluate(CONTROLS_JS['click'], 'continue')
+    bad = wait(lambda st: 'threshold must be' in st.get('status', ''))
+    page.evaluate(CONTROLS_JS['set'], ['threshold', '0.001Jy'])
+    page.evaluate(CONTROLS_JS['click'], 'continue')
+    ### the cycle's own result in the status line, the buttons enabled again (with no mask
+    ### drawn tclean ends the cycle with "Zero mask" and adds no convergence point)
+    good = wait(lambda st: st.get('status') not in (bad.get('status'), '<p>Running one set of deconvolution iterations</p>')
+                and not st.get('continue_disabled'))
+    ok = (clicked == 'clicked' and 'threshold must be' in bad.get('status', '') and not bad.get('continue_disabled')
+          and not good.get('continue_disabled') and 'error' not in good.get('status', '').lower()
+          and good.get('status') not in (bad.get('status'), before.get('status')))
+    return ok, {'before': before, 'refused': bad, 'cycle': good}
+
+
 APP = """import sys, os
 sys.path.insert(0, sys.argv[1])
 from cubevis.private.apps import InteractiveClean
@@ -90,7 +149,7 @@ print('result', ic())
 """
 
 
-def run(repo, ms, work, chrome, kernel=None):
+def run(repo, ms, work, chrome, kernel=None, controls=False):
     from playwright.sync_api import sync_playwright
     work = os.path.abspath(work)
     os.makedirs(work, exist_ok=True)
@@ -135,6 +194,10 @@ def run(repo, ms, work, chrome, kernel=None):
                     break
             time.sleep(3)
             page.screenshot(path=os.path.join(work, 'page.png'))
+            if controls:
+                ok, what = exercise_controls(page)
+                result = dict(result or {}, controls={'ok': ok, **what})
+                page.screenshot(path=os.path.join(work, 'controls.png'))
             browser.close()
     finally:
         proc.kill()
@@ -216,14 +279,24 @@ if __name__ == '__main__':
     ap.add_argument('--tolerance', type=float, default=0.01, help='arcsec, against casatools')
     ap.add_argument('--no-casatools', action='store_true', help='skip the comparison with casatools')
     ap.add_argument('--kernel', help='run the imaging layer on this Jupyter kernel (RemoteImagingSession)')
+    ap.add_argument('--controls', action='store_true', help='also press continue: a refused threshold, then a cycle')
     ap.add_argument('args', nargs='*', metavar='REPO MS WORKDIR')
     ns = ap.parse_args()
     if ns.compare:
         sys.exit(compare(*ns.compare))
     if len(ns.args) != 3:
         ap.error('REPO MS WORKDIR')
-    status = run(*ns.args, ns.chrome, kernel=ns.kernel)
-    contour = json.load(open(os.path.join(ns.args[2], 'page.json')))['result'].get('contour')
+    status = run(*ns.args, ns.chrome, kernel=ns.kernel, controls=ns.controls)
+    page_result = json.load(open(os.path.join(ns.args[2], 'page.json')))['result']
+    if 'controls' in page_result:
+        c = page_result['controls']
+        print(f"    controls: refused threshold -> {c['refused'].get('status')!r} "
+              f"(continue disabled: {c['refused'].get('continue_disabled')}); then a cycle -> "
+              f"{c['cycle'].get('status')!r} (continue disabled: {c['cycle'].get('continue_disabled')}), "
+              f"convergence points {c['before'].get('points')} -> {c['cycle'].get('points')}: "
+              f"{'ok' if c['ok'] else 'FAILED'}")
+        status = status or (0 if c['ok'] else 1)
+    contour = page_result.get('contour')
     if contour is not None and (contour['x'] != [3, 6] or contour['y'] != [2, 4]):
         print('    the mask outline is not on the pixel edges')      # before 2026-11-07 (notes §66)
         status = 1

@@ -50,8 +50,11 @@ name = "imaging-remote"
 # RemoteImagingSession on a kernel on this computer (iclean design step 3): a
 # scripted clean in the kernel's worker compared call by call with the same in
 # this process, a cycle that leaves the worker answering, failures, a dead
-# worker.  No CASA.
-pytest = ["tests/manual/iclean-imaging/test_remote_session.py"]
+# worker; and (design step 4) the GUI's clean controls -- continue, finish,
+# stop, refused values, failing cycles, a dead worker -- through the handlers
+# the browser uses, here and on the kernel.  No CASA.
+pytest = ["tests/manual/iclean-imaging/test_remote_session.py",
+          "tests/manual/iclean-imaging/test_clean_controls.py"]
 args = ["-q"]
 
 [[suite]]

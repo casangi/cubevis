@@ -124,30 +124,40 @@ def numpy_store(image_path: str, mask_path: Optional[str] = None) -> NumpyImageS
 
 
 class ScriptedDeconvolver:
-    '''gclean's surface without tclean.  Keywords as tclean's; uses
-    ``imagename``, ``imsize`` (int or [nx, ny]), ``nchan`` and ``niter``,
-    and two of its own: ``cycle_seconds`` (how long a cycle takes) and
-    ``fail_at`` (the cycle that raises).  Each cycle halves the residual
-    and uses ``cycleniter`` iterations (default 10).'''
+    '''gclean's surface without tclean, with gclean's results: the six values
+    (stop description, ``(major, minor)`` stop code, majors done and left,
+    iterations left) and its convergence record per field -- ``{'major':
+    {'cyclethreshold': [...]}, 'chan': {chan: {stokes: {'modelFlux',
+    'iterations' (an array), 'peakRes', 'stopCode', 'cycleThresh'}}}}``, each
+    list one entry longer per major cycle -- so ``InteractiveCleanUI`` runs on
+    it.  Keywords as tclean's; uses ``imagename``, ``imsize`` (int or [nx, ny]),
+    ``nchan``, ``niter``, ``cycleniter`` and ``threshold``, and two of its own:
+    ``cycle_seconds`` (how long a cycle takes) and ``fail_at`` (the cycle that
+    raises).  Each cycle halves the residual.  ``update`` checks its values as
+    gclean does (``(-1, message)`` for a bad one).'''
 
     def __init__(self, imagename='scripted', imsize=16, nchan=4, niter=40, cycleniter=10,
-                 cycle_seconds=0.0, fail_at=None, **ignored):
+                 threshold='0.0Jy', cycle_seconds=0.0, fail_at=None, **ignored):
         nx, ny = (imsize, imsize) if isinstance(imsize, int) else tuple(imsize)
         nchan = max(1, int(nchan))
         self._name = imagename
+        self._niter = int(niter)
         self._iterleft = int(niter)
-        self._cycleniter = int(cycleniter)
+        self._cycleniter = int(cycleniter) if int(cycleniter) > 0 else int(niter)
+        self._threshold = _jy(threshold)
         self._cycle_seconds = float(cycle_seconds)
         self._fail_at = fail_at
         self._major = 0
         self._lines: List[str] = []
-        self._params = {}
         seed = zlib.crc32(imagename.encode())
         image = np.random.default_rng(seed).normal(size=(nx, ny, 1, nchan))
         self.residual_path = f'/scripted/{imagename}.residual'
         self.mask_path = f'/scripted/{imagename}.mask'
         STORES[self.residual_path] = NumpyImageStore(image, np.zeros_like(image),
                                                      self.residual_path, self.mask_path)
+        self._cyclethreshold: List[float] = []
+        self._chan = {c: {0: {'modelFlux': [], 'iterations': np.zeros(0), 'peakRes': [],
+                              'stopCode': [], 'cycleThresh': []}} for c in range(nchan)}
 
     # ---- Deconvolver --------------------------------------------------------
 
@@ -156,12 +166,34 @@ class ScriptedDeconvolver:
                  'residualname': f'{self._name}.residual', 'maskname': f'{self._name}.mask'}]
 
     def update(self, params):
-        self._params.update(params)
-        if 'niter' in params:
+        '''gclean's checks for the values the GUI sends (the rest ignored)'''
+        for key in ('niter', 'cycleniter', 'nmajor'):
+            if key in params:
+                try:
+                    value = int(params[key])
+                except (TypeError, ValueError):
+                    return (-1, f'{key} must be an integer')
+                if value < -1:
+                    return (-1, f'{key} must be >= -1')
+        if 'threshold' in params:
             try:
-                self._iterleft = int(params['niter'])
-            except (TypeError, ValueError):
-                return (-1, f'niter must be an integer, not {params["niter"]!r}')
+                if _jy(params['threshold']) < 0:
+                    return (-1, 'threshold must be >= 0')
+            except ValueError:
+                return (-1, 'threshold must be a number, or a number with units (Jy/mJy/uJy)')
+        for key in ('gain', 'cyclefactor'):
+            if key in params:
+                try:
+                    if float(params[key]) <= 0:
+                        return (-1, f'{key} must be > 0')
+                except (TypeError, ValueError):
+                    return (-1, f'{key} must be a number')
+        if 'niter' in params:
+            self._iterleft = int(params['niter'])
+        if 'cycleniter' in params and int(params['cycleniter']) > 0:
+            self._cycleniter = int(params['cycleniter'])
+        if 'threshold' in params:
+            self._threshold = _jy(params['threshold'])
         return (0, '')
 
     def has_next(self):
@@ -173,21 +205,32 @@ class ScriptedDeconvolver:
         if self._cycle_seconds:
             time.sleep(self._cycle_seconds)
         store = STORES[self.residual_path]
+        done = 0
         if self._major > 0:
             store.image *= 0.5
             store.mtime += 1.0
-            done = min(self._cycleniter, self._iterleft)
+            done = max(0, min(self._cycleniter, self._iterleft))
             self._iterleft -= done
-        self._lines.append(f'cycle {self._major}: peak {float(np.abs(store.image).max()):.6f}')
-        nchan = store.image.shape[3]
-        convergence = {self._name: {c: {0: {'iterDone': [self._major * self._cycleniter],
-                                            'peakRes': [float(np.abs(store.image[:, :, 0, c]).max())],
-                                            'modelFlux': [0.5 * self._major],
-                                            'stopCode': [0]}}
-                                    for c in range(nchan)}}
-        stop = (1, 0) if self._iterleft <= 0 else (0, 0)
-        result = ('iteration limit' if stop[0] else '', stop, self._major, 0 if stop[0] else 1,
-                  self._iterleft, convergence)
+        peak = float(np.abs(store.image).max())
+        reached = self._major > 0 and (self._iterleft <= 0 or peak <= self._threshold)
+        self._cyclethreshold.append(max(self._threshold, 0.1 * peak) if self._major else self._threshold)
+        for c, by_stokes in self._chan.items():
+            rec = by_stokes[0]
+            before = rec['iterations'][-1] if len(rec['iterations']) else 0.0
+            rec['iterations'] = np.append(rec['iterations'], before + done)
+            rec['modelFlux'].append(0.5 * self._major)
+            rec['peakRes'].append(float(np.abs(store.image[:, :, 0, c]).max()))
+            rec['stopCode'].append(3 if self._major == 0 else 2)
+            rec['cycleThresh'].append(self._cyclethreshold[-1] if self._major else 0.0)
+        self._lines.append(f'cycle {self._major}: peak {peak:.6f}, {self._iterleft} iterations left')
+        stop = (1 if self._iterleft <= 0 else 2, 0) if reached else (0, 0)
+        stopdesc = ('Reached iteration limit' if stop[0] == 1 else
+                    'Reached global stopping criterion : threshold' if stop[0] == 2 else '')
+        convergence = {self._name: {'major': {'cyclethreshold': list(self._cyclethreshold)},
+                                    'chan': {c: {s: {k: (v.copy() if isinstance(v, np.ndarray) else list(v))
+                                                     for k, v in d.items()} for s, d in by_stokes.items()}
+                                             for c, by_stokes in self._chan.items()}}}
+        result = (stopdesc, stop, self._major, -1, self._iterleft, convergence)
         self._major += 1
         return result
 
@@ -202,8 +245,19 @@ class ScriptedDeconvolver:
         return list(self._lines)
 
     def restore(self):
-        return {'stopcode': 1, 'iterdone': self._major * self._cycleniter,
+        return {'stopcode': 1, 'iterdone': self._niter - self._iterleft,
                 'peak': np.float64(np.abs(STORES[self.residual_path].image).max())}
 
     def stop_descriptions(self):
-        return {0: 'no stop', 1: 'iteration limit', 2: 'threshold'}
+        return {0: 'no stop', 1: 'iteration limit', 2: 'threshold', 3: 'zero iterations'}
+
+
+def _jy(value) -> float:
+    '''"0.01Jy", "5mJy", "3uJy" or a number, in Jy (ValueError otherwise)'''
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    for unit, scale in (('uJy', 1e-6), ('mJy', 1e-3), ('Jy', 1.0)):
+        if text.endswith(unit):
+            return float(text[:-len(unit)]) * scale
+    return float(text)

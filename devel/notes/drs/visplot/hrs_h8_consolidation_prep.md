@@ -3746,3 +3746,77 @@ GUI (step 5), stopping/progress/reattach during a cycle (step 4).
     of the 128×128×5 test 2.3 s with every poll answered within 10 ms.
 * **Fingerprint** `k2-46c7c0ba50891e6131d4` (new root, `worker_main`,
   `_worker_transport`); the pending release takes it.
+
+## 68. iclean step 4: cycles -- stopping, failures, the controls tested (base `ad4ac0f`, 2026-11-07)
+
+Design step 4.  The cycle itself already runs as a job (step 3: a thread in
+the worker, polled, awaited without blocking Bokeh); what remained was what
+happens around it.
+
+* **Stopping: after the cycle, as locally.**  gclean has no way to interrupt
+  a cycle (no interrupt, abort or cancel anywhere in it: a cycle is
+  deconvolve + tclean calls returning at the end), and the GUI's contract is
+  already "stop after this cycle": the orange stop (during *finish*) stops the
+  browser sending the next 'finish' and sends 'status', whose reply waits on
+  the control comm's lock until the running cycle ends
+  (`wait_for_tclean_stop`).  Nothing of it depends on where the imager runs;
+  tested both ways.  Interrupting would mean killing the worker, which loses
+  tclean's state.
+* **Failures reach the GUI** (`_ui.py`, `clean_handler`, `_cycle_error`):
+  an exception from `update`/`arun_cycle`/`log` -- the imager raising, or
+  remotely `RemoteCallError`, `RemoteWorkerDiedError`, `RemoteKernelLostError`,
+  a timeout -- is answered `result='error'` with a message for the status line
+  (the exception's type and text, the remote traceback left in the log of
+  the Python session; worker/kernel messages as they are), stop code
+  `[-1, -1]` and the imager's log so far; the browser's `update_gui` already
+  handled 'error' (controls enabled again).  Before, the handler raised,
+  `CommMgr` replied `{'error', 'traceback'}`, which `update_gui` does not
+  recognise: the browser stayed at "Running one set of deconvolution
+  iterations" for ever -- locally too, for any gclean exception.
+* **A value `update()` refuses is an error** (behaviour change): gclean
+  checks every value and returns `(-1, "threshold must be a number, ...")`;
+  `clean_handler` ignored it and ran a cycle with the previous values, so a
+  typo in the threshold box silently did nothing.  Now the message is shown
+  and no cycle runs.
+* **`cubevis.imaging.testing.ScriptedDeconvolver`** now gives gclean's
+  results: the convergence record per field (`major.cyclethreshold`,
+  `chan[c][stokes]` with `modelFlux`, `iterations` (an array), `peakRes`,
+  `stopCode`, `cycleThresh`, one entry more per cycle), stop codes and
+  descriptions (iteration limit, threshold), `update` checking values as
+  gclean does -- so `InteractiveCleanUI` runs on it without CASA.
+* **Checks**:
+  * `test_clean_controls.py` (new, 11; in the `imaging-remote` quick suite):
+    the real `InteractiveCleanUI` on the scripted imager, here and on kernel
+    "python3", through the handlers the browser uses -- continue (one cycle,
+    convergence, log); finish repeated until converged (update, update,
+    converged); a refused threshold (error, no cycle; the next press runs the
+    first cycle); a cycle that raises (error with the message, no remote
+    traceback in it, the log so far); stop during finish (the 'status'
+    answered, the cycle finishes, Bokeh's loop free throughout); a killed
+    worker (error "... worker ... is gone ...", and again on the next press).
+    Passes with casatools/casatasks unimportable and without `BROWSER`
+    (the test sets it).  Against `ad4ac0f`'s `_ui.py` the five failure
+    tests fail.
+  * `browser_check.py --controls` (real tclean, headless Chrome), here and
+    with `--kernel python3`: threshold "abc" + continue -> the status line
+    shows gclean's "threshold must be a number, or a number with units
+    (Jy/mJy/uJy)" with continue enabled; "0.001Jy" + continue -> the cycle's
+    own result ("Zero mask": nothing drawn) with continue enabled.  Buttons
+    are clicked through their views (found from `Bokeh.index`'s roots).
+  * Handler records: local identical to step 3's (84); remote against local
+    the same three expected differences as §67.
+  * Quick tests: `remote`, `imaging`, `imaging-remote`, `syntax` pass.
+    Fingerprint unchanged (`k2-46c7c0ba50891e6131d4`): nothing kernel-side
+    changed (`testing.py` is not reached from a root).
+* **Open, for Darrell** (design §5):
+  * *Progress during a cycle*: locally there is none either (the status line
+    says "Running ..." until the cycle ends).  Remotely a cycle can take
+    minutes over a slow link.  Cheapest useful form: the elapsed time in the
+    status line, pushed by Python while it waits (`CommMgr.send` to a small
+    browser handler); fuller: minor-cycle lines from tclean's log, relayed by
+    the worker.
+  * *Reattach*: a laptop that loses the kernel ends the session
+    (`RemoteKernelLostError`, now shown in the GUI); picking a running clean up
+    again from a new process would need the session record
+    (`cubevis.setup.sessions`, written with `app="iclean"`) plus a way to
+    rebuild the GUI's state from the worker.  Not needed for parity.

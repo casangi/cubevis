@@ -557,13 +557,26 @@ class InteractiveCleanUI:
                 ### the browser never sends 'mask' -- it sends 'masks' -- so it never ran.)
                 ###
                 convergence_state={ 'convergence': {}, 'cyclethreshold': {} }
-                err,errmsg = self._clean['session'].update( dict( **msg['value']['iteration'],
-                                                                 **msg['value']['automask'] ) )
+                ###
+                ### A failure -- the imager raising, a value it refuses, or with a remote session the
+                ### worker or the kernel gone (design step 4, notes §68) -- is answered as an 'error'
+                ### the browser shows, with the controls enabled again.  Until 2026-11-07 an exception
+                ### here left the browser waiting for ever ("Running one set of deconvolution
+                ### iterations"), and a value update() refused was ignored: the cycle ran with the
+                ### previous values.
+                ###
+                try:
+                    err,errmsg = self._clean['session'].update( dict( **msg['value']['iteration'],
+                                                                     **msg['value']['automask'] ) )
+                    if err != 0:
+                        return self._cycle_error( errmsg or f'the imager refused the new values (code {err})' )
 
-                iteration_limit = int(msg['value']['iteration']['niter'])
-                stopdesc, stopcode, majordone, majorleft, iterleft, self._convergence_data = await self._clean['session'].arun_cycle( )
+                    iteration_limit = int(msg['value']['iteration']['niter'])
+                    stopdesc, stopcode, majordone, majorleft, iterleft, self._convergence_data = await self._clean['session'].arun_cycle( )
 
-                clean_cmds = self._clean['session'].log( )
+                    clean_cmds = self._clean['session'].log( )
+                except Exception as exc:
+                    return self._cycle_error( exc )
 
                 for key, value in self._convergence_data.items( ):
 
@@ -1124,6 +1137,27 @@ class InteractiveCleanUI:
             #await self.__result_future
 
         return self.result( )
+
+    def _cycle_error( self, failure ):
+        '''The reply to a clean button when the cycle could not run or failed:
+        ``result='error'`` with a message for the status line (the browser's
+        ``update_gui``), the stop code ``(-1, -1)`` and the imager's log so far.
+        ``failure`` is the message, or the exception (logged with its
+        traceback here; a remote one carries the worker's).'''
+        if isinstance( failure, BaseException ):
+            logger.error( "interactive clean: the cycle failed", exc_info=failure )
+            text = str( failure ).split( "\n--- remote traceback ---" )[0]
+            if type( failure ).__name__ not in ( 'RemoteWorkerDiedError', 'RemoteKernelLostError' ):
+                text = f"{type( failure ).__name__}: {text}"
+            text = f"{text} (details in the log of the Python session that started interactive clean)"
+        else:
+            text = str( failure )
+        try:
+            cmds = self._clean['session'].log( )
+        except Exception:
+            cmds = [ ]
+        return dict( result='error', stopcode=[ -1, -1 ], cmd=cmds, convergence=None,
+                     stopdesc=html_escape( text ) )
 
     def _setup( self ):
         self.__reset( )

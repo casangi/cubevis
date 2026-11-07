@@ -376,7 +376,7 @@ current one. This comparison is part of step 1's tests.
 | 2. `edit_mask` operations replace `CubeMask`'s per-channel loops. **Done: notes §65, §2.2.1** | 0.5 |
 | 2b. Region selection by pixel centre, the mask outline on pixel edges (§2.2.1). **Done: notes §66** | 0.5 |
 | 3. Registration + `RemoteImagingSession`; remote display (channel, spectrum, stats, histogram) and mask edits. **Done: notes §67, §3.1** | 1–2 |
-| 4. `run_cycle` as an async job; stop and progress semantics | 1 |
+| 4. `run_cycle` as an async job; stop and progress semantics. **Done: notes §68** (the job in step 3; stop after the cycle; failures shown in the GUI; progress and reattach open, §5) | 1 |
 | 5. `iclean(kernel_name=)`, the shared connection base, setup environments with casatasks (`cubevis[visplot,iclean]`, discovery reports it), fingerprint roots, release | 1 |
 | 6. Parity tests (local kernel, small MS, local vs remote), quick tests, rounds with Darrell | 1 + 2–3 rounds |
 | 1c. Package organization (§6): `toolbox/iclean/`, one app template, dependency rule. **Done: notes §62** | 1 |
@@ -404,13 +404,20 @@ becomes explicit, and mask editing becomes faster for cubes.
   rewrites it. casacore auto-locking handles this today. An arcae-based store
   must flush and release around `run_cycle`, which is another reason the
   session should own both sides.
-* **Stop during a cycle**: can gclean stop mid-cycle, or is "stop after this
-  cycle" the contract? (From the handoff.)
-* **Progress during a cycle**: push minor-cycle convergence from the worker,
-  or only after each cycle? (From the handoff.)
-* **Reattach** after a disconnect (hours of cleaning): `on_reconnect` pushes a
-  full state snapshot (generation, last `CycleResult`) rather than replaying
-  queued messages.
+* ~~**Stop during a cycle**~~: "stop after this cycle" is the contract
+  (step 4, notes §68): gclean cannot interrupt a cycle, and the GUI's orange
+  stop already waits for the running one; the same remotely.
+* **Progress during a cycle** (open): none locally either.  Options: the
+  elapsed time in the status line, pushed by Python while it waits; or
+  minor-cycle lines from tclean's log relayed by the worker.
+* **Reattach** after a disconnect (hours of cleaning; open): a lost kernel
+  now ends the session with a message in the GUI (§68).  Picking a running
+  clean up from a new process needs the session record (`app="iclean"`) and
+  the GUI's state rebuilt from the worker (generation, last `CycleResult`),
+  rather than replaying queued messages.
+* **Failures** (done, §68): any failure of a cycle -- the imager, a value it
+  refuses, the worker or kernel gone -- is an 'error' reply the browser shows
+  with the controls enabled again.
 * **Multi-field**: one `ImageCube` per field in the one session. Check the
   per-field loops in `toolbox/iclean/_ui.py`.
 * ~~`cubevis/private/_gclean.py`~~: deleted in 1c (notes §62).

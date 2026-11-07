@@ -232,3 +232,22 @@ def test_progress_is_pushed_while_a_cycle_runs(where, monkeypatch):
         assert any(m['text'].startswith('Running multiple iterations') for _, m in sent[n:])
     finally:
         close(ic)
+
+
+def test_the_end_keeps_the_history_and_closes_a_remote_session(where, monkeypatch):
+    '''when the GUI has ended for good (design step 5): the imager's history is
+    kept and a remote session -- worker, kernel -- closed; a local one is left'''
+    ic, ui = make_ui(where, monkeypatch, imagename=f'end-{where}')
+    session = ui._clean['session']
+    try:
+        assert asyncio.run(button(ui, 'next'))['result'] == 'update'
+        before = ui.history()
+        ui._finish_session()
+        assert ui.history() == before and any('cycle 1' in line for line in before)
+        if where == 'remote':
+            assert session.connection.closed
+            ui._finish_session()                                         # once only
+        else:
+            assert session.cube(session.fields()[0]['id']).shape         # still usable
+    finally:
+        close(ic)

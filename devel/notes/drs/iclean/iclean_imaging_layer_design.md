@@ -382,7 +382,10 @@ current one. This comparison is part of step 1's tests.
 | 3. Registration + `RemoteImagingSession`; remote display (channel, spectrum, stats, histogram) and mask edits. **Done: notes §67, §3.1** | 1–2 |
 | 4. `run_cycle` as an async job; stop and progress semantics. **Done: notes §68** (the job in step 3; stop after the cycle; failures shown in the GUI; progress and reattach open, §5) | 1 |
 | 4b. Progress of a running cycle, local and remote: tclean's log followed where the imager runs (`CycleProgress`), kept as session state (`progress()`), pushed to the status line about once a second. **Done: notes §69** | 0.5 |
-| 5. `iclean(kernel_name=)`, the shared connection base, setup environments with casatasks (`cubevis[visplot,iclean]`, discovery reports it), fingerprint roots, release | 1 |
+| 5a. `iclean(kernel_name=)` (like `iclean_backend`), the GUI's end closes a remote session (history kept); CI without python-casacore. **Done: notes §70** | 0.5 |
+| 5b. Kernel capabilities in setup: environments report whether they can run interactive clean (casatasks); setup asks whether a host's kernels should, and offers it on a rerun; `iclean(kernel_name=)` refuses a kernel without it before connecting | 1 |
+| 5c. visplot's `RemoteReductionContext` onto `RemoteObjectConnection` | 0.5 |
+| 5d. Release: from `main` after the merge (until then: this checkout installed on the node, found by fingerprint) | — |
 | 6. Parity tests (local kernel, small MS, local vs remote), quick tests, rounds with Darrell | 1 + 2–3 rounds |
 | 1c. Package organization (§6): `toolbox/iclean/`, one app template, dependency rule. **Done: notes §62** | 1 |
 | Later: coordtxl taking the description natively, with ICRS, a spectral axis and correct FK4 (§2.5); `XarrayImageStore` over arcae; notebook variant; remove `tests/manual/iclean-remote/` and `_gen_port_fwd_cmd` | — |

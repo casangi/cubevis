@@ -124,6 +124,7 @@ class InteractiveCleanUI:
         ###
         self.__result = None
         self.__result_from_gui = None
+        self.__history = None                   ### the imager's history, kept at the end (_finish_session)
 
     def __init__( self, session, user_args ):
         '''``session`` is the imaging layer (``cubevis.imaging.ImagingSession``):
@@ -152,6 +153,7 @@ class InteractiveCleanUI:
         ### the asyncio future that is used to transmit the result from interactive clean
         ###
         self.__result_future = None
+        self.__history = None
 
         ###
         ### This is used to tell whether the websockets have been initialized, but also to
@@ -1153,7 +1155,30 @@ class InteractiveCleanUI:
             #self._comm_task.add_done_callback( self._on_comm_task_done )
             #await self.__result_future
 
-        return self.result( )
+        try:
+            return self.result( )
+        finally:
+            self._finish_session( )
+
+    def _finish_session( self ):
+        '''The GUI has ended for good (the result is in): keep the imager's history,
+        then close a remote session -- its worker and kernel (design step 5).  A
+        connection that only dropped does not come here (connection_closed_handler):
+        the session lives on for the frontend to reconnect.  A local session is
+        left as it was.'''
+        session = self._clean.get( 'session' )
+        if session is None or self.__history is not None:
+            return
+        try:
+            self.__history = session.log( True )
+        except Exception:
+            logger.debug( "interactive clean: no history from the imager", exc_info=True )
+            self.__history = [ ]
+        if getattr( session, 'connection', None ) is not None:
+            try:
+                session.close( )
+            except Exception:
+                logger.warning( "interactive clean: closing the remote session failed", exc_info=True )
 
     #: seconds between progress updates while a cycle runs
     PROGRESS_INTERVAL = 1.0
@@ -1311,6 +1336,8 @@ class InteractiveCleanUI:
         -------
         list[str]  tclean calls made during the interactive clean session.
         '''
+        if self.__history is not None:
+            return self.__history                   ### kept when the session was closed
         return self._clean['session'].log( True )
 
     def _initialize_javascript( self ):

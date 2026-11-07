@@ -12,6 +12,8 @@ world for the residual image (``--tolerance`` arcsec, default 0.01).  Before
 2026-11-06 the readout was one pixel off and coordtxl treated every image as
 linear, so an older checkout fails this check; ``--no-casatools`` skips it.
 
+``--stop`` presses the red stop at the end: the app must end with its
+result, keep its history and close a remote session (design step 5).
 ``--controls`` also presses continue: a refused threshold must show gclean's
 message with the buttons enabled again, then a good one must run a cycle
 (design step 4).
@@ -155,24 +157,23 @@ if scripted:
                                             store='cubevis.imaging.testing:numpy_store')
             return LocalImagingSession(T.ScriptedDeconvolver(**args), store_factory=T.numpy_store)
     app.LocalImagingSession = Scripted
-elif kernel:
-    ### the imaging layer on a Jupyter kernel (RemoteImagingSession; iclean(kernel_name=) is
-    ### design step 5).  The kernel's cubevis is its own environment's.
-    import cubevis.toolbox.iclean._app as app
-    from cubevis.imaging import RemoteImagingSession
-    class Remote:
-        @staticmethod
-        def from_args(args, iclean_backend='PROD'):
-            return RemoteImagingSession(args, kernel, iclean_backend=iclean_backend)
-    app.LocalImagingSession = Remote
 ic = InteractiveClean(vis=sys.argv[2], imagename=os.path.abspath('br'), imsize=128, cell='12.0arcsec', specmode='cube',
                       interpolation='nearest', nchan=5, start='1.0GHz', width='0.2GHz', pblimit=-1e-05,
-                      deconvolver='hogbom', threshold='0.001Jy', cyclefactor=3, niter=50, cycleniter=10)
-print('result', ic())
+                      deconvolver='hogbom', threshold='0.001Jy', cyclefactor=3, niter=50, cycleniter=10,
+                      **({'kernel_name': kernel} if kernel and not scripted else {}))
+result = ic()
+print('result', {k: v for k, v in result.items() if k in ('stopcode', 'stopDescription', 'iterdone', 'nmajordone')}
+      if isinstance(result, dict) else result)
+print('history', len(ic._ui.history()), 'entries')
+session = ic._ui._clean['session']
+conn = getattr(session, 'connection', None)
+print('session closed:', conn.closed if conn is not None else 'local')
+print('APP-ENDED', flush=True)
+
 """
 
 
-def run(repo, ms, work, chrome, kernel=None, controls=False, scripted=0.0):
+def run(repo, ms, work, chrome, kernel=None, controls=False, scripted=0.0, stop=False):
     from playwright.sync_api import sync_playwright
     work = os.path.abspath(work)
     os.makedirs(work, exist_ok=True)
@@ -221,6 +222,21 @@ def run(repo, ms, work, chrome, kernel=None, controls=False, scripted=0.0):
                 ok, what = exercise_controls(page)
                 result = dict(result or {}, controls={'ok': ok, **what})
                 page.screenshot(path=os.path.join(work, 'controls.png'))
+            if stop:
+                ### the red stop: the browser asks to confirm, the app ends and returns its result
+                ### (and closes a remote session: design step 5)
+                page.on('dialog', lambda d: d.accept())
+                page.evaluate(CONTROLS_JS['click'], 'stop')
+                log = os.path.join(work, 'iclean.log')
+                t0 = time.time()
+                while time.time() - t0 < 120 and 'APP-ENDED' not in open(log).read():
+                    time.sleep(0.5)
+                ended = [l.strip() for l in open(log) if l.startswith(('result', 'history', 'session closed', 'APP-ENDED'))]
+                try:
+                    proc.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    pass
+                result = dict(result or {}, stop={'ended': ended, 'exit': proc.poll()})
             browser.close()
     finally:
         proc.kill()
@@ -303,6 +319,7 @@ if __name__ == '__main__':
     ap.add_argument('--no-casatools', action='store_true', help='skip the comparison with casatools')
     ap.add_argument('--kernel', help='run the imaging layer on this Jupyter kernel (RemoteImagingSession)')
     ap.add_argument('--controls', action='store_true', help='also press continue: a refused threshold, then a cycle')
+    ap.add_argument('--stop', action='store_true', help='at the end press the red stop: the app must end with its result')
     ap.add_argument('--scripted', type=float, default=0.0, metavar='SECONDS',
                     help='the scripted imager (no tclean), each cycle taking SECONDS: progress shows; '
                          'no comparison with casatools')
@@ -312,7 +329,7 @@ if __name__ == '__main__':
         sys.exit(compare(*ns.compare))
     if len(ns.args) != 3:
         ap.error('REPO MS WORKDIR')
-    status = run(*ns.args, ns.chrome, kernel=ns.kernel, controls=ns.controls, scripted=ns.scripted)
+    status = run(*ns.args, ns.chrome, kernel=ns.kernel, controls=ns.controls, scripted=ns.scripted, stop=ns.stop)
     if ns.scripted:
         ns.no_casatools = True
     page_result = json.load(open(os.path.join(ns.args[2], 'page.json')))['result']
@@ -330,6 +347,13 @@ if __name__ == '__main__':
             print('    expected progress in the status line during the cycle')
             c['ok'] = False
         status = status or (0 if c['ok'] else 1)
+    if 'stop' in page_result:
+        st = page_result['stop']
+        good = (st['exit'] == 0 and any(l.startswith('result {') for l in st['ended'])
+                and any(l == 'APP-ENDED' for l in st['ended'])
+                and (not ns.kernel or ns.scripted or 'session closed: True' in st['ended']))
+        print(f"    stop: exit {st['exit']}; " + '; '.join(st['ended']) + f": {'ok' if good else 'FAILED'}")
+        status = status or (0 if good else 1)
     contour = page_result.get('contour')
     if contour is not None and (contour['x'] != [3, 6] or contour['y'] != [2, 4]):
         print('    the mask outline is not on the pixel edges')      # before 2026-11-07 (notes §66)

@@ -48,7 +48,7 @@ class InteractiveClean:
     {{docstring}}
     '''
 
-    def __init__( self, vis, imagename{{# initParams}}, {{name}}={{default}}{{/ initParams}}, iclean_backend="PROD" ):
+    def __init__( self, vis, imagename{{# initParams}}, {{name}}={{default}}{{/ initParams}}, iclean_backend="PROD", kernel_name=None ):
         ###
         ### iclean_backend can be used to select alternate backends for interactive clean. This could be used
         ### to enable a backend with extended features or it could be used to select a stub backend designed
@@ -59,7 +59,15 @@ class InteractiveClean:
         ### The imaging layer (cubevis.imaging): the imager -- casatasks' gclean, or the module
         ### _gclean_NAME that iclean_backend names -- and the images of each field
         ###
-        self._session = LocalImagingSession.from_args( self._args, iclean_backend )
+        ### kernel_name: the imager and its images run on that Jupyter kernel (a kernelspec
+        ### name; e.g. one cubevis setup made for a cluster node), with vis and imagename
+        ### paths on its host; the GUI runs here (cubevis.imaging.RemoteImagingSession)
+        ###
+        if kernel_name:
+            from cubevis.imaging import RemoteImagingSession
+            self._session = RemoteImagingSession( self._args, kernel_name, iclean_backend=iclean_backend )
+        else:
+            self._session = LocalImagingSession.from_args( self._args, iclean_backend )
         self._gclean = self._session.deconvolver
         self._gclean_paths = self._session.image_products( )
 

@@ -68,17 +68,7 @@ async def call(h, msg):
 def make_app():
     if not opts.kernel:
         return IClean(**ARGS)
-    ### InteractiveClean with a RemoteImagingSession in place of its LocalImagingSession
-    ### (iclean(kernel_name=) is design step 5)
-    import cubevis.toolbox.iclean._app as app
-    from cubevis.imaging import RemoteImagingSession
-
-    class Remote:
-        @staticmethod
-        def from_args(args, iclean_backend='PROD'):
-            return RemoteImagingSession(args, opts.kernel, iclean_backend=iclean_backend)
-    app.LocalImagingSession = Remote
-    return IClean(**ARGS)
+    return IClean(**ARGS, kernel_name=opts.kernel)        # design step 5 (until then the session was swapped in)
 
 async def main():
     ic = make_app()

@@ -3904,3 +3904,63 @@ the significant work for that session.
   last `CycleResult`, the controls' state) from it, the browser registering
   the progress handler at page load rather than at the first click.
 * **Fingerprint** `k2-eefb1f77fd564a7cf7ee` (session, `_progress`, the worker).
+
+## 70. iclean step 5a: `iclean(kernel_name=)`, the end of a session; CI without python-casacore (base `48a51d7`, 2026-11-07)
+
+Step 5 split (Darrell, 2026-11-07): 5a `kernel_name=` and closing the remote
+session; 5b kernel capabilities in setup; 5c visplot onto
+`RemoteObjectConnection`.  A cubevis release comes from `main`, so it waits
+for the merge; until then a node runs this branch the way setup already
+advises for a development install (this checkout installed with
+`pip install -e` in an environment there; setup finds it by fingerprint).
+
+* **`kernel_name=`** (like `iclean_backend`: accepted, not in the
+  casashell `inp`/`go` listing): `InteractiveClean(..., iclean_backend="PROD",
+  kernel_name=None)` makes a `RemoteImagingSession(args, kernel_name,
+  iclean_backend=)` instead of a `LocalImagingSession`; the casatasks
+  wrappers `iclean` and `iclean_notebook` pass it on.  Templates
+  (`toolbox/iclean/_app.mustache`, `private/casatasks/iclean{,_notebook}.mustache`)
+  and the generated `.py` (`scripts/expand_templates`; it reproduces the
+  base byte for byte, so the generated diff is these lines only).  The
+  casashell binding passes neither `iclean_backend` nor `kernel_name` (it
+  never had the first).
+* **The end of a session** (`_ui.py`, `_finish_session`): `_task_server`
+  returns `result()` (which calls `restore()`), then keeps the imager's
+  history (`log(True)`; `history()` returns it afterwards) and closes a
+  remote session -- worker, link, kernel.  Only the GUI's real end comes
+  here (`shutdown_handler` resolves the result future); a connection that
+  drops (`connection_closed_handler`) leaves the session for the frontend to
+  reconnect.  A local session is left as before.  Not done: closing when the
+  Python process ends some other way (an exception, Ctrl-C) -- with session
+  management a kernel left running may be wanted; decided there.
+* **Remote result**: `restore()`'s `stopcode` is gclean's `StopCodes`
+  namedtuple locally, a plain tuple remotely (indexing is the same,
+  `.major` is not).
+* **CI without python-casacore**: visplot itself never needed it (MSv2
+  through xarray-ms/arcae; casacore only named as the table format).
+  `tests/ci/make_tiny_ms.py` used `casacore.tables` to give the generated MS
+  its times, UVWs and data; xradio 1.3.0 accesses tables through arcae by
+  default (`xradio._utils._casacore.backend`: python-casacore's
+  `tables`/`images` API emulated on arcae; python-casacore only through an
+  unsupported `XRADIO_CASACORE_BACKEND` switch), and its generator writes
+  with it -- `make_tiny_ms` now uses that `tables.table`.
+  `tests/ci/requirements.txt`: `xradio>=1.3`, no `python-casacore`;
+  `suites.toml`: `tiny-ms` and `visplot-remote` require `arcae` instead of
+  `casacore`.  Here (xradio 1.3.0, arcae 0.5.8, xarray-ms 0.5.13, no
+  python-casacore): both suites run and pass -- `visplot-remote` 22/22,
+  which also confirms §67's `protect_wire` for visplot's workers.
+* **Checks**:
+  * `browser_check.py --controls --stop` (new `--stop`: the red stop, the
+    confirmation accepted; the app must end with its result), with real
+    tclean, here and with `--kernel python3` -- now through
+    `InteractiveClean(kernel_name=)`, not a swapped-in session: controls as
+    §68; stop: exit 0, the result (`'stopDescription': 'Zero mask'`),
+    history 4 entries, `session closed: True` remotely; no kernel process
+    left.
+  * `record_iclean_handlers.py --kernel` now uses `kernel_name=`:
+    identical to the swapped-in session's record (85 entries).
+  * `test_clean_controls.py` (+2, 15): the end keeps the history and closes
+    a remote session once; a local session stays usable.
+  * Quick tests: `remote`, `imaging`, `imaging-remote`, `tiny-ms`,
+    `visplot-remote`, `syntax` pass.  Fingerprint unchanged
+    (`k2-eefb1f77fd564a7cf7ee`).

@@ -64,14 +64,14 @@ args = ["-q"]
 name = "tiny-ms"
 # a 3 MB MSv2 for the next suite
 command = ["{python}", "tests/ci/make_tiny_ms.py", "{tmp}/ci.ms"]
-requires = ["xradio", "casacore"]
+requires = ["xradio", "arcae"]
 
 [[suite]]
 name = "visplot-remote"
 # visplot local and with backend="remote" (a kernel on this computer),
 # driven through the GUI's handlers and compared step by step
 command = ["{python}", "tests/manual/visplot/remote_visplot_check.py", "--ms", "{tmp}/ci.ms"]
-requires = ["xradio", "casacore", "ipykernel", "xarray_ms"]
+requires = ["xradio", "arcae", "ipykernel", "xarray_ms"]
 after = "tiny-ms"
 
 [[lint]]

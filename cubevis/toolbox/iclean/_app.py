@@ -1810,7 +1810,7 @@ class InteractiveClean:
 
     '''
 
-    def __init__( self, vis, imagename, selectdata=True, field='', spw='', timerange='', uvrange='', antenna='', scan='', observation='', intent='', datacolumn='corrected', imsize=[ int(100) ], cell=[  ], phasecenter='', stokes='I', projection='SIN', startmodel='', specmode='mfs', reffreq='', nchan=int(-1), start='', width='', outframe='LSRK', veltype='radio', restfreq=[  ], interpolation='linear', perchanweightdensity=True, gridder='standard', facets=int(1), psfphasecenter='', wprojplanes=int(1), vptable='', mosweight=True, aterm=True, psterm=False, wbawp=True, conjbeams=False, cfcache='', usepointing=False, computepastep=float(360.0), rotatepastep=float(360.0), pointingoffsetsigdev=[  ], pblimit=float(0.2), normtype='flatnoise', deconvolver='hogbom', scales=[  ], nterms=int(2), smallscalebias=float(0.0), fusedthreshold=float(0.0), largestscale=int(-1), restoration=True, restoringbeam=[  ], pbcor=False, outlierfile='', weighting='natural', robust=float(0.5), noise='1.0Jy', npixels=int(0), uvtaper=[ '' ], niter=int(0), gain=float(0.1), threshold=float(0.0), nsigma=float(0.0), cycleniter=int(-1), cyclefactor=float(1.0), minpsffraction=float(0.05), maxpsffraction=float(0.8), nmajor=int(-1), usemask='user', mask='', pbmask=float(0.0), sidelobethreshold=float(3.0), noisethreshold=float(5.0), lownoisethreshold=float(1.5), negativethreshold=float(0.0), smoothfactor=float(1.0), minbeamfrac=float(0.3), cutthreshold=float(0.01), growiterations=int(75), dogrowprune=True, minpercentchange=float(-1.0), verbose=False, fastnoise=True, restart=True, savemodel='none', calcres=True, calcpsf=True, psfcutoff=float(0.35), parallel=False, iclean_backend="PROD" ):
+    def __init__( self, vis, imagename, selectdata=True, field='', spw='', timerange='', uvrange='', antenna='', scan='', observation='', intent='', datacolumn='corrected', imsize=[ int(100) ], cell=[  ], phasecenter='', stokes='I', projection='SIN', startmodel='', specmode='mfs', reffreq='', nchan=int(-1), start='', width='', outframe='LSRK', veltype='radio', restfreq=[  ], interpolation='linear', perchanweightdensity=True, gridder='standard', facets=int(1), psfphasecenter='', wprojplanes=int(1), vptable='', mosweight=True, aterm=True, psterm=False, wbawp=True, conjbeams=False, cfcache='', usepointing=False, computepastep=float(360.0), rotatepastep=float(360.0), pointingoffsetsigdev=[  ], pblimit=float(0.2), normtype='flatnoise', deconvolver='hogbom', scales=[  ], nterms=int(2), smallscalebias=float(0.0), fusedthreshold=float(0.0), largestscale=int(-1), restoration=True, restoringbeam=[  ], pbcor=False, outlierfile='', weighting='natural', robust=float(0.5), noise='1.0Jy', npixels=int(0), uvtaper=[ '' ], niter=int(0), gain=float(0.1), threshold=float(0.0), nsigma=float(0.0), cycleniter=int(-1), cyclefactor=float(1.0), minpsffraction=float(0.05), maxpsffraction=float(0.8), nmajor=int(-1), usemask='user', mask='', pbmask=float(0.0), sidelobethreshold=float(3.0), noisethreshold=float(5.0), lownoisethreshold=float(1.5), negativethreshold=float(0.0), smoothfactor=float(1.0), minbeamfrac=float(0.3), cutthreshold=float(0.01), growiterations=int(75), dogrowprune=True, minpercentchange=float(-1.0), verbose=False, fastnoise=True, restart=True, savemodel='none', calcres=True, calcpsf=True, psfcutoff=float(0.35), parallel=False, iclean_backend="PROD", kernel_name=None ):
         ###
         ### iclean_backend can be used to select alternate backends for interactive clean. This could be used
         ### to enable a backend with extended features or it could be used to select a stub backend designed
@@ -1821,7 +1821,15 @@ class InteractiveClean:
         ### The imaging layer (cubevis.imaging): the imager -- casatasks' gclean, or the module
         ### _gclean_NAME that iclean_backend names -- and the images of each field
         ###
-        self._session = LocalImagingSession.from_args( self._args, iclean_backend )
+        ### kernel_name: the imager and its images run on that Jupyter kernel (a kernelspec
+        ### name; e.g. one cubevis setup made for a cluster node), with vis and imagename
+        ### paths on its host; the GUI runs here (cubevis.imaging.RemoteImagingSession)
+        ###
+        if kernel_name:
+            from cubevis.imaging import RemoteImagingSession
+            self._session = RemoteImagingSession( self._args, kernel_name, iclean_backend=iclean_backend )
+        else:
+            self._session = LocalImagingSession.from_args( self._args, iclean_backend )
         self._gclean = self._session.deconvolver
         self._gclean_paths = self._session.image_products( )
 

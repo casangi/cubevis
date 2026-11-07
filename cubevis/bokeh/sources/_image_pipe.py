@@ -175,6 +175,10 @@ class ImagePipe( Model ):
         """Replace one channel mask (see ``ImageCube.put_mask``)"""
         self.__cube.put_mask( index, mask )
 
+    def edit_mask( self, op, scope, index, *, polygon=None, src=None ):
+        """One mask edit where the mask is stored (see ``ImageCube.edit_mask``)"""
+        return self.__cube.edit_mask( op, scope, index, polygon=polygon, src=src )
+
     def spectrum( self, index, mask=False ):
         """Retrieve one spectrum from the image cube (see ``ImageCube.spectrum``)"""
         return self.__cube.spectrum( index, mask )

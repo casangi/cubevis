@@ -55,7 +55,7 @@ from cubevis.bokeh.sources import ImageDataSource, ImagePipe
 from cubevis.bokeh.format import WcsTicks
 from cubevis.bokeh.models import EditSpan
 from ..data import casaimage
-from ..utils import pack_arrays, find_ws_address, set_attributes, resource_manager, polygon_indexes, is_interactive_jupyter, have_firefox
+from ..utils import pack_arrays, find_ws_address, set_attributes, resource_manager, is_interactive_jupyter, have_firefox
 from ..bokeh import BokehInit
 from ..bokeh.models import EvTextInput, SharedDict
 from ..bokeh.tools import CBResetTool
@@ -348,10 +348,7 @@ class CubeMask:
         '''
         shape = self._pipe['image'].shape
         for stokes in range(shape[2]):
-            for chan in range(shape[3]):
-                mask = self._pipe['image'].mask( [stokes,chan], True )
-                mask[:] = 1.0 if value else 0.0
-                self._pipe['image'].put_mask( [stokes,chan], mask )
+            self._pipe['image'].edit_mask( 'fill' if value else 'clear', 'cube', [stokes, 0] )
 
     def set_channelcb( self, callback ):
         self._channel_callback = callback
@@ -399,127 +396,31 @@ class CubeMask:
                                                       **self._region_style ) for _ in range(maxanno) ]
             else:
                 ### a bitmask cube is available and a single annotation is used to add or subtract from the bitmask cube
+                ### the browser's mask edits ('mask-mod'); each is one ImageCube.edit_mask
+                ### call (cubevis.imaging._masks), done where the mask is stored
+                mask_operation = { 'addition': 'add', 'subtract': 'subtract', 'delete': 'clear', 'not': 'invert' }
                 async def mod_mask( msg, context, self=self ):
-                    err = None
-                    shape = self._pipe['image'].shape
-                    if msg['action'] == 'addition' or msg['action'] == 'subtract':
-                        if 'xs' in msg['value'] and 'ys' in msg['value']:
-                            indices = tuple(np.array(list(polygon_indexes( msg['value']['xs'], msg['value']['ys'], shape[:2] ))).T)
-                            if len(indices) == 0 and len(msg['value']['xs']) > 0 and len(msg['value']['xs']) == len(msg['value']['ys']):
-                                ### this can happen if the entire region is within a single pixel
-                                xs = set(map(int,msg['value']['xs']))
-                                ys = set(map(int,msg['value']['ys']))
-                                if len(xs) == len(ys) and len(xs) == 1:
-                                    indices = ( np.array([xs.pop()]), np.array([ys.pop( )]) )
-                            if msg['scope'] == 'chan':
-                                ### modifying single channel with mouse selected region
-                                mask = self._pipe['image'].mask( msg['value']['chan'], True )
-                                mask[indices] = 0 if msg['action'] == 'subtract' else 1
-                                self._pipe['image'].put_mask( msg['value']['chan'], mask )
-                                self._mask_id = str(uuid4( ))                   ### new mask identifier
-                                return dict( result='success', update={ } )
-                            elif msg['scope'] == 'cube':
-                                ### modifying all channels with mouse selected region
-                                stokes = msg['value']['chan'][0]
-                                for c in range(shape[3]):
-                                    mask = self._pipe['image'].mask( [stokes,c], True )
-                                    mask[indices] = 0 if msg['action'] == 'subtract' else 1
-                                    self._pipe['image'].put_mask( [stokes,c], mask )
-                                self._mask_id = str(uuid4( ))                   ### new mask identifier
-                                return dict( result='success', update={ } )
-                        elif 'src' in msg['value']:
-                            if msg['scope'] == 'chan':
-                                ### modifying single channel with mask from another channel
-                                update={ }
-                                if msg['value']['chan'] == msg['value']['src']:
-                                    if msg['action'] == 'subtract':
-                                        mask = self._pipe['image'].mask( msg['value']['chan'], True )
-                                        mask[:,:] = False
-                                        self._pipe['image'].put_mask( msg['value']['chan'], mask )
-                                        update['clear_region'] = True
-                                else:
-                                    modifier = self._pipe['image'].mask( msg['value']['src'], True )
-                                    mask = self._pipe['image'].mask( msg['value']['chan'], True )
-                                    if msg['action'] == 'addition':
-                                        mask = np.logical_or( mask, modifier )
-                                        self._pipe['image'].put_mask( msg['value']['chan'], mask )
-                                    else:
-                                        mask = np.logical_and( mask, np.logical_not(modifier) )
-                                        self._pipe['image'].put_mask( msg['value']['chan'], mask )
-
-                                self._mask_id = str(uuid4( ))                   ### new mask identifier
-                                return dict( result='success', update=update )
-
-                            elif msg['scope'] == 'cube':
-                                ### modifying all channels with mask from another channel
-                                modifier_index = msg['value']['src']
-                                modifier = self._pipe['image'].mask( modifier_index, True )
-                                stokes = msg['value']['chan'][0]
-                                if msg['action'] == 'addition':
-                                    ### addition
-                                    for c in range(shape[3]):
-                                        ### do not add/subtract the modifier mask with itself
-                                        if stokes != modifier_index[0] or c != modifier_index[1]:
-                                            mask = self._pipe['image'].mask( [stokes,c], True )
-                                            mask = np.logical_or( mask, modifier )
-                                            self._pipe['image'].put_mask( [stokes,c], mask )
-                                else:
-                                    ### subtraction
-                                    for c in range(shape[3]):
-                                        ### do not add/subtract the modifier mask with itself
-                                        if stokes != modifier_index[0] or c != modifier_index[1]:
-                                            mask = self._pipe['image'].mask( [stokes,c], True )
-                                            mask = np.logical_and( mask, np.logical_not(modifier) )
-                                            self._pipe['image'].put_mask( [stokes,c], mask )
-                                self._mask_id = str(uuid4( ))                   ### new mask identifier
-                                return dict( result='success', update={ } )
-                            else:
-                                err = "internal error: bad add/subtract scope"
+                    action, scope, value = msg['action'], msg['scope'], msg['value']
+                    polygon = src = None
+                    ### the failure replies are the ones the per-channel loops gave
+                    if action not in mask_operation:
+                        err = "internal error: bad message action"
+                    elif action in ( 'addition', 'subtract' ):
+                        if 'xs' in value and 'ys' in value:
+                            polygon = { 'xs': value['xs'], 'ys': value['ys'] }
+                            err = None
+                        elif 'src' in value:
+                            src = value['src']
+                            err = "internal error: bad add/subtract scope"
                         else:
                             err = "internal error: bad add/subtract message"
-                    elif msg['action'] == 'delete':
-                        if msg['scope'] == 'chan':
-                            mask = self._pipe['image'].mask( msg['value']['chan'], True )
-                            mask.fill(0.0)
-                            self._pipe['image'].put_mask( msg['value']['chan'], mask )
-                            self._mask_id = str(uuid4( ))                   ### new mask identifier
-                            return dict( result='success', update={ } )
-                        elif msg['scope'] == 'cube':
-                            stokes = msg['value']['chan'][0]
-                            for c in range(shape[3]):
-                                mask = self._pipe['image'].mask( [stokes,c], True )
-                                mask.fill(0.0)
-                                self._pipe['image'].put_mask( [stokes,c], mask )
-                            self._mask_id = str(uuid4( ))                   ### new mask identifier
-                            return dict( result='success', update={ } )
-                        else:
-                            err = "internal error: bad invert scope"
-                    elif msg['action'] == 'not':
-                        notf = np.vectorize(lambda x: 0.0 if x != 0 else 1.0)
-                        if msg['scope'] == 'chan':
-                            ### invert single channel
-                            ### ctrl.send( ids['mask-mod'], { scope: 'chan', action: 'not',
-                            ###                               value: { chan: source.cur_chan } },
-                            ###            mask_mod_result )
-                            mask = self._pipe['image'].mask( msg['value']['chan'], True )
-                            self._pipe['image'].put_mask( msg['value']['chan'], notf(mask) )
-                            self._mask_id = str(uuid4( ))                   ### new mask identifier
-                            return dict( result='success', update={ } )
-                        elif msg['scope'] == 'cube':
-                            ### invert all channels
-                            ### ctrl.send( ids['mask-mod'], { scope: 'cube', action: 'not',
-                            ###                               value: { chan: source.cur_chan } },
-                            ###            mask_mod_result )
-                            stokes = msg['value']['chan'][0]
-                            for c in range(shape[3]):
-                                mask = self._pipe['image'].mask( [stokes,c], True )
-                                self._pipe['image'].put_mask( [stokes,c], notf(mask) )
-                            self._mask_id = str(uuid4( ))                   ### new mask identifier
-                            return dict( result='success', update={ } )
-                        else:
-                            err = "internal error: bad invert scope"
                     else:
-                        err = "internal error: bad message action"
+                        err = "internal error: bad invert scope"
+                    if ( polygon is not None or src is not None or action in ( 'delete', 'not' ) ) and scope in ( 'chan', 'cube' ):
+                        update = self._pipe['image'].edit_mask( mask_operation[action], scope, value['chan'],
+                                                                polygon=polygon, src=src )
+                        self._mask_id = str(uuid4( ))                   ### new mask identifier
+                        return dict( result='success', update=update )
 
                     return dict( result='failure', update={ }, error=err )
 

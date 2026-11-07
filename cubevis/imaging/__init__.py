@@ -32,7 +32,8 @@ iclean_imaging_layer_design.md``).
 * ``ImagingSession`` (protocol) -- the imager and the images of each field;
   ``LocalImagingSession`` runs them in this process.
 * ``ImageCube`` -- one field's residual, mask and mask0 for display and
-  mask editing, in numpy, over an ``ImageStore``.
+  mask editing (``edit_mask``: one call per edit, ``_masks``), in numpy,
+  over an ``ImageStore``.
 * ``ImageStore`` (protocol) -- primitive image access for one format;
   ``CasatoolsImageStore`` for CASA images.
 * ``Deconvolver`` (protocol) -- the gclean surface.
@@ -50,8 +51,9 @@ from ._image_cube import ImageCube, quantize
 from ._casatools_store import CasatoolsImageStore
 from ._session import LocalImagingSession, resolve_deconvolver, as_imaging_session, open_image_cube
 from ._coordinates import astropy_wcs, from_casa_coordsys
+from ._masks import polygon_pixels
 
 __all__ = ['CycleResult', 'Deconvolver', 'ImageStore', 'ImagingSession', 'ImageCubeProtocol',
            'ImageCube', 'quantize', 'CasatoolsImageStore', 'LocalImagingSession',
            'resolve_deconvolver', 'as_imaging_session', 'open_image_cube',
-           'astropy_wcs', 'from_casa_coordsys']
+           'astropy_wcs', 'from_casa_coordsys', 'polygon_pixels']

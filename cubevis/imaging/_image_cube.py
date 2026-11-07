@@ -50,6 +50,8 @@ from typing import List, Optional
 
 import numpy as np
 
+from ._masks import MaskEditor
+
 
 def partition(pred, iterable):
     '''Split ``iterable`` into two lists based on ``pred`` (as
@@ -454,6 +456,35 @@ class ImageCube:
             self._store.write_mask_plane(index, mask.astype(np.uint8))
         else:
             self._store.write_mask_plane(index, mask)
+
+    def edit_mask(self, op, scope, index, *, polygon=None, src=None):
+        '''One mask edit, done where the mask is stored (design §2.2, step 2).
+
+        Parameters
+        ----------
+        op: str
+            ``'add'`` or ``'subtract'`` (a region or another channel's mask),
+            ``'clear'``, ``'fill'`` or ``'invert'``
+        scope: str
+            ``'chan'`` (the channel ``index``) or ``'cube'`` (every channel of
+            ``index``'s stokes plane)
+        index: [ int, int ]
+            ``[stokes, channel]``
+        polygon: dict
+            ``{'xs': [...], 'ys': [...]}``, the region's vertices in Bokeh data
+            coordinates (``_masks.polygon_pixels`` gives its pixels)
+        src: [ int, int ]
+            ``[stokes, channel]`` whose mask is added or subtracted
+
+        Returns
+        -------
+        dict:
+            what the browser should update besides the mask: ``{'clear_region': True}``
+            when a channel's own mask was subtracted from it, else empty
+        '''
+        if not self.have_mask():
+            raise RuntimeError(f'cannot edit the mask at {repr(index)} because no mask cube exists')
+        return MaskEditor(self._store, self.shape).edit(op, scope, index, polygon=polygon, src=src)
 
     # ---- description ----------------------------------------------------
 

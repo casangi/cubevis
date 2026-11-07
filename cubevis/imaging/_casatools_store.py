@@ -136,6 +136,17 @@ class CasatoolsImageStore:
     def write_mask_plane(self, index: List[int], pixels) -> None:
         self._mask().putchunk(blc=[0, 0] + index, pixels=pixels)
 
+    def read_mask_chans(self, stokes: int, start: int, count: int):
+        '''Mask channels ``start .. start+count-1`` of ``stokes``, ``[x, y, 1, count]``.'''
+        nx, ny = self._chan_shape
+        return self._mask().getchunk(blc=[0, 0, stokes, start], trc=[nx - 1, ny - 1, stokes, start + count - 1])
+
+    def write_mask_chans(self, stokes: int, start: int, pixels) -> None:
+        '''Write ``[x, y, count]`` (or ``[x, y, 1, count]``) from channel ``start``.'''
+        if pixels.ndim == 3:
+            pixels = pixels[:, :, None, :]
+        self._mask().putchunk(blc=[0, 0, stokes, start], pixels=pixels)
+
     def read_mask_spectrum(self, index: List[int]):
         nchan = self.shape()[-1]
         return self._mask().getchunk(blc=index + [0], trc=index + [nchan])

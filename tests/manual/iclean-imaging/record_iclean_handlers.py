@@ -92,6 +92,11 @@ async def main():
     mod = H[cube._ids['mask-mod']]
     sq = {'xs': [54, 74, 74, 54], 'ys': [54, 54, 74, 74]}
     sq2 = {'xs': [10, 30, 30, 10], 'ys': [90, 90, 110, 110]}
+    tri = {'xs': [20.3, 50.7, 35.2], 'ys': [20.1, 25.6, 60.4]}                    # not a box: Path
+    pent = {'xs': [60.5, 80.2, 90.8, 75.1, 58.3], 'ys': [20.5, 18.2, 40.7, 55.9, 42.4]}
+    px = {'xs': [40.2, 40.8, 40.8, 40.2], 'ys': [100.3, 100.3, 100.7, 100.7]}    # inside one pixel
+    edge = {'xs': [110.5, 128.0, 128.0, 110.5], 'ys': [0.0, 0.0, 20.5, 20.5]}    # to the image's edge
+    edgetri = {'xs': [100.0, 128.0, 128.0], 'ys': [128.0, 100.0, 128.0]}
     steps = [
         ('add_chan', {'action': 'addition', 'scope': 'chan', 'value': dict(sq, chan=[0, 2])}),
         ('add_cube', {'action': 'addition', 'scope': 'cube', 'value': dict(sq2, chan=[0, 2])}),
@@ -102,6 +107,21 @@ async def main():
         ('not_chan_again', {'action': 'not', 'scope': 'chan', 'value': {'chan': [0, 0]}}),
         ('delete_chan', {'action': 'delete', 'scope': 'chan', 'value': {'chan': [0, 4]}}),
         ('add_cube_center', {'action': 'addition', 'scope': 'cube', 'value': dict(sq, chan=[0, 0])}),
+        # added 2026-11-07 (design step 2, edit_mask): every branch of CubeMask's mask-mod
+        ('add_chan_poly', {'action': 'addition', 'scope': 'chan', 'value': dict(tri, chan=[0, 1])}),
+        ('sub_cube_poly', {'action': 'subtract', 'scope': 'cube', 'value': dict(pent, chan=[0, 1])}),
+        ('add_chan_pixel', {'action': 'addition', 'scope': 'chan', 'value': dict(px, chan=[0, 3])}),
+        ('add_chan_edge', {'action': 'addition', 'scope': 'chan', 'value': dict(edge, chan=[0, 3])}),
+        ('add_cube_edge_poly', {'action': 'addition', 'scope': 'cube', 'value': dict(edgetri, chan=[0, 3])}),
+        ('src_add_cube', {'action': 'addition', 'scope': 'cube', 'value': {'src': [0, 3], 'chan': [0, 0]}}),
+        ('src_add_self', {'action': 'addition', 'scope': 'chan', 'value': {'src': [0, 2], 'chan': [0, 2]}}),
+        ('src_sub_chan', {'action': 'subtract', 'scope': 'chan', 'value': {'src': [0, 0], 'chan': [0, 4]}}),
+        ('src_sub_self', {'action': 'subtract', 'scope': 'chan', 'value': {'src': [0, 2], 'chan': [0, 2]}}),
+        ('not_cube', {'action': 'not', 'scope': 'cube', 'value': {'chan': [0, 1]}}),
+        ('delete_cube', {'action': 'delete', 'scope': 'cube', 'value': {'chan': [0, 3]}}),
+        ('add_cube_final', {'action': 'addition', 'scope': 'cube', 'value': dict(sq, chan=[0, 0])}),
+        ('bad_action', {'action': 'bogus', 'scope': 'chan', 'value': {'chan': [0, 0]}}),
+        ('bad_scope', {'action': 'delete', 'scope': 'bogus', 'value': {'chan': [0, 0]}}),
     ]
     for name, m in steps:
         put(f'mod_{name}', await call(mod, m))

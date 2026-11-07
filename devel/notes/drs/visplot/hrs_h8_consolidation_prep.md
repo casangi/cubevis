@@ -3511,3 +3511,77 @@ the coordtxl feature work.  Design §2.5.2.
   * `imaging` suite (30) and `test_fingerprint.py` pass; the fingerprint
     is unchanged (`k2-19e170a674fe895b4d7d`: none of the changed files is
     in the kernel closure).
+* **Since** (2026-11-06, Darrell): coordtxl 0.1.6 published; casalib's
+  `package.json` takes `coordtxl ^0.1.6`, and `casalib.min.js` rebuilt from
+  it is identical to the hand-patched one above (`a5719c4`).
+
+## 65. iclean step 2: mask edits as single operations (base `a5719c4`, 2026-11-07)
+
+Design §2.2 and step 2: `CubeMask`'s `mask-mod` handler read and wrote the
+mask one channel at a time through `ImagePipe` (`mask(index, True)` /
+`put_mask`), 2×nchan calls for a cube-wide edit -- 2×nchan round trips once
+the cube is remote.  Each edit is now one `ImageCube.edit_mask` call that
+runs where the mask is stored.  No behaviour change; the browser and its
+messages are unchanged (no cubevisjs rebuild).
+
+* **`cubevis/imaging/_masks.py`** (new):
+  * `polygon_pixels(xs, ys, shape) -> (ix, iy)`: `polygon_indexes`'
+    selection, vectorized (`Path.contains_points` over the candidate grid
+    instead of `filter(contains_point, product(...))`); matplotlib imported
+    when first used, so `cubevis.imaging` still imports none of matplotlib,
+    Bokeh, CASA.  0.02 s instead of 0.47 s for a 52k-pixel triangle.
+    `region_pixels` adds the handler's "whole region inside one pixel"
+    fallback.
+  * `apply(op, planes, pixels=, modifier=)` on `[x, y]` or `[x, y, n]`
+    planes; `MaskEditor.edit(op, scope, index, polygon=, src=)`: ops `add`,
+    `subtract` (a region, or another channel's mask: `src`), `clear`, `fill`,
+    `invert`; scopes `chan`, `cube` (every channel of `index`'s stokes).  The
+    special cases kept: a channel with itself -- subtract clears it and
+    returns `{'clear_region': True}`, add does nothing; cube-wide add/subtract
+    of a channel's mask skips that channel.  Values written are 0/1 (bools
+    as uint8, which putchunk needs).  Cube scope goes through
+    `read_mask_chans`/`write_mask_chans` when the store has them (optional
+    `ImageStore` primitives, in the protocol's docstring), in chunks of at
+    most `CHUNK_BYTES` (64 MB, at least one channel), else plane by plane.
+* `ImageCube.edit_mask` (and the `ImageCube` protocol), `ImagePipe.edit_mask`,
+  `CasatoolsImageStore.read_mask_chans`/`write_mask_chans` (getchunk/putchunk
+  over a channel range).  `mask(index, True)`/`put_mask` stay (tests, other
+  callers outside iclean may use them).
+* `_cube.py`: `mod_mask` maps the browser's actions (`addition`, `subtract`,
+  `delete`, `not`) onto `edit_mask` -- ~120 lines of loops become ~30; the
+  failure replies are the ones the loops gave, including their check order
+  (e.g. add with a polygon and a bad scope replied `error: None`).
+  `set_all_mask_pixels` is `fill`/`clear` per stokes.  `cubevis.utils.
+  polygon_indexes` now calls `polygon_pixels` (same generator of int tuples).
+* **Two defects in the selection, measured and kept** (a decision for
+  Darrell; to fix, change `polygon_pixels` and its reference test):
+  1. The last column and row are never selected: the ranges stop at
+     `min(ceil(x1), nx - 1)`, exclusive, so a box drawn to the image's edge
+     ends at pixel nx-2 (126 of 128).
+  2. Non-box polygons test the pixel's *corner* `(i, j)`, not its centre
+     `(i + 0.5, j + 0.5)` (§64: pixel i covers [i, i+1] in Bokeh data space):
+     the recorded triangle is exactly the corner test, 51 of ~570 pixels
+     differ from the centre test.  Boxes (`floor(x0) <= i < ceil(x1)`) are
+     consistent with the centre convention.
+* **Checks**:
+  * `record_iclean_handlers.py`: 15 more mask edits (non-box polygons in
+    both scopes, a one-pixel region, regions at the image's edge, cube-wide
+    add of a channel's mask, a channel with itself both ways, cube invert
+    and delete, a bad action and a bad scope).  Before (`a5719c4`) and after:
+    84 entries, 0 differences (24 mask cubes, every reply).
+  * `test_masks.py` (new, no CASA, 46) in the `imaging` suite:
+    `polygon_pixels` against the old `polygon_indexes` (verbatim, as the
+    reference) on 600 random polygons and boxes plus edge cases; each of 17
+    edits against a numpy rendering of the old loops, on a store with and
+    without the ranged primitives; a sequence of edits whole and in
+    three-channel chunks; cube edits on a ranged store read no planes;
+    errors; `cubevis.imaging` loads no matplotlib.  `imaging`, `syntax`,
+    `remote` suites, `test_fingerprint.py`, `test_lazy_packages.py` pass;
+    `browser_check.py`: no console errors, coordinates as §64.
+  * 512×512×1×200 mask (casatools): cube-wide region add 2.80 s → 2.19 s,
+    cube-wide invert 8.57 s → 2.35 s (one getchunk+putchunk of the whole
+    mask: 3.29 s, so edits are now I/O bound).  The point is remote: one
+    round trip instead of 400.
+* **Fingerprint**: `cubevis.utils._regions` now imports
+  `cubevis.imaging._masks`, which is in the closure: `k2-c82e095772c5b36bec49`
+  (release still pending).

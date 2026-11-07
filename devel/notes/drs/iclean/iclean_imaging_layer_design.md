@@ -115,6 +115,24 @@ Two changes compared with what `ImagePipe` does today:
   shape). This is the largest change on the GUI side, and it's worth making
   even for local use.
 
+#### 2.2.1 As done (step 2, 2026-11-07, notes §65)
+
+* `ImageCube.edit_mask(op, scope, index, *, polygon=None, src=None) -> dict`,
+  in `cubevis/imaging/_masks.py`: ops `add` / `subtract` (a region's
+  vertices, or `src`, another channel's mask), `clear`, `fill`, `invert`;
+  scopes `chan` / `cube` (every channel of `index`'s stokes).  Returns
+  `{'clear_region': True}` when a channel's own mask was subtracted from it.
+  The polygon is rasterized where the mask is (`polygon_pixels`,
+  vectorized; `cubevis.utils.polygon_indexes` calls it).
+* Cube scope uses the optional store primitives `read_mask_chans` /
+  `write_mask_chans` (casatools: getchunk/putchunk over a channel range) in
+  chunks of at most 64 MB, else plane by plane.
+* `CubeMask`'s `mask-mod` handler maps the browser's messages onto it;
+  the browser is unchanged.  Before/after: identical mask cubes and replies.
+* Kept as they were, pending a decision: the selection never includes the
+  last column/row, and non-box polygons test pixel corners rather than
+  centres (notes §65).
+
 ### 2.3 `ImageStore` (primitives; this is what a new image format implements)
 
 ```python
@@ -122,6 +140,7 @@ shape; coordinates()                            # §2.5; the store builds it fro
 read_plane(stokes, chan) -> np.ndarray          # float
 read_spectrum(x, y, stokes) -> np.ndarray
 read_mask_plane(stokes, chan); write_mask_plane(stokes, chan, plane)
+read_mask_chans(stokes, start, count); write_mask_chans(stokes, start, planes)   # optional (§2.2.1)
 read_default_mask() -> np.ndarray | None        # mask0
 open_mask(path) / close()
 statistics(stokes, chan, mask_path|None) -> dict   # optional; ImageCube has a numpy default
@@ -283,10 +302,9 @@ current one. This comparison is part of step 1's tests.
   letters after the run of dashes that follows the axis name (`RA---SIN`,
   `DEC--SIN`, `GLON-SIN`, `RA---TAN-SIP` → `-TAN`), not characters 3..6.
   `ProjectionTypeTest` (new) and the expected label in `CasaImageLabelTest`
-  / `tstest.ts` (now the SIN value, checked with astropy).  casalib's
-  bundle (`cubevis/__js__/casalib.min.js`) is built with the fix; casalib's
-  `package.json` still says `coordtxl ^0.1.4` until 0.1.6 is published
-  (then `yarn up coordtxl@^0.1.6` and rebuild).
+  / `tstest.ts` (now the SIN value, checked with astropy).  Published;
+  casalib takes `coordtxl ^0.1.6`, and its bundle
+  (`cubevis/__js__/casalib.min.js`) is built from it.
 * **Pixel convention**: the image glyph is drawn at `x=0, y=0` with
   `dw, dh` = shape, so pixel index i covers [i, i+1] in Bokeh data space and
   its centre is i + 0.5.  Axis ticks (`wcs_ticks.ts`) and region centres
@@ -328,7 +346,7 @@ current one. This comparison is part of step 1's tests.
 | 1. Protocols; `LocalImagingSession` = gclean + `CasatoolsImageStore` + `ImageCube` extracted from `ImagePipe`; UI and `CubeMask` go through it (field ids, `stop_descriptions`, generation instead of ctime). Local only, no behaviour change; tests against today. **Done: notes §60** | 1.5 |
 | 1b. Coordinate description (§2.5): casatools store builds it; `coords_json` + `DescriptionKeywordProvider` in cubevisjs; `astropy_wcs()` replaces the two coordsys→WCS helpers; parity against the FITS-header path. **Done: notes §63, §2.5.1** | 0.5–1 |
 | 1d. Coordinate defects (§2.5.2): coordtxl projection parsing (0.1.6), the GUI's pixel convention. FK4 stays for the coordtxl feature work. **Done: notes §64** | 0.5 |
-| 2. `edit_mask` operations replace `CubeMask`'s per-channel loops | 0.5 |
+| 2. `edit_mask` operations replace `CubeMask`'s per-channel loops. **Done: notes §65, §2.2.1** | 0.5 |
 | 3. Registration + `RemoteImagingSession`; remote display (channel, spectrum, stats, histogram) and mask edits | 1–2 |
 | 4. `run_cycle` as an async job; stop and progress semantics | 1 |
 | 5. `iclean(kernel_name=)`, the shared connection base, setup environments with casatasks (`cubevis[visplot,iclean]`, discovery reports it), fingerprint roots, release | 1 |

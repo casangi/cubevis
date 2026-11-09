@@ -177,17 +177,62 @@ class MissingCapability(RuntimeError):
     """The kernel cannot run the application (setup's record says so)."""
 
 
+def recorded(kernel_name: str, app: str) -> Optional[bool]:
+    """What setup recorded about *kernel_name* running *app*: True, False,
+    or None (not one of its kernels, or never checked)."""
+    caps = (kernel_record(kernel_name) or {}).get("capabilities")
+    v = (caps or {}).get(app)
+    return None if v is None else bool(v)
+
+
+def missing_message(kernel_name: str, app: str, why: Optional[str] = None) -> str:
+    """What ``MissingCapability`` says: why, and what to do."""
+    if why is None:
+        k = kernel_record(kernel_name) or {}
+        why = ((k.get("capability_errors") or {}).get(app)
+               or f"{NEEDS[app]} is not in its environment")
+    return (f"kernel {kernel_name!r} cannot run {WHAT[app]}: {why}. "
+            f"python -m cubevis.setup HOST (the host it is on) offers to add it to an environment "
+            f"setup made; in your own environment, pip install \"cubevis[{app}]\" there")
+
+
+def mark(kernel_name: str, app: str, can: bool, why: Optional[str] = None) -> None:
+    """Record what a connection found: the kernel *can* run *app* or not
+    (``why``).  The record follows the environment when it changed after
+    setup checked it (a package installed, say).  Never raises."""
+    try:
+        from . import state
+        from .sessions import setup_kernel_name
+        st = state.load()
+        kernels = st.section("kernels")
+        name = setup_kernel_name(kernel_name, st)
+        if name not in kernels:
+            return
+        k = kernels[name]
+        caps = dict(k.get("capabilities") or {})
+        if caps.get(app) == can:
+            return
+        caps[app] = can
+        k["capabilities"] = caps
+        errors = dict(k.get("capability_errors") or {})
+        if can:
+            errors.pop(app, None)
+        elif why:
+            errors[app] = why
+        k["capability_errors"] = errors
+        state.save(st)
+    except Exception:
+        pass
+
+
 def require(kernel_name: str, app: str) -> None:
     """Refuse *kernel_name* for *app* when setup recorded that it cannot run
     it (``MissingCapability``, with what to do).  Silent when setup knows
-    nothing about the kernel or its capabilities."""
-    k = kernel_record(kernel_name)
-    caps = (k or {}).get("capabilities")
-    if not caps or caps.get(app) is not False:
-        return
-    why = ((k.get("capability_errors") or {}).get(app)
-           or f"{NEEDS[app]} is not in its environment")
-    raise MissingCapability(
-        f"kernel {kernel_name!r} cannot run {WHAT[app]}: {why}. "
-        f"python -m cubevis.setup HOST (the host it is on) offers to add it to an environment "
-        f"setup made; in your own environment, pip install \"cubevis[{app}]\" there.")
+    nothing about the kernel or its capabilities.
+
+    Connections do not use it (2026-11-09): a record can be older than the
+    environment (a package installed since), so they try, and say this when
+    the worker cannot import what the application needs
+    (``RemoteObjectConnection``)."""
+    if recorded(kernel_name, app) is False:
+        raise MissingCapability(missing_message(kernel_name, app) + ".")

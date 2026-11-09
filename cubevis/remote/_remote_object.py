@@ -198,11 +198,19 @@ class RemoteObjectConnection:
         if not kernel_name:
             raise ValueError(f"{app}: a remote session needs kernel_name= (a kernelspec name "
                              "resolvable by `jupyter kernelspec list`)")
-        # A kernel setup recorded as unable to run *app*: refused before
-        # anything starts (MissingCapability says what to do).
+        # What setup recorded about this kernel and *app*.  Not a refusal: a
+        # record can be older than the environment (a package installed
+        # since -- Darrell, 2026-11-09), so the worker is tried; when it
+        # cannot import what the application needs, MissingCapability says
+        # so and what to do, and the record follows what was found.
         from cubevis.setup import capabilities as _capabilities
-        if app in _capabilities.APPS:
-            _capabilities.require(kernel_name, app)
+        self._capability = (app, kernel_name) if app in _capabilities.APPS else None
+        expected = _capabilities.recorded(kernel_name, app) if self._capability else None
+        if expected is False:
+            log.warning("%s: setup recorded that kernel %r cannot run %s (%s); trying it",
+                        app, kernel_name, app,
+                        _capabilities.missing_message(kernel_name, app).split(": ", 1)[1]
+                        .split(". python -m", 1)[0])
         # setup's name for a kernel -> its Jupyter kernel (cubevis-NAME);
         # a name nobody knows is refused here, saying what to do
         kernel_name = resolve_kernel_name(kernel_name)
@@ -262,6 +270,8 @@ class RemoteObjectConnection:
             self._bridge.stop()
             raise
         log.info("%s: connected in %.1fs", app, time.perf_counter() - t0)
+        if expected is False:
+            _capabilities.mark(self._capability[1], app, True)
         self._session_id = self._record_session()
 
     # ---- facts ------------------------------------------------------------
@@ -296,8 +306,24 @@ class RemoteObjectConnection:
             "create_object", {"class_name": self._class_name, "args": [], "kwargs": self._kwargs})
         if isinstance(reply, dict) and "error" in reply:
             self._raise_if_worker_died(reply)
+            self._raise_if_missing(reply)
             raise RemoteCallError(f"create_object({self._class_name!r})", reply)
         return reply["handle"]
+
+    def _raise_if_missing(self, reply: Dict[str, Any]) -> None:
+        """The application's object could not be made because the worker
+        cannot import a module: ``MissingCapability`` (the kernel's
+        environment lacks what the application needs), recorded for setup."""
+        if not getattr(self, "_capability", None):
+            return
+        last = [ln for ln in str(reply.get("traceback", "")).strip().splitlines() if ln.strip()]
+        last = last[-1].strip() if last else ""
+        if not (last.startswith("ModuleNotFoundError") or last.startswith("ImportError")):
+            return
+        from cubevis.setup import capabilities as _capabilities
+        app, name = self._capability
+        _capabilities.mark(name, app, False, last)
+        raise _capabilities.MissingCapability(_capabilities.missing_message(name, app, last) + ".")
 
     def _raise_if_worker_died(self, reply: Dict[str, Any]) -> None:
         tb = str(reply.get("traceback", ""))

@@ -4231,3 +4231,42 @@ that matters.
 * Tests (+3): the rerun's offer (no / yes), `--kernel` new and existing,
   the help text.  Setup: the 11 ssh failures only; syntax passes.
   Fingerprint unchanged (setup's modules are not kernel-side).
+
+## 77. A kernel's capability record is tried, not trusted; the visplot tests take setup's kernel names (base `128cbc1`, 2026-11-09)
+
+Darrell's full visplot run against `CUBEVIS_TEST_KERNEL=cvpost106-visplot`
+(setup-test-run-005): 7 failed, 81 errors, two kinds:
+
+* **`MissingCapability: kernel 'cvpost106-visplot' cannot run visplot:
+  ModuleNotFoundError: No module named 'xarray_ms'`** (every test through
+  `RemoteReductionContext`).  Setup records what a kernel runs when it
+  tests the launcher; this kernel's environment (`cubevis-devel`) got its
+  visplot packages after that, but the record still said no, and the
+  connection refused on the record alone.  Now:
+  * `RemoteObjectConnection` does not refuse on a record: a negative one is
+    logged ("setup recorded that kernel ... cannot run visplot (...);
+    trying it") and the kernel is tried.
+  * When the worker cannot make the application's object because it
+    cannot import a module (`ModuleNotFoundError` / `ImportError` the last
+    line of the remote traceback), `MissingCapability` says why and what to
+    do -- as the refusal did, now from what the worker found -- and the
+    record is set to it (`capabilities.mark`).
+  * A connection that works where the record said no sets it to yes: the
+    record follows the environment (`setup status` shows it).
+  * `capabilities.require` stays, for an explicit check; connections no
+    longer call it.
+* **`NoSuchKernel: No such kernel named cvpost106-visplot`**
+  (`test_remote_eval_exec`, `test_remote_kernel_link`,
+  `test_remote_object_registry`): those tests start `AsyncKernelManager`
+  with `CUBEVIS_TEST_KERNEL` as given; setup's name needs
+  `cubevis.remote.resolve_kernel_name` (Jupyter knows `cubevis-NAME`).  The
+  seven visplot test modules that read `CUBEVIS_TEST_KERNEL` now resolve it.
+* **Checks**: `test_capabilities.py` (a negative record tried with a
+  warning; a missing module reported as the capability and recorded; a
+  working connection correcting the record); a real kernel recorded
+  "visplot: no" connects and the record becomes yes; the visplot remote
+  tests with a setup-style name (`CUBEVIS_TEST_KERNEL=localtest`, Jupyter
+  `cubevis-localtest`): eval/exec 5/5, reduction context as before (the
+  same 3 failures on the simulated MS, before and after).  Quick suites
+  pass; setup: the 11 ssh failures only.  Fingerprint
+  `k2-c26b085ba19057418f44`.

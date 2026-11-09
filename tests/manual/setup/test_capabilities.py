@@ -183,18 +183,57 @@ def test_no_setup_state_refuses_nothing(tmp_path, monkeypatch):
     C.require("anything", "iclean")
 
 
-def test_iclean_refuses_the_kernel_before_starting_it(recorded, monkeypatch):
-    """``RemoteImagingSession`` (``iclean(kernel_name=)``): no kernel manager
-    is made for a kernel that cannot run interactive clean."""
+def test_a_negative_record_is_tried_not_trusted(recorded, monkeypatch, caplog):
+    """Darrell 2026-11-09: a kernel recorded without xarray-ms (checked before
+    it was installed) refused every visplot test.  A record can be older than
+    the environment, so the connection tries the kernel, with a warning."""
     pytest.importorskip("jupyter_client")
+    import logging
     import jupyter_client
     made = []
-    monkeypatch.setattr(jupyter_client, "AsyncKernelManager", lambda **kw: made.append(kw))
+
+    class Stop(Exception):
+        pass
+
+    def manager(kernel_name):
+        made.append(kernel_name)
+        raise Stop
+    monkeypatch.setattr(jupyter_client, "AsyncKernelManager", manager)
     recorded(plots={"visplot": True, "iclean": False})
     from cubevis.imaging import RemoteImagingSession
-    with pytest.raises(C.MissingCapability):
+    with caplog.at_level(logging.WARNING), pytest.raises(Stop):
+        RemoteImagingSession({"vis": "x.ms", "imagename": "x"}, "python3")       # not setup's
+    assert "recorded" not in caplog.text
+    with caplog.at_level(logging.WARNING), pytest.raises((Stop, ValueError)):
         RemoteImagingSession({"vis": "x.ms", "imagename": "x"}, "cubevis-plots")
-    assert made == []
+    assert "setup recorded that kernel 'cubevis-plots' cannot run iclean" in caplog.text
+
+
+def _bare_connection(app="iclean", name="cubevis-plots"):
+    from cubevis.remote import RemoteObjectConnection
+    conn = RemoteObjectConnection.__new__(RemoteObjectConnection)
+    conn._capability = (app, name)
+    return conn
+
+
+def test_a_module_the_worker_cannot_import_is_the_capability(recorded):
+    """The object could not be made because the worker cannot import a module:
+    ``MissingCapability`` with what to do, and the record follows."""
+    recorded(plots={"visplot": True, "iclean": True})
+    conn = _bare_connection()
+    with pytest.raises(C.MissingCapability) as exc:
+        conn._raise_if_missing({"error": "x", "traceback": "Traceback ...\n  File ...\n"
+                                "ModuleNotFoundError: No module named 'casatasks'\n"})
+    assert "cannot run interactive clean: ModuleNotFoundError: No module named 'casatasks'" \
+        in str(exc.value) and 'pip install "cubevis[iclean]"' in str(exc.value)
+    assert C.recorded("cubevis-plots", "iclean") is False
+    assert "casatasks" in C.kernel_record("plots")["capability_errors"]["iclean"]
+    # Any other failure is the application's own.
+    conn._raise_if_missing({"error": "x", "traceback": "ValueError: bad\n"})
+    # A connection that worked marks it again (a package installed since).
+    C.mark("cubevis-plots", "iclean", True)
+    assert C.recorded("cubevis-plots", "iclean") is True
+    assert "iclean" not in C.kernel_record("plots")["capability_errors"]
 
 
 def test_iclean_takes_a_setup_kernels_own_name(tmp_path, recorded, monkeypatch):

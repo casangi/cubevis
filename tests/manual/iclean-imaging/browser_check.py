@@ -92,6 +92,23 @@ CONTROLS_JS = {
                     return 'no view' }
                 return 'no model' }""",
     'state': """() => { const out = {points: 0}
+                // the layout: the largest plot's box on the page and the status line's height
+                // (a status line that grows must not move or resize the image, notes §74)
+                const walk = (v, seen, f) => { if (!v || seen.has(v)) return; seen.add(v); f(v)
+                    const kids = typeof v.children === 'function' ? [...v.children()] : [...(v.child_views ?? [])]
+                    for (const c of kids) walk(c, seen, f) }
+                const roots = typeof Bokeh.index.roots === 'function' ? Bokeh.index.roots() : Bokeh.index.roots
+                let best = null
+                for (const r of roots) walk(r, new Set(), (v) => {
+                    if (!v.el || !v.model || typeof v.el.getBoundingClientRect !== "function") return
+                    const b = v.el.getBoundingClientRect()
+                    const name = v.model.constructor.name
+                    if ((name === 'Plot' || name === 'Figure') && (!best || b.width * b.height > best[2] * best[3]))
+                        best = [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)]
+                    if (name === 'Div' && /^<p>/.test(v.model.text || '')) {
+                        out.status_height = Math.round(b.height)
+                        if (v.el.scrollHeight > v.el.clientHeight + 1) out.status_scrolls = v.model.text } })
+                out.plot = best
                 for (const m of Bokeh.documents[0]._all_models.values()) {
                     if (m.constructor.name === 'Div' && /^<p>/.test(m.text || '')) out.status = m.text
                     if (m.name === 'continue' || m.name === 'finish') out[m.name + '_disabled'] = m.disabled
@@ -124,13 +141,21 @@ def exercise_controls(page, timeout=180):
     ### drawn tclean ends the cycle with "Zero mask" and adds no convergence point); the
     ### status lines seen meanwhile are the cycle's progress (design step 4b)
     seen = []
+    layouts = set()
+    scrolls = set()
     def cycle_done(st):
         if not seen or seen[-1] != st.get('status'):
             seen.append(st.get('status'))
+        layouts.add((tuple(st.get('plot') or ()), st.get('status_height')))
+        if st.get('status_scrolls'):
+            scrolls.add(st['status_scrolls'])
         return (st.get('status') not in (bad.get('status'), '<p>Running one set of deconvolution iterations</p>')
                 and not st.get('continue_disabled') and '·' not in st.get('status', ''))
     good = wait(cycle_done)
     good['seen'] = seen
+    good['plots'] = sorted({lay[0] for lay in layouts})
+    good['status_heights'] = sorted({lay[1] for lay in layouts if lay[1] is not None})
+    good['status_scrolls'] = sorted(scrolls)
     ok = (clicked == 'clicked' and 'threshold must be' in bad.get('status', '') and not bad.get('continue_disabled')
           and not good.get('continue_disabled') and 'error' not in good.get('status', '').lower()
           and good.get('status') not in (bad.get('status'), before.get('status')))
@@ -345,6 +370,13 @@ if __name__ == '__main__':
               ''.join(f"\n      {t}" for t in progress[:6]))
         if ns.scripted and len(progress) < 2:
             print('    expected progress in the status line during the cycle')
+            c['ok'] = False
+        plots = c['cycle'].get('plots') or []
+        print(f"    layout during the cycle: image plot {plots} (left, top, width, height); status line "
+              f"heights {c['cycle'].get('status_heights')}"
+              + ''.join(f"\n      too long for it (scrolls): {t}" for t in c['cycle'].get('status_scrolls') or []))
+        if len(plots) > 1:
+            print('    the image plot moved or changed size while the status line changed (notes §74)')
             c['ok'] = False
         status = status or (0 if c['ok'] else 1)
     if 'stop' in page_result:

@@ -653,7 +653,10 @@ class InteractiveCleanUI:
             imdetails['gui']['stats'] = imdetails['gui']['cube'].statistics( name=f"{imid} stats" )
             imdetails['image-channels'] = imdetails['gui']['cube'].shape( )[3]
 
-            status_line = imdetails['gui']['stopcode'] = imdetails['gui']['cube'].status_text( "<p>initial residual image</p>" if imdetails['image-channels'] > 1 else "<p>initial <b>single-channel</b> residual image</p>", width=230, reuse=status_line )
+            ### a fixed height, the clean buttons' beside it: a longer status (progress, an
+            ### error) scrolls inside it rather than growing the top row, which shrank and
+            ### moved the image as the text changed (notes §74)
+            status_line = imdetails['gui']['stopcode'] = imdetails['gui']['cube'].status_text( "<p>initial residual image</p>" if imdetails['image-channels'] > 1 else "<p>initial <b>single-channel</b> residual image</p>", width=230, height=self.STATUS_HEIGHT, height_policy='fixed', styles={ 'overflow-y': 'auto' }, reuse=status_line )
 
             ###
             ### Retrieve convergence information
@@ -1182,6 +1185,9 @@ class InteractiveCleanUI:
 
     #: seconds between progress updates while a cycle runs
     PROGRESS_INTERVAL = 1.0
+    #: the status line's height (px): the clean buttons' (``cheight``), two
+    #: lines of text; more scrolls inside it (notes §74)
+    STATUS_HEIGHT = 40
 
     async def _report_progress( self, label ):
         '''While a cycle runs: every ``PROGRESS_INTERVAL`` seconds the session's
@@ -1197,8 +1203,12 @@ class InteractiveCleanUI:
             await asyncio.sleep( self.PROGRESS_INTERVAL )
             try:
                 snapshot = progress( ) if callable( progress ) else None
+                ### the short form fits the status line's fixed two lines (a growing status
+                ### line resized the image, notes §74); the whole of it is the tooltip
+                full = html_escape( describe_progress( snapshot, label ), quote=True )
+                short = html_escape( describe_progress( snapshot, label, short=True ) )
                 await self._pipe['progress'].send( self._progress_id,
-                                                   { 'text': html_escape( describe_progress( snapshot, label ) ),
+                                                   { 'text': f'<span title="{full}">{short}</span>',
                                                      'progress': snapshot } )
             except asyncio.CancelledError:
                 raise

@@ -128,3 +128,18 @@ def test_a_failed_cycle_is_marked():
         s.run_cycle()
     p = s.progress()
     assert not p['running'] and p['ok'] is False and p['kind'] == 'run'
+
+
+def test_the_short_form_fits_the_status_line():
+    """The GUI's status line has a fixed two lines (notes §74): the short form
+    drops the label and abbreviates; the full one is its tooltip."""
+    s = {'seconds': 42, 'phase': 'minor cycles', 'channels': 5, 'channels_done': 3,
+         'iterations': 1520, 'peak_residual': 0.021345, 'algorithm': 'hogbom'}
+    assert describe_progress(s, 'Running', short=True) == \
+        '0:42 · minor cycles: 3/5 chans, 1520 iter, peak 0.0213'
+    assert describe_progress(dict(s, phase='major cycle'), 'Running', short=True) == '0:42 · major cycle'
+    assert describe_progress({'seconds': 3}, 'Running', short=True) == 'Running · 0:03'
+    assert describe_progress(dict(s, channels=1, channels_done=0, iterations=None, peak_residual=None,
+                                  quiet_seconds=42), 'Running', short=True) == \
+        '0:42 · minor cycles: 0/1 chan · quiet 42 s'
+    assert describe_progress(None, 'Running', short=True) == 'Running'

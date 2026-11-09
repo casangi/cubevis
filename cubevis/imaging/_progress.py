@@ -178,12 +178,37 @@ class CycleProgress:
             st['iterations'] = int(m.group(1))
 
 
-def describe(progress: Optional[dict], label: str = 'Running') -> str:
+def describe(progress: Optional[dict], label: str = 'Running', short: bool = False) -> str:
     '''the status line for a snapshot: "<label> · 0:42 · minor cycles
-    (hogbom): 3 of 5 channels, 1520 iterations, peak residual 0.0213"'''
+    (hogbom): 3 of 5 channels, 1520 iterations, peak residual 0.0213".
+
+    *short*: what fits the GUI's status line (two lines of a narrow box,
+    notes §74), without the label: "0:42 · minor cycles: 3/5 chans,
+    1520 iter, peak 0.0213"; "0:42 · major cycle"; "· quiet 42 s".'''
     if not progress:
         return label
     seconds = int(progress.get('seconds') or 0)
+    if short:
+        text = f'{seconds // 60}:{seconds % 60:02d}'
+        phase = progress.get('phase')
+        if phase == 'minor cycles':
+            bits = []
+            if progress.get('channels'):
+                bits.append(f"{progress.get('channels_done', 0)}/{progress['channels']} "
+                            f"chan{'s' if progress['channels'] != 1 else ''}")
+            if progress.get('iterations') is not None:
+                bits.append(f"{progress['iterations']} iter")
+            if progress.get('peak_residual') is not None:
+                bits.append(f"peak {progress['peak_residual']:.3g}")
+            text += ' · minor cycles' + (f": {', '.join(bits)}" if bits else '')
+        elif phase == 'major cycle':
+            text += ' · major cycle'
+        else:
+            text = f'{label} · {text}'
+        quiet = progress.get('quiet_seconds')
+        if quiet is not None and quiet >= 30:
+            text += f' · quiet {int(quiet)} s'
+        return text
     text = f'{label} · {seconds // 60}:{seconds % 60:02d}'
     phase = progress.get('phase')
     if phase == 'minor cycles':

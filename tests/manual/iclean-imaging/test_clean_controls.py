@@ -217,8 +217,11 @@ def test_progress_is_pushed_while_a_cycle_runs(where, monkeypatch):
         assert r['result'] == 'update'
         assert len(sent) >= 4 and all(mid == ui._progress_id for mid, _ in sent)
         texts = [m['text'] for _, m in sent]
-        assert all(t.startswith('Running one set of deconvolution iterations · 0:0') for t in texts), texts
+        ### the short form shown, the whole of it the tooltip (notes §74)
+        assert all(t.startswith('<span title="Running one set of deconvolution iterations · 0:0')
+                   and '">0:0' in t for t in texts), texts
         assert any('minor cycles (Hogbom)' in t and 'of 4 channels' in t for t in texts), texts
+        assert any('minor cycles: ' in t and '/4 chans' in t for t in texts), texts
         seconds = [m['progress']['seconds'] for _, m in sent]
         assert seconds == sorted(seconds) and seconds[-1] > seconds[0]
         done = [m['progress']['channels_done'] for _, m in sent]
@@ -229,7 +232,7 @@ def test_progress_is_pushed_while_a_cycle_runs(where, monkeypatch):
         p = ui._clean['session'].progress()
         assert not p['running'] and p['ok'] and p['channels_done'] == 4   # still there afterwards
         r = asyncio.run(button(ui, 'finish'))                             # 'finish' has its own label
-        assert any(m['text'].startswith('Running multiple iterations') for _, m in sent[n:])
+        assert any(m['text'].startswith('<span title="Running multiple iterations') for _, m in sent[n:])
     finally:
         close(ic)
 

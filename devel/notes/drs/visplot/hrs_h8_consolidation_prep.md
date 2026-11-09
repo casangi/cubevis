@@ -4132,3 +4132,30 @@ as given.
   is refused before a kernel manager is made.
 * Quick suites pass; setup: the 11 ssh failures only.  Fingerprint
   `k2-1d0eb7578783471039fe`.
+
+## 74. The image no longer resizes as the status line changes (2026-11-09)
+
+Darrell, on the cluster kernel: during a cycle the image plot shrank a
+little and came back.  The status line is a `Div` (width 230) in the top
+row beside the clean buttons (40 px); the progress text (§69) ran to 3-4
+lines, the row grew with it, and the image below lost the height.  Two
+lines (the old "Running one set of deconvolution iterations") fit beside
+the buttons, which is why it was never seen before progress.  Measured in
+`browser_check --scripted 6 --controls`: status 37 / 51 / 69 px -> image
+plot 875 / 860 / 843 px high, top 96 / 111 / 128.
+
+* The status line has a fixed height (`InteractiveCleanUI.STATUS_HEIGHT`
+  = 40, the buttons'; `height_policy='fixed'`, `overflow-y: auto`): a
+  longer status (an error) scrolls inside it.
+* Progress uses a short form that fits two lines --
+  `describe(progress, label, short=True)`: "0:42 · minor cycles: 3/5
+  chans, 1520 iter, peak 0.0213", "0:42 · major cycle", "· quiet 42 s" --
+  with the whole text (label and all) as its tooltip (`<span title=...>`).
+* `browser_check.py --controls` now records the image plot's box and the
+  status line's height while the cycle runs, fails when the plot moves or
+  changes size, and lists status texts too long for the line.  Scripted
+  (6 s cycles) and real tclean: the plot one box throughout
+  ([0, 99, 1050, 872]), the status line 40 px, nothing scrolling.
+* Tests: `test_progress.py` +1 (the short form); `test_clean_controls.py`
+  (the pushed text is the short form with the tooltip).  Quick suites pass;
+  setup: the 11 ssh failures only.  Fingerprint `k2-dc6e5294be51545a1070`.

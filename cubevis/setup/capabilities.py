@@ -60,17 +60,57 @@ data_auto_update = False
 PROBE = r'''
 def _cubevis_caps():
     import importlib.util, json, os
+    import re
     caps, errors = {}, {}
     try:
+        from importlib.metadata import version, requires
+    except ImportError:
+        version = requires = None
+
+    def missing(extra):
+        # What cubevis[extra] asks for that is not installed here (by its
+        # distribution, nothing imported; cubevis[...] within it followed).
+        # None when cubevis's own metadata cannot say.
+        try:
+            reqs = requires("cubevis") or []
+        except Exception:
+            return None
+        todo, seen, out = [extra], set(), []
+        while todo:
+            ex = todo.pop()
+            if ex in seen:
+                continue
+            seen.add(ex)
+            for r in reqs:
+                spec, _, marker = r.partition(";")
+                if not re.search(r"""extra\s*==\s*["']%s["']""" % re.escape(ex), marker):
+                    continue
+                m = re.match(r"\s*([A-Za-z0-9._-]+)(\[([^\]]*)\])?", spec)
+                if not m:
+                    continue
+                name = m.group(1)
+                if name.lower() == "cubevis":
+                    todo.extend(x.strip() for x in (m.group(3) or "").split(",") if x.strip())
+                    continue
+                try:
+                    version(name)
+                except Exception:
+                    out.append(name)
+        return out
+
+    # visplot: its data packages (cubevis[xarray]: xarray-ms, zarr, dask,
+    # distributed, datashader) installed -- xarray-ms alone was not enough
+    # (Darrell, 2026-11-09: no dask, and every remote open failed) -- and
+    # xarray-ms importing.
+    gone = missing("xarray") if requires else None
+    try:
         import xarray_ms                                    # noqa: F401
-        caps["visplot"] = True
+        caps["visplot"] = not gone
+        if gone:
+            errors["visplot"] = "not installed: %s" % ", ".join(sorted(gone))
     except BaseException as exc:
         caps["visplot"] = False
         errors["visplot"] = "%s: %s" % (type(exc).__name__, exc)
-    try:
-        from importlib.metadata import version
-    except ImportError:
-        version = None
     vers = {}
     for d in ("casatasks", "casatools", "casaconfig", "casadata"):
         try:
@@ -86,7 +126,11 @@ def _cubevis_caps():
     except Exception:
         pass
     caps["iclean"] = bool(vers["casatasks"] and vers["casatools"] and gclean)
-    if not caps["iclean"]:
+    gone = missing("casa6") if requires else None
+    if caps["iclean"] and gone:
+        caps["iclean"] = False
+        errors["iclean"] = "not installed: %s" % ", ".join(sorted(gone))
+    elif not caps["iclean"]:
         errors["iclean"] = ("casatasks is not installed" if not vers["casatasks"] else
                             "casatools is not installed" if not vers["casatools"] else
                             "casatasks has no gclean (interactive clean's imager)")

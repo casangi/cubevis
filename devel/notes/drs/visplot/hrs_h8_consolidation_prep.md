@@ -4270,3 +4270,32 @@ Darrell's full visplot run against `CUBEVIS_TEST_KERNEL=cvpost106-visplot`
   same 3 failures on the simulated MS, before and after).  Quick suites
   pass; setup: the 11 ssh failures only.  Fingerprint
   `k2-c26b085ba19057418f44`.
+
+## 78. A capability is the application's whole extra (base `9cd5d4e`, 2026-11-09)
+
+Darrell's run 006 (after §77): every remote open failed in the worker with
+`xarray-ms failed to open '...sis14_twhya_calibrated_flagged.ms': chunk
+manager 'dask' is not available ... <<class 'ImportError'>>` (6 failed, 70
+errors).  `cubevis-devel` has xarray-ms but not dask: the probe's
+`import xarray_ms` said visplot could run, and the wrapped ImportError was
+not recognized as a missing package, so the test reported a remote error.
+
+* **The probe checks the application's whole extra** -- every package of
+  `cubevis[xarray]` for visplot (xarray-ms, zarr, dask, distributed,
+  datashader), of `cubevis[casa6]` for interactive clean -- by distribution
+  (`importlib.metadata`, nothing imported), from the kernel's own cubevis
+  metadata (`cubevis[...]` inside an extra followed; versions not
+  compared).  Missing ones: `capability_errors[app] = "not installed:
+  dask, distributed"`.  Without cubevis metadata (none installed), only the
+  import checks, as before.
+* **A wrapped import failure** -- `ImportError`/`ModuleNotFoundError` in the
+  remote error or the traceback's last line -- is a `MissingCapability`
+  too (with the application's message), recorded as such.
+* Darrell asked whether what is found updates the kernel's record: yes --
+  setup's launcher test (`setup HOST`, `setup check NAME`, `setup kernel
+  NAME`) writes the probe's answer, and a connection writes what it found
+  (a working one sets the app to yes; a missing package to no, with why,
+  §77).  `setup status` shows the record.
+* Tests: `test_capabilities.py` (+1: the probe with dask and distributed
+  missing; the wrapped ImportError).  Quick suites pass; setup: the 11 ssh
+  failures only.  Fingerprint `k2-c12ff110034d7a0f949b`.

@@ -318,8 +318,15 @@ class RemoteObjectConnection:
             return
         last = [ln for ln in str(reply.get("traceback", "")).strip().splitlines() if ln.strip()]
         last = last[-1].strip() if last else ""
-        if not (last.startswith("ModuleNotFoundError") or last.startswith("ImportError")):
+        error = str(reply.get("error") or "")
+        # The import failure itself, or one an application wrapped (xarray-ms
+        # opening an MS without dask: "... chunk manager 'dask' is not
+        # available ... <<class 'ImportError'>>", Darrell 2026-11-09).
+        if not any(t in text for t in ("ModuleNotFoundError", "ImportError")
+                   for text in (last, error)):
             return
+        if not (last.startswith("ModuleNotFoundError") or last.startswith("ImportError")):
+            last = error
         from cubevis.setup import capabilities as _capabilities
         app, name = self._capability
         _capabilities.mark(name, app, False, last)

@@ -230,6 +230,13 @@ def test_a_module_the_worker_cannot_import_is_the_capability(recorded):
     assert "casatasks" in C.kernel_record("plots")["capability_errors"]["iclean"]
     # Any other failure is the application's own.
     conn._raise_if_missing({"error": "x", "traceback": "ValueError: bad\n"})
+    # An import failure the application wrapped: the error says it.
+    vis = _bare_connection(app="visplot")
+    wrapped = ("xarray-ms failed to open 'x.ms': chunk manager 'dask' is not available. Please "
+               "make sure 'dask' is installed and importable. <<class 'ImportError'>>")
+    with pytest.raises(C.MissingCapability, match="cannot run visplot: xarray-ms failed to open"):
+        vis._raise_if_missing({"error": wrapped, "traceback": "Traceback ...\nRuntimeError: " + wrapped})
+    assert C.recorded("cubevis-plots", "visplot") is False
     # A connection that worked marks it again (a package installed since).
     C.mark("cubevis-plots", "iclean", True)
     assert C.recorded("cubevis-plots", "iclean") is True
@@ -284,3 +291,32 @@ def test_a_kernel_on_another_node_of_a_cluster_is_setups_kernel(recorded):
     with pytest.raises(C.MissingCapability):
         C.require("cubevis-plots-cvpost107", "iclean")
     C.require("cubevis-plots-cvpost107", "visplot")
+
+
+def test_visplot_needs_its_whole_extra(tmp_path):
+    """Darrell 2026-11-09: xarray-ms was there but dask was not, and every
+    remote open failed ("chunk manager 'dask' is not available").  The probe
+    checks every package of cubevis[xarray] (by distribution, nothing
+    imported), and of cubevis[casa6] for interactive clean."""
+    pytest.importorskip("xarray_ms")
+    prelude = ("import importlib.metadata as _m\n"
+               "_v = _m.version\n"
+               "def _version(name):\n"
+               "    if name in ('dask', 'distributed'):\n"
+               "        raise _m.PackageNotFoundError(name)\n"
+               "    return _v(name)\n"
+               "_m.version = _version\n")
+    r = subprocess.run([sys.executable, "-c", L.TEST_CODE], input=prelude + C.PROBE,
+                       capture_output=True, text=True, cwd=str(tmp_path), timeout=120,
+                       env=clean_env(tmp_path))
+    rep = C.parse(r.stdout)
+    assert rep is not None, r.stdout + r.stderr
+    try:
+        from importlib.metadata import requires
+        has_meta = bool(requires("cubevis"))
+    except Exception:
+        has_meta = False
+    if not has_meta:
+        pytest.skip("cubevis has no installed metadata here")
+    assert rep["capabilities"]["visplot"] is False
+    assert rep["errors"]["visplot"] == "not installed: dask, distributed"

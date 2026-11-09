@@ -146,7 +146,7 @@ def summary(rep: dict) -> str:
         return why
     parts = [f"cubevis {v.get('cubevis') or '?'}", f"Python {rep.get('python')}",
              f"ipykernel {v.get('ipykernel') or '?'}"]
-    parts.append("visplot data: yes" if rep.get("visplot")
-                 else "visplot data: no (xarray-ms missing)")
+    from .capabilities import describe
+    parts.append("runs " + describe({"visplot": rep.get("visplot"), "iclean": rep.get("iclean")}))
     parts.append("installed " + describe_method(install_method(rep)))
     return ", ".join(parts)

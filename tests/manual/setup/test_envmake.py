@@ -279,3 +279,76 @@ def test_status_of_a_running_job_says_what_it_is_doing(node):
     assert a["log_size"] > 0 and a["log_age"] >= 0
     assert node.wait()["state"] == "ok"
     assert "activity" not in node.call("status", name="cubevis-1.0.97")["status"]
+
+
+# --------------------------------------------------------------------------
+# add: interactive clean, CASA's data (iclean design step 5b)
+# --------------------------------------------------------------------------
+
+def test_the_specs_for_interactive_clean():
+    assert E.spec("1.0.97", iclean=True) == "cubevis[visplot,iclean]==1.0.97"
+    assert E.add_spec("1.0.97", iclean=True) == "cubevis[visplot,iclean]==1.0.97"
+    assert E.add_spec("1.0.97", casa_data=True) == "casadata"
+    assert E.add_spec("1.0.97", True, True) == "cubevis[visplot,iclean]==1.0.97 casadata"
+
+
+def _add(node, prefix, **extra):
+    req = dict(prefix=prefix, spec=E.add_spec("1.0.97", iclean=True), version="1.0.97",
+               setup={"host": "gui1"}, marker_update={"iclean": True})
+    req.update(extra)
+    return node.call("add", **req)
+
+
+def test_add_installs_into_setups_own_and_says_so_in_its_marker(node):
+    node.start(install_shell="true")
+    assert node.wait()["state"] == "ok"
+    prefix = f"{node.envs_dir}/cubevis-1.0.97"
+    r = _add(node, prefix, install_shell='echo "$PREFIX" > "$PREFIX/added"')
+    assert r["ok"] and r["started"], r
+    st = node.wait()
+    assert st["state"] == "ok" and st["done"] == ["create", "install"], st
+    assert open(f"{prefix}/added").read().strip() == prefix
+    marker = json.load(open(f"{prefix}/{E.MARKER_FILE}"))
+    assert marker["name"] == "cubevis-1.0.97" and marker["spec"] == "cubevis[visplot]==1.0.97"
+    assert marker["iclean"] is True and marker["created"]
+    assert [a["spec"] for a in marker["added"]] == ["cubevis[visplot,iclean]==1.0.97"]
+    log = open(f"{node.config_dir}/make/cubevis-1.0.97.log").read()
+    assert log.count("create -y -p") == 1                       # not made again
+
+
+def test_add_writes_the_casa_site_configuration(node):
+    from cubevis.setup import capabilities as C
+    node.start(install_shell="true")
+    node.wait()
+    prefix = f"{node.envs_dir}/cubevis-1.0.97"
+    site = f"{prefix}/{C.SITE_CONFIG_FILE}"
+    r = _add(node, prefix, spec=E.add_spec("1.0.97", casa_data=True), install_shell="true",
+             site_config={"file": C.SITE_CONFIG_FILE, "text": C.SITE_CONFIG_TEXT},
+             marker_update={"casa_site_config": site})
+    assert r["ok"], r
+    st = node.wait()
+    assert st["state"] == "ok" and st["done"] == ["create", "install", "site-config"], st
+    assert open(site).read() == C.SITE_CONFIG_TEXT
+    assert json.load(open(f"{prefix}/{E.MARKER_FILE}"))["casa_site_config"] == site
+
+
+def test_the_default_add_is_pip_with_each_requirement(node):
+    node.start(install_shell="true")
+    node.wait()
+    prefix = f"{node.envs_dir}/cubevis-1.0.97"
+    _add(node, prefix, spec=E.add_spec("1.0.97", True, True))
+    st = node.wait()
+    assert st["state"] == "failed" and st["done"] == ["create"]      # the fake has no pip
+    log = open(st["log"]).read()
+    assert f"$ {prefix}/bin/python -m pip install cubevis[visplot,iclean]==1.0.97 casadata" in log
+    assert "iclean" not in json.load(open(f"{prefix}/{E.MARKER_FILE}"))     # marker: last
+    _add(node, prefix, spec=E.add_spec("1.0.97", True, True), install_shell="true")
+    assert node.wait()["state"] == "ok"
+
+
+def test_add_never_touches_an_environment_that_is_not_setups(node):
+    mine = node.tmp / "envs" / "mine"
+    (mine / "bin").mkdir(parents=True)
+    r = _add(node, str(mine), install_shell="touch \"$PREFIX/touched\"")
+    assert not r["ok"] and "not made by cubevis setup" in r["error"]
+    assert not (mine / "touched").exists()

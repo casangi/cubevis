@@ -6,7 +6,10 @@
 # One line on stdout:  CUBEVIS-ENVCHECK {json}
 #   python, executable, prefix, base_prefix, conda (a conda/mamba prefix),
 #   versions {dist: version or null}, kernel (true: cubevis' kernel side and
-#   ipykernel import), visplot (true: its data backend imports), errors
+#   ipykernel import), visplot (true: its data backend imports), iclean
+#   (true: casatasks and casatools are installed, with gclean -- not
+#   imported: casatools writes a log file into the current directory and
+#   may start CASA's data updates when imported), errors
 #   {what: last line of the error}, install (how cubevis got here: from its
 #   packaging metadata -- see below), fingerprint (its kernel-side code,
 #   cubevis._fingerprint; null for a cubevis without it).
@@ -31,7 +34,7 @@ except Exception:          # Python < 3.8
     _version = None
 
 for dist in ("cubevis", "ipykernel", "jupyter_client", "bokeh", "xarray-ms", "arcae",
-             "casatasks"):
+             "casatasks", "casatools", "casadata"):
     v = None
     if _version is not None:
         try:
@@ -114,5 +117,20 @@ kernel = _try("ipykernel", "ipykernel") and kernel
 out["kernel"] = kernel
 # visplot reads measurement sets through xarray-ms / arcae.
 out["visplot"] = _try("visplot", "xarray_ms") if kernel else False
+# Interactive clean drives casatasks' gclean: installed, found without an
+# import (capabilities.PROBE does the same in a kernel).
+iclean = False
+if kernel and out["versions"].get("casatasks") and out["versions"].get("casatools"):
+    try:
+        import importlib.util
+        _spec = importlib.util.find_spec("casatasks")
+        for _d in (_spec.submodule_search_locations or []) if _spec else []:
+            iclean = iclean or os.path.isfile(os.path.join(_d, "private", "imagerhelpers",
+                                                           "_gclean.py"))
+    except Exception:
+        pass
+    if not iclean:
+        out["errors"]["iclean"] = "casatasks has no gclean (interactive clean's imager)"
+out["iclean"] = iclean
 
 sys.stdout.write("CUBEVIS-ENVCHECK " + json.dumps(out) + "\n")

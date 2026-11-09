@@ -137,6 +137,11 @@ class RemoteObjectConnection:
         if not kernel_name:
             raise ValueError(f"{app}: a remote session needs kernel_name= (a kernelspec name "
                              "resolvable by `jupyter kernelspec list`)")
+        # A kernel setup recorded as unable to run *app*: refused before
+        # anything starts (MissingCapability says what to do).
+        from cubevis.setup import capabilities as _capabilities
+        if app in _capabilities.APPS:
+            _capabilities.require(kernel_name, app)
         from jupyter_client import AsyncKernelManager
         from cubevis.remote import RemoteAppLink, SyncBridge, DEFAULT_WORKER_TARGET_NAME
 

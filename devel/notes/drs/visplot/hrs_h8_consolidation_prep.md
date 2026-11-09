@@ -3964,3 +3964,84 @@ advises for a development install (this checkout installed with
   * Quick tests: `remote`, `imaging`, `imaging-remote`, `tiny-ms`,
     `visplot-remote`, `syntax` pass.  Fingerprint unchanged
     (`k2-eefb1f77fd564a7cf7ee`).
+
+## 71. iclean step 5b: kernel capabilities in setup; CASA's data (base `1e0c6b2`, 2026-11-07)
+
+Decisions (Darrell, 2026-11-07): two capabilities, `visplot` and `iclean`,
+never assumed of each other (a site's CASA environment with cubevis is an
+iclean kernel without xarray-ms); setup adds only to environments it made;
+the extra is `cubevis[iclean]`; no warning about casa6 + xarray in one
+environment (arcae was written to live beside casatools -- checked here:
+casatools 6.7.6.14 and arcae 0.5.8 from pip read one MS in one process);
+CASA's data: a private copy per environment (casadata), or the user's own
+when casaconfig finds it -- the user chooses; the private copy reaches the
+kernels as `CASASITECONFIG` through the kernel launcher's environment.
+
+* **Capabilities** (`cubevis/setup/capabilities.py`, new):
+  * `PROBE`, appended to the launcher test (`launcher.test_program`), so it
+    runs in the kernel's own context (directory, variables,
+    `CASASITECONFIG`): `visplot` -- `xarray_ms` imports; `iclean` --
+    casatasks and casatools installed and casatasks' `_gclean.py` found,
+    **not imported** (importing casatools writes `casa-*.log` into the
+    current directory and may start CASA's data updates; the worker's real
+    import reports failures in the GUI); `casa_data` -- casaconfig's
+    resolved configuration (`casaconfig.config` alone reads the site and
+    user files, changes nothing): `measurespath`, the files that set it,
+    auto-update, `ready` when `measurespath/geodetic` exists, else why.
+    One line, `CUBEVIS-CAPS {json}`; `remote.test_launcher` returns
+    `(fingerprint, cwd, report)`.
+  * Kernel records: `capabilities`, `capability_errors`, `casa_data`
+    (health fields).  `envcheck` reports `iclean` per environment the same
+    way (no import); environment records keep `iclean`.
+  * `require(kernel_name, app)`: the laptop side.  `RemoteObjectConnection`
+    (app `iclean`) and visplot's `RemoteReductionContext` refuse, before
+    anything starts, a kernel setup recorded as unable to run the app
+    (`MissingCapability`, with what to do).  A kernel setup does not know,
+    or never checked, is not refused.
+* **Setup** (`hostsetup.py`):
+  * Making an environment asks "Should kernels on NODE run interactive
+    clean?" (default yes; `cubevis[visplot,iclean]==V`, about 300 MB more).
+  * `iclean_step` (after an environment is chosen, and on a rerun for each
+    environment the host's kernels use): an environment that cannot run it
+    -- its check, else its kernels' tests (`environment_iclean`: records from
+    before 5b have no `iclean`) -- gets, if setup made it, "Add interactive
+    clean to it?" (a no is kept, `iclean_declined`, until `--redo`); if it
+    is the user's, the pip command.  Added: the kernels are tested again.
+  * `casa_data_step` (after a kernel's test passes, it runs iclean): data
+    found -- "[u]se it, or give the environment a [p]rivate copy?" (asked
+    once per environment, `casa_data_choice`; `--redo` asks again); none
+    found -- a private copy by default in setup's environment, what to do in
+    the user's.  A private copy: `envmake` add of `casadata` plus
+    `PREFIX/cubevis-casasiteconfig.py` (measurespath = casadata's, no
+    auto-updates); the environment record's `casa_site_config` (from the
+    marker); the launcher exports `CASASITECONFIG` (unless the kernel's
+    variables set it); the kernels are tested again, and a user
+    `~/.casa/config.py` whose measurespath overrides the copy is said.
+  * `use_kernel` and `status` show what each kernel runs, the iclean call
+    beside the visplot one, and CASA's data.
+* **envmake**: `add` -- into an environment with setup's marker only: the
+  same detached worker without the create step, pip with each requirement
+  (`spec` now space-separated), the site configuration
+  (`site-config` step), the marker rewritten last (`added`, `iclean`,
+  `casa_site_config`).  Its docstring: setup changes its own environments
+  only by adding to them when asked.
+* **pyproject**: `iclean = ["cubevis[casa6,remote]"]` (a kernel's
+  environment needs ipykernel as visplot's does); the casa6 + xarray
+  warning replaced.
+* **Checks**: setup suite: the 11 base failures (ssh) only, +24 tests
+  (`test_capabilities.py` new: the probe in this Python -- no data, your
+  configuration, setup's site configuration, your config overriding it,
+  nothing written in the directory or home -- and in one without either;
+  the launcher's `CASASITECONFIG`; `require`; `RemoteImagingSession` refused
+  before a kernel manager is made.  `test_envmake.py`: add, the site
+  configuration, pip with both requirements, never into an environment
+  without the marker.  `test_hostsetup.py`: the question when making, the
+  offer and its no, the user's environment, the add round trip, both data
+  choices, an overriding config, the rerun path end to end).  Quick tests:
+  `remote`, `imaging`, `imaging-remote`, `tiny-ms`, `visplot-remote`,
+  `syntax` pass.  Fingerprint `k2-4e77b3fe294591fa0bd6`
+  (`cubevis.setup.capabilities` joins the closure through
+  `RemoteObjectConnection`, as `sessions` and `state` did).
+* **Not done**: a real host (ssh, conda, PyPI's casatasks) -- the rig's
+  tests skip here; the probe ran through a launcher on this computer
+  (`test_launcher.py` with the kernel Python).

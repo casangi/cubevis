@@ -383,7 +383,7 @@ current one. This comparison is part of step 1's tests.
 | 4. `run_cycle` as an async job; stop and progress semantics. **Done: notes §68** (the job in step 3; stop after the cycle; failures shown in the GUI; progress and reattach open, §5) | 1 |
 | 4b. Progress of a running cycle, local and remote: tclean's log followed where the imager runs (`CycleProgress`), kept as session state (`progress()`), pushed to the status line about once a second. **Done: notes §69** | 0.5 |
 | 5a. `iclean(kernel_name=)` (like `iclean_backend`), the GUI's end closes a remote session (history kept); CI without python-casacore. **Done: notes §70** | 0.5 |
-| 5b. Kernel capabilities in setup: environments report whether they can run interactive clean (casatasks); setup asks whether a host's kernels should, and offers it on a rerun; `iclean(kernel_name=)` refuses a kernel without it before connecting | 1 |
+| 5b. Kernel capabilities in setup (`visplot`, `iclean`, probed in the kernel's context); setup asks whether a host's kernels should run interactive clean and offers it on a rerun (adding only to its own environments); CASA's data: the user's, or a private `casadata` copy given to kernels as `CASASITECONFIG`; `iclean`/`visplot` refuse a kernel without the capability before connecting. **Done: notes §71** | 1 |
 | 5c. visplot's `RemoteReductionContext` onto `RemoteObjectConnection` | 0.5 |
 | 5d. Release: from `main` after the merge (until then: this checkout installed on the node, found by fingerprint) | — |
 | 6. Parity tests (local kernel, small MS, local vs remote), quick tests, rounds with Darrell | 1 + 2–3 rounds |
@@ -430,6 +430,9 @@ becomes explicit, and mask editing becomes faster for cubes.
 * **Failures** (done, §68): any failure of a cycle -- the imager, a value it
   refuses, the worker or kernel gone -- is an 'error' reply the browser shows
   with the controls enabled again.
+* ~~**Which kernels can run interactive clean**~~ (done, step 5b, notes §71):
+  capabilities per kernel, from its launcher test; CASA's data chosen per
+  environment (the user's, or setup's private copy).
 * **Multi-field**: one `ImageCube` per field in the one session. Check the
   per-field loops in `toolbox/iclean/_ui.py`.
 * ~~`cubevis/private/_gclean.py`~~: deleted in 1c (notes §62).

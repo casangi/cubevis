@@ -364,6 +364,10 @@ class RemoteReductionContext(ReductionContext):
         from jupyter_client import AsyncKernelManager
         from cubevis.remote import RemoteAppLink, SyncBridge, DEFAULT_WORKER_TARGET_NAME
 
+        # A kernel setup recorded as unable to run visplot (no xarray-ms in
+        # its environment): refused before anything starts.
+        from cubevis.setup import capabilities as _capabilities
+        _capabilities.require(kernel_name, "visplot")
         self._path = path
         self._kernel_name = kernel_name
         self._backend_kind = backend_kind

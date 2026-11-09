@@ -57,6 +57,7 @@ COMMANDS = ("status", "check", "network", "jupyter", "diagnose")
 
 def cmd_status(c: Ctx) -> int:
     ui, st = c.ui, c.st
+    from . import capabilities as _caps
     ui.heading(f"cubevis setup in {tilde(S.state_path().parent)}")
     loc = st.local
     ui._p(f"    {'computer':<10} {host_id()} ({tilde(S.host_state_path().parent)})")
@@ -121,7 +122,10 @@ def cmd_status(c: Ctx) -> int:
             state_ = "ok" if e.get("status") == "ok" else f"{e.get('status')} ({e.get('last_error')})"
             ui._p(f"      environment {en}: {e.get('kind')} {e.get('python')} on {where}, "
                   + ("made by setup, " if e.get("marker") else "")
-                  + (f"cubevis {e['cubevis']}, " if e.get("cubevis") else "") + state_)
+                  + (f"cubevis {e['cubevis']}, " if e.get("cubevis") else "")
+                  + (f"runs {_caps.describe({'visplot': e.get('visplot'), 'iclean': e.get('iclean')})}, "
+                     if e.get("visplot") is not None or e.get("iclean") is not None else "")
+                  + ("CASA's data: setup's copy, " if e.get("casa_site_config") else "") + state_)
         for kn, k in sorted(st.section("kernels").items()):
             e = envs_.get(k.get("environment")) or {}
             if e.get("network") != name:
@@ -136,12 +140,18 @@ def cmd_status(c: Ctx) -> int:
                   + (", sets PYTHONHOME" if k.get("pythonhome") else "")
                   + f", {state_}"
                   + (f" (on {k['checked_on']}, {k['last_checked']})" if k.get("checked_on") else ""))
+            caps = k.get("capabilities")
+            ui._p(f"        runs {_caps.describe(caps)}"
+                  + (f"; CASA's data {_caps.describe_data(k.get('casa_data'))}"
+                     if (caps or {}).get("iclean") else ""))
             specs = J.specs_for(st, kn)
             if specs:
                 for jn, jnode in specs:
                     shown = kn if jn == J.jupyter_name(kn) else jn
-                    ui._p(f"        visplot(..., backend=\"remote\", kernel_name=\"{shown}\")"
-                          f"   runs it on {jnode}")
+                    for app in _caps.APPS:
+                        if caps is None or caps.get(app):
+                            ui._p(f"        {app}(..., " + ("backend=\"remote\", " if app == "visplot" else "")
+                                  + f"kernel_name=\"{shown}\")   runs it on {jnode}")
             else:
                 ui._p(f"        no Jupyter kernel for it here: python -m cubevis.setup "
                       f"jupyter {kn}")

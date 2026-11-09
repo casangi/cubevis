@@ -55,14 +55,10 @@ casa6 = ["casatasks"]
 # `pip show arcae` after install to see what it actually requires and match
 # it - don't reintroduce a pin from a hunch.
 #
-# NOTE: this extra is only known-good in isolation. Installing
-# `cubevis[casa6,xarray]` together via plain pip is NOT supported and may
-# resolve to a version set that is ABI-incompatible at the C++ level
-# (casatools' linked libprotobuf vs. arcae's linked libprotobuf/arrow) even
-# though pip's resolver reports success. pip has no mechanism to express or
-# check that constraint - only conda/pixi package metadata carries the
-# relevant ABI/build info. For combined casa6+xarray environments, use the
-# pixi environment shipped in `pixi.toml` instead of pip extras.
+# Together with [casa6] (an environment for both visplot and interactive
+# clean, as setup makes them): arcae was written to live alongside
+# casatools in one process -- its own casacore, unlike python-casacore --
+# and `cubevis[visplot,iclean]` from pip is what setup installs.
 xarray = [
     "xarray-ms>=0.5.9,<0.6.0",
     "zarr",
@@ -75,7 +71,10 @@ xarray = [
 # What a user actually installs cubevis for. Document/recommend these in
 # the README and quickstart rather than the backend extras above.
 #
-# iclean is casatasks-only.
+# iclean is casatasks-only on the data side; [remote] for kernels on another
+# computer (the laptop starts them, the kernel's environment serves them),
+# as for visplot.  CASA's data (casadata, or a measurespath of your own) is
+# not an extra: setup offers a private copy per environment.
 #
 # visplot is xarray-ms/arcae-only for BOTH its MSv2 and MSv4 backends - arcae
 # reads MSv2 tables directly, no casatasks involved - so "I have old-format
@@ -91,7 +90,7 @@ xarray = [
 # ssh from the computer the plots are on; ipykernel and jupyter_client are
 # what a kernel's environment needs there (python -m cubevis.setup HOST).
 remote = ["sshpyk>=1.23", "ipykernel", "jupyter_client"]
-iclean = ["cubevis[casa6]"]
+iclean = ["cubevis[casa6,remote]"]
 visplot = ["cubevis[xarray,remote]"]
 
 

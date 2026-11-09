@@ -4,9 +4,14 @@ step 3).
 When no environment on a node has the same kernel-side code as this
 computer, setup makes one there: a minimal conda environment named for the
 cubevis version, ``<tool> create -y -p PREFIX python=X.Y pip`` and then
-``PREFIX/bin/python -m pip install "cubevis[visplot]==VERSION"``.  Setup
-never modifies it afterwards (a new cubevis version gets a new one) and
-never installs into an environment of the user's.
+``PREFIX/bin/python -m pip install "cubevis[visplot]==VERSION"`` --
+``cubevis[visplot,iclean]`` when its kernels should run interactive clean
+too.  Setup never installs into an environment of the user's, and changes
+its own only to **add** to them (``add``, iclean step 5b): interactive
+clean (the same cubevis with the ``iclean`` extra), or a private copy of
+CASA's data (the ``casadata`` package and a site configuration pointing at
+it, ``capabilities.SITE_CONFIG_FILE``).  A new cubevis version still gets a
+new environment.
 
 Making one takes minutes, over a connection that may be a laptop's, so the
 work runs **detached on the node** and setup only polls it:
@@ -23,6 +28,9 @@ work runs **detached on the node** and setup only polls it:
   should be running is not (the node restarted, the process was killed);
 * ``plan`` says, before anything is made, where an environment could go
   (writable? free space? names taken?) and what earlier jobs left;
+* ``add`` installs more into an environment **that has the marker** --
+  the same detached worker, without the create step; the marker is
+  rewritten last, with what was added;
 * ``remove`` removes an environment **that has the marker**, with the
   tool's own ``env remove`` -- never anything else, never by deleting
   files itself.
@@ -66,8 +74,22 @@ def candidate_names(version: str) -> list:
     return [b] + [f"{b}-{i}" for i in range(2, 10)]
 
 
-def spec(version: str) -> str:
-    return f"cubevis[visplot]=={version}"
+def spec(version: str, iclean: bool = False) -> str:
+    """What pip installs in setup's environment for cubevis *version*;
+    *iclean*: its kernels run interactive clean too."""
+    return f"cubevis[visplot,iclean]=={version}" if iclean else f"cubevis[visplot]=={version}"
+
+
+def add_spec(version: str, iclean: bool = False, casa_data: bool = False) -> str:
+    """What ``add`` installs: interactive clean (*iclean*: the same cubevis
+    with the ``iclean`` extra) and/or a private copy of CASA's data
+    (*casa_data*: casadata).  Requirements separated by spaces."""
+    parts = []
+    if iclean:
+        parts.append(f"cubevis[visplot,iclean]=={version}")
+    if casa_data:
+        parts.append("casadata")
+    return " ".join(parts)
 
 
 def pick_tool(tools) -> Optional[dict]:
@@ -238,15 +260,35 @@ try:
         if job.get("install_shell"):
             rc = run("installing cubevis (pip)", job["install_shell"], shell=True, extra=home)
         else:
-            rc = run("installing cubevis (pip)", [PY, "-m", "pip", "install", job["spec"]],
-                     extra=home)
+            rc = run(job.get("step") or "installing cubevis (pip)",
+                     [PY, "-m", "pip", "install"] + job["spec"].split(), extra=home)
         if rc:
             put(reason=reason(LAST))
             raise Failed("pip install %s failed" % job["spec"])
         done.append("install")
         put(done=done)
-    marker = {"schema": 1, "name": job["name"], "version": job["version"], "spec": job["spec"],
-              "python": job["python"], "tool": TOOL, "created": now(), "setup": job.get("setup") or {}}
+    if job.get("site_config") and "site-config" not in done:
+        put(step="writing the CASA site configuration")
+        path = os.path.join(PREFIX, job["site_config"]["file"])
+        fd, tmp = tempfile.mkstemp(dir=PREFIX, prefix=".siteconfig.")
+        with os.fdopen(fd, "w") as f:
+            f.write(job["site_config"]["text"])
+        os.replace(tmp, path)
+        say("wrote %s" % path)
+        done.append("site-config")
+        put(done=done)
+    if job.get("add"):
+        # More in an environment of setup's own: its marker says what.
+        with open(os.path.join(PREFIX, job["marker"])) as f:
+            marker = json.load(f)
+        marker.setdefault("added", []).append({"spec": job["spec"], "at": now(),
+                                               "setup": job.get("setup") or {}})
+        marker.update(job.get("marker_update") or {})
+    else:
+        marker = {"schema": 1, "name": job["name"], "version": job["version"], "spec": job["spec"],
+                  "python": job["python"], "tool": TOOL, "created": now(),
+                  "setup": job.get("setup") or {}}
+        marker.update(job.get("marker_update") or {})
     fd, tmp = tempfile.mkstemp(dir=PREFIX, prefix=".marker.")
     with os.fdopen(fd, "w") as f:
         json.dump(marker, f, indent=1)
@@ -431,17 +473,25 @@ def act_start():
         if not (old and old.get("prefix") == prefix and old.get("state") in ("failed", "died")):
             return answer(ok=False, error="%s exists already" % prefix)
         done = old.get("done") or []
+    spawn(name, prefix, tool, done, {})
+
+def spawn(name, prefix, tool, done, more):
+    """Write the job and its status, start the detached worker, answer."""
     p = paths(name)
     os.makedirs(make_dir(), mode=0o700, exist_ok=True)
-    job = {"name": name, "prefix": prefix, "tool": tool, "python": REQUEST["python"],
+    job = {"name": name, "prefix": prefix, "tool": tool, "python": REQUEST.get("python"),
            "spec": REQUEST["spec"], "version": REQUEST["version"], "marker": REQUEST["marker"],
            "setup": REQUEST.get("setup") or {}, "install_shell": REQUEST.get("install_shell"),
+           "site_config": REQUEST.get("site_config"), "marker_update": REQUEST.get("marker_update"),
            "done": done, "status": p["status"], "log": p["log"]}
+    job.update(more)
     with open(p["job"], "w") as f:
         json.dump(job, f)
     with open(p["status"], "w") as f:
         json.dump({"state": "starting", "step": "starting", "prefix": prefix, "tool": tool,
-                   "version": REQUEST["version"], "done": done, "queued": time.strftime("%Y-%m-%dT%H:%M:%S%z")}, f)
+                   "version": REQUEST["version"], "done": done, "add": bool(job.get("add")),
+                   "spec": job["spec"],
+                   "queued": time.strftime("%Y-%m-%dT%H:%M:%S%z")}, f)
     with open(p["log"], "ab") as f:
         f.write(("---- %s\n" % time.strftime("%Y-%m-%d %H:%M:%S")).encode())
     log = open(p["log"], "ab")
@@ -449,13 +499,39 @@ def act_start():
                      stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True)
     answer(ok=True, started=True, status=status_of(name))
 
-def act_remove():
-    prefix, tool = REQUEST["prefix"], REQUEST["tool"]
+def own_marker(prefix):
+    """The marker of an environment setup made, or (None, why not)."""
     marker = read_json(os.path.join(prefix, REQUEST["marker"]))
     if not isinstance(marker, dict) or marker.get("schema") != 1:
-        return answer(ok=False, error="%s was not made by cubevis setup (no marker): not removed" % prefix)
+        return None, "%s was not made by cubevis setup (no marker)" % prefix
     if os.path.basename(prefix.rstrip("/")) != marker.get("name"):
-        return answer(ok=False, error="%s is not named as its marker says: not removed" % prefix)
+        return None, "%s is not named as its marker says" % prefix
+    return marker, None
+
+def act_add():
+    """More in an environment setup made (interactive clean, CASA's data):
+    pip, the site configuration, the marker rewritten -- detached, as start."""
+    prefix = REQUEST["prefix"]
+    marker, why = own_marker(prefix)
+    if marker is None:
+        return answer(ok=False, error=why + ": setup does not install into it")
+    name = marker["name"]
+    old = status_of(name)
+    if old and old.get("state") in ("running", "starting"):
+        return answer(ok=True, started=False, status=old)
+    done = ["create"]
+    if old and old.get("add") and old.get("state") in ("failed", "died") \
+            and old.get("spec") == REQUEST["spec"]:
+        done = old.get("done") or done                     # go on from where it stopped
+    spawn(name, prefix, marker.get("tool") or REQUEST.get("tool"), done,
+          {"add": True, "python": marker.get("python"),
+           "step": REQUEST.get("step") or "installing (pip)"})
+
+def act_remove():
+    prefix, tool = REQUEST["prefix"], REQUEST["tool"]
+    marker, why = own_marker(prefix)
+    if marker is None:
+        return answer(ok=False, error=why + ": not removed")
     if not (os.path.isfile(tool) and os.access(tool, os.X_OK)):
         return answer(ok=False, error="%s is not an executable there" % tool)
     r = subprocess.run([tool, "env", "remove", "-y", "-p", prefix], stdin=subprocess.DEVNULL,
@@ -473,14 +549,15 @@ def act_remove():
            error=None if gone else "%s is still there after %s env remove" % (prefix, os.path.basename(tool)))
 
 try:
-    {"plan": act_plan, "status": act_status, "start": act_start, "remove": act_remove}[REQUEST["action"]]()
+    {"plan": act_plan, "status": act_status, "start": act_start, "add": act_add,
+     "remove": act_remove}[REQUEST["action"]]()
 except Exception as exc:
     answer(ok=False, error="%s: %s" % (type(exc).__name__, exc))
 '''
 
 
 def request(action: str, config_dir: str, **fields) -> dict:
-    """A request for ``call``: *action* (plan, start, status, remove), the
+    """A request for ``call``: *action* (plan, start, add, status, remove), the
     node's configuration directory (where jobs and logs live), its fields."""
     return dict(action=action, config_dir=config_dir, marker=MARKER_FILE, **fields)
 

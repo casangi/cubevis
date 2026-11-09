@@ -10,7 +10,10 @@ one worker, one object per interactive clean).  ``cube(field)`` is a
 ``cube_call(field, method, ...)`` on that same object.
 
 * Paths in ``args`` (``vis``, ``imagename``) are the kernel host's; relative
-  ones are relative to the kernel's working directory.
+  ones are relative to the kernel's working directory.  The worker checks
+  and coerces the arguments there, as tclean's task wrapper does locally
+  (``_tclean_params.check``), and logs the task in the host's CASA log;
+  ``args`` is what it got (the GUI's values).
 * ``start()`` and ``arun_cycle()`` run in a thread in the worker and are
   polled (``CYCLE_POLL`` seconds), so the worker keeps answering the GUI
   during a cycle; ``arun_cycle`` awaits on the caller's event loop without
@@ -57,16 +60,34 @@ class RemoteImagingSession:
 
     def __init__(self, args: Dict[str, Any], kernel_name: str, *, iclean_backend: str = 'PROD',
                  deconvolver: Optional[str] = None, store: Optional[str] = None,
-                 **connection_kwargs) -> None:
-        from cubevis.remote import RemoteObjectConnection
-        kwargs = {'args': dict(args), 'iclean_backend': iclean_backend}
+                 check: Optional[bool] = None, **connection_kwargs) -> None:
+        from cubevis.remote import RemoteObjectConnection, RemoteCallError
+        from .remote_registrations import PARAMS_ERROR
+        if check is None:
+            check = deconvolver is None             # tclean's arguments: checked on the host
+        kwargs = {'args': dict(args), 'iclean_backend': iclean_backend, 'check': bool(check)}
         if deconvolver is not None:
             kwargs['deconvolver'] = deconvolver
         if store is not None:
             kwargs['store'] = store
-        self._conn = RemoteObjectConnection(
-            kernel_name, BACKEND_CLASS, kwargs, register_function=REGISTER_FUNCTION,
-            app='iclean', data=args.get('vis'), data_methods=DATA_METHODS, **connection_kwargs)
+        try:
+            self._conn = RemoteObjectConnection(
+                kernel_name, BACKEND_CLASS, kwargs, register_function=REGISTER_FUNCTION,
+                app='iclean', data=args.get('vis'), data_methods=DATA_METHODS,
+                **connection_kwargs)
+        except RemoteCallError as exc:
+            if str(exc.remote_error or '').startswith(PARAMS_ERROR):
+                # an argument the host refused (a path that is not there):
+                # what is wrong, not the worker's traceback
+                raise ValueError(f"kernel {kernel_name!r}: {exc.remote_error}") from None
+            raise
+        try:
+            #: iclean's arguments as the worker has them -- checked and
+            #: coerced there (paths made absolute on the host): the GUI's values
+            self.args: Dict[str, Any] = self._conn.call('args')
+        except BaseException:
+            self._conn.close()
+            raise
         self._cubes: Dict[str, 'RemoteImageCube'] = {}
         self._fields = None
         self._products = None

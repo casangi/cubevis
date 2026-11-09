@@ -297,6 +297,19 @@ def test_session_fields_and_cubes():
         s.cube('nope')
 
 
+def test_a_failed_cycles_bare_stop_code_becomes_a_pair():
+    """gclean gives ``-1`` (not a pair) when its cycle raised, with the
+    exception's text as the description; the GUI indexes the code
+    (notes §72)."""
+    failed = ("the imagename parameter must be a path that exists ('br.residual' does not exist)",
+              -1, 1, -1, 50, {'f1': {'chan': [], 'major': {'cyclethreshold': []}}})
+    s = LocalImagingSession(FakeGclean([step(0), failed]),
+                            store_factory=lambda i, m: NumpyStore(cube_data(), np.zeros_like(cube_data()), i, m))
+    assert s.start().stopcode == (0, 0)
+    r = s.run_cycle()
+    assert r.stopcode == (-1, 0) and r.stopcode[0] == -1 and "does not exist" in r.stopdesc
+
+
 def test_session_cycles_bump_generation_and_reread():
     data = cube_data()
     store = NumpyStore(data)

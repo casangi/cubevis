@@ -103,8 +103,15 @@ class LocalImagingSession:
         (``basename(abspath(imagename))``): with an imagename that has a
         directory -- an absolute path, as a remote kernel's paths usually are
         -- the GUI found no field for the record and interactive clean failed
-        at start-up (before this layer too; notes §67).'''
+        at start-up (before this layer too; notes §67).
+
+        The stop code is always a (major, minor) pair: gclean gives a bare
+        ``-1`` when its cycle raised (with the exception's text as the
+        description), which the GUI could not index -- the error reached
+        nobody (notes §72).'''
         result = CycleResult(*values)
+        if isinstance(result.stopcode, (int, float)) and not isinstance(result.stopcode, bool):
+            result = result._replace(stopcode=(int(result.stopcode), 0))
         conv = result.convergence
         if isinstance(conv, dict):
             ids = {f['id'] for f in self.fields()}

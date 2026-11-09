@@ -341,7 +341,14 @@ current one. This comparison is part of step 1's tests.
   Restarting a dead worker is *not* transparent for iclean: tclean's state
   would be lost. It should fail clearly, with the products left on disk.
 * `iclean(..., kernel_name=)`: `vis`/`imagename` are interpreted on the host,
-  relative to the kernel's working directory, as visplot's `ms=` is.
+  relative to the kernel's working directory, as visplot's `ms=` is.  So
+  the parameters are checked there too (2026-11-09, notes §72): the task
+  wrapper skips its casatools check with a kernel, and the worker runs the
+  same check (`cubevis/imaging/_tclean_params`, generated from tclean's
+  XML) in its own directory.  casatasks' gclean reads each field's
+  residual and mask by base name in the current directory
+  (`_update_peakres_masksum_multifield`), so an `imagename` outside the
+  kernel's directory fails at the first cycle -- a casatasks fix.
 
 ### 3.1 As done (step 3, 2026-11-07, notes §67)
 

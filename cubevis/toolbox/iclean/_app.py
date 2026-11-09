@@ -1828,6 +1828,9 @@ class InteractiveClean:
         if kernel_name:
             from cubevis.imaging import RemoteImagingSession
             self._session = RemoteImagingSession( self._args, kernel_name, iclean_backend=iclean_backend )
+            ### checked and coerced on the kernel's host (iclean's task wrapper
+            ### does not check them here: the paths are the host's)
+            self._args = self._session.args
         else:
             self._session = LocalImagingSession.from_args( self._args, iclean_backend )
         self._gclean = self._session.deconvolver

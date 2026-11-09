@@ -40,11 +40,13 @@ name = "imaging"
 # interactive clean's imaging layer (cubevis.imaging) without CASA: an
 # ImageCube over numpy, a LocalImagingSession over a scripted gclean, the
 # coordinate description and its astropy WCS, mask edits (edit_mask), a
-# cycle's progress from tclean's log
+# cycle's progress from tclean's log; where iclean's parameters are checked
+# (the CASA parts skip without casatools)
 pytest = ["tests/manual/iclean-imaging/test_imaging_layer.py",
           "tests/manual/iclean-imaging/test_coordinates.py",
           "tests/manual/iclean-imaging/test_masks.py",
-          "tests/manual/iclean-imaging/test_progress.py"]
+          "tests/manual/iclean-imaging/test_progress.py",
+          "tests/manual/iclean-imaging/test_task_params.py"]
 args = ["-q"]
 
 [[suite]]

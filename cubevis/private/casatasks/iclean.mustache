@@ -45,20 +45,23 @@ class _iclean:
     _info_desc_ = """{{desc}}"""
 
     def __call__( self, {{params}}, iclean_backend="PROD", kernel_name=None ):
-        from casatools.typecheck import CasaValidator as _val_ctor
-        from casatools.coercetype import coerce as _coerce
-        from casatools.errors import create_error_string
+        doc = { {{# paramListNKW}}'{{name}}': {{name}}, {{/ paramListNKW}} }
+        if kernel_name:
+            # The data is on the kernel's host: the parameters are checked
+            # there (paths must exist there, relative to the kernel's working
+            # directory), and logged in its CASA log -- by the worker
+            # (cubevis.imaging.remote_registrations).  This computer needs no
+            # CASA for it.
+            return _iclean_t( iclean_backend=iclean_backend, kernel_name=kernel_name, **doc )
+        from cubevis.imaging._tclean_params import check as _check
         from casatasks.private.task_logging import start_log as _start_log
         from casatasks.private.task_logging import end_log as _end_log
         from casatasks.private.task_logging import except_log as _except_log
-        _pc = _val_ctor( )
-        schema = { {{# paramListNKW}}'{{name}}': {{schema}}, {{/ paramListNKW}} }
-        doc = { {{# paramListNKW}}'{{name}}': {{name}}, {{/ paramListNKW}} }
-        assert _pc.validate(doc,schema), create_error_string(_pc.errors)
-        _logging_state_ = _start_log( 'iclean', [ {{# paramListNKW}}'{{name}}=' + repr(_pc.document['{{name}}']), {{/ paramListNKW}} ] )
+        doc = _check( doc )
+        _logging_state_ = _start_log( 'iclean', [ {{# paramListNKW}}'{{name}}=' + repr(doc['{{name}}']), {{/ paramListNKW}} ] )
         task_result = None
         try:
-            task_result = _iclean_t( iclean_backend=iclean_backend, kernel_name=kernel_name, {{# paramListNKW}}{{name}}=_pc.document['{{name}}'], {{/ paramListNKW}} )
+            task_result = _iclean_t( iclean_backend=iclean_backend, kernel_name=kernel_name, **doc )
         except Exception as exc:
             _except_log('iclean', exc)
             raise

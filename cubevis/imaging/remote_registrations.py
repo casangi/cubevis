@@ -41,6 +41,12 @@ CUBE_METHODS = frozenset({
 })
 
 
+#: How a refused argument begins (``ImagingSessionBackend(check=True)``):
+#: ``RemoteImagingSession`` raises it as a ValueError, without the worker's
+#: traceback.
+PARAMS_ERROR = "iclean's parameters"
+
+
 def _load(dotted: str):
     '''``"module:name"`` -> the object'''
     import importlib
@@ -66,11 +72,34 @@ class ImagingSessionBackend:
     store : str
         ``"module:callable"`` making a field's ``ImageStore`` from
         ``(image_path, mask_path)``; casatools' by default
+    check : bool
+        check and coerce *args* here first, as tclean's task wrapper does
+        (``_tclean_params.check``: paths must exist on this host, relative
+        to this working directory, and are made absolute), and log the task
+        in this host's CASA log -- what a local ``iclean`` does in the
+        user's Python.  ``args()`` gives the checked arguments back.
     '''
 
     def __init__(self, args: Dict[str, Any], iclean_backend: str = 'PROD',
-                 deconvolver: Optional[str] = None, store: Optional[str] = None) -> None:
+                 deconvolver: Optional[str] = None, store: Optional[str] = None,
+                 check: bool = False) -> None:
         from cubevis.imaging import LocalImagingSession
+        self._task_log = None
+        if check:
+            from cubevis.imaging._tclean_params import check as check_params
+            try:
+                args = check_params(args)
+            except AssertionError as exc:
+                import os
+                import socket
+                raise ValueError(f"{PARAMS_ERROR} (checked on {socket.gethostname()}, "
+                                 f"in {os.getcwd()}): {exc}") from None
+            try:
+                from casatasks.private.task_logging import start_log
+                self._task_log = start_log('iclean', [f'{k}={v!r}' for k, v in args.items()])
+            except Exception:                                   # logging is not the task
+                self._task_log = None
+        self._args = args
         kw = {} if store is None else {'store_factory': _load(store)}
         if deconvolver is not None:
             self._session = LocalImagingSession(_load(deconvolver)(**args), **kw)
@@ -182,8 +211,22 @@ class ImagingSessionBackend:
             args[1] = np.dtype(args[1])                           # sent by name
         return getattr(cube, method)(*args, **(kwargs or {}))
 
+    def args(self) -> dict:
+        '''iclean's arguments as the session got them (checked and coerced
+        here when it was made with ``check``): what the GUI shows.'''
+        return _wire_safe(self._args)
+
     def close(self) -> None:
-        self._session.close()
+        try:
+            self._session.close()
+        finally:
+            if self._task_log is not None:
+                state, self._task_log = self._task_log, None
+                try:
+                    from casatasks.private.task_logging import end_log
+                    end_log(state, 'iclean', None)
+                except Exception:
+                    pass
 
     # ---- diagnostics -----------------------------------------------------
 

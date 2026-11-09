@@ -4045,3 +4045,68 @@ kernels as `CASASITECONFIG` through the kernel launcher's environment.
 * **Not done**: a real host (ssh, conda, PyPI's casatasks) -- the rig's
   tests skip here; the probe ran through a launcher on this computer
   (`test_launcher.py` with the kernel Python).
+## 72. iclean with `kernel_name=`: parameters checked on the kernel's host; gclean's bare error code (base `1e0c6b2` + §71, 2026-11-09)
+
+Darrell's first run on a cluster kernel (`cvpost106-iclean`, from a wheel of
+this branch): `iclean(vis='refim_point_withline.ms', ..., kernel_name=...)`
+failed **on the laptop** -- `AssertionError: all elements of the vis vector
+parameter must be a path that exists`.  The task wrapper
+(`private/casatasks/iclean{,_notebook}`) checks and coerces every
+parameter with casatools' `CasaValidator` before anything else, and `vis`
+is a `cReqPath`: it must exist *here*.  With a kernel the paths are the
+host's.  (It also needed casatools and casatasks on the laptop; the
+notebook wrapper imported them at module level.)
+
+* **The check, generated once**: `cubevis/imaging/_tclean_params.mustache`
+  (new; `TASK XML> tclean -argfilter=interactive,fullsummary`, as the
+  wrappers) -> `_tclean_params.py`: `check(doc)` (the wrapper's schema and
+  validation; the coerced document, or AssertionError with casatools'
+  text) and `names()`.  casatools only inside `check`
+  (`cubevis.imaging` still imports no CASA).  `scripts/expand_templates`
+  regenerates every other file unchanged.
+* **Wrappers**: with `kernel_name` the arguments go to the application as
+  given -- no CASA imported, nothing logged here; otherwise `check` and the
+  task log as before (the schema no longer inline; module-level casatools
+  imports in `iclean_notebook` gone).
+* **Worker**: `ImagingSessionBackend(check=True)` checks in its own
+  working directory (relative paths relative to the kernel's, as the
+  design says), logs `iclean` in the host's CASA log (begin; end at
+  `close`), keeps the coerced arguments (`args()`).  A refusal is a
+  ValueError beginning `PARAMS_ERROR` with the host and directory;
+  `RemoteImagingSession` raises it as `ValueError("kernel 'K': iclean's
+  parameters (checked on HOST, in DIR): ...")`, without the worker's
+  traceback.  `check` defaults to True unless a test deconvolver is given.
+  The app takes `session.args` (coerced on the host) for the GUI's values.
+* **gclean's bare error code**: when gclean's cycle raises, it returns
+  stopcode `-1` (an int) with the exception's text as the description;
+  `clean_handler` indexed `stopcode[0]` and failed with "'int' object is
+  not subscriptable", so the error reached nobody and the page kept
+  "Running one set of deconvolution iterations".  `LocalImagingSession`
+  now makes a bare code a pair, `(-1, 0)`: the GUI shows gclean's message.
+* **Found, in casatasks' gclean (not fixed here)**:
+  `_update_peakres_masksum_multifield` runs `imstat` on
+  `product['residualname']` / `['maskname']` -- base names, without
+  `imagepath` -- so they are looked up in the **current directory**.  An
+  `imagename` whose directory is not the working directory fails at the
+  first cycle ("the imagename parameter must be a path that exists
+  ('br.residual' does not exist)") -- or, worse, silently reads a
+  same-named image there.  Locally too.  Seen as: the browser check with
+  an absolute imagename on a kernel started elsewhere; a relative
+  `imagename` (images in the kernel's directory, Darrell's case) works.
+  Fix belongs in casatasks: join `imagepath`.
+* **Checks**: the case reproduced with a kernelspec that starts in another
+  directory (`hostdir`, `cd /tmp/hostdir`): the wrapper from a directory
+  without the MS -> the GUI starts on the kernel; `vis` not on the host ->
+  the plain ValueError; locally -> casatools' AssertionError as before.
+  Relative and absolute imagename cycles (`Zero mask`).  New
+  `test_task_params.py` (imaging suite): the wrapper's remote branch with
+  casatools/casatasks unimportable (both wrappers), `check`, the worker's
+  check in its directory, the refusal through a kernel.
+  `test_imaging_layer.py` +1 (the pair).  `browser_check.py --controls
+  --stop --kernel hostdir` with the absolute imagename now shows gclean's
+  message in the status line, the buttons enabled again (before: stuck on
+  "Running ...").  Quick suites (`remote`, `imaging`, `imaging-remote`,
+  `tiny-ms`, `visplot-remote`, `syntax`) pass; setup: the 11 ssh failures
+  only.  Fingerprint `k2-4649a3d7dc3c3e260b98` (with §71).
+* **Delivery**: cumulative on `1e0c6b2` -- §71's files (not yet pushed
+  then) and these.

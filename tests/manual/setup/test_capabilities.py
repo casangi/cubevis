@@ -195,3 +195,36 @@ def test_iclean_refuses_the_kernel_before_starting_it(recorded, monkeypatch):
     with pytest.raises(C.MissingCapability):
         RemoteImagingSession({"vis": "x.ms", "imagename": "x"}, "cubevis-plots")
     assert made == []
+
+
+def test_iclean_takes_a_setup_kernels_own_name(tmp_path, recorded, monkeypatch):
+    """Setup prints ``kernel_name="NAME"``; Jupyter knows ``cubevis-NAME``.
+    Every remote connection resolves it, as visplot always did (Darrell,
+    2026-11-09: iclean failed with NoSuchKernel)."""
+    pytest.importorskip("jupyter_client")
+    import json as _json
+    import jupyter_client
+    monkeypatch.setenv("JUPYTER_DATA_DIR", str(tmp_path / "jd"))
+    monkeypatch.setenv("JUPYTER_PATH", str(tmp_path / "jd"))
+    d = tmp_path / "jd" / "kernels" / "cubevis-cvpost106-iclean"
+    d.mkdir(parents=True)
+    (d / "kernel.json").write_text(_json.dumps({"argv": ["python", "-c", "pass"],
+                                                "display_name": "x", "language": "python"}))
+    recorded(**{"cvpost106-iclean": {"visplot": True, "iclean": True},
+                "plots": {"visplot": True, "iclean": False}})
+    started = []
+
+    class Stop(Exception):
+        pass
+
+    def manager(kernel_name):
+        started.append(kernel_name)
+        raise Stop
+    monkeypatch.setattr(jupyter_client, "AsyncKernelManager", manager)
+    from cubevis.imaging import RemoteImagingSession
+    with pytest.raises(Stop):
+        RemoteImagingSession({"vis": "x.ms", "imagename": "x"}, "cvpost106-iclean")
+    assert started == ["cubevis-cvpost106-iclean"]
+    with pytest.raises(ValueError, match="no Jupyter kernel named 'nope' here"):
+        RemoteImagingSession({"vis": "x.ms", "imagename": "x"}, "nope")
+    assert started == ["cubevis-cvpost106-iclean"]

@@ -14,6 +14,7 @@ from ._remote_object import (
     RemoteCallError,
     RemoteWorkerDiedError,
     RemoteKernelLostError,
+    resolve_kernel_name,
 )
 
 __all__ = [
@@ -35,4 +36,5 @@ __all__ = [
     "RemoteCallError",
     "RemoteWorkerDiedError",
     "RemoteKernelLostError",
+    "resolve_kernel_name",
 ]

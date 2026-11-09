@@ -98,6 +98,61 @@ class RemoteKernelLostError(RuntimeError):
     waiting for it."""
 
 
+def resolve_kernel_name(kernel_name: str) -> str:
+    """The Jupyter kernel to start for ``kernel_name=``: the name itself
+    when Jupyter knows it; else, for a kernel set up with ``python -m
+    cubevis.setup HOST`` (``state.json``), its Jupyter kernel
+    ``cubevis-NAME``.  A name neither knows fails here, saying what to do,
+    rather than deep in jupyter_client (NoSuchKernel).
+
+    Every ``RemoteObjectConnection`` resolves its kernel name so (interactive
+    clean, 2026-11-09: setup prints ``kernel_name="NAME"`` and Jupyter knows
+    ``cubevis-NAME``); visplot's ``RemoteReductionContext`` gets it resolved
+    by ``VisibilityPlotter``."""
+    try:
+        from jupyter_client.kernelspec import KernelSpecManager, NoSuchKernel
+    except ImportError:
+        return kernel_name                # the connection says so itself
+    ksm = KernelSpecManager()
+
+    def known(name):
+        try:
+            ksm.get_kernel_spec(name)
+            return True
+        except NoSuchKernel:
+            return False
+
+    if known(kernel_name):
+        return kernel_name
+    setup_kernels = {}
+    try:
+        from cubevis.setup import state as _state
+        setup_kernels = _state.load(host=False).section("kernels")
+    except Exception:
+        pass
+    alias = f"cubevis-{kernel_name}"
+    if not kernel_name.startswith("cubevis-") and known(alias):
+        log.info("kernel_name=%r: Jupyter kernel %s (python -m cubevis.setup)", kernel_name, alias)
+        return alias
+    if kernel_name in setup_kernels:
+        hint = (f"{kernel_name!r} is a kernel set up with python -m cubevis.setup, but it has "
+                f"no Jupyter kernel here yet: python -m cubevis.setup jupyter {kernel_name} "
+                "makes it (in this account, with this Python)")
+    elif kernel_name.startswith("cubevis-"):
+        hint = ("python -m cubevis.setup jupyter KERNEL makes cubevis-KERNEL, and ... "
+                "jupyter KERNEL NODE makes cubevis-KERNEL-NODE (run it in this account, with "
+                "this Python; python -m cubevis.setup status lists the kernels)")
+    else:
+        hint = ("python -m cubevis.setup HOST sets up a kernel on a remote host, and "
+                "python -m cubevis.setup status lists the ones set up")
+    known_here = sorted(ksm.find_kernel_specs())
+    raise ValueError(f"no Jupyter kernel named {kernel_name!r} here: {hint}. "
+                     f"Jupyter kernels here: {', '.join(known_here) or 'none'}"
+                     + (f"; set up with cubevis: {', '.join(sorted(setup_kernels))}"
+                        if setup_kernels else "")
+                     + f" (searched {', '.join(ksm.kernel_dirs)}).")
+
+
 class RemoteObjectConnection:
     """One object (``class_name(**kwargs)``) in a worker on the kernel
     ``kernel_name``, and calls to it.
@@ -142,6 +197,9 @@ class RemoteObjectConnection:
         from cubevis.setup import capabilities as _capabilities
         if app in _capabilities.APPS:
             _capabilities.require(kernel_name, app)
+        # setup's name for a kernel -> its Jupyter kernel (cubevis-NAME);
+        # a name nobody knows is refused here, saying what to do
+        kernel_name = resolve_kernel_name(kernel_name)
         from jupyter_client import AsyncKernelManager
         from cubevis.remote import RemoteAppLink, SyncBridge, DEFAULT_WORKER_TARGET_NAME
 

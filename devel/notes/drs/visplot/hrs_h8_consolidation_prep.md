@@ -4110,3 +4110,25 @@ notebook wrapper imported them at module level.)
   only.  Fingerprint `k2-4649a3d7dc3c3e260b98` (with §71).
 * **Delivery**: cumulative on `1e0c6b2` -- §71's files (not yet pushed
   then) and these.
+
+## 73. iclean takes setup's kernel name (2026-11-09)
+
+Darrell's next run: setup made kernel `cvpost106-iclean` and printed
+`iclean(..., kernel_name="cvpost106-iclean")`; iclean failed with
+jupyter_client's `NoSuchKernel: No such kernel named cvpost106-iclean`.
+Setup writes the Jupyter kernel as `cubevis-NAME`; visplot has resolved
+setup's name to it (`VisibilityPlotter._resolve_kernel_name`),
+but `RemoteObjectConnection` (iclean) passed the name to jupyter_client
+as given.
+
+* The resolver moves to `cubevis.remote.resolve_kernel_name`
+  (`_remote_object.py`; the text unchanged), and `RemoteObjectConnection`
+  resolves every kernel name -- after the capability check, which knows
+  setup's names (so a kernel that cannot run the app is refused as that,
+  not as an unknown name).  `visibility_plotter._resolve_kernel_name`
+  delegates to it (its tests unchanged).
+* Test: `test_capabilities.py` +1 -- `RemoteImagingSession` with
+  `"cvpost106-iclean"` starts `cubevis-cvpost106-iclean`; an unknown name
+  is refused before a kernel manager is made.
+* Quick suites pass; setup: the 11 ssh failures only.  Fingerprint
+  `k2-1d0eb7578783471039fe`.

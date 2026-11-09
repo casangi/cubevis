@@ -4299,3 +4299,45 @@ not recognized as a missing package, so the test reported a remote error.
 * Tests: `test_capabilities.py` (+1: the probe with dask and distributed
   missing; the wrapped ImportError).  Quick suites pass; setup: the 11 ssh
   failures only.  Fingerprint `k2-c12ff110034d7a0f949b`.
+
+## 79. iclean step 6: parity in CI; release clean-up (base `a55ea9e`, 2026-11-09)
+
+* **Suite `iclean-parity`** (`tests/manual/iclean-imaging/test_iclean_parity.py`;
+  needs casatasks, casatools, jupyter_client, ipykernel -- skipped
+  without, as in the GitHub workflow, which has no CASA; ~60 s here):
+  * the GUI's handlers with real tclean on `make_sim_ms.py`'s MS:
+    `record_iclean_handlers.py` here (`--absolute`) and on the `python3`
+    kernel, in the same directory, compared with `compare_records.py
+    --remote` -- identical but for what differs by design (the casatools
+    coordsys stays on the host; the connection's call counts).  To get
+    there: the recorder's local run checks and coerces the arguments as
+    `iclean()` does (`cyclefactor` 3 -> 3.0, as the worker does); the
+    comparer takes numpy scalars as their Python values (a mask value
+    crosses the wire as `bool`);
+  * a kernel (kernelspec written in the test, `JUPYTER_PATH`) that starts
+    in another directory: relative `vis`/`imagename` found and written
+    there, the arguments checked there, a cycle runs; the task refuses an
+    MS that is only on this side, naming the kernel's directory;
+  * `iclean.notebook(..., kernel_name=)` in a notebook kernel (nbclient)
+    against that kernel: the task returns its page; the application under
+    it holds a `RemoteImagingSession` whose worker runs in the kernel's
+    directory.
+* **casashell `iclean`** takes `kernel_name=` and `iclean_backend=`
+  (keywords, not inp/go parameters): with a kernel nothing is checked or
+  logged here and the arguments, defaults filled in, go to the application
+  (`test_task_params.py` +1, casashell stood in for when absent).
+* **Remote sessions closed when Python ends** (an exception, Ctrl-C, a
+  script that never closes): `RemoteObjectConnection` keeps its open
+  connections (`weakref.WeakSet`) and an `atexit` hook closes them (10 s
+  each).  For session management, where a session may be kept on purpose.
+* **Removed** `tests/manual/iclean-remote/` (the ssh-port webserver
+  prototype, superseded by step 3; `_gen_port_fwd_cmd` was already gone).
+* **Docs**: `docs/source/applications/remote_kernels.rst` (new: kernels,
+  setup, capabilities, CASA's data, changing a kernel, interactive clean
+  on a kernel); `interactive_clean.rst` ("Running on the data's
+  computer"); `visplot.rst` points at it instead of
+  `demos/visplot-remote/00_setup.md`.  `tests/ci/README.md` lists the
+  imaging suites.
+* **Release notes**: `devel/notes/drs/iclean/remote_iclean_release_notes.md`.
+* Checks: all 7 quick suites pass (iclean-parity 63 s); setup: the 11 ssh
+  failures only.  Fingerprint `k2-bee1ac5389adfcab483d`.

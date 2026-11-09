@@ -63,6 +63,18 @@ pytest = ["tests/manual/iclean-imaging/test_remote_session.py",
 args = ["-q"]
 
 [[suite]]
+name = "iclean-parity"
+# interactive clean with real tclean (design step 6): the GUI's handlers give
+# the same replies with the imaging on a kernel as in this process; a kernel
+# started in another directory (relative paths are the kernel's, checked
+# there); iclean.notebook(kernel_name=) in a notebook kernel.  Needs CASA
+# (casatasks and its data): skipped where it is not installed, as in the
+# GitHub workflow today.
+pytest = ["tests/manual/iclean-imaging/test_iclean_parity.py"]
+args = ["-q"]
+requires = ["casatasks", "casatools", "jupyter_client", "ipykernel"]
+
+[[suite]]
 name = "tiny-ms"
 # a 3 MB MSv2 for the next suite
 command = ["{python}", "tests/ci/make_tiny_ms.py", "{tmp}/ci.ms"]

@@ -67,7 +67,10 @@ async def call(h, msg):
 
 def make_app():
     if not opts.kernel:
-        return IClean(**ARGS)
+        ### as iclean() does: the arguments checked and coerced first (on the kernel's host,
+        ### remotely: notes §72) -- so a local record equals a remote one (cyclefactor=3.0)
+        from cubevis.imaging._tclean_params import check
+        return IClean(**check(ARGS))
     return IClean(**ARGS, kernel_name=opts.kernel)        # design step 5 (until then the session was swapped in)
 
 async def main():

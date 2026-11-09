@@ -109,3 +109,27 @@ def test_a_path_not_on_the_host_is_refused_plainly():
     msg = str(exc.value)
     assert msg.startswith("kernel 'python3': iclean's parameters (checked on ")
     assert '"nowhere-to-be-found.ms" does not exist' in msg and 'Traceback' not in msg
+
+
+@needs_casatools
+def test_the_casashell_binding_passes_a_kernel_through(tmp_path, monkeypatch):
+    """casashell's ``iclean`` (inp/go): with ``kernel_name=`` nothing is
+    checked here and the arguments -- defaults filled in -- go to the
+    application with the kernel (notes §79).  casashell is stood in for when
+    it is not installed: only its stack helpers are used."""
+    import types
+    if importlib.util.find_spec("casashell") is None:
+        sm = types.ModuleType("casashell.private.stack_manip")
+        sm.find_local = lambda *a, **k: (lambda f: f)
+        sm.find_frame = lambda *a, **k: {}
+        for name, mod in (("casashell", types.ModuleType("casashell")),
+                          ("casashell.private", types.ModuleType("casashell.private")),
+                          ("casashell.private.stack_manip", sm)):
+            monkeypatch.setitem(sys.modules, name, mod)
+    monkeypatch.chdir(tmp_path)
+    mod = importlib.import_module("cubevis.private.casashell.iclean")
+    got = {}
+    monkeypatch.setattr(mod, "_iclean_t", lambda **kw: got.update(kw) or "ran")
+    assert mod.iclean(vis="only-on-the-host.ms", imagename="x", niter=7, kernel_name="k") == "ran"
+    assert got["kernel_name"] == "k" and got["iclean_backend"] == "PROD"
+    assert got["vis"] == "only-on-the-host.ms" and got["niter"] == 7 and "cyclefactor" in got

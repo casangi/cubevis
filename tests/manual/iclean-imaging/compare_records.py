@@ -1,10 +1,21 @@
 """Deep-compare two record_iclean_handlers.py pickles; print every difference
-(floats to 1e-6 relative; FITS cards that change from run to run -- DATE,
-MEMAVAIL, IMAGENME, HISTORY -- ignored).  Exit status 1 when they differ."""
+(floats to 1e-6 relative; numpy scalars equal to their Python values; FITS
+cards that change from run to run -- DATE, MEMAVAIL, IMAGENME, HISTORY --
+ignored).  Exit status 1 when they differ.
+
+``--remote``: the second is a remote run (``--kernel``) of the first's
+setup: what differs by design is left out -- the casatools ``coordsys``
+(it stays on the kernel's host: ``coorddesc_csys`` is None remotely) and the
+connection's call counts (``remote_call_stats``) (step 6, notes §79)."""
 import sys, pickle, math
 import numpy as np
 
-a, b = (pickle.load(open(p, 'rb')) for p in sys.argv[1:3])
+args = [x for x in sys.argv[1:] if not x.startswith('--')]
+REMOTE = '--remote' in sys.argv[1:]
+a, b = (pickle.load(open(p, 'rb')) for p in args[:2])
+if REMOTE:
+    for k in ('coorddesc_csys', 'remote_call_stats'):
+        a.pop(k, None); b.pop(k, None)
 diffs = []
 VOLATILE = ('MEMAVAIL', 'DATE', 'IMAGENME', 'HISTORY')
 import json
@@ -45,6 +56,10 @@ def cmp(x, y, path):
         for i, (p, q) in enumerate(zip(x, y)):
             cmp(p, q, f'{path}[{i}]')
         return
+    if isinstance(x, np.generic) and not isinstance(x, np.ndarray):
+        x = x.item()                               # numpy.bool / numpy.float64 cross the wire as Python's
+    if isinstance(y, np.generic) and not isinstance(y, np.ndarray):
+        y = y.item()
     if isinstance(x, float) and isinstance(y, float):
         if not (math.isclose(x, y, rel_tol=1e-6, abs_tol=1e-9) or (math.isnan(x) and math.isnan(y))):
             diffs.append(f'{path}: {x} != {y}')

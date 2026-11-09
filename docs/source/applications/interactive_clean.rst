@@ -11,6 +11,20 @@ pathfinder application for the :ref:`terminal usage setting <design-terminal-usa
 This is an important use case because it pushes the boundaries of what is possible
 in this usage setting.
 
+Running on the data's computer
+------------------------------
+
+Interactive clean can run :code:`tclean` and the image access in a Jupyter
+kernel on the computer that holds the data, with the window on your own
+computer (which then needs no CASA)::
+
+   from cubevis import iclean
+   iclean(vis="twhya.ms", imagename="twhya", ..., kernel_name="cvpost106-iclean")
+
+``iclean.notebook(..., kernel_name=...)`` does the same in a notebook.
+Setting up such a kernel, and what to know when using one, is described in
+:doc:`remote_kernels`.
+
 Infrastructure
 ----------------------
 

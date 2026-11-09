@@ -393,9 +393,9 @@ current one. This comparison is part of step 1's tests.
 | 5b. Kernel capabilities in setup (`visplot`, `iclean`, probed in the kernel's context); setup asks whether a host's kernels should run interactive clean and offers it on a rerun (adding only to its own environments); CASA's data: the user's, or a private `casadata` copy given to kernels as `CASASITECONFIG`; `iclean`/`visplot` refuse a kernel without the capability before connecting. **Done: notes §71** | 1 |
 | 5c. visplot's `RemoteReductionContext` onto `RemoteObjectConnection`; kernels on other cluster nodes known to setup; `setup kernel NAME` changes one kernel. **Done: notes §75** | 0.5 |
 | 5d. Release: from `main` after the merge (until then: this checkout installed on the node, found by fingerprint) | — |
-| 6. Parity tests (local kernel, small MS, local vs remote), quick tests, rounds with Darrell | 1 + 2–3 rounds |
+| 6. Parity tests (local kernel, small MS, local vs remote), quick tests, rounds with Darrell. **Done: notes §79** (suite `iclean-parity`: handler records local vs remote with real tclean, a kernel in another directory, the notebook variant; rounds §72–§78; casashell `kernel_name`; remote sessions closed when Python ends; docs `remote_kernels.rst`) | 1 + 2–3 rounds |
 | 1c. Package organization (§6): `toolbox/iclean/`, one app template, dependency rule. **Done: notes §62** | 1 |
-| Later: coordtxl taking the description natively, with ICRS, a spectral axis and correct FK4 (§2.5); `XarrayImageStore` over arcae; notebook variant; remove `tests/manual/iclean-remote/` and `_gen_port_fwd_cmd` | — |
+| Later: coordtxl taking the description natively, with ICRS, a spectral axis and correct FK4 (§2.5); `XarrayImageStore` over arcae; reattach (session management, §5) | — |
 
 Steps 1–2 are useful without any remote work: the CASA dependency in the GUI
 becomes explicit, and mask editing becomes faster for cubes.

@@ -273,6 +273,7 @@ class RemoteObjectConnection:
         if expected is False:
             _capabilities.mark(self._capability[1], app, True)
         self._session_id = self._record_session()
+        _close_at_exit(self)
 
     # ---- facts ------------------------------------------------------------
 
@@ -596,6 +597,32 @@ class RemoteObjectConnection:
     def __repr__(self) -> str:  # pragma: no cover
         return (f"RemoteObjectConnection({self._class_name}, kernel_name={self._kernel_name!r}, "
                 f"closed={self._closed})")
+
+
+#: connections not closed yet, closed when this Python ends (an exception,
+#: Ctrl-C, a script that ends without closing): a kernel on a cluster node is
+#: not left running for nobody (step 6 cleanup, notes §79).  When sessions
+#: can be reattached (session management), this is where keeping one goes.
+_OPEN = None
+
+
+def _close_at_exit(conn) -> None:
+    global _OPEN
+    import weakref
+    if _OPEN is None:
+        import atexit
+        _OPEN = weakref.WeakSet()
+
+        def close_all():
+            for c in list(_OPEN):
+                try:
+                    if not c.closed:
+                        log.info("%s: closing the remote session as Python ends", c._app)
+                        c.close(timeout=10)
+                except Exception:
+                    pass
+        atexit.register(close_all)
+    _OPEN.add(conn)
 
 
 class _QuietIdentityFileHint(logging.Filter):

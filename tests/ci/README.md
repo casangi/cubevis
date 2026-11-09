@@ -21,6 +21,12 @@ A test is a quick test because a suite names it, not because of where it is.  To
   rig's tests skip themselves).
 * **remote** -- the remote layer against a kernel on this computer:
   transport, worker, objects, a dead worker reported.
+* **imaging**, **imaging-remote** -- interactive clean's imaging layer,
+  here and on a kernel on this computer, with a scripted imager (no CASA).
+* **iclean-parity** -- interactive clean with real tclean, here and on a
+  kernel (also one started in another directory, and the notebook variant):
+  needs casatasks and CASA's data, so it is skipped where they are not
+  installed (the GitHub workflow today).
 * **tiny-ms**, **visplot-remote** -- a 3 MB MSv2 made by `make_tiny_ms.py`
   (xradio's generator, then given real times, UVWs, data and frequencies),
   and `tests/manual/visplot/remote_visplot_check.py` on it: visplot local

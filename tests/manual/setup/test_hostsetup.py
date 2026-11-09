@@ -1026,3 +1026,64 @@ def test_the_command_line(tmp_path, monkeypatch):
     assert M.main(["kernel", "cvpost106-iclean", "--workdir", "~/casa/x"]) == 0
     assert seen == {"name": "cvpost106-iclean", "workdir": "~/casa/x", "env_vars": None,
                     "environment": None}
+
+
+def _host_rig(ctx, monkeypatch, **answers):
+    """cmd_host with the logins, discovery and the steps' insides stubbed:
+    which steps run, with what."""
+    calls = []
+    c = ctx(via_login="n", user="jo", **answers)
+    node = _node(c)
+    if "e" not in c.st.section("environments"):
+        _env(c, node)
+    if "k" not in c.st.section("kernels"):
+        c.st.add_kernel("k", environment="e")["checked_on"] = node
+    for f in ("local_steps", "adopt_step", "record_facts", "cluster_step", "inside_step",
+              "offer_cleanup"):
+        monkeypatch.setattr(H, f, lambda *a, **k: True)
+    monkeypatch.setattr(H, "locate", lambda c, host, port: node)
+    monkeypatch.setattr(H, "hop_steps", lambda *a, **k: True)
+    monkeypatch.setattr(H, "discover_step", lambda *a, **k: _rep())
+    monkeypatch.setattr(H, "check_kernels", lambda c, node, rep, text: calls.append("check") or True)
+    monkeypatch.setattr(H, "environment_step",
+                        lambda c, node, rep, reuse: calls.append(("environment", reuse)) or "e")
+    monkeypatch.setattr(H, "iclean_step", lambda c, node, env, rep: calls.append(("iclean", env)))
+    monkeypatch.setattr(H, "kernel_step", lambda c, node, env, rep, name, text:
+                        calls.append(("kernel", env, name)) or True)
+    return c, node, calls
+
+
+def test_a_host_set_up_before_offers_another_kernel(ctx, release, monkeypatch):
+    """Darrell 2026-11-09: a rerun only checked the kernels; another one (another
+    environment) needed --kernel NAME, which then took the environment in use
+    without asking."""
+    c, node, calls = _host_rig(ctx, monkeypatch)
+    assert H.cmd_host(c, "node1.example.org") == 0
+    assert calls == ["check"]                                     # the default: no
+    assert "Add another kernel? [y/N]" in c.ui.out.getvalue()
+    c, node, calls = _host_rig(ctx, monkeypatch, another_kernel="y")
+    assert H.cmd_host(c, "node1.example.org") == 0
+    assert calls == ["check", ("environment", False), ("iclean", "e"), ("kernel", "e", None)]
+
+
+def test_kernel_option_chooses_a_new_kernels_environment(ctx, release, monkeypatch):
+    c, node, calls = _host_rig(ctx, monkeypatch)
+    assert H.cmd_host(c, "node1.example.org", kernel="other") == 0
+    assert calls == [("environment", False), ("iclean", "e"), ("kernel", "e", "other")]
+    # A kernel there is: its own environment, its settings asked again.
+    c, node, calls = _host_rig(ctx, monkeypatch)
+    assert H.cmd_host(c, "node1.example.org", kernel="k") == 0
+    assert calls == [("iclean", "e"), ("kernel", "e", "k")]
+
+
+def test_help_lists_every_command():
+    from cubevis.setup import __main__ as M
+    import contextlib
+    import io as _io
+    out = _io.StringIO()
+    with contextlib.redirect_stdout(out), pytest.raises(SystemExit):
+        M.main(["--help"])
+    text = out.getvalue()
+    for line in ("python -m cubevis.setup kernel NAME [--workdir DIR] [--env VARS] [--environment ENV]",
+                 "python -m cubevis.setup HOST --kernel NAME", "python -m cubevis.setup status"):
+        assert line in text, text

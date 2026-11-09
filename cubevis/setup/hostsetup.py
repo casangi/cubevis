@@ -1960,8 +1960,29 @@ def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None,
     if net.get("login"):
         inside_step(c, n["network"], node)
     if kernel is None and st.kernels_on(node):
-        return 0 if check_kernels(c, node, rep, text) else 1
-    env = environment_step(c, node, rep, reuse=kernel is not None)
+        good = check_kernels(c, node, rep, text)
+        # Another kernel here -- another environment (one with casatasks for
+        # interactive clean, say), directory or variables: offered, not
+        # only through --kernel NAME (Darrell, 2026-11-09).
+        ui.heading(f"Another kernel on {node}")
+        ui.say(f"Kernels here: {', '.join(st.kernels_on(node))}. Another one can use another "
+               "environment (one that can run interactive clean, say), working directory or "
+               "variables; python -m cubevis.setup kernel NAME changes one of these instead.")
+        if not ui.ask_yn("Add another kernel?", False, key="another_kernel"):
+            return 0 if good else 1
+    elif kernel is not None and kernel in st.section("kernels"):
+        # --kernel NAME of a kernel there is: its settings asked again, in
+        # its own environment (python -m cubevis.setup kernel NAME
+        # --environment ENV moves it to another).
+        env = st.section("kernels")[kernel].get("environment")
+        if env in st.section("environments") and st.environment_on(env, node):
+            iclean_step(c, node, env, rep)
+            c.save()
+            return 0 if kernel_step(c, node, env, rep, kernel, text) else 1
+    # A new kernel: its environment is always chosen (the one the host's
+    # kernels use is the default) -- before, --kernel NEW took that one
+    # without asking, so a second environment could not be chosen.
+    env = environment_step(c, node, rep, reuse=False)
     c.save()
     if env is None:
         return 1

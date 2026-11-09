@@ -4207,3 +4207,27 @@ plot 875 / 860 / 843 px high, top 96 / 111 / 128.
   on `sim_point_withline.ms`: the same 9 pass / 3 fail before and after
   (the 3 compare `antenna_labels` and columns on this simulated MS; not
   this change).
+
+## 76. setup: another kernel on a host set up before; the help lists every command (base `2b385ab`, 2026-11-09)
+
+Darrell: (1) `--help` did not show the kernel command's options; (2) a
+rerun of `setup cvpost106` (a working kernel there) gave no way to add a
+kernel in another environment -- now that kernels serve two applications,
+that matters.
+
+* **Another kernel**: a rerun of a host whose kernels exist checks them, as
+  before, then asks "Add another kernel?" (default no, `another_kernel`);
+  yes chooses its environment (any of the node's, 'new', or a path), the
+  interactive clean offer for it, then the kernel's settings and name.
+* **`HOST --kernel NAME`**: a *new* NAME now always chooses its environment
+  (the default is the one the host's kernels use).  Before,
+  `environment_step(reuse=True)` took that one without asking whenever a
+  single environment was in use -- the reason no other could be chosen.
+  An existing NAME keeps its environment (its settings asked again);
+  `setup kernel NAME --environment ENV` moves it.
+* **`--help`** prints the commands' table from the module docstring (every
+  command and its options, the kernel command's included) above argparse's
+  list (`RawDescriptionHelpFormatter`).
+* Tests (+3): the rerun's offer (no / yes), `--kernel` new and existing,
+  the help text.  Setup: the 11 ssh failures only; syntax passes.
+  Fingerprint unchanged (setup's modules are not kernel-side).

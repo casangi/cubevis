@@ -2,7 +2,10 @@
 
     python -m cubevis.setup HOST                  make kernels work on HOST (the computer
                                                   your data is on); again: check them
-    python -m cubevis.setup HOST --kernel NAME    add (or change) a kernel on HOST
+    python -m cubevis.setup HOST --kernel NAME    add a kernel on HOST (its environment, working
+                                                  directory and variables are asked), or
+                                                  change one there; a host set up before
+                                                  offers another kernel at the end too
     python -m cubevis.setup kernel NAME [--workdir DIR] [--env VARS] [--environment ENV]
                                                   change one kernel: its working directory,
                                                   variables ('none' for none) or environment
@@ -353,7 +356,10 @@ def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     p = argparse.ArgumentParser(
         prog="python -m cubevis.setup",
-        description="Set up cubevis kernels on the computers your data is on.",
+        description="Set up cubevis kernels on the computers your data is on.\n\n"
+                    + __doc__.split('"""')[0].split("\nRemote session design")[0]
+                    .split("\n", 1)[1].rstrip(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Anything that is not a command is a host: python -m cubevis.setup HOST "
                "[--kernel NAME]. Without one, setup asks for it.")
     p.add_argument("--yes", action="store_true", help="take every default (for tests)")

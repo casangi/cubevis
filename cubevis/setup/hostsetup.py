@@ -65,7 +65,7 @@ from . import host_dir, host_id, launcher, envs, envmake, checkout, capabilities
 from . import remote as R
 from . import state as S
 from .steps import (Ctx, account_name, first_jump, hop_steps, inside_step, local_steps,
-                    parent_domain, split_port, user_ssh)
+                    network_steps, parent_domain, split_port, user_ssh)
 from .ui import tilde
 
 
@@ -1707,6 +1707,8 @@ def use_kernel(c: Ctx, name: str, host_text: str) -> bool:
            + (f"On another node of cluster {cl}, alongside: python -m cubevis.setup jupyter "
               f"{name} NODE. " if cl else "")
            + f"Another kernel here: python -m cubevis.setup {host_text} --kernel NAME. "
+           f"Its working directory, variables or environment, later: python -m cubevis.setup "
+           f"kernel {name} --workdir DIR (--env, --environment; no option asks). "
            "python -m cubevis.setup status lists them all.")
     return True
 
@@ -2007,3 +2009,106 @@ def check_kernel(c: Ctx, name: str) -> bool:
     ui.ok(f"kernel {name} on {node}: starts in {cwd}; {why}"
           + (f"; runs {capabilities.describe(caps.get('capabilities'))}" if caps else ""))
     return True
+
+
+# --------------------------------------------------------------------------
+# One kernel's settings, changed on their own (2026-11-09, Darrell)
+# --------------------------------------------------------------------------
+
+def cmd_kernel(c: Ctx, name: str, workdir: Optional[str] = None, env_vars: Optional[str] = None,
+               environment: Optional[str] = None) -> int:
+    """``python -m cubevis.setup kernel NAME [--workdir DIR] [--env VARS]
+    [--environment ENV]``: change one kernel without going through its host
+    again.  With no option, its working directory and variables are asked
+    (the answers default to what it has); with options, only those change.
+    Its launcher is written again on the node it was last checked on and run
+    once.  On a cluster, when the kernel's old settings were the cluster's
+    defaults (for its next kernels), they can follow."""
+    ui, st = c.ui, c.st
+    kernels = st.section("kernels")
+    if name not in kernels:
+        ui.fail(f"there is no kernel {name!r}"
+                + (f" (kernels: {', '.join(sorted(kernels))})" if kernels else
+                   " (python -m cubevis.setup HOST sets one up)"))
+        return 1
+    k = kernels[name]
+    envs_ = st.section("environments")
+    new_env = environment or k.get("environment")
+    if new_env not in envs_:
+        ui.fail(f"there is no environment {new_env!r}"
+                + (f" (environments: {', '.join(sorted(envs_))})" if envs_ else ""))
+        return 1
+    old_net = (envs_.get(k.get("environment")) or {}).get("network")
+    if old_net and envs_[new_env].get("network") != old_net:
+        ui.fail(f"environment {new_env} is on another network than kernel {name} ({old_net})")
+        return 1
+    nodes = [x for x in sorted(st.nodes()) if st.environment_on(new_env, x)]
+    if k.get("checked_on") in nodes:
+        nodes.remove(k["checked_on"])
+        nodes.insert(0, k["checked_on"])
+    if not nodes:
+        ui.fail(f"no node has environment {new_env}: python -m cubevis.setup HOST first")
+        return 1
+    node = nodes[0]
+    n = st.nodes()[node]
+    if not local_steps(c):
+        return 1
+    if not network_steps(c, n["network"], [node]):
+        return 1
+    ui.heading(f"Kernel {name} on {n.get('cluster') and 'cluster ' + n['cluster'] or node}")
+    rep = discover_step(c, node, only=True)
+    if rep is None:
+        return 1
+    home = (rep.get("host") or {}).get("home") or n.get("home") or "/"
+    old = {"workdir": k.get("workdir"), "env": dict(k.get("env") or {}),
+           "environment": k.get("environment")}
+    new = dict(old, env=dict(old["env"]))
+    if workdir is None and env_vars is None and environment is None:
+        _ask_settings(c, node, new, home)
+    else:
+        if workdir is not None:
+            p = expand_remote(workdir, home)
+            new["workdir"] = None if p == home else p
+        if env_vars is not None:
+            try:
+                new["env"] = ({} if env_vars.strip().lower() in ("none", "-", "")
+                              else launcher.parse_vars(env_vars))
+            except ValueError as exc:
+                ui.fail(f"--env: {exc}")
+                return 1
+        new["environment"] = new_env
+    if new == old:
+        ui.ok(f"kernel {name}: nothing to change (starts in {rtilde(old['workdir'] or home, home)}"
+              + (f", {launcher.format_vars(old['env'])}" if old["env"] else "") + ")")
+        return 0
+    k.update(workdir=new["workdir"], env=new["env"], environment=new["environment"])
+    said = []
+    if new["workdir"] != old["workdir"]:
+        said.append(f"starts in {rtilde(new['workdir'] or home, home)} "
+                    f"(was {rtilde(old['workdir'] or home, home)})")
+    if new["env"] != old["env"]:
+        said.append(f"variables {launcher.format_vars(new['env']) or 'none'} "
+                    f"(were {launcher.format_vars(old['env']) or 'none'})")
+    if new["environment"] != old["environment"]:
+        said.append(f"environment {new['environment']} (was {old['environment']})")
+    ui.record_change("changed kernel", f"{name}: " + "; ".join(said))
+    cl_name = n.get("cluster")
+    cl = st.section("clusters").get(cl_name) if cl_name else None
+    if (cl is not None and (cl.get("workdir"), dict(cl.get("env") or {})) == (old["workdir"], old["env"])
+            and (new["workdir"], new["env"]) != (old["workdir"], old["env"])):
+        ui.say(f"Cluster {cl_name}'s defaults for its next kernels are kernel {name}'s old "
+               "settings.")
+        if ui.ask_yn(f"Make its new settings cluster {cl_name}'s defaults?", True,
+                     key="cluster_defaults"):
+            cl["workdir"], cl["env"] = new["workdir"], dict(new["env"])
+            ui.record_change("cluster defaults", f"{cl_name}: starts in "
+                             f"{rtilde(new['workdir'] or home, home)}"
+                             + (f", {launcher.format_vars(new['env'])}" if new["env"] else ""))
+    c.save()
+    ok, msg = write_and_test(c, node, name, rep, node)
+    (ui.ok if ok else ui.fail)(f"kernel {name}: {msg}")
+    c.save()
+    if ok and new["environment"] != old["environment"]:
+        casa_data_step(c, node, name, rep, node)
+        c.save()
+    return 0 if ok else 1

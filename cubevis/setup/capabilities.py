@@ -158,7 +158,8 @@ def describe_data(data: Optional[dict], home: Optional[str] = None) -> str:
 
 def kernel_record(kernel_name: str) -> Optional[dict]:
     """Setup's record of the kernel a Jupyter kernel name (``cubevis-NAME``,
-    or NAME) stands for, or None (no setup state, or not one of its own)."""
+    ``cubevis-NAME-NODE`` on another node of a cluster, or NAME) stands for,
+    or None (no setup state, or not one of its own)."""
     try:
         from . import state
         from .sessions import setup_kernel_name
@@ -166,7 +167,7 @@ def kernel_record(kernel_name: str) -> Optional[dict]:
         kernels = st.section("kernels")
     except Exception:
         return None
-    for name in (setup_kernel_name(kernel_name), kernel_name):
+    for name in (setup_kernel_name(kernel_name, st), kernel_name):
         if name in kernels:
             return kernels[name]
     return None

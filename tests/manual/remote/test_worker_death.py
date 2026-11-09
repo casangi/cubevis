@@ -83,19 +83,27 @@ async def test_a_worker_that_exits_says_its_status_and_last_words():
 
 
 # ---------------------------------------------------------------------------
-# The plotter's side (RemoteReductionContext): its liveness watch and the
-# new worker after a dead one -- without an MS (the methods under test do
-# not touch the data), on an object made without its constructor.
+# The application's side (RemoteObjectConnection: visplot's and interactive
+# clean's, since iclean design step 5c): its liveness watch and the new
+# worker after a dead one -- without an MS (the methods under test do not
+# touch the data), on an object made without its constructor, set up as
+# visplot's RemoteReductionContext makes it (restart_worker, its hint).
 # ---------------------------------------------------------------------------
 
-from cubevis.toolbox.visplot import remote_reduction_context as R
+from cubevis.remote import _remote_object as R
+from cubevis.toolbox.visplot import remote_reduction_context as V
 
 
-def _bare(km=None, link=None):
-    rrc = R.RemoteReductionContext.__new__(R.RemoteReductionContext)
+def _bare(km=None, link=None, restart=True):
+    rrc = R.RemoteObjectConnection.__new__(R.RemoteObjectConnection)
     rrc._km, rrc._link, rrc._kernel_name = km, link, "test-kernel"
-    rrc._path, rrc._backend_kind = "x.ms", "msv2"
+    rrc._app, rrc._class_name = "visplot", "VisplotRemoteBackend"
+    rrc._kwargs = {"path": "x.ms", "backend_kind": "msv2"}
     rrc._context_config = {}
+    rrc._restart_worker, rrc._restart_hint = restart, V.RESTART_HINT
+    rrc._worker_dead = rrc._closed = False
+    rrc._session_id = None
+    rrc._call_timeout, rrc._data_timeout, rrc._data_methods = 30.0, 600.0, frozenset()
     return rrc
 
 
@@ -188,9 +196,9 @@ async def test_a_dead_worker_is_reported_and_the_next_call_starts_a_new_one():
     rrc = _bare(_Alive(True), link)
     rrc._ctx, rrc._handle = old, "h1"
     with pytest.raises(R.RemoteWorkerDiedError, match="SIGKILL.*the next Plot starts a new one"):
-        await rrc._acall("query_columns")
+        await rrc.acall("query_columns")
     assert rrc._worker_dead
-    assert await rrc._acall("query_columns") == {"answer": 1}
+    assert await rrc.acall("query_columns") == {"answer": 1}
     assert rrc._ctx is new and rrc._handle == "h2" and not rrc._worker_dead
     assert new.calls[0][0] == "create_object"
     assert new.calls[0][1]["kwargs"] == {"path": "x.ms", "backend_kind": "msv2"}
@@ -207,7 +215,7 @@ def test_sshpyks_identityfile_hint_is_quiet_for_setups_kernels(monkeypatch, tmp_
         "ssh_config": str(sshgen.config_path())}}}})()
     km = type("K", (), {"kernel_spec": spec, "log": lg})()
     R._quiet_setup_kernel_hints(km)
-    R._quiet_setup_kernel_hints(km)
+    V._quiet_setup_kernel_hints(km)                      # visplot's name for it: the same
     assert len(lg.filters) == 1
     rec = lambda m: logging.LogRecord("x", logging.WARNING, "", 0, m, None, None)
     f = lg.filters[0]
@@ -238,7 +246,7 @@ async def test_a_worker_gone_between_calls_gets_the_call_sent_to_a_new_one():
     link.create_context = create_context
     rrc = _bare(_Alive(True), link)
     rrc._ctx, rrc._handle = old, "h1"
-    assert await rrc._acall("axis_info") == {"labels": ["a"]}
+    assert await rrc.acall("axis_info") == {"labels": ["a"]}
     assert rrc._ctx is new and not rrc._worker_dead
     assert [m for m, _ in new.calls] == ["create_object", "call_method"]
     # Gone again at once: reported, not resent forever.
@@ -249,7 +257,12 @@ async def test_a_worker_gone_between_calls_gets_the_call_sent_to_a_new_one():
         return newer
     link.create_context = create_context2
     with pytest.raises(R.RemoteWorkerDiedError):
-        await rrc._acall("axis_info")
+        await rrc.acall("axis_info")
+    # Interactive clean's (no restart_worker): reported at once, never resent.
+    rrc = _bare(_Alive(True), link, restart=False)
+    rrc._ctx, rrc._handle = _Ctx([gone]), "h1"
+    with pytest.raises(R.RemoteWorkerDiedError, match="close this visplot and start it again"):
+        await rrc.acall("axis_info")
 
 
 def test_last_words_leave_out_pythons_warnings():

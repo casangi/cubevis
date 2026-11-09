@@ -25,6 +25,16 @@ own not-yet-implemented paths.  ``supports_calibration()`` returns
 buttons for a remote session, same as it would for
 ``NullReductionContext``.
 
+The connection (since iclean design step 5c, 2026-11-09)
+--------------------------------------------------------
+The kernel, the link, the worker and every call go through
+``cubevis.remote.RemoteObjectConnection`` -- the same connection interactive
+clean uses (``self._conn``).  Points 1 and 2 below describe what it does;
+this class keeps visplot's own: the data's metadata, the memo of axis
+answers, which pending flags the worker has, the memory guard's refusal as
+``SelectionTooLargeError``, the messages for a slow call, and starting a
+new worker when one dies (``restart_worker``: the data can be reopened).
+
 Three things worth reading before touching this file
 ------------------------------------------------------
 1. **SyncBridge loop affinity (developer guide §6).**  Every method on
@@ -109,12 +119,9 @@ Package location (proposed)
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
 import time
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
-from uuid import uuid4
+from typing import Any, List, Optional, TYPE_CHECKING
 
 from . import _wire_types  # noqa: F401 -- import for its Serializer/Deserializer
                             # registration side effect (xr.DataArray wire
@@ -206,100 +213,25 @@ DATA_METHODS = frozenset({
 })
 
 
-# How often a call in flight checks that the kernel is still there
-# (seconds), and how long its heartbeat may be silent before the
-# connection counts as lost (notes section 56).  CUBEVIS_REMOTE_LIVENESS
-# overrides the interval.
-LIVENESS_INTERVAL = 5.0
-HEARTBEAT_GRACE = 30.0
+# The liveness watch, the timeouts' environment variables and the error
+# types are the shared connection's (``cubevis.remote``); the names stay
+# here for visplot's callers and tests.
+from cubevis.remote._remote_object import (          # noqa: E402,F401 -- re-exported
+    LIVENESS_INTERVAL, HEARTBEAT_GRACE, liveness_interval as _liveness_interval,
+    data_call_timeout as _data_call_timeout, _QuietIdentityFileHint, _quiet_setup_kernel_hints,
+)
+from cubevis.remote import (                          # noqa: E402,F401 -- re-exported
+    RemoteCallError as RemoteBackendError, RemoteWorkerDiedError, RemoteKernelLostError,
+)
 
-
-def _liveness_interval() -> float:
-    v = os.environ.get("CUBEVIS_REMOTE_LIVENESS", "").strip()
-    try:
-        return max(0.2, float(v)) if v else LIVENESS_INTERVAL
-    except ValueError:
-        return LIVENESS_INTERVAL
-
-
-def _data_call_timeout() -> float:
-    v = os.environ.get("CUBEVIS_REMOTE_TIMEOUT", "").strip()
-    try:
-        return float(v) if v else DEFAULT_DATA_CALL_TIMEOUT
-    except ValueError:
-        log.warning("CUBEVIS_REMOTE_TIMEOUT=%r is not a number; using %.0f s",
-                    v, DEFAULT_DATA_CALL_TIMEOUT)
-        return DEFAULT_DATA_CALL_TIMEOUT
+#: what a dead worker means for visplot (``RemoteObjectConnection(restart_hint=)``)
+RESTART_HINT = ("the next Plot starts a new one (state held only by the old one, such as "
+                "flags not yet saved, is lost)")
 
 
 class UserFilterNotRemoteError(RuntimeError):
     """A user-supplied (Python callable) flag filter was used with remote
     data.  Callables never cross the wire; built-in filters run remotely."""
-
-
-class RemoteBackendError(RuntimeError):
-    """Raised when the remote ``VisplotRemoteBackend`` method call
-    itself failed (an exception inside the worker subprocess) — as
-    opposed to a transport-level failure (timeout, connection lost),
-    which surfaces as whatever exception ``cubevis.remote`` itself
-    raises (``asyncio.TimeoutError``, etc.).
-
-    Carries the remote traceback text so it shows up in a local
-    stack trace instead of vanishing into an opaque dict.
-    """
-
-    def __init__(self, method: str, reply: Dict[str, Any]):
-        self.method = method
-        self.remote_error = reply.get("error")
-        self.remote_traceback = reply.get("traceback", "")
-        msg = f"remote call to {method!r} failed: {self.remote_error}"
-        if self.remote_traceback:
-            msg += f"\n--- remote traceback ---\n{self.remote_traceback}"
-        super().__init__(msg)
-
-
-class _QuietIdentityFileHint(logging.Filter):
-    """Drops sshpyk's ``[SSHPYK640] ... identityfile: Likely missing in your
-    ssh config. Multiple values: [...]`` for kernels setup made: their ssh
-    configuration is setup's own, which leaves ssh's default identity
-    files in place on purpose (one would stop ssh trying the others; ``none``
-    is an error to sshpyk), and for a host logged in to by password the
-    hint is noise (Darrell's try-015A, notes section 56)."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            msg = record.getMessage()
-        except Exception:
-            return True
-        return not ("[SSHPYK640]" in msg and "identityfile" in msg)
-
-
-def _quiet_setup_kernel_hints(km) -> None:
-    """``_QuietIdentityFileHint`` on the kernel manager's logger (the one
-    sshpyk's provisioner logs through), when the kernel's ssh
-    configuration is cubevis setup's; once per logger."""
-    try:
-        from cubevis.setup import sshgen
-        cfg = ((km.kernel_spec.metadata or {}).get("kernel_provisioner") or {}).get("config") or {}
-        if str(cfg.get("ssh_config") or "") != str(sshgen.config_path()):
-            return
-        lg = km.log
-        if not any(isinstance(f, _QuietIdentityFileHint) for f in lg.filters):
-            lg.addFilter(_QuietIdentityFileHint())
-    except Exception:
-        log.debug("could not quiet sshpyk's identityfile hint", exc_info=True)
-
-
-class RemoteWorkerDiedError(RuntimeError):
-    """The worker process holding the data on the remote host is gone
-    (killed -- most often by the system's memory limit --, crashed or
-    exited): reported by the kernel at once, with the reason.  The next
-    call starts a new worker (notes section 56)."""
-
-
-class RemoteKernelLostError(RuntimeError):
-    """The remote kernel stopped, or the connection to it was lost, while
-    a call was waiting for it (notes section 56)."""
 
 
 class RemoteReductionContext(ReductionContext):
@@ -357,17 +289,10 @@ class RemoteReductionContext(ReductionContext):
                 "name resolvable by `jupyter kernelspec list`)."
             )
 
-        # Local imports -- these pull in jupyter_client/cubevis.remote,
-        # which every OTHER backend (casa6/radps/null) has no reason to
-        # import at all. Matches the existing lazy-import convention in
-        # visibility_plotter.py's own _resolve_context_* functions.
-        from jupyter_client import AsyncKernelManager
-        from cubevis.remote import RemoteAppLink, SyncBridge, DEFAULT_WORKER_TARGET_NAME
+        # Local import -- it pulls in jupyter_client/cubevis.remote, which
+        # every OTHER backend (casa6/radps/null) has no reason to import.
+        from cubevis.remote import RemoteObjectConnection
 
-        # A kernel setup recorded as unable to run visplot (no xarray-ms in
-        # its environment): refused before anything starts.
-        from cubevis.setup import capabilities as _capabilities
-        _capabilities.require(kernel_name, "visplot")
         self._path = path
         self._kernel_name = kernel_name
         self._backend_kind = backend_kind
@@ -381,99 +306,26 @@ class RemoteReductionContext(ReductionContext):
                                    else _data_call_timeout())
         self._closed = False
 
-        # See module docstring, point 1: this bridge is the ONE loop
-        # everything below is constructed on and driven from. It is
-        # deliberately NOT the same object as `self._link.sync_bridge`
-        # (which RemoteAppLink.open() builds internally, on a different
-        # loop, and which this class never touches).
-        self._bridge = SyncBridge(name=f"visplot-remote-{uuid4().hex[:8]}")
-        self._bridge.start()
-
-        # A new account may not have Jupyter's runtime directory yet, and
-        # the sshpyk provisioner writes its connection file there without
-        # creating it (FileNotFoundError on the first remote kernel).
-        from jupyter_core.paths import jupyter_runtime_dir
-        os.makedirs(jupyter_runtime_dir(), mode=0o700, exist_ok=True)
-
-        self._km = AsyncKernelManager(kernel_name=kernel_name)
-        log.info(
-            "RemoteReductionContext: connecting kernel_name=%r "
-            "(path=%r, backend_kind=%r) -- this can take from a few "
-            "seconds (local kernel) to a couple of minutes (first "
-            "connect to a real cluster kernel)",
-            kernel_name, path, backend_kind,
-        )
-        # Phase timing -- connect time turned out to NOT be dominated by
-        # kernel startup alone (measured 51s of a 154s connect against a
-        # real sshpyk cluster kernel); logging each phase separately here
-        # is cheap and turns "connect is slow" into "THIS phase is slow",
-        # rather than re-deriving it from raw sshpyk log timestamps by
-        # hand every time, as this number was.
-        t0 = time.perf_counter()
-        _quiet_setup_kernel_hints(self._km)
-        self._bridge.run(self._km.start_kernel())
-        t1 = time.perf_counter()
-        log.info("RemoteReductionContext: start_kernel() took %.1fs", t1 - t0)
+        # The kernel, the link, the worker, the backend object (opening the
+        # MS/PS on the remote host), each phase timed in the log; the kernel
+        # refused first when setup recorded it cannot run visplot.  The
+        # supervisor relays every message and must deserialize this
+        # application's wire types too (xr.DataArray), hence wire_types.
+        log.info("RemoteReductionContext: path=%r, backend_kind=%r", path, backend_kind)
+        self._conn = RemoteObjectConnection(
+            kernel_name, _BACKEND_CLASS_NAME, {"path": path, "backend_kind": backend_kind},
+            register_function=register_function,
+            wire_types=["cubevis.toolbox.visplot._wire_types"],
+            app="visplot", data=path, worker_target_name=worker_target_name,
+            open_timeout=open_timeout, create_context_timeout=create_context_timeout,
+            call_timeout=self._call_timeout, data_methods=DATA_METHODS,
+            data_timeout=self._data_call_timeout, restart_worker=True, restart_hint=RESTART_HINT)
+        self._kernel_name = self._conn.kernel_name
         try:
-            self._link = self._bridge.run(
-                RemoteAppLink.open(
-                    self._km,
-                    worker_target_name=worker_target_name or DEFAULT_WORKER_TARGET_NAME,
-                    timeout=open_timeout,
-                )
-            )
-            t2 = time.perf_counter()
-            log.info("RemoteReductionContext: RemoteAppLink.open() took %.1fs", t2 - t1)
-            self._context_config = {
-                "register_function": register_function,
-                "wire_types": ["cubevis.toolbox.visplot._wire_types"],
-            }
-            # Same reasoning as register_function, one layer up: the
-            # supervisor relays every message between P_local and the
-            # worker and must be able to deserialize() them to do so,
-            # including this application's own wire types (xr.DataArray)
-            # -- see _supervisor.py's _handle_create_context and
-            # _wire_types.py's own docstring.  Kept: a dead worker's
-            # replacement is made with the same (_arestart_worker).
-            self._ctx = self._bridge.run(
-                self._link.create_context(
-                    config=self._context_config,
-                    timeout=create_context_timeout,
-                )
-            )
-            t3 = time.perf_counter()
-            log.info("RemoteReductionContext: create_context() took %.1fs "
-                      "(worker subprocess spawn + register_function import)", t3 - t2)
-            self._handle = self._bridge.run(
-                self._acreate_object(
-                    _BACKEND_CLASS_NAME,
-                    kwargs={"path": path, "backend_kind": backend_kind},
-                )
-            )
-            t4 = time.perf_counter()
-            log.info("RemoteReductionContext: create_object() took %.1fs "
-                      "(includes opening the MS/PS on the remote host)", t4 - t3)
-
             # Fetched once, up front -- open_ms/open_ps need an
             # ObservationMetadata immediately, and every ReductionContext
-            # list_*() method below is served from this same cached copy
-            # rather than a fresh remote round trip per call. If metadata
-            # can change server-side during a session (e.g. after a future
-            # split()), this will need an explicit refresh() -- not needed
-            # for Chunk 2's read-only scope.
-            #
-            # INSIDE the try block deliberately (moved here 2026-09,
-            # Chunk 2d): this call was previously issued after the
-            # try/except below, so a failure here -- including, now, a
-            # too-tight call_timeout= -- skipped the same-shaped cleanup
-            # every earlier failure in this constructor already gets,
-            # leaking the kernel and worker subprocess. Confirmed as a
-            # real leak (not just theoretical) by triggering it directly
-            # against a local kernel: the kernel process was still alive
-            # after the exception propagated, and only exited because it
-            # happened to notice its parent process exit -- a real
-            # long-lived caller (VisibilityPlotter itself) would have
-            # leaked it indefinitely.
+            # list_*() method below is served from this same cached copy.
+            # A failure here closes the connection (no kernel left behind).
             if self._backend_kind == "auto":
                 # vis= (2026-10-18): the worker decided the format on the
                 # data's host; ask which.
@@ -482,220 +334,55 @@ class RemoteReductionContext(ReductionContext):
                 self._call("metadata"), source_path=path
             )
         except BaseException:
-            # Don't leak a half-connected kernel if any step above
-            # fails -- best-effort, and deliberately swallows its own
-            # errors so the ORIGINAL failure is what the caller sees.
-            try:
-                self._bridge.run(self._km.shutdown_kernel())
-            except Exception:
-                log.warning(
-                    "RemoteReductionContext: cleanup after failed connect "
-                    "also failed", exc_info=True,
-                )
-            self._bridge.stop()
+            self._conn.close()
             raise
-        self._session_id = self._record_session()
 
-    def _record_session(self) -> Optional[str]:
-        """This computer's record of the session (``cubevis.setup.sessions``:
-        what a later reconnect or reattach needs), for a kernel sshpyk
-        started; None for a local kernel or when it cannot be written."""
-        try:
-            from cubevis.setup import sessions as _sessions
-            facts = _sessions.kernel_facts(self._km)
-            if not facts:
-                return None
-            return _sessions.record(app="visplot", jupyter_kernel=self._kernel_name,
-                                    data=self._path, context_id=self._context_id_of(),
-                                    handle=getattr(self, "_handle", None), **facts)
-        except Exception:
-            log.debug("RemoteReductionContext: session not recorded", exc_info=True)
-            return None
-
-    def _context_id_of(self) -> Optional[str]:
-        cid = getattr(getattr(self, "_ctx", None), "context_id", None)
-        return str(cid) if cid is not None else None
+    @property
+    def connection(self):
+        """the ``RemoteObjectConnection`` (diagnostics, tests)"""
+        return self._conn
 
     # ------------------------------------------------------------------ #
-    # Internal call plumbing -- see module docstring, point 2            #
+    # Internal call plumbing                                             #
     # ------------------------------------------------------------------ #
-
-    async def _acreate_object(self, class_name: str, args: Optional[List[Any]] = None,
-                               kwargs: Optional[Dict[str, Any]] = None) -> str:
-        reply = await self._ctx.dispatch_fast(
-            "create_object",
-            {"class_name": class_name, "args": args or [], "kwargs": kwargs or {}},
-        )
-        if isinstance(reply, dict) and "error" in reply:
-            self._raise_if_worker_died(reply)
-            raise RemoteBackendError(f"create_object({class_name!r})", reply)
-        return reply["handle"]
-
-    def _raise_if_worker_died(self, reply: Dict[str, Any]) -> None:
-        """A ``WorkerDiedError`` reply (the supervisor's, ``_supervisor.relay``):
-        a clear exception; the next call starts a new worker."""
-        tb = str(reply.get("traceback", ""))
-        if "WorkerDiedError" not in tb and "WorkerGoneError" not in tb:
-            return
-        self._worker_dead = True
-        raise RemoteWorkerDiedError(
-            f"{reply.get('error')}. The data's worker on kernel {self._kernel_name!r} is "
-            "gone; the next Plot starts a new one (state held only by the old one, "
-            "such as flags not yet saved, is lost).")
-
-    async def _watched(self, aw):
-        """Await *aw* (a call to the kernel) while checking, every
-        ``LIVENESS_INTERVAL`` seconds, that the kernel is still running
-        and still answering its heartbeat: a kernel that stopped, or a
-        connection lost for ``HEARTBEAT_GRACE`` seconds, ends the wait at
-        once with ``RemoteKernelLostError`` instead of after the call's
-        whole budget (up to ten minutes for data)."""
-        task = asyncio.ensure_future(aw)
-        interval = _liveness_interval()
-        silent_since = None
-        try:
-            while True:
-                done, _ = await asyncio.wait({task}, timeout=interval)
-                if task in done:
-                    return task.result()
-                try:
-                    alive = await asyncio.wait_for(self._km.is_alive(), timeout=30)
-                except Exception:
-                    alive = True                        # cannot tell: keep waiting
-                if not alive:
-                    raise RemoteKernelLostError(
-                        f"the kernel {self._kernel_name!r} has stopped (its process is gone: "
-                        "killed, or its computer restarted). Close this visplot and start "
-                        "it again.")
-                hb = getattr(getattr(getattr(self, "_link", None), "transport", None),
-                             "_client", None)
-                hb = getattr(hb, "hb_channel", None)
-                beating = True
-                try:
-                    beating = hb is None or bool(hb.is_beating())
-                except Exception:
-                    pass
-                now = time.monotonic()
-                if beating:
-                    silent_since = None
-                elif silent_since is None:
-                    silent_since = now
-                elif now - silent_since >= HEARTBEAT_GRACE:
-                    raise RemoteKernelLostError(
-                        f"no answer from the kernel {self._kernel_name!r} for "
-                        f"{now - silent_since:.0f} s: the connection to it was lost (the "
-                        "network or VPN, or this computer slept). Close this visplot and "
-                        "start it again.")
-        finally:
-            if not task.done():
-                task.cancel()
-
-    async def _arestart_worker(self) -> None:
-        """A new worker in place of a dead one: a new execution context,
-        the backend object opened again on it (same path and kind)."""
-        log.warning("RemoteReductionContext: starting a new worker on kernel %r "
-                    "(the previous one is gone)", self._kernel_name)
-        try:
-            await self._ctx.shutdown(timeout=10)
-        except Exception:
-            pass
-        self._ctx = await self._link.create_context(
-            config=self._context_config, timeout=DEFAULT_CREATE_CONTEXT_TIMEOUT)
-        self._handle = await self._acreate_object(
-            _BACKEND_CLASS_NAME, kwargs={"path": self._path, "backend_kind": self._backend_kind})
-        self._worker_dead = False
-        if getattr(self, "_session_id", None):
-            try:
-                from cubevis.setup import sessions as _sessions
-                _sessions.update(self._session_id, context_id=self._context_id_of(),
-                                 handle=self._handle)
-            except Exception:
-                pass
-
-    async def _acall(self, method: str, *, timeout: Optional[float] = None,
-                      _cv_resent: bool = False, **kwargs: Any) -> Any:
-        if getattr(self, "_worker_dead", False):
-            await self._watched(self._arestart_worker())
-        reply = await self._watched(self._ctx.dispatch_fast(
-            "call_method",
-            {"handle": self._handle, "method": method, "args": [], "kwargs": kwargs,
-             "pre_encoded": True},
-            timeout=timeout,
-        ))
-        if isinstance(reply, dict) and "error" in reply:
-            if not _cv_resent and "WorkerGoneError" in str(reply.get("traceback", "")):
-                # The worker died between calls (killed while idle, say):
-                # this call never reached it, so a new worker gets it --
-                # once -- instead of failing it (notes section 58).
-                log.warning("visplot: %s; starting a new worker on kernel %r and sending "
-                            "%s to it", reply.get("error"), self._kernel_name, method)
-                self._worker_dead = True
-                return await self._acall(method, timeout=timeout, _cv_resent=True, **kwargs)
-            self._raise_if_worker_died(reply)
-            # The memory guard's refusal (2026-10-18) is a message for the
-            # user, not a fault: raised here as the same local type, so
-            # the plotter treats it as it does locally (panel left empty
-            # at start-up, Plot's warning without a remote traceback).
-            if "SelectionTooLargeError" in str(reply.get("traceback", "")):
-                from .data.reader import SelectionTooLargeError
-                log.debug("remote %s refused: %s", method, reply.get("traceback"))
-                raise SelectionTooLargeError(str(reply.get("error")))
-            raise RemoteBackendError(method, reply)
-        if isinstance(reply, dict) and "__cv_pre_encoded__" in reply:
-            # Worker-encoded result passed through the kernel untouched
-            # (see worker_main.handle_call_method): decode it here, once.
-            from cubevis.utils import remote_deserialize
-            t0 = time.perf_counter()
-            reply = remote_deserialize(reply["__cv_pre_encoded__"])
-            try:
-                from cubevis.remote._kernel_transport import CLIENT_STATS
-                CLIENT_STATS["decode_s"] += time.perf_counter() - t0
-            except Exception:
-                pass
-        return reply
 
     def _call(self, method: str, *, timeout: Optional[float] = None,
               **kwargs: Any) -> Any:
         """Synchronous entry point every VisibilityReader/ReductionContext
-        method below uses -- see module docstring, point 1.
+        method below uses (``RemoteObjectConnection.call``).
 
-        ``timeout=None`` (the default every call site below uses unless
-        its own ``timeout=`` was given) resolves to this instance's
-        ``_call_timeout`` (``call_timeout=`` at construction, itself
-        defaulting to ``DEFAULT_CALL_TIMEOUT``) -- so leaving both alone
-        changes nothing about today's behavior. A caller that knows one
-        particular call needs longer (or shorter) can pass ``timeout=``
-        on that call alone without touching the instance-wide default.
+        ``timeout=None`` resolves to the connection's budget for *method*
+        (``call_timeout=`` at construction; the data budget for
+        ``DATA_METHODS``).  A caller that knows one particular call needs
+        longer (or shorter) can pass ``timeout=`` on that call alone.
+
+        The memory guard's refusal (2026-10-18) is a message for the user,
+        not a fault: raised as the same local type
+        (``SelectionTooLargeError``), so the plotter treats it as it does
+        locally (panel left empty at start-up, Plot's warning without a
+        remote traceback).  A call that runs out of time says what to do.
         """
-        if timeout is not None:
-            effective_timeout = timeout
-        elif method in DATA_METHODS:
-            effective_timeout = self._data_call_timeout
-        else:
-            effective_timeout = self._call_timeout
-        t0 = time.perf_counter()
-        ok = False
         try:
-            out = self._bridge.run(self._acall(method, timeout=effective_timeout, **kwargs))
-            ok = True
-            return out
+            return self._conn.call(method, timeout=timeout, **kwargs)
+        except RemoteBackendError as exc:
+            if "SelectionTooLargeError" in str(exc.remote_traceback or ""):
+                from .data.reader import SelectionTooLargeError
+                log.debug("remote %s refused: %s", method, exc.remote_traceback)
+                raise SelectionTooLargeError(str(exc.remote_error)) from None
+            raise
         except TimeoutError as exc:
             # A bare TimeoutError said nothing (Darrell's demo-3 report).
+            budget = (timeout if timeout is not None else
+                      self._data_call_timeout if method in DATA_METHODS else self._call_timeout)
             hint = ("set CUBEVIS_REMOTE_TIMEOUT (seconds) to allow longer, or "
                     "narrow the selection (one field, fewer SPWs)"
                     if method in DATA_METHODS and not self._call_timeout_given
                     else "pass call_timeout= to allow longer")
             raise TimeoutError(
                 f"the kernel {self._kernel_name!r} did not answer {method} "
-                f"within {effective_timeout:.0f} s. The worker may still be "
+                f"within {budget:.0f} s. The worker may still be "
                 f"working on it, and the next request may wait for it; "
                 f"{hint}.") from exc
-        finally:
-            dt = time.perf_counter() - t0
-            stats = self.__dict__.setdefault("_cv_call_stats", {})
-            n, tot, mx, last = stats.get(method, (0, 0.0, 0.0, 0.0))
-            stats[method] = (n + 1, tot + dt, max(mx, dt), dt)
-            log.debug("remote %s: %.4fs%s", method, dt, "" if ok else " (FAILED)")
 
     def runtime_info(self, timeout: Optional[float] = None) -> dict:
         """What the remote worker is running (paths, versions, whether the
@@ -714,15 +401,11 @@ class RemoteReductionContext(ReductionContext):
     def eval_code(self, code: str, timeout: Optional[float] = None):
         """Evaluate a Python expression in the worker (on the kernel host)
         and return its value -- e.g. to inspect or prepare files there."""
-        import asyncio
-        return self._bridge.run(asyncio.wait_for(self._ctx.eval_code(code),
-                                                 timeout or self._call_timeout or 600))
+        return self._conn.eval_code(code, timeout or self._call_timeout or 600)
 
     def exec_code(self, code: str, timeout: Optional[float] = None):
         """Execute Python statements in the worker; ``_result`` is returned."""
-        import asyncio
-        return self._bridge.run(asyncio.wait_for(self._ctx.exec_code(code),
-                                                 timeout or self._call_timeout or 600))
+        return self._conn.exec_code(code, timeout or self._call_timeout or 600)
 
     def reopen(self, path: str, backend_kind: Optional[str] = None) -> None:
         """Point this session at another data set on the kernel host,
@@ -730,8 +413,7 @@ class RemoteReductionContext(ReductionContext):
         zuul06 that saves ~2.5 minutes).  Caches tied to the old data are
         dropped and metadata is refreshed."""
         kind = backend_kind or self._backend_kind
-        self._handle = self._bridge.run(self._acreate_object(
-            _BACKEND_CLASS_NAME, kwargs={"path": path, "backend_kind": kind}))
+        self._conn.recreate({"path": path, "backend_kind": kind})
         self._path, self._backend_kind = path, kind
         for k in ("_cv_memo", "_cv_sent_ids"):
             self.__dict__.pop(k, None)
@@ -748,11 +430,12 @@ class RemoteReductionContext(ReductionContext):
         overhead is what the Jupyter-kernel execution model costs per call
         (transport, serialization, dispatch) on top of the computation.
         """
-        worker = self._bridge.run(self._acall(
+        conn = self._conn
+        worker = conn.run(conn.acall(
             "call_stats", timeout=self._call_timeout if timeout is None else timeout,
             reset=reset)) or {}
         frames = worker.pop("__frames__", None) if isinstance(worker, dict) else None
-        client = {k: list(v) for k, v in self.__dict__.get("_cv_call_stats", {}).items()}
+        client = {k: list(v) for k, v in conn.call_stats.items()}
         try:
             from cubevis.remote._kernel_transport import CLIENT_STATS
             relay = {"worker": frames, "client": dict(CLIENT_STATS)}
@@ -767,7 +450,7 @@ class RemoteReductionContext(ReductionContext):
             if w and n and w[0]:
                 overhead[m] = tot / n - w[1] / w[0]
         if reset:
-            self.__dict__["_cv_call_stats"] = {}
+            conn.call_stats.clear()
         return {"client": client, "worker": worker, "overhead": overhead, "relay": relay}
 
     # ------------------------------------------------------------------ #
@@ -1012,67 +695,9 @@ class RemoteReductionContext(ReductionContext):
         return self._backend_kind
 
     def kernel_fingerprint(self, timeout: float = 60.0) -> Optional[str]:
-        """The kernel-side fingerprint (``cubevis._fingerprint``) of the
-        cubevis the kernel imports, or None when it cannot be had.
-
-        Computed in the Jupyter kernel with *this* computer's fingerprint
-        code, sent as text -- as ``python -m cubevis.setup`` does on the node
-        -- so both sides hash the same way whatever cubevis the kernel has,
-        and nothing of the kernel side changes for it (a new worker
-        method would itself change the fingerprint).  Run on a client of its
-        own; only the replies to its own request are read."""
-        from cubevis import _fingerprint
-        code = (f"_cubevis_fp_src = {_fingerprint.source()!r}\n"
-                "def _cubevis_fp():\n"
-                "    import importlib.util, os\n"
-                "    ns = {'__name__': 'cubevis_fingerprint_from_client'}\n"
-                "    exec(compile(_cubevis_fp_src, 'cubevis/_fingerprint.py (sent)', 'exec'), ns)\n"
-                "    spec = importlib.util.find_spec('cubevis')\n"
-                "    root = os.path.dirname(os.path.dirname(os.path.abspath(spec.origin)))\n"
-                "    return ns['fingerprint'](root=root)\n"
-                "print('CUBEVIS-FINGERPRINT ' + _cubevis_fp())\n"
-                "del _cubevis_fp_src, _cubevis_fp\n")
-
-        async def run():
-            # A Session of its own (same key): ``km.client()`` would share
-            # the manager's Session with the link's client, and a Session
-            # rejects a message whose signature it has seen (its replay
-            # check, ``digest_history``) -- every iopub message reaches both
-            # clients, so the link then lost the worker's replies and the
-            # next call hung (Darrell's try-010A, 2026-11-01).
-            from jupyter_client.session import Session
-            ks = self._km.session
-            client = self._km.client(session=Session(key=ks.key,
-                                                     signature_scheme=ks.signature_scheme,
-                                                     username=ks.username))
-            client.start_channels()
-            try:
-                await client.wait_for_ready(timeout=timeout)
-                msg_id = client.execute(code, silent=False, store_history=False)
-                out = []
-                while True:
-                    msg = await client.get_iopub_msg(timeout=timeout)
-                    if msg.get("parent_header", {}).get("msg_id") != msg_id:
-                        continue                   # another request's traffic
-                    kind = msg["msg_type"]
-                    if kind == "stream":
-                        out.extend(msg["content"]["text"].splitlines())
-                    elif kind == "error":
-                        raise RuntimeError(msg["content"].get("evalue") or "error")
-                    elif kind == "status" and msg["content"]["execution_state"] == "idle":
-                        return out
-            finally:
-                client.stop_channels()
-
-        try:
-            lines = self._bridge.run(run(), timeout=timeout + 10)
-        except Exception as exc:
-            log.debug("kernel_fingerprint failed: %s", exc)
-            return None
-        for line in lines:
-            if line.startswith("CUBEVIS-FINGERPRINT "):
-                return line.split(" ", 1)[1].strip() or None
-        return None
+        """The kernel-side fingerprint of the cubevis the kernel imports, or
+        None (``RemoteObjectConnection.kernel_fingerprint``)."""
+        return self._conn.kernel_fingerprint(timeout=timeout)
 
     def software_versions(self, timeout: Optional[float] = None) -> list:
         """``[(package, version), ...]`` in the worker.  A worker whose
@@ -1229,31 +854,12 @@ class RemoteReductionContext(ReductionContext):
 
     def close(self, timeout: float = 20.0) -> None:
         """Tears down the remote worker subprocess, the supervisor-kernel
-        link, and the kernel itself. Idempotent.
-
-        Nothing calls this automatically today -- see the module
-        docstring's "Lifecycle" section and the patch notes for wiring
-        this into ``VisibilityPlotter``'s ``_shutdown_handler``.
-        """
+        link, and the kernel itself (``RemoteObjectConnection.close``).
+        Idempotent."""
         if self._closed:
             return
-        try:
-            self._bridge.run(self._link.close(), timeout=timeout)
-        except Exception:
-            log.warning("RemoteReductionContext.close: link.close() failed",
-                        exc_info=True)
-        try:
-            self._bridge.run(self._km.shutdown_kernel())
-        except Exception:
-            log.warning("RemoteReductionContext.close: shutdown_kernel() failed",
-                        exc_info=True)
-        self._bridge.stop()
         self._closed = True
-        try:
-            from cubevis.setup import sessions as _sessions
-            _sessions.forget(getattr(self, "_session_id", None))
-        except Exception:
-            pass
+        self._conn.close(timeout=timeout)
 
     def __repr__(self) -> str:  # pragma: no cover
         return (

@@ -228,3 +228,20 @@ def test_iclean_takes_a_setup_kernels_own_name(tmp_path, recorded, monkeypatch):
     with pytest.raises(ValueError, match="no Jupyter kernel named 'nope' here"):
         RemoteImagingSession({"vis": "x.ms", "imagename": "x"}, "nope")
     assert started == ["cubevis-cvpost106-iclean"]
+
+
+def test_a_kernel_on_another_node_of_a_cluster_is_setups_kernel(recorded):
+    """``python -m cubevis.setup jupyter NAME NODE`` makes ``cubevis-NAME-NODE``:
+    the capability check knows it as NAME (before 5c it knew nothing of it, so
+    never refused it)."""
+    recorded(plots={"visplot": True, "iclean": False})
+    st = S.load()
+    st.add_node("cvpost107", network="n", hostname="cvpost107.example.org")
+    S.save(st)
+    from cubevis.setup.sessions import setup_kernel_name
+    assert setup_kernel_name("cubevis-plots-cvpost107", S.load()) == "plots"
+    assert setup_kernel_name("cubevis-plots-cvpost107") == "plots-cvpost107"   # no state: as before
+    assert setup_kernel_name("cubevis-other-cvpost107", S.load()) == "other-cvpost107"
+    with pytest.raises(C.MissingCapability):
+        C.require("cubevis-plots-cvpost107", "iclean")
+    C.require("cubevis-plots-cvpost107", "visplot")

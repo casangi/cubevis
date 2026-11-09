@@ -6,10 +6,11 @@ local) Jupyter kernel, and the plumbing to call it -- application-agnostic.
 This is the generic half of visplot's ``RemoteReductionContext``
 (``cubevis/toolbox/visplot/remote_reduction_context.py``), lifted so that
 interactive clean's ``RemoteImagingSession`` (``cubevis/imaging``) uses the
-same connection rather than a copy (iclean design §3, 2026-11-07).  visplot
-moves onto it in design step 5; until then the two carry the same logic, and
-a change to one belongs in the other.  What it does, in order of the
-constructor:
+same connection rather than a copy (iclean design §3, 2026-11-07).  visplot's
+``RemoteReductionContext`` uses it too since design step 5c (2026-11-09):
+one connection for both applications.  What it does, in order of the
+constructor (each phase's time is logged: connecting to a cluster kernel can
+take minutes, and which phase is slow matters):
 
 * one ``SyncBridge``: everything below is made on, and driven from, its loop
   (visplot's module docstring, point 1: ``RemoteAppLink``'s own bridge runs
@@ -26,7 +27,9 @@ watched for the kernel stopping or its heartbeat going quiet
 (``RemoteKernelLostError`` at once instead of after the call's budget).
 A worker that died raises ``RemoteWorkerDiedError``; whether a new one is
 started is the application's choice (``restart_worker``): visplot's data
-can be reopened, a clean's state cannot.
+can be reopened, a clean's state cannot.  With ``restart_worker``, a call
+that never reached the worker (it was gone between calls) is sent to a new
+one -- once -- instead of failing.
 
 ``call`` blocks the calling thread (``SyncBridge.run``).  ``acall`` is a
 coroutine on the bridge's loop; ``submit(coro)`` runs one there and returns a
@@ -179,6 +182,9 @@ class RemoteObjectConnection:
     restart_worker : bool
         start a new worker (and object) when the old one died; False raises
         ``RemoteWorkerDiedError`` on every call after it
+    restart_hint : str
+        what the user is told a dead worker means, with ``restart_worker``
+        (default: "the next call starts a new one")
     """
 
     def __init__(self, kernel_name: str, class_name: str, kwargs: Optional[Dict[str, Any]] = None, *,
@@ -188,7 +194,7 @@ class RemoteObjectConnection:
                  create_context_timeout: float = DEFAULT_CREATE_CONTEXT_TIMEOUT,
                  call_timeout: Optional[float] = None,
                  data_methods: Iterable[str] = (), data_timeout: Optional[float] = None,
-                 restart_worker: bool = False) -> None:
+                 restart_worker: bool = False, restart_hint: Optional[str] = None) -> None:
         if not kernel_name:
             raise ValueError(f"{app}: a remote session needs kernel_name= (a kernelspec name "
                              "resolvable by `jupyter kernelspec list`)")
@@ -213,6 +219,7 @@ class RemoteObjectConnection:
         self._data_timeout = (data_timeout if data_timeout is not None
                               else call_timeout if call_timeout is not None else data_call_timeout())
         self._restart_worker = restart_worker
+        self._restart_hint = restart_hint or "the next call starts a new one"
         self._worker_dead = False
         self._closed = False
         self._session_id = None
@@ -229,15 +236,24 @@ class RemoteObjectConnection:
         t0 = time.perf_counter()
         _quiet_setup_kernel_hints(self._km)
         self._bridge.run(self._km.start_kernel())
+        t1 = time.perf_counter()
+        log.info("%s: start_kernel() took %.1fs", app, t1 - t0)
         try:
             self._link = self._bridge.run(RemoteAppLink.open(
                 self._km, worker_target_name=worker_target_name or DEFAULT_WORKER_TARGET_NAME,
                 timeout=open_timeout))
+            t2 = time.perf_counter()
+            log.info("%s: RemoteAppLink.open() took %.1fs", app, t2 - t1)
             self._context_config = {"register_function": register_function,
                                     "wire_types": list(wire_types)}
             self._ctx = self._bridge.run(self._link.create_context(
                 config=self._context_config, timeout=create_context_timeout))
+            t3 = time.perf_counter()
+            log.info("%s: create_context() took %.1fs (worker subprocess spawn + "
+                     "register_function import)", app, t3 - t2)
             self._handle = self._bridge.run(self._acreate_object())
+            log.info("%s: create_object() took %.1fs (the application's object, made on the "
+                     "kernel's host)", app, time.perf_counter() - t3)
         except BaseException:
             try:
                 self._bridge.run(self._km.shutdown_kernel())
@@ -259,6 +275,16 @@ class RemoteObjectConnection:
         return self._closed
 
     @property
+    def kernel_manager(self):
+        '''the ``AsyncKernelManager`` (its loop is the bridge's)'''
+        return self._km
+
+    @property
+    def session_id(self) -> Optional[str]:
+        '''this computer's record of the session (``cubevis.setup.sessions``), or None'''
+        return self._session_id
+
+    @property
     def loop(self) -> asyncio.AbstractEventLoop:
         '''the bridge's event loop, on which ``acall`` coroutines run'''
         return self._bridge.loop
@@ -278,7 +304,7 @@ class RemoteObjectConnection:
         if "WorkerDiedError" not in tb and "WorkerGoneError" not in tb:
             return
         self._worker_dead = True
-        what = ("the next call starts a new one" if self._restart_worker
+        what = (self._restart_hint if self._restart_worker
                 else f"close this {self._app} and start it again (what the worker held is lost; "
                      "what it wrote to disk stays)")
         raise RemoteWorkerDiedError(f"{reply.get('error')}. The {self._app} worker on kernel "
@@ -335,13 +361,33 @@ class RemoteObjectConnection:
                                                     timeout=DEFAULT_CREATE_CONTEXT_TIMEOUT)
         self._handle = await self._acreate_object()
         self._worker_dead = False
+        if self._session_id:
+            try:
+                from cubevis.setup import sessions as _sessions
+                cid = getattr(self._ctx, "context_id", None)
+                _sessions.update(self._session_id, context_id=None if cid is None else str(cid),
+                                 handle=self._handle)
+            except Exception:
+                pass
+
+    def recreate(self, kwargs: Dict[str, Any]) -> None:
+        '''A new object in the same worker, made with *kwargs* (visplot's
+        ``reopen``: other data, the kernel and worker kept).'''
+        old = self._kwargs
+        self._kwargs = dict(kwargs)
+        try:
+            self._handle = self._bridge.run(self._acreate_object())
+        except BaseException:
+            self._kwargs = old
+            raise
 
     def _timeout_for(self, method: str, timeout: Optional[float]) -> float:
         if timeout is not None:
             return timeout
         return self._data_timeout if method in self._data_methods else self._call_timeout
 
-    async def acall(self, method: str, /, *, timeout: Optional[float] = None, **kwargs: Any) -> Any:
+    async def acall(self, method: str, /, *, timeout: Optional[float] = None,
+                    _resent: bool = False, **kwargs: Any) -> Any:
         '''Call ``method(**kwargs)`` on the remote object (a coroutine on the
         bridge's loop: ``submit`` it from any other loop).'''
         if self._closed:
@@ -357,11 +403,28 @@ class RemoteObjectConnection:
              "pre_encoded": True},
             timeout=self._timeout_for(method, timeout)))
         if isinstance(reply, dict) and "error" in reply:
+            if (self._restart_worker and not _resent
+                    and "WorkerGoneError" in str(reply.get("traceback", ""))):
+                # The worker died between calls (killed while idle, say):
+                # this call never reached it, so a new worker gets it --
+                # once -- instead of failing it (visplot, notes section 58).
+                log.warning("%s: %s; starting a new worker on kernel %r and sending %s to it",
+                            self._app, reply.get("error"), self._kernel_name, method)
+                self._worker_dead = True
+                return await self.acall(method, timeout=timeout, _resent=True, **kwargs)
             self._raise_if_worker_died(reply)
             raise RemoteCallError(method, reply)
         if isinstance(reply, dict) and "__cv_pre_encoded__" in reply:
+            # Worker-encoded result passed through the kernel untouched
+            # (worker_main.handle_call_method): decoded here, once.
             from cubevis.utils import remote_deserialize
+            t0 = time.perf_counter()
             reply = remote_deserialize(reply["__cv_pre_encoded__"])
+            try:
+                from cubevis.remote._kernel_transport import CLIENT_STATS
+                CLIENT_STATS["decode_s"] += time.perf_counter() - t0
+            except Exception:
+                pass
         return reply
 
     def call(self, method: str, /, *, timeout: Optional[float] = None, **kwargs: Any) -> Any:
@@ -388,6 +451,70 @@ class RemoteObjectConnection:
     def run(self, coro, timeout: Optional[float] = None):
         '''Run *coro* on the bridge's loop and wait for it.'''
         return self._bridge.run(coro, timeout=timeout)
+
+    def kernel_fingerprint(self, timeout: float = 60.0) -> Optional[str]:
+        """The kernel-side fingerprint (``cubevis._fingerprint``) of the
+        cubevis the kernel imports, or None when it cannot be had (visplot's
+        check, shared since step 5c).
+
+        Computed in the Jupyter kernel with *this* computer's fingerprint
+        code, sent as text -- as ``python -m cubevis.setup`` does on the node
+        -- so both sides hash the same way whatever cubevis the kernel has,
+        and nothing of the kernel side changes for it (a new worker
+        method would itself change the fingerprint).  Run on a client of its
+        own; only the replies to its own request are read."""
+        from cubevis import _fingerprint
+        code = (f"_cubevis_fp_src = {_fingerprint.source()!r}\n"
+                "def _cubevis_fp():\n"
+                "    import importlib.util, os\n"
+                "    ns = {'__name__': 'cubevis_fingerprint_from_client'}\n"
+                "    exec(compile(_cubevis_fp_src, 'cubevis/_fingerprint.py (sent)', 'exec'), ns)\n"
+                "    spec = importlib.util.find_spec('cubevis')\n"
+                "    root = os.path.dirname(os.path.dirname(os.path.abspath(spec.origin)))\n"
+                "    return ns['fingerprint'](root=root)\n"
+                "print('CUBEVIS-FINGERPRINT ' + _cubevis_fp())\n"
+                "del _cubevis_fp_src, _cubevis_fp\n")
+
+        async def run():
+            # A Session of its own (same key): ``km.client()`` would share
+            # the manager's Session with the link's client, and a Session
+            # rejects a message whose signature it has seen (its replay
+            # check, ``digest_history``) -- every iopub message reaches both
+            # clients, so the link then lost the worker's replies and the
+            # next call hung (Darrell's try-010A, 2026-11-01).
+            from jupyter_client.session import Session
+            ks = self._km.session
+            client = self._km.client(session=Session(key=ks.key,
+                                                     signature_scheme=ks.signature_scheme,
+                                                     username=ks.username))
+            client.start_channels()
+            try:
+                await client.wait_for_ready(timeout=timeout)
+                msg_id = client.execute(code, silent=False, store_history=False)
+                out = []
+                while True:
+                    msg = await client.get_iopub_msg(timeout=timeout)
+                    if msg.get("parent_header", {}).get("msg_id") != msg_id:
+                        continue                   # another request's traffic
+                    kind = msg["msg_type"]
+                    if kind == "stream":
+                        out.extend(msg["content"]["text"].splitlines())
+                    elif kind == "error":
+                        raise RuntimeError(msg["content"].get("evalue") or "error")
+                    elif kind == "status" and msg["content"]["execution_state"] == "idle":
+                        return out
+            finally:
+                client.stop_channels()
+
+        try:
+            lines = self._bridge.run(run(), timeout=timeout + 10)
+        except Exception as exc:
+            log.debug("kernel_fingerprint failed: %s", exc)
+            return None
+        for line in lines:
+            if line.startswith("CUBEVIS-FINGERPRINT "):
+                return line.split(" ", 1)[1].strip() or None
+        return None
 
     # ---- worker-side code (tests, diagnostics) ------------------------------
 

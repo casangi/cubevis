@@ -1,4 +1,5 @@
-"""``RemoteReductionContext.kernel_fingerprint`` asks the Jupyter kernel on a
+"""``RemoteObjectConnection.kernel_fingerprint`` (visplot's
+``RemoteReductionContext.kernel_fingerprint`` until iclean step 5c) asks the Jupyter kernel on a
 client of its own -- and the link to the worker must go on working after it
 (2026-11-01, Darrell's try-010A: visplot hung on the first call after the
 check, because the extra client shared the kernel manager's ``Session`` with
@@ -17,7 +18,7 @@ from jupyter_client import AsyncKernelManager
 
 from cubevis import _fingerprint
 from cubevis.remote import RemoteAppLink, SyncBridge
-from cubevis.toolbox.visplot.remote_reduction_context import RemoteReductionContext
+from cubevis.remote import RemoteObjectConnection
 
 SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
@@ -36,7 +37,7 @@ def test_the_link_works_after_the_kernel_is_asked_for_its_fingerprint():
         h = bridge.run(ctx.create_object("Counter", args=[10]), timeout=30)
         assert bridge.run(ctx.call_method(h, "increment", args=[1]), timeout=30) == 11
         # The check, as visplot runs it: same bridge, same kernel manager.
-        c = RemoteReductionContext.__new__(RemoteReductionContext)
+        c = RemoteObjectConnection.__new__(RemoteObjectConnection)
         c._bridge, c._km = bridge, km
         assert c.kernel_fingerprint() == _fingerprint.fingerprint(root=SRC)
         # ... and the worker still answers (it hung here before the fix).

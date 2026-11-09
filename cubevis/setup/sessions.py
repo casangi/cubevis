@@ -72,12 +72,25 @@ def kernel_facts(km) -> dict:
             "remote_pid": getattr(p, "rem_pid_k", None)}
 
 
-def setup_kernel_name(jupyter_kernel: str) -> str:
+def setup_kernel_name(jupyter_kernel: str, st=None) -> str:
     """Setup's name for the Jupyter kernel *jupyter_kernel* (``cubevis-NAME``
-    -> ``NAME``), else the Jupyter name itself."""
-    if jupyter_kernel.startswith("cubevis-"):
-        return jupyter_kernel[len("cubevis-"):]
-    return jupyter_kernel
+    -> ``NAME``), else the Jupyter name itself.  With setup's state *st*, a
+    kernel of a cluster on another of its nodes (``cubevis-NAME-NODE``,
+    ``python -m cubevis.setup jupyter NAME NODE``) is NAME too, when NAME is
+    one of its kernels and NODE one of its nodes."""
+    if not jupyter_kernel.startswith("cubevis-"):
+        return jupyter_kernel
+    name = jupyter_kernel[len("cubevis-"):]
+    if st is not None:
+        try:
+            kernels, nodes = st.section("kernels"), st.nodes()
+        except Exception:
+            return name
+        if name not in kernels:
+            for node in sorted(nodes, key=len, reverse=True):
+                if name.endswith(f"-{node}") and name[:-len(node) - 1] in kernels:
+                    return name[:-len(node) - 1]
+    return name
 
 
 def record(*, app: str, jupyter_kernel: str, node: str,
@@ -91,7 +104,7 @@ def record(*, app: str, jupyter_kernel: str, node: str,
         sid = f"{app}-{uuid.uuid4().hex[:8]}"
         st = state.load()
         st.section("sessions")[sid] = {
-            "app": app, "kernel": kernel or setup_kernel_name(jupyter_kernel),
+            "app": app, "kernel": kernel or setup_kernel_name(jupyter_kernel, st),
             "jupyter_kernel": jupyter_kernel, "node": node,
             "local_pid": os.getpid(), "started": _now(),
             "persistent_file": persistent_file,

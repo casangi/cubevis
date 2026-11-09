@@ -356,7 +356,7 @@ current one. This comparison is part of step 1's tests.
   connection -- one bridge loop, kernel, link, context, one object; `call`,
   `acall`, `submit`; liveness, remote errors with tracebacks, a dead worker
   (not restarted for iclean), the session record.  Lifted from visplot's
-  `RemoteReductionContext`, which moves onto it in step 5.
+  `RemoteReductionContext`, which uses it since step 5c (notes §75).
 * Worker: `cubevis.imaging.remote_registrations.ImagingSessionBackend` over a
   `LocalImagingSession`; cycles run in a thread (`start_cycle` /
   `cycle_status`) so the worker keeps answering the GUI; cube methods by name
@@ -391,7 +391,7 @@ current one. This comparison is part of step 1's tests.
 | 4b. Progress of a running cycle, local and remote: tclean's log followed where the imager runs (`CycleProgress`), kept as session state (`progress()`), pushed to the status line about once a second. **Done: notes §69** | 0.5 |
 | 5a. `iclean(kernel_name=)` (like `iclean_backend`), the GUI's end closes a remote session (history kept); CI without python-casacore. **Done: notes §70** | 0.5 |
 | 5b. Kernel capabilities in setup (`visplot`, `iclean`, probed in the kernel's context); setup asks whether a host's kernels should run interactive clean and offers it on a rerun (adding only to its own environments); CASA's data: the user's, or a private `casadata` copy given to kernels as `CASASITECONFIG`; `iclean`/`visplot` refuse a kernel without the capability before connecting. **Done: notes §71** | 1 |
-| 5c. visplot's `RemoteReductionContext` onto `RemoteObjectConnection` | 0.5 |
+| 5c. visplot's `RemoteReductionContext` onto `RemoteObjectConnection`; kernels on other cluster nodes known to setup; `setup kernel NAME` changes one kernel. **Done: notes §75** | 0.5 |
 | 5d. Release: from `main` after the merge (until then: this checkout installed on the node, found by fingerprint) | — |
 | 6. Parity tests (local kernel, small MS, local vs remote), quick tests, rounds with Darrell | 1 + 2–3 rounds |
 | 1c. Package organization (§6): `toolbox/iclean/`, one app template, dependency rule. **Done: notes §62** | 1 |

@@ -92,12 +92,13 @@ def test_recording_never_fails(home, monkeypatch):
 
 
 def test_remote_context_records_only_sshpyk_kernels(home):
-    """``RemoteReductionContext._record_session``: a local kernel (no ssh
-    alias) is not recorded; an sshpyk one is, and ``close`` forgets it."""
+    """``RemoteObjectConnection._record_session`` (visplot's and interactive
+    clean's since iclean step 5c): a local kernel (no ssh alias) is not
+    recorded; an sshpyk one is, and ``close`` forgets it."""
     pytest.importorskip("jupyter_client")
-    from cubevis.toolbox.visplot.remote_reduction_context import RemoteReductionContext
-    rrc = RemoteReductionContext.__new__(RemoteReductionContext)
-    rrc._kernel_name, rrc._path = "cubevis-zuul06", "tw.ms"
+    from cubevis.remote import RemoteObjectConnection
+    rrc = RemoteObjectConnection.__new__(RemoteObjectConnection)
+    rrc._kernel_name, rrc._data, rrc._app = "cubevis-zuul06", "tw.ms", "visplot"
     rrc._ctx, rrc._handle = types.SimpleNamespace(context_id="ctx-1"), "obj-1"
     rrc._km = types.SimpleNamespace()
     assert rrc._record_session() is None

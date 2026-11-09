@@ -938,3 +938,91 @@ def test_a_rerun_offers_interactive_clean_and_tests_the_kernels_again(ctx, relea
     out = " ".join(c.ui.out.getvalue().split())
     assert "Add interactive clean to it? [Y/n] ok kernel k: starts in ~; runs visplot, interactive clean" in out
     assert "finds CASA's data in ~/.casa/data" in out
+
+
+# --------------------------------------------------------------------------
+# python -m cubevis.setup kernel NAME: one kernel changed (2026-11-09)
+# --------------------------------------------------------------------------
+
+def _kernel_rig(ctx, monkeypatch, **answers):
+    """A kernel 'k' on node1 (environment e), with no ssh: the logins pass, the
+    node says where home is, and the launcher's test is recorded."""
+    tested = []
+    monkeypatch.setattr(H, "local_steps", lambda c: True)
+    monkeypatch.setattr(H, "network_steps", lambda c, net, nodes=None, inside=True: True)
+    monkeypatch.setattr(H, "discover_step", lambda c, node, paths=(), only=False, python3=None: _rep())
+    monkeypatch.setattr(H, "write_and_test", lambda c, node, name, rep, h: tested.append(
+        (node, name, dict(c.st.section("kernels")[name]))) or (True, "starts in ..."))
+    c = ctx(via_login="n", user="jo", **answers)
+    node = _node(c)
+    _env(c, node)
+    k = c.st.add_kernel("k", environment="e", workdir="/home/jo/old", env={"A": "1"})
+    k["checked_on"] = node
+    return c, node, tested
+
+
+def test_a_kernels_working_directory_alone(ctx, release, monkeypatch):
+    c, node, tested = _kernel_rig(ctx, monkeypatch)
+    assert H.cmd_kernel(c, "k", workdir="~/casa/iclean") == 0
+    k = c.st.section("kernels")["k"]
+    assert k["workdir"] == "/home/jo/casa/iclean" and k["env"] == {"A": "1"}
+    assert tested and tested[0][:2] == (node, "k") and tested[0][2]["workdir"] == "/home/jo/casa/iclean"
+    c.ui.show_changes()
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "changed kernel: k: starts in ~/casa/iclean (was ~/old)" in out
+    # ~ alone is the home directory: no workdir kept
+    assert H.cmd_kernel(c, "k", workdir="~") == 0 and c.st.section("kernels")["k"]["workdir"] is None
+
+
+def test_variables_alone_and_nothing_to_change(ctx, release, monkeypatch):
+    c, node, tested = _kernel_rig(ctx, monkeypatch)
+    assert H.cmd_kernel(c, "k", env_vars="OMP_NUM_THREADS=8 B=2") == 0
+    assert c.st.section("kernels")["k"]["env"] == {"OMP_NUM_THREADS": "8", "B": "2"}
+    assert H.cmd_kernel(c, "k", env_vars="none") == 0 and c.st.section("kernels")["k"]["env"] == {}
+    n = len(tested)
+    assert H.cmd_kernel(c, "k", env_vars="none") == 0 and len(tested) == n       # not written again
+    assert "nothing to change" in c.ui.out.getvalue()
+    assert H.cmd_kernel(c, "k", env_vars="not a variable") == 1
+
+
+def test_without_options_its_settings_are_asked(ctx, release, monkeypatch):
+    c, node, tested = _kernel_rig(ctx, monkeypatch, workdir="/data/new", env_vars="none")
+    assert H.cmd_kernel(c, "k") == 0
+    k = c.st.section("kernels")["k"]
+    assert (k["workdir"], k["env"]) == ("/data/new", {})
+    assert "Working directory [~/old]" in c.ui.out.getvalue()
+
+
+def test_the_clusters_defaults_can_follow(ctx, release, monkeypatch):
+    c, node, tested = _kernel_rig(ctx, monkeypatch)
+    c.st.add_cluster("cv", network=c.st.nodes()[node]["network"], pattern="node*")
+    c.st.nodes()[node]["cluster"] = "cv"
+    cl = c.st.section("clusters")["cv"]
+    cl["workdir"], cl["env"] = "/home/jo/old", {"A": "1"}
+    assert H.cmd_kernel(c, "k", workdir="/home/jo/new") == 0
+    assert cl["workdir"] == "/home/jo/new" and cl["env"] == {"A": "1"}
+    assert "Make its new settings cluster cv's defaults? [Y/n]" in c.ui.out.getvalue()
+    # Defaults that were not this kernel's are left alone, unasked.
+    cl["workdir"] = "/elsewhere"
+    c.ui.out = __import__("io").StringIO()
+    assert H.cmd_kernel(c, "k", workdir="/home/jo/newer") == 0
+    assert cl["workdir"] == "/elsewhere" and "defaults" not in c.ui.out.getvalue()
+
+
+def test_unknown_kernel_or_environment(ctx, release, monkeypatch):
+    c, node, tested = _kernel_rig(ctx, monkeypatch)
+    assert H.cmd_kernel(c, "nope", workdir="/x") == 1
+    assert "there is no kernel 'nope' (kernels: k)" in c.ui.out.getvalue()
+    assert H.cmd_kernel(c, "k", environment="nope") == 1
+    assert "there is no environment 'nope'" in c.ui.out.getvalue()
+    assert tested == []
+
+
+def test_the_command_line(tmp_path, monkeypatch):
+    from cubevis.setup import __main__ as M
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    seen = {}
+    monkeypatch.setattr(H, "cmd_kernel", lambda c, name, **kw: seen.update(name=name, **kw) or 0)
+    assert M.main(["kernel", "cvpost106-iclean", "--workdir", "~/casa/x"]) == 0
+    assert seen == {"name": "cvpost106-iclean", "workdir": "~/casa/x", "env_vars": None,
+                    "environment": None}

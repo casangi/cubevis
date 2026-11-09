@@ -4159,3 +4159,51 @@ plot 875 / 860 / 843 px high, top 96 / 111 / 128.
 * Tests: `test_progress.py` +1 (the short form); `test_clean_controls.py`
   (the pushed text is the short form with the tooltip).  Quick suites pass;
   setup: the 11 ssh failures only.  Fingerprint `k2-dc6e5294be51545a1070`.
+
+## 75. iclean step 5c: visplot on the shared connection; kernels on other cluster nodes; `setup kernel NAME` (base `ca3f47b`, 2026-11-09)
+
+* **visplot's `RemoteReductionContext` uses `RemoteObjectConnection`**
+  (`self._conn`): the kernel, link, worker, liveness watch, session record
+  and kernel-name resolution are one code path for visplot and interactive
+  clean.  `remote_reduction_context.py` 1281 -> 887 lines.  What the shared
+  connection gained from visplot's copy, for both: each connect phase's
+  time in the log; with `restart_worker`, a call that never reached a
+  worker gone between calls is sent to a new one, once; the session record
+  follows a new worker; `recreate(kwargs)` (visplot's `reopen`); the
+  decode time in `CLIENT_STATS`; `kernel_fingerprint()`;
+  `kernel_manager`, `session_id`; `restart_hint` (visplot: "the next Plot
+  starts a new one ...").  Kept in visplot: metadata after connecting (a
+  failure there closes the connection), the memory guard's refusal as
+  `SelectionTooLargeError`, the slow-call message with its hint, the memo
+  and pending-flag bookkeeping, `call_stats()` over `conn.call_stats`.
+  `RemoteBackendError`, `RemoteWorkerDiedError`, `RemoteKernelLostError`,
+  `HEARTBEAT_GRACE`, `_quiet_setup_kernel_hints` stay importable from the
+  module (the shared ones).  Tests that set visplot's internals
+  (`test_worker_death`, `test_kernel_fingerprint`, `test_sessions`) now set
+  the connection's, plus: interactive clean's connection (no restart)
+  reports a gone worker at once.
+* **Fingerprint**: `RemoteObjectConnection.kernel_fingerprint` imports
+  `cubevis._fingerprint`, which put that module in the kernel-side closure
+  -- an environment's own copy of it then changed the hash, though it never
+  decides anything (setup and the connection send their copy).
+  `_fingerprint.SENT` leaves it out (`test_discover`'s
+  `test_environments_are_fingerprinted_with_the_code_setup_sends` found
+  it).  Fingerprint `k2-046c84b6febd6d1717d6`.
+* **Kernels on another node of a cluster** (`setup jupyter NAME NODE` ->
+  `cubevis-NAME-NODE`): `sessions.setup_kernel_name(name, st)` knows them as
+  NAME when NAME is a kernel and NODE a node; the capability check and the
+  session record use it (before, such a kernel was never refused, and its
+  session recorded as `NAME-NODE`).
+* **`python -m cubevis.setup kernel NAME [--workdir DIR] [--env VARS]
+  [--environment ENV]`** (Darrell: change one thing without the host's
+  whole walk): logs in to the node the kernel was last checked on, changes
+  only what is given (no option: working directory and variables asked,
+  defaulting to the kernel's), records the change, rewrites and runs the
+  launcher; a cluster whose defaults were the kernel's old settings is
+  asked whether they follow (`cluster_defaults`); a new environment gets the
+  CASA-data step.  The end of a host's setup names the command.
+* **Checks**: quick suites pass; setup: the 11 ssh failures only (+7
+  tests: the command, the node names).  `test_remote_reduction_context.py`
+  on `sim_point_withline.ms`: the same 9 pass / 3 fail before and after
+  (the 3 compare `antenna_labels` and columns on this simulated MS; not
+  this change).

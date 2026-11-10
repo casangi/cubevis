@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 import time
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional
 from uuid import uuid4
@@ -99,6 +100,49 @@ class RemoteWorkerDiedError(RuntimeError):
 class RemoteKernelLostError(RuntimeError):
     """The kernel stopped, or the connection to it was lost, while a call was
     waiting for it."""
+
+
+class MissingKernelPackages(ImportError):
+    """``kernel_name=`` was given, but this Python lacks what starts a
+    Jupyter kernel: jupyter_client, or sshpyk for a kernel on another
+    computer (a CASA without the ``remote`` packages, say).  An ImportError,
+    so code that already catches one still does."""
+
+
+def require_kernel_packages(kernel_name: str, app: str = "cubevis", *, resolved: bool = False) -> None:
+    """Refuse ``kernel_name=`` early, saying what to install, when this
+    Python cannot start the kernel: without jupyter_client, any kernel;
+    without sshpyk, a kernel whose definition (once *resolved*) names
+    sshpyk's provisioner -- setup's kernels, on other computers."""
+    import importlib.util
+    find = importlib.util.find_spec
+    if not resolved:
+        if find("jupyter_client") is None:
+            # the packages themselves, not "cubevis[remote]": that could
+            # upgrade cubevis too (in a CASA, say)
+            raise MissingKernelPackages(_packages_message(kernel_name, app, "jupyter_client "
+                                                          "(and sshpyk for kernels on other "
+                                                          "computers)",
+                                                          'jupyter_client "sshpyk>=1.23"'))
+        return
+    try:
+        from jupyter_client.kernelspec import KernelSpecManager, NoSuchKernel
+        spec = KernelSpecManager().get_kernel_spec(kernel_name)
+    except Exception:                     # unknown name, odd spec: jupyter_client says so later
+        return
+    meta = getattr(spec, "metadata", None) or {}
+    provisioner = (meta.get("kernel_provisioner") or {}).get("provisioner_name")
+    if provisioner == "sshpyk-provisioner" and find("sshpyk") is None:
+        raise MissingKernelPackages(_packages_message(kernel_name, app, "sshpyk (it starts "
+                                                      "kernels on other computers over ssh)",
+                                                      '"sshpyk>=1.23"'))
+
+
+def _packages_message(kernel_name: str, app: str, what: str, spec: str) -> str:
+    return (f'{app}: kernel_name="{kernel_name}" runs {app} in a Jupyter kernel, which needs '
+            f"{what} in this Python ({sys.executable}), which does not have it.  Install it with\n"
+            f"    {sys.executable} -m pip install {spec}\n"
+            f"or leave out kernel_name= to run {app} here.")
 
 
 def resolve_kernel_name(kernel_name: str) -> str:
@@ -213,7 +257,11 @@ class RemoteObjectConnection:
                         .split(". python -m", 1)[0])
         # setup's name for a kernel -> its Jupyter kernel (cubevis-NAME);
         # a name nobody knows is refused here, saying what to do
+        # without jupyter_client (or sshpyk, for a kernel over ssh) say what
+        # to install, not "No module named 'jupyter_client'"
+        require_kernel_packages(kernel_name, app)
         kernel_name = resolve_kernel_name(kernel_name)
+        require_kernel_packages(kernel_name, app, resolved=True)
         from jupyter_client import AsyncKernelManager
         from cubevis.remote import RemoteAppLink, SyncBridge, DEFAULT_WORKER_TARGET_NAME
 

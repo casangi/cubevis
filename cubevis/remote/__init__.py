@@ -14,7 +14,9 @@ from ._remote_object import (
     RemoteCallError,
     RemoteWorkerDiedError,
     RemoteKernelLostError,
+    MissingKernelPackages,
     resolve_kernel_name,
+    require_kernel_packages,
 )
 
 __all__ = [
@@ -36,5 +38,7 @@ __all__ = [
     "RemoteCallError",
     "RemoteWorkerDiedError",
     "RemoteKernelLostError",
+    "MissingKernelPackages",
     "resolve_kernel_name",
+    "require_kernel_packages",
 ]

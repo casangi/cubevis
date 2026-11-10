@@ -12,6 +12,8 @@
 #   command     a command (a list), instead of pytest
 #   requires    Python modules the suite needs; missing -> skipped
 #               (a failure with --strict, as in GitHub Actions)
+#   optional    true: skipped without them even under --strict (a suite
+#               for where CASA is installed, say)
 #   env         extra environment variables
 #   timeout     seconds (default 900)
 #   after       a suite this one needs (skipped unless that one passed)
@@ -36,17 +38,57 @@ args = ["-q", "--ignore=tests/manual/remote/test_query_raster.py",
 requires = ["ipykernel", "jupyter_client", "pytest_asyncio"]
 
 [[suite]]
+name = "imaging"
+# interactive clean's imaging layer (cubevis.imaging) without CASA: an
+# ImageCube over numpy, a LocalImagingSession over a scripted gclean, the
+# coordinate description and its astropy WCS, mask edits (edit_mask), a
+# cycle's progress from tclean's log; where iclean's parameters are checked
+# (the CASA parts skip without casatools)
+pytest = ["tests/manual/iclean-imaging/test_imaging_layer.py",
+          "tests/manual/iclean-imaging/test_coordinates.py",
+          "tests/manual/iclean-imaging/test_masks.py",
+          "tests/manual/iclean-imaging/test_progress.py",
+          "tests/manual/iclean-imaging/test_task_params.py"]
+args = ["-q"]
+
+[[suite]]
+name = "imaging-remote"
+# RemoteImagingSession on a kernel on this computer (iclean design step 3): a
+# scripted clean in the kernel's worker compared call by call with the same in
+# this process, a cycle that leaves the worker answering, failures, a dead
+# worker; and (design step 4) the GUI's clean controls -- continue, finish,
+# stop, refused values, failing cycles, a dead worker -- through the handlers
+# the browser uses, here and on the kernel, with the progress pushed during a
+# cycle.  No CASA.
+pytest = ["tests/manual/iclean-imaging/test_remote_session.py",
+          "tests/manual/iclean-imaging/test_clean_controls.py"]
+args = ["-q"]
+
+[[suite]]
+name = "iclean-parity"
+# interactive clean with real tclean (design step 6): the GUI's handlers give
+# the same replies with the imaging on a kernel as in this process; a kernel
+# started in another directory (relative paths are the kernel's, checked
+# there); iclean.notebook(kernel_name=) in a notebook kernel.  Needs CASA
+# (casatasks and its data): skipped where it is not installed, as in the
+# GitHub workflow today.
+pytest = ["tests/manual/iclean-imaging/test_iclean_parity.py"]
+args = ["-q"]
+requires = ["casatasks", "casatools", "jupyter_client", "ipykernel"]
+optional = true     # skipped without them, even under --strict (the workflow has no CASA)
+
+[[suite]]
 name = "tiny-ms"
 # a 3 MB MSv2 for the next suite
 command = ["{python}", "tests/ci/make_tiny_ms.py", "{tmp}/ci.ms"]
-requires = ["xradio", "casacore"]
+requires = ["xradio", "arcae"]
 
 [[suite]]
 name = "visplot-remote"
 # visplot local and with backend="remote" (a kernel on this computer),
 # driven through the GUI's handlers and compared step by step
 command = ["{python}", "tests/manual/visplot/remote_visplot_check.py", "--ms", "{tmp}/ci.ms"]
-requires = ["xradio", "casacore", "ipykernel", "xarray_ms"]
+requires = ["xradio", "arcae", "ipykernel", "xarray_ms"]
 after = "tiny-ms"
 
 [[lint]]

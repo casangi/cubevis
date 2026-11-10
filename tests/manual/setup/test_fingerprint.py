@@ -184,7 +184,7 @@ def test_imports_only_for_type_checkers_do_not_count(tmp_path):
 def test_the_real_kernel_side_leaves_out_the_front_end():
     mods = set(F.closure())
     for front in ("cubevis.toolbox.visplot.visibility_plotter", "cubevis.toolbox._cube",
-                  "cubevis.toolbox.visplot.flag_controls", "cubevis.toolbox._interactive_clean_ui"):
+                  "cubevis.toolbox.visplot.flag_controls", "cubevis.toolbox.iclean._ui"):
         assert front not in mods, front
 
 
@@ -195,7 +195,8 @@ def test_the_version_file_the_build_writes_does_not_count(tmp_path):
     files = {"cubevis/__init__.py": "try:\n    from .__version__ import __version__\nexcept ImportError:\n    pass\n",
              "cubevis/remote/__init__.py": "", "cubevis/remote/worker_main.py": "import cubevis\n",
              "cubevis/toolbox/__init__.py": "", "cubevis/toolbox/visplot/__init__.py": "",
-             "cubevis/toolbox/visplot/remote_registrations.py": "X = 1\n"}
+             "cubevis/toolbox/visplot/remote_registrations.py": "X = 1\n",
+             "cubevis/imaging/__init__.py": "", "cubevis/imaging/remote_registrations.py": "Y = 1\n"}
     checkout = _pkg(tmp_path / "checkout", files)
     wheel = _pkg(tmp_path / "wheel", dict(files, **{"cubevis/__version__.py": "__version__ = '1.0.102'\n"}))
     other = _pkg(tmp_path / "other", dict(files, **{"cubevis/__version__.py": "__version__ = '1.0.103'\n"}))
@@ -214,3 +215,23 @@ def test_the_source_runs_elsewhere(tmp_path):
     ns = {"__name__": "x"}
     exec(compile(F.source(), "sent", "exec"), ns)
     assert ns["fingerprint"](root=ROOT) == F.fingerprint(root=ROOT)
+
+
+def test_a_cubevis_without_a_root_has_a_fingerprint_that_differs(tmp_path):
+    """A kernel with a cubevis from before one of the roots (interactive
+    clean's, 2026-11-07): computed there with this code, its fingerprint must
+    differ -- "kernel-side code differs" -- not raise (which callers report as
+    "no kernel-side fingerprint")."""
+    base = {"cubevis/__init__.py": "", "cubevis/remote/__init__.py": "",
+            "cubevis/remote/worker_main.py": "import cubevis\n",
+            "cubevis/toolbox/__init__.py": "", "cubevis/toolbox/visplot/__init__.py": "",
+            "cubevis/toolbox/visplot/remote_registrations.py": "X = 1\n"}
+    old = _pkg(tmp_path / "old", base)
+    new = _pkg(tmp_path / "new", dict(base, **{"cubevis/imaging/__init__.py": "",
+                                                "cubevis/imaging/remote_registrations.py": "Y = 1\n"}))
+    fp_old, fp_new = F.fingerprint(root=old), F.fingerprint(root=new)
+    assert fp_old.startswith(F.ALGORITHM + "-") and fp_old != fp_new
+    ok, why = F.compatible(fp_new, fp_old, environ={})
+    assert not ok and "code differs" in why
+    with pytest.raises(FileNotFoundError):              # closure itself still insists
+        F.closure(root=old)

@@ -61,11 +61,11 @@ import re
 import time
 from typing import Optional
 
-from . import host_dir, host_id, launcher, envs, envmake, checkout
+from . import host_dir, host_id, launcher, envs, envmake, checkout, capabilities
 from . import remote as R
 from . import state as S
 from .steps import (Ctx, account_name, first_jump, hop_steps, inside_step, local_steps,
-                    parent_domain, split_port, user_ssh)
+                    network_steps, parent_domain, split_port, user_ssh)
 from .ui import tilde
 
 
@@ -615,7 +615,7 @@ def no_environment_advice(c: Ctx, node: str, rep: dict, declined: bool = False,
             "run this again and answer yes; or, on ") + f"{node}:")
     ui._p(f"    {t} create -y -n cubevis-{v} python={py} pip")
     ui._p(f"    {t} run -n cubevis-{v} python -m pip install \"cubevis[visplot]=={v}\"")
-    ui.say("and run this again.")
+    ui.say("(\"cubevis[visplot,iclean]\" for interactive clean too) and run this again.")
 
 
 def same_release(c: Ctx) -> Optional[str]:
@@ -825,9 +825,12 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Option
     py = f"{sys.version_info[0]}.{sys.version_info[1]}"
     v = same or v
     names = envmake.candidate_names(v)
-    what = (f"cubevis {v} (cubevis[visplot]=={v}, from PyPI"
-            + (f"; this checkout ({local_version()}) has the same kernel-side code"
-               if same else "") + ")")
+
+    def what(spec_text):
+        return (f"cubevis {v} ({spec_text}, from PyPI"
+                + (f"; this checkout ({local_version()}) has the same kernel-side code"
+                   if same else "") + ")")
+
     spec_text = envmake.spec(v)
     alias, python3, config_dir = _node_access(c, node, rep)
     dirs = list((rep.get("envs_dirs") or {}).get(tool["path"]) or [])
@@ -855,6 +858,7 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Option
         name = stopped[0]
         j = jobs[name]
         prefix = j["prefix"]
+        spec_text = j.get("spec") or spec_text          # as it was started
         ui.heading(f"An environment stopped on {node}")
         ui.note(f"An earlier try to make {rtilde(prefix, home)} stopped at "
                 f"{j.get('step') or 'the start'}: {j.get('error') or 'no reason recorded'}")
@@ -871,10 +875,12 @@ def offer_creation(c: Ctx, node: str, rep: dict, forced: bool = False) -> Option
         ui.say(("You asked for one of setup's own. " if forced else
                 f"No environment on {node} has the same kernel-side code as this computer "
                 f"({local_fingerprint(c)}), so ") + "setup makes its own there: a minimal conda "
-               f"environment with Python {py} and {what}, {envmake.EXPECTED_SIZE}. It is made "
-               f"in the background on {node}, so closing the laptop does not lose it; setup "
-               "never changes it afterwards (a later cubevis gets a new one) and never touches "
-               "your own environments.")
+               f"environment with Python {py} and {what(spec_text)}, {envmake.EXPECTED_SIZE}. "
+               f"It is made in the background on {node}, so closing the laptop does not lose it; "
+               "setup only adds to it afterwards, when you ask (a later cubevis gets a new one), "
+               "and never touches your own environments.")
+        if ask_iclean(c, node):
+            spec_text = envmake.spec(v, iclean=True)
         default = next((d for d in dirs if (facts.get(d) or {}).get("writable")), dirs[0])
         ui.say(f"{os.path.basename(tool['path'])} keeps environments in {rtilde(dirs[0], home)}"
                f" ({envmake.human_bytes(first.get('free'))} free there). Another directory is fine"
@@ -1021,6 +1027,214 @@ def environment_step(c: Ctx, node: str, rep: dict, reuse: bool) -> Optional[str]
     if "CUBEVIS_ALLOW_MISMATCH" in why:
         ui.note(f"using {rtilde(cand['prefix'], home)} although {why}")
     return record_environment(c, node, cand, r)
+
+
+# --------------------------------------------------------------------------
+# 5b. Interactive clean: a capability of the environment, CASA's data
+# --------------------------------------------------------------------------
+
+ICLEAN_SIZE = "about 300 MB more"        # casatools + casatasks + casaconfig wheels, installed
+CASA_DATA_SIZE = "about 850 MB"          # casadata 2025.9.22, installed
+
+
+def ask_iclean(c: Ctx, node: str) -> bool:
+    """Should kernels on *node* run interactive clean (casatasks in their
+    environment)?"""
+    c.ui.say(f"Kernels on {node} can run interactive clean (iclean) too: their environment then "
+             f"also holds casatasks and casatools ({ICLEAN_SIZE}).")
+    c.iclean_answer = c.ui.ask_yn(f"Should kernels on {node} run interactive clean?", True,
+                                  key="iclean")
+    return c.iclean_answer
+
+
+def environment_iclean(st, env: str) -> Optional[bool]:
+    """Can environment *env* run interactive clean: its check's answer, else
+    its kernels' (their launcher tests); None when nothing says."""
+    e = st.section("environments")[env]
+    if e.get("iclean") is not None:
+        return e["iclean"]
+    said = [(k.get("capabilities") or {}).get("iclean") for k in st.section("kernels").values()
+            if k.get("environment") == env and k.get("capabilities")]
+    return None if not said else all(said)
+
+
+def made_by_setup(e: dict) -> bool:
+    """An environment setup made (its marker): the only kind it adds to."""
+    m = e.get("marker")
+    return isinstance(m, dict) and m.get("schema") == 1
+
+
+def iclean_step(c: Ctx, node: str, env: str, rep: dict) -> None:
+    """Environment *env* cannot run interactive clean: for one of setup's
+    own, offer to add it (once: a no is remembered until ``--redo``); for
+    the user's own, say how."""
+    ui, st = c.ui, c.st
+    e = st.section("environments")[env]
+    if environment_iclean(st, env) is not False:
+        return                          # can, or nothing says (asked once it is checked)
+    if getattr(c, "iclean_answer", None) is False:
+        e["iclean_declined"] = True     # answered no when it was made, in this run
+        return
+    if e.get("iclean_declined") and not c.redo:
+        return
+    home = (rep.get("host") or {}).get("home")
+    where = rtilde(e.get("prefix"), home)
+    ui.heading(f"Interactive clean on {node}")
+    if not made_by_setup(e):
+        ui.say(f"Kernels using {where} cannot run interactive clean: it has no casatasks. It is "
+               f"your environment, so setup does not install into it. To add it: "
+               f"{rtilde(e['python'], home)} -m pip install \"cubevis[iclean]=={e.get('cubevis')}\" "
+               "there, then run this again (--redo says this again).")
+        e["iclean_declined"] = True
+        return
+    ui.say(f"Kernels using {where} cannot run interactive clean: it has no casatasks. Setup "
+           f"made that environment, so it can add casatasks and casatools ({ICLEAN_SIZE}), "
+           "in the background like making it.")
+    if not ui.ask_yn("Add interactive clean to it?", True, key="add_iclean"):
+        e["iclean_declined"] = True
+        ui.say("Not added; python -m cubevis.setup --redo HOST asks again.")
+        return
+    e.pop("iclean_declined", None)
+    add_to_environment(c, node, rep, env, iclean=True)
+
+
+def add_to_environment(c: Ctx, node: str, rep: dict, env: str, iclean: bool = False,
+                       casa_data: bool = False) -> bool:
+    """Add interactive clean (*iclean*) and/or a private copy of CASA's
+    data (*casa_data*) to setup's own environment *env* (``envmake`` add),
+    wait for it, and check it again; True when it was added."""
+    ui, st = c.ui, c.st
+    e = st.section("environments")[env]
+    home = (rep.get("host") or {}).get("home")
+    prefix = e["prefix"]
+    alias, python3, config_dir = _node_access(c, node, rep)
+    v = e.get("cubevis")
+    site = posixpath.join(prefix, capabilities.SITE_CONFIG_FILE)
+    update = {}
+    if iclean:
+        update["iclean"] = True
+    if casa_data:
+        update["casa_site_config"] = site
+    req = envmake.request(
+        "add", config_dir, prefix=prefix, spec=envmake.add_spec(v, iclean, casa_data), version=v,
+        step="installing " + " and ".join(
+            (["interactive clean (pip)"] if iclean else []) + (["CASA's data (pip)"] if casa_data else [])),
+        site_config=({"file": capabilities.SITE_CONFIG_FILE, "text": capabilities.SITE_CONFIG_TEXT}
+                     if casa_data else None),
+        marker_update=update, setup={"cubevis": local_version(), "host": host_id()},
+        install_shell=os.environ.get("CUBEVIS_SETUP_TEST_ADD"))
+    try:
+        res = envmake.call(c, alias, python3, req)
+    except R.RemoteError as exc:
+        res = {"ok": False, "error": str(exc)}
+    if not res.get("ok"):
+        ui.fail(f"cannot add to {rtilde(prefix, home)} on {node}: {res.get('error')}")
+        return False
+    what = " and ".join((["interactive clean"] if iclean else [])
+                        + (["a private copy of CASA's data"] if casa_data else []))
+    ui.record_change("adding to environment", f"{node}:{rtilde(prefix, home)}: {what} (in the "
+                     f"background; log {rtilde(envmake_log(config_dir, posixpath.basename(prefix)), home)})")
+    ui.say("Started; setup waits for it (Ctrl-C stops waiting, not the work).")
+    js = wait_for_job(c, node, rep, posixpath.basename(prefix.rstrip("/")))
+    if js is None:
+        return False
+    if js["state"] != "ok":
+        ui.fail(f"{what} could not be added to {rtilde(prefix, home)}: {js.get('error')}")
+        for line in ([js["reason"]] if js.get("reason") else (js.get("log_tail") or [])[-8:]):
+            ui._p("    " + line)
+        ui.say(f"Its log is {rtilde(js.get('log'), home)} on {node}. Run this again to go on from "
+               "the step that failed.")
+        return False
+    more = discover_step(c, node, [prefix], only=True, python3=rep.get("python_exe"))
+    got = _rows(c, more) if more else []
+    if not got:
+        ui.fail(f"{what} was added to {rtilde(prefix, home)}, but it cannot be checked")
+        return False
+    record_environment(c, node, got[0][0], got[0][1])
+    ui.ok(f"{rtilde(prefix, home)} now has {what}")
+    return True
+
+
+def _private_data_in_use(e: dict, data: dict) -> bool:
+    return bool(e.get("casa_site_config") and data.get("ready")
+                and str(data.get("measurespath") or "").startswith(e["prefix"].rstrip("/") + "/"))
+
+
+def casa_data_step(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> None:
+    """Kernel *name* runs interactive clean: where it finds CASA's data.
+    Found (your configuration or the site's): use it, or give the
+    environment a private copy -- asked once per environment
+    (``casa_data_choice``; ``--redo`` asks again).  Not found: a private
+    copy, for setup's own environment; what to do, for yours.  A private
+    copy is the ``casadata`` package with a site configuration pointing at
+    it, which the kernels get as ``CASASITECONFIG`` (``launcher.text``)."""
+    ui, st = c.ui, c.st
+    k = st.section("kernels")[name]
+    if not (k.get("capabilities") or {}).get("iclean"):
+        return
+    env = k["environment"]
+    e = st.section("environments")[env]
+    data = k.get("casa_data") or {}
+    home = (rep.get("host") or {}).get("home")
+    if e.get("casa_site_config"):
+        if _private_data_in_use(e, data):
+            ui.ok(f"kernel {name}: CASA's data is the environment's own copy")
+        else:
+            ui.note(f"kernel {name}: CASA's data is {capabilities.describe_data(data, home)}, not the "
+                    f"environment's own copy"
+                    + (f" -- {', '.join(rtilde(f, home) for f in data.get('files') or [])} "
+                       "sets it (your own configuration overrides the site's)"
+                       if data.get("files") else ""))
+        return
+    if data.get("ready") and (not made_by_setup(e)
+                              or e.get("casa_data_choice") == "own" and not c.redo):
+        ui.ok(f"kernel {name}: CASA's data {capabilities.describe_data(data, home)}")
+        return
+    ui.heading(f"CASA's data for interactive clean on {node}")
+    if data.get("ready"):
+        by = data.get("files") or []
+        ui.say(f"Interactive clean in kernel {name} finds CASA's data in "
+               f"{rtilde(data.get('measurespath'), home)} ("
+               + (f"set by {', '.join(rtilde(f, home) for f in by)}" if by else "casaconfig's default")
+               + ("; CASA updates it itself" if data.get("auto_update") else "; not updated by CASA")
+               + "). The environment can have a private copy instead: the casadata package "
+               f"({CASA_DATA_SIZE}), which nothing updates -- so cleaning there never changes "
+               "with your data.")
+        default = "u"
+    else:
+        ui.say(f"Interactive clean in kernel {name} finds no CASA data: "
+               f"{data.get('why') or 'not known why'}.")
+        if not made_by_setup(e):
+            ui.say("Its environment is yours: install casadata there (pip install casadata) and "
+                   "point CASA at it -- measurespath in ~/.casa/config.py, or a site "
+                   "configuration given as CASASITECONFIG among the kernel's variables -- or create "
+                   "~/.casa/data for CASA to fill, then run this again.")
+            return
+        ui.say(f"Setup can give its environment a private copy: the casadata package "
+               f"({CASA_DATA_SIZE}), which nothing updates.")
+        default = "p"
+    a = ui.ask_choice("[u]se " + ("it" if data.get("ready") else "nothing (decide later)")
+                      + ", or give the environment a [p]rivate copy?", default, ("u", "p"),
+                      key="casa_data")
+    if a == "u":
+        if data.get("ready"):
+            e["casa_data_choice"] = "own"
+        return
+    if not add_to_environment(c, node, rep, env, casa_data=True):
+        return
+    e = st.section("environments")[env]
+    e["casa_data_choice"] = "private"
+    for kn in st.kernels_on(node):
+        if st.section("kernels")[kn].get("environment") == env:
+            ok, msg = write_and_test(c, node, kn, rep, host_text)
+            (ui.ok if ok else ui.fail)(f"kernel {kn}: {msg}")
+            if ok:
+                d = st.section("kernels")[kn].get("casa_data") or {}
+                if not _private_data_in_use(e, d):
+                    ui.note(f"kernel {kn}: CASA's data is {capabilities.describe_data(d, home)}"
+                            + (f" -- {', '.join(rtilde(f, home) for f in d.get('files') or [])} "
+                               "overrides the environment's copy" if d.get("files") else ""))
+    c.save()
 
 
 # --------------------------------------------------------------------------
@@ -1227,9 +1441,11 @@ def record_environment(c: Ctx, node: str, cand: dict, r: dict) -> str:
     e.update(kind=envs.kind_from_report(r) or cand["kind"],
              prefix=r.get("prefix") or cand["prefix"], versions=r.get("versions") or {},
              cubevis=(r.get("versions") or {}).get("cubevis"), python_version=r.get("python"),
-             visplot=r.get("visplot"), cubevis_via=via, tool=tool,
+             visplot=r.get("visplot"), iclean=r.get("iclean"), cubevis_via=via, tool=tool,
              fingerprint=r.get("fingerprint"), marker=cand.get("marker"), checked_on=node,
              base_prefix=r.get("base_prefix"))
+    if (cand.get("marker") or {}).get("casa_site_config"):
+        e["casa_site_config"] = cand["marker"]["casa_site_config"]
     st.mark_ok("environments", name)
     return name
 
@@ -1277,7 +1493,7 @@ def write_and_test(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> t
 
     def write_test():
         """Write the launcher (when its text changed) and run it once:
-        ``(fp, cwd, seconds)``; RemoteError."""
+        ``(fp, cwd, report, seconds)``; RemoteError."""
         text = launcher.text(name, k, e, home, host_id(), host=host_text)
         try:
             did = R.install_launcher(c, alias, rep.get("python_exe") or "python3", path, text)
@@ -1288,16 +1504,16 @@ def write_and_test(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> t
         k["launcher"] = path
         t0 = time.monotonic()
         try:
-            fp_, cwd_ = R.test_launcher(c, alias, path)
+            fp_, cwd_, caps_ = R.test_launcher(c, alias, path)
         except R.RemoteError as exc:
             raise R.RemoteError(f"on {node}: {exc}") from None
         took_ = time.monotonic() - t0
         ui.log(f"kernel {name}: the launcher test took {took_:.1f} s"
                + (" (PYTHONHOME set)" if k.get("pythonhome") else ""))
-        return fp_, cwd_, took_
+        return fp_, cwd_, caps_, took_
 
     try:
-        fp, cwd, took = write_test()
+        fp, cwd, caps, took = write_test()
     except R.RemoteError as exc:
         st.flag("kernels", name, str(exc))
         return False, st.section("kernels")[name]["last_error"]
@@ -1311,12 +1527,12 @@ def write_and_test(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> t
                "slow on automounted filesystems) ...")
         k["pythonhome"], k["pythonhome_by"] = True, "setup"
         try:
-            fp2, cwd2, took2 = write_test()
+            fp2, cwd2, caps2, took2 = write_test()
         except R.RemoteError as exc:
             fp2, took2 = None, None
             ui.log(f"kernel {name}: with PYTHONHOME: {exc}")
         if took2 is not None and took2 < took / 2:
-            fp, cwd = fp2, cwd2
+            fp, cwd, caps = fp2, cwd2, caps2
             k["pythonhome_times"] = [round(took, 1), round(took2, 1)]
             ui.ok(f"with PYTHONHOME it starts in {took2:.1f} s: kernel {name} sets it "
                   f"(python -m cubevis.setup {host_text} --no-pythonhome takes it out)")
@@ -1327,7 +1543,7 @@ def write_and_test(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> t
                     + ": not set")
             k["pythonhome"], k["pythonhome_by"] = False, None
             try:
-                fp, cwd, _t = write_test()
+                fp, cwd, caps, _t = write_test()
             except R.RemoteError as exc:
                 st.flag("kernels", name, str(exc))
                 return False, st.section("kernels")[name]["last_error"]
@@ -1335,8 +1551,19 @@ def write_and_test(c: Ctx, node: str, name: str, rep: dict, host_text: str) -> t
     if not usable:
         st.flag("kernels", name, f"on {node}: {why}")
         return False, st.section("kernels")[name]["last_error"]
-    st.mark_ok("kernels", name, fingerprint=fp, checked_on=node)
-    return True, f"starts in {rtilde(cwd, home)}" + (f"; {why}" if fp != local_fingerprint(c) else "")
+    st.mark_ok("kernels", name, fingerprint=fp, checked_on=node, **capability_fields(caps))
+    return True, (f"starts in {rtilde(cwd, home)}" + (f"; {why}" if fp != local_fingerprint(c) else "")
+                  + (f"; runs {capabilities.describe(caps.get('capabilities'))}" if caps else ""))
+
+
+def capability_fields(report: Optional[dict]) -> dict:
+    """A kernel record's fields from what its launcher test reported
+    (``capabilities.parse``): nothing from a kernel that did not say."""
+    if not report:
+        return {}
+    return {"capabilities": report.get("capabilities") or {},
+            "capability_errors": report.get("errors") or {},
+            "casa_data": report.get("casa_data")}
 
 
 # A launcher test slower than this (seconds): PYTHONHOME is tried.
@@ -1457,6 +1684,7 @@ def kernel_step(c: Ctx, node: str, env: str, rep: dict, name: Optional[str],
                          f"{rtilde(kk.get('workdir') or home, home)}"
                          + (", sets " + ", ".join(sorted(kk['env'])) if kk.get("env") else ""))
         c.save()
+    casa_data_step(c, node, name, rep, host_text)
     use_kernel(c, name, host_text)
     return True
 
@@ -1472,12 +1700,15 @@ def use_kernel(c: Ctx, name: str, host_text: str) -> bool:
         return False
     node = J.default_node(st, name)
     cl = st.nodes()[node].get("cluster")
-    ui.ok(f"visplot can use kernel {name} (on {node}):")
-    J.show_use(ui, name)
+    caps = st.section("kernels")[name].get("capabilities")
+    ui.ok(f"kernel {name} (on {node}) runs {capabilities.describe(caps)}:")
+    J.show_use(ui, name, caps=caps)
     ui.say("Relative paths are found in the kernel's working directory there. "
            + (f"On another node of cluster {cl}, alongside: python -m cubevis.setup jupyter "
               f"{name} NODE. " if cl else "")
            + f"Another kernel here: python -m cubevis.setup {host_text} --kernel NAME. "
+           f"Its working directory, variables or environment, later: python -m cubevis.setup "
+           f"kernel {name} --workdir DIR (--env, --environment; no option asks). "
            "python -m cubevis.setup status lists them all.")
     return True
 
@@ -1569,6 +1800,24 @@ def check_kernels(c: Ctx, node: str, rep: dict, host_text: str) -> bool:
         elif not ok and "kernel-side code differs" in (msg or ""):
             ok = environment_gone(c, node, name, rep, host_text, gone=False)
         good = good and ok
+    c.save()
+    # Interactive clean: offered for each environment the kernels use that
+    # lacks it (added: their kernels are tested again), then CASA's data.
+    for env in sorted({st.section("kernels")[n].get("environment") for n in names
+                       if n in st.section("kernels")}):
+        if env not in st.section("environments"):
+            continue
+        before = environment_iclean(st, env)
+        iclean_step(c, node, env, rep)
+        if before is False and st.section("environments")[env].get("iclean"):
+            for name in names:
+                if (st.section("kernels").get(name) or {}).get("environment") == env:
+                    ok, msg = write_and_test(c, node, name, rep, host_text)
+                    (ui.ok if ok else ui.fail)(f"kernel {name}: {msg}")
+        c.save()
+    for name in names:
+        if (st.section("kernels").get(name) or {}).get("status") == "ok":
+            casa_data_step(c, node, name, rep, host_text)
     c.save()
     for name in names:
         if name in st.section("kernels") and st.section("kernels")[name].get("status") == "ok":
@@ -1711,11 +1960,34 @@ def cmd_host(c: Ctx, text: str, kernel: Optional[str] = None,
     if net.get("login"):
         inside_step(c, n["network"], node)
     if kernel is None and st.kernels_on(node):
-        return 0 if check_kernels(c, node, rep, text) else 1
-    env = environment_step(c, node, rep, reuse=kernel is not None)
+        good = check_kernels(c, node, rep, text)
+        # Another kernel here -- another environment (one with casatasks for
+        # interactive clean, say), directory or variables: offered, not
+        # only through --kernel NAME (Darrell, 2026-11-09).
+        ui.heading(f"Another kernel on {node}")
+        ui.say(f"Kernels here: {', '.join(st.kernels_on(node))}. Another one can use another "
+               "environment (one that can run interactive clean, say), working directory or "
+               "variables; python -m cubevis.setup kernel NAME changes one of these instead.")
+        if not ui.ask_yn("Add another kernel?", False, key="another_kernel"):
+            return 0 if good else 1
+    elif kernel is not None and kernel in st.section("kernels"):
+        # --kernel NAME of a kernel there is: its settings asked again, in
+        # its own environment (python -m cubevis.setup kernel NAME
+        # --environment ENV moves it to another).
+        env = st.section("kernels")[kernel].get("environment")
+        if env in st.section("environments") and st.environment_on(env, node):
+            iclean_step(c, node, env, rep)
+            c.save()
+            return 0 if kernel_step(c, node, env, rep, kernel, text) else 1
+    # A new kernel: its environment is always chosen (the one the host's
+    # kernels use is the default) -- before, --kernel NEW took that one
+    # without asking, so a second environment could not be chosen.
+    env = environment_step(c, node, rep, reuse=False)
     c.save()
     if env is None:
         return 1
+    iclean_step(c, node, env, rep)
+    c.save()
     ok = kernel_step(c, node, env, rep, kernel, text)
     if ok:
         offer_cleanup(c, node, rep, text, st.section("environments")[env]["python"])
@@ -1744,7 +2016,7 @@ def check_kernel(c: Ctx, name: str) -> bool:
         return False
     node = nodes[0]
     try:
-        fp, cwd = R.test_launcher(c, st.nodes()[node]["alias"], k["launcher"])
+        fp, cwd, caps = R.test_launcher(c, st.nodes()[node]["alias"], k["launcher"])
     except R.RemoteError as exc:
         st.flag("kernels", name, f"on {node}: {exc}")
         ui.fail(f"kernel {name} on {node}: {exc}")
@@ -1754,6 +2026,110 @@ def check_kernel(c: Ctx, name: str) -> bool:
         st.flag("kernels", name, f"on {node}: {why}")
         ui.fail(f"kernel {name} on {node}: {why}")
         return False
-    st.mark_ok("kernels", name, fingerprint=fp, checked_on=node)
-    ui.ok(f"kernel {name} on {node}: starts in {cwd}; {why}")
+    st.mark_ok("kernels", name, fingerprint=fp, checked_on=node, **capability_fields(caps))
+    ui.ok(f"kernel {name} on {node}: starts in {cwd}; {why}"
+          + (f"; runs {capabilities.describe(caps.get('capabilities'))}" if caps else ""))
     return True
+
+
+# --------------------------------------------------------------------------
+# One kernel's settings, changed on their own (2026-11-09, Darrell)
+# --------------------------------------------------------------------------
+
+def cmd_kernel(c: Ctx, name: str, workdir: Optional[str] = None, env_vars: Optional[str] = None,
+               environment: Optional[str] = None) -> int:
+    """``python -m cubevis.setup kernel NAME [--workdir DIR] [--env VARS]
+    [--environment ENV]``: change one kernel without going through its host
+    again.  With no option, its working directory and variables are asked
+    (the answers default to what it has); with options, only those change.
+    Its launcher is written again on the node it was last checked on and run
+    once.  On a cluster, when the kernel's old settings were the cluster's
+    defaults (for its next kernels), they can follow."""
+    ui, st = c.ui, c.st
+    kernels = st.section("kernels")
+    if name not in kernels:
+        ui.fail(f"there is no kernel {name!r}"
+                + (f" (kernels: {', '.join(sorted(kernels))})" if kernels else
+                   " (python -m cubevis.setup HOST sets one up)"))
+        return 1
+    k = kernels[name]
+    envs_ = st.section("environments")
+    new_env = environment or k.get("environment")
+    if new_env not in envs_:
+        ui.fail(f"there is no environment {new_env!r}"
+                + (f" (environments: {', '.join(sorted(envs_))})" if envs_ else ""))
+        return 1
+    old_net = (envs_.get(k.get("environment")) or {}).get("network")
+    if old_net and envs_[new_env].get("network") != old_net:
+        ui.fail(f"environment {new_env} is on another network than kernel {name} ({old_net})")
+        return 1
+    nodes = [x for x in sorted(st.nodes()) if st.environment_on(new_env, x)]
+    if k.get("checked_on") in nodes:
+        nodes.remove(k["checked_on"])
+        nodes.insert(0, k["checked_on"])
+    if not nodes:
+        ui.fail(f"no node has environment {new_env}: python -m cubevis.setup HOST first")
+        return 1
+    node = nodes[0]
+    n = st.nodes()[node]
+    if not local_steps(c):
+        return 1
+    if not network_steps(c, n["network"], [node]):
+        return 1
+    ui.heading(f"Kernel {name} on {n.get('cluster') and 'cluster ' + n['cluster'] or node}")
+    rep = discover_step(c, node, only=True)
+    if rep is None:
+        return 1
+    home = (rep.get("host") or {}).get("home") or n.get("home") or "/"
+    old = {"workdir": k.get("workdir"), "env": dict(k.get("env") or {}),
+           "environment": k.get("environment")}
+    new = dict(old, env=dict(old["env"]))
+    if workdir is None and env_vars is None and environment is None:
+        _ask_settings(c, node, new, home)
+    else:
+        if workdir is not None:
+            p = expand_remote(workdir, home)
+            new["workdir"] = None if p == home else p
+        if env_vars is not None:
+            try:
+                new["env"] = ({} if env_vars.strip().lower() in ("none", "-", "")
+                              else launcher.parse_vars(env_vars))
+            except ValueError as exc:
+                ui.fail(f"--env: {exc}")
+                return 1
+        new["environment"] = new_env
+    if new == old:
+        ui.ok(f"kernel {name}: nothing to change (starts in {rtilde(old['workdir'] or home, home)}"
+              + (f", {launcher.format_vars(old['env'])}" if old["env"] else "") + ")")
+        return 0
+    k.update(workdir=new["workdir"], env=new["env"], environment=new["environment"])
+    said = []
+    if new["workdir"] != old["workdir"]:
+        said.append(f"starts in {rtilde(new['workdir'] or home, home)} "
+                    f"(was {rtilde(old['workdir'] or home, home)})")
+    if new["env"] != old["env"]:
+        said.append(f"variables {launcher.format_vars(new['env']) or 'none'} "
+                    f"(were {launcher.format_vars(old['env']) or 'none'})")
+    if new["environment"] != old["environment"]:
+        said.append(f"environment {new['environment']} (was {old['environment']})")
+    ui.record_change("changed kernel", f"{name}: " + "; ".join(said))
+    cl_name = n.get("cluster")
+    cl = st.section("clusters").get(cl_name) if cl_name else None
+    if (cl is not None and (cl.get("workdir"), dict(cl.get("env") or {})) == (old["workdir"], old["env"])
+            and (new["workdir"], new["env"]) != (old["workdir"], old["env"])):
+        ui.say(f"Cluster {cl_name}'s defaults for its next kernels are kernel {name}'s old "
+               "settings.")
+        if ui.ask_yn(f"Make its new settings cluster {cl_name}'s defaults?", True,
+                     key="cluster_defaults"):
+            cl["workdir"], cl["env"] = new["workdir"], dict(new["env"])
+            ui.record_change("cluster defaults", f"{cl_name}: starts in "
+                             f"{rtilde(new['workdir'] or home, home)}"
+                             + (f", {launcher.format_vars(new['env'])}" if new["env"] else ""))
+    c.save()
+    ok, msg = write_and_test(c, node, name, rep, node)
+    (ui.ok if ok else ui.fail)(f"kernel {name}: {msg}")
+    c.save()
+    if ok and new["environment"] != old["environment"]:
+        casa_data_step(c, node, name, rep, node)
+        c.save()
+    return 0 if ok else 1

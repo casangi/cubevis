@@ -22,15 +22,6 @@ try {
 // Determine if we should minify (production or when neither dev nor watch is specified)
 const shouldMinify = isProduction || (!isDev && !isWatch);
 
-// Define files to copy with versioning
-const filesToCopy = [
-  {
-    source: 'dist/esbuild/casalib.min.js',
-    dest: '../cubevis/__js__/casalib.min.js',
-    description: 'Published library'
-  }
-];
-
 // Always create the versioned filename as the primary output
 const getVersionedOutputFile = () => {
   if (shouldMinify) {
@@ -38,6 +29,17 @@ const getVersionedOutputFile = () => {
   }
   return `dist/esbuild/casalib-${version}.js`;
 };
+
+// Define files to copy with versioning
+// The build writes only the versioned file (getVersionedOutputFile), so that
+// is what gets published under the unversioned name cubevis loads.
+const filesToCopy = [
+  {
+    source: getVersionedOutputFile(),
+    dest: '../cubevis/__js__/casalib.min.js',
+    description: 'Published library'
+  }
+];
 
 // Ensure output directory exists
 const outputDir = 'dist/esbuild';
@@ -54,6 +56,9 @@ const config = {
   bundle: true,
   sourcemap: 'external',
   platform: 'browser',
+  // src/browser.ts reads __VERSION__; without this the bundle throws a
+  // ReferenceError as soon as it is loaded.
+  define: { __VERSION__: JSON.stringify(version) },
   outfile: getVersionedOutputFile()
 };
 

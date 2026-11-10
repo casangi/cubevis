@@ -561,6 +561,11 @@ class CommsTransport(TransportBase):
         super().__init__(comm_mgr_id, abort)
         self._main_ioloop = IOLoop.current()
         self._bridge = None
+        # Why display_bridge() failed, if it did.  It runs as a preflight
+        # callable, whose exceptions are only logged (as a warning in the cell
+        # that built the application), so connect() reports this cause instead
+        # of only "display_bridge() must be called before connect()".
+        self._bridge_error: Optional[BaseException] = None
         self._bridge_started = { }                   # key is self._comm_mgr_id
         self._callback: Optional[Callable] = None
         self._connected = False
@@ -833,6 +838,14 @@ class CommsTransport(TransportBase):
     # Phase 1: synchronous – must run inside the cell output context
     # ------------------------------------------------------------------
     def display_bridge(self) -> None:
+        """Display the bridge (``_display_bridge``), recording why it failed."""
+        try:
+            self._display_bridge( )
+        except BaseException as exc:
+            self._bridge_error = exc
+            raise
+
+    def _display_bridge(self) -> None:
         """
         Build the anywidget bridge widget, register the comm target, and
         display it in the current cell output.
@@ -870,7 +883,8 @@ class CommsTransport(TransportBase):
             from IPython.display import display
         except ImportError:
             raise ImportError(
-                "The 'anywidget' package is required. Install with: pip install anywidget"
+                "The 'anywidget' package is required for display in Jupyter notebooks. "
+                "Install with: pip install anywidget (or: pip install 'cubevis[notebook]')"
             )
 
         is_debug_js = "true" if self._debug else "false"
@@ -1291,6 +1305,9 @@ class CommsTransport(TransportBase):
         if self._connected: return
 
         if self._bridge is None:
+            if self._bridge_error is not None:
+                raise RuntimeError( "the notebook bridge could not be displayed: "
+                                    f"{self._bridge_error}" ) from self._bridge_error
             raise RuntimeError( "display_bridge() must be called before connect()." )
 
         deadline = asyncio.get_event_loop( ).time( ) + timeout

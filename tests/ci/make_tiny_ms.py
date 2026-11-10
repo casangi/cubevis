@@ -2,7 +2,8 @@
 antennas, 2 spectral windows of 8 channels, 2 polarizations, 2 scans of
 100 times each -- about 3 MB, made in a few seconds.
 
-xradio's test generator (``xradio.testing``) writes the tables; its rows
+xradio's test generator (``xradio.testing``) writes the tables (through
+arcae, xradio >= 1.3: no python-casacore); its rows
 each get a time of their own, its UVWs are tiny and many of its data are
 zero, and all its channels have one frequency.  So afterwards the rows are regrouped into
 integrations (one time per 10 baselines), and given plausible UVWs and
@@ -31,7 +32,11 @@ INTERVAL = 10.0
 
 def make(path: str) -> str:
     from xradio.testing.measurement_set.msv2_io import gen_test_ms, default_ms_descr
-    from casacore.tables import table
+    ### python-casacore's table API as xradio provides it -- on arcae since xradio 1.3
+    ### (xradio._utils._casacore.backend, the same tables its generator writes with);
+    ### python-casacore is not needed (until 2026-11-07 it was imported here)
+    from xradio._utils._casacore.backend import tables
+    table = tables.table
 
     nbl = NANT * (NANT - 1) // 2
     d = copy.deepcopy(default_ms_descr)

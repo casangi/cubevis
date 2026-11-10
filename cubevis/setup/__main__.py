@@ -2,7 +2,15 @@
 
     python -m cubevis.setup HOST                  make kernels work on HOST (the computer
                                                   your data is on); again: check them
-    python -m cubevis.setup HOST --kernel NAME    add (or change) a kernel on HOST
+    python -m cubevis.setup HOST --kernel NAME    add a kernel on HOST (its environment, working
+                                                  directory and variables are asked), or
+                                                  change one there; a host set up before
+                                                  offers another kernel at the end too
+    python -m cubevis.setup kernel NAME [--workdir DIR] [--env VARS] [--environment ENV]
+                                                  change one kernel: its working directory,
+                                                  variables ('none' for none) or environment
+                                                  (asked, without options); its launcher is
+                                                  written again and run once
     python -m cubevis.setup HOST --2fa            HOST's login asks for a second factor
     python -m cubevis.setup HOST --pythonhome     HOST's kernels set PYTHONHOME (Python
                                                   starts slowly there: autofs)
@@ -48,7 +56,7 @@ from .hostsetup import check_kernel, cmd_cleanup, cmd_host, rtilde
 from .steps import Ctx, last_line, local_steps, network_steps
 from .ui import UI, Quit, tilde
 
-COMMANDS = ("status", "check", "network", "jupyter", "diagnose")
+COMMANDS = ("status", "check", "network", "jupyter", "diagnose", "kernel")
 
 
 # ==========================================================================
@@ -57,6 +65,7 @@ COMMANDS = ("status", "check", "network", "jupyter", "diagnose")
 
 def cmd_status(c: Ctx) -> int:
     ui, st = c.ui, c.st
+    from . import capabilities as _caps
     ui.heading(f"cubevis setup in {tilde(S.state_path().parent)}")
     loc = st.local
     ui._p(f"    {'computer':<10} {host_id()} ({tilde(S.host_state_path().parent)})")
@@ -121,7 +130,10 @@ def cmd_status(c: Ctx) -> int:
             state_ = "ok" if e.get("status") == "ok" else f"{e.get('status')} ({e.get('last_error')})"
             ui._p(f"      environment {en}: {e.get('kind')} {e.get('python')} on {where}, "
                   + ("made by setup, " if e.get("marker") else "")
-                  + (f"cubevis {e['cubevis']}, " if e.get("cubevis") else "") + state_)
+                  + (f"cubevis {e['cubevis']}, " if e.get("cubevis") else "")
+                  + (f"runs {_caps.describe({'visplot': e.get('visplot'), 'iclean': e.get('iclean')})}, "
+                     if e.get("visplot") is not None or e.get("iclean") is not None else "")
+                  + ("CASA's data: setup's copy, " if e.get("casa_site_config") else "") + state_)
         for kn, k in sorted(st.section("kernels").items()):
             e = envs_.get(k.get("environment")) or {}
             if e.get("network") != name:
@@ -136,12 +148,18 @@ def cmd_status(c: Ctx) -> int:
                   + (", sets PYTHONHOME" if k.get("pythonhome") else "")
                   + f", {state_}"
                   + (f" (on {k['checked_on']}, {k['last_checked']})" if k.get("checked_on") else ""))
+            caps = k.get("capabilities")
+            ui._p(f"        runs {_caps.describe(caps)}"
+                  + (f"; CASA's data {_caps.describe_data(k.get('casa_data'))}"
+                     if (caps or {}).get("iclean") else ""))
             specs = J.specs_for(st, kn)
             if specs:
                 for jn, jnode in specs:
                     shown = kn if jn == J.jupyter_name(kn) else jn
-                    ui._p(f"        visplot(..., backend=\"remote\", kernel_name=\"{shown}\")"
-                          f"   runs it on {jnode}")
+                    for app in _caps.APPS:
+                        if caps is None or caps.get(app):
+                            ui._p(f"        {app}(..., " + ("backend=\"remote\", " if app == "visplot" else "")
+                                  + f"kernel_name=\"{shown}\")   runs it on {jnode}")
             else:
                 ui._p(f"        no Jupyter kernel for it here: python -m cubevis.setup "
                       f"jupyter {kn}")
@@ -338,7 +356,10 @@ def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     p = argparse.ArgumentParser(
         prog="python -m cubevis.setup",
-        description="Set up cubevis kernels on the computers your data is on.",
+        description="Set up cubevis kernels on the computers your data is on.\n\n"
+                    + __doc__.split('"""')[0].split("\nRemote session design")[0]
+                    .split("\n", 1)[1].rstrip(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Anything that is not a command is a host: python -m cubevis.setup HOST "
                "[--kernel NAME]. Without one, setup asks for it.")
     p.add_argument("--yes", action="store_true", help="take every default (for tests)")
@@ -389,11 +410,20 @@ def main(argv=None) -> int:
                                         "VisibilityPlotter(kernel_name=...)")
     pj.add_argument("jkernel", metavar="kernel")
     pj.add_argument("node", nargs="?", help="where it runs (default: where it was last checked)")
+    pk = sub.add_parser("kernel", help="change one kernel: working directory, variables, "
+                                       "environment")
+    pk.add_argument("kname", metavar="name")
+    pk.add_argument("--workdir", metavar="DIR", help="the directory it starts in (~ is your "
+                                                       "home there)")
+    pk.add_argument("--env", dest="env_vars", metavar="VARS",
+                    help="its variables, NAME=value separated by spaces ('none' for none)")
+    pk.add_argument("--environment", metavar="ENV", help="another environment of setup's "
+                                                         "(python -m cubevis.setup status)")
     pn.add_argument("--inside-here", action="store_true",
                     help="add where this computer is now to the network's inside ranges, "
                          "after checking that its nodes answer directly from here")
     # Anything that is not a command (or an option) is a host.
-    takes_value = {"--answer", "--kernel"}
+    takes_value = {"--answer", "--kernel", "--workdir", "--env", "--environment"}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -447,6 +477,10 @@ def main(argv=None) -> int:
             rc = cmd_inside_here(c, a.name) if a.inside_here else cmd_network(c, a.name)
         elif a.cmd == "jupyter":
             rc = cmd_jupyter(c, a.jkernel, a.node)
+        elif a.cmd == "kernel":
+            from .hostsetup import cmd_kernel
+            rc = cmd_kernel(c, a.kname, workdir=a.workdir, env_vars=a.env_vars,
+                            environment=a.environment)
         elif a.cmd == "host":
             rc = (cmd_cleanup(c, a.host) if a.cleanup
                   else cmd_host(c, a.host, a.kernel, twofactor=a.twofactor,

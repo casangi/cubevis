@@ -59,9 +59,8 @@ casacore bindings, ``arcae``.  ``arcae`` is published for Linux (x86_64
 and aarch64) and macOS (Apple Silicon on macOS 14 or later, Intel on
 macOS 15 or later); there is no Windows build.  Elsewhere, run the data
 access on a machine that has the data, with the window on your own
-computer: a *remote kernel* (``kernel_name=``), described in
-``demos/visplot-remote/00_setup.md`` of the cubevis repository (being
-replaced by ``python -m cubevis.setup``).
+computer: a *remote kernel* (``kernel_name=``), set up with
+``python -m cubevis.setup``: see :doc:`remote_kernels`.
 
 Launching visplot
 ------------------

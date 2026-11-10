@@ -373,10 +373,15 @@ def test_a_taken_name_gets_the_next_one(ctx, release, monkeypatch):
     assert H.offer_creation(c, _node(c), _rep()) is None
     start = seen[-1]
     assert start["name"] == "cubevis-1.0.97-2" and start["prefix"] == "/opt/c/envs/cubevis-1.0.97-2"
-    assert start["tool"] == CONDA and start["spec"] == "cubevis[visplot]==1.0.97"
+    # kernels there run interactive clean too unless asked not to (step 5b)
+    assert start["tool"] == CONDA and start["spec"] == "cubevis[visplot,iclean]==1.0.97"
     assert start["version"] == "1.0.97" and start["setup"] == {"cubevis": "1.0.97", "host": "gui1"}
     assert start["python"] == "%d.%d" % __import__("sys").version_info[:2]
     assert "cannot start it on node1: stop here" in c.ui.out.getvalue()
+    assert "Should kernels on node1 run interactive clean?" in c.ui.out.getvalue()
+    c = ctx(via_login="n", user="jo", iclean="n")
+    assert H.offer_creation(c, _node(c), _rep()) is None
+    assert seen[-1]["spec"] == "cubevis[visplot]==1.0.97" and c.iclean_answer is False
 
 
 def test_waiting_follows_the_steps_and_ends_on_the_state(ctx, release, monkeypatch):
@@ -637,7 +642,7 @@ def _slow_kernel(ctx, monkeypatch, seconds, **record):
     monkeypatch.setattr(H, "time", _Clock(seconds))
     written = []
     monkeypatch.setattr(H.R, "install_launcher", lambda c, a, py, path, text: written.append(text) or "written")
-    monkeypatch.setattr(H.R, "test_launcher", lambda c, a, path: ("FP", "/home/jo"))
+    monkeypatch.setattr(H.R, "test_launcher", lambda c, a, path: ("FP", "/home/jo", None))
     c = ctx(via_login="n", user="jo")
     node = _node(c)
     net = c.st.nodes()[node]["network"]
@@ -713,3 +718,372 @@ def test_a_step_whose_check_passes_after_a_declined_do_is_done(ctx):
     assert run_step(c.ui, FuncStep("Thing", lambda: (True, "fine"), lambda: False), redo=True)
     out = c.ui.out.getvalue()
     assert "ok    Thing -- fine" in out and "FAIL" not in out
+
+
+# --------------------------------------------------------------------------
+# Interactive clean and CASA's data (iclean design step 5b)
+# --------------------------------------------------------------------------
+
+MARKER = {"schema": 1, "name": "cubevis-1.0.97", "version": "1.0.97", "tool": CONDA}
+
+
+def _env(c, node, marker=MARKER, **fields):
+    net = c.st.nodes()[node]["network"]
+    e = c.st.add_environment("e", network=net, python="/opt/c/envs/cubevis-1.0.97/bin/python",
+                             kind="conda", prefix="/opt/c/envs/cubevis-1.0.97", hosts=[node])
+    e.update(cubevis="1.0.97", marker=marker, **fields)
+    return e
+
+
+def test_setups_environment_is_offered_interactive_clean_once(ctx, release, monkeypatch):
+    added = []
+    monkeypatch.setattr(H, "add_to_environment", lambda c, node, rep, env, **kw: added.append((env, kw)) or True)
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    e = _env(c, node, iclean=False)
+    H.iclean_step(c, node, "e", _rep())
+    assert added == [("e", {"iclean": True})]
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "cannot run interactive clean: it has no casatasks. Setup made that environment" in out
+    # no: remembered, not asked again ...
+    added.clear()
+    c = ctx(via_login="n", user="jo", add_iclean="n")
+    c.st.section("environments")["e"] = e
+    H.iclean_step(c, node, "e", _rep())
+    assert added == [] and e["iclean_declined"] is True
+    c.ui.out = __import__("io").StringIO()
+    H.iclean_step(c, node, "e", _rep())
+    assert c.ui.out.getvalue() == ""
+    # ... until --redo
+    c = ctx(via_login="n", user="jo")
+    c.st.section("environments")["e"] = e
+    c.redo = True
+    H.iclean_step(c, node, "e", _rep())
+    assert added == [("e", {"iclean": True})] and "iclean_declined" not in e
+
+
+def test_your_environment_is_told_how_not_installed_into(ctx, release, monkeypatch):
+    monkeypatch.setattr(H, "add_to_environment", lambda *a, **k: pytest.fail("installed into yours"))
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    _env(c, node, marker=None, iclean=False)
+    H.iclean_step(c, node, "e", _rep())
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "It is your environment, so setup does not install into it" in out
+    assert '-m pip install "cubevis[iclean]==1.0.97"' in out
+
+
+def test_nothing_is_offered_when_it_can_or_nobody_knows(ctx, release, monkeypatch):
+    monkeypatch.setattr(H, "add_to_environment", lambda *a, **k: pytest.fail("offered"))
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    c.ui.out = __import__("io").StringIO()
+    e = _env(c, node, iclean=True)
+    H.iclean_step(c, node, "e", _rep())
+    e["iclean"] = None                                  # checked before step 5b
+    H.iclean_step(c, node, "e", _rep())
+    c.iclean_answer = False                             # said no when it was made, this run
+    e["iclean"] = False
+    H.iclean_step(c, node, "e", _rep())
+    assert c.ui.out.getvalue() == "" and e["iclean_declined"] is True
+
+
+def test_a_kernels_test_says_what_its_environment_lacks(ctx, release, monkeypatch):
+    """An environment checked before 5b (``iclean`` unknown): its kernels'
+    launcher tests decide."""
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    _env(c, node)
+    assert H.environment_iclean(c.st, "e") is None
+    c.st.add_kernel("k", environment="e")["capabilities"] = {"visplot": True, "iclean": False}
+    assert H.environment_iclean(c.st, "e") is False
+
+
+def test_adding_waits_and_checks_the_environment_again(ctx, release, monkeypatch):
+    seen = []
+
+    def call(c, alias, python3, req, timeout=120):
+        seen.append(req)
+        if req["action"] == "add":
+            return {"ok": True, "started": True}
+        return {"ok": True, "status": {"state": "ok", "step": "done"}}
+    monkeypatch.setattr(H.envmake, "call", call)
+    prefix = "/opt/c/envs/cubevis-1.0.97"
+    marker = dict(MARKER, iclean=True, casa_site_config=f"{prefix}/{H.capabilities.SITE_CONFIG_FILE}")
+    check = {"python": "3.12.3", "prefix": prefix, "versions": {"cubevis": "1.0.97", "ipykernel": "6"},
+             "kernel": True, "visplot": True, "iclean": True, "errors": {}, "fingerprint": "FP-HERE"}
+    monkeypatch.setattr(H, "discover_step", lambda c, node, paths, only=False, python3=None: {
+        "environments": [{"python": f"{prefix}/bin/python", "prefix": prefix, "kind": "conda",
+                          "marker": marker, "check": check}]})
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    _env(c, node, iclean=False)
+    assert H.add_to_environment(c, node, _rep(), "e", iclean=True, casa_data=True)
+    add = seen[0]
+    assert add["action"] == "add" and add["prefix"] == prefix
+    assert add["spec"] == "cubevis[visplot,iclean]==1.0.97 casadata"
+    assert add["site_config"]["file"] == H.capabilities.SITE_CONFIG_FILE
+    assert add["marker_update"] == {"iclean": True, "casa_site_config": marker["casa_site_config"]}
+    assert seen[1] == dict(seen[1], action="status", name="cubevis-1.0.97")
+    e = c.st.section("environments")["e"]
+    assert e["iclean"] is True and e["casa_site_config"] == marker["casa_site_config"]
+
+
+def _kernel(c, node, data, **env_fields):
+    _env(c, node, iclean=True, **env_fields)
+    k = c.st.add_kernel("k", environment="e")
+    k.update(capabilities={"visplot": True, "iclean": True}, casa_data=data, status="ok")
+    return k
+
+
+def test_found_data_is_used_or_replaced_by_a_private_copy(ctx, release, monkeypatch):
+    added = []
+    monkeypatch.setattr(H, "add_to_environment", lambda c, node, rep, env, **kw: added.append(kw) or True)
+    tested = []
+    monkeypatch.setattr(H, "write_and_test", lambda c, node, name, rep, h: tested.append(name) or (True, "ok"))
+    data = {"ready": True, "measurespath": "/home/jo/.casa/data", "files": ["/home/jo/.casa/config.py"],
+            "auto_update": True}
+    c = ctx(via_login="n", user="jo")                      # the default: use it
+    node = _node(c)
+    _kernel(c, node, data)
+    H.casa_data_step(c, node, "k", _rep(), "node1")
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "finds CASA's data in ~/.casa/data (set by ~/.casa/config.py; CASA updates it itself)" in out
+    assert added == [] and c.st.section("environments")["e"]["casa_data_choice"] == "own"
+    c.ui.out = __import__("io").StringIO()
+    H.casa_data_step(c, node, "k", _rep(), "node1")          # decided: not asked again
+    assert "kernel k: CASA's data in ~/.casa/data (auto-updated)" in c.ui.out.getvalue()
+    c.st.section("environments")["e"].pop("casa_data_choice")
+    c.ui.answers["casa_data"] = "p"
+    H.casa_data_step(c, node, "k", _rep(), "node1")
+    assert added == [{"casa_data": True}] and tested == ["k"]
+    assert c.st.section("environments")["e"]["casa_data_choice"] == "private"
+
+
+def test_no_data_gets_a_private_copy_in_setups_environment_only(ctx, release, monkeypatch):
+    added = []
+    monkeypatch.setattr(H, "add_to_environment", lambda c, node, rep, env, **kw: added.append(kw) or True)
+    monkeypatch.setattr(H, "write_and_test", lambda *a: (True, "ok"))
+    data = {"ready": False, "measurespath": "/home/jo/.casa/data",
+            "why": "/home/jo/.casa/data does not exist"}
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    _kernel(c, node, data)
+    H.casa_data_step(c, node, "k", _rep(), "node1")
+    assert added == [{"casa_data": True}]                       # the default when there is none
+    assert "finds no CASA data: /home/jo/.casa/data does not exist" in " ".join(c.ui.out.getvalue().split())
+    added.clear()
+    c.ui.out = __import__("io").StringIO()
+    c.st.section("environments")["e"]["marker"] = None
+    H.casa_data_step(c, node, "k", _rep(), "node1")
+    out = " ".join(c.ui.out.getvalue().split())
+    assert added == [] and "Its environment is yours: install casadata there" in out
+
+
+def test_a_private_copy_overridden_by_your_configuration_is_said(ctx, release, monkeypatch):
+    prefix = "/opt/c/envs/cubevis-1.0.97"
+    site = f"{prefix}/{H.capabilities.SITE_CONFIG_FILE}"
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    _kernel(c, node, {"ready": True, "measurespath": f"{prefix}/lib/python3.12/site-packages/casadata/__data__",
+                      "files": [site]}, casa_site_config=site)
+    H.casa_data_step(c, node, "k", _rep(), "node1")
+    assert "kernel k: CASA's data is the environment's own copy" in c.ui.out.getvalue()
+    c.st.section("kernels")["k"]["casa_data"] = {
+        "ready": True, "measurespath": "/home/jo/data", "files": [site, "/home/jo/.casa/config.py"]}
+    H.casa_data_step(c, node, "k", _rep(), "node1")
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "not the environment's own copy" in out and "~/.casa/config.py sets it" in out
+
+
+def test_the_launcher_test_records_what_the_kernel_runs(ctx, monkeypatch):
+    monkeypatch.setattr(H, "local_fingerprint", lambda c: "FP")
+    monkeypatch.setattr(H.R, "install_launcher", lambda *a: "written")
+    report = {"capabilities": {"visplot": False, "iclean": True}, "errors": {"visplot": "no xarray_ms"},
+              "casa_data": {"ready": True, "measurespath": "/d"}}
+    monkeypatch.setattr(H.R, "test_launcher", lambda c, a, path: ("FP", "/home/jo", report))
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    _env(c, node)
+    c.st.add_kernel("k", environment="e")
+    ok, msg = H.write_and_test(c, node, "k", _rep(), "node1")
+    assert ok and msg.endswith("runs interactive clean"), msg
+    k = c.st.section("kernels")["k"]
+    assert k["capabilities"] == report["capabilities"] and k["capability_errors"] == report["errors"]
+    assert k["casa_data"] == report["casa_data"]
+
+
+def test_a_rerun_offers_interactive_clean_and_tests_the_kernels_again(ctx, release, monkeypatch):
+    """A host set up before 5b: its kernel's test says no interactive clean;
+    setup offers to add it to its own environment, then tests again."""
+    reports = iter([{"capabilities": {"visplot": True, "iclean": False}, "errors": {}, "casa_data": None},
+                    {"capabilities": {"visplot": True, "iclean": True}, "errors": {},
+                     "casa_data": {"ready": True, "measurespath": "/home/jo/.casa/data", "files": []}}])
+    monkeypatch.setattr(H, "local_fingerprint", lambda c: "FP")
+    monkeypatch.setattr(H.R, "install_launcher", lambda *a: "same")
+    monkeypatch.setattr(H.R, "test_launcher", lambda c, a, path: ("FP", "/home/jo", next(reports)))
+    monkeypatch.setattr(H, "use_kernel", lambda c, name, h: True)
+
+    def add(c, node, rep, env, **kw):
+        c.st.section("environments")[env]["iclean"] = True       # as the check after it says
+        return True
+    monkeypatch.setattr(H, "add_to_environment", add)
+    c = ctx(via_login="n", user="jo")
+    node = _node(c)
+    _env(c, node)                                                # iclean: never checked
+    c.st.add_kernel("k", environment="e")
+    assert H.check_kernels(c, node, _rep(), "node1")
+    k = c.st.section("kernels")["k"]
+    assert k["capabilities"]["iclean"] is True and k["casa_data"]["ready"]
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "Add interactive clean to it? [Y/n] ok kernel k: starts in ~; runs visplot, interactive clean" in out
+    assert "finds CASA's data in ~/.casa/data" in out
+
+
+# --------------------------------------------------------------------------
+# python -m cubevis.setup kernel NAME: one kernel changed (2026-11-09)
+# --------------------------------------------------------------------------
+
+def _kernel_rig(ctx, monkeypatch, **answers):
+    """A kernel 'k' on node1 (environment e), with no ssh: the logins pass, the
+    node says where home is, and the launcher's test is recorded."""
+    tested = []
+    monkeypatch.setattr(H, "local_steps", lambda c: True)
+    monkeypatch.setattr(H, "network_steps", lambda c, net, nodes=None, inside=True: True)
+    monkeypatch.setattr(H, "discover_step", lambda c, node, paths=(), only=False, python3=None: _rep())
+    monkeypatch.setattr(H, "write_and_test", lambda c, node, name, rep, h: tested.append(
+        (node, name, dict(c.st.section("kernels")[name]))) or (True, "starts in ..."))
+    c = ctx(via_login="n", user="jo", **answers)
+    node = _node(c)
+    _env(c, node)
+    k = c.st.add_kernel("k", environment="e", workdir="/home/jo/old", env={"A": "1"})
+    k["checked_on"] = node
+    return c, node, tested
+
+
+def test_a_kernels_working_directory_alone(ctx, release, monkeypatch):
+    c, node, tested = _kernel_rig(ctx, monkeypatch)
+    assert H.cmd_kernel(c, "k", workdir="~/casa/iclean") == 0
+    k = c.st.section("kernels")["k"]
+    assert k["workdir"] == "/home/jo/casa/iclean" and k["env"] == {"A": "1"}
+    assert tested and tested[0][:2] == (node, "k") and tested[0][2]["workdir"] == "/home/jo/casa/iclean"
+    c.ui.show_changes()
+    out = " ".join(c.ui.out.getvalue().split())
+    assert "changed kernel: k: starts in ~/casa/iclean (was ~/old)" in out
+    # ~ alone is the home directory: no workdir kept
+    assert H.cmd_kernel(c, "k", workdir="~") == 0 and c.st.section("kernels")["k"]["workdir"] is None
+
+
+def test_variables_alone_and_nothing_to_change(ctx, release, monkeypatch):
+    c, node, tested = _kernel_rig(ctx, monkeypatch)
+    assert H.cmd_kernel(c, "k", env_vars="OMP_NUM_THREADS=8 B=2") == 0
+    assert c.st.section("kernels")["k"]["env"] == {"OMP_NUM_THREADS": "8", "B": "2"}
+    assert H.cmd_kernel(c, "k", env_vars="none") == 0 and c.st.section("kernels")["k"]["env"] == {}
+    n = len(tested)
+    assert H.cmd_kernel(c, "k", env_vars="none") == 0 and len(tested) == n       # not written again
+    assert "nothing to change" in c.ui.out.getvalue()
+    assert H.cmd_kernel(c, "k", env_vars="not a variable") == 1
+
+
+def test_without_options_its_settings_are_asked(ctx, release, monkeypatch):
+    c, node, tested = _kernel_rig(ctx, monkeypatch, workdir="/data/new", env_vars="none")
+    assert H.cmd_kernel(c, "k") == 0
+    k = c.st.section("kernels")["k"]
+    assert (k["workdir"], k["env"]) == ("/data/new", {})
+    assert "Working directory [~/old]" in c.ui.out.getvalue()
+
+
+def test_the_clusters_defaults_can_follow(ctx, release, monkeypatch):
+    c, node, tested = _kernel_rig(ctx, monkeypatch)
+    c.st.add_cluster("cv", network=c.st.nodes()[node]["network"], pattern="node*")
+    c.st.nodes()[node]["cluster"] = "cv"
+    cl = c.st.section("clusters")["cv"]
+    cl["workdir"], cl["env"] = "/home/jo/old", {"A": "1"}
+    assert H.cmd_kernel(c, "k", workdir="/home/jo/new") == 0
+    assert cl["workdir"] == "/home/jo/new" and cl["env"] == {"A": "1"}
+    assert "Make its new settings cluster cv's defaults? [Y/n]" in c.ui.out.getvalue()
+    # Defaults that were not this kernel's are left alone, unasked.
+    cl["workdir"] = "/elsewhere"
+    c.ui.out = __import__("io").StringIO()
+    assert H.cmd_kernel(c, "k", workdir="/home/jo/newer") == 0
+    assert cl["workdir"] == "/elsewhere" and "defaults" not in c.ui.out.getvalue()
+
+
+def test_unknown_kernel_or_environment(ctx, release, monkeypatch):
+    c, node, tested = _kernel_rig(ctx, monkeypatch)
+    assert H.cmd_kernel(c, "nope", workdir="/x") == 1
+    assert "there is no kernel 'nope' (kernels: k)" in c.ui.out.getvalue()
+    assert H.cmd_kernel(c, "k", environment="nope") == 1
+    assert "there is no environment 'nope'" in c.ui.out.getvalue()
+    assert tested == []
+
+
+def test_the_command_line(tmp_path, monkeypatch):
+    from cubevis.setup import __main__ as M
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    seen = {}
+    monkeypatch.setattr(H, "cmd_kernel", lambda c, name, **kw: seen.update(name=name, **kw) or 0)
+    assert M.main(["kernel", "cvpost106-iclean", "--workdir", "~/casa/x"]) == 0
+    assert seen == {"name": "cvpost106-iclean", "workdir": "~/casa/x", "env_vars": None,
+                    "environment": None}
+
+
+def _host_rig(ctx, monkeypatch, **answers):
+    """cmd_host with the logins, discovery and the steps' insides stubbed:
+    which steps run, with what."""
+    calls = []
+    c = ctx(via_login="n", user="jo", **answers)
+    node = _node(c)
+    if "e" not in c.st.section("environments"):
+        _env(c, node)
+    if "k" not in c.st.section("kernels"):
+        c.st.add_kernel("k", environment="e")["checked_on"] = node
+    for f in ("local_steps", "adopt_step", "record_facts", "cluster_step", "inside_step",
+              "offer_cleanup"):
+        monkeypatch.setattr(H, f, lambda *a, **k: True)
+    monkeypatch.setattr(H, "locate", lambda c, host, port: node)
+    monkeypatch.setattr(H, "hop_steps", lambda *a, **k: True)
+    monkeypatch.setattr(H, "discover_step", lambda *a, **k: _rep())
+    monkeypatch.setattr(H, "check_kernels", lambda c, node, rep, text: calls.append("check") or True)
+    monkeypatch.setattr(H, "environment_step",
+                        lambda c, node, rep, reuse: calls.append(("environment", reuse)) or "e")
+    monkeypatch.setattr(H, "iclean_step", lambda c, node, env, rep: calls.append(("iclean", env)))
+    monkeypatch.setattr(H, "kernel_step", lambda c, node, env, rep, name, text:
+                        calls.append(("kernel", env, name)) or True)
+    return c, node, calls
+
+
+def test_a_host_set_up_before_offers_another_kernel(ctx, release, monkeypatch):
+    """Darrell 2026-11-09: a rerun only checked the kernels; another one (another
+    environment) needed --kernel NAME, which then took the environment in use
+    without asking."""
+    c, node, calls = _host_rig(ctx, monkeypatch)
+    assert H.cmd_host(c, "node1.example.org") == 0
+    assert calls == ["check"]                                     # the default: no
+    assert "Add another kernel? [y/N]" in c.ui.out.getvalue()
+    c, node, calls = _host_rig(ctx, monkeypatch, another_kernel="y")
+    assert H.cmd_host(c, "node1.example.org") == 0
+    assert calls == ["check", ("environment", False), ("iclean", "e"), ("kernel", "e", None)]
+
+
+def test_kernel_option_chooses_a_new_kernels_environment(ctx, release, monkeypatch):
+    c, node, calls = _host_rig(ctx, monkeypatch)
+    assert H.cmd_host(c, "node1.example.org", kernel="other") == 0
+    assert calls == [("environment", False), ("iclean", "e"), ("kernel", "e", "other")]
+    # A kernel there is: its own environment, its settings asked again.
+    c, node, calls = _host_rig(ctx, monkeypatch)
+    assert H.cmd_host(c, "node1.example.org", kernel="k") == 0
+    assert calls == [("iclean", "e"), ("kernel", "e", "k")]
+
+
+def test_help_lists_every_command():
+    from cubevis.setup import __main__ as M
+    import contextlib
+    import io as _io
+    out = _io.StringIO()
+    with contextlib.redirect_stdout(out), pytest.raises(SystemExit):
+        M.main(["--help"])
+    text = out.getvalue()
+    for line in ("python -m cubevis.setup kernel NAME [--workdir DIR] [--env VARS] [--environment ENV]",
+                 "python -m cubevis.setup HOST --kernel NAME", "python -m cubevis.setup status"):
+        assert line in text, text

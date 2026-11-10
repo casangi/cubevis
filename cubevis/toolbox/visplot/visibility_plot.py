@@ -756,7 +756,7 @@ class VisibilityPlot(Model):
         # Using uuids (rather than fixed strings like "vr_probe") means
         # multiple VisibilityPlot instances on the same page each have
         # unique routing, matching the cubevis convention established in
-        # _interactive_clean_ui.py.
+        # toolbox/iclean/_ui.py (InteractiveCleanUI).
         self._msg_probe    = str(uuid4())
         self._msg_rerender = str(uuid4())
         self._msg_axes     = str(uuid4())

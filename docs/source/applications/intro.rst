@@ -18,3 +18,4 @@ that is included in CASA.
 
    interactive_clean
    visplot
+   remote_kernels

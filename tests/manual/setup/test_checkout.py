@@ -26,6 +26,7 @@ def _repo(tmp_path):
              "cubevis/remote/worker_main.py": "W = 1\n", "cubevis/toolbox/__init__.py": "",
              "cubevis/toolbox/visplot/__init__.py": "",
              "cubevis/toolbox/visplot/remote_registrations.py": "R = 1\n",
+             "cubevis/imaging/__init__.py": "", "cubevis/imaging/remote_registrations.py": "I = 1\n",
              "cubevis/gui.py": "G = 1\n"}
     for rel, text in files.items():
         p = root / rel

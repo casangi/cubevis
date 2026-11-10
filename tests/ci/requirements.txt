@@ -3,5 +3,4 @@ pytest
 pytest-asyncio
 pytest-xdist
 pexpect
-xradio
-python-casacore
+xradio>=1.3     # its test generator and table API on arcae: no python-casacore

@@ -1,8 +1,4 @@
 
-from itertools import product
-from matplotlib.path import Path
-from math import floor,ceil
-
 def polygon_indexes( xs, ys, shape ):
     '''
     Returns indexes for a 2D array of the given ``shape`` which
@@ -23,18 +19,7 @@ def polygon_indexes( xs, ys, shape ):
         the stream of tuples that is returned will be the indexes
         of the elements which lie within the polygon
     '''
-    assert len(shape) == 2, 'contains only works for 2D shapes, so "shape" should have length equal to two'
-    assert len(xs) == len(ys), 'to specify a polygon the number of X values must equal the number of Y values'
-
-    if len(xs) == 4 and len(ys) == 4 :
-        uniqx = sorted(set(xs))
-        uniqy = sorted(set(ys))
-        if len(uniqx) == 2 and len(uniqy) == 2:
-            ### we have a proper box, the Path.contains_point implementation seems to
-            ### err slightly with very small regions...
-            return product(range(max(floor(uniqx[0]),0),min(ceil(uniqx[1]),shape[0]-1)),range(max(floor(uniqy[0]),0),min(ceil(uniqy[1]),shape[1]-1)))
-
-    path = Path(list(zip(xs,ys)))
-    xmin, xmax = max([0,min(xs)-1]), max(xs)+1
-    ymin, ymax = max([0,min(ys)-1]), max(ys)+1
-    return filter( path.contains_point, product(range(max(floor(xmin),0),min(ceil(xmax),shape[0]-1)), range(max(floor(ymin),0),min(ceil(ymax),shape[1]-1))) )
+    ### the selection is cubevis.imaging._masks.polygon_pixels' (vectorized; the same pixels)
+    from ..imaging._masks import polygon_pixels
+    ix, iy = polygon_pixels( xs, ys, shape )
+    return zip( map(int, ix), map(int, iy) )

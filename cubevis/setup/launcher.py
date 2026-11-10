@@ -35,8 +35,11 @@ it
    starts inherit it.  Setup turns it on by itself when a kernel's start
    is slow and it helps (``hostsetup.write_and_test``, notes section 53);
    ``--pythonhome`` / ``--no-pythonhome`` decide instead;
-4. sets the kernel's variables (after activation, so they win -- a
-   ``PYTHONHOME`` given there too);
+4. for an environment setup gave a private copy of CASA's data, sets
+   ``CASASITECONFIG`` to the site configuration it wrote there
+   (``capabilities.SITE_CONFIG_FILE``), unless the kernel's variables set
+   it; then sets the kernel's variables (after activation, so they win --
+   a ``PYTHONHOME`` given there too);
 5. ``exec``s the python with the arguments it was given.
 
 Only what the kernel's record holds goes in; nothing else comes from the
@@ -142,6 +145,9 @@ def text(kernel: str, k: dict, e: dict, home: str, gui: str, host: str = "HOST")
     if k.get("pythonhome") and home_of(e):
         lines.append(f"export PYTHONHOME={q(home_of(e))}   # python -m cubevis.setup {host} "
                      "--no-pythonhome removes it")
+    if e.get("casa_site_config") and "CASASITECONFIG" not in (k.get("env") or {}):
+        lines.append(f"export CASASITECONFIG={q(e['casa_site_config'])}   # CASA's data: "
+                     "setup's copy in the environment")
     for name, v in sorted((k.get("env") or {}).items()):
         lines.append(f"export {check_var(name)}={q(v)}")
     lines.append(f"exec {q(e['python'])} \"$@\"")
@@ -186,14 +192,17 @@ TEST_CODE = "import sys;exec(sys.stdin.read())"
 def test_program() -> str:
     """What ``TEST_CODE`` runs: the kernel side imported as a kernel would,
     then the fingerprint of the cubevis it found -- with this computer's
-    fingerprint code (``cubevis._fingerprint.source``), as ``envcheck`` does."""
+    fingerprint code (``cubevis._fingerprint.source``), as ``envcheck`` does
+    -- and what the kernel can run (``capabilities.PROBE``)."""
     from .. import _fingerprint
+    from .capabilities import PROBE
     return ("import os, ipykernel, cubevis, cubevis.remote.worker_main\n"
             f"FINGERPRINT_SOURCE = {_fingerprint.source()!r}\n"
             "_ns = {'__name__': 'cubevis_setup_fingerprint'}\n"
             "exec(compile(FINGERPRINT_SOURCE, 'cubevis/_fingerprint.py (sent by setup)', 'exec'), _ns)\n"
             "_root = os.path.dirname(os.path.dirname(os.path.abspath(cubevis.__file__)))\n"
-            "print(chr(10) + 'CUBEVIS-LAUNCH-OK', _ns['fingerprint'](root=_root), os.getcwd())\n")
+            "print(chr(10) + 'CUBEVIS-LAUNCH-OK', _ns['fingerprint'](root=_root), os.getcwd())\n"
+            + PROBE)
 
 
 def install_script(path: str, content: str) -> str:

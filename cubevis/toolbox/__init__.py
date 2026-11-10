@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING
 _LAZY = {
     "CubeMask": "._cube",
     "RegionList": "._region_list",
-    "InteractiveCleanUI": "._interactive_clean_ui",
+    "InteractiveCleanUI": ".iclean._ui",
 }
 
 __all__ = ["CubeMask", "RegionList", "InteractiveCleanUI"]
@@ -63,4 +63,4 @@ def __dir__():
 if TYPE_CHECKING:                        # for type checkers and editors only
     from ._cube import CubeMask
     from ._region_list import RegionList
-    from ._interactive_clean_ui import InteractiveCleanUI
+    from .iclean._ui import InteractiveCleanUI

@@ -170,9 +170,15 @@ def specs_for(st, kernel: str) -> list:
     return out
 
 
-def show_use(ui, name: str, example_ms: str = "sis14_twhya_calibrated_flagged.ms") -> None:
-    """How to plot with Jupyter kernel *name*."""
+def show_use(ui, name: str, example_ms: str = "sis14_twhya_calibrated_flagged.ms",
+             caps: Optional[dict] = None) -> None:
+    """How to use Jupyter kernel *name*: visplot, and interactive clean when
+    the kernel can run it (*caps*, ``capabilities``; None: not known)."""
     ui._p("")
-    ui._p("    from cubevis import visplot")
-    ui._p(f"    visplot(ms=\"{example_ms}\", backend=\"remote\", kernel_name=\"{name}\")")
+    if caps is None or caps.get("visplot"):
+        ui._p("    from cubevis import visplot")
+        ui._p(f"    visplot(ms=\"{example_ms}\", backend=\"remote\", kernel_name=\"{name}\")")
+    if caps is not None and caps.get("iclean"):
+        ui._p("    from cubevis import iclean")
+        ui._p(f"    iclean(vis=\"{example_ms}\", imagename=\"twhya\", ..., kernel_name=\"{name}\")")
     ui._p("")

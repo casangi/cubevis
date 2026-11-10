@@ -9,12 +9,24 @@ and by hand:
 
 What runs is listed in `suites.toml`; adding tests means adding a
 `[[suite]]` there (a pytest path, or any command) -- the workflow does not
-change.  Today:
+change.
+
+The tests themselves stay with their subject under `tests/manual/` (e.g.
+`tests/manual/iclean-imaging/`, next to that subject's demos and slower
+checks), where they can be run by hand on their own; `tests/ci/` holds only
+the runner, the list of suites and what exists for CI alone (`make_tiny_ms.py`).
+A test is a quick test because a suite names it, not because of where it is.  Today:
 
 * **setup** -- `python -m cubevis.setup` without the ssh test rig (the
   rig's tests skip themselves).
 * **remote** -- the remote layer against a kernel on this computer:
   transport, worker, objects, a dead worker reported.
+* **imaging**, **imaging-remote** -- interactive clean's imaging layer,
+  here and on a kernel on this computer, with a scripted imager (no CASA).
+* **iclean-parity** -- interactive clean with real tclean, here and on a
+  kernel (also one started in another directory, and the notebook variant):
+  needs casatasks and CASA's data, so it is skipped where they are not
+  installed (the GitHub workflow today).
 * **tiny-ms**, **visplot-remote** -- a 3 MB MSv2 made by `make_tiny_ms.py`
   (xradio's generator, then given real times, UVWs, data and frequencies),
   and `tests/manual/visplot/remote_visplot_check.py` on it: visplot local

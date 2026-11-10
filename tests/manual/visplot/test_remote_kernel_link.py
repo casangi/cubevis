@@ -25,7 +25,18 @@ from jupyter_client import AsyncKernelManager
 from cubevis.bokeh.transport import CommMgr
 from cubevis.remote import DEFAULT_TARGET_NAME, open_remote_kernel_link, request
 
-KERNEL_NAME = os.environ.get("CUBEVIS_TEST_KERNEL", "python3")
+def _jupyter_kernel(name):
+    """CUBEVIS_TEST_KERNEL may be setup's name for a kernel (cvpost106-visplot):
+    the Jupyter kernel that starts it (cubevis-cvpost106-visplot), as
+    visplot and interactive clean resolve it (``cubevis.remote.resolve_kernel_name``)."""
+    try:
+        from cubevis.remote import resolve_kernel_name
+        return resolve_kernel_name(name)
+    except Exception:
+        return name
+
+
+KERNEL_NAME = _jupyter_kernel(os.environ.get("CUBEVIS_TEST_KERNEL", "python3"))
 
 BOOTSTRAP_CODE = """
 from cubevis.remote import ensure_remote_worker

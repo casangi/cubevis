@@ -34,7 +34,9 @@ messages `WorkerCommTransport` sends -- stdout is the wire. Anything a
 handler (or a library it calls) prints accidentally would corrupt the
 frame stream from the supervisor's point of view. Logging is configured
 to stderr only, which `WorkerProcessTransport` on the supervisor side
-captures and relays.
+captures and relays.  Since 2026-11-07 `protect_wire` enforces it: the
+wire gets a file descriptor of its own and descriptor 1 goes to stderr, so
+a library that prints (tclean, from Python and C++) cannot reach the wire.
 """
 from __future__ import annotations
 
@@ -255,7 +257,7 @@ async def _amain(comm_mgr_id: str) -> None:
 
     _register_generic_handlers(comm, registry, namespace, configured)
 
-    transport = WorkerCommTransport(comm_mgr_id)
+    transport = WorkerCommTransport(comm_mgr_id, wire_out=_WIRE_OUT)
     await mgr.initialize(transport=transport)
     mgr.state = AppState.RUNNING
 
@@ -263,6 +265,27 @@ async def _amain(comm_mgr_id: str) -> None:
                 f"hostname={socket.gethostname()}")
     await transport.run()
     logger.info("worker_main: transport closed, exiting")
+
+
+_WIRE_OUT = None     # the protocol's stdout, from protect_wire() (None: sys.stdout)
+
+
+def protect_wire():
+    """Keep stdout -- the wire to the supervisor -- for the protocol alone.
+
+    The wire is file descriptor 1, and code the worker runs may write to it:
+    tclean does, from Python and from C++ (``Running initial major cycle``,
+    casacore's own messages).  Bytes between frames corrupt the stream and the
+    supervisor stops understanding the worker: interactive clean's first cycle
+    in a worker never answered (2026-11-07, notes §67).  So the wire moves to a
+    descriptor of its own, descriptor 1 (and ``sys.stdout``) to stderr, which
+    the supervisor relays and keeps the last lines of.  Returns the wire, a
+    binary stream for ``WorkerCommTransport(wire_out=)``."""
+    sys.stdout.flush()
+    wire_fd = os.dup(1)
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
+    return os.fdopen(wire_fd, "wb", buffering=0)
 
 
 def main() -> int:
@@ -273,7 +296,10 @@ def main() -> int:
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
-    # Logging to stderr ONLY -- stdout is the wire protocol.
+    # Logging to stderr ONLY -- stdout is the wire protocol (and protect_wire
+    # keeps anything else from writing to it).
+    global _WIRE_OUT
+    _WIRE_OUT = protect_wire()
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         stream=sys.stderr,

@@ -7,7 +7,8 @@ its own, then a summary; the exit status is 0 only if none failed.
     python tests/ci/run.py --only remote,setup
     python tests/ci/run.py --skip visplot-remote
     python tests/ci/run.py --lint          # only the [[lint]] entries
-    python tests/ci/run.py --strict        # a suite missing a module fails (CI)
+    python tests/ci/run.py --strict        # a suite missing a module fails (CI),
+                                           # unless the suite says optional = true
 
 What a suite needs is installed by ``pip install -e ".[visplot]"`` plus
 ``tests/ci/requirements.txt``.  Standard library only (Python 3.11+, for
@@ -114,7 +115,7 @@ def main(argv=None) -> int:
             if dep and results.get(dep, ("PASS",))[0] != "PASS":
                 results[name] = ("SKIP", 0.0, f"needs {dep}, which did not pass")
             elif miss:
-                results[name] = ("FAIL" if a.strict else "SKIP", 0.0,
+                results[name] = ("FAIL" if a.strict and not e.get("optional") else "SKIP", 0.0,
                                  f"missing module(s): {', '.join(miss)}")
             else:
                 results[name] = run_one(e, tmp)

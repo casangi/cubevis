@@ -27,48 +27,44 @@
 ########################################################################
 '''Implementation of ``ImagePipe`` class which provides a ``websockets``
 implementation for CASA images which allows for interacitve display
-of image cube channels in response to user input.'''
+of image cube channels in response to user input.
 
-import os
-import sys
+Since 2026-11 the image itself is read and written by an ``ImageCube``
+(``cubevis.imaging``): ``ImagePipe`` keeps the Bokeh model, the messages
+from the browser and the colormap adjustment, and asks the cube for
+everything else -- so the cube can be one served by an ``ImagingSession``
+(interactive clean, later a remote one) or one opened from a path.'''
+
 import json
-import asyncio
 from uuid import uuid4
 
 from bokeh.model import Model
-from bokeh.util.compiler import TypeScript
 from bokeh.core.properties import Tuple, String, Int, Instance, Nullable
-from bokeh.models.callbacks import Callback
 from bokeh.plotting import ColumnDataSource
 from .. import BokehInit
-from ..state import casalib_url, cubevisjs_url
+from ..state import casalib_url, cubevisjs_url   # noqa: F401 (imported here since before 2026-11)
 from ..transport import Comm
 
 import numpy as np
-# casatools on first use, not at import (cubevis.utils._casa): visplot
-# imports this module and needs none of CASA.
-from ...utils._casa import casatools_available, imagetool, regionmanager
 
-from ...utils import pack_arrays, partition, resource_manager, strip_arrays
+from ...utils import pack_arrays, resource_manager
 
 class ImagePipe( Model ):
     """The `ImagePipe` allows for updates to Bokeh plots from a CASA or CNGI
 
     image. This is done using a `websocket`. A `ImagePipe` is created with
-    the path to the image, and then it is used as the input to an
-    `ImageDataSource` or a `SpectraDataSource`. This allows a single CASA
-    or CNGI imge to be opened once and shared among multiple Bokeh plots,
-    for example ploting an image channel and a plot of a spectrum from the
-    image cube.
+    the path to the image (or with an ``ImageCube``), and then it is used as
+    the input to an `ImageDataSource` or a `SpectraDataSource`. This allows a
+    single CASA or CNGI imge to be opened once and shared among multiple Bokeh
+    plots, for example ploting an image channel and a plot of a spectrum from
+    the image cube.
     """
-    __im_path = None
-    __im = None
-    __chan_shape = None
 
     comm = Instance(Comm)
     shape = Tuple( Int, Int, Int, Int, help="shape: [ RA, DEC, Stokes, Spectral ]" )
     dataid = String( )
-    fits_header_json = Nullable( String, help="""JSON representation of image FITS header for world coordinate labeling""" )
+    coords_json = Nullable( String, help="""JSON of the image's coordinate description (cubevis.imaging._coordinates)
+    for world coordinates in the browser: axis labels, cursor readout, regions""" )
     _histogram_source = Nullable(Instance(ColumnDataSource), help='''
     data source for (raw) image channel histogram of intensities used with a "figure.quad(...)"
     ''')
@@ -78,389 +74,7 @@ class ImagePipe( Model ):
     ###################################################################
     #__javascript__ = [ casalib_url( ), cubevisjs_url( ) ]
 
-    def __open_image( self, image ):
-        if self.__img is not None:
-            self.__img.close( )
-            self.__stokes_labels = None
-        self.__img = imagetool( )
-        self.__rgn = regionmanager( )
-        try:
-            self.__img.open(image)
-            self.__image_path = image
-        except Exception as ex:
-            self.__img = None
-            self.__image_path = None
-            raise RuntimeError(f'could not open image: {image}') from ex
-        imshape = self.__img.shape( )
-        if self.__msk is not None and all(self.__msk.shape( ) != imshape):
-            raise RuntimeError(f'mismatch between image shape ({imshape}) and mask shape ({self.__msk.shape( )})')
-        if self.__chan_shape is None: self.__chan_shape = list(imshape[0:2])
-
-    def __open_mask( self, mask ):
-        if mask is None:
-            self.__mask_path = None
-            return
-        if self.__msk is not None:
-            self.__msk.close( )
-        self.__msk = imagetool( )
-        try:
-            self.__msk.open(mask)
-            self.__mask_path = mask
-        except Exception as ex:
-            self.__msk = None
-            self.__mask_path = None
-            raise RuntimeError(f'could not open mask: {mask}') from ex
-        mskshape = self.__msk.shape( )
-        if self.__img is not None and all(self.__img.shape( ) != mskshape):
-            raise RuntimeError(f'mismatch between image shape ({self.__img.shape( )}) and mask shape ({mskshape})')
-        if self.__chan_shape is None: self.__chan_shape = list(mskshape[0:2])
-
-    def __close_mask( self ):
-        if self.__msk is not None:
-            self.__msk.close( )
-            self.__msk = None
-
-    def pixel_value( self, chan, index ):
-        channel = self.__get_chan(chan)
-        index[0] = min( index[0], channel.shape[0] - 1 )
-        index[1] = min( index[1], channel.shape[1] - 1 )
-        index[0] = max( index[0], 0 )
-        index[1] = max( index[1], 0 )
-        return np.squeeze(channel[index[0],index[1]])
-
-    def stokes_labels( self ):
-        """Returns stokes plane labels"""
-        if self.__stokes_labels is None:
-            self.__stokes_labels = self.__img.coordsys( ).stokes( )
-        return self.__stokes_labels
-
-    def __get_chan( self, index ):
-        def newest_ctime( path ):
-            files = os.listdir(path)
-            paths = [os.path.join(path, basename) for basename in files]
-            return max( map( os.path.getctime, paths ) )
-
-        image_ctime = newest_ctime( self.__image_path )
-        if image_ctime > self.__cached_chan_ctime or \
-           self.__cached_chan_index[0] != index[0] or \
-           self.__cached_chan_index[1] != index[1] or \
-           self.__cached_chan is None :
-            if self.__img is None:
-                raise RuntimeError('no image is available')
-            ###
-            ### ensure that the channel index is within cube shape
-            ###
-            index = list(index)     # index is potentially a python tuple
-            index[0] = min( index[0], self.__chan_shape[0] - 1 )
-            index[1] = min( index[1], self.__chan_shape[1] - 1 )
-            index[0] = max( index[0], 0 )
-            index[1] = max( index[1], 0 )
-            self.__cached_chan_index = index
-            self.__cached_chan_ctime = image_ctime
-            self.__cached_chan = self.__img.getchunk( blc=[0,0] + index,
-                                                      trc=self.__chan_shape + index )
-        return self.__cached_chan
-
-    ### ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
-    ### the element type of image pixels retrieved from the CASA image are float64, but it
-    ### seems like 256 is the greatest number of colors in the colormaps currrently used
-    ### for pseudo color within interactive clean...
-    ### ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
-    def channel( self, index, pixel_type ):
-        """Retrieve one channel from the image cube. The `index` should be a
-        two element list of integers. The first integer is the ''stokes'' axis
-        in the image cube. The second integer is the ''channel'' axis in the
-        image cube.
-
-        Parameters
-        ----------
-        index: [ int, int ]
-            list containing first the ''stokes'' index and second the ''channel'' index
-        pixel_type: numpy type
-            the numpy type for the pixel elements of the returned channel
-        """
-        def quantize( nptype, image_plane ):
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            ### Note:
-            ###    (1) the histogram sent to GUI is ALWAYS be histogram based on the raw image (THIS IS HANDLED ABOVE)
-            ###    (2) the scaled portion of the matrix should be the non-cropped portion
-            ###    (3) the lower cropped portion should be set to the min scaled value
-            ###    (4) the upper cropped portion should be set to the max scaled value
-            ###    (5) a histogram should be created with the resulting (completely filled) array
-            ###    (6) then this histogram should be used with the (completely filled) array with numpy.digitize( ) to create
-            ###        the uint8 array
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            exclude_below = None
-            exclude_above = None
-            included = None
-
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            ### Sort out the relationship between channel min/max and user specified min/max
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            amin = image_plane.min( )           ## array min
-            amax = image_plane.max( )           ## array max
-
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            ### Extract user bounds (use array bounds as fallback)
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            umin = amin if len(self.__quant_adjustments['bounds'][0]) == 0 else self.__quant_adjustments['bounds'][0][0]
-            umax = amax if len(self.__quant_adjustments['bounds'][1]) == 0 else self.__quant_adjustments['bounds'][1][0]
-
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            ### Handle cropping (when user bounds are narrower than data)
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            if umin > amin:
-                exclude_below = image_plane < umin
-            if umax < amax:
-                exclude_above = image_plane > umax
-
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            ### Set up access masks
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            if exclude_below is not None and exclude_above is not None:
-                included = np.logical_not( np.logical_or( exclude_below, exclude_above ) )
-            elif exclude_below is not None:
-                included = np.logical_not( exclude_below )
-            elif exclude_above is not None:
-                included = np.logical_not( exclude_above )
-
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            ### Apply the scaling function to the included pixels
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            selected_scaling = self.__quant_adjustments['transfer']['scaling']
-            if selected_scaling != 'linear':
-                if selected_scaling not in self.__quant_scaling:
-                    print( f'''error: ${selected_scaling} is not a known scaling...''', file=sys.stderr )
-                    result = image_plane
-                else:
-                    normalize = 0 if umin > 0 else -umin
-                    result = np.ma.zeros(image_plane.shape,image_plane.dtype)
-
-                    if included is not None:
-
-                        result[included] = self.__quant_scaling[selected_scaling](
-                            image_plane[included] + normalize,
-                            **self.__quant_adjustments['transfer']['args']
-                        )
-
-                        # Set excluded regions to min/max of included values
-                        if exclude_below is not None:
-                            result[exclude_below] = result[included].min( )
-                        if exclude_above is not None:
-                            result[exclude_above] = result[included].max( )
-                    else:
-                        result = self.__quant_scaling[selected_scaling](
-                            image_plane + normalize,
-                            **self.__quant_adjustments['transfer']['args']
-                        )
-            else:
-
-                result = image_plane
-
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            ### Histogram of the scaled
-            ### --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-            edges = np.histogram_bin_edges( result, bins=254, range=( umin, umax ) )
-
-            return np.digitize( result, edges, right=True ).astype(nptype)
-
-        if self.__img is None:
-            raise RuntimeError('no image is available')
-        if np.issubdtype( pixel_type, np.integer ):
-            return quantize( pixel_type,
-                             np.squeeze( self.__get_chan(index) ) ).transpose( )
-        else:
-            return np.squeeze( self.__get_chan(index) ).astype(pixel_type).transpose( )
-
-    def have_mask0( self ):
-        """Check to see if the synthesis imaging 'mask0' mask exists
-
-        Returns
-        -------
-        bool:
-            ''True'' if the cube contains an internal ''mask0'' mask otherwise ''False''
-        """
-        if self.__img is None:
-            raise RuntimeError('no image is available')
-        return 'mask0' in self.__img.maskhandler('get')
-
-
-    def mask0( self, index ):
-        """Within the image, there can be an arbitrary number of INTERNAL masks. They can
-        have arbitrary names. The synthesis imaging module uses a mask named 'mask0'. This
-        mask is used in processing (it MAY represent the beam).
-
-        Parameters
-        ----------
-        index: [ int, int ]
-            list containing first the ''stokes'' index and second the ''channel'' index
-        """
-        ### ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
-        ### tclean does not maintain mask0. Instead, calls to tclean can result in the
-        ### internal, mask0 being lost. Because of this, once a good copy of this internal
-        ### mask is retrieved it is reused. Urvashi says that reusing one copy throughout
-        ### should be fine (Fri Mar 31 13:54:17 EDT 2023)
-        ### ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
-        if self.__img is None:
-            raise RuntimeError('no image is available')
-        if self.__mask0_cache is None and self.have_mask0( ):
-            self.__mask0_cache = self.__img.getregion(getmask=True)
-        if self.__mask0_cache is not None:
-            return self.__mask0_cache[:,:,index[0],index[1]]
-        return None
-
-    def have_mask( self ):
-        """Check to see if a mask exists.
-
-        Returns
-        -------
-        bool:
-            ''True'' if a mask cube is available otherwise ''False''
-        """
-        return self.__msk is not None
-
-    def mask( self, index, modify=False ):
-        """Retrieve one channel mask from the mask cube. The `index` should be a
-        two element list of integers. The first integer is the ''stokes'' axis
-        in the image cube. The second integer is the ''channel'' axis in the
-        image cube.
-
-        Parameters
-        ----------
-        index: [ int, int ]
-            list containing first the ''stokes'' index and second the ''channel'' index
-        modify: boolean
-            If true, it implies that the channel mask is being retrieved for modification
-            and updating the channel on disk. If false, it implies that the channel mask
-            is being retrieved for display.
-        """
-        if self.__msk is None:
-            raise RuntimeError(f'cannot retrieve mask at {repr(index)} because no mask cube exists')
-        return ( np.squeeze( self.__msk.getchunk( blc=[0,0] + index,
-                                                trc=self.__chan_shape + index) ).astype(np.bool_).transpose( )
-                 if modify == False else
-                 np.squeeze( self.__msk.getchunk( blc=[0,0] + index,
-                                                trc=self.__chan_shape + index) ) )
-
-    def mask_value( self, chan, index ):
-        if self.__msk is None:
-            raise RuntimeError(f'cannot retrieve mask at {repr(index)} because no mask cube exists')
-        try:
-            pv = self.__msk.pixelvalue( index + chan )
-            return int(pv['value']['value'])
-        except:
-            pass
-        return -1
-
-    def set_mask_name( self, new_mask_path ):
-        self.__close_mask( )
-        self.__open_mask( new_mask_path )
-
-    def put_mask( self, index, mask ):
-        """Replace one channel mask with the mask specified as the second parameter.
-        The `index` should be a two element list of integers. The first integer is the
-        ''stokes'' axis in the image cube. The second integer is the ''channel'' axis
-        in the image cube. The assumption is that the :code:`mask` parameter was retrieved
-        from the mask cube using the :code:`mask(...)` function with the :code:`modify`
-        parameter set to :code:`True`.
-
-        Parameters
-        ----------
-        index: [ int, int ]
-            list containing first the ''stokes'' index and second the ''channel'' index
-        mask: numpy.ndarray
-            two dimensional array to replace the existing mask for the channel specified
-            by :code:`index`
-        """
-        if self.__msk is None:
-            raise RuntimeError(f'cannot replace mask at {repr(index)} because no mask cube exists')
-        if mask.dtype == bool:
-            ### cannot put bools with putchunk
-            self.__msk.putchunk( blc=[0,0] + index, pixels=mask.astype(np.uint8) )
-        else:
-            self.__msk.putchunk( blc=[0,0] + index, pixels=mask )
-
-    def spectrum( self, index, mask=False ):
-        """Retrieve one spectrum from the image cube. The `index` should be a
-        three element list of integers. The first integer is the ''right
-        ascension'' axis, the second integer is the ''declination'' axis,
-        and the third integer is the ''stokes'' axis.
-
-        Parameters
-        ----------
-        index: [ int, int, int ]
-            list containing first the ''right ascension'', the ''declination'' and
-            the ''stokes'' axis
-        """
-        index = list(map( lambda i: 0 if i is None else i, index ))
-        if index[0] >= self.shape[0]:
-            index[0] = self.shape[0] - 1
-        if index[1] >= self.shape[1]:
-            index[1] = self.shape[1] - 1
-        if self.__img is None:
-            raise RuntimeError('no image is available')
-        result_mask = np.squeeze( self.__msk.getchunk( blc=index + [0],
-                                                       trc=index + [self.shape[-1]] ) ) if self.__msk and mask else None
-        result = np.squeeze( self.__img.getchunk( blc=index + [0],
-                                                 trc=index + [self.shape[-1]] ) )
-        ### should return spectral freq etc.
-        ### here for X rather than just the index
-        try:
-            if mask:
-                return { 'chan': list(range(len(result))), 'pixel': list(result) }, None if result_mask is None else list(result_mask.astype(bool))
-            else:
-                return { 'chan': list(range(len(result))), 'pixel': list(result) }
-        except Exception as e:
-            ## In this case, result is not iterable (e.g.) only one channel in the cube.
-            ## A zero length numpy ndarray has no shape and looks like a float but it is
-            ## an ndarray.
-            if mask:
-                return { 'chan': [0], 'pixel': [float(result)] }, None if result_mask is None else [ bool(result_mask) ]
-            else:
-                return { 'chan': [0], 'pixel': [float(result)] }
-
-    def histogram_source( self, data ):
-        if not self._histogram_source:
-            self._histogram_source = ColumnDataSource( data=data )
-        return self._histogram_source
-
-    async def _image_message_handler( self, cmd ):
-        if cmd['action'] == 'channel':
-            chan = self.channel(cmd['index'],np.uint8)
-            mask = { } if self.__msk is None else { 'msk': [ pack_arrays( self.mask(cmd['index']) ) ] }
-            _mask0 = self.mask0(cmd['index'])
-            mask0 = { } if _mask0 is None else { 'msk0': [ pack_arrays(_mask0) ] }
-            histogram = self.histogram( cmd['index'] ) if self._histogram_source else { }
-            if self._stats:
-                #statistics for the displayed plane of the image cubea
-                statistics = self.statistics( cmd['index'] )
-                return { 'chan': { 'img': [ pack_arrays(chan) ],
-                                   **mask0,
-                                   **mask },
-                         'stats': { 'labels': list(statistics.keys( )), 'values': pack_arrays(list(statistics.values( ))) },
-                         'hist': histogram,
-                         'id': cmd['id'] }
-            else:
-                return { 'chan': { 'img': [ pack_arrays(chan) ],
-                                   **mask0,
-                                   **mask },
-                         'hist': histogram,
-                         'id': cmd['id'] }
-
-        elif cmd['action'] == 'spectrum':
-            return { 'spectrum': pack_arrays( self.spectrum(cmd['index']) ), 'id': cmd['id'] }
-        elif cmd['action'] == 'adjust-colormap':
-            if cmd['bounds'] == "reset":
-                self.__quant_adjustments = { 'bounds': [ [ ], [ ] ],
-                                             'transfer': {'scaling': 'linear'} }
-            else:
-                ### later a function should be provided for setting the quantization transfer function
-                self.__quant_adjustments = { 'bounds': cmd['bounds'], 'transfer': cmd['transfer'] }
-                ### ensure that the cached channel is not used...
-                self.__cached_chan = None
-            return { 'result': 'OK', 'id': cmd['id'] }
-
-    def __init__( self, image, *args, mask=None, stats=False, lock=None, **kwargs ):
+    def __init__( self, image=None, *args, mask=None, stats=False, lock=None, cube=None, **kwargs ):
 
         self._comm_mgr = BokehInit.get_app_context( ).comm_mgr
         kwargs['dataid'] = str(uuid4( ))
@@ -481,114 +95,167 @@ class ImagePipe( Model ):
 
         super( ).__init__( *args, **kwargs, )
 
-        if not casatools_available():
-            raise RuntimeError('cannot open an image because casatools is not available')
+        if cube is None:
+            if image is None:
+                raise RuntimeError('ImagePipe requires an image path or an ImageCube')
+            from ...imaging import open_image_cube
+            cube = open_image_cube( image, mask )
+        self.__cube = cube
 
-        self.__img = None
-        self.__msk = None
         self.__fits_header = None
-        self.__fits_header_str = ''
         resource_manager( ).reg_at_exit( self, '__del__' )
         self._stats = stats
-        self.__open_image( image )
-        self.__open_mask( mask )
-        self.__mask0_cache = None
-        self.shape = list(self.__img.shape( ))
-        if not self.fits_header_json:
-            self.__fits_header = self.__img.fitsheader(exclude="HISTORY")
-            self.__fits_header_str = self.__img.fitsheader(retstr=True,exclude="HISTORY")
-            if self.__fits_header:
-                self.fits_header_json = json.dumps(strip_arrays(self.__fits_header))
-        self.__session = None
-        self.__stokes_labels = None
-        self.__mask_statistics = False
-
+        self.shape = list(self.__cube.shape)
         ###
-        ### the last channel retrieved is kept around for pixel retrieval
+        ### world coordinates in the browser come from the coordinate description (until
+        ### 2026-11-06 from the image's FITS header, fits_header_json)
         ###
-        self.__cached_chan = None
-        self.__cached_chan_index = None
-        self.__cached_chan_ctime = 0
+        if not self.coords_json:
+            self.coords_json = json.dumps( self.__cube.coordinates( ) )
 
         ###
         ### quantization controls to affect how pseudo colors are displayed
+        ### (display state: kept here, passed to the cube)
         ###
         self.__quant_adjustments = { 'bounds': [ [ ], [ ] ],
                                      'transfer': {'scaling': 'linear'} }
-        self.__quant_scaling = { 'log':    lambda chan,alpha: np.ma.log(alpha * chan + 1.0) / np.ma.log(alpha + 1.0),
-                                 'sqrt':   lambda chan:       np.ma.sqrt(chan),
-                                 'square': lambda chan:       np.square(chan),
-                                 'gamma':  lambda chan,gamma: np.ma.power(chan,gamma),
-                                 'power':  lambda chan,alpha: (np.ma.power(alpha,chan) - 1.0) / alpha }
 
         self.comm.register( self.dataid, self._image_message_handler )
+
+    @property
+    def cube( self ):
+        '''the ``ImageCube`` this pipe displays'''
+        return self.__cube
+
+    def pixel_value( self, chan, index ):
+        return self.__cube.pixel_value( chan, index )
+
+    def stokes_labels( self ):
+        """Returns stokes plane labels"""
+        return self.__cube.stokes_labels( )
+
+    def channel( self, index, pixel_type ):
+        """Retrieve one channel from the image cube. The `index` should be a
+        two element list of integers. The first integer is the ''stokes'' axis
+        in the image cube. The second integer is the ''channel'' axis in the
+        image cube.
+
+        Parameters
+        ----------
+        index: [ int, int ]
+            list containing first the ''stokes'' index and second the ''channel'' index
+        pixel_type: numpy type
+            the numpy type for the pixel elements of the returned channel
+        """
+        return self.__cube.channel( index, pixel_type, self.__quant_adjustments )
+
+    def have_mask0( self ):
+        """Check to see if the synthesis imaging 'mask0' mask exists"""
+        return self.__cube.have_mask0( )
+
+    def mask0( self, index ):
+        """The synthesis imaging 'mask0' internal mask for one channel (or None)"""
+        return self.__cube.mask0( index )
+
+    def have_mask( self ):
+        """Check to see if a mask exists."""
+        return self.__cube.have_mask( )
+
+    def mask( self, index, modify=False ):
+        """Retrieve one channel mask from the mask cube (see ``ImageCube.mask``)"""
+        return self.__cube.mask( index, modify )
+
+    def mask_value( self, chan, index ):
+        return self.__cube.mask_value( chan, index )
+
+    def set_mask_name( self, new_mask_path ):
+        self.__cube.set_mask_name( new_mask_path )
+
+    def put_mask( self, index, mask ):
+        """Replace one channel mask (see ``ImageCube.put_mask``)"""
+        self.__cube.put_mask( index, mask )
+
+    def edit_mask( self, op, scope, index, *, polygon=None, src=None ):
+        """One mask edit where the mask is stored (see ``ImageCube.edit_mask``)"""
+        return self.__cube.edit_mask( op, scope, index, polygon=polygon, src=src )
+
+    def spectrum( self, index, mask=False ):
+        """Retrieve one spectrum from the image cube (see ``ImageCube.spectrum``)"""
+        return self.__cube.spectrum( index, mask )
+
+    def histogram_source( self, data ):
+        if not self._histogram_source:
+            self._histogram_source = ColumnDataSource( data=data )
+        return self._histogram_source
+
+    async def _image_message_handler( self, cmd ):
+        if cmd['action'] == 'channel':
+            reply = self.__cube.channel_reply( cmd['index'], self.__quant_adjustments, stats=bool(self._stats),
+                                               hist_bins=len(self._histogram_source.data['top']) if self._histogram_source else None )
+            mask = { } if 'msk' not in reply else { 'msk': [ pack_arrays( reply['msk'] ) ] }
+            mask0 = { } if 'msk0' not in reply else { 'msk0': [ pack_arrays( reply['msk0'] ) ] }
+            if self._stats:
+                #statistics for the displayed plane of the image cubea
+                statistics = reply['stats']
+                return { 'chan': { 'img': [ pack_arrays( reply['img'] ) ],
+                                   **mask0,
+                                   **mask },
+                         'stats': { 'labels': list(statistics.keys( )), 'values': pack_arrays(list(statistics.values( ))) },
+                         'hist': reply['hist'],
+                         'id': cmd['id'] }
+            else:
+                return { 'chan': { 'img': [ pack_arrays( reply['img'] ) ],
+                                   **mask0,
+                                   **mask },
+                         'hist': reply['hist'],
+                         'id': cmd['id'] }
+
+        elif cmd['action'] == 'spectrum':
+            return { 'spectrum': pack_arrays( self.spectrum(cmd['index']) ), 'id': cmd['id'] }
+        elif cmd['action'] == 'adjust-colormap':
+            if cmd['bounds'] == "reset":
+                self.__quant_adjustments = { 'bounds': [ [ ], [ ] ],
+                                             'transfer': {'scaling': 'linear'} }
+            else:
+                ### later a function should be provided for setting the quantization transfer function
+                self.__quant_adjustments = { 'bounds': cmd['bounds'], 'transfer': cmd['transfer'] }
+            return { 'result': 'OK', 'id': cmd['id'] }
 
     def add_init_script(self, code, args=None, description=''):
         self.comm.add_init_script( code=code, args=args, description=f"ImagePipe: {description}" )
 
     def __del__(self):
-        if self.__rgn:
-            self.__rgn.done( )
-        if self.__img != None:
-            self.__img.close()
-            self.__img.done()
-            self.__img = None
-            self.__stokes_labels = None
+        cube = getattr( self, '_ImagePipe__cube', None )
+        if cube is not None:
+            try:
+                cube.close( )
+            except Exception:
+                pass
+            self.__cube = None
 
     def fits_header( self ):
-        return ( self.__fits_header, self.__fits_header_str )
+        '''``(dict, str)``: the FITS header, for stores that have one (made on first use)'''
+        if self.__fits_header is None:
+            self.__fits_header = self.__cube.fits_header( )
+        return self.__fits_header
+
+    def coordinates( self ):
+        '''the coordinate description (``cubevis.imaging._coordinates``)'''
+        return self.__cube.coordinates( )
 
     def coorddesc( self ):
-        ia = imagetool( )
-        ia.open(self.__image_path)
-        csys = ia.coordsys( )
-        ia.close( )
-        return { 'csys': csys, 'shape': tuple(self.shape) }
+        return self.__cube.coorddesc( )
 
     def statistics_config( self, use_mask=None ):
         '''Configure the behavior of the statistics function.
         use_mask indicates that if a mask is available, the statistics should
         be based upon the portion of the image included in the mask instead of
         the whole channel.'''
-        if self.__mask_path and use_mask is not None:
-            self.__mask_statistics = bool(use_mask)
+        self.__cube.statistics_config( use_mask )
 
     def statistics( self, index ):
-        """Retrieve statistics for one channel from the image cube. The `index`
-        should be a two element list of integers. The first integer is the
-        ''stokes'' axis in the image cube. The second integer is the ''channel''
-        axis in the image cube.
-
-        Parameters
-        ----------
-        index: [ int, int ]
-            list containing first the ''stokes'' index and second the ''channel'' index
-        """
-        def singleton( potential_nonlist ):
-            # convert a list of a single element to the element
-            return potential_nonlist if len(potential_nonlist) != 1 else potential_nonlist[0]
-        def sort_result( unsorted_dictionary ):
-            part = partition( lambda s: (s.startswith('trc') or s.startswith('blc')), sorted(unsorted_dictionary.keys( )) )
-            return { k: unsorted_dictionary[k] for k in part[1] + part[0] }
-
-        reg = self.__rgn.box( [0,0] + index, self.__chan_shape + index )
-        ###
-        ### This seems like it should work:
-        ###
-        #      rawstats = self.__img.statistics( region=reg )
-        ###
-        ### but it does not so we have to create a one-use image tool (see CAS-13625)
-        ###
-        ia = imagetool( )
-        ia.open(self.__image_path)
-        if self.__mask_statistics:
-            ### mask is an LEL expression and quotes prevents a name containing
-            ### numbers from being interpreted as an expression
-            rawstats = ia.statistics( region=reg, mask=f'''"{self.__mask_path}"''' )
-        else:
-            rawstats = ia.statistics( region=reg )
-        ia.close( )
-        return sort_result( { k: singleton([ x.item( ) for x in v ]) if isinstance(v,np.ndarray) else v for k,v in rawstats.items( ) } )
+        """Retrieve statistics for one channel from the image cube (see ``ImageCube.statistics``)"""
+        return self.__cube.statistics( index )
 
     def histogram( self, index ):
         """Calculate histogram (Bokeh Quad) extents for update of colormap adjuster (or anything
@@ -601,8 +268,4 @@ class ImagePipe( Model ):
         """
         if not self._histogram_source:
             return { }
-
-        chan = self.__get_chan(index)
-        bins = np.linspace( chan.min( ), chan.max( ), len(self._histogram_source.data['top'])+1 )
-        hist, edges = np.histogram( chan, density=False, bins=bins )
-        return dict( left=list(edges[:-1]), right=list(edges[1:]), top=list(hist), bottom=[0]*len(hist) )
+        return self.__cube.histogram( index, len(self._histogram_source.data['top']) )

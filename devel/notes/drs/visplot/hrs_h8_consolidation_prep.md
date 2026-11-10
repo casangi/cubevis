@@ -3164,3 +3164,1205 @@ left over, `status`, `kernel_facts`, recording never fails,
 `hrs_handoff_2026-11-04_sessions.md` (remote session management:
 Scenario A first) and `hrs_handoff_2026-11-04_iclean_remote.md` (iclean
 with `gclean` and the image backend on the remote).
+
+## 60. iclean on remote kernels, step 1: the imaging layer, local (base `ff0d810`, 2026-11-04)
+
+Design: `devel/notes/drs/iclean/iclean_imaging_layer_design.md` (step 1 of
+its §4).  Interactive clean's GUI now reaches the imager and its images
+only through an `ImagingSession`; nothing remote yet, and no change in
+behaviour.
+
+* **New package `cubevis.imaging`** (imports no CASA; casatools when a
+  store first opens an image, casatasks when a session is made from
+  iclean's arguments):
+  * `_protocols.py`: `ImagingSession`, `ImageCube` (exported as
+    `ImageCubeProtocol`), `ImageStore`, `Deconvolver` (runtime-checkable
+    `Protocol`s); `CycleResult` (a `NamedTuple`, so the UI's six-value
+    unpacking of gclean's tuple is unchanged).
+  * `CasatoolsImageStore`: every casatools call `ImagePipe` made, moved
+    unchanged (getchunk/putchunk, `pixelvalue`, mask0 by `getregion`, the
+    one-use image tool for statistics -- CAS-13625 -- and for `coordsys`).
+    Opens the image on first use: iclean makes its cubes before gclean has
+    written the residual.  Reopens itself (mask included) after `close()`.
+  * `ImageCube`: `ImagePipe`'s numpy logic, moved unchanged (plane cache,
+    quantization to uint8, histogram, spectrum, statistics and their
+    sorting, mask planes, mask0 cache), plus `channel_reply` (plane, mask,
+    mask0, histogram and statistics in one call: one round trip per
+    channel step when remote).  Colormap bounds/transfer are passed in
+    (`quant`), not kept.  Freshness: `track="generation"` for cubes a
+    session serves (the session increments `generation` after `start`
+    and each cycle -- no ctime polling), `track="ctime"` for cubes opened
+    from a path (createmask, createregion: as before).
+  * `LocalImagingSession`: a gclean (`resolve_deconvolver(iclean_backend)`
+    -- "PROD" or `_gclean_NAME`, the logic that was in both iclean entry
+    points) and a cube per field; `start`, `update`, `run_cycle`,
+    `arun_cycle` (gclean's own `__anext__`, its thread), `has_next`,
+    `log`, `restore`, `stop_descriptions` (the deconvolver's own if it has
+    one, else casatasks' `ImagingDict`), `fields`, `cube`, `close`.
+    `as_imaging_session` wraps a bare gclean; `open_image_cube(path, mask)`.
+* **`ImagePipe`** keeps the Bokeh model, the browser's messages and the
+  colormap state; takes `cube=` (or a path, as before, for which it makes
+  one).  Its public methods are unchanged and delegate.
+* **`CubeMask`** takes a path (as before) or an `ImageCube`; "does the mask
+  exist" asks the pipe (`have_mask`) instead of `os.path.isdir` on the
+  path; `path()` fixed (it returned `self._image_papth`: `AttributeError`).
+* **`InteractiveCleanUI(session, user_args)`** (a gclean is still accepted,
+  wrapped): fields from `session.fields()`, each `CubeMask` built on
+  `session.cube(field)`, `session.start/update/arun_cycle/log/restore`,
+  stop descriptions from the session -- the UI no longer imports casatasks.
+  Removed, all dead: the `msg['value']['mask']` branch of `clean_handler`
+  (the browser sends `masks`; the branch used `self._imagename` and
+  `self._mask_history`, never set, and its `rmtree` ran on the laptop),
+  `_gen_port_fwd_cmd` and `_is_remote` (the pre-multiplexing port
+  forwarding, design §3 of the remote design), `_residual_path` /
+  `_mask_path` (never called; would have failed on the dict they scan).
+  `masks()` returns `[]` instead of raising `AttributeError`.
+* **Both entry points** (`_interactiveclean.py`,
+  `_interactivecleannotebook.py`) make a
+  `LocalImagingSession.from_args(args, iclean_backend)`; `_gclean` and
+  `_gclean_paths` are kept (from the session).
+
+Kernel-side code unchanged (`k2-8c32a07ef87455eb3cd6`): nothing in
+`_fingerprint.ROOTS` imports `cubevis.imaging` yet (step 5 adds the
+registration module).
+
+**Tests**:
+* `tests/manual/iclean-imaging/test_imaging_layer.py` (13, no CASA): the
+  import pulls in no CASA; the protocols; quantization (linear, log with
+  bounds) against `quantize`; generation vs ctime rereads; mask planes
+  (bool -> uint8, display transpose, `mask_value` -1 on error); spectra
+  (clipping, one channel); statistics (mask only with a mask path, blc/trc
+  last); `channel_reply`; the session over a scripted gclean (fields,
+  cubes made once, `CycleResult` unpacking, a cycle rereads the residual,
+  log, restore, stop descriptions, close); `as_imaging_session`;
+  `resolve_deconvolver`/`from_args` with a `_gclean_NAME` module.  A
+  quick-test suite, `imaging` (`tests/ci/suites.toml`).
+* **Before/after, with CASA** (`record_iclean_handlers.py`,
+  `compare_records.py`, `make_sim_ms.py` in the same directory): iclean
+  driven headlessly through the browser's handlers -- 5 channel replies,
+  spectrum, colormap log/sqrt/reset, pixel value, statistics, histogram,
+  9 mask edits (chan/cube add and subtract by polygon and by source
+  channel, invert twice, delete) with the whole mask cube saved after
+  each, masked statistics, the spectrum fetch, two clean cycles (46 and 34
+  iterations) with the plane and statistics after each, status, the
+  convergence pipe -- 56 records.  Base `ff0d810` against this zip:
+  identical (floats to 1e-6; two runs of the base were identical apart
+  from FITS DATE/MEMAVAIL/IMAGENME/HISTORY cards, which are ignored).
+  Also: `CubeMask` from paths, with and without a mask (createmask and
+  createregion's use); the notebook entry point to a built GUI.
+* The data: casa.nrao.edu is not reachable from where this was done, so
+  `make_sim_ms.py` simulates an MS like `refim_point_withline.ms`
+  (VLA D, five channels from 1 GHz by 0.2 GHz, two sources).  Worth
+  repeating the before/after with `refim_point_withline.ms` itself.
+  (Environment note: the casatools 6.7.6 wheel's bundled libssl and
+  libldap need RHEL's OpenSSL; on Ubuntu 24.04 they were replaced by the
+  system's for this test.)
+
+**Next** (design §4): 1b, the coordinate description; 2, `edit_mask`
+operations in place of `CubeMask`'s per-channel `mask`/`put_mask` loops.
+
+## 61. iclean step 1, follow-up: templates, the notebook bridge, organization (base `ff0d810` + §60, 2026-11-05)
+
+* **Templates.**  `_interactive_clean_ui.py`, `_interactiveclean.py` and
+  `_interactivecleannotebook.py` are generated (`scripts/expand_templates`)
+  from `.mustache` files; §60 edited only the `.py` files, so the next
+  expansion would have undone step 1.  The three templates now carry the
+  same changes.  Checked: `expand_templates` on a checkout of `ff0d810`
+  reproduces the committed `.py` files byte for byte, and on this tree
+  reproduces the §60 `.py` files byte for byte.  (The UI's template has no
+  tags at all: design §6 proposes dropping it.)
+* **JupyterLab "display_bridge() must be called before connect()".**  Not
+  step 1: reproduced on `ff0d810` without it, in a kernel with no
+  `anywidget`.  The bridge is displayed by a preflight callable at the end
+  of the cell that constructs the application; `run_preflight_callables`
+  catches its exception and logs only a WARNING there, then `show()` fails
+  in the next cell with the message above.  `anywidget` is the optional
+  `cubevis[notebook]` extra.  With `anywidget` installed, both the base and
+  step 1 run the notebook's whole sequence (construct, show, get_result,
+  construct, show) to the bridge display and the connect.
+  `tests/manual/iclean-imaging/notebook_check.py` runs those cells in a
+  real kernel, no browser.
+* **Better message (separate patch, `cubevis-ff0d8108-bridge-error.zip`).**
+  `CommsTransport.display_bridge` records why it failed; `connect()`
+  raises "the notebook bridge could not be displayed: The 'anywidget'
+  package is required ... pip install 'cubevis[notebook]'" from that
+  cause.  `_low_level_transport.py` is in the kernel-side closure, so this
+  changes the fingerprint (`k2-8c32a07ef87455eb3cd6` ->
+  `k2-97336d2e11f1cef86a2d`): kept out of the main zip so that it can go
+  with the next release.
+* **Organization**: design §6 (proposal, not yet done): `cubevis/toolbox/
+  iclean/` like `toolbox/visplot/` (one app template with the notebook class
+  as a subclass, the UI as plain source, the widgets); `cubevis/imaging`
+  stays top level with a no-Bokeh/no-CASA-at-import rule; old pieces
+  removed.  Step 1c, before 1b.
+
+## 62. iclean step 1c: package organization (base `ff0d810` + §60, §61, 2026-11-05)
+
+Design `devel/notes/drs/iclean/iclean_imaging_layer_design.md` §6 (as done:
+§6.5).  Interactive clean now has visplot's shape:
+
+* **`cubevis/toolbox/iclean/`** (new; lazy `__init__` like `cubevis.toolbox`):
+  * `_app.mustache` -> `_app.py` (generated): ONE template for
+    `InteractiveClean` and `InteractiveCleanNotebook(InteractiveClean)`,
+    which adds only its display (`DisplayContext`, `get_future`, its
+    `__call__`).  Was `private/apps/_interactiveclean{,notebook}.mustache`.
+    The notebook class now sets `_future = None` (`get_future()` before
+    launch raised `AttributeError`, not its `RuntimeError`); its unused
+    module-level imports (`ImagerParameters` from casatasks,
+    `output_notebook`, `pprint`, `find_pkg`/`load_pkg`) are gone.
+  * `_ui.py`: `InteractiveCleanUI`, plain source (was
+    `toolbox/_interactive_clean_ui.py`; its tag-free `.mustache` deleted).
+  * `_widgets.py`: `SharedWidgets` (was `toolbox/_interactiveclean_wrappers.py`).
+* **Pointers**: `cubevis.toolbox` (`InteractiveCleanUI`) and
+  `cubevis.private.apps` (`InteractiveClean`, `InteractiveCleanNotebook`)
+  lazy tables; the three task-wrapper templates import from
+  `cubevis.toolbox.iclean` (regenerated: one line each changed).
+  `pyproject.toml` excludes: `cubevis/apps/*.mustache` (a directory that
+  no longer exists, so the app and UI templates shipped in the wheel) ->
+  `cubevis/toolbox/iclean/*.mustache`.
+* **Removed**: `private/apps/_interactiveclean{,notebook}.{mustache,py}`,
+  `toolbox/_interactive_clean_ui.mustache`, `private/_gclean.py` (unused,
+  pre-`image_products` copy).  `tests/manual/iclean-remote/` stays until
+  remote iclean works (design §6.2).
+* **`cubevis.imaging` dependency rule**: it imports no other `cubevis`
+  module at import (own `partition`; `cubevis.utils._casa` when a store
+  first opens an image), so not Bokeh, astropy, regions or CASA.
+* **Tests**: `test_imaging_layer.py` gains the dependency rule and the
+  laziness of `cubevis.toolbox.iclean` (14).  `test_lazy_packages.py` and
+  `test_fingerprint.py` name `cubevis.toolbox.iclean._ui` as front end the
+  kernel side must not load.  `record_iclean_handlers.py` imports the
+  public `cubevis.private.apps.InteractiveClean`.
+* **Checks**: `expand_templates` regenerates `_app.py` and the three
+  wrappers (and nothing else changes); before/after handler records,
+  base `ff0d810` against this tree: identical, 56 of 56;
+  `notebook_check.py`: both rounds reach the bridge and connect;
+  public names (`cubevis.iclean`, `.notebook`, `cubevis.toolbox.InteractiveCleanUI`,
+  `cubevis.private.apps.*`, the casashell layer with casashell installed)
+  resolve, `InteractiveCleanNotebook` a subclass.  Quick tests: remote,
+  imaging, syntax pass; setup 180 pass, 11 fail only for want of an
+  `ssh` binary where this was run (`test_wrapper_reachable`, the CLI's
+  tools check); tiny-ms skipped (no xradio/casacore here).
+* **Fingerprint** `k2-8c32a07ef87455eb3cd6` -> `k2-e38a583701fa4183c928` (this slice:
+  `cubevis/toolbox/__init__.py` is in the closure; plus §61's bridge-error
+  patch, now included).  Needs a release before remote sessions match.
+
+## 63. iclean step 1b: the coordinate description (base `99116cd`, 2026-11-06)
+
+Design `devel/notes/drs/iclean/iclean_imaging_layer_design.md` §2.5, as done
+§2.5.1.  World coordinates come from a coordinate description (plain,
+JSON-safe, independent of the image format) instead of the FITS header (in
+the browser) and a casatools `coordsys` (in Python).  No change in what the
+GUI shows.
+
+* **`cubevis/imaging/_coordinates.py`** (new): `from_casa_coordsys`,
+  `astropy_wcs`, `beam_from_casa`, frame table; no CASA, astropy only
+  inside `astropy_wcs`.  `CasatoolsImageStore.coordinates()`,
+  `ImageCube.coordinates()` (once), in the `ImageStore`/`ImageCube`
+  protocols; `cubevis.imaging` exports `astropy_wcs`, `from_casa_coordsys`.
+  The record's `pc` is the transpose of FITS `PCi_j`; the description
+  follows FITS.
+* **Browser**: `ImagePipe.coords_json` (Python and TS) replaces
+  `fits_header_json`; new `cubevisjs/src/bokeh/util/coordinate_description.ts`
+  (`description_keywords`: the keywords coordtxl reads, `CD` matrix for a
+  rotated image); `image_pipe.ts` builds the `WCSTransform` from it and
+  adds `coordinates()`.  coordtxl unchanged.  `ImagePipe.fits_header()`
+  (Python) is made on first use.
+* **cubevisjs builds** (`cubevis/__js__/bokeh-*/cubevisjs.min.js`):
+  first checked that this environment reproduces the committed files byte
+  for byte (bokeh 3.9.2 -> the 3.6-3.9 file, bokeh 3.10.0 -> the 3.10
+  file; `bokeh build` in `cubevisjs/`, `npm ci`), then rebuilt both.
+  (`cubevisjs/package.json` has no `scripts`, so the README's
+  `npm run build` is `bokeh build` + `node scripts/copy-versioned.js`.)
+* **Python**: `convert_masks(coord='world')`'s WCS from the description
+  (`ImageCube.coorddesc()` adds `coordinates`; a `coordsys`, its record or
+  a description in `csys` also work) -- the old helper put CASA's 0-based
+  reference pixel in FITS' 1-based `CRPIX` (one pixel off, 0.0044 deg on
+  the test image) and always used SIN; createregion's `RegionList` gets
+  `astropy_wcs(cube.coordinates())` (vertices as from the FITS header
+  string to 1e-8"); `bokeh/utils/_axes_labels.py` (never imported) deleted.
+  `CubeMask.coordinates()`.
+* **Checks**:
+  * `coordinates_parity.py` (new; casatools, node, tsc, the coordtxl npm
+    package): seven images made from the test residual -- its own frame,
+    ICRS, FK4/B1950, galactic, rotated 30°, TAN, 200×90 with an off-centre
+    reference pixel.  coordtxl from the old header keywords against coordtxl
+    from `description_keywords` (the compiled `.ts`), the GUI's strings,
+    `astropy_wcs` and the header's astropy WCS against casatools:
+
+    case                    coordtxl desc vs header  strings  astropy desc vs casatools  header WCS vs casatools
+    own_frame                                    0"    36/36                         0"                1.21e-08"
+    icrs                                         0"    36/36                         0"                1.21e-08"
+    fk4_b1950                                    0"    36/36                         0"                1.21e-08"
+    galactic                                     0"    36/36                         0"                1.21e-08"
+    rotated_30                                 540"     0/36                         0"                1.21e-08"
+    tan                                          0"    36/36                         0"                1.21e-08"
+    nonsquare_offcentre                          0"    36/36                         0"                1.21e-08"
+    
+    coordtxl vs casatools (1-based)   header, 0.1.4  desc, 0.1.4  header, fixed  desc, fixed
+    own_frame                                  190"         190"      1.66e-10"    1.66e-10"
+    icrs                                       190"         190"      1.66e-10"    1.66e-10"
+    fk4_b1950                                  190"         190"      2.97e+05"    2.97e+05"
+    galactic                                   190"         190"      1.66e-10"    1.66e-10"
+    rotated_30                                 683"         256"           571"    2.82e-10"
+    tan                                        190"         190"      2.86e-10"    2.86e-10"
+    nonsquare_offcentre                        546"         546"      2.94e-10"    2.94e-10"
+    
+
+    The rotated image differs by design: the header path never gave coordtxl
+    the rotation (it ignores `PC`).  The second table is coordtxl against
+    casatools; "fixed" is a copy of coordtxl with its projection parsing
+    corrected (below).
+  * `browser_check.py` (new; playwright with a Chrome): real iclean pages,
+    base `99116cd` and this tree, in headless Chrome: no console errors,
+    `ImagePipe.wcs()` world coordinates and strings identical, screenshots
+    identical (0 pixels differ), the page has the spectral values.
+  * Handler records against `ff0d810`: 54 identical, `fits_header_json`
+    -> `coords_json` the only difference; `notebook_check.py`: both rounds.
+  * `test_coordinates.py` (new, no CASA, 16) in the `imaging` suite:
+    record -> description (frames, pc orientation, spectral, beams,
+    JSON-safe), `astropy_wcs` against a FITS-built WCS (rotated too),
+    `ImageCube.coordinates`/`coorddesc`, `convert_masks`' helper with each
+    kind of `csys`, astropy not imported until used.  Single and per-plane
+    beams also checked on CASA images.
+* **coordtxl 0.1.4** (pre-existing, for the planned coordtxl change; design
+  §2.5.1): (1) `WCSTransform` parses the projection with
+  `wcstemp.substring(3, 7)` (`"--SI"`), so every image is linear: RA
+  offsets lack 1/cos(dec) (190" at the test image's corners);
+  `substring(4, 8)` fixes it.  (2) Then FK4 is ~82° off (its FK4
+  conversion).  (3) coordtxl pixels are 1-based; the GUI passes 0-based
+  indices.  (4) `NAXIS1` was 4 (the axis count) from the header path.
+* **Fingerprint**: `cubevis.utils` (in the kernel closure) now refers to
+  `cubevis.imaging._coordinates`, which brings `cubevis.imaging` into the
+  closure: `k2-19e170a674fe895b4d7d`.  Delete `cubevis/bokeh/utils/_axes_labels.py`.
+
+## 64. iclean step 1d: coordinate defects (base `9ba6093`, 2026-11-06)
+
+Fixes two of the four coordtxl findings of §63: the projection parsing (in
+coordtxl, released as 0.1.6) and the GUI's pixel convention.  FK4 waits for
+the coordtxl feature work.  Design §2.5.2.
+
+* **coordtxl** (casangi/coordtxl, separate change, for 0.1.6):
+  `WCSTransform.java` parsed the projection with `wcstemp.substring(3, 7)`
+  (`"--SI"`), so every image was treated as linear.  Now it skips the run
+  of dashes after the axis name and takes the next three letters (`-SIN`,
+  `-TAN` from `RA---TAN-SIP`, `GLON-SIN`).  New `ProjectionTypeTest`
+  (seven CTYPEs, a SIN corner against astropy); the expected label in
+  `CasaImageLabelTest` and `tstest.ts` becomes the SIN value
+  `20:03:56.406, +39:52:17.78 J2000` (astropy; was the linear
+  `20:02:54.100, +39:52:37.50`).  `package.json` 0.1.6.  The Java compiles
+  and gives the same results as the JS patch and astropy; Gradle/JSweet
+  could not run here (no Maven Central), so it is not built.  Two stray
+  tracked files to delete there: `src/main/java/coordtxl/fits/.#KeywordProvider.java`
+  (an Emacs lock file, which javac trips over) and
+  `src/test/java/coordtxl/CasaImageLabelTest.java~`.
+* **casalib**: with `node_modules` at the versions in `yarn.lock` (yarn 1
+  resolves newer d3/hotkeys-js; corepack could not fetch Berry), the build
+  reproduces the committed `casalib.min.js` byte for byte apart from the
+  version string.  Two pre-existing bugs in `scripts/build-browser.js`:
+  `__VERSION__` (read by `src/browser.ts`) was never defined, so a fresh
+  bundle throws a ReferenceError on load; and the copy step looked for
+  `dist/esbuild/casalib.min.js`, which the build does not write (it writes
+  `casalib-<version>.min.js`), so nothing reached `cubevis/__js__`.  Now
+  `define: {__VERSION__}` and the copy takes the versioned output.
+  `cubevis/__js__/casalib.min.js` is rebuilt with coordtxl 0.1.5 plus the
+  0.1.6 change applied by hand to its JS (what JSweet makes of the Java);
+  it embeds version `1.0.113` (the highest git tag) where the old one had
+  `0.0.8`.  `package.json` keeps `coordtxl ^0.1.4` until 0.1.6 is
+  published: then `yarn up coordtxl@^0.1.6` and rebuild.
+* **Pixel convention**: the image glyph is drawn at `x=0, y=0`, `dw, dh` =
+  shape, so pixel i covers [i, i+1] and its centre is i + 0.5 in Bokeh data
+  space.  Axis ticks and region centres (`to_world`/`from_world`) convert
+  data-space positions; the cursor readout converted `Math.floor(x)`.
+  coordtxl takes 1-based FITS pixels, so the axes were half a pixel off and
+  the readout one pixel.  `coordinate_description.ts`: `FITS_PIXEL_CENTER`
+  (1, the default) and `BOKEH_PIXEL_CENTER` (0.5);
+  `description_keywords(desc, pixel_center)` gives CRPIX = reference pixel
+  − origin + pixel_center.  `ImagePipe` builds its transform with
+  `BOKEH_PIXEL_CENTER`; `_cube.py`'s `refresh_pixel_display` converts
+  index + 0.5.  cubevisjs rebuilt (Bokeh 3.9.2 → 3.6–3.9, 3.10.0 → 3.10).
+  Note: `scripts/copy-versioned.js` names the target from the `bokeh` on
+  PATH, not the one that built; put the build's venv first on PATH.
+* **Checks**:
+  * `browser_check.py`: probes the page at pixel centres (i + 0.5, as the
+    readout now does) and compares with casatools' `toworld` for the
+    residual (`--tolerance`, default 0.01"; `--no-casatools`); absolute
+    work paths.  This tree: max separation 2.8e-10" over 5 pixels, no
+    console errors, axis labels consistent (first tick at the pixel corner,
+    half a pixel from pixel 0's centre).  Base `9ba6093`: 189" at the
+    corner, 7.5" at the reference pixel (the readout there was a further
+    pixel off).
+  * `coordinates_parity.py`: the "fixed" copy now gets the 0.1.6 change
+    (FIXED_PARSE, as JSweet writes it) instead of `substring(4, 8)`, or is
+    used as is when the coordtxl given already parses the projection; a
+    "GUI (bokeh)" column (`BOKEH_PIXEL_CENTER` at the pixel centres); with
+    the projection parsed, description and GUI must equal casatools to
+    1e-3" except the known FK4 defect (then: no worse than the header).
+    With 0.1.5 and with the patched copy: all checks pass.
+
+    coordtxl vs casatools  header, as given desc, as given  header, fixed  desc, fixed  GUI (bokeh), fixed
+    own_frame                         190"          190"      1.66e-10"    1.66e-10"           1.66e-10"
+    icrs                              190"          190"      1.66e-10"    1.66e-10"           1.66e-10"
+    fk4_b1950                         190"          190"      2.97e+05"    2.97e+05"           2.97e+05"   (known coordtxl defect)
+    galactic                          190"          190"      1.66e-10"    1.66e-10"           1.66e-10"
+    rotated_30                        683"          256"           571"    2.82e-10"           2.82e-10"
+    tan                               190"          190"      2.86e-10"    2.86e-10"           2.86e-10"
+    nonsquare_offcentre               546"          546"      2.94e-10"    2.94e-10"           2.94e-10"
+
+  * `imaging` suite (30) and `test_fingerprint.py` pass; the fingerprint
+    is unchanged (`k2-19e170a674fe895b4d7d`: none of the changed files is
+    in the kernel closure).
+* **Since** (2026-11-06, Darrell): coordtxl 0.1.6 published; casalib's
+  `package.json` takes `coordtxl ^0.1.6`, and `casalib.min.js` rebuilt from
+  it is identical to the hand-patched one above (`a5719c4`).
+
+## 65. iclean step 2: mask edits as single operations (base `a5719c4`, 2026-11-07)
+
+Design §2.2 and step 2: `CubeMask`'s `mask-mod` handler read and wrote the
+mask one channel at a time through `ImagePipe` (`mask(index, True)` /
+`put_mask`), 2×nchan calls for a cube-wide edit -- 2×nchan round trips once
+the cube is remote.  Each edit is now one `ImageCube.edit_mask` call that
+runs where the mask is stored.  No behaviour change; the browser and its
+messages are unchanged (no cubevisjs rebuild).
+
+* **`cubevis/imaging/_masks.py`** (new):
+  * `polygon_pixels(xs, ys, shape) -> (ix, iy)`: `polygon_indexes`'
+    selection, vectorized (`Path.contains_points` over the candidate grid
+    instead of `filter(contains_point, product(...))`); matplotlib imported
+    when first used, so `cubevis.imaging` still imports none of matplotlib,
+    Bokeh, CASA.  0.02 s instead of 0.47 s for a 52k-pixel triangle.
+    `region_pixels` adds the handler's "whole region inside one pixel"
+    fallback.
+  * `apply(op, planes, pixels=, modifier=)` on `[x, y]` or `[x, y, n]`
+    planes; `MaskEditor.edit(op, scope, index, polygon=, src=)`: ops `add`,
+    `subtract` (a region, or another channel's mask: `src`), `clear`, `fill`,
+    `invert`; scopes `chan`, `cube` (every channel of `index`'s stokes).  The
+    special cases kept: a channel with itself -- subtract clears it and
+    returns `{'clear_region': True}`, add does nothing; cube-wide add/subtract
+    of a channel's mask skips that channel.  Values written are 0/1 (bools
+    as uint8, which putchunk needs).  Cube scope goes through
+    `read_mask_chans`/`write_mask_chans` when the store has them (optional
+    `ImageStore` primitives, in the protocol's docstring), in chunks of at
+    most `CHUNK_BYTES` (64 MB, at least one channel), else plane by plane.
+* `ImageCube.edit_mask` (and the `ImageCube` protocol), `ImagePipe.edit_mask`,
+  `CasatoolsImageStore.read_mask_chans`/`write_mask_chans` (getchunk/putchunk
+  over a channel range).  `mask(index, True)`/`put_mask` stay (tests, other
+  callers outside iclean may use them).
+* `_cube.py`: `mod_mask` maps the browser's actions (`addition`, `subtract`,
+  `delete`, `not`) onto `edit_mask` -- ~120 lines of loops become ~30; the
+  failure replies are the ones the loops gave, including their check order
+  (e.g. add with a polygon and a bad scope replied `error: None`).
+  `set_all_mask_pixels` is `fill`/`clear` per stokes.  `cubevis.utils.
+  polygon_indexes` now calls `polygon_pixels` (same generator of int tuples).
+* **Two defects in the selection, measured and kept** (a decision for
+  Darrell; to fix, change `polygon_pixels` and its reference test):
+  1. The last column and row are never selected: the ranges stop at
+     `min(ceil(x1), nx - 1)`, exclusive, so a box drawn to the image's edge
+     ends at pixel nx-2 (126 of 128).
+  2. Non-box polygons test the pixel's *corner* `(i, j)`, not its centre
+     `(i + 0.5, j + 0.5)` (§64: pixel i covers [i, i+1] in Bokeh data space):
+     the recorded triangle is exactly the corner test, 51 of ~570 pixels
+     differ from the centre test.  Boxes (`floor(x0) <= i < ceil(x1)`) are
+     consistent with the centre convention.
+* **Checks**:
+  * `record_iclean_handlers.py`: 15 more mask edits (non-box polygons in
+    both scopes, a one-pixel region, regions at the image's edge, cube-wide
+    add of a channel's mask, a channel with itself both ways, cube invert
+    and delete, a bad action and a bad scope).  Before (`a5719c4`) and after:
+    84 entries, 0 differences (24 mask cubes, every reply).
+  * `test_masks.py` (new, no CASA, 46) in the `imaging` suite:
+    `polygon_pixels` against the old `polygon_indexes` (verbatim, as the
+    reference) on 600 random polygons and boxes plus edge cases; each of 17
+    edits against a numpy rendering of the old loops, on a store with and
+    without the ranged primitives; a sequence of edits whole and in
+    three-channel chunks; cube edits on a ranged store read no planes;
+    errors; `cubevis.imaging` loads no matplotlib.  `imaging`, `syntax`,
+    `remote` suites, `test_fingerprint.py`, `test_lazy_packages.py` pass;
+    `browser_check.py`: no console errors, coordinates as §64.
+  * 512×512×1×200 mask (casatools): cube-wide region add 2.80 s → 2.19 s,
+    cube-wide invert 8.57 s → 2.35 s (one getchunk+putchunk of the whole
+    mask: 3.29 s, so edits are now I/O bound).  The point is remote: one
+    round trip instead of 400.
+* **Fingerprint**: `cubevis.utils._regions` now imports
+  `cubevis.imaging._masks`, which is in the closure: `k2-c82e095772c5b36bec49`
+  (release still pending).
+
+## 66. iclean step 2b: drawn regions and the mask outline on the pixel grid (base `6da8526`, 2026-11-07)
+
+The two selection defects measured in §65, fixed at Darrell's request, and
+the cause of the long-standing "mask contour off by one pixel on one side":
+the outline the browser draws was half a pixel inside the mask, and drawn
+polygons selected pixels half a pixel down and left of the polygon, so the
+outline met the drawn line on the left and bottom and was one pixel inside it
+on the right and top.  The convention is §64's: the image glyph is drawn at
+`x=0, y=0`, pixel i covers [i, i+1] and its centre is i + 0.5.
+
+* **Selection** (`cubevis/imaging/_masks.py`, `polygon_pixels`): a pixel is
+  selected when its centre is inside the region, for every shape.  Boxes:
+  `x0 <= i + 0.5 < x1` exactly (was every pixel the box overlapped,
+  `floor(x0) <= i < ceil(x1)`); other polygons: `Path.contains_points` at
+  `(i + 0.5, j + 0.5)` (was the corner `(i, j)`).  The last column and row
+  can be selected (the ranges stopped at `nx - 1`, exclusive).  A region
+  holding no pixel centre selects the pixel under the middle of its bounding
+  box when that is on the plane (`region_pixels`; was: only when all
+  vertices fell in one pixel, so a sliver across two pixels selected
+  nothing).  `cubevis.utils.polygon_indexes` follows (it calls
+  `polygon_pixels`).
+* **Outline** (`cubevisjs/src/bokeh/sources/image_data_source.ts`,
+  `_mask_contour`): d3-contour puts mask value i at i + 0.5 -- the pixel's
+  centre in Bokeh space -- and the mask is 0/1, so `thresholds([1])` drew the
+  outline through the centres of the edge pixels.  `thresholds([0.5])` puts
+  it on the pixel edges, corners cut by half a pixel (marching squares; a
+  single pixel is a diamond inside its square).  Drawn back as a region (the
+  "copy the contour" path), that outline selects the same pixels by the
+  centre rule (test).  cubevisjs rebuilt (Bokeh 3.9.2 → 3.6–3.9, 3.10.0 →
+  3.10).
+* **Checks**:
+  * `test_masks.py` (50): `polygon_pixels` against a brute-force centre test
+    with its own even-odd ray casting (no matplotlib) on 500 random polygons
+    and boxes plus edge cases (replaces the old-selection reference); the
+    whole plane including its last column/row; boxes by their centres; the
+    d3 outline of a block gives the block back; the no-centre fallback (one
+    pixel, a sliver across two, off the plane); the 17 edits × 2 stores now
+    against the centre rule.
+  * Handler records against step 2 (`6da8526`): only mask cubes differ (10
+    entries, from the first non-box polygon on); every reply is unchanged.
+    Replaying each recorded edit against the centre rule: all 23 steps match
+    now; before, 3 did not -- the triangle (51 pixels), the box to the
+    image's edge (37) and the triangle in the corner (405 over 5 channels).
+  * `browser_check.py` now also hands the page's `_mask_contour` a 3×2 block
+    (x 3..5, y 2..3) and fails unless the outline is x [3, 6], y [2, 4]:
+    this tree x [3, 6], y [2, 4]; `6da8526` x [3.5, 5.5], y [2.5, 3.5].  No
+    console errors, coordinates as §64.
+  * `imaging`, `syntax`, `remote` suites, `test_fingerprint.py`,
+    `test_lazy_packages.py` pass.  Fingerprint `k2-f28e9989ade14c5f8b72`
+    (`_masks.py` is in the closure; release still pending).
+* `tests/ci/README.md`: says that the tests stay with their subject under
+  `tests/manual/` and `tests/ci/` holds the runner, the suite list and
+  CI-only helpers (Darrell asked whether the tests belong under `tests/ci/`).
+
+## 67. iclean step 3: the imaging layer on a Jupyter kernel (base `4eca91f`, 2026-11-07)
+
+Design §3 and step 3: `RemoteImagingSession` (`cubevis/imaging/_remote_session.py`)
+has `LocalImagingSession`'s surface, so `InteractiveCleanUI`, `CubeMask` and
+`ImagePipe` run unchanged on it; everything runs in a worker on the kernel's
+host.  Not yet in it: `iclean(kernel_name=)` and closing the session from the
+GUI (step 5), stopping/progress/reattach during a cycle (step 4).
+
+* **`cubevis/remote/_remote_object.py`** (new, exported by `cubevis.remote`):
+  `RemoteObjectConnection(kernel_name, class_name, kwargs, register_function=,
+  wire_types=, app=, data=, ...)` -- one object in a worker on a kernel: the one
+  `SyncBridge` loop, kernel start, `RemoteAppLink.open`, `create_context`,
+  `create_object`; `call` (blocking), `acall` (a coroutine on the bridge's loop),
+  `submit` (a `concurrent.futures.Future` another loop awaits with
+  `asyncio.wrap_future`), `run`; liveness (`_watched`: kernel stopped or
+  heartbeat silent -> `RemoteKernelLostError`), error replies ->
+  `RemoteCallError` with the remote traceback, a dead worker ->
+  `RemoteWorkerDiedError` (restarted only with `restart_worker=True`), timeouts
+  (`DEFAULT_CALL_TIMEOUT`, `data_methods` with `CUBEVIS_REMOTE_TIMEOUT`), the
+  session record (`app=`), `eval_code`/`exec_code`, `close` (idempotent).  The
+  method name is positional-only (`cube_call` has its own `method`).  It is
+  the generic half of visplot's `RemoteReductionContext`, lifted: visplot
+  moves onto it in step 5 -- until then the two carry the same logic.
+* **`cubevis/imaging/remote_registrations.py`** (new; a fingerprint root):
+  `ImagingSessionBackend(args, iclean_backend, deconvolver=, store=)` holds a
+  plain `LocalImagingSession`.  Cycles run in a thread (`start_cycle(kind)`,
+  `cycle_status(number)`), as `arun_cycle` does locally, because a worker
+  answers one call at a time and the GUI keeps asking for channels during a
+  cycle; `cube_info(field, image=)`, `cube_call(field, method, args, kwargs)`
+  for the `CUBE_METHODS` the GUI uses (`coorddesc` without its casatools
+  coordsys; `channel`'s dtype sent by name); `update`, `has_next`, `log`,
+  `restore`, `stop_descriptions`, `fields`, `image_products`, `close`,
+  `runtime_info`.  `CycleResult` travels as a list; `StopCodes` arrives as a
+  plain tuple (the GUI indexes it).
+* **`RemoteImagingSession(args, kernel_name, iclean_backend=, deconvolver=,
+  store=)`**: `start`/`run_cycle` block the calling thread while polling the
+  worker (`CYCLE_POLL` 0.25 s, no budget for a cycle as a whole; the
+  connection watches the kernel); `arun_cycle` awaits on the caller's loop
+  without blocking it; a dead worker is not replaced (tclean's state was in
+  it).  `cube(field)` is a `RemoteImageCube`: paths at once, shape /
+  coordinates / stokes labels on first use (the GUI makes its cubes before
+  `start()` writes the images), everything else forwarded; `coorddesc()['csys']`
+  is None.  `deconvolver` is None.
+* **`cubevis/imaging/testing.py`** (new): `ScriptedDeconvolver` (gclean's
+  surface; each cycle halves the residual; `cycle_seconds`, `fail_at`) and
+  `numpy_store` (an in-memory `ImageStore` with the ranged mask primitives),
+  importable by name in a worker.
+* **Found and fixed on the way**:
+  1. **The worker's stdout is its wire** to the supervisor, and tclean prints
+     to stdout from Python and C++ (`Running initial major cycle ...`): the
+     bytes corrupted the frame stream and the first cycle never answered.
+     `worker_main.protect_wire()`: the wire gets a descriptor of its own,
+     descriptor 1 and `sys.stdout` go to stderr (relayed);
+     `WorkerCommTransport(wire_out=)`.  Applies to every worker, visplot's
+     too (nothing it prints reaches the wire any more).  tclean in a thread
+     does not hold the GIL (measured: the main thread's longest wait 0.1 s).
+  2. **An `imagename` with a directory** (an absolute path -- what a remote
+     kernel's paths usually are) failed at start-up, locally too and before
+     the imaging layer: gclean keys its convergence record by `imagename` as
+     given, `image_products()` names the field by its base name.
+     `LocalImagingSession._result` re-keys the record to field ids.
+  3. **Fingerprint of a cubevis without one of the roots** (any release
+     before this one, now that interactive clean's is a root): `closure`
+     raised there, `kernel_fingerprint` returned None and the check said "no
+     kernel-side fingerprint (a cubevis from before 2026-10-23)".
+     `fingerprint` now hashes a missing root as a marker: the value differs
+     and the message is "kernel-side code differs".  Complete trees hash as
+     before (`k2`).
+* **Checks**:
+  * `test_remote_session.py` (new, 7; quick suite **`imaging-remote`**, kernel
+    "python3", no CASA): the scripted clean in the kernel and in this process
+    compared call by call -- fields, products, stop descriptions, start, two
+    cycles, update (accepted and refused), log, restore, and every cube call
+    the GUI makes (channel replies with statistics and histograms, quantized,
+    float and uint8 channels, spectrum, histogram, pixel and mask values,
+    statistics with and without mask, six mask edits, `put_mask`) before and
+    after editing and after each cycle; the worker answering during a
+    2-second cycle (>= 10 calls, each < 1 s); a failing cycle raising
+    `RemoteCallError` with the remote traceback, the session still usable;
+    cube methods outside `CUBE_METHODS` refused; a killed worker reported as
+    `RemoteWorkerDiedError` and not replaced; `close` idempotent.
+  * Real tclean through kernel "python3": `record_iclean_handlers.py
+    --kernel python3` against a local run with `--absolute` in the same
+    directory (84 entries): identical except `coorddesc_csys` (None remotely,
+    by design), the remote run's own `remote_call_stats`, and
+    `fetch_spectrum`'s mask flags (numpy bool locally, bool remotely: the
+    browser's JSON is identical).  The recorder reads the mask cube through
+    the session's cube: casatools in another process waits for ever on the
+    worker's lock.  The recorder and `browser_check.py` replace
+    `InteractiveClean`'s `LocalImagingSession` with the remote one
+    (`iclean(kernel_name=)` is step 5).
+  * `browser_check.py --kernel python3`: the page from a remote session --
+    image, axes, convergence plot -- no console errors, coordinates equal
+    casatools' (2.8e-10"), the mask outline on the pixel edges.
+  * Local iclean against step 2b's record: identical (84 entries).
+  * Quick tests: `remote` (worker_main changed), `imaging`, `imaging-remote`,
+    `syntax` pass; `setup` fails only the 11 tests that need `ssh`, as on
+    the base; `test_fingerprint.py`, `test_checkout.py`,
+    `test_lazy_packages.py` pass with `CUBEVIS_TEST_KERNEL_PYTHON` set
+    (the roots-cover-the-imports check included); their small trees gain
+    the new root, and a test for a tree without it.  `tiny-ms` and
+    `visplot-remote` skip here (no xradio/casacore).
+  * Timing, kernel on this computer: connect 4–7 s; a cube call ~5 ms; start
+    of the 128×128×5 test 2.3 s with every poll answered within 10 ms.
+* **Fingerprint** `k2-46c7c0ba50891e6131d4` (new root, `worker_main`,
+  `_worker_transport`); the pending release takes it.
+
+## 68. iclean step 4: cycles -- stopping, failures, the controls tested (base `ad4ac0f`, 2026-11-07)
+
+Design step 4.  The cycle itself already runs as a job (step 3: a thread in
+the worker, polled, awaited without blocking Bokeh); what remained was what
+happens around it.
+
+* **Stopping: after the cycle, as locally.**  gclean has no way to interrupt
+  a cycle (no interrupt, abort or cancel anywhere in it: a cycle is
+  deconvolve + tclean calls returning at the end), and the GUI's contract is
+  already "stop after this cycle": the orange stop (during *finish*) stops the
+  browser sending the next 'finish' and sends 'status', whose reply waits on
+  the control comm's lock until the running cycle ends
+  (`wait_for_tclean_stop`).  Nothing of it depends on where the imager runs;
+  tested both ways.  Interrupting would mean killing the worker, which loses
+  tclean's state.
+* **Failures reach the GUI** (`_ui.py`, `clean_handler`, `_cycle_error`):
+  an exception from `update`/`arun_cycle`/`log` -- the imager raising, or
+  remotely `RemoteCallError`, `RemoteWorkerDiedError`, `RemoteKernelLostError`,
+  a timeout -- is answered `result='error'` with a message for the status line
+  (the exception's type and text, the remote traceback left in the log of
+  the Python session; worker/kernel messages as they are), stop code
+  `[-1, -1]` and the imager's log so far; the browser's `update_gui` already
+  handled 'error' (controls enabled again).  Before, the handler raised,
+  `CommMgr` replied `{'error', 'traceback'}`, which `update_gui` does not
+  recognise: the browser stayed at "Running one set of deconvolution
+  iterations" for ever -- locally too, for any gclean exception.
+* **A value `update()` refuses is an error** (behaviour change): gclean
+  checks every value and returns `(-1, "threshold must be a number, ...")`;
+  `clean_handler` ignored it and ran a cycle with the previous values, so a
+  typo in the threshold box silently did nothing.  Now the message is shown
+  and no cycle runs.
+* **`cubevis.imaging.testing.ScriptedDeconvolver`** now gives gclean's
+  results: the convergence record per field (`major.cyclethreshold`,
+  `chan[c][stokes]` with `modelFlux`, `iterations` (an array), `peakRes`,
+  `stopCode`, `cycleThresh`, one entry more per cycle), stop codes and
+  descriptions (iteration limit, threshold), `update` checking values as
+  gclean does -- so `InteractiveCleanUI` runs on it without CASA.
+* **Checks**:
+  * `test_clean_controls.py` (new, 11; in the `imaging-remote` quick suite):
+    the real `InteractiveCleanUI` on the scripted imager, here and on kernel
+    "python3", through the handlers the browser uses -- continue (one cycle,
+    convergence, log); finish repeated until converged (update, update,
+    converged); a refused threshold (error, no cycle; the next press runs the
+    first cycle); a cycle that raises (error with the message, no remote
+    traceback in it, the log so far); stop during finish (the 'status'
+    answered, the cycle finishes, Bokeh's loop free throughout); a killed
+    worker (error "... worker ... is gone ...", and again on the next press).
+    Passes with casatools/casatasks unimportable and without `BROWSER`
+    (the test sets it).  Against `ad4ac0f`'s `_ui.py` the five failure
+    tests fail.
+  * `browser_check.py --controls` (real tclean, headless Chrome), here and
+    with `--kernel python3`: threshold "abc" + continue -> the status line
+    shows gclean's "threshold must be a number, or a number with units
+    (Jy/mJy/uJy)" with continue enabled; "0.001Jy" + continue -> the cycle's
+    own result ("Zero mask": nothing drawn) with continue enabled.  Buttons
+    are clicked through their views (found from `Bokeh.index`'s roots).
+  * Handler records: local identical to step 3's (84); remote against local
+    the same three expected differences as §67.
+  * Quick tests: `remote`, `imaging`, `imaging-remote`, `syntax` pass.
+    Fingerprint unchanged (`k2-46c7c0ba50891e6131d4`): nothing kernel-side
+    changed (`testing.py` is not reached from a root).
+* **Open, for Darrell** (design §5):
+  * *Progress during a cycle*: locally there is none either (the status line
+    says "Running ..." until the cycle ends).  Remotely a cycle can take
+    minutes over a slow link.  Cheapest useful form: the elapsed time in the
+    status line, pushed by Python while it waits (`CommMgr.send` to a small
+    browser handler); fuller: minor-cycle lines from tclean's log, relayed by
+    the worker.
+  * *Reattach*: a laptop that loses the kernel ends the session
+    (`RemoteKernelLostError`, now shown in the GUI); picking a running clean up
+    again from a new process would need the session record
+    (`cubevis.setup.sessions`, written with `app="iclean"`) plus a way to
+    rebuild the GUI's state from the worker.  Not needed for parity.
+
+## 69. iclean step 4b: progress of a running cycle (base `ad4ac0f` + §68, 2026-11-07)
+
+Darrell (on §68's questions): progress feedback for local and remote tclean
+runs -- the GUI is disabled during a cycle, so a busy cursor says little;
+progress that changes shows that tclean runs and is being followed.  And
+session management (a later session) will let a user start iclean on a
+cluster node, close the laptop, and reconnect from elsewhere with the GUI
+showing the clean's current state: support it where it is cheap now, leave
+the significant work for that session.
+
+* **What there is to show** (measured): tclean writes to casalog *while* a
+  cycle runs -- `Begin Task: deconvolve` / `tclean`, `Run Hogbom minor-cycle
+  on 5 chans`, one line per channel as it finishes (`[bl:C2] iters=18->33
+  [15], ... peakres=1.00951->0.42671`), `Completed 51 iterations`,
+  `Run Major Cycle 2`.
+* **`cubevis/imaging/_progress.py`** (new): `CycleProgress(log_path)` --
+  `begin(kind)` / `end(ok)` around a cycle, `snapshot()` reads what the log
+  gained since (whole lines, at most 256 kB a time, a log that starts again
+  read from its start) and returns the state: `running`, `number`, `kind`,
+  `seconds`, `phase` ('minor cycles' / 'major cycle'), `algorithm`,
+  `channels` / `channels_done`, `iterations`, `peak_residual`,
+  `major_cycle`, `activity` (lines read), `quiet_seconds`, `ok`.
+  `describe(snapshot, label)` makes the status line: "Running one set of
+  deconvolution iterations · 0:42 · minor cycles (Hogbom): 3 of 5 channels,
+  33 iterations, peak residual 0.4267" (and "· tclean quiet for N s" after
+  30 s without a line).  The log is casalog's (`casatasks`, imported when
+  first needed), or a deconvolver's own `log_path()`; without one, only the
+  elapsed time.
+* **Progress is state, kept where the imager runs** -- what a reconnecting GUI
+  will need: `LocalImagingSession.progress()` (begin/end around `start`,
+  `run_cycle`, `arun_cycle`; `log_path=` or the deconvolver's own);
+  the worker's `cycle_status` carries it and `ImagingSessionBackend.progress()`
+  answers it at any time; `RemoteImagingSession.progress()` returns the last
+  poll's while it polls a cycle (no extra round trip), else asks the worker.
+* **The GUI** (`_ui.py`): a third comm, "cycle progress", opened with
+  `squash_queue=True` (a slow link holds the newest update, not a backlog);
+  `_report_progress(label)` runs while `clean_handler` awaits the cycle and
+  every `PROGRESS_INTERVAL` (1 s) sends `{'text', 'progress'}`; cancelled
+  when the cycle ends.  Browser (`'clean-progress'` snippet):
+  `progress_watch()` -- called before each 'next'/'finish' is sent, the
+  automatic 'finish' repeats included -- registers the handler once and sets
+  `state.cycle_running`; the handler writes the text to the status line only
+  while `cycle_running` (`update_gui` and `wait_for_tclean_stop` clear it), so
+  an update arriving after the cycle's result is dropped.  Labels: "Running
+  one set of deconvolution iterations" (continue), "Running multiple
+  iterations" (finish), as the browser's own.
+* **`ScriptedDeconvolver`** writes those casalog lines into its own log
+  (`log_path()`) while it works, spread over `cycle_seconds`; names its field
+  by the image's base name, as gclean does.
+* **Checks**:
+  * `test_progress.py` (new, 7; `imaging` suite): real tclean lines read as
+    they are written (phase, algorithm, channels 3 of 5, iterations 33, peak
+    residual, then the major cycle, totals), what came before the cycle
+    skipped, a line written in two pieces read once, a log that starts again,
+    no log (time only; a failing log source), the "quiet" note, the session
+    following its cycles while they run, a failed cycle marked.
+  * `test_clean_controls.py` (+2, 13): during a 3 s cycle, here and in the
+    worker, at least four updates, the elapsed time rising, the channels
+    moving, "minor cycles (Hogbom) ... of 4 channels"; none after the cycle;
+    `progress()` still answers after it; 'finish' with its own label.
+  * Real tclean (1024², 5 channels, a mask): snapshots every 0.1 s showed
+    "minor cycles (Hogbom): 1 / 3 / 5 of 5 channels, 9 / 33 / 51
+    iterations, peak residual ..." then "major cycle (51 iterations so far)",
+    for two cycles.
+  * `browser_check.py --controls --scripted 4` (headless Chrome), here and
+    with `--kernel python3`: the status line showed 3 (local) and 4
+    (remote) progress lines during the cycle -- "... · 0:01 · minor cycles
+    (Hogbom): 1 of 5 channels, 2 iterations, peak residual 1.924", "... ·
+    0:03 · major cycle (10 iterations so far)" -- then the cycle's result.
+    `--scripted SECONDS` runs the scripted imager (no tclean, no casatools
+    comparison).  Real tclean `--controls`, both ways: as §68.
+  * Handler records: local and remote identical to step 4's.
+  * Quick tests: `remote`, `imaging`, `imaging-remote`, `syntax` pass
+    (without `BROWSER`); `test_fingerprint.py` with a kernel Python passes.
+* **For reattach, in place**: a cycle's state and progress live in the
+  worker (`cycle_status()` without a number answers the latest cycle, with
+  its result once done; `progress()` at any time), so a new laptop process
+  could learn what runs and what came of it.  **Left for the session work**:
+  adopting a running worker (the session record, `app="iclean"`, has the
+  kernel, context and handle), rebuilding the GUI (convergence history, the
+  last `CycleResult`, the controls' state) from it, the browser registering
+  the progress handler at page load rather than at the first click.
+* **Fingerprint** `k2-eefb1f77fd564a7cf7ee` (session, `_progress`, the worker).
+
+## 70. iclean step 5a: `iclean(kernel_name=)`, the end of a session; CI without python-casacore (base `48a51d7`, 2026-11-07)
+
+Step 5 split (Darrell, 2026-11-07): 5a `kernel_name=` and closing the remote
+session; 5b kernel capabilities in setup; 5c visplot onto
+`RemoteObjectConnection`.  A cubevis release comes from `main`, so it waits
+for the merge; until then a node runs this branch the way setup already
+advises for a development install (this checkout installed with
+`pip install -e` in an environment there; setup finds it by fingerprint).
+
+* **`kernel_name=`** (like `iclean_backend`: accepted, not in the
+  casashell `inp`/`go` listing): `InteractiveClean(..., iclean_backend="PROD",
+  kernel_name=None)` makes a `RemoteImagingSession(args, kernel_name,
+  iclean_backend=)` instead of a `LocalImagingSession`; the casatasks
+  wrappers `iclean` and `iclean_notebook` pass it on.  Templates
+  (`toolbox/iclean/_app.mustache`, `private/casatasks/iclean{,_notebook}.mustache`)
+  and the generated `.py` (`scripts/expand_templates`; it reproduces the
+  base byte for byte, so the generated diff is these lines only).  The
+  casashell binding passes neither `iclean_backend` nor `kernel_name` (it
+  never had the first).
+* **The end of a session** (`_ui.py`, `_finish_session`): `_task_server`
+  returns `result()` (which calls `restore()`), then keeps the imager's
+  history (`log(True)`; `history()` returns it afterwards) and closes a
+  remote session -- worker, link, kernel.  Only the GUI's real end comes
+  here (`shutdown_handler` resolves the result future); a connection that
+  drops (`connection_closed_handler`) leaves the session for the frontend to
+  reconnect.  A local session is left as before.  Not done: closing when the
+  Python process ends some other way (an exception, Ctrl-C) -- with session
+  management a kernel left running may be wanted; decided there.
+* **Remote result**: `restore()`'s `stopcode` is gclean's `StopCodes`
+  namedtuple locally, a plain tuple remotely (indexing is the same,
+  `.major` is not).
+* **CI without python-casacore**: visplot itself never needed it (MSv2
+  through xarray-ms/arcae; casacore only named as the table format).
+  `tests/ci/make_tiny_ms.py` used `casacore.tables` to give the generated MS
+  its times, UVWs and data; xradio 1.3.0 accesses tables through arcae by
+  default (`xradio._utils._casacore.backend`: python-casacore's
+  `tables`/`images` API emulated on arcae; python-casacore only through an
+  unsupported `XRADIO_CASACORE_BACKEND` switch), and its generator writes
+  with it -- `make_tiny_ms` now uses that `tables.table`.
+  `tests/ci/requirements.txt`: `xradio>=1.3`, no `python-casacore`;
+  `suites.toml`: `tiny-ms` and `visplot-remote` require `arcae` instead of
+  `casacore`.  Here (xradio 1.3.0, arcae 0.5.8, xarray-ms 0.5.13, no
+  python-casacore): both suites run and pass -- `visplot-remote` 22/22,
+  which also confirms §67's `protect_wire` for visplot's workers.
+* **Checks**:
+  * `browser_check.py --controls --stop` (new `--stop`: the red stop, the
+    confirmation accepted; the app must end with its result), with real
+    tclean, here and with `--kernel python3` -- now through
+    `InteractiveClean(kernel_name=)`, not a swapped-in session: controls as
+    §68; stop: exit 0, the result (`'stopDescription': 'Zero mask'`),
+    history 4 entries, `session closed: True` remotely; no kernel process
+    left.
+  * `record_iclean_handlers.py --kernel` now uses `kernel_name=`:
+    identical to the swapped-in session's record (85 entries).
+  * `test_clean_controls.py` (+2, 15): the end keeps the history and closes
+    a remote session once; a local session stays usable.
+  * Quick tests: `remote`, `imaging`, `imaging-remote`, `tiny-ms`,
+    `visplot-remote`, `syntax` pass.  Fingerprint unchanged
+    (`k2-eefb1f77fd564a7cf7ee`).
+
+## 71. iclean step 5b: kernel capabilities in setup; CASA's data (base `1e0c6b2`, 2026-11-07)
+
+Decisions (Darrell, 2026-11-07): two capabilities, `visplot` and `iclean`,
+never assumed of each other (a site's CASA environment with cubevis is an
+iclean kernel without xarray-ms); setup adds only to environments it made;
+the extra is `cubevis[iclean]`; no warning about casa6 + xarray in one
+environment (arcae was written to live beside casatools -- checked here:
+casatools 6.7.6.14 and arcae 0.5.8 from pip read one MS in one process);
+CASA's data: a private copy per environment (casadata), or the user's own
+when casaconfig finds it -- the user chooses; the private copy reaches the
+kernels as `CASASITECONFIG` through the kernel launcher's environment.
+
+* **Capabilities** (`cubevis/setup/capabilities.py`, new):
+  * `PROBE`, appended to the launcher test (`launcher.test_program`), so it
+    runs in the kernel's own context (directory, variables,
+    `CASASITECONFIG`): `visplot` -- `xarray_ms` imports; `iclean` --
+    casatasks and casatools installed and casatasks' `_gclean.py` found,
+    **not imported** (importing casatools writes `casa-*.log` into the
+    current directory and may start CASA's data updates; the worker's real
+    import reports failures in the GUI); `casa_data` -- casaconfig's
+    resolved configuration (`casaconfig.config` alone reads the site and
+    user files, changes nothing): `measurespath`, the files that set it,
+    auto-update, `ready` when `measurespath/geodetic` exists, else why.
+    One line, `CUBEVIS-CAPS {json}`; `remote.test_launcher` returns
+    `(fingerprint, cwd, report)`.
+  * Kernel records: `capabilities`, `capability_errors`, `casa_data`
+    (health fields).  `envcheck` reports `iclean` per environment the same
+    way (no import); environment records keep `iclean`.
+  * `require(kernel_name, app)`: the laptop side.  `RemoteObjectConnection`
+    (app `iclean`) and visplot's `RemoteReductionContext` refuse, before
+    anything starts, a kernel setup recorded as unable to run the app
+    (`MissingCapability`, with what to do).  A kernel setup does not know,
+    or never checked, is not refused.
+* **Setup** (`hostsetup.py`):
+  * Making an environment asks "Should kernels on NODE run interactive
+    clean?" (default yes; `cubevis[visplot,iclean]==V`, about 300 MB more).
+  * `iclean_step` (after an environment is chosen, and on a rerun for each
+    environment the host's kernels use): an environment that cannot run it
+    -- its check, else its kernels' tests (`environment_iclean`: records from
+    before 5b have no `iclean`) -- gets, if setup made it, "Add interactive
+    clean to it?" (a no is kept, `iclean_declined`, until `--redo`); if it
+    is the user's, the pip command.  Added: the kernels are tested again.
+  * `casa_data_step` (after a kernel's test passes, it runs iclean): data
+    found -- "[u]se it, or give the environment a [p]rivate copy?" (asked
+    once per environment, `casa_data_choice`; `--redo` asks again); none
+    found -- a private copy by default in setup's environment, what to do in
+    the user's.  A private copy: `envmake` add of `casadata` plus
+    `PREFIX/cubevis-casasiteconfig.py` (measurespath = casadata's, no
+    auto-updates); the environment record's `casa_site_config` (from the
+    marker); the launcher exports `CASASITECONFIG` (unless the kernel's
+    variables set it); the kernels are tested again, and a user
+    `~/.casa/config.py` whose measurespath overrides the copy is said.
+  * `use_kernel` and `status` show what each kernel runs, the iclean call
+    beside the visplot one, and CASA's data.
+* **envmake**: `add` -- into an environment with setup's marker only: the
+  same detached worker without the create step, pip with each requirement
+  (`spec` now space-separated), the site configuration
+  (`site-config` step), the marker rewritten last (`added`, `iclean`,
+  `casa_site_config`).  Its docstring: setup changes its own environments
+  only by adding to them when asked.
+* **pyproject**: `iclean = ["cubevis[casa6,remote]"]` (a kernel's
+  environment needs ipykernel as visplot's does); the casa6 + xarray
+  warning replaced.
+* **Checks**: setup suite: the 11 base failures (ssh) only, +24 tests
+  (`test_capabilities.py` new: the probe in this Python -- no data, your
+  configuration, setup's site configuration, your config overriding it,
+  nothing written in the directory or home -- and in one without either;
+  the launcher's `CASASITECONFIG`; `require`; `RemoteImagingSession` refused
+  before a kernel manager is made.  `test_envmake.py`: add, the site
+  configuration, pip with both requirements, never into an environment
+  without the marker.  `test_hostsetup.py`: the question when making, the
+  offer and its no, the user's environment, the add round trip, both data
+  choices, an overriding config, the rerun path end to end).  Quick tests:
+  `remote`, `imaging`, `imaging-remote`, `tiny-ms`, `visplot-remote`,
+  `syntax` pass.  Fingerprint `k2-4e77b3fe294591fa0bd6`
+  (`cubevis.setup.capabilities` joins the closure through
+  `RemoteObjectConnection`, as `sessions` and `state` did).
+* **Not done**: a real host (ssh, conda, PyPI's casatasks) -- the rig's
+  tests skip here; the probe ran through a launcher on this computer
+  (`test_launcher.py` with the kernel Python).
+## 72. iclean with `kernel_name=`: parameters checked on the kernel's host; gclean's bare error code (base `1e0c6b2` + §71, 2026-11-09)
+
+Darrell's first run on a cluster kernel (`cvpost106-iclean`, from a wheel of
+this branch): `iclean(vis='refim_point_withline.ms', ..., kernel_name=...)`
+failed **on the laptop** -- `AssertionError: all elements of the vis vector
+parameter must be a path that exists`.  The task wrapper
+(`private/casatasks/iclean{,_notebook}`) checks and coerces every
+parameter with casatools' `CasaValidator` before anything else, and `vis`
+is a `cReqPath`: it must exist *here*.  With a kernel the paths are the
+host's.  (It also needed casatools and casatasks on the laptop; the
+notebook wrapper imported them at module level.)
+
+* **The check, generated once**: `cubevis/imaging/_tclean_params.mustache`
+  (new; `TASK XML> tclean -argfilter=interactive,fullsummary`, as the
+  wrappers) -> `_tclean_params.py`: `check(doc)` (the wrapper's schema and
+  validation; the coerced document, or AssertionError with casatools'
+  text) and `names()`.  casatools only inside `check`
+  (`cubevis.imaging` still imports no CASA).  `scripts/expand_templates`
+  regenerates every other file unchanged.
+* **Wrappers**: with `kernel_name` the arguments go to the application as
+  given -- no CASA imported, nothing logged here; otherwise `check` and the
+  task log as before (the schema no longer inline; module-level casatools
+  imports in `iclean_notebook` gone).
+* **Worker**: `ImagingSessionBackend(check=True)` checks in its own
+  working directory (relative paths relative to the kernel's, as the
+  design says), logs `iclean` in the host's CASA log (begin; end at
+  `close`), keeps the coerced arguments (`args()`).  A refusal is a
+  ValueError beginning `PARAMS_ERROR` with the host and directory;
+  `RemoteImagingSession` raises it as `ValueError("kernel 'K': iclean's
+  parameters (checked on HOST, in DIR): ...")`, without the worker's
+  traceback.  `check` defaults to True unless a test deconvolver is given.
+  The app takes `session.args` (coerced on the host) for the GUI's values.
+* **gclean's bare error code**: when gclean's cycle raises, it returns
+  stopcode `-1` (an int) with the exception's text as the description;
+  `clean_handler` indexed `stopcode[0]` and failed with "'int' object is
+  not subscriptable", so the error reached nobody and the page kept
+  "Running one set of deconvolution iterations".  `LocalImagingSession`
+  now makes a bare code a pair, `(-1, 0)`: the GUI shows gclean's message.
+* **Found, in casatasks' gclean (not fixed here)**:
+  `_update_peakres_masksum_multifield` runs `imstat` on
+  `product['residualname']` / `['maskname']` -- base names, without
+  `imagepath` -- so they are looked up in the **current directory**.  An
+  `imagename` whose directory is not the working directory fails at the
+  first cycle ("the imagename parameter must be a path that exists
+  ('br.residual' does not exist)") -- or, worse, silently reads a
+  same-named image there.  Locally too.  Seen as: the browser check with
+  an absolute imagename on a kernel started elsewhere; a relative
+  `imagename` (images in the kernel's directory, Darrell's case) works.
+  Fix belongs in casatasks: join `imagepath`.
+* **Checks**: the case reproduced with a kernelspec that starts in another
+  directory (`hostdir`, `cd /tmp/hostdir`): the wrapper from a directory
+  without the MS -> the GUI starts on the kernel; `vis` not on the host ->
+  the plain ValueError; locally -> casatools' AssertionError as before.
+  Relative and absolute imagename cycles (`Zero mask`).  New
+  `test_task_params.py` (imaging suite): the wrapper's remote branch with
+  casatools/casatasks unimportable (both wrappers), `check`, the worker's
+  check in its directory, the refusal through a kernel.
+  `test_imaging_layer.py` +1 (the pair).  `browser_check.py --controls
+  --stop --kernel hostdir` with the absolute imagename now shows gclean's
+  message in the status line, the buttons enabled again (before: stuck on
+  "Running ...").  Quick suites (`remote`, `imaging`, `imaging-remote`,
+  `tiny-ms`, `visplot-remote`, `syntax`) pass; setup: the 11 ssh failures
+  only.  Fingerprint `k2-4649a3d7dc3c3e260b98` (with §71).
+* **Delivery**: cumulative on `1e0c6b2` -- §71's files (not yet pushed
+  then) and these.
+
+## 73. iclean takes setup's kernel name (2026-11-09)
+
+Darrell's next run: setup made kernel `cvpost106-iclean` and printed
+`iclean(..., kernel_name="cvpost106-iclean")`; iclean failed with
+jupyter_client's `NoSuchKernel: No such kernel named cvpost106-iclean`.
+Setup writes the Jupyter kernel as `cubevis-NAME`; visplot has resolved
+setup's name to it (`VisibilityPlotter._resolve_kernel_name`),
+but `RemoteObjectConnection` (iclean) passed the name to jupyter_client
+as given.
+
+* The resolver moves to `cubevis.remote.resolve_kernel_name`
+  (`_remote_object.py`; the text unchanged), and `RemoteObjectConnection`
+  resolves every kernel name -- after the capability check, which knows
+  setup's names (so a kernel that cannot run the app is refused as that,
+  not as an unknown name).  `visibility_plotter._resolve_kernel_name`
+  delegates to it (its tests unchanged).
+* Test: `test_capabilities.py` +1 -- `RemoteImagingSession` with
+  `"cvpost106-iclean"` starts `cubevis-cvpost106-iclean`; an unknown name
+  is refused before a kernel manager is made.
+* Quick suites pass; setup: the 11 ssh failures only.  Fingerprint
+  `k2-1d0eb7578783471039fe`.
+
+## 74. The image no longer resizes as the status line changes (2026-11-09)
+
+Darrell, on the cluster kernel: during a cycle the image plot shrank a
+little and came back.  The status line is a `Div` (width 230) in the top
+row beside the clean buttons (40 px); the progress text (§69) ran to 3-4
+lines, the row grew with it, and the image below lost the height.  Two
+lines (the old "Running one set of deconvolution iterations") fit beside
+the buttons, which is why it was never seen before progress.  Measured in
+`browser_check --scripted 6 --controls`: status 37 / 51 / 69 px -> image
+plot 875 / 860 / 843 px high, top 96 / 111 / 128.
+
+* The status line has a fixed height (`InteractiveCleanUI.STATUS_HEIGHT`
+  = 40, the buttons'; `height_policy='fixed'`, `overflow-y: auto`): a
+  longer status (an error) scrolls inside it.
+* Progress uses a short form that fits two lines --
+  `describe(progress, label, short=True)`: "0:42 · minor cycles: 3/5
+  chans, 1520 iter, peak 0.0213", "0:42 · major cycle", "· quiet 42 s" --
+  with the whole text (label and all) as its tooltip (`<span title=...>`).
+* `browser_check.py --controls` now records the image plot's box and the
+  status line's height while the cycle runs, fails when the plot moves or
+  changes size, and lists status texts too long for the line.  Scripted
+  (6 s cycles) and real tclean: the plot one box throughout
+  ([0, 99, 1050, 872]), the status line 40 px, nothing scrolling.
+* Tests: `test_progress.py` +1 (the short form); `test_clean_controls.py`
+  (the pushed text is the short form with the tooltip).  Quick suites pass;
+  setup: the 11 ssh failures only.  Fingerprint `k2-dc6e5294be51545a1070`.
+
+## 75. iclean step 5c: visplot on the shared connection; kernels on other cluster nodes; `setup kernel NAME` (base `ca3f47b`, 2026-11-09)
+
+* **visplot's `RemoteReductionContext` uses `RemoteObjectConnection`**
+  (`self._conn`): the kernel, link, worker, liveness watch, session record
+  and kernel-name resolution are one code path for visplot and interactive
+  clean.  `remote_reduction_context.py` 1281 -> 887 lines.  What the shared
+  connection gained from visplot's copy, for both: each connect phase's
+  time in the log; with `restart_worker`, a call that never reached a
+  worker gone between calls is sent to a new one, once; the session record
+  follows a new worker; `recreate(kwargs)` (visplot's `reopen`); the
+  decode time in `CLIENT_STATS`; `kernel_fingerprint()`;
+  `kernel_manager`, `session_id`; `restart_hint` (visplot: "the next Plot
+  starts a new one ...").  Kept in visplot: metadata after connecting (a
+  failure there closes the connection), the memory guard's refusal as
+  `SelectionTooLargeError`, the slow-call message with its hint, the memo
+  and pending-flag bookkeeping, `call_stats()` over `conn.call_stats`.
+  `RemoteBackendError`, `RemoteWorkerDiedError`, `RemoteKernelLostError`,
+  `HEARTBEAT_GRACE`, `_quiet_setup_kernel_hints` stay importable from the
+  module (the shared ones).  Tests that set visplot's internals
+  (`test_worker_death`, `test_kernel_fingerprint`, `test_sessions`) now set
+  the connection's, plus: interactive clean's connection (no restart)
+  reports a gone worker at once.
+* **Fingerprint**: `RemoteObjectConnection.kernel_fingerprint` imports
+  `cubevis._fingerprint`, which put that module in the kernel-side closure
+  -- an environment's own copy of it then changed the hash, though it never
+  decides anything (setup and the connection send their copy).
+  `_fingerprint.SENT` leaves it out (`test_discover`'s
+  `test_environments_are_fingerprinted_with_the_code_setup_sends` found
+  it).  Fingerprint `k2-046c84b6febd6d1717d6`.
+* **Kernels on another node of a cluster** (`setup jupyter NAME NODE` ->
+  `cubevis-NAME-NODE`): `sessions.setup_kernel_name(name, st)` knows them as
+  NAME when NAME is a kernel and NODE a node; the capability check and the
+  session record use it (before, such a kernel was never refused, and its
+  session recorded as `NAME-NODE`).
+* **`python -m cubevis.setup kernel NAME [--workdir DIR] [--env VARS]
+  [--environment ENV]`** (Darrell: change one thing without the host's
+  whole walk): logs in to the node the kernel was last checked on, changes
+  only what is given (no option: working directory and variables asked,
+  defaulting to the kernel's), records the change, rewrites and runs the
+  launcher; a cluster whose defaults were the kernel's old settings is
+  asked whether they follow (`cluster_defaults`); a new environment gets the
+  CASA-data step.  The end of a host's setup names the command.
+* **Checks**: quick suites pass; setup: the 11 ssh failures only (+7
+  tests: the command, the node names).  `test_remote_reduction_context.py`
+  on `sim_point_withline.ms`: the same 9 pass / 3 fail before and after
+  (the 3 compare `antenna_labels` and columns on this simulated MS; not
+  this change).
+
+## 76. setup: another kernel on a host set up before; the help lists every command (base `2b385ab`, 2026-11-09)
+
+Darrell: (1) `--help` did not show the kernel command's options; (2) a
+rerun of `setup cvpost106` (a working kernel there) gave no way to add a
+kernel in another environment -- now that kernels serve two applications,
+that matters.
+
+* **Another kernel**: a rerun of a host whose kernels exist checks them, as
+  before, then asks "Add another kernel?" (default no, `another_kernel`);
+  yes chooses its environment (any of the node's, 'new', or a path), the
+  interactive clean offer for it, then the kernel's settings and name.
+* **`HOST --kernel NAME`**: a *new* NAME now always chooses its environment
+  (the default is the one the host's kernels use).  Before,
+  `environment_step(reuse=True)` took that one without asking whenever a
+  single environment was in use -- the reason no other could be chosen.
+  An existing NAME keeps its environment (its settings asked again);
+  `setup kernel NAME --environment ENV` moves it.
+* **`--help`** prints the commands' table from the module docstring (every
+  command and its options, the kernel command's included) above argparse's
+  list (`RawDescriptionHelpFormatter`).
+* Tests (+3): the rerun's offer (no / yes), `--kernel` new and existing,
+  the help text.  Setup: the 11 ssh failures only; syntax passes.
+  Fingerprint unchanged (setup's modules are not kernel-side).
+
+## 77. A kernel's capability record is tried, not trusted; the visplot tests take setup's kernel names (base `128cbc1`, 2026-11-09)
+
+Darrell's full visplot run against `CUBEVIS_TEST_KERNEL=cvpost106-visplot`
+(setup-test-run-005): 7 failed, 81 errors, two kinds:
+
+* **`MissingCapability: kernel 'cvpost106-visplot' cannot run visplot:
+  ModuleNotFoundError: No module named 'xarray_ms'`** (every test through
+  `RemoteReductionContext`).  Setup records what a kernel runs when it
+  tests the launcher; this kernel's environment (`cubevis-devel`) got its
+  visplot packages after that, but the record still said no, and the
+  connection refused on the record alone.  Now:
+  * `RemoteObjectConnection` does not refuse on a record: a negative one is
+    logged ("setup recorded that kernel ... cannot run visplot (...);
+    trying it") and the kernel is tried.
+  * When the worker cannot make the application's object because it
+    cannot import a module (`ModuleNotFoundError` / `ImportError` the last
+    line of the remote traceback), `MissingCapability` says why and what to
+    do -- as the refusal did, now from what the worker found -- and the
+    record is set to it (`capabilities.mark`).
+  * A connection that works where the record said no sets it to yes: the
+    record follows the environment (`setup status` shows it).
+  * `capabilities.require` stays, for an explicit check; connections no
+    longer call it.
+* **`NoSuchKernel: No such kernel named cvpost106-visplot`**
+  (`test_remote_eval_exec`, `test_remote_kernel_link`,
+  `test_remote_object_registry`): those tests start `AsyncKernelManager`
+  with `CUBEVIS_TEST_KERNEL` as given; setup's name needs
+  `cubevis.remote.resolve_kernel_name` (Jupyter knows `cubevis-NAME`).  The
+  seven visplot test modules that read `CUBEVIS_TEST_KERNEL` now resolve it.
+* **Checks**: `test_capabilities.py` (a negative record tried with a
+  warning; a missing module reported as the capability and recorded; a
+  working connection correcting the record); a real kernel recorded
+  "visplot: no" connects and the record becomes yes; the visplot remote
+  tests with a setup-style name (`CUBEVIS_TEST_KERNEL=localtest`, Jupyter
+  `cubevis-localtest`): eval/exec 5/5, reduction context as before (the
+  same 3 failures on the simulated MS, before and after).  Quick suites
+  pass; setup: the 11 ssh failures only.  Fingerprint
+  `k2-c26b085ba19057418f44`.
+
+## 78. A capability is the application's whole extra (base `9cd5d4e`, 2026-11-09)
+
+Darrell's run 006 (after §77): every remote open failed in the worker with
+`xarray-ms failed to open '...sis14_twhya_calibrated_flagged.ms': chunk
+manager 'dask' is not available ... <<class 'ImportError'>>` (6 failed, 70
+errors).  `cubevis-devel` has xarray-ms but not dask: the probe's
+`import xarray_ms` said visplot could run, and the wrapped ImportError was
+not recognized as a missing package, so the test reported a remote error.
+
+* **The probe checks the application's whole extra** -- every package of
+  `cubevis[xarray]` for visplot (xarray-ms, zarr, dask, distributed,
+  datashader), of `cubevis[casa6]` for interactive clean -- by distribution
+  (`importlib.metadata`, nothing imported), from the kernel's own cubevis
+  metadata (`cubevis[...]` inside an extra followed; versions not
+  compared).  Missing ones: `capability_errors[app] = "not installed:
+  dask, distributed"`.  Without cubevis metadata (none installed), only the
+  import checks, as before.
+* **A wrapped import failure** -- `ImportError`/`ModuleNotFoundError` in the
+  remote error or the traceback's last line -- is a `MissingCapability`
+  too (with the application's message), recorded as such.
+* Darrell asked whether what is found updates the kernel's record: yes --
+  setup's launcher test (`setup HOST`, `setup check NAME`, `setup kernel
+  NAME`) writes the probe's answer, and a connection writes what it found
+  (a working one sets the app to yes; a missing package to no, with why,
+  §77).  `setup status` shows the record.
+* Tests: `test_capabilities.py` (+1: the probe with dask and distributed
+  missing; the wrapped ImportError).  Quick suites pass; setup: the 11 ssh
+  failures only.  Fingerprint `k2-c12ff110034d7a0f949b`.
+
+## 79. iclean step 6: parity in CI; release clean-up (base `a55ea9e`, 2026-11-09)
+
+* **Suite `iclean-parity`** (`tests/manual/iclean-imaging/test_iclean_parity.py`;
+  needs casatasks, casatools, jupyter_client, ipykernel -- skipped
+  without, as in the GitHub workflow, which has no CASA; ~60 s here):
+  * the GUI's handlers with real tclean on `make_sim_ms.py`'s MS:
+    `record_iclean_handlers.py` here (`--absolute`) and on the `python3`
+    kernel, in the same directory, compared with `compare_records.py
+    --remote` -- identical but for what differs by design (the casatools
+    coordsys stays on the host; the connection's call counts).  To get
+    there: the recorder's local run checks and coerces the arguments as
+    `iclean()` does (`cyclefactor` 3 -> 3.0, as the worker does); the
+    comparer takes numpy scalars as their Python values (a mask value
+    crosses the wire as `bool`);
+  * a kernel (kernelspec written in the test, `JUPYTER_PATH`) that starts
+    in another directory: relative `vis`/`imagename` found and written
+    there, the arguments checked there, a cycle runs; the task refuses an
+    MS that is only on this side, naming the kernel's directory;
+  * `iclean.notebook(..., kernel_name=)` in a notebook kernel (nbclient)
+    against that kernel: the task returns its page; the application under
+    it holds a `RemoteImagingSession` whose worker runs in the kernel's
+    directory.
+* **casashell `iclean`** takes `kernel_name=` and `iclean_backend=`
+  (keywords, not inp/go parameters): with a kernel nothing is checked or
+  logged here and the arguments, defaults filled in, go to the application
+  (`test_task_params.py` +1, casashell stood in for when absent).
+* **Remote sessions closed when Python ends** (an exception, Ctrl-C, a
+  script that never closes): `RemoteObjectConnection` keeps its open
+  connections (`weakref.WeakSet`) and an `atexit` hook closes them (10 s
+  each).  For session management, where a session may be kept on purpose.
+* **Removed** `tests/manual/iclean-remote/` (the ssh-port webserver
+  prototype, superseded by step 3; `_gen_port_fwd_cmd` was already gone).
+* **Docs**: `docs/source/applications/remote_kernels.rst` (new: kernels,
+  setup, capabilities, CASA's data, changing a kernel, interactive clean
+  on a kernel); `interactive_clean.rst` ("Running on the data's
+  computer"); `visplot.rst` points at it instead of
+  `demos/visplot-remote/00_setup.md`.  `tests/ci/README.md` lists the
+  imaging suites.
+* **Release notes**: `devel/notes/drs/iclean/remote_iclean_release_notes.md`.
+* Checks: all 7 quick suites pass (iclean-parity 63 s); setup: the 11 ssh
+  failures only.  Fingerprint `k2-bee1ac5389adfcab483d`.
+
+## 80. Pre-release: the PR's CI failure; the bash setup removed (2026-11-09)
+
+* **CI failure** (PR run 42723976041): the GitHub workflow has no CASA, and
+  `run.py --strict` turns a suite with missing modules into FAIL, so the
+  new `iclean-parity` suite (casatasks, casatools) failed the run.  A
+  suite may now say `optional = true` (`tests/ci/suites.toml`): skipped
+  without its modules even under `--strict`.  `iclean-parity` is optional.
+  Reproduced and checked in a CI-like Python 3.12 venv
+  (`pip install -e .[visplot] -r tests/ci/requirements.txt`): 8 of 8
+  without failure, iclean-parity skipped.  (The setup suite's earlier
+  "11 ssh failures" were this sandbox's missing ssh client, not cubevis.)
+* **Removed the bash setup**: `setup/` (`cubevis-setup`, `lib/*.sh`,
+  `lib/check_kernel.py`, `README.md`) and `demos/visplot-remote/00_setup.md`.
+  Nothing imported or ran them; `python -m cubevis.setup` replaced them.
+  The Python setup's handling of files the bash setup left in
+  `~/.config/cubevis` (sshgen's earlier-layout files, the store rules) is
+  kept: those are files on users' disks, not this code.
+  `tests/manual/setup/test_setup_scripts.py` became `test_ssh_wrapper.py`
+  (the wrapper's three tests; the bash-syntax and helper tests went with
+  the scripts).  `demos/visplot-remote/README.md` points at
+  `python -m cubevis.setup` and `remote_kernels.rst`.
+* **gclean's imagepath bug**: a casatasks ticket after release; the
+  release notes say so, with the workaround (an `imagename` relative to
+  the working directory).

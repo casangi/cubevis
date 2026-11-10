@@ -237,7 +237,14 @@ def test_check_passes_for_a_kernel_environment(tmp_path):
     assert r["ok"], r
     assert r["versions"]["cubevis"] and r["versions"]["ipykernel"] and r["kernel"] is True
     assert r["prefix"] == e and r["fingerprint"].startswith("k2-")
-    assert "cubevis" in envs.summary(r) and "visplot data" in envs.summary(r)
+    assert "cubevis" in envs.summary(r) and "runs " in envs.summary(r)
+    # interactive clean: casatasks found, not imported (step 5b)
+    has_casa = subprocess.run([KERNEL_PY, "-c", "import importlib.util as u; "
+                               "print(bool(u.find_spec('casatasks')))"],
+                              capture_output=True, text=True).stdout.strip() == "True"
+    assert r["iclean"] is has_casa
+    if has_casa:
+        assert "interactive clean" in envs.summary(r)
 
 
 def test_install_method_from_the_records():

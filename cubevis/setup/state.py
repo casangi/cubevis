@@ -44,11 +44,13 @@ Layout (schema 3)::
                              "last_checked", "last_error"}},
      "environments": {NAME: {"network", "kind", "python", "prefix", "tool",
                              "hosts", "cluster", "cubevis", "versions",
-                             "python_version", "visplot", "cubevis_via",
-                             "fingerprint", "marker", "checked_on",
+                             "python_version", "visplot", "iclean", "cubevis_via",
+                             "fingerprint", "marker", "casa_site_config",
+                             "iclean_declined", "casa_data_choice", "checked_on",
                              "status", "last_checked", "last_error"}},
      "kernels":      {NAME: {"environment", "workdir", "env", "launcher",
                              "launch_timeout", "fingerprint", "checked_on",
+                             "capabilities", "capability_errors", "casa_data",
                              "status", "last_checked", "last_error"}}}
 
 A **network** is setup's own bookkeeping (design 7c): a route (the login
@@ -128,7 +130,8 @@ STORES = ("keychain", "secret-tool", "pass", "gpg-file", "command")
 # Fields a check writes.  A change to these alone neither keeps a record
 # another run removed nor stops this run's removal of it (``merge``).
 HEALTH_FIELDS = {"status", "last_checked", "last_error", "checked_on", "cubevis",
-                 "versions", "python_version", "visplot", "cubevis_via", "tool", "kind",
+                 "versions", "python_version", "visplot", "iclean", "cubevis_via", "tool", "kind",
+                 "capabilities", "capability_errors", "casa_data",
                  "fingerprint", "marker", "fqdn", "ranges", "home", "base_prefix",
                  "pythonhome_times"}
 KINDS = ("conda", "venv", "python")
@@ -563,7 +566,7 @@ class State:
             raise StateError(f"cluster {cluster!r} is not in network {network!r}")
         e = {"network": network, "kind": kind, "python": python, "prefix": prefix,
              "tool": tool, "hosts": hosts, "cluster": cluster, "cubevis": None, "versions": {},
-             "python_version": None, "visplot": None, "checked_on": None,
+             "python_version": None, "visplot": None, "iclean": None, "checked_on": None,
              "status": "new", "last_checked": None, "last_error": None}
         self.section("environments")[name] = e
         return e

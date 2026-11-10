@@ -372,31 +372,30 @@ def expand_range_incl(r):
         return range(r[0], r[1] + 1)
 
 
-def __get_wcs_object(csys: 'image.coordsys', naxis=2) -> 'image.coordsys()':
-    """Generate world coordinate object from coordinate system.
+def __get_wcs_object(cdesc: dict, naxis=2) -> 'astropy.wcs.WCS':
+    """The astropy WCS of the direction axes for a coordinate description
+    ``cdesc`` (``{'csys': ..., 'shape': ..., 'coordinates': ...}``).
+
+    It is made from ``cdesc['coordinates']`` (the coordinate description,
+    ``cubevis.imaging._coordinates``) when present, else from ``cdesc['csys']``
+    (a casatools ``coordsys``, its record, or a coordinate description).
+    Until 2026-11-06 this was built here from the ``coordsys``, with CASA's
+    0-based reference pixel used as FITS' 1-based ``CRPIX`` (one pixel off)
+    and the projection always ``SIN``.
 
     Returns:
         w: world coordinate object
     """
-    try:
-        import numpy as np
-        from astropy.wcs import WCS
-
-        w = WCS(naxis=naxis)
-
-        rad_to_deg = 180/np.pi
-        w.wcs.crpix = csys.referencepixel()['numeric'][0:2]
-        w.wcs.cdelt = csys.increment()['numeric'][0:2]*rad_to_deg
-        w.wcs.crval = csys.referencevalue()['numeric'][0:2] * rad_to_deg
-        w.wcs.ctype = ['RA---SIN', 'DEC--SIN']
-
-        return w
-
-    except ImportError as error:
-        print('Error importing module:: ' + str(error))
-
-    except Exception as error:
-        print(error)
+    from ..imaging._coordinates import astropy_wcs, from_casa_coordsys
+    desc = cdesc.get('coordinates')
+    if desc is None:
+        csys = cdesc['csys']
+        if isinstance(csys, dict) and 'version' in csys and 'direction' in csys:
+            desc = csys
+        else:
+            record = csys if isinstance(csys, dict) else csys.torecord()
+            desc = from_casa_coordsys(record, list(cdesc['shape']))
+    return astropy_wcs(desc, naxis=naxis)
 
 def __index_to_stokes(index: int):
     """Convert stokes axis index to alphabetic value.
@@ -544,7 +543,7 @@ def convert_masks(masks: dict, coord='pixel', cdesc=None)->list:
 
     # Get the wcs object of the request format is world
     if coord == 'world':
-        wcs = __get_wcs_object(cdesc['csys'])
+        wcs = __get_wcs_object(cdesc)
 
     # Build list containing masks with channel and polaization information
     # in a more accesible way for the grouping funciton

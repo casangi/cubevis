@@ -42,8 +42,13 @@ export class ImageDataSource extends ColumnDataSource {
             // @ts-ignore: Parameter 'acc' implicitly has an 'any' type.
             return pairs.reduce( (acc, pair) => { acc[0].push(pair[0]); acc[1].push(pair[1]); return acc }, [[],[]] )
         }
+        // d3-contour puts mask value i at i + 0.5, the centre of the pixel that the
+        // image glyph draws over [i, i+1].  The mask is 0/1, so the threshold half
+        // way between gives the outline on the pixel edges (corners cut by half a
+        // pixel).  A threshold of 1 put it through the centres of the edge pixels,
+        // half a pixel inside the mask on every side.
         // @ts-ignore:
-        const d3contours = casalib.d3.contours( ).size(this.image_source.shape.slice(0,2)).thresholds([1])(mask[0])[0]
+        const d3contours = casalib.d3.contours( ).size(this.image_source.shape.slice(0,2)).thresholds([0.5])(mask[0])[0]
         //             Parameter 'x' implicitly has an 'any' type.
         // @ts-ignore: Parameter 'y' implicitly has an 'any' type.
         const split_tuples = d3contours.coordinates.map( x => x.map( y => split(y) ) )

@@ -26,6 +26,8 @@ too, and a forgotten bump is a silent mismatch).  It is *computed*:
   ``write_to``), which hold only the version.  A wheel has one and a
   checkout does not, so with it every release differed from its own source
   and from every other release (found 2026-11-01: ``k1``).
+* ``SENT``: this module itself, which is always run from the copy that is
+  sent (below), is left out too.
 * ``fingerprint`` hashes the modules, in name order, with ``ALGORITHM``.
 
 **Computed with one copy of this code** (``source()``): setup sends this
@@ -57,9 +59,15 @@ from typing import Iterable, Optional
 ALGORITHM = "k2"            # k1 (2026-10-23) counted cubevis/__version__.py
 # Written by the build into the package; not code (see the module docstring).
 GENERATED = frozenset({"cubevis.__version__"})
+# This module: it is always run from the copy setup (or the laptop's
+# connection) sends, never from the environment's own file, so that file
+# does not decide anything.  ``RemoteObjectConnection.kernel_fingerprint``
+# imports it, and the closure would otherwise count it (2026-11-09, step 5c).
+SENT = frozenset({"cubevis._fingerprint"})
 ROOTS = (
     "cubevis.remote.worker_main",
     "cubevis.toolbox.visplot.remote_registrations",
+    "cubevis.imaging.remote_registrations",          # interactive clean (2026-11-07)
 )
 TOP = "cubevis"
 
@@ -133,7 +141,7 @@ def closure(roots: Iterable[str] = ROOTS, root: Optional[str] = None) -> list:
             parent = ".".join(parts[:i])
             if parent not in seen and _path_of(root, parent):
                 todo.append(parent)
-        if mod in seen or mod in GENERATED or _path_of(root, mod) is None:
+        if mod in seen or mod in GENERATED or mod in SENT or _path_of(root, mod) is None:
             continue
         seen.add(mod)
         todo.extend(_imports(root, mod) - seen)
@@ -168,13 +176,25 @@ def normalize(source: str) -> str:
 
 def fingerprint(roots: Iterable[str] = ROOTS, root: Optional[str] = None) -> str:
     """``k2-<20 hex digits>`` for the kernel-side code installed at *root*
-    (the directory holding the ``cubevis`` package; default: this one's)."""
+    (the directory holding the ``cubevis`` package; default: this one's).
+
+    A root that is not there counts as missing (a marker in the hash), so a
+    cubevis older than one of the roots -- before interactive clean's,
+    2026-11-07 -- has a fingerprint that differs, and is reported as kernel-side
+    code that differs, rather than raising there (which reached the user as "no
+    kernel-side fingerprint").  With every root present the value is what it
+    was."""
     root = root or package_root()
+    roots = list(roots)
+    present = [r for r in roots if _path_of(root, r) is not None]
     h = hashlib.sha256(ALGORITHM.encode())
-    for mod in closure(roots, root):
+    for mod in closure(present, root):
         with open(_path_of(root, mod), encoding="utf-8") as f:
             text = normalize(f.read())
         h.update(b"\0" + mod.encode() + b"\0" + text.encode())
+    for r in roots:
+        if r not in present:
+            h.update(b"\0missing root\0" + r.encode())
     return f"{ALGORITHM}-{h.hexdigest()[:20]}"
 
 

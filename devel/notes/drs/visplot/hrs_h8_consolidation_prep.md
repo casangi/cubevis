@@ -4366,3 +4366,29 @@ not recognized as a missing package, so the test reported a remote error.
 * **gclean's imagepath bug**: a casatasks ticket after release; the
   release notes say so, with the workaround (an `imagename` relative to
   the working directory).
+
+## 81. After 1.0.115: kernel_name= without the kernel packages; CASA6 notes (2026-11-10)
+
+* **A clear refusal** when `kernel_name=` is given and this Python cannot
+  start a kernel (a CASA without the `remote` packages): the connection
+  (`RemoteObjectConnection`, so iclean and visplot alike) checks before it
+  resolves the name -- no jupyter_client -- and after -- a kernel whose
+  definition names sshpyk's provisioner, without sshpyk.  It raises
+  `MissingKernelPackages` (an ImportError) naming this Python and the pip
+  command (`jupyter_client "sshpyk>=1.23"`, not `cubevis[remote]`, which
+  could upgrade cubevis inside a CASA), or to leave out kernel_name=.
+  Was: `No module named 'jupyter_client'`.  `cubevis.remote` exports
+  `MissingKernelPackages`, `require_kernel_packages`.
+  `tests/manual/remote/test_kernel_packages.py` (3 tests).
+* **CASA6** (checked against the casatasks/casashell 6.7.6.14 wheels and
+  the published 1.0.115 in a clean venv): casashell imports
+  `cubevis.private.casashell.iclean` (inside a bare try/except) and a
+  local iclean runs with no Jupyter packages; with jupyter_client and
+  ipykernel added, iclean on a python3 kernel matches the local run
+  (83 entries, 0 differences).  gclean: `_check_initial_mask`,
+  `_fix_initial_mask` and `_update_peakres_masksum_multifield` use
+  `image_products()`' base names relative to the cwd -- with an imagename
+  in another directory the second cycle fails and the starting mask is
+  not zeroed; the fix joins `imagepath` (three lines, given to Darrell as
+  a patch for the casatasks ticket).  casatasks 6.7.6.14 imports `six`
+  without declaring it.

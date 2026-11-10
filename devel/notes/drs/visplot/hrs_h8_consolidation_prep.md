@@ -4341,3 +4341,28 @@ not recognized as a missing package, so the test reported a remote error.
 * **Release notes**: `devel/notes/drs/iclean/remote_iclean_release_notes.md`.
 * Checks: all 7 quick suites pass (iclean-parity 63 s); setup: the 11 ssh
   failures only.  Fingerprint `k2-bee1ac5389adfcab483d`.
+
+## 80. Pre-release: the PR's CI failure; the bash setup removed (2026-11-09)
+
+* **CI failure** (PR run 42723976041): the GitHub workflow has no CASA, and
+  `run.py --strict` turns a suite with missing modules into FAIL, so the
+  new `iclean-parity` suite (casatasks, casatools) failed the run.  A
+  suite may now say `optional = true` (`tests/ci/suites.toml`): skipped
+  without its modules even under `--strict`.  `iclean-parity` is optional.
+  Reproduced and checked in a CI-like Python 3.12 venv
+  (`pip install -e .[visplot] -r tests/ci/requirements.txt`): 8 of 8
+  without failure, iclean-parity skipped.  (The setup suite's earlier
+  "11 ssh failures" were this sandbox's missing ssh client, not cubevis.)
+* **Removed the bash setup**: `setup/` (`cubevis-setup`, `lib/*.sh`,
+  `lib/check_kernel.py`, `README.md`) and `demos/visplot-remote/00_setup.md`.
+  Nothing imported or ran them; `python -m cubevis.setup` replaced them.
+  The Python setup's handling of files the bash setup left in
+  `~/.config/cubevis` (sshgen's earlier-layout files, the store rules) is
+  kept: those are files on users' disks, not this code.
+  `tests/manual/setup/test_setup_scripts.py` became `test_ssh_wrapper.py`
+  (the wrapper's three tests; the bash-syntax and helper tests went with
+  the scripts).  `demos/visplot-remote/README.md` points at
+  `python -m cubevis.setup` and `remote_kernels.rst`.
+* **gclean's imagepath bug**: a casatasks ticket after release; the
+  release notes say so, with the workaround (an `imagename` relative to
+  the working directory).

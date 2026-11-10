@@ -12,6 +12,8 @@
 #   command     a command (a list), instead of pytest
 #   requires    Python modules the suite needs; missing -> skipped
 #               (a failure with --strict, as in GitHub Actions)
+#   optional    true: skipped without them even under --strict (a suite
+#               for where CASA is installed, say)
 #   env         extra environment variables
 #   timeout     seconds (default 900)
 #   after       a suite this one needs (skipped unless that one passed)
@@ -73,6 +75,7 @@ name = "iclean-parity"
 pytest = ["tests/manual/iclean-imaging/test_iclean_parity.py"]
 args = ["-q"]
 requires = ["casatasks", "casatools", "jupyter_client", "ipykernel"]
+optional = true     # skipped without them, even under --strict (the workflow has no CASA)
 
 [[suite]]
 name = "tiny-ms"

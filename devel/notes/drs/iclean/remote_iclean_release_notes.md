@@ -71,14 +71,24 @@ Draft for the merge of `remote-iclean` (notes §60–§79,
 * `cubevis[iclean]` now includes the `remote` packages.
 * CI no longer needs python-casacore (xradio >= 1.3 reads tables through
   arcae).
-* Removed: `tests/manual/iclean-remote/` (the ssh-port webserver prototype).
+* Removed: `tests/manual/iclean-remote/` (the ssh-port webserver prototype);
+  the bash setup (`setup/cubevis-setup`, `setup/lib/`) and its guide
+  `demos/visplot-remote/00_setup.md` -- `python -m cubevis.setup` replaces
+  them, and still recognizes the files the bash setup left
+  (`~/.config/cubevis`).  The ssh wrapper's tests moved to
+  `tests/manual/setup/test_ssh_wrapper.py`.
+* CI: a suite may say `optional = true` (tests/ci/suites.toml): skipped
+  when its modules are missing even under `--strict`.  `iclean-parity`
+  (needs CASA) is optional; the GitHub workflow has no CASA.
 
 ## Known, outside cubevis
 
 * casatasks' gclean `_update_peakres_masksum_multifield` reads each
   field's residual and mask by base name in the current directory (not
   `imagepath`): an `imagename` outside the working directory fails at the
-  first cycle, locally too.  Fix in casatasks: join `imagepath`.
+  first cycle, locally too.  Fix in casatasks (join `imagepath`): a ticket
+  after this release; until then keep `imagename` relative to the working
+  directory.
 
 ## Not in this release
 

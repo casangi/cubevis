@@ -1,7 +1,7 @@
 """Configure-style interaction for ``python -m cubevis.setup``: messages,
 questions, the logs, and the step runner.
 
-The same conventions as the bash ``setup/cubevis-setup`` (``lib/common.sh``):
+The same conventions as the earlier bash setup (removed before release):
 each step *checks* (asks nothing, changes nothing), and only when the check
 fails *explains, lists its changes, asks, makes them*, and checks again;
 a failure offers retry / skip / quit.  Every change goes to

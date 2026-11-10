@@ -5,7 +5,7 @@
 groups = ["default", "casa6", "iclean", "notebook", "remote", "visplot", "xarray"]
 strategy = []
 lock_version = "4.5.1"
-content_hash = "sha256:ff69f2833666ac1d393cbf4f704b845ae29c377aff8eab2fd3176474f079e348"
+content_hash = "sha256:4e96a57fe80f6f69bb009048667a53c98bd0fb61d8e126aee721ab4e7742c438"
 
 [[metadata.targets]]
 requires_python = ">=3.12"

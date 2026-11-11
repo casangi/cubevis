@@ -211,6 +211,46 @@ class KernelClientTransport(TransportBase):
             f"(comm_id={self._comm_id}, target_name={self._target_name})"
         )
 
+    async def renew_client(self, ready_timeout: Optional[float] = None) -> None:
+        """A new kernel client, under a new session id, in place of the one
+        in use (Scenario A, 2026-11-10).
+
+        After the ssh connection under the kernel's tunnels was replaced
+        (another network), ZeroMQ reconnects the old client's sockets by
+        itself -- but its shell socket carries a fixed routing identity (the
+        session id), and on the kernel's host the dead route's connection to
+        the kernel's ROUTER socket is still open (that host's sshd has not
+        noticed the client is gone).  A ROUTER drops a second peer claiming
+        an identity in use, so nothing sent on the old shell socket arrives
+        any more.  A new session id is a new identity.  The comm is the same
+        (it is addressed by ``comm_id``, not by session); replies keep
+        arriving on iopub, which ``run`` reads from whichever client is
+        current."""
+        if self._client is None or self._closed:
+            return
+        from jupyter_client.session import Session
+        old = self._client
+        ks = old.session
+        client = self._km.client(session=Session(key=ks.key, signature_scheme=ks.signature_scheme,
+                                                  username=ks.username))
+        client.start_channels()
+        try:
+            await client.wait_for_ready(timeout=ready_timeout or self._ready_timeout)
+        except BaseException:
+            try:
+                client.stop_channels()
+            except Exception:
+                pass
+            raise
+        self._client = client
+        try:
+            old.stop_channels()
+        except Exception:
+            logger.debug("KernelClientTransport.renew_client: stopping the old channels failed",
+                         exc_info=True)
+        logger.info(f"KernelClientTransport: new kernel client for {self._comm_mgr_id} "
+                    f"(session {client.session.session[:8]})")
+
     def set_message_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         self._callback = callback
 
@@ -239,11 +279,22 @@ class KernelClientTransport(TransportBase):
             raise RuntimeError("KernelClientTransport.run: connect() was not called")
 
         while not self._closed:
+            client = self._client
             try:
-                msg = await self._client.get_iopub_msg(timeout=0.5)
+                msg = await client.get_iopub_msg(timeout=0.5)
             except Empty:
                 continue
+            except asyncio.CancelledError:
+                # stop_channels() on a client renew_client replaced cancels
+                # its pending read; this task itself was not cancelled
+                task = asyncio.current_task()
+                if (client is not self._client and not self._closed
+                        and not (task is not None and task.cancelling())):
+                    continue
+                raise
             except Exception:
+                if client is not self._client:
+                    continue                  # replaced under it (renew_client)
                 logger.exception("KernelClientTransport.run: error reading iopub")
                 continue
 

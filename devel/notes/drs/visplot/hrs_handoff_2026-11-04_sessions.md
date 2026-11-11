@@ -42,7 +42,9 @@ iclean on remote kernels has its own handoff,
 
 In the order I would do them:
 
-1. **Scenario A -- the network changes under a running session.**  Start
+1. **Scenario A -- the network changes under a running session.**
+   *(2026-11-10: A1-A4 done, notes section 82; A5, Darrell's rounds,
+   remains.)*  Start
    a plot on the internal network (or the VPN), close the laptop, open it
    at home, and carry on in the *same* Python and browser tab.  The
    laptop's Python and the browser survive the sleep; only the ssh

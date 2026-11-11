@@ -4392,3 +4392,125 @@ not recognized as a missing package, so the test reported a remote error.
   not zeroed; the fix joins `imagepath` (three lines, given to Darrell as
   a patch for the casatasks ticket).  casatasks 6.7.6.14 imports `six`
   without declaring it.
+
+## 82. Scenario A: a session through a change of network (base `089df90`, 2026-11-10)
+
+The handoff's (b)1 (`hrs_handoff_2026-11-04_sessions.md`), A1 to A4, for
+visplot and interactive clean alike (the shared `RemoteObjectConnection`).
+The three facts the handoff asked for first were not gathered; a rig
+stands in for them (below), and Darrell's rounds (A5) are what is left.
+
+**Reproduced first, on a rig** (`tests/manual/remote/rig_scenario_a.py`,
+root): sshd on 127.0.0.1:2202 ("direct") and :2203 ("outside"), setup's
+ssh shape (`Match exec` route test, shared connections, BatchMode,
+`ServerAliveInterval 30` x 6), an sshpyk kernel through it.  Dropping 2202
+both ways and switching the route: every call ran out its own budget
+(30 s; 600 s for data) and none came back.  Four causes, each found in
+turn, all fixed:
+
+1. **sshpyk blocks the loop** (as the handoff said): `check_control_sockets`
+   calls `verify_ssh_connection` -- a `subprocess.run`, up to 3 x
+   `launch_timeout` -- and `has_control_socket` reads its pipes
+   synchronously, both in `async` methods.  `make_nonblocking(km)`
+   (`cubevis/remote/_reconnect.py`, new) gives the provisioner *instance*
+   the same two methods with the work off the loop (`asyncio.to_thread`,
+   `create_subprocess_exec`).  Until an sshpyk release does it (a PR, as
+   #12/#13).  Test: a 1.5 s blocking verify, the loop never stalls > 0.5 s.
+2. **The old shared connection holds the kernel's local ports, under a
+   socket the host's name no longer reaches.**  `ControlPath`'s `%C` hash
+   covers port and hops, so after the route changes `ssh -O exit HOST`
+   targets the *new* socket; the stale master (alive until the keep-alives
+   end it, 3 minutes) keeps the forwarded ports, and forwarding over the
+   new connection fails.  `SshReconnector` records each host's socket
+   (`ssh -G`) while the connection works and, when the heartbeat goes
+   quiet: ends the old route's master by its socket (`-S old -O exit`),
+   checks the connection with a command through it (8 s), ends a stale
+   one, opens a new one (`ssh HOST true`: the route test runs again), and
+   has sshpyk forward the same local ports again (`ensure_tunnels`).
+3. **The kernel drops the old client's messages.**  ZeroMQ reconnects the
+   shell socket by itself, but with jupyter_client's fixed routing identity
+   (the session id); on the kernel's host the dead route's connection to
+   the kernel's ROUTER socket is still open (that sshd has not noticed), and
+   a ROUTER drops a second peer claiming an identity in use.  A new client
+   worked at once; the link's did not.
+   `KernelClientTransport.renew_client()`: a new client under a new
+   session id (the comm is addressed by `comm_id`, unchanged), once per
+   gap.  Its read loop now survives the old client's channels stopping
+   under it (that cancels the pending read: `CancelledError`, which is not
+   an `Exception`; told apart from a real cancel by `task.cancelling()`).
+4. **A lost reply wedges the comm for good.**  `CommMgr` sends one request
+   per comm at a time and queues the rest until its reply; the request
+   whose reply was lost in the gap stays pending, so every later call
+   queues behind it.  `CommMgr.abandon_inflight()` (new): forget the
+   pending requests (callbacks not called; a late reply ignored), then
+   send what is queued.  Not `_reset_for_reconnect`: that re-sends every
+   request, writes included.
+
+**The watch** (`RemoteObjectConnection._watched`), rewritten:
+
+* heartbeat quiet: the kernel's process is no longer asked about (that
+  question goes over the lost connection, through sshpyk's blocking path);
+  after `RECONNECT_AFTER` (4 s) reconnecting starts, retried while quiet;
+  the call fails after `CUBEVIS_REMOTE_RECONNECT` seconds (120) with
+  "... the kernel and what it holds may still be there: the next action
+  tries to reconnect" and the reason (setup's wrapper's own message for a
+  login that needs a second factor reaches it this way).  A kernel without
+  ssh keeps `HEARTBEAT_GRACE` and the old message.
+* heartbeat back: a new kernel client; a call still waiting
+  `RESEND_SETTLE` (5 s) later presumed lost (only replies sent during the
+  gap are): sent again once if its method is in `repeatable_methods`,
+  otherwise `RemoteCallInterruptedError` (a `RemoteKernelLostError`):
+  "... whether it was done is not known.  The connection is back: check
+  the result before doing it again."  A missed beat or two (shorter than
+  `RECONNECT_AFTER`) puts nothing in doubt.  A call whose own time ran out
+  during the gap is held for the connection's outcome, then resent or
+  reported, instead of a bare timeout.
+* after a failure the next call reconnects first.
+* `state` (`connected` / `reconnecting` / `lost`), `state_detail`,
+  `add_state_listener(fn)`.
+
+**Repeatable methods**: visplot `REPEATABLE_METHODS` (reads, and the
+pending-flag sets, which send the whole state with a version) --
+`commit_pending_flags` and `restore_flag_backup` are not; interactive clean
+`REPEATABLE_METHODS` (args, progress, has_next, log, stop_descriptions,
+image_products, fields, cube_info) -- a cycle and mask writes are not.
+
+**visplot's busy chip** says what the connection is doing: while a call
+waits, the page asks every 2 s on a pipe of its own ("conn"; the control
+pipe has the waiting Plot in flight) and shows "Reconnecting to zuul06…
+12 s" instead of "Working…".  JS syntax-checked and its installation
+checked on a GUI-mode remote plotter; **not run in a browser here** (no
+Chromium in the sandbox).  Interactive clean's status line does not show
+it yet.
+
+**Rig results** (`sudo python tests/manual/remote/rig_scenario_a.py`):
+
+| scenario | result |
+|---|---|
+| between: route changes between calls | next call answers after 20 s |
+| read: during an 8 s read | resent, answers after 28 s |
+| write: during an 8 s write | `RemoteCallInterruptedError` after 20 s (the write had been done: get -> 2) |
+| exit: shared connection ended | next call answers after 10 s |
+| down: no route for 35 s | fails after 35 s with the reason (budget 30 s); loop never stalled > 0.2 s; first call after: 1.4 s |
+
+**Tests**: `tests/manual/remote/test_reconnect.py` (10, in the "remote"
+quick suite: the watch with fakes, sshpyk's check off the loop, and on a
+local kernel `abandon_inflight` and `renew_client`).  All quick suites
+pass (iclean-parity skipped: no CASA here).
+
+**Fingerprint**: `k2-baece811eebd39ef0a2e` -> `k2-3fe9faaae4688b790820`
+(`_remote_object`, `_kernel_transport`, `_comm_mgr`, the registrations'
+method sets are on the kernel side's closure): setup makes new
+environments.
+
+**Also in this zip (gridplot G0)**: headless export re-queries only the
+panels it draws (`_apply_selection_overrides(panels=)`, stale ones brought
+up to date when shown); `devel/tools/gridplot_bench/bench_g0.py`; results in
+`devel/docs/gridplot/grid_and_calplot_plan.md` section 11.
+
+**For Darrell's rounds (A5)**: VPN dropped mid-Plot on zuul06; then sleep at
+work, open at home.  Worth watching: the chip's text; how long the first
+call after waking takes; whether the login host (outside route) needs the
+`--2fa` command, and that the failure names it.  Open: the Plot button
+stays orange after a failed Plot -- by design (pending until a Plot
+succeeds); say if "reset" meant something else.

@@ -725,6 +725,29 @@ class CommMgr( Model, BokehInit ):
             self._pending_requests.pop(request_id, None)
             self._send_queue.setdefault(comm_id, []).insert(0, (message_id, message, callback))
 
+    async def abandon_inflight(self) -> int:
+        """Forget the requests waiting for a reply, then send what is queued.
+
+        For a connection that dropped and came back under the same transport
+        (the remote kernel link after a change of network, Scenario A,
+        2026-11-10): replies sent while it was down are lost, and a comm whose
+        request never gets one holds every later message in its queue.  Their
+        callbacks are not called (the caller has already decided -- resent
+        the request, or said it was interrupted); a reply that arrives late
+        is ignored.  Unlike ``_reset_for_reconnect`` nothing is re-sent here:
+        whether a request is safe to repeat is the caller's to know.
+        Returns how many were forgotten."""
+        async with self._lock:
+            n = len(self._pending_requests)
+            comms = list(self._pending)
+            self._pending.clear()
+            self._pending_requests.clear()
+        for comm_id in comms:
+            await self._process_next_queued(comm_id)
+        if n:
+            logger.debug(f"CommMgr: forgot {n} request(s) waiting for a reply")
+        return n
+
     async def _process_next_queued(self, comm_id: str):
         """
         Process next queued message for a comm after current request completes.

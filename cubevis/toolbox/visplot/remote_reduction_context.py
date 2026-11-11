@@ -212,6 +212,19 @@ DATA_METHODS = frozenset({
     "set_pending_flags", "sync_pending_flags",
 })
 
+#: Calls safe to send twice: reads, and the pending-flag sets, which send
+#: the whole ordered state with a version.  One waiting when the connection
+#: drops and comes back (another network, a laptop that slept) is sent
+#: again once; the others -- writing flags to the data, restoring a backup
+#: -- fail saying the connection was interrupted (Scenario A, 2026-11-10).
+REPEATABLE_METHODS = frozenset({
+    "query_raster", "query_columns", "probe_scatter_region", "probe_flag_region",
+    "identity_tables", "baselines_with_rows", "axis_info", "available_axes",
+    "evaluate_flag_request", "metadata", "backend_kind", "spw_casa_ids", "flag_spw_table",
+    "flag_commit_capabilities", "list_flag_backups", "software_versions", "runtime_info",
+    "set_pending_flags", "sync_pending_flags", "set_frame_cache_limit_mb",
+})
+
 
 # The liveness watch, the timeouts' environment variables and the error
 # types are the shared connection's (``cubevis.remote``); the names stay
@@ -319,7 +332,8 @@ class RemoteReductionContext(ReductionContext):
             app="visplot", data=path, worker_target_name=worker_target_name,
             open_timeout=open_timeout, create_context_timeout=create_context_timeout,
             call_timeout=self._call_timeout, data_methods=DATA_METHODS,
-            data_timeout=self._data_call_timeout, restart_worker=True, restart_hint=RESTART_HINT)
+            data_timeout=self._data_call_timeout, restart_worker=True, restart_hint=RESTART_HINT,
+            repeatable_methods=REPEATABLE_METHODS)
         self._kernel_name = self._conn.kernel_name
         try:
             # Fetched once, up front -- open_ms/open_ps need an

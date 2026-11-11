@@ -72,7 +72,7 @@ import xarray as xr
 
 from .axes import Axis
 from .flag_filters import BUILTIN_FILTERS, ALL, FlagFilter, zscore_values
-from .raster_grid import overlapping, positions_of
+from ..gridplot.raster_grid import overlapping, positions_of
 from .data.reader import expand_polarization
 from .flag_model import (
     BlockCoords, FlagCounts, FlagDelta, SampleBlock, SpwChannels, SpwKey,

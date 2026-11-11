@@ -34,7 +34,7 @@ exported files, which matters when someone is flipping through
 
 Package location
 ----------------
-``cubevis/cubevis/toolbox/visplot/png_export.py``
+``cubevis/cubevis/toolbox/gridplot/png_export.py`` (moved from ``toolbox/visplot`` in gridplot G1a, 2026-11-10)
 """
 
 from __future__ import annotations

@@ -29,7 +29,7 @@ browser.
 
 Package location
 ----------------
-``cubevis/cubevis/toolbox/visplot/panel_spec.py``
+``cubevis/cubevis/toolbox/gridplot/panel_spec.py`` (moved from ``toolbox/visplot`` in gridplot G1a, 2026-11-10)
 """
 
 from __future__ import annotations

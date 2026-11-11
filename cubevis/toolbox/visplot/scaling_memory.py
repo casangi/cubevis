@@ -39,7 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Callable, Dict, Optional
 
-from . import colormap_scaling as _cms
+from ..gridplot import colormap_scaling as _cms
 from .axes import Axis
 from .data._scatter_render import _DEFAULT_ZSCORE_THRESHOLD
 

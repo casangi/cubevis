@@ -41,7 +41,7 @@ from the background.  Scatter selection therefore names a set
 
 Package location
 ----------------
-``cubevis/cubevis/toolbox/visplot/palettes.py``
+``cubevis/cubevis/toolbox/gridplot/palettes.py`` (moved from ``toolbox/visplot`` in gridplot G1a, 2026-11-10)
 """
 
 from __future__ import annotations

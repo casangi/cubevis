@@ -163,7 +163,7 @@ def _coord_text(value, is_time: bool, unit: str = "") -> str:
         return str(value)
     if is_time:
         return _utc(v) + " UTC"
-    from .tick_format import si_scale
+    from ..gridplot.tick_format import si_scale
     s, u = si_scale(v, unit)
     return f"{s:.6g}" + (f" {u}" if u else "")
 
@@ -269,7 +269,7 @@ def reproducing_call(plotter) -> str:
     args.append(("datacolumn", getattr(plotter, "_datacolumn", "DATA").lower()))
     args.append(("layout", getattr(plotter, "_layout", "side")))
     # Sizes only when not the layout's default (2026-10-13).
-    from .panel_sizes import size_value
+    from ..gridplot.panel_sizes import size_value
     for name, attr in (("row_height", "_row_height"), ("column_width", "_column_width")):
         v = size_value(getattr(plotter, attr, None))
         if v is not None:
@@ -468,7 +468,7 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
     rows.append(("Time labels", getattr(plotter, "_time_labels", "utc")))
     rows.append(("Theme", getattr(plotter, "_theme", "dark")))
     # row_height / column_width (2026-10-13)
-    from .panel_sizes import size_text
+    from ..gridplot.panel_sizes import size_text
     rows.append(("Layout", {"one": "One panel", "side": "Side by Side",
                             "over": "Over / Under"}.get(getattr(plotter, "_layout", ""),
                                                         getattr(plotter, "_layout", ""))))

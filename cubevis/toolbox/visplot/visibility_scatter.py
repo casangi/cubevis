@@ -70,8 +70,8 @@ from .visibility_plot import _composite_flag_mask
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num, wrap_title,
 )
-from .panel_spec import ColorBand, PanelSpec, CATEGORY_PRIORITY_CAPTIONS
-from . import colormap_scaling as _cms
+from ..gridplot.panel_spec import ColorBand, PanelSpec, CATEGORY_PRIORITY_CAPTIONS
+from ..gridplot import colormap_scaling as _cms
 from .data.reader import (ScatterLayerSpec, ScatterLayerReference, CATEGORY_PRIORITIES,
                           DEFAULT_CATEGORY_PRIORITY, EXCLUDED_DISPLAYS,
                           DEFAULT_EXCLUDED_DISPLAY,
@@ -989,7 +989,7 @@ class VisibilityScatter(VisibilityPlot):
             self._layer_continuous_cmap_backup[layer_index] = (
                 self._cmap_for_layer(layer_index, "continuous")
                 if lyr.coloring == "statistical" else lyr.cmap)
-            from . import palettes
+            from ..gridplot import palettes
             new_cmap = tuple(palettes.categorical_cmap(theme=self._theme_hint()))
         elif new_coloring in ("continuous", "statistical") and lyr.coloring == "categorical":
             # Restores the backed-up gradient cmap for EITHER mode a
@@ -4251,7 +4251,7 @@ for (const name in checklist_by_axis) {
         for i, lyr in enumerate(layers):
             if lyr.cmap is None:
                 if lyr.coloring == "categorical":
-                    from . import palettes
+                    from ..gridplot import palettes
                     cmap = tuple(palettes.categorical_cmap(theme=self._theme_hint()))
                 else:
                     cmap = self._cmap_for_layer(i, lyr.coloring)

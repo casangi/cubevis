@@ -892,7 +892,7 @@ def _cell_bounds(coords: np.ndarray, idx: int,
     its fixed half-width.  Handles the single-element case (zero width
     unless *half* is given).
     """
-    from ..raster_grid import cell_edges
+    from ...gridplot.raster_grid import cell_edges
     n = len(coords)
     if n == 0:
         raise IndexError("empty coordinate array")

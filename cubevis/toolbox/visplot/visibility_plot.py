@@ -80,7 +80,7 @@ from bokeh.layouts import column, row
 
 from cubevis.bokeh.tools._flag_tool import FlagTool
 
-from .tick_format import TICK_FORMATTER_JS
+from ..gridplot.tick_format import TICK_FORMATTER_JS
 
 #: Shared, idempotent busy-cursor overlay -- the CORE piece of what was
 #: previously a single, plotter-only `cvSetBusy()` (see visibility_
@@ -876,7 +876,7 @@ class VisibilityPlot(Model):
         the browser never reaches Python, so the Python-side ranges are
         stale the moment the user touches the plot.
         """
-        from .panel_spec import RenderedPanel
+        from ..gridplot.panel_spec import RenderedPanel
         spec = self._panel_spec()
         if spec.status != "ok":
             return RenderedPanel(spec=spec, image=None, viewport=viewport)
@@ -1378,7 +1378,7 @@ class VisibilityPlot(Model):
         # change later.
         try:
             spec = self._panel_spec()
-            from .tick_format import set_time_ticker
+            from ..gridplot.tick_format import set_time_ticker
             for axes, ticks, is_utc in (
                     (self._fig.xaxis, spec.x_ticks,
                      spec.x_is_time and spec.time_labels == "utc"),
@@ -2145,7 +2145,7 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
         The label comes from *info*, so a substituted axis reports what
         was actually plotted rather than what was asked for.
         """
-        from .tick_format import format_tick, si_scale
+        from ..gridplot.tick_format import format_tick, si_scale
         from .axes import Axis
 
         label = info.label
@@ -2160,7 +2160,7 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
                 origin = getattr(self, "_x_origin", None)
                 origin = self._x_range[0] if origin is None else origin
             if self._time_labels == "utc":
-                from .tick_format import utc_datetime_text
+                from ..gridplot.tick_format import utc_datetime_text
                 try:
                     return f"<b>{label}:</b> {utc_datetime_text(float(value))} UTC"
                 except (OverflowError, ValueError, OSError):
@@ -2223,7 +2223,7 @@ window._cvRerenderTimers['{msg_rerender}'] = setTimeout(function() {{
             parts.append(f"<b>BL:</b> {bl_str}")
         bl_len = info.get("baseline_length_m")
         if bl_len is not None:
-            from .raster_grid import format_length
+            from ..gridplot.raster_grid import format_length
             parts.append(f"<b>Length:</b> {format_length(bl_len)}")
 
         n = info.get("n_scatter_samples")

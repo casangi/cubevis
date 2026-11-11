@@ -47,20 +47,20 @@ from .visibility_plot import _composite_flag_mask
 from .visibility_plot import (
     VisibilityPlot, _img_to_uint32, _json_num, wrap_title,
 )
-from .panel_spec import ColorBand, PanelSpec
-from . import colormap_scaling as _cms
+from ..gridplot.panel_spec import ColorBand, PanelSpec
+from ..gridplot import colormap_scaling as _cms
 from .data.reader import (
     CHANNEL_AXIS_ATTR, CHANNEL_REF_ATTR,
     _agg_value, _cell_bounds, channel_range_to_freq,
 )
-from . import raster_grid as _rg
-from .raster_grid import BaselineAxis, normalize_baseline_order
+from ..gridplot import raster_grid as _rg
+from ..gridplot.raster_grid import BaselineAxis, normalize_baseline_order
 from .axes import Axis
 from .data._antenna_matrix import ANTENNA_DIMS as _ANT_DIM_MAP
 
 #: Raster dimensions of the antenna x antenna matrix (HRS H7).
 _ANT_DIMS = tuple(_ANT_DIM_MAP.values())
-from . import palettes as _palettes
+from ..gridplot import palettes as _palettes
 from .selection import normalize_averaging, normalize_baseline_combine
 from .data._raster_average import combines_baselines
 from .data._raster_diff import DIFF_QUANTITIES, describe_diff_window
@@ -1546,7 +1546,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         over both, again matching the shade.
         """
         from dataclasses import replace
-        from .colormap_scaling import ScalarMapping
+        from ..gridplot.colormap_scaling import ScalarMapping
 
         if self._agg is None or not spec.bands:
             return spec.bands

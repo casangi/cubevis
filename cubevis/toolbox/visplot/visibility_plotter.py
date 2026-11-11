@@ -109,7 +109,7 @@ from .axes import Axis
 from .selection import (
     SelectionSpec, normalize_averaging, normalize_baseline_combine,
 )
-from .raster_grid import normalize_baseline_order
+from ..gridplot.raster_grid import normalize_baseline_order
 from .data._raster_stats import normalize_chan_window, normalize_time_window
 from .data._scatter_average import normalize_avg_chan, normalize_avg_time
 from . import antenna_baseline_select as _abs
@@ -125,7 +125,7 @@ from .visibility_plot import (
     _CV_SET_BUSY_JS, CURSOR_PLACEHOLDER_HTML, TITLE_FONT_SIZE,
     TITLE_FONT_SIZE_TWO_LINE,
 )
-from . import palettes as _palettes
+from ..gridplot import palettes as _palettes
 from .scaling_memory import RasterScalingUnit
 from .view_state import ApplyReport, StateRegistry
 from .refresh import RefreshLevel as _RefreshLevel
@@ -3039,7 +3039,7 @@ class VisibilityPlotter:
         return opts
 
     def _size_spec_json(self) -> str:
-        from .panel_sizes import size_value
+        from ..gridplot.panel_sizes import size_value
         return json.dumps({"row_height": size_value(self._row_height),
                            "column_width": size_value(self._column_width)})
 
@@ -3051,7 +3051,7 @@ class VisibilityPlotter:
         sizes = msg.get("sizes") if isinstance(msg, dict) else None
         if not isinstance(sizes, dict):
             return
-        from .panel_sizes import parse_size, SizeError
+        from ..gridplot.panel_sizes import parse_size, SizeError
         for key, attr in (("row_height", "_row_height"),
                           ("column_width", "_column_width")):
             if key in sizes:
@@ -3064,7 +3064,7 @@ class VisibilityPlotter:
         """``_plot_width`` / ``_plot_height``: the canvas each panel is
         first drawn at -- the first position's cell for the layout, from
         ``row_height`` / ``column_width`` (``panel_sizes.cell_sizes``)."""
-        from .panel_sizes import cell_sizes
+        from ..gridplot.panel_sizes import cell_sizes
         lay = self._layout if getattr(self, "_layout", None) in ("one", "side", "over") else "side"
         self._plot_width, self._plot_height = cell_sizes(
             self._row_height, self._column_width, lay)[0]
@@ -3196,7 +3196,7 @@ class VisibilityPlotter:
         # stay as the canvas each panel is first drawn at: the first
         # position's cell for the layout (the browser then sends the real
         # size with every Plot and redraw).
-        from .panel_sizes import parse_size, cell_sizes, SizeError
+        from ..gridplot.panel_sizes import parse_size, cell_sizes, SizeError
         try:
             self._row_height   = parse_size("row_height", row_height)
             self._column_width = parse_size("column_width", column_width)
@@ -3513,7 +3513,7 @@ class VisibilityPlotter:
             if any(k in d for k in ("detrend", "stat_time_window", "stat_chan_window")):
                 c["scatter_stat_own"] = True
             if "scaling" in d:
-                from . import colormap_scaling as _cms
+                from ..gridplot import colormap_scaling as _cms
                 if d["scaling"] not in _cms.ALL_SCALINGS:
                     raise ValueError(f"{tag}.scaling must be one of "
                                      f"{', '.join(_cms.ALL_SCALINGS)}")
@@ -3835,7 +3835,7 @@ class VisibilityPlotter:
         # B raster.
         # Each slot drawn at its own cell (row_height / column_width,
         # 2026-10-13); "one" has a single cell, which slot B shares.
-        from .panel_sizes import cell_sizes
+        from ..gridplot.panel_sizes import cell_sizes
         _cells = cell_sizes(self._row_height, self._column_width, self._layout)
         _wh_a, _wh_b = _cells[0], _cells[min(1, len(_cells) - 1)]
         # A headless One-panel export draws only slot A, so slot B is not
@@ -4510,7 +4510,7 @@ for (const dt of other.tools) {
         repeatedly with no selection change re-uses the cached
         aggregations and costs only the shade.
         """
-        from .png_export import export_png
+        from ..gridplot.png_export import export_png
 
         lay = (layout or self._layout).lower()
         if nrows is None or ncols is None:
@@ -4556,7 +4556,7 @@ for (const dt of other.tools) {
         # its own size.  The panels were drawn at these cells for the
         # constructor's layout, so the image stays 1:1; a layout= given
         # here only for this call scales the image into its cells.
-        from .panel_sizes import cell_sizes, GRID
+        from ..gridplot.panel_sizes import cell_sizes, GRID
         sizes = {}
         if (nrows, ncols) == GRID.get(lay):
             cells = cell_sizes(self._row_height, self._column_width, lay)
@@ -4669,7 +4669,7 @@ for (const dt of other.tools) {
         fresh query that might differ.
         """
         import os
-        from .png_export import export_png
+        from ..gridplot.png_export import export_png
 
         panels_msg = msg.get("panels") or []
         if msg.get("layout") in ("one", "side", "over"):
@@ -10442,7 +10442,7 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
         # layout, set on both kinds of each position as the layout buttons
         # do (panel_sizes).  "fit" starts at the layout's default height;
         # the browser fits it once the page is laid out (_SIZES_JS).
-        from .panel_sizes import row_heights, column_widths, ROW_HEIGHT_DEFAULT
+        from ..gridplot.panel_sizes import row_heights, column_widths, ROW_HEIGHT_DEFAULT
         _hs = [h if isinstance(h, int) else ROW_HEIGHT_DEFAULT[self._layout]
                for h in row_heights(self._row_height, self._layout)]
         _ws = column_widths(self._column_width, self._layout)
@@ -10598,7 +10598,7 @@ if (x != null && !isNaN(x)) {
             sjs.args["over_container"] = over_container
 
         # Panel sizes (2026-10-13): window.__cvApplySizes, see _SIZES_JS.
-        from .panel_sizes import FIT_MIN_HEIGHT
+        from ..gridplot.panel_sizes import FIT_MIN_HEIGHT
         self._app_context.add_init_script(
             code=_SIZES_JS.replace("__FIT_MIN__", str(int(FIT_MIN_HEIGHT))),
             args={

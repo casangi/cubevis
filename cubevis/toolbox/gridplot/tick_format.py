@@ -40,7 +40,7 @@ operating on a decimal approximation.
 
 Package location
 ----------------
-``cubevis/cubevis/toolbox/visplot/tick_format.py``
+``cubevis/cubevis/toolbox/gridplot/tick_format.py`` (moved from ``toolbox/visplot`` in gridplot G1a, 2026-11-10)
 """
 
 from __future__ import annotations

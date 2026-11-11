@@ -70,7 +70,7 @@ try:
 except ImportError:
     HAS_SCIPY = False
 
-from .. import colormap_scaling as _cms
+from ...gridplot import colormap_scaling as _cms
 from .reader import (ScatterLayerSpec, ScatterLayerRender, ScatterLayerReference,
                      AntennaZScoreSummary,
                      COLORIZE_AXIS_COLUMNS,

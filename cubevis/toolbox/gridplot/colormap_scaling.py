@@ -42,7 +42,7 @@ Two scaling mechanisms exist side by side
 
 Package location
 -----------------
-``cubevis/cubevis/toolbox/visplot/colormap_scaling.py``
+``cubevis/cubevis/toolbox/gridplot/colormap_scaling.py`` (moved from ``toolbox/visplot`` in gridplot G1a, 2026-11-10)
 """
 
 from __future__ import annotations

@@ -109,8 +109,10 @@ Bokeh 3.10.
    stays, the default pool is smaller.  Cells start with 1x1 placeholders.
 5. **Outer axes need equal frames**: hiding inner cells' axes made the
    first column's frames narrower than the others' (visible in
-   `pool_8x8.png`).  Every cell keeps the same `min_border_*` so frames
-   line up whichever axes show.
+   `pool_8x8.png`).  *Settled 2026-11-11*: cells are sized by
+   `frame_width`/`frame_height`, which keeps the plot areas equal whichever
+   axes show; X axis across the top of the top row, Y axis down the left
+   of the first column, each axis name once (the plan's 1.3).
 
 **Running it** (2026-11-11, after Darrell's first try): `--open` writes the page and
 opens it in the default browser, no playwright -- hover and tap in cells,
@@ -127,3 +129,75 @@ table's.
 remote) -- the next step builds `GridView` on the real comm; the
 `InfoTool`'s own region probe in a merged proxy (it merged; its action was
 not exercised).
+
+## 3. G1b: the grid view (base `bdb2ec76`, 2026-11-11)
+
+The prototype's toolbar design, built on the real comm path.  Three new
+modules in `cubevis/toolbox/gridplot`, one export change, a browser check
+and a demo notebook.  Nothing in visplot changes yet (that is G2).
+
+**`grid_source.py`** -- the `GridSource` protocol a grid draws from:
+`labels()`, `axis_names()`, `extent()`, `render(indices, viewport, size)`
+-> `RenderedPanel`s, `probe(index, x, y)` -> one line of text.  visplot (G2)
+and calplot (C1) each implement it; the view knows nothing else about
+the data.  `SyntheticGridSource(n, kind="raster"|"scatter", cost=0.0)` is
+the test source: every baseline of enough antennas for *n* cells, every
+7th cell the odd one out, *cost* seconds of simulated render per cell.
+
+**`grid_view.py`** -- `GridView(source, comm_mgr, rows, cols, pool, cell,
+theme, on_drill)`.  A pool of figures (default 6 x 6, at most 8 x 8) built
+once; each cell an `image_rgba` with its own source; one merged toolbar
+(Pan, WheelZoom, BoxZoom, Reset, Tap, Hover for the probe, one shared
+Crosshair).  Controls: page ⏮ ◀ ▶ ⏭, Rows, Cols, Scale (common / per
+cell), Play with pages/s and Loop, Save PNG; a status line ("drawn in N
+ms") and a probe line.  Two pipes: page/drill/save (in order) and probe
+(squashed, so a fast mouse sends only the latest position).
+
+- *Paging*: Python renders a page's cells and returns RGBA images; the
+  browser caches pages by (rows, cols, scale, viewport) and prefetches the
+  next two.  Responses for a superseded request are dropped.
+- *Scale*: common -- a zoom in any cell sets one viewport for all, and the
+  page is re-rendered at it; per cell -- only that cell re-renders.  Reset
+  returns to the full extent.
+- *Axes*: common -- X on the top row, Y on the first column, each name once
+  (a Div above the grid, a rotated one beside it); per cell -- every cell
+  has both.  Cells are sized by `frame_width`/`frame_height`, so plot areas
+  stay equal either way.
+- *Playback*: steps pages at the chosen rate; a tick is skipped while the
+  previous page is still loading, so a slow source slows playback instead
+  of losing pages.
+- *Tap* drills: `on_drill(index, label)` is called in Python.  Flagging
+  stays drill-down (decision 2 of section 2).
+- *Save PNG*: the page as Python renders it (`png_export`), used rows only,
+  downloaded by the browser.
+
+**`grid_app.py`** -- `GridApp(source, title, **view_kw)`: the grid on its
+own page, with the same protocol as visplot and iclean (`cubevis.exe`,
+`show()` in a notebook).  calplot's application starts from it.
+
+**`png_export.export_png(..., axes="each"|"outer")`** -- `"outer"` draws a
+common-scale page the way the view does: X tick labels across the top of
+the top row, Y down the first column, each axis name once, narrow gaps.
+The grid's Save passes `"outer"` when the scale is common.  The default
+(`"each"`) is unchanged: the 40 reference PNGs (both MSs, every preset,
+both themes) are byte-identical to `bdb2ec76`'s.
+
+**Checks**
+
+- `tests/manual/gridplot/grid_browser_check.py`: serves a `GridApp` and
+  drives it in Chrome (Playwright) with a real mouse -- first page, axes,
+  paging, last page, reshape, probe, tap/drill, zoom common, axes per
+  cell, zoom per cell, playback, save, console errors.  13 of 13 pass for
+  raster and for scatter with `--cost 0.05`.  `--chrome` as in section 2.
+- `tests/manual/gridplot/grid_demo.ipynb`: a 4 x 4 raster grid (light) and
+  a 3 x 3 scatter grid (dark, slow source).  Executes without error under
+  nbconvert; the interaction itself is for a person to try.
+- `python tests/ci/run.py`: 8 of 8.
+
+**Not established here**: a remote kernel (a synthetic source has no
+remote meaning; G2 tests remote with visplot's real data), and page times
+for real data (G0's numbers stand).
+
+**Next: G2** -- visplot's Grid layout as a `GridSource` over its plot core:
+raster presets first (waterfall, Time x Baseline per antenna, antenna
+matrix); scatter grids after G3's read-once-and-split.

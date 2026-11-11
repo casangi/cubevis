@@ -152,6 +152,10 @@ def _wrap_footer(text: str, width_pt: float, size_pt: float = 7.5) -> list:
         lines.append(cur)
     return lines
 _LEGEND_PT     = 16.0
+# axes="outer" (gridplot, 2026-11-11): the X tick labels and the X name go
+# above the top row, and only the gap between cells' frames is left
+_OUTER_TOP_PT   = 30.0
+_OUTER_SPACE_PT = 8.0
 _CBAR_W_PT     = 9.0        # bar thickness
 _CBAR_PAD_PT   = 8.0        # gap between plot and bar
 _CBAR_LBL_PT   = 52.0       # tick labels + rotated axis label beside a bar
@@ -777,6 +781,28 @@ def _draw_colorbar(fig, rect, band: ColorBand, theme: Theme,
         cax.yaxis.set_label_position("left")
 
 
+def _outer_axes(ax, r: int, c: int) -> None:
+    """axes="outer": X tick labels across the top of the top row only, Y
+    tick labels down the first column only, no per-cell axis names (the
+    figure draws each once).  A grid at a common scale, as the browser's
+    grid view draws it (plan 1.3, 2026-11-11)."""
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    if r == 0:
+        ax.xaxis.tick_top()
+        ax.tick_params(axis="x", which="both", bottom=False, labelbottom=False,
+                       top=True, labeltop=True)
+    else:
+        ax.tick_params(axis="x", which="both", labelbottom=False, labeltop=False)
+    if c != 0:
+        ax.tick_params(axis="y", which="both", labelleft=False)
+    # the title clears the top row's tick labels
+    if r == 0 and ax.get_title():
+        ax.title.set_y(1.0)
+        ax.set_title(ax.get_title(), color=ax.title.get_color(),
+                     fontsize=ax.title.get_fontsize(), pad=20)
+
+
 def _draw_cell(ax, panel: Optional[RenderedPanel], theme: Theme,
                extents: _ExtentIndex, legend_mode: str = "panel") -> None:
     """Render one grid cell — with data, empty, failed, or absent."""
@@ -871,6 +897,7 @@ def export_png(
     legend: str = "auto",
     colorbar: str = "auto",
     colorbar_side: str = "right",
+    axes: str = "each",
 ) -> str:
     """Composite *panels* into a PNG at *path*; return the absolute path.
 
@@ -933,6 +960,13 @@ def export_png(
         Which edge.  For ``"shared"`` this is the figure edge; for
         ``"each"`` it is each plot's own edge, and ``"bottom"`` puts a
         horizontal bar under every cell.
+    axes : {"each", "outer"}
+        ``"each"`` (default): every cell its own tick labels and axis
+        names.  ``"outer"``: a grid at a common scale, drawn as the grid
+        view draws it -- X tick labels across the top of the top row, Y
+        tick labels down the first column, each axis name once (above the
+        grid, beside the first column), and narrow gaps between cells
+        (gridplot, 2026-11-11).  A single cell is drawn as ``"each"``.
 
     Returns
     -------
@@ -993,9 +1027,12 @@ def export_png(
     )
     if not wants_legend:
         legend_mode = "none"
+    if axes not in ("each", "outer"):
+        raise ValueError(f"axes must be 'each' or 'outer', not {axes!r}")
+    outer = axes == "outer" and nrows * ncols > 1
     m_l   = _MARGIN_L_PT * px
     m_r   = _MARGIN_R_PT * px
-    m_t   = _MARGIN_T_PT * px
+    m_t   = (_MARGIN_T_PT + (_OUTER_TOP_PT if outer else 0.0)) * px
     # The footer wraps (HRS B2, 2026-10-11): it was one line, cut off at
     # the right in a narrow (Over / Under) export.  Broken between its
     # " | " fields, to the width of the grid of axes.
@@ -1006,8 +1043,13 @@ def export_png(
     m_b   = (_MARGIN_B_PT + (_FOOTER_PT + _FOOTER_LINE_PT * (len(footer_lines) - 1)
                              if footer_lines else 0.0)) * px
     title = _CELL_TITLE_PT * px
-    wsp   = _WSPACE_PT * px
-    hsp   = (_HSPACE_PT + _CELL_TITLE_PT) * px
+    # outer axes: no tick labels or names between cells, so the gaps
+    # shrink to a frame's breathing space (and the bottom margin to what
+    # the footer needs)
+    wsp   = (_OUTER_SPACE_PT if outer else _WSPACE_PT) * px
+    hsp   = ((_OUTER_SPACE_PT if outer else _HSPACE_PT) + _CELL_TITLE_PT) * px
+    if outer:
+        m_b -= (_MARGIN_B_PT - _OUTER_SPACE_PT) * px
     # Legend space is *reserved*, not overlaid: a band above each axes for
     # per-panel legends, or one band below the top margin for a shared
     # figure legend.  Either way the data area stays cw x ch.
@@ -1090,6 +1132,7 @@ def export_png(
     # ratios of the average axes width, which makes exact pixel control
     # awkward, and exactness is the point -- the data area must be cw x ch
     # device pixels so the Datashader image is placed, not resampled.
+    top_axes, left_axes = [], []
     for i, panel in enumerate(cells):
         r, c = divmod(i, ncols)
         cw, ch = cwl[c], rh[r]
@@ -1101,6 +1144,12 @@ def export_png(
                       + sum(blocks[:r]) + r * hsp + lg_panel + ch)
         ax = fig.add_axes([x0 / fig_w, y0 / fig_h, cw / fig_w, ch / fig_h])
         _draw_cell(ax, panel, th, extents, legend_mode)
+        if outer:
+            _outer_axes(ax, r, c)
+            if r == 0:
+                top_axes.append(ax)
+            if c == 0:
+                left_axes.append(ax)
 
         for j, band in enumerate(_bar_bands(
                 panel.spec if panel else None, cbar_mode, want_density)):
@@ -1146,6 +1195,20 @@ def export_png(
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
+    if outer and top_axes and left_axes:
+        spec = next((p.spec for p in cells if p is not None and p.image is not None), None) \
+            or next((p.spec for p in cells if p is not None), None)
+        if spec is not None:
+            x_left = top_axes[0].get_position().x0
+            x_right = top_axes[-1].get_position().x1
+            fig.text((x_left + x_right) / 2, 1.0 - (_MARGIN_T_PT * 0.5 * px) / fig_h,
+                     spec.axis_label("x"), ha="center", va="top", fontsize=9.5,
+                     color=th.text)
+            y_top = left_axes[0].get_position().y1
+            y_bot = left_axes[-1].get_position().y0
+            fig.text((_MARGIN_L_PT * 0.18 * px) / fig_w, (y_top + y_bot) / 2,
+                     spec.axis_label("y"), ha="center", va="center", rotation=90,
+                     fontsize=9.5, color=th.text)
     fig.savefig(path, dpi=dpi, facecolor=th.figure)
     plt.close(fig)
     log.info("export_png: wrote %s (%dx%d px, %dx%d grid)",

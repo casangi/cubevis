@@ -119,6 +119,17 @@ design below:
   own scale" as an option.
 - External shared axes: tick labels only on the outer row/column, which
   saves a lot of space on a 4×4 page.
+  *Decided 2026-11-11 (Darrell): with a common scale, the X axis is drawn
+  across the **top** of the top row and the Y axis down the **left** of the
+  first column -- not at the bottom as plotms does: the top row is always
+  full (cells fill row by row), while a partly filled last page would put
+  bottom axes in the middle of the grid; the axes then sit in one place on
+  every page.  Each axis **name** appears **once** (centred over the top
+  row, down the left column), which also leaves room for long names; tick
+  numbers on every outer cell.  Cells are sized by their frame
+  (`frame_width`/`frame_height`), so a cell with an axis has the same plot
+  area as one without.  With a per-cell scale every cell has its own axes.
+  The PNG export follows the same rule.*
 - Export one PNG per page, for a page range (`exprange`). `png_export`
   already composites an M×N page with a shared colorbar and legend
   **[code]**.
@@ -390,7 +401,7 @@ weeks of sessions. Each stage has an exit test you run in the browser.
 |---|---|---|---|
 | **G0** | Benchmark: page of 9/16 headless cells (waterfall per baseline; time series per baseline; one cal-like scatter), read-per-cell vs read-once-and-split. Record in this note. **Done 2026-11-10: section 11** (synthetic data; the cal-like scatter waits for C0; retake on real data) | S | Numbers; decide whether "read once, split" is needed in G2 or later |
 | **G1a** | Move `panel_spec`, `png_export`, `tick_format`, `palettes`, `colormap_scaling`, `panel_sizes` (and shading helpers as needed) to a shared module; re-export from old paths **Done 2026-11-10** (`devel/notes/drs/gridplot/gridplot_notes.md` section 1) | S–M | Test suite unchanged; `plotfile=` output byte-identical |
-| **G1b** | `GridView` (Bokeh) + `GridController` + `GridSource` protocol; a synthetic source for tests; paging; common/per-cell scale; external axes; one probe; crosshair; save-page; tap event | M–L | Demo notebook with a synthetic 4×4 source, both themes, local and remote |
+| **G1b** | `GridView` (Bokeh) + `GridController` + `GridSource` protocol; a synthetic source for tests; paging; common/per-cell scale; external axes; one probe; crosshair; save-page; tap event. **Built 2026-11-11: section 12** (remote waits for G2) | M–L | Demo notebook with a synthetic 4×4 source, both themes, local and remote |
 | **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
 | **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only | M | Page time inside the G0 target |
 | **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables | M | Round-trip of values and flags against casatools reads |
@@ -780,6 +791,20 @@ per query, not the data read.
   matrix) first; scatter grids wait for read-once-and-split.
 - G3's "read once, split" is required, and first in G3.
 - The grid source re-renders its template panel only: no hidden panels.
+
+## 12. G1b built (2026-11-11, base `bdb2ec76`)
+
+The grid view is built in `cubevis/toolbox/gridplot`: `GridSource` (the
+protocol visplot and calplot implement) with a synthetic source,
+`GridView` (pool of figures, one merged toolbar, paging with cache and
+prefetch, common/per-cell scale, outer axes at common scale with each name
+once, probe, crosshair, tap to drill, playback, Save PNG) and `GridApp`
+(the view on its own page). `export_png` gains `axes="outer"`, so a saved
+page follows the same axes rule; its default output is unchanged. A
+browser check (13 items, raster and scatter) and a demo notebook come with
+it. Details: `devel/notes/drs/gridplot/gridplot_notes.md` section 3.
+
+Not yet exercised: a remote kernel. G2 does that with visplot's own data.
 
 ## Sources
 

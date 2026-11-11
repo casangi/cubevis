@@ -490,6 +490,11 @@ only that cell; with a **common** scale it zooms all cells, because they
 share ranges. That is the natural result of the design and matches what a
 user would expect from each mode.
 
+*Proved in the G1b prototype (2026-11-11, `devel/notes/drs/gridplot/gridplot_notes.md`
+section 2): all three hold, with tools identical in every cell and the cell
+taken from the event's origin; Bokeh's merge does work with cubevis's
+`InfoTool` and `FlagTool` when their arguments are the same in every cell.*
+
 ### 9.3 Maximum rows and columns: yes, two limits
 
 - **A legibility floor, not a fixed shape.** Rows and columns are refused
@@ -502,6 +507,10 @@ user would expect from each mode.
   cheap, but G1b measures construction time and page-switch time at 64
   before the number is fixed. For comparison, ALMA's 66 antennas fit in two
   pages of 6×6. CARTA caps its channel map at 100 panels **[doc]**.
+- *Prototype (2026-11-11): the pool costs about 55 ms a cell at start, so
+  it defaults to 6 x 6, with up to 8 x 8 as an argument; rows x cols change
+  by re-assigning the grid's children (70-760 ms), never by hiding cells
+  (8 s).*
 - **No cap for headless export** beyond memory, as in plotms **[doc]**:
   a PNG page of 12×6 is reasonable on paper even if not on screen.
 

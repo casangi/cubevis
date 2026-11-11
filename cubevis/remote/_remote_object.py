@@ -102,6 +102,22 @@ class RemoteKernelLostError(RuntimeError):
     waiting for it."""
 
 
+class RemoteCallInterruptedError(RemoteKernelLostError):
+    """The connection was lost and came back while a call that is not safe
+    to repeat (a write) was waiting: its reply may have been lost with the
+    connection, so whether it was done is not known.  A
+    ``RemoteKernelLostError``, so code that catches that still does."""
+
+
+#: seconds after the heartbeat comes back that a call cut by the gap is
+#: still waited for before it is presumed lost (its reply may yet arrive:
+#: only replies sent *during* the gap are lost)
+RESEND_SETTLE = 5.0
+#: seconds of heartbeat silence before reconnecting is tried (a laptop that
+#: wakes, a short Wi-Fi drop: often over by itself)
+RECONNECT_AFTER = 4.0
+
+
 class MissingKernelPackages(ImportError):
     """``kernel_name=`` was given, but this Python lacks what starts a
     Jupyter kernel: jupyter_client, or sshpyk for a kernel on another
@@ -229,7 +245,30 @@ class RemoteObjectConnection:
     restart_hint : str
         what the user is told a dead worker means, with ``restart_worker``
         (default: "the next call starts a new one")
+    repeatable_methods : iterable of str
+        methods safe to send twice (reads).  One waiting when the connection
+        drops and comes back is sent again, once; any other fails with
+        ``RemoteCallInterruptedError`` (its reply may have been lost, so
+        whether it was done is not known)
+
+    Reconnecting (Scenario A, 2026-11-10): when the kernel's heartbeat goes
+    quiet, the shared ssh connections under its tunnels are reopened
+    (``cubevis.remote._reconnect``) for up to ``CUBEVIS_REMOTE_RECONNECT``
+    seconds (two minutes) before the call fails; after a failure, the next
+    call tries again first.  ``add_state_listener`` hears ``"reconnecting"``,
+    ``"connected"`` and ``"lost"`` as they happen.
     """
+
+    # Defaults for what a test may build without the constructor
+    # (``object.__new__``, tests/manual/remote/test_worker_death.py).
+    _repeatable: FrozenSet[str] = frozenset()
+    _reconnector = None
+    _link_down = False
+    _state = "connected"
+    _listeners: tuple = ()
+    _renewed_at = 0.0
+    _renew_lock = None
+    _state_detail: Dict[str, Any] = {}
 
     def __init__(self, kernel_name: str, class_name: str, kwargs: Optional[Dict[str, Any]] = None, *,
                  register_function: str, wire_types: Iterable[str] = (), app: str = "cubevis",
@@ -238,7 +277,8 @@ class RemoteObjectConnection:
                  create_context_timeout: float = DEFAULT_CREATE_CONTEXT_TIMEOUT,
                  call_timeout: Optional[float] = None,
                  data_methods: Iterable[str] = (), data_timeout: Optional[float] = None,
-                 restart_worker: bool = False, restart_hint: Optional[str] = None) -> None:
+                 restart_worker: bool = False, restart_hint: Optional[str] = None,
+                 repeatable_methods: Iterable[str] = ()) -> None:
         if not kernel_name:
             raise ValueError(f"{app}: a remote session needs kernel_name= (a kernelspec name "
                              "resolvable by `jupyter kernelspec list`)")
@@ -276,6 +316,8 @@ class RemoteObjectConnection:
                               else call_timeout if call_timeout is not None else data_call_timeout())
         self._restart_worker = restart_worker
         self._restart_hint = restart_hint or "the next call starts a new one"
+        self._repeatable = frozenset(repeatable_methods)
+        self._listeners = []
         self._worker_dead = False
         self._closed = False
         self._session_id = None
@@ -294,6 +336,16 @@ class RemoteObjectConnection:
         self._bridge.run(self._km.start_kernel())
         t1 = time.perf_counter()
         log.info("%s: start_kernel() took %.1fs", app, t1 - t0)
+        # Scenario A: sshpyk's reconnect off the event loop, and what the
+        # watch reopens when the heartbeat goes quiet (None: no ssh)
+        from ._reconnect import SshReconnector, make_nonblocking
+        make_nonblocking(self._km)
+        self._reconnector = SshReconnector.for_kernel(self._km)
+        if self._reconnector is not None:
+            try:
+                self._bridge.run(self._reconnector.remember(), timeout=30)
+            except Exception:                            # noqa: BLE001 -- best effort
+                log.debug("%s: could not record the ssh connection's socket", app, exc_info=True)
         try:
             self._link = self._bridge.run(RemoteAppLink.open(
                 self._km, worker_target_name=worker_target_name or DEFAULT_WORKER_TARGET_NAME,
@@ -392,17 +444,199 @@ class RemoteObjectConnection:
         raise RemoteWorkerDiedError(f"{reply.get('error')}. The {self._app} worker on kernel "
                                     f"{self._kernel_name!r} is gone; {what}.")
 
-    async def _watched(self, aw):
+    # ---- connection state (Scenario A) --------------------------------------
+
+    @property
+    def state(self) -> str:
+        '''``"connected"``, ``"reconnecting"`` (the heartbeat is quiet and the
+        connection is being reopened) or ``"lost"`` (reconnecting failed; the
+        next call tries again)'''
+        return self._state
+
+    def add_state_listener(self, fn) -> None:
+        '''Call ``fn(state, detail)`` on every change of ``state`` (on the
+        bridge's thread: a GUI hands it to its own loop).  *detail* is a
+        dict: ``host``, ``kernel``, ``seconds`` (of silence), ``message``.'''
+        if not isinstance(self._listeners, list):
+            self._listeners = list(self._listeners)
+        self._listeners.append(fn)
+
+    def _host_label(self) -> str:
+        rc = self._reconnector
+        return rc.host if rc is not None else self._kernel_name
+
+    @property
+    def state_detail(self) -> Dict[str, Any]:
+        '''the last ``state`` change's detail (``add_state_listener``)'''
+        return dict(self._state_detail)
+
+    def _set_state(self, state: str, seconds: float = 0.0, message: str = "") -> None:
+        if state == self._state and state != "reconnecting":
+            return
+        self._state = state
+        detail = {"host": self._host_label(), "kernel": self._kernel_name,
+                  "seconds": round(seconds), "message": message}
+        self._state_detail = detail
+        for fn in list(self._listeners):
+            try:
+                fn(state, detail)
+            except Exception:                         # noqa: BLE001 -- a listener's own fault
+                log.debug("%s: connection state listener failed", self._app, exc_info=True)
+
+    def _heartbeat(self):
+        hb = getattr(getattr(getattr(self, "_link", None), "transport", None), "_client", None)
+        return getattr(hb, "hb_channel", None)
+
+    def _beating(self) -> bool:
+        hb = self._heartbeat()
+        try:
+            return hb is None or bool(hb.is_beating())
+        except Exception:
+            return True
+
+    def _lost_message(self, seconds: float) -> str:
+        why = ""
+        rc = self._reconnector
+        if rc is not None and rc.last_error:
+            why = f" Reconnecting failed: {rc.last_error}."
+        if rc is None:
+            return (f"no answer from the kernel {self._kernel_name!r} for {seconds:.0f} s: the "
+                    "connection to it was lost (the network or VPN, or this computer slept). "
+                    f"Close this {self._app} and start it again.")
+        return (f"no answer from the kernel {self._kernel_name!r} on {rc.host} for "
+                f"{seconds:.0f} s: the connection to it was lost (the network or VPN changed, or "
+                f"this computer slept).{why} The kernel and what it holds may still be there: "
+                f"the next action tries to reconnect.")
+
+    async def _arenew(self, gap_began: float) -> None:
+        """After a gap that began at *gap_began*: a new kernel client for the
+        link (``KernelClientTransport.renew_client`` says why), once per gap
+        however many calls were waiting."""
+        if self._renewed_at >= gap_began:
+            return
+        if self._renew_lock is None:
+            self._renew_lock = asyncio.Lock()
+        async with self._renew_lock:
+            if self._renewed_at >= gap_began:
+                return
+            transport = getattr(getattr(self, "_link", None), "transport", None)
+            renew = getattr(transport, "renew_client", None)
+            if renew is not None:
+                try:
+                    await asyncio.wait_for(renew(), timeout=60)
+                except Exception as exc:                 # noqa: BLE001 -- said; calls then fail
+                    log.warning("%s: a new kernel client after the connection came back "
+                                "failed: %s", self._app, exc)
+            self._renewed_at = time.monotonic()
+
+    async def _aabandon(self) -> None:
+        """Forget requests whose replies were lost with the connection
+        (``CommMgr.abandon_inflight``): the link's comm sends one request at
+        a time, so one that never gets its reply holds every later call."""
+        mgr = getattr(getattr(self, "_link", None), "mgr", None)
+        abandon = getattr(mgr, "abandon_inflight", None)
+        if abandon is not None:
+            try:
+                await abandon()
+            except Exception:                            # noqa: BLE001
+                log.debug("%s: forgetting the lost requests failed", self._app, exc_info=True)
+
+    async def _areconnect(self, budget: float) -> bool:
+        """Reopen the connection and wait for the heartbeat, for up to
+        *budget* seconds.  True when it beats again."""
+        rc = self._reconnector
+        t0 = time.monotonic()
+        while True:
+            if rc is not None:
+                await rc.reconnect()
+            for _ in range(int(max(1, liveness_interval() * 3) / 0.25)):
+                if self._beating():
+                    await self._arenew(t0)
+                    return True
+                if time.monotonic() - t0 >= budget:
+                    return False
+                await asyncio.sleep(0.25)
+            if time.monotonic() - t0 >= budget:
+                return False
+
+    async def _watched(self, aw, method: Optional[str] = None, resend=None):
         """Await *aw* while checking every ``liveness_interval()`` seconds
-        that the kernel runs and answers its heartbeat."""
+        that the kernel runs and answers its heartbeat.
+
+        A quiet heartbeat starts reconnecting (``_reconnect``) after
+        ``RECONNECT_AFTER`` seconds and fails the call after
+        ``CUBEVIS_REMOTE_RECONNECT`` seconds (``HEARTBEAT_GRACE`` for a
+        kernel without ssh, where there is nothing to reopen).  While it is
+        quiet the kernel's process is not asked about: that question goes
+        over the same lost connection, and sshpyk's answer to it reopens the
+        connection in ways that can hold the event loop.
+
+        When the heartbeat comes back and the call is still waiting
+        ``RESEND_SETTLE`` seconds later, its reply was probably lost with
+        the connection: *resend* (a coroutine factory) is used once for a
+        method in ``repeatable_methods``; any other *method* fails with
+        ``RemoteCallInterruptedError``."""
+        from ._reconnect import reconnect_budget
         task = asyncio.ensure_future(aw)
         interval = liveness_interval()
-        silent_since = None
+        rc = self._reconnector
+        budget = reconnect_budget() if rc is not None else HEARTBEAT_GRACE
+        silent_since: Optional[float] = None
+        back_since: Optional[float] = None
+        reconnecting: Optional[asyncio.Task] = None
+        resent = False
+        gap_seen = False
+        held = False             # the call ran out of time during a gap: held for the outcome
         try:
             while True:
-                done, _ = await asyncio.wait({task}, timeout=interval)
+                if held:                       # done already: nothing to wait on but time
+                    await asyncio.sleep(interval)
+                    done = set()
+                else:
+                    done, _ = await asyncio.wait({task}, timeout=interval)
                 if task in done:
-                    return task.result()
+                    exc = None if task.cancelled() else task.exception()
+                    if not (isinstance(exc, (asyncio.TimeoutError, TimeoutError))
+                            and (gap_seen or not self._beating())):
+                        return task.result()
+                    # Its time ran out while the connection was gone or
+                    # just back: not the kernel's slowness.  Wait for the
+                    # connection's outcome, then resend or say so.
+                    held = True
+                    back_since = (time.monotonic() - RESEND_SETTLE
+                                  if self._beating() else back_since)
+                now = time.monotonic()
+                if not self._beating():
+                    if silent_since is None:
+                        silent_since = now
+                        back_since = None
+                        log.warning("%s: no heartbeat from kernel %r; waiting for it",
+                                    self._app, self._kernel_name)
+                    quiet = now - silent_since
+                    if quiet >= RECONNECT_AFTER:
+                        gap_seen = True          # long enough to have cut the tunnels
+                    if rc is not None:
+                        self._set_state("reconnecting", quiet)
+                        if quiet >= RECONNECT_AFTER and (reconnecting is None or reconnecting.done()):
+                            reconnecting = asyncio.ensure_future(rc.reconnect())
+                    if quiet >= budget:
+                        self._link_down = True
+                        await self._aabandon()
+                        msg = self._lost_message(quiet)
+                        self._set_state("lost", quiet, msg)
+                        raise RemoteKernelLostError(msg)
+                    continue
+                if silent_since is not None:
+                    log.warning("%s: heartbeat from kernel %r again after %.0f s",
+                                self._app, self._kernel_name, now - silent_since)
+                    if gap_seen:
+                        await self._arenew(silent_since)
+                    silent_since = None
+                    # a missed beat or two is not a lost connection: only a
+                    # gap that could have cut the tunnels puts the call in doubt
+                    back_since = now if (gap_seen or held) else None
+                    self._link_down = False
+                    self._set_state("connected")
                 try:
                     alive = await asyncio.wait_for(self._km.is_alive(), timeout=30)
                 except Exception:
@@ -411,26 +645,31 @@ class RemoteObjectConnection:
                     raise RemoteKernelLostError(
                         f"the kernel {self._kernel_name!r} has stopped (its process is gone: killed, "
                         f"or its computer restarted). Close this {self._app} and start it again.")
-                hb = getattr(getattr(getattr(self, "_link", None), "transport", None), "_client", None)
-                hb = getattr(hb, "hb_channel", None)
-                beating = True
-                try:
-                    beating = hb is None or bool(hb.is_beating())
-                except Exception:
-                    pass
-                now = time.monotonic()
-                if beating:
-                    silent_since = None
-                elif silent_since is None:
-                    silent_since = now
-                elif now - silent_since >= HEARTBEAT_GRACE:
-                    raise RemoteKernelLostError(
-                        f"no answer from the kernel {self._kernel_name!r} for {now - silent_since:.0f} s: "
-                        "the connection to it was lost (the network or VPN, or this computer slept). "
-                        f"Close this {self._app} and start it again.")
+                if back_since is not None and time.monotonic() - back_since >= RESEND_SETTLE:
+                    back_since = None
+                    if method is None:
+                        if held:
+                            return task.result()           # its own TimeoutError
+                        continue
+                    if method in self._repeatable and resend is not None and not resent:
+                        log.warning("%s: %s was waiting when the connection dropped; sending it "
+                                    "again", self._app, method)
+                        resent, held = True, False
+                        task.cancel()
+                        await self._aabandon()
+                        task = asyncio.ensure_future(resend())
+                        continue
+                    await self._aabandon()
+                    raise RemoteCallInterruptedError(
+                        f"the connection to the kernel {self._kernel_name!r} was interrupted (the "
+                        f"network or VPN changed, or this computer slept) while {method} was "
+                        "waiting for its reply; whether it was done is not known. The connection "
+                        "is back: check the result before doing it again.")
         finally:
             if not task.done():
                 task.cancel()
+            if reconnecting is not None and not reconnecting.done():
+                reconnecting.cancel()
 
     async def _arestart(self) -> None:
         log.warning("%s: starting a new worker on kernel %r (the previous one is gone)",
@@ -479,11 +718,30 @@ class RemoteObjectConnection:
                 raise RemoteWorkerDiedError(f"the {self._app} worker on kernel {self._kernel_name!r} "
                                             f"is gone; close this {self._app} and start it again")
             await self._watched(self._arestart())
-        reply = await self._watched(self._ctx.dispatch_fast(
-            "call_method",
-            {"handle": self._handle, "method": method, "args": [], "kwargs": kwargs,
-             "pre_encoded": True},
-            timeout=self._timeout_for(method, timeout)))
+        if self._link_down:
+            # The last call found the connection lost; try again before this
+            # one (Scenario A: "the next action tries to reconnect").
+            from ._reconnect import reconnect_budget
+            budget = reconnect_budget() if self._reconnector is not None else HEARTBEAT_GRACE
+            self._set_state("reconnecting")
+            t0 = time.monotonic()
+            if not await self._areconnect(budget):
+                msg = self._lost_message(time.monotonic() - t0)
+                self._set_state("lost", time.monotonic() - t0, msg)
+                raise RemoteKernelLostError(msg)
+            self._link_down = False
+            await self._aabandon()
+            self._set_state("connected")
+
+        budget = self._timeout_for(method, timeout)
+
+        def send():
+            return self._ctx.dispatch_fast(
+                "call_method",
+                {"handle": self._handle, "method": method, "args": [], "kwargs": kwargs,
+                 "pre_encoded": True},
+                timeout=budget)
+        reply = await self._watched(send(), method=method, resend=send)
         if isinstance(reply, dict) and "error" in reply:
             if (self._restart_worker and not _resent
                     and "WorkerGoneError" in str(reply.get("traceback", ""))):

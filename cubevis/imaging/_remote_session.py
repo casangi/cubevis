@@ -37,6 +37,11 @@ BACKEND_CLASS = 'ImagingSessionBackend'
 CYCLE_POLL = 0.25
 #: calls that read image data (the longer budget, ``CUBEVIS_REMOTE_TIMEOUT``)
 DATA_METHODS = ('cube_call', 'cube_info', 'restore', 'run_cycle')
+#: calls that only read: one waiting when the connection drops and comes
+#: back is sent again (``RemoteObjectConnection(repeatable_methods=)``);
+#: a cycle or a mask write fails saying the connection was interrupted
+REPEATABLE_METHODS = ('args', 'progress', 'has_next', 'log', 'stop_descriptions',
+                      'image_products', 'fields', 'cube_info')
 
 
 class RemoteImagingSession:
@@ -74,7 +79,7 @@ class RemoteImagingSession:
             self._conn = RemoteObjectConnection(
                 kernel_name, BACKEND_CLASS, kwargs, register_function=REGISTER_FUNCTION,
                 app='iclean', data=args.get('vis'), data_methods=DATA_METHODS,
-                **connection_kwargs)
+                repeatable_methods=REPEATABLE_METHODS, **connection_kwargs)
         except RemoteCallError as exc:
             if str(exc.remote_error or '').startswith(PARAMS_ERROR):
                 # an argument the host refused (a path that is not there):

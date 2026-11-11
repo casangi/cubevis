@@ -1,7 +1,7 @@
 # Iteration grids for `visplot` and a first `calplot`: plan
 
-*Written 2026-11-10 against `casangi/cubevis` `main` at `a42cab5`, branch
-`grid-calplot-plan`. Planning only; no code changes. Builds on, and in one
+*Written 2026-11-10 against `casangi/cubevis` `main` at `a42cab5`; kept in
+`devel/docs/gridplot`. G0 results: section 11. Builds on, and in one
 place supersedes, `devel/notes/drs/visplot/visplot-grid-iteration-notes.md`
 (July 2026, "the July notes" below).*
 
@@ -388,7 +388,7 @@ weeks of sessions. Each stage has an exit test you run in the browser.
 
 | Stage | What | Size | Exit |
 |---|---|---|---|
-| **G0** | Benchmark: page of 9/16 headless cells (waterfall per baseline; time series per baseline; one cal-like scatter), read-per-cell vs read-once-and-split. Record in this note. | S | Numbers; decide whether "read once, split" is needed in G2 or later |
+| **G0** | Benchmark: page of 9/16 headless cells (waterfall per baseline; time series per baseline; one cal-like scatter), read-per-cell vs read-once-and-split. Record in this note. **Done 2026-11-10: section 11** (synthetic data; the cal-like scatter waits for C0; retake on real data) | S | Numbers; decide whether "read once, split" is needed in G2 or later |
 | **G1a** | Move `panel_spec`, `png_export`, `tick_format`, `palettes`, `colormap_scaling`, `panel_sizes` (and shading helpers as needed) to a shared module; re-export from old paths | S–M | Test suite unchanged; `plotfile=` output byte-identical |
 | **G1b** | `GridView` (Bokeh) + `GridController` + `GridSource` protocol; a synthetic source for tests; paging; common/per-cell scale; external axes; one probe; crosshair; save-page; tap event | M–L | Demo notebook with a synthetic 4×4 source, both themes, local and remote |
 | **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
@@ -717,6 +717,60 @@ unrelated. The new name avoids confusion with it.
   transparently) and `TpRecord` keywords, which arcae does not handle yet.
 - Lock behaviour when calplot holds a table open while CASA writes a new
   version of it (RADPS iteration): `lockoptions`.
+
+## 11. G0 results: what a page costs today (2026-11-10, base `089df90`)
+
+`devel/tools/gridplot_bench/bench_g0.py`.  One headless `VisibilityPlotter`
+holds the open data, as a `GridSource` will; each cell is the same panel
+re-selected to one baseline and rendered to a `RenderedPanel`; the page is
+composited with `export_png`.  **Data**: a synthetic MSv2 from the quick
+tests' generator at VLBA size (10 antennas, 45 baselines, 1 SPW of 64
+channels, 600 times, 2 correlations; `--make`).  **Machine**: the cloud
+sandbox, 2 cores, 8 GB.  Not real data: the numbers that decide G2 should
+be retaken on TW Hya and the VLBA TL016B subset (`--ms`).
+
+| View | Page | All four panels re-rendered (today's `plotfile=` path) | Shown panel only | Page's baselines in one render | Compose (PNG) |
+|---|---|---|---|---|---|
+| Waterfall (Time × Channel raster) | 3×3 | 15.1 s (1.7 s/cell) | **2.1 s** (0.23 s/cell) | 0.24 s | 0.8 s |
+| | 4×4 | 30.4 s | **3.6 s** (0.22 s/cell) | 0.22 s | 1.0 s |
+| Time series (Amplitude vs Time scatter) | 3×3 | 26.4 s (3.0 s/cell) | **15.3 s** (1.8 s/cell) | 1.4 s | 0.5 s |
+| | 4×4 | 44.7 s | **27.9 s** (1.7 s/cell) | 1.8 s | 1.0 s |
+
+A second pass over the same page costs the same as the first: the cost is
+per query, not the data read.
+
+**Findings**
+
+1. **Re-selecting re-rendered all four panel objects** (both kinds in both
+   slots, shown or not): in the waterfall run, 5.0 s of 7.2 s went to
+   hidden scatters.  Fixed in this slice for headless export:
+   `_apply_selection_overrides(..., panels=)` re-queries only what the file
+   shows and marks the rest stale; `_export_png` brings a stale panel up to
+   date when a later call shows it (checked identical to a full refresh).
+   Nine `plotfile=` calls of the waterfall preset (Side layout, two panels
+   drawn): 23.3 s → 17.3 s.  A grid source must likewise re-render only
+   its template panel.
+2. **Raster grids are workable through today's path**: 0.22 s a cell,
+   a 4×4 page in under 4 s plus a second to compose.  With playback's
+   prefetch (9.1) that is usable for G2 as it is.
+3. **Scatter grids are not**: 1.7 s a cell, 28 s for 4×4, while the same
+   16 baselines in *one* render take 1.8 s.  The cost is the scatter
+   pipeline per query (column query, binning, histogram equalisation), not
+   the bytes.  **Read once, split by the iteration axis is required before
+   scatter grids ship** -- G3's first item moves ahead of G2's scatter
+   presets.  Rasters can ship first.
+4. **Composing is not the bottleneck**: under a second for 16 cells,
+   though it grows with the page's pixel size (4754×1513 px for a 4×4
+   waterfall page).
+5. **Not yet measured**: remote kernels (each cell a round trip, plus the
+   images on the wire: about 1 MB RGBA a cell), and real data sizes.
+
+**Plan changes**
+
+- G2 ships raster grids (waterfall, Time × Baseline per antenna, antenna
+  matrix) first; scatter grids wait for read-once-and-split.
+- G3's "read once, split" is required, and first in G3.
+- The grid source re-renders its template panel only: no hidden panels.
 
 ## Sources
 

@@ -2146,6 +2146,39 @@ class _IterButtons:
 # colormap histograms, icons and the gear tab strip -- and every one of
 # those was added after a *reported* light-mode gap.  A second copy would
 # silently miss the next one.
+# Remote sessions (Scenario A, 2026-11-10): while the busy chip is up (a
+# call is waiting), ask every 2 s what the connection is doing and say it in
+# the chip -- "Reconnecting to zuul06... 12 s" -- instead of "Working".
+# Args: pipe (the "conn" comm), id.  One question at a time; the chip's text
+# goes back to "Working" when the answer is empty.
+_CONNECTION_STATUS_JS = """
+if (window.__cvConnPoll == null) {
+    const label = function(text) {
+        const chip = document.getElementById('__cv_busy_chip');
+        if (!chip) return;
+        const spans = chip.getElementsByTagName('span');
+        const t = spans.length ? spans[spans.length - 1] : null;
+        const want = text || 'Working\u2026';
+        if (t && t.textContent !== want) t.textContent = want;
+    };
+    window.__cvConnAsking = false;
+    window.__cvConnPoll = setInterval(function() {
+        if (!((window.__cvBusyN || 0) > 0)) { window.__cvConnText = ''; return; }
+        label(window.__cvConnText || '');
+        if (window.__cvConnAsking) return;
+        window.__cvConnAsking = true;
+        try {
+            pipe.send(id, {}, function(msg) {
+                window.__cvConnAsking = false;
+                window.__cvConnText = (msg && msg.text) || '';
+                label(window.__cvConnText);
+            });
+        } catch (e) { window.__cvConnAsking = false; }
+    }, 2000);
+}
+"""
+
+
 _THEME_RESTYLE_JS = """
 // Each block below is wrapped by _step() so that one failure cannot
 // silently abort the rest.  This body has grown by accretion -- figures,
@@ -3605,6 +3638,17 @@ class VisibilityPlotter:
         self._ids["flag"] = str(uuid4())
         self._pipe["flag"].register(self._ids["flag"], self._flags.handle_action)
 
+        # Remote sessions (Scenario A, 2026-11-10): while a call waits, the
+        # page asks what the connection is doing and shows it in the busy
+        # chip ("Reconnecting to zuul06 ... 12 s") instead of a silent
+        # "Working".  Its own pipe: the control pipe has a request in
+        # flight (the Plot that is waiting), and would queue this behind it.
+        if getattr(self._reader, "connection", None) is not None:
+            self._pipe["conn"] = self._comm_mgr.open(
+                squash_queue=True, description="remote connection state")
+            self._ids["conn"] = str(uuid4())
+            self._pipe["conn"].register(self._ids["conn"], self._handle_conn_state)
+
     def _build_panels(self) -> None:
         """Phase 2b: cursor/order sources, panel objects, slot bookkeeping.
 
@@ -4027,6 +4071,43 @@ class VisibilityPlotter:
                   theme, RefreshLevel.SHADE.name, len(self._all_panels),
                   "re-resolved" if changed else "kept (user-set)")
 
+    def _connection_text(self) -> str:
+        '''What the busy chip says about a remote session's connection:
+        empty while it is fine (the chip says "Working").'''
+        conn = getattr(self._reader, "connection", None)
+        if conn is None:
+            return ""
+        state = getattr(conn, "state", "connected")
+        detail = getattr(conn, "state_detail", {}) or {}
+        host = detail.get("host") or getattr(conn, "kernel_name", "the kernel")
+        if state == "reconnecting":
+            secs = int(detail.get("seconds") or 0)
+            return (f"Reconnecting to {host}\u2026 {secs} s" if secs
+                    else f"Reconnecting to {host}\u2026")
+        if state == "lost":
+            return f"No connection to {host}; the next action tries again"
+        return ""
+
+    async def _handle_conn_state(self, msg, context=None):
+        '''The page's question while a call waits (``_install_connection_status``).'''
+        return {"text": self._connection_text()}
+
+    def _install_connection_status(self) -> None:
+        '''For a remote session: every 2 s while the busy chip is up, ask
+        ``_handle_conn_state`` and put its answer in the chip.  Nothing for
+        a local session (no ``conn`` pipe).'''
+        if "conn" not in getattr(self, "_pipe", {}):
+            return
+        try:
+            from bokeh.events import DocumentReady
+            from bokeh.io import curdoc
+            from bokeh.models import CustomJS
+            cb = CustomJS(args={"pipe": self._pipe["conn"], "id": self._ids["conn"]},
+                          code=_CONNECTION_STATUS_JS)
+            curdoc().js_on_event(DocumentReady, cb)
+        except Exception as exc:                      # noqa: BLE001 -- a missing nicety
+            log.debug("connection status in the busy chip not installed: %s", exc)
+
     def _apply_startup_theme(self, layout) -> None:
         """Run the theme restyle once at document load, if starting light.
 
@@ -4144,6 +4225,7 @@ for (const dt of other.tools) {
 
         # Last, so every model the restyle touches already exists.
         self._apply_startup_theme(inner_layout)
+        self._install_connection_status()
 
     # ====================================================================== #
     # Stage 1b.5 — slot lookup + Stage 1b compatibility properties           #
@@ -4430,8 +4512,27 @@ for (const dt of other.tools) {
         """
         from .png_export import export_png
 
+        lay = (layout or self._layout).lower()
+        if nrows is None or ncols is None:
+            nrows, ncols = {"one": (1, 1), "side": (1, 2),
+                            "over": (2, 1)}.get(lay, (1, 2))
+        n_panels = nrows * ncols
+        panels = [self._pos0, self._pos1][:n_panels]
+
         if selection:
-            self._apply_selection_overrides(selection)
+            # Only what this file shows is queried again (gridplot G0,
+            # 2026-11-10: re-rendering all four panel objects made a
+            # One-panel waterfall loop ~8x slower); the rest are brought up
+            # to date when a later call shows them.
+            self._apply_selection_overrides(selection, panels=panels)
+        stale = getattr(self, "_stale_after_selection", None) or set()
+        for panel in panels:
+            if id(panel) in stale:
+                stale.discard(id(panel))
+                try:
+                    panel.apply_refresh(_RefreshLevel.QUERY)
+                except Exception as exc:
+                    log.warning("re-render failed for %s: %s", type(panel).__name__, exc)
 
         if theme is not None and theme != self._theme:
             # One `theme` means one thing.  The constructor's `theme`
@@ -4446,13 +4547,6 @@ for (const dt of other.tools) {
             # the cached aggregations.
             self.set_theme(theme)
 
-        lay = (layout or self._layout).lower()
-        if nrows is None or ncols is None:
-            nrows, ncols = {"one": (1, 1), "side": (1, 2),
-                            "over": (2, 1)}.get(lay, (1, 2))
-        n_panels = nrows * ncols
-
-        panels = [self._pos0, self._pos1][:n_panels]
         rendered = [p.render_result() for p in panels]
 
         path = (str(plotfile or "").strip()
@@ -4477,8 +4571,11 @@ for (const dt of other.tools) {
         log.info("wrote %s", out)
         return out
 
-    def _apply_selection_overrides(self, overrides: dict) -> None:
-        """Update ``_selection`` in place and re-render the panels.
+    def _apply_selection_overrides(self, overrides: dict, panels=None) -> None:
+        """Update ``_selection`` in place and re-render the panels -- all of
+        them, or only *panels*, the others then recorded as stale
+        (``_stale_after_selection``) for ``_export_png`` to bring up to date
+        when it next shows them.
 
         A ``QUERY``-level change (``refresh.py``): new rows are needed,
         so this is the one part of a headless export that touches the
@@ -4497,7 +4594,12 @@ for (const dt of other.tools) {
             )
         for key, value in overrides.items():
             setattr(self._selection, key, value)
-        for panel in self._all_panels:
+        targets = list(self._all_panels) if panels is None else list(panels)
+        stale = self.__dict__.setdefault("_stale_after_selection", set())
+        if panels is not None:
+            stale.update(id(p) for p in self._all_panels if p not in targets)
+        for panel in targets:
+            stale.discard(id(panel))
             try:
                 panel.apply_refresh(_RefreshLevel.QUERY)
             except Exception as exc:

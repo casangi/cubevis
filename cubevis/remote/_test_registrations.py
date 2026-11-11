@@ -36,6 +36,20 @@ class Counter:
     def get(self) -> int:
         return self.value
 
+    def slow_get(self, seconds: float = 1.0) -> int:
+        """``get`` after *seconds*: a read that is in flight long enough
+        for a test to cut the connection under it (Scenario A)."""
+        import time
+        time.sleep(float(seconds))
+        return self.value
+
+    def slow_increment(self, seconds: float = 1.0, by: int = 1) -> int:
+        """``increment`` after *seconds*: a write in flight (Scenario A)."""
+        import time
+        time.sleep(float(seconds))
+        self.value += by
+        return self.value
+
 
 class NumpyEcho:
     """Round-trips a non-trivial (numpy-array-typed) argument through a

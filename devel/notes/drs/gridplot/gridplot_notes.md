@@ -201,3 +201,142 @@ for real data (G0's numbers stand).
 **Next: G2** -- visplot's Grid layout as a `GridSource` over its plot core:
 raster presets first (waterfall, Time x Baseline per antenna, antenna
 matrix); scatter grids after G3's read-once-and-split.
+
+## 4. G2: visplot's Grid layout (base `fe6c0b0d`, 2026-11-11)
+
+The grid view of section 3 inside visplot: Layout **Grid**, a fourth
+button beside One / Side by Side / Over / Under, draws the first panel once
+per baseline, antenna, SPW, field, scan or correlation of the selection.
+Raster panels only (G0: a scatter cell costs ~1.7 s; scatter grids wait for
+G3's read-once-and-split).
+
+**`visplot/vis_grid_source.py`** -- `VisGridSource`, visplot's `GridSource`.
+`configure(template, iterate_by, selection)` copies the template panel
+(Panel A -- the panel shown first) and the plotter's selection, and lists
+the iteration values *within* that selection (plan 1.3): baselines with
+rows; antennas (each one's baselines); the selection's SPWs, fields,
+scans, correlations.  Each cell is its own headless `VisibilityRaster`,
+built as the template is (axes, quantity, correlation, averaging, scaling,
+colormap, theme) and queried when first drawn; up to 128 are kept, so a
+zoom re-shades (~10 ms) and the probe reads the cell under the cursor, with
+the panels' own probe text.  The common extent is the template's (no extra
+query), corrected per axis where a cell's axis differs: a Baseline axis the
+grid splits (the cell with most baselines decides), or an axis of another
+kind -- a one-SPW cell draws Channel where the template over two SPWs draws
+Frequency (found by the tests: every cell was blank).
+
+**In the GUI** (`visibility_plotter.py`):
+
+- *Plot in Grid* updates only the template panel, then configures the
+  source; the browser draws page 1.  The panels' layout (`_layout`) is
+  kept: Grid is a mode (`_grid_on`), so a drill-down has One to go to.
+- *Iterate by* sits in the grid's control row; changing it plots again.
+- *Tap* drills down: the sidebar is set to the cell's selection (as the
+  Prev / Next steppers set it), Layout to One, and Plot runs.  Back to
+  Grid restores the sidebar to the grid's own selection, so the next Plot
+  iterates over that, not the one cell.
+- *Export PNG* in Grid is the grid's Save PNG.
+- *Presets in Grid keep Grid* (as if Pin layout were ticked): the preset
+  sets the panel the grid repeats -- vplot, Waterfall, Antenna x antenna
+  are the plan's grid presets.  A two-scatter preset (Spectrum, Time
+  series) is refused with the raster-only message.
+- *An axis whose cells name their positions differently* (a Baseline axis
+  in a grid by antenna: each antenna's own baselines) is labelled on every
+  cell, in the browser as in `png_export` -- else the first column's
+  labels would stand for every column.
+- *Light / Dark*: the grid's chrome at once, its cells redrawn in the new
+  palette once Python has it (kept cells re-coloured, not re-queried).
+- *Cells fill an area* (1020 x 640 px) at every rows x cols, with the
+  panels' tick labels (UTC times, SI units, names along a Baseline axis:
+  each cell carries its `PanelSpec` axis state for `TICK_FORMATTER_JS`).
+- *Plot sends the grid's rows x cols*, so the plot summary's reproducing
+  call has `layout="grid"`, `iterate_by`, `gridrows`, `gridcols`.
+
+**Three Bokeh / cubevis traps, found in the browser:**
+
+1. *The grid inside visplot's plot area was never laid out*: its cells'
+   frames stayed 0 x 0 (white boxes).  Bisecting visplot's layout: any
+   column around the body row (sidebar + plot area, both stretch) with
+   the grid inside the plot area breaks it; beside the plot area it is
+   laid out normally.  So the grid has its own area in the body row and
+   `window.__cvGridLayout(on)` swaps the two.
+2. *A hidden grid still costs at page load*: the browser builds views for
+   hidden layouts -- 1.4 s more for every visplot page (4.8 -> 6.3 s).
+   The grid area stays empty until Grid is first chosen (the models are in
+   the document through `__cvGridLayout`'s arguments); page load is
+   unchanged (4.5 s here).
+3. *A message sent while the websocket is still opening kills the
+   session*: cubevis queues it and reconnects, which aborts the opening
+   connection; Python takes the aborted handshake as fatal and shuts down
+   (`MSv2Backend is not open`).  Seen when visplot starts in Grid (page 1
+   is requested at load).  GridView now waits for
+   `pipe._mgr.transport.isConnected()` before its first page.  **The
+   transport itself should not do this** -- a cubevis fix (queue without
+   reconnecting while the first connect is under way) is worth making
+   separately; anything else that sends at load will hit it.
+
+Also: cells built with an empty title had no room for one (titles never
+showed, also in G1b's GridApp); they start with a no-break space.
+
+**`plotfile=`** -- `VisibilityPlotter(layout="grid", iterate_by=...,
+gridrows=, gridcols=, exprange=, plotfile=...)` writes pages with
+`png_export(axes="outer")`: `exprange` is `"current"` (page 1, as plotms),
+`"all"` or page numbers (`"1-3,5"`); several pages get `_page01`, ... before
+the extension unless the name has `{page}` (and `{value}`, the page's
+first label).  `plotter(exprange=...)` per call.  Cell size: 300 x 200 px, or
+`column_width` / `row_height` when they are numbers.  The task layers carry
+the four new arguments (`scripts/sync_layers`).
+
+**`png_export(axes="outer")` follows the labels**: margins sized from the
+tick labels' text (long upright antenna names, UTC times), the names
+beyond them; an axis whose cells name their positions differently (a
+Baseline axis in a grid by antenna) gets tick labels on every cell; fewer
+UTC ticks in a narrow cell.  `axes="each"` (every other export) is
+unchanged: the 40 reference PNGs are byte-identical to `fe6c0b0d`'s.
+
+**Fixed on the way:**
+
+- *G1a's seven alias modules were never committed* (`visplot/png_export.py`,
+  `panel_spec.py`, `tick_format.py`, `palettes.py`, `colormap_scaling.py`,
+  `panel_sizes.py`, `raster_grid.py`: not in `b1b8009a`, `bdb2ec76` or
+  `fe6c0b0d`).  Every old import (20 test files, and anyone's scripts)
+  failed.  Recreated as section 1 describes.  `tests/manual/visplot`: 80
+  failed + 105 errors -> 3 failed + 36 errors, 2035 passed; the rest pass
+  with `CUBEVIS_SRC` set (they need it).
+- *The CASA task template was behind the committed layer*: `6294aad0`
+  (casatasks optional) edited `private/casatasks/visplot.py` by hand, so
+  regenerating put the CASA logging import back (`test_casa_optional`
+  failed).  The template now writes what was committed; `--check` is
+  clean at `fe6c0b0d` and here.
+- `test_antenna_iteration` reads `_handle_plot`'s source: it now reads
+  `_handle_plot_panels` too (the panels' Plot moved there).
+
+**Checks**
+
+- `tests/manual/gridplot/test_vis_grid.py` (16, ~30 s, tiny MS): arguments,
+  every iteration axis, common extent, drawing, zoom, probe, theme,
+  scatter refused, `plotfile` pages, GUI models, Plot in Grid, summary.
+- `tests/manual/gridplot/visplot_grid_check.py --ms DATA.ms [--start grid]
+  [--kernel python3]`: 14 browser checks (load, Grid, Plot, axis names,
+  ticks, Iterate by, probe, zoom, drill-down, back to Grid, theme, preset,
+  export, console).  14 of 14: starting in Over, starting in Grid, and
+  through a remote kernel (`python3` on this host).
+- Remote headless: 9 cells through the kernel are pixel-identical to
+  local (3.0 s vs 2.7 s).
+- `grid_browser_check.py` (G1b) 13 of 13, raster and scatter; demo
+  notebook runs; `tests/ci/run.py` 8 of 8.
+
+**Not established here**: TW Hya and the VLBA subset (the exit test's data);
+flagging after a drill-down in the browser (it is the ordinary panel path,
+untouched); a real remote host.
+
+**Open, for Darrell:**
+
+1. *Colour scale across cells.*  Each cell scales its colours to its own
+   data, as the template panel would alone; at a common axis scale a
+   common colour scale may matter more for spotting the odd one out (a
+   bright baseline is normalised away).  Options: per cell (now); one
+   range for the grid -- from the template's own (whole-selection) render,
+   or from the page.  plotms's iteration has no colour axis to follow.
+2. *Status line after Back to Grid* says "One panel" until the next Plot
+   (the layout buttons do not talk to Python).

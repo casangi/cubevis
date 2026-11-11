@@ -276,7 +276,11 @@ class TestAntennaNamesGatesAxesChanged:
     def _handle_plot_source() -> str:
         import inspect
         import cubevis.toolbox.visplot.visibility_plotter as vp_mod
-        return inspect.getsource(vp_mod.VisibilityPlotter._handle_plot)
+        # Since gridplot G2 (2026-11-11) _handle_plot handles the Grid
+        # layout and leaves the panels to _handle_plot_panels.
+        cls = vp_mod.VisibilityPlotter
+        return "".join(inspect.getsource(getattr(cls, n))
+                       for n in ("_handle_plot", "_handle_plot_panels") if hasattr(cls, n))
 
     def test_raster_axes_changed_checks_antenna_names(self):
         src = self._handle_plot_source()

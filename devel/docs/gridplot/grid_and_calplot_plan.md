@@ -402,7 +402,7 @@ weeks of sessions. Each stage has an exit test you run in the browser.
 | **G0** | Benchmark: page of 9/16 headless cells (waterfall per baseline; time series per baseline; one cal-like scatter), read-per-cell vs read-once-and-split. Record in this note. **Done 2026-11-10: section 11** (synthetic data; the cal-like scatter waits for C0; retake on real data) | S | Numbers; decide whether "read once, split" is needed in G2 or later |
 | **G1a** | Move `panel_spec`, `png_export`, `tick_format`, `palettes`, `colormap_scaling`, `panel_sizes` (and shading helpers as needed) to a shared module; re-export from old paths **Done 2026-11-10** (`devel/notes/drs/gridplot/gridplot_notes.md` section 1) | S–M | Test suite unchanged; `plotfile=` output byte-identical |
 | **G1b** | `GridView` (Bokeh) + `GridController` + `GridSource` protocol; a synthetic source for tests; paging; common/per-cell scale; external axes; one probe; crosshair; save-page; tap event. **Built 2026-11-11: section 12** (remote waits for G2) | M–L | Demo notebook with a synthetic 4×4 source, both themes, local and remote |
-| **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
+| **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets. **Built 2026-11-11: section 13** (rasters; presets are the panel presets in Grid; TW Hya / VLBA to test) | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
 | **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only | M | Page time inside the G0 target |
 | **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables | M | Round-trip of values and flags against casatools reads |
 | **C1** | calplot app: selection (antenna, SPW, field, pol, time), grid per antenna, overlay mode, flagged solutions shown, refant in titles, PNG pages; remote kernels via the existing setup | L | Gain, bandpass and fringe tables from a real VLA/VLBA reduction |
@@ -805,6 +805,28 @@ browser check (13 items, raster and scatter) and a demo notebook come with
 it. Details: `devel/notes/drs/gridplot/gridplot_notes.md` section 3.
 
 Not yet exercised: a remote kernel. G2 does that with visplot's own data.
+
+## 13. G2 built (2026-11-11, base `fe6c0b0d`)
+
+visplot has a Grid layout: the panel shown first, once per baseline,
+antenna, SPW, field, scan or correlation of the selection (`iterate_by`),
+in the grid view of section 12 -- Plot in Grid draws page 1, a tap opens
+the cell in One with the sidebar set to it, Grid again restores the grid's
+selection; Export PNG writes the page; Light / Dark follows.  Raster
+panels only (scatter after G3).  `plotfile=` writes pages
+(`gridrows`, `gridcols`, `exprange` = current / all / page numbers), with
+`png_export(axes="outer")`, which now sizes its margins from the tick
+labels.  Local and remote (a kernel on this host) checked in the browser;
+headless remote cells are pixel-identical to local.
+
+Found on the way: Bokeh does not lay out a grid nested in visplot's plot
+area (the grid has its own area), a hidden grid costs 1.4 s at page load
+(attached on first use instead), and a cubevis message sent while the
+websocket opens ends the session (the grid waits; the transport should be
+fixed).  G1a's alias modules, never committed, are restored.  Details:
+`devel/notes/drs/gridplot/gridplot_notes.md` section 4.
+
+Open: one colour scale for the grid, or per cell as now (notes section 4).
 
 ## Sources
 

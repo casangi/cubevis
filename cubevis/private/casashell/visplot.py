@@ -81,6 +81,10 @@ def _visplot_t(
         kind: Optional[str] = None,
         preset: Optional[str] = None,
         pin_layout: bool = False,
+        iterate_by: str = 'baseline',
+        gridrows: int = 3,
+        gridcols: int = 3,
+        exprange: str = 'current',
         time_labels: str = 'utc',
         autocorr: str = 'exclude',
         panels: Optional[list] = None,
@@ -137,6 +141,10 @@ def _visplot_t(
         kind = kind,
         preset = preset,
         pin_layout = pin_layout,
+        iterate_by = iterate_by,
+        gridrows = gridrows,
+        gridcols = gridcols,
+        exprange = exprange,
         time_labels = time_labels,
         autocorr = autocorr,
         panels = panels,
@@ -313,8 +321,11 @@ class _visplot:
         ``scatter_avg_time``.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
-        panels, side by side), or ``"over"`` (both panels, one above
-        the other). Default ``"side"``. ``"raster"``/``"scatter"`` are
+        panels, side by side), ``"over"`` (both panels, one above
+        the other), or ``"grid"`` (the first panel repeated once per
+        baseline, antenna, SPW, field, scan or correlation -- see
+        ``iterate_by``; raster panels only, for now). Default ``"side"``.
+        ``"raster"``/``"scatter"`` are
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
         an explicit, conflicting ``kind=`` raises ``ValueError``.
@@ -355,6 +366,22 @@ class _visplot:
         Start with "Pin layout" ticked: presets (this ``preset`` and the
         toolbar buttons) keep the current layout -- ``layout`` -- instead
         of switching to their own.  Default ``False``.
+    iterate_by : str
+        What the Grid layout makes one plot of each: ``"baseline"``
+        (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
+        ``"field"``, ``"scan"`` or ``"correlation"`` -- within the
+        selection, as plotms's ``iteraxis``.  Every plot is drawn as the
+        first panel is (its axes, quantity, averaging, colour scale).
+    gridrows : int
+        Rows of plots on a page of the Grid layout (1-8, default 3).
+    gridcols : int
+        Columns of plots on a page of the Grid layout (1-8, default 3).
+    exprange : str
+        Which pages of the Grid layout ``plotfile=`` writes: ``"current"``
+        (default: the first page, as plotms), ``"all"``, or page numbers
+        such as ``"2"`` or ``"1-3,5"``.  Several pages are written to
+        ``plotfile`` with ``_page01``, ``_page02``, ... before the
+        extension, unless the name contains ``{page}``.
     panels : list[dict] | None
         Each panel's configuration, in screen order: ``[{...}, {...}]``,
         one dict per panel, so that a two-panel view can be written as
@@ -529,10 +556,14 @@ class _visplot:
         'stat_chan_window': 'Channel window for the same statistic: ``"off"`` (default) or a number of channels.',
         'scatter_avg_time': 'Scatter points averaged over time, per baseline and correlation: ``"off"`` (default, every sample a point), ``"scan"``, or a number of seconds (windows from the start of each scan, never across a scan boundary).',
         'scatter_avg_chan': 'Scatter points averaged over channels: ``"off"`` (default), a number of channels, or ``"all"`` (one point per spectral window).',
-        'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), or ``"over"`` (both panels, one above the other).',
+        'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), ``"over"`` (both panels, one above the other), or ``"grid"`` (the first panel repeated once per baseline, antenna, SPW, field, scan or correlation -- see ``iterate_by``; raster panels only, for now).',
         'kind': 'Which panel kind leads: ``"raster"`` (default when omitted) or ``"scatter"``.',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
         'pin_layout': 'Start with "Pin layout" ticked: presets (this ``preset`` and the toolbar buttons) keep the current layout -- ``layout`` -- instead of switching to their own.',
+        'iterate_by': 'What the Grid layout makes one plot of each: ``"baseline"`` (default), ``"antenna"`` (each antenna\'s baselines), ``"spw"``, ``"field"``, ``"scan"`` or ``"correlation"`` -- within the selection, as plotms\'s ``iteraxis``.',
+        'gridrows': 'Rows of plots on a page of the Grid layout (1-8, default 3).',
+        'gridcols': 'Columns of plots on a page of the Grid layout (1-8, default 3).',
+        'exprange': 'Which pages of the Grid layout ``plotfile=`` writes: ``"current"`` (default: the first page, as plotms), ``"all"``, or page numbers such as ``"2"`` or ``"1-3,5"``.',
         'time_labels': 'How time axes and the cursor readout give time: ``"utc"`` (default; time of day, the date in the axis label, AIPS-style ``d/hh:mm:ss`` when the data cross a UTC midnight) or ``"elapsed"`` (minutes and seconds from the first sample).',
         'autocorr': 'Autocorrelations (baselines from an antenna to itself): ``"exclude"`` (default; cross-correlations only), ``"include"`` or ``"only"``.',
         'panels': "Each panel's configuration, in screen order: ``[{...}, {...}]``, one dict per panel, so that a two-panel view can be written as arguments (and the plot summary can print the call that reproduces what is on screen).",
@@ -590,6 +621,10 @@ class _visplot:
         'kind': None,
         'preset': None,
         'pin_layout': False,
+        'iterate_by': 'baseline',
+        'gridrows': 3,
+        'gridcols': 3,
+        'exprange': 'current',
         'time_labels': 'utc',
         'autocorr': 'exclude',
         'panels': None,
@@ -682,6 +717,10 @@ class _visplot:
             'kind': 'Optional[str]',
             'preset': 'Optional[str]',
             'pin_layout': 'bool',
+            'iterate_by': 'str',
+            'gridrows': 'int',
+            'gridcols': 'int',
+            'exprange': 'str',
             'time_labels': 'str',
             'autocorr': 'str',
             'panels': 'Optional[list]',
@@ -1190,6 +1229,66 @@ class _visplot:
             desc, fmt,
         )
 
+    def __iterate_by_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('iterate_by', self._arg_default['iterate_by'])
+        default = self._arg_default['iterate_by']
+        desc    = self._arg_description.get('iterate_by', '')
+        if self.__validate_('iterate_by', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('iterate_by', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __gridrows_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('gridrows', self._arg_default['gridrows'])
+        default = self._arg_default['gridrows']
+        desc    = self._arg_description.get('gridrows', '')
+        if self.__validate_('gridrows', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('gridrows', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __gridcols_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('gridcols', self._arg_default['gridcols'])
+        default = self._arg_default['gridcols']
+        desc    = self._arg_description.get('gridcols', '')
+        if self.__validate_('gridcols', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('gridcols', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
+    def __exprange_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('exprange', self._arg_default['exprange'])
+        default = self._arg_default['exprange']
+        desc    = self._arg_description.get('exprange', '')
+        if self.__validate_('exprange', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('exprange', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     def __time_labels_inp(self):
         glb     = self.__globals_()
         value   = glb.get('time_labels', self._arg_default['time_labels'])
@@ -1626,6 +1725,10 @@ class _visplot:
         if 'kind' in glb: del glb['kind']
         if 'preset' in glb: del glb['preset']
         if 'pin_layout' in glb: del glb['pin_layout']
+        if 'iterate_by' in glb: del glb['iterate_by']
+        if 'gridrows' in glb: del glb['gridrows']
+        if 'gridcols' in glb: del glb['gridcols']
+        if 'exprange' in glb: del glb['exprange']
         if 'time_labels' in glb: del glb['time_labels']
         if 'autocorr' in glb: del glb['autocorr']
         if 'panels' in glb: del glb['panels']
@@ -1683,6 +1786,10 @@ class _visplot:
         self.__kind_inp()
         self.__preset_inp()
         self.__pin_layout_inp()
+        self.__iterate_by_inp()
+        self.__gridrows_inp()
+        self.__gridcols_inp()
+        self.__exprange_inp()
         self.__time_labels_inp()
         self.__autocorr_inp()
         self.__panels_inp()
@@ -1764,6 +1871,10 @@ class _visplot:
         _invocation_parameters['kind'] = glb.get('kind', self._arg_default['kind'])
         _invocation_parameters['preset'] = glb.get('preset', self._arg_default['preset'])
         _invocation_parameters['pin_layout'] = glb.get('pin_layout', self._arg_default['pin_layout'])
+        _invocation_parameters['iterate_by'] = glb.get('iterate_by', self._arg_default['iterate_by'])
+        _invocation_parameters['gridrows'] = glb.get('gridrows', self._arg_default['gridrows'])
+        _invocation_parameters['gridcols'] = glb.get('gridcols', self._arg_default['gridcols'])
+        _invocation_parameters['exprange'] = glb.get('exprange', self._arg_default['exprange'])
         _invocation_parameters['time_labels'] = glb.get('time_labels', self._arg_default['time_labels'])
         _invocation_parameters['autocorr'] = glb.get('autocorr', self._arg_default['autocorr'])
         _invocation_parameters['panels'] = glb.get('panels', self._arg_default['panels'])
@@ -1837,6 +1948,10 @@ class _visplot:
             kind = _UNSET,
             preset = _UNSET,
             pin_layout = _UNSET,
+            iterate_by = _UNSET,
+            gridrows = _UNSET,
+            gridcols = _UNSET,
+            exprange = _UNSET,
             time_labels = _UNSET,
             autocorr = _UNSET,
             panels = _UNSET,
@@ -1903,6 +2018,10 @@ class _visplot:
             kind,
             preset,
             pin_layout,
+            iterate_by,
+            gridrows,
+            gridcols,
+            exprange,
             time_labels,
             autocorr,
             panels,
@@ -2014,6 +2133,18 @@ class _visplot:
             _invocation_parameters['pin_layout'] = \
                 pin_layout if pin_layout is not _UNSET \
                 else glb.get('pin_layout', self._arg_default['pin_layout'])
+            _invocation_parameters['iterate_by'] = \
+                iterate_by if iterate_by is not _UNSET \
+                else glb.get('iterate_by', self._arg_default['iterate_by'])
+            _invocation_parameters['gridrows'] = \
+                gridrows if gridrows is not _UNSET \
+                else glb.get('gridrows', self._arg_default['gridrows'])
+            _invocation_parameters['gridcols'] = \
+                gridcols if gridcols is not _UNSET \
+                else glb.get('gridcols', self._arg_default['gridcols'])
+            _invocation_parameters['exprange'] = \
+                exprange if exprange is not _UNSET \
+                else glb.get('exprange', self._arg_default['exprange'])
             _invocation_parameters['time_labels'] = \
                 time_labels if time_labels is not _UNSET \
                 else glb.get('time_labels', self._arg_default['time_labels'])
@@ -2149,6 +2280,14 @@ class _visplot:
                 glb.get('preset', self._arg_default['preset'])
             _invocation_parameters['pin_layout'] = \
                 glb.get('pin_layout', self._arg_default['pin_layout'])
+            _invocation_parameters['iterate_by'] = \
+                glb.get('iterate_by', self._arg_default['iterate_by'])
+            _invocation_parameters['gridrows'] = \
+                glb.get('gridrows', self._arg_default['gridrows'])
+            _invocation_parameters['gridcols'] = \
+                glb.get('gridcols', self._arg_default['gridcols'])
+            _invocation_parameters['exprange'] = \
+                glb.get('exprange', self._arg_default['exprange'])
             _invocation_parameters['time_labels'] = \
                 glb.get('time_labels', self._arg_default['time_labels'])
             _invocation_parameters['autocorr'] = \
@@ -2249,6 +2388,10 @@ class _visplot:
                     'kind=' + repr(_invocation_parameters['kind']),
                     'preset=' + repr(_invocation_parameters['preset']),
                     'pin_layout=' + repr(_invocation_parameters['pin_layout']),
+                    'iterate_by=' + repr(_invocation_parameters['iterate_by']),
+                    'gridrows=' + repr(_invocation_parameters['gridrows']),
+                    'gridcols=' + repr(_invocation_parameters['gridcols']),
+                    'exprange=' + repr(_invocation_parameters['exprange']),
                     'time_labels=' + repr(_invocation_parameters['time_labels']),
                     'autocorr=' + repr(_invocation_parameters['autocorr']),
                     'panels=' + repr(_invocation_parameters['panels']),
@@ -2305,6 +2448,10 @@ class _visplot:
                 kind = _invocation_parameters['kind'],
                 preset = _invocation_parameters['preset'],
                 pin_layout = _invocation_parameters['pin_layout'],
+                iterate_by = _invocation_parameters['iterate_by'],
+                gridrows = _invocation_parameters['gridrows'],
+                gridcols = _invocation_parameters['gridcols'],
+                exprange = _invocation_parameters['exprange'],
                 time_labels = _invocation_parameters['time_labels'],
                 autocorr = _invocation_parameters['autocorr'],
                 panels = _invocation_parameters['panels'],

@@ -189,7 +189,7 @@ def main() -> int:
             set_status_marker(); click_button("⏭"); wait_drawn()
             t, d = titles(), drawn_cells()
             n_last = len(labels) - 32
-            ok = t[:n_last] == labels[32:] and all(x == "" for x in t[n_last:]) and \
+            ok = t[:n_last] == labels[32:] and all(x.strip() == "" for x in t[n_last:]) and \
                 all(x <= 1 for x in d[n_last:])
             pg.screenshot(path=os.path.join(a.out, "last_page.png"))
             check("last page", ok, f"{n_last} of 16 cells, the rest blank")

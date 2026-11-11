@@ -154,7 +154,7 @@ def _wrap_footer(text: str, width_pt: float, size_pt: float = 7.5) -> list:
 _LEGEND_PT     = 16.0
 # axes="outer" (gridplot, 2026-11-11): the X tick labels and the X name go
 # above the top row, and only the gap between cells' frames is left
-_OUTER_TOP_PT   = 30.0
+_OUTER_NAME_PT  = 16.0     # an axis name drawn once (axes="outer")
 _OUTER_SPACE_PT = 8.0
 _CBAR_W_PT     = 9.0        # bar thickness
 _CBAR_PAD_PT   = 8.0        # gap between plot and bar
@@ -334,10 +334,18 @@ def _style_axes(ax, theme: Theme, spec: Optional[PanelSpec],
         from matplotlib.ticker import MaxNLocator, MultipleLocator
         from .tick_format import utc_tick_step
         if tl == "utc":
+            # fewer ticks in a narrow cell (a grid page), so time-of-day
+            # labels do not run into each other; a panel-sized cell keeps
+            # the browser's six
+            fig = ax.figure
+            w_pt = ax.get_position().width * fig.get_figwidth() * 72.0
+            h_pt = ax.get_position().height * fig.get_figheight() * 72.0
+            nx = 6 if w_pt >= 330 else max(2, int(w_pt // 55))
+            ny = 6 if h_pt >= 90 else max(2, int(h_pt // 15))
             if src.x_is_time:
-                ax.xaxis.set_major_locator(MultipleLocator(utc_tick_step(x0, x1)))
+                ax.xaxis.set_major_locator(MultipleLocator(utc_tick_step(x0, x1, nx)))
             if src.y_is_time:
-                ax.yaxis.set_major_locator(MultipleLocator(utc_tick_step(y0, y1)))
+                ax.yaxis.set_major_locator(MultipleLocator(utc_tick_step(y0, y1, ny)))
         # An axis drawn in whole positions has labels only at integers.
         # Up to 30 positions (an antenna matrix, a small array's
         # baselines): every label, as the browser shows them, and x labels
@@ -781,26 +789,59 @@ def _draw_colorbar(fig, rect, band: ColorBand, theme: Theme,
         cax.yaxis.set_label_position("left")
 
 
-def _outer_axes(ax, r: int, c: int) -> None:
+def _tick_label_pt(specs, axis: str) -> float:
+    """About how far an axis's tick labels reach from it, pt: their
+    height for X (the length of the longest when written upright), their
+    width for Y.  An estimate from the labels' text (8 pt font), made
+    before anything is drawn, because the layout is fixed in points."""
+    cw = 8 * 0.6                      # an average character, 8 pt
+    longest, upright = 6, False
+    for sp in specs:
+        names = sp.axis_ticks(axis)
+        if names:
+            n = max(len(str(t)) for t in names)
+            if axis == "x" and len(names) <= 30 and n > 3:
+                upright = True
+        elif sp.x_is_time if axis == "x" else sp.y_is_time:
+            n = 8                      # 01:15:00
+        else:
+            n = 6
+        longest = max(longest, n)
+    if axis == "x":
+        return (longest * cw if upright else 10.0) + 6.0
+    return longest * cw + 8.0
+
+
+def _same_ticks(specs, axis: str) -> bool:
+    """Every cell names the positions along *axis* alike (or none does):
+    one set of tick labels then serves the whole row / column.  Not so
+    for a Baseline axis in a grid by antenna -- each cell's baselines are
+    its own."""
+    return len({tuple(sp.axis_ticks(axis) or ()) for sp in specs}) <= 1
+
+
+def _outer_axes(ax, r: int, c: int, x_each: bool = False, y_each: bool = False,
+                x_pad: float = 20.0) -> None:
     """axes="outer": X tick labels across the top of the top row only, Y
     tick labels down the first column only, no per-cell axis names (the
     figure draws each once).  A grid at a common scale, as the browser's
-    grid view draws it (plan 1.3, 2026-11-11)."""
+    grid view draws it (plan 1.3, 2026-11-11).  *x_each* / *y_each*: that
+    axis's tick labels on every cell, because the cells' differ."""
     ax.set_xlabel("")
     ax.set_ylabel("")
-    if r == 0:
+    if r == 0 or x_each:
         ax.xaxis.tick_top()
         ax.tick_params(axis="x", which="both", bottom=False, labelbottom=False,
                        top=True, labeltop=True)
     else:
         ax.tick_params(axis="x", which="both", labelbottom=False, labeltop=False)
-    if c != 0:
+    if c != 0 and not y_each:
         ax.tick_params(axis="y", which="both", labelleft=False)
-    # the title clears the top row's tick labels
-    if r == 0 and ax.get_title():
+    # the title clears the tick labels above the cell
+    if (r == 0 or x_each) and ax.get_title():
         ax.title.set_y(1.0)
         ax.set_title(ax.get_title(), color=ax.title.get_color(),
-                     fontsize=ax.title.get_fontsize(), pad=20)
+                     fontsize=ax.title.get_fontsize(), pad=x_pad)
 
 
 def _draw_cell(ax, panel: Optional[RenderedPanel], theme: Theme,
@@ -1032,7 +1073,19 @@ def export_png(
     outer = axes == "outer" and nrows * ncols > 1
     m_l   = _MARGIN_L_PT * px
     m_r   = _MARGIN_R_PT * px
-    m_t   = (_MARGIN_T_PT + (_OUTER_TOP_PT if outer else 0.0)) * px
+    m_t   = _MARGIN_T_PT * px
+    if outer:
+        # room for the tick labels the page shows, measured from their
+        # text: the axis names go beyond them, once each
+        o_specs = [p.spec for p in cells
+                   if p is not None and p.spec is not None and p.image is not None] or \
+                  [p.spec for p in cells if p is not None and p.spec is not None]
+        x_each = not _same_ticks(o_specs, "x")
+        y_each = not _same_ticks(o_specs, "y")
+        x_lbl = _tick_label_pt(o_specs, "x") if o_specs else 16.0
+        y_lbl = _tick_label_pt(o_specs, "y") if o_specs else 40.0
+        m_t = (_MARGIN_T_PT + _OUTER_NAME_PT + x_lbl) * px
+        m_l = max(_MARGIN_L_PT, _OUTER_NAME_PT + y_lbl + 4.0) * px
     # The footer wraps (HRS B2, 2026-10-11): it was one line, cut off at
     # the right in a narrow (Over / Under) export.  Broken between its
     # " | " fields, to the width of the grid of axes.
@@ -1046,8 +1099,9 @@ def export_png(
     # outer axes: no tick labels or names between cells, so the gaps
     # shrink to a frame's breathing space (and the bottom margin to what
     # the footer needs)
-    wsp   = (_OUTER_SPACE_PT if outer else _WSPACE_PT) * px
-    hsp   = ((_OUTER_SPACE_PT if outer else _HSPACE_PT) + _CELL_TITLE_PT) * px
+    wsp   = ((_OUTER_SPACE_PT + (y_lbl if y_each else 0.0)) if outer else _WSPACE_PT) * px
+    hsp   = ((_OUTER_SPACE_PT + (x_lbl if x_each else 0.0)) if outer else _HSPACE_PT) * px \
+        + _CELL_TITLE_PT * px
     if outer:
         m_b -= (_MARGIN_B_PT - _OUTER_SPACE_PT) * px
     # Legend space is *reserved*, not overlaid: a band above each axes for
@@ -1145,7 +1199,7 @@ def export_png(
         ax = fig.add_axes([x0 / fig_w, y0 / fig_h, cw / fig_w, ch / fig_h])
         _draw_cell(ax, panel, th, extents, legend_mode)
         if outer:
-            _outer_axes(ax, r, c)
+            _outer_axes(ax, r, c, x_each, y_each, x_pad=x_lbl + 2.0)
             if r == 0:
                 top_axes.append(ax)
             if c == 0:
@@ -1206,7 +1260,7 @@ def export_png(
                      color=th.text)
             y_top = left_axes[0].get_position().y1
             y_bot = left_axes[-1].get_position().y0
-            fig.text((_MARGIN_L_PT * 0.18 * px) / fig_w, (y_top + y_bot) / 2,
+            fig.text((_OUTER_NAME_PT * 0.55 * px) / fig_w, (y_top + y_bot) / 2,
                      spec.axis_label("y"), ha="center", va="center", rotation=90,
                      fontsize=9.5, color=th.text)
     fig.savefig(path, dpi=dpi, facecolor=th.figure)

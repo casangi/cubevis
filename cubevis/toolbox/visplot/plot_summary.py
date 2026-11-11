@@ -267,7 +267,16 @@ def reproducing_call(plotter) -> str:
     if getattr(plotter, "_autocorr", "exclude") != "exclude":
         args.append(("autocorr", plotter._autocorr))
     args.append(("datacolumn", getattr(plotter, "_datacolumn", "DATA").lower()))
-    args.append(("layout", getattr(plotter, "_layout", "side")))
+    if getattr(plotter, "_grid_on", False):
+        # the Grid layout (gridplot G2): what it iterates over, its page
+        args.append(("layout", "grid"))
+        if plotter._iterate_by != "baseline":
+            args.append(("iterate_by", plotter._iterate_by))
+        if tuple(plotter._grid_shape) != (3, 3):
+            args.append(("gridrows", plotter._grid_shape[0]))
+            args.append(("gridcols", plotter._grid_shape[1]))
+    else:
+        args.append(("layout", getattr(plotter, "_layout", "side")))
     # Sizes only when not the layout's default (2026-10-13).
     from ..gridplot.panel_sizes import size_value
     for name, attr in (("row_height", "_row_height"), ("column_width", "_column_width")):

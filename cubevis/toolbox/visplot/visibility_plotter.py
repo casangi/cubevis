@@ -866,7 +866,8 @@ _SIZES_JS = r"""
   }
   function setH(fig, h) { if (h && Math.abs((fig.height || 0) - h) > 3) fig.height = h; }
   function apply() {
-    const lay = layout_rbg.active;            // 0 one, 1 side, 2 over
+    const lay = layout_rbg.active;            // 0 one, 1 side, 2 over, 3 grid
+    if (lay === 3) return;                    // the grid sizes its own cells
     const sp = spec();
     const rh = (sp.row_height == null) ? ROW_DEFAULT[lay] : sp.row_height;
     const cw = sp.column_width;
@@ -894,7 +895,7 @@ _SIZES_JS = r"""
   }
   window.__cvApplySizes = apply;
   window.__cvSizeSpec = spec;
-  window.__cvLayoutName = function () { return ['one', 'side', 'over'][layout_rbg.active]; };
+  window.__cvLayoutName = function () { return ['one', 'side', 'over', 'grid'][layout_rbg.active]; };
   window.addEventListener('resize', function () {
     clearTimeout(window.__cvFitTimer);
     window.__cvFitTimer = setTimeout(refit, 200);
@@ -2458,6 +2459,107 @@ def kernel_code_check(remote) -> tuple:
         log.debug("kernel fingerprint check failed", exc_info=True)
     return versions, warning
 
+# Grid layout (gridplot G2) -------------------------------------------------
+#
+# window.__cvGridLayout(on): show the grid instead of the plot area (or the
+# reverse), called by the Layout buttons and the presets.  Showing it again
+# after a drill-down puts the sidebar back to the selection the grid was
+# drawn with, so the next Plot in Grid iterates over that, not the one cell.
+_GRID_LAYOUT_JS = """
+window.__cvGridLayout = function (on) {
+    if (on && grid_area.children.length === 0) grid_area.children = [grid_container];
+    grid_area.visible = !!on;
+    plot_area.visible = !on;
+    if (!on) return;
+    const sv = window.__cvGridSavedSel;
+    if (!sv) return;
+    window.__cvGridSavedSel = null;
+    try {
+        ant_src.selected.indices = sv.ant; bl_src.selected.indices = sv.bl;
+        spw_src.selected.indices = sv.spw;
+        if (field_sel) field_sel.value = sv.field;
+        if (scan_inp) scan_inp.value = sv.scan;
+        corr_cbg.active = sv.corr;
+        if (ant_mode && sv.mode != null) ant_mode.active = sv.mode;
+    } catch (e) { console.warn('grid: restoring the selection failed:', e); }
+};
+"""
+
+# A grid cell tapped (GridView's drill_js; after doPlot's code): the sidebar
+# set to the cell's selection -- as the Prev / Next steppers set it -- and
+# the cell plotted in the full panel, One layout.  cb_obj is the drill
+# response, {text, select}.
+_GRID_DRILL_JS = """
+const sel = cb_obj && cb_obj.select;
+if (sel) {
+    if (!window.__cvGridSavedSel) window.__cvGridSavedSel = {
+        ant: Array.from(ant_src.selected.indices || []),
+        bl: Array.from(bl_src.selected.indices || []),
+        spw: Array.from(spw_src.selected.indices || []),
+        field: field_sel ? field_sel.value : null,
+        scan: scan_inp ? scan_inp.value : '',
+        corr: Array.from(corr_cbg.active || []),
+        mode: ant_mode ? ant_mode.active : null};
+    if (sel.baselines) {
+        const a1 = bl_src.data['ant1'] || [], a2 = bl_src.data['ant2'] || [], rows = [];
+        for (const p of sel.baselines)
+            for (let i = 0; i < a1.length; i++)
+                if ((a1[i] === p[0] && a2[i] === p[1]) || (a1[i] === p[1] && a2[i] === p[0])) {
+                    rows.push(i); break;
+                }
+        bl_src.selected.indices = rows;
+        ant_src.selected.indices = [];
+    }
+    if (sel.antenna) {
+        const i = (ant_src.data['name'] || []).indexOf(sel.antenna);
+        ant_src.selected.indices = i >= 0 ? [i] : [];
+        bl_src.selected.indices = [];
+        if (ant_mode) ant_mode.active = 0;          // Either end
+    }
+    if (sel.spw != null) {
+        const ids = (spw_src.data['ident'] || []).map(String);
+        const i = ids.indexOf(String(sel.spw));
+        if (i >= 0) spw_src.selected.indices = [i];
+    }
+    if (sel.field && field_sel) field_sel.value = sel.field;
+    if (sel.scan && scan_inp) scan_inp.value = String(sel.scan);
+    if (sel.correlation) {
+        const i = corr_cbg.labels.indexOf(sel.correlation);
+        if (i >= 0) corr_cbg.active = [i];
+    }
+    layout_rbg.active = 0;                        // One: the cell, full size
+    doPlot(false);
+}
+"""
+
+
+def parse_exprange(value) -> object:
+    """``exprange=`` (gridplot G2): ``"current"`` (the first page),
+    ``"all"``, or 1-based page numbers (``"2"``, ``"1-3,5"``) as a sorted
+    list.  Raises ``ValueError`` on anything else."""
+    v = str(value if value is not None else "current").strip().lower()
+    if v in ("", "current", "first"):
+        return "current"
+    if v == "all":
+        return "all"
+    pages = set()
+    for part in v.replace(" ", "").split(","):
+        if not part:
+            continue
+        lo, _, hi = part.partition("-")
+        try:
+            a, b = int(lo), int(hi) if hi else int(lo)
+        except ValueError:
+            raise ValueError(f"exprange must be 'current', 'all' or page numbers "
+                             f"such as '1-3,5'; got {value!r}") from None
+        if a < 1 or b < a:
+            raise ValueError(f"exprange: bad page range {part!r} in {value!r}")
+        pages.update(range(a, b + 1))
+    if not pages:
+        raise ValueError(f"exprange: no pages in {value!r}")
+    return sorted(pages)
+
+
 class VisibilityPlotter:
     """Combined raster + scatter visibility inspection and flagging tool.
 
@@ -2598,8 +2700,11 @@ class VisibilityPlotter:
         ``scatter_avg_time``.
     layout : str
         Panel layout: ``"one"`` (single panel), ``"side"`` (both
-        panels, side by side), or ``"over"`` (both panels, one above
-        the other). Default ``"side"``. ``"raster"``/``"scatter"`` are
+        panels, side by side), ``"over"`` (both panels, one above
+        the other), or ``"grid"`` (the first panel repeated once per
+        baseline, antenna, SPW, field, scan or correlation -- see
+        ``iterate_by``; raster panels only, for now). Default ``"side"``.
+        ``"raster"``/``"scatter"`` are
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
         an explicit, conflicting ``kind=`` raises ``ValueError``.
@@ -2640,6 +2745,22 @@ class VisibilityPlotter:
         Start with "Pin layout" ticked: presets (this ``preset`` and the
         toolbar buttons) keep the current layout -- ``layout`` -- instead
         of switching to their own.  Default ``False``.
+    iterate_by : str
+        What the Grid layout makes one plot of each: ``"baseline"``
+        (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
+        ``"field"``, ``"scan"`` or ``"correlation"`` -- within the
+        selection, as plotms's ``iteraxis``.  Every plot is drawn as the
+        first panel is (its axes, quantity, averaging, colour scale).
+    gridrows : int
+        Rows of plots on a page of the Grid layout (1-8, default 3).
+    gridcols : int
+        Columns of plots on a page of the Grid layout (1-8, default 3).
+    exprange : str
+        Which pages of the Grid layout ``plotfile=`` writes: ``"current"``
+        (default: the first page, as plotms), ``"all"``, or page numbers
+        such as ``"2"`` or ``"1-3,5"``.  Several pages are written to
+        ``plotfile`` with ``_page01``, ``_page02``, ... before the
+        extension, unless the name contains ``{page}``.
     panels : list[dict] | None
         Each panel's configuration, in screen order: ``[{...}, {...}]``,
         one dict per panel, so that a two-panel view can be written as
@@ -2822,6 +2943,10 @@ class VisibilityPlotter:
         kind:             Optional[str] = None,
         preset:           Optional[str] = None,
         pin_layout:       bool          = False,
+        iterate_by:       str           = "baseline",
+        gridrows:         int           = 3,
+        gridcols:         int           = 3,
+        exprange:         str           = "current",
         time_labels:      str           = "utc",
         autocorr:         str           = "exclude",
         panels:           Optional[list] = None,
@@ -2867,6 +2992,20 @@ class VisibilityPlotter:
         # the GUI -- what the visplot task's plotfile= means.
         self._plotfile = plotfile or None
         self._headless = bool(headless) or self._plotfile is not None
+        # The Grid layout (gridplot G2): what it iterates over, its page
+        # shape, and which pages plotfile= writes.  Validated now.
+        from .vis_grid_source import normalize_iterate_by
+        from ..gridplot.grid_view import MAX_POOL
+        self._iterate_by = normalize_iterate_by(iterate_by)
+        for _n, _v, _cap in (("gridrows", gridrows, MAX_POOL[0]),
+                             ("gridcols", gridcols, MAX_POOL[1])):
+            if not isinstance(_v, int) or isinstance(_v, bool) or not 1 <= _v <= _cap:
+                raise ValueError(f"{_n} must be an integer 1..{_cap}; got {_v!r}")
+        self._grid_shape = (int(gridrows), int(gridcols))
+        self._exprange = parse_exprange(exprange)
+        self._grid_on = False          # set from layout= in _resolve_config
+        self._grid_source = None
+        self._grid_view = None
         # Presets keep the layout instead of setting their own (2026-10-10;
         # the "Pin layout" checkbox starts from this).
         self._pin_layout = bool(pin_layout)
@@ -3165,6 +3304,12 @@ class VisibilityPlotter:
         # _build_panels' slot-kind assignment below) ever needs to know
         # the shortcut exists. See _normalize_layout_kind.
         self._layout, self._kind = _normalize_layout_kind(layout, kind)
+        # The Grid layout (gridplot G2, 2026-11-11) is a mode over the
+        # panel layouts: _layout keeps the panel arrangement a drill-down
+        # returns to (One), _grid_on says the grid is what is shown.
+        self._grid_on = self._layout == "grid"
+        if self._grid_on:
+            self._layout = "one"
         self._preset        = (preset.lower().replace("_", "-")
                                if preset else None)
         self._time_range    = time_range
@@ -4070,6 +4215,12 @@ class VisibilityPlotter:
         log.debug("set_theme(%r): %s re-shade of %d panels (defaults %s)",
                   theme, RefreshLevel.SHADE.name, len(self._all_panels),
                   "re-resolved" if changed else "kept (user-set)")
+        # The Grid layout's cells copy the template's palette: re-colour the
+        # ones kept (no re-query) -- gridplot G2
+        if getattr(self, "_grid_source", None) is not None:
+            self._grid_source.set_theme(theme, self._raster_ramp)
+        if getattr(self, "_grid_view", None) is not None:
+            self._grid_view.set_theme(theme)
 
     def _connection_text(self) -> str:
         '''What the busy chip says about a remote session's connection:
@@ -4433,7 +4584,7 @@ for (const dt of other.tools) {
 
     def __call__(self, exec_context=None, task_id=None, *,
                  plotfile=None, nrows=None, ncols=None,
-                 theme=None, dpi=100, layout=None, **selection):
+                 theme=None, dpi=100, layout=None, exprange=None, **selection):
         """Do the thing — display in a GUI, or write a PNG.
 
         The two modes are disjoint, so one verb serves both: a plotter
@@ -4477,7 +4628,12 @@ for (const dt of other.tools) {
             Scales the chrome; the data area stays at the panel's canvas
             size.  See ``png_export``.
         layout:
-            Override the constructor's layout for this call only.
+            Override the constructor's layout for this call only
+            (``"grid"`` writes Grid layout pages).
+        exprange:
+            Grid layout: which pages to write, for this call only (see the
+            constructor's ``exprange``).  The return is then a list of
+            paths when several pages are written.
         **selection:
             Any ``SelectionSpec`` field (``spw``, ``field_names``,
             ``scan``, ``time_range``, ``freq_range``, ``correlation``,
@@ -4499,10 +4655,11 @@ for (const dt of other.tools) {
         return self._export_png(
             plotfile=plotfile, nrows=nrows, ncols=ncols,
             theme=theme, dpi=dpi, layout=layout, selection=selection,
+            exprange=exprange,
         )
 
     def _export_png(self, *, plotfile=None, nrows=None, ncols=None,
-                    theme=None, dpi=100, layout=None, selection=None):
+                    theme=None, dpi=100, layout=None, selection=None, exprange=None):
         """Render the current configuration to a PNG; return its path.
 
         Re-queries only when *selection* actually changes something --
@@ -4512,7 +4669,11 @@ for (const dt of other.tools) {
         """
         from ..gridplot.png_export import export_png
 
-        lay = (layout or self._layout).lower()
+        lay = (layout or ("grid" if self._grid_on else self._layout)).lower()
+        if lay == "grid":
+            return self._export_grid_png(plotfile=plotfile, nrows=nrows, ncols=ncols,
+                                         theme=theme, dpi=dpi, selection=selection,
+                                         exprange=exprange)
         if nrows is None or ncols is None:
             nrows, ncols = {"one": (1, 1), "side": (1, 2),
                             "over": (2, 1)}.get(lay, (1, 2))
@@ -4570,6 +4731,84 @@ for (const dt of other.tools) {
         )
         log.info("wrote %s", out)
         return out
+
+    #: a grid cell's plot area for plotfile=, px, when row_height /
+    #: column_width do not give one
+    GRID_CELL = (300, 200)
+
+    def _grid_cell_size(self) -> tuple:
+        w, h = self.GRID_CELL
+        if isinstance(self._column_width, int) and not isinstance(self._column_width, bool):
+            w = self._column_width
+        if isinstance(self._row_height, int) and not isinstance(self._row_height, bool):
+            h = self._row_height
+        return int(w), int(h)
+
+    def _grid(self):
+        """The grid's source, configured from the first panel and the
+        selection as they are now."""
+        from .vis_grid_source import VisGridSource
+        if self._grid_source is None:
+            self._grid_source = VisGridSource(self, self._iterate_by)
+        return self._grid_source.configure(template=self._pos0, iterate_by=self._iterate_by)
+
+    def _export_grid_png(self, *, plotfile=None, nrows=None, ncols=None, theme=None,
+                         dpi=100, selection=None, exprange=None):
+        """The Grid layout's pages as PNG files (gridplot G2): the pages
+        ``exprange`` names, each a ``png_export`` page of the first panel
+        once per baseline / antenna / ... (``iterate_by``).  Returns the
+        path, or the list of paths when several pages are written."""
+        import math
+        import re
+        from ..gridplot.png_export import export_png
+        if selection:
+            # the template's own extent is the cells' common one: only it
+            # is drawn again
+            self._apply_selection_overrides(selection, panels=[self._pos0])
+        if theme is not None and theme != self._theme:
+            self.set_theme(theme)
+        src = self._grid()
+        rows = int(nrows or self._grid_shape[0])
+        cols = int(ncols or self._grid_shape[1])
+        labels = src.labels()
+        per = rows * cols
+        n_pages = max(1, math.ceil(len(labels) / per))
+        want = parse_exprange(exprange) if exprange is not None else self._exprange
+        if want == "current":
+            pages = [1]
+        elif want == "all":
+            pages = list(range(1, n_pages + 1))
+        else:
+            pages = [p for p in want if p <= n_pages]
+            if len(pages) < len(want):
+                log.warning("exprange: only %d page(s) at %d x %d; pages %s skipped",
+                            n_pages, rows, cols, [p for p in want if p > n_pages])
+            if not pages:
+                raise ValueError(f"exprange: no page of {n_pages} is in {want}")
+        base = (str(plotfile or "").strip() or (getattr(self, "_plotfile", None) or "")
+                or self._default_plotfile())
+        root, ext = os.path.splitext(base)
+        ext = ext or ".png"
+        vp = src.extent()
+        size = self._grid_cell_size()
+        footer = self._status_text()
+        out = []
+        for page in pages:
+            idx = list(range((page - 1) * per, min(len(labels), page * per)))
+            rendered = src.render(idx, vp, size) if idx else []
+            first = re.sub(r"[^\w.+-]+", "_", labels[idx[0]]) if idx else "empty"
+            if "{page}" in base or "{value}" in base:
+                path = base.replace("{page}", f"{page:02d}").replace("{value}", first)
+            elif len(pages) > 1:
+                path = f"{root}_page{page:02d}{ext}"
+            else:
+                path = base
+            used_rows = max(1, math.ceil(max(1, len(rendered)) / cols))
+            out.append(export_png(rendered, path, nrows=used_rows, ncols=cols,
+                                  footer=footer, theme=self._theme, dpi=dpi,
+                                  axes="outer"))
+            log.info("wrote %s (grid page %d of %d)", out[-1], page, n_pages)
+        return out[0] if len(out) == 1 else out
 
     def _apply_selection_overrides(self, overrides: dict, panels=None) -> None:
         """Update ``_selection`` in place and re-render the panels -- all of
@@ -4915,6 +5154,58 @@ for (const dt of other.tools) {
         return out
 
     async def _handle_plot(self, msg, context=None):
+        """Plot ▶ (and Reload, presets, steppers).  In the Grid layout
+        (gridplot G2) only the panel the grid repeats is updated -- the
+        template -- and then the grid's source is configured from it; the
+        browser draws page 1 again on the response's ``grid``."""
+        from .vis_grid_source import GridTemplateError, normalize_iterate_by
+        grid = msg.get("layout") == "grid"
+        tslot = None
+        if "layout" in msg:
+            self._grid_on = grid
+        if grid:
+            msg = dict(msg)
+            msg["layout"] = self._layout
+            try:
+                tslot = self._slot_by_id(msg.get("grid_slot")).id
+            except ValueError:
+                tslot = self._slots[self._slot_display_order[0]].id
+            panels = msg.get("panels") or {}
+            msg["panels"] = {tslot: panels[tslot]} if tslot in panels else {}
+            try:
+                r, c = (int(v) for v in msg.get("grid_shape") or ())
+                if 1 <= r <= 8 and 1 <= c <= 8:
+                    self._grid_shape = (r, c)          # for plotfile= and the summary
+            except (TypeError, ValueError):
+                pass
+            if msg.get("iterate_by"):
+                try:
+                    self._iterate_by = normalize_iterate_by(msg["iterate_by"])
+                except ValueError as exc:
+                    text = f"⚠ {exc}"
+                    self._notify(text)
+                    return {"status": "error", "status_text": text,
+                            "notify_text": text, "notify_color": "#f38ba8"}
+        resp = await self._handle_plot_panels(msg, context)
+        if not grid or not isinstance(resp, dict) or resp.get("status") != "ok":
+            return resp
+        try:
+            from .vis_grid_source import VisGridSource
+            if self._grid_source is None:
+                self._grid_source = VisGridSource(self, self._iterate_by)
+            src = await asyncio.to_thread(
+                self._grid_source.configure,
+                template=self._slot_by_id(tslot).active, iterate_by=self._iterate_by)
+        except GridTemplateError as exc:
+            text = f"⚠ {exc}"
+            self._notify(text)
+            return dict(resp, status="error", status_text=text, notify_text=text,
+                        notify_color="#f38ba8", failed_slot=tslot)
+        resp["grid"] = {"n_cells": len(src.labels()), "iterate_by": self._iterate_by}
+        resp["status_text"] = self._status_text()
+        return resp
+
+    async def _handle_plot_panels(self, msg, context=None):
         # Validation-error auto-switch-to-tab (added 2026-08-03) — the
         # last piece of decision 9's originally-settled gear/Tabs design
         # never built. Every error return below now includes
@@ -5925,6 +6216,8 @@ cvApplySelectionText(
         fname        = os.path.basename(self._source_path)
         layout_label = {"one": "One panel", "side": "Side by Side",
                         "over": "Over / Under"}.get(self._layout, self._layout)
+        if getattr(self, "_grid_on", False):
+            layout_label = f"Grid by {self._iterate_by}"
 
         # I-1 (Phase 2.5): once a single field/SPW is selected -- via
         # Prev/Next or a manual pick, the two are indistinguishable here
@@ -6012,6 +6305,76 @@ cvApplySelectionText(
     # Layout construction                                                      #
     # ====================================================================== #
 
+    #: labels of the Grid layout's "Iterate by" menu
+    _GRID_ITERATE_LABELS = {"baseline": "Baseline", "antenna": "Antenna", "spw": "SPW",
+                            "field": "Field", "scan": "Scan", "correlation": "Correlation"}
+    #: the area a grid page fills in the GUI, px
+    GRID_AREA = (_PANEL_WIDTH_FULL, 640)
+
+    def _build_grid(self) -> None:
+        """The Grid layout (gridplot G2): a ``GridView`` of a
+        ``VisGridSource``, its "Iterate by" menu, and the container the
+        Layout buttons show.  Built with the rest of the GUI (no Bokeh
+        server: every model exists before the page does); drawn on the
+        first Plot in Grid, or at once when the plotter starts in it."""
+        from bokeh.models import CustomJS, Select
+        from ..gridplot.grid_view import GridView, MAX_POOL
+        from .vis_grid_source import GridTemplateError, ITERATE_BY, VisGridSource
+        if self._grid_source is None:
+            self._grid_source = VisGridSource(self, self._iterate_by)
+        autoload = False
+        if self._grid_on:
+            try:
+                self._grid()
+                autoload = True
+            except GridTemplateError as exc:
+                self._notify(f"⚠ {exc}")
+        self._grid_iter_sel = Select(
+            title="Iterate by", value=self._iterate_by, width=110,
+            options=[(k, self._GRID_ITERATE_LABELS[k]) for k in ITERATE_BY])
+        # filled in by _wire_grid, once doPlot exists
+        self._grid_drill_js = CustomJS(code="")
+        rows, cols = self._grid_shape
+        pool = (min(MAX_POOL[0], max(6, rows)), min(MAX_POOL[1], max(6, cols)))
+        self._grid_view = GridView(
+            self._grid_source, self._comm_mgr, rows=rows, cols=cols, pool=pool,
+            area=self.GRID_AREA, theme=self._theme, on_drill=self._grid_drill,
+            drill_js=self._grid_drill_js, autoload=autoload,
+            extra_controls=[self._grid_iter_sel], app_context=self._app_context)
+        self._grid_container = column(self._grid_view.layout)
+        # Empty until Grid is first shown (window.__cvGridLayout attaches the
+        # grid): the browser builds a view for every cell of a layout even
+        # when it is hidden -- 1.4 s more at every page load for a 6 x 6
+        # pool (2026-11-11) -- and the models are in the document anyway,
+        # through __cvGridLayout's arguments.
+        self._grid_area = column(*([self._grid_container] if self._grid_on else []),
+                                 sizing_mode="stretch_both", styles={"overflow": "auto"},
+                                 visible=self._grid_on)
+
+    def _wire_grid(self) -> None:
+        """Connect the grid to doPlot (after ``_build_toolbar``): a
+        drill-down sets the sidebar to the cell's selection and plots it in
+        One; changing "Iterate by" in Grid plots again."""
+        from bokeh.models import CustomJS
+        args = dict(self._plot_js_args)
+        self._grid_drill_js.args = args
+        self._grid_drill_js.code = self._do_plot_js + _GRID_DRILL_JS
+        self._grid_iter_sel.js_on_change("value", CustomJS(
+            args=args, code=self._do_plot_js + "if (layout_rbg.active === 3) doPlot(false);"))
+        self._grid_restore_args = {k: args[k] for k in (
+            "ant_src", "bl_src", "spw_src", "field_sel", "scan_inp", "corr_cbg", "ant_mode")}
+
+    def _grid_drill(self, index: int, label: str) -> dict:
+        """A grid cell tapped: what the browser selects to show it in a
+        full panel (``_GRID_DRILL_JS``)."""
+        try:
+            target = self._grid_source.drill_target(index)
+        except (IndexError, KeyError):
+            return {"text": ""}
+        return {"text": f"{label}: shown in the full panel (One).  Grid returns "
+                        f"to the grid and its selection.",
+                "select": target}
+
     def _build_layout(self):
         """Build the full layout.
 
@@ -6098,7 +6461,9 @@ html, body { height: 100%; margin: 0; }
                          getattr(panel, "_unflag_tool", None)):
                 if tool is not None:
                     tool.response_callback = _flag_resp_cb
+        self._build_grid()
         toolbar                  = self._build_toolbar(toggle_btn)
+        self._wire_grid()
         side_container, over_container = self._build_plot_area()
 
         # Both containers always in the document; only one visible.
@@ -6150,6 +6515,23 @@ html, body { height: 100%; margin: 0; }
             sizing_mode="stretch_both",
             styles={"overflow-y": "auto"},
             css_classes=["cv-plot-area"],
+            visible=not self._grid_on,
+        )
+        # The Grid layout (gridplot G2) takes the plot area's place in the
+        # body rather than sitting inside it: nested in the plot area's
+        # stretch columns, Bokeh 3.10 never lays out the grid's cells (their
+        # frames stay 0 x 0 -- found 2026-11-11), while beside it they are
+        # laid out as in a page of their own.  window.__cvGridLayout swaps
+        # the two.
+        self._plot_area = plot_area
+        self._grid_area.visible = self._grid_on
+        # window.__cvGridLayout(on), called by the Layout buttons and the
+        # presets.
+        self._app_context.add_init_script(
+            code=_GRID_LAYOUT_JS,
+            args=dict(self._grid_restore_args, grid_area=self._grid_area,
+                      grid_container=self._grid_container, plot_area=plot_area),
+            description="grid layout",
         )
         # "More below" cue (2026-09-28): when the plots plus their info /
         # colorbar strips are taller than the window, the plot area
@@ -6173,7 +6555,7 @@ html, body { height: 100%; margin: 0; }
             description="busy cursor helper",
         )
         body = row(
-            sidebar_col, plot_area,
+            sidebar_col, plot_area, self._grid_area,
             sizing_mode="stretch_both",
         )
         return column(_css_div, toolbar, body, status_bar,
@@ -8334,9 +8716,10 @@ if (sidebarEl && prevScrollTop !== null) {
         # hidden slot's panel and a single-panel view turns into two
         # (stakeholder report, 2026-10).
         layout_rbg = RadioButtonGroup(
-            labels = ["One", "Side by Side", "Over / Under"],
-            active = {"one": 0, "side": 1, "over": 2}.get(self._layout, 1),
-            width  = 320,
+            labels = ["One", "Side by Side", "Over / Under", "Grid"],
+            active = (3 if self._grid_on
+                      else {"one": 0, "side": 1, "over": 2}.get(self._layout, 1)),
+            width  = 380,
         )
         self._layout_rbg = layout_rbg
 
@@ -8811,7 +9194,13 @@ function doPlot(reload) {
         // The layout as shown (2026-10-10): presets and the Layout buttons
         // change it in the browser only, and the status line (and the
         // PNG export) read Python's copy, which stayed at the start value.
-        layout:      ['one', 'side', 'over'][layout_rbg.active],
+        layout:      ['one', 'side', 'over', 'grid'][layout_rbg.active],
+        // Grid layout (gridplot G2): what it iterates over, and the panel
+        // it repeats -- the one shown first.
+        iterate_by:  (typeof grid_iter_sel !== 'undefined' && grid_iter_sel) ? grid_iter_sel.value : null,
+        grid_slot:   [panel0_id, panel1_id][(display_order_source.data['order'][0] || [0, 1])[0]],
+        grid_shape:  (typeof grid_key !== 'undefined' && window.__cvGrid && window.__cvGrid[grid_key])
+                     ? [window.__cvGrid[grid_key].state().rows, window.__cvGrid[grid_key].state().cols] : null,
         // Row height / column width as shown (2026-10-13), for the
         // reproducing call and the status line.
         sizes:       window.__cvSizeSpec ? window.__cvSizeSpec() : null,
@@ -8864,8 +9253,13 @@ function doPlot(reload) {
         // hidden slot and turned a one-panel view into two.
         const _order   = display_order_source.data['order'][0];
         const _one     = (layout_rbg.active === 0);
-        const hide0    = _one && (_order[0] !== 0);
-        const hide1    = _one && (_order[0] !== 1);
+        // Grid (gridplot G2): the panels stay hidden; the grid draws
+        // page 1 again from the source Python has just configured.
+        const _grid    = (layout_rbg.active === 3);
+        const hide0    = _grid || (_one && (_order[0] !== 0));
+        const hide1    = _grid || (_one && (_order[0] !== 1));
+        if (resp.grid && typeof grid_key !== 'undefined' && window.__cvGrid && window.__cvGrid[grid_key])
+            window.__cvGrid[grid_key].reload('drawing ' + resp.grid.n_cells + ' plots');
 
         // Show the kind that rendered, hide the other (both hidden when
         // this slot is the hidden one in "One" layout).  A figure that
@@ -9342,6 +9736,9 @@ function doPlot(reload) {
             "ctrl":       ctrl,
             "ids":        ids,
             "layout_rbg":           layout_rbg,
+            # Grid layout (gridplot G2)
+            "grid_iter_sel":        self._grid_iter_sel,
+            "grid_key":             self._grid_view.key,
             "display_order_source": self._display_order_source,
             "field_sel":  self._field_select,
             # Scan / Time range / UV range boxes (HRS A1).
@@ -9676,6 +10073,7 @@ function doIterateSpw(delta) {
                 "display_order_source": self._display_order_source,
                 "layout_rbg":  layout_rbg,
                 "notify_div":  self._notify_div,
+                "grid_key":    self._grid_view.key if self._grid_view else "",
                 # Index of each (slot, kind) panel in _all_panels, so the
                 # message can name panels the way the handler indexes them.
                 "panel_index": {
@@ -9686,6 +10084,11 @@ function doIterateSpw(delta) {
                 },
             },
             code="""
+// Grid (gridplot G2): the page as the grid's Save PNG writes it.
+if (layout_rbg.active === 3) {
+    if (window.__cvGrid && window.__cvGrid[grid_key]) window.__cvGrid[grid_key].save();
+    return;
+}
 // Collect the state only the browser has.  With no Bokeh server the
 // figures' ranges, the layout radio and the panel order are all
 // CustomJS-mutated and never reach Python, so an export driven purely
@@ -9797,9 +10200,13 @@ ctrl.send(ids['export'], {panels: panels, nrows: nrows, ncols: ncols,
                 "sy_sel": self._panel_axis_widgets[self._slots[1].id]["scatter"]["y_sel"],
             },
             code="""
-const val  = cb_obj.active;   // 0=one, 1=side, 2=over
+const val  = cb_obj.active;   // 0=one, 1=side, 2=over, 3=grid
 const one  = (val === 0);
 const over = (val === 2);
+// Grid (gridplot G2): the grid instead of the panels.  Its page is what
+// the last Plot in Grid drew; Plot draws it again.
+if (window.__cvGridLayout) window.__cvGridLayout(val === 3);
+if (val === 3) return;
 
 // Which SLOT is currently in the primary/first screen position — read
 // from the live swap tracker, not assumed from construction-time slot
@@ -9856,7 +10263,7 @@ if (window.__cvApplySizes) { window.__cvApplySizes(); } else {
 
 // Persist preference (side vs. over) — unchanged from before, "one"
 // doesn't participate since there's nothing to arrange with one panel.
-if (!one) {
+if (!one && val !== 3) {
     const key   = [ry_sel.value, rx_sel.value, 'AMPLITUDE',
                    sx_sel.value, sy_sel.value].join(':');
     const prefs = JSON.parse(pref_src.data['prefs'][0]);
@@ -9968,7 +10375,8 @@ try {
                 args=args,
                 code=self._do_plot_js + colorize_mode_js + f"""
 // The preset's own layout, unless "Pin layout" is ticked (2026-10-10).
-const lay = (pin_cb && pin_cb.active.length > 0) ? layout_rbg.active : active_layout;
+// In Grid a preset sets what the grid repeats, and Grid stays (gridplot G2).
+const lay = ((pin_cb && pin_cb.active.length > 0) || layout_rbg.active === 3) ? layout_rbg.active : active_layout;
 layout_rbg.active      = lay;
 
 // Presets' fixed target: pos0 = raster, pos1 = scatter. Set the complete
@@ -10021,6 +10429,7 @@ try {{
 const over = (lay === 2);
 side_container.visible = !over;
 over_container.visible =  over;
+if (window.__cvGridLayout) window.__cvGridLayout(lay === 3);
 // row_height / column_width (2026-10-13): window.__cvApplySizes (_SIZES_JS)
 // keeps the sizes the user chose; the fixed sizes are the fallback.
 if (window.__cvApplySizes) {{ window.__cvApplySizes(); }} else {{
@@ -10083,7 +10492,8 @@ try {{
     }});
 }} catch(e) {{ console.warn('preset colorize-mode sync failed:', e); }}
 // Over / Under, unless "Pin layout" is ticked (2026-10-10).
-const lay = (pin_cb && pin_cb.active.length > 0) ? layout_rbg.active : 2;
+// In Grid a preset sets what the grid repeats, and Grid stays (gridplot G2).
+const lay = ((pin_cb && pin_cb.active.length > 0) || layout_rbg.active === 3) ? layout_rbg.active : 2;
 layout_rbg.active = lay;
 pos0_raster_layout.visible  = false;
 pos0_scatter_layout.visible = true;
@@ -10094,6 +10504,7 @@ panel1_kind_switch.active = 1;
 {sets}
 side_container.visible = (lay !== 2);
 over_container.visible = (lay === 2);
+if (window.__cvGridLayout) window.__cvGridLayout(lay === 3);
 // row_height / column_width (2026-10-13): window.__cvApplySizes (_SIZES_JS)
 // keeps the sizes the user chose; the fixed sizes are the fallback.
 if (window.__cvApplySizes) {{ window.__cvApplySizes(); }} else {{
@@ -10299,6 +10710,10 @@ const light     = cb_obj.active;
 """ + _THEME_RESTYLE_JS + """
 cb_obj.label = light ? '\U0001f319 Dark' : '\u2600 Light';
 
+// The Grid layout (gridplot G2): its chrome now, its cells once Python has
+// the new palettes (the response below).
+_step('grid', () => { for (const k in (window.__cvGrid || {})) window.__cvGrid[k].restyle(!light); });
+
 // Tell Python, so the palettes follow.  The chrome above is JS-only;
 // the ramps are resolved server-side and conditioned against the
 // background, so without this the plot keeps ramps trimmed for the
@@ -10312,6 +10727,8 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             // in Python does nothing here -- no Bokeh server -- so the
             // handler returns them and the client installs them, the
             // same contract every other image-updating handler uses.
+            if (resp && resp.status === 'ok')
+                for (const k in (window.__cvGrid || {})) window.__cvGrid[k].redraw();
             if (!resp || resp.status !== 'ok' || !resp.images) return;
             if (typeof theme_img_srcs === 'undefined') return;
             var n = Math.min(resp.images.length, theme_img_srcs.length);

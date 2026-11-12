@@ -29,6 +29,8 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
                     the toolbar, not over the plots
     all (✱)         Antenna ▶ narrows the grid to that antenna's cells;
                     the stepper's ✱ goes back to all antennas and plots at once
+    busy            stepping in Grid: busy until the grid's page is drawn,
+                    idle after
     colour          Colour: "this page" by default; "per cell" draws the
                     cells again in their own ranges; "whole grid" waits for
                     the background pass, then draws in the grid's range
@@ -66,6 +68,18 @@ sys.path.insert(0, {root!r})
 from uuid import uuid4
 from cubevis import exe
 from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+# a slow kernel, on demand (the busy check): while this file exists each grid
+# page is answered a second late -- in the page's worker thread, so the
+# other replies are not held up
+import time as _time
+from cubevis.toolbox.gridplot.grid_view import GridView
+_slow = {slow!r}
+_page = GridView.page
+def _slow_page(self, msg):
+    if os.path.exists(_slow):
+        _time.sleep(1.0)
+    return _page(self, msg)
+GridView.page = _slow_page
 p = VisibilityPlotter(ms={ms!r}, preset={preset!r}, layout={start!r}, gridrows=3, gridcols=3,
                       theme="light", **{remote!r})
 ctx = exe.Context(exe.Mode.SYNC)
@@ -96,9 +110,13 @@ def main() -> int:
     with open(rec, "w") as f:
         f.write(f'#!/bin/sh\necho "$1" > {url_file}\n')
     os.chmod(rec, 0o755)
+    slow_flag = os.path.join(a.out, "slow_grid_pages")
+    if os.path.exists(slow_flag):
+        os.unlink(slow_flag)
     log = open(os.path.join(a.out, "serve.log"), "w")
     srv = subprocess.Popen(
         [sys.executable, "-c", SERVE.format(root=ROOT, ms=os.path.abspath(a.ms), preset=a.preset,
+                                         slow=slow_flag,
                                          start=a.start,
                                          remote=(dict(backend="remote", kernel_name=a.kernel)
                                                  if a.kernel else {}))],
@@ -353,7 +371,29 @@ def main() -> int:
                 return int(m.group(1)) if m else -1
             set_marker(); run_button("✱", "ant_src.selected.indices = []"); wait_drawn()
             all_cells = n_cells()
+            # sample the busy count and the grid's status while it steps
+            pg.evaluate(f"""() => {{ window.__cvBusyLog = [];
+                const st = {MODELS}.filter(m => m.type === 'Div');
+                window.__cvBusyPoll = setInterval(() => window.__cvBusyLog.push([
+                    window.__cvBusyN || 0,
+                    st.some(d => /^drawing \\d+ plots/.test(d.text))]), 5); }}""")
+            open(slow_flag, "w").close()
             set_marker(); run_button("▶", "doIterateAntenna(1)"); wait_drawn()
+            os.unlink(slow_flag)
+            pg.wait_for_timeout(800)
+            blog = pg.evaluate("() => { clearInterval(window.__cvBusyPoll); return window.__cvBusyLog; }")
+            drawing = [b for b, d in blog if d]
+            if os.environ.get("CV_BUSY_DEBUG"):
+                runs = []
+                for b, d in blog:
+                    if runs and runs[-1][0] == (b, d):
+                        runs[-1][1] += 1
+                    else:
+                        runs.append([(b, d), 1])
+                print("busy timeline (busyN, drawing) x samples:", runs)
+            check("busy", drawing and min(drawing) > 0 and blog[-1][0] == 0,
+                  f"{len(drawing)} samples while the page was drawing, busy in all: "
+                  f"{bool(drawing) and min(drawing) > 0}; idle after: {blog[-1][0] == 0}")
             stepped = status_line()
             one_cells = n_cells()
             set_marker(); run_button("✱", "ant_src.selected.indices = []"); wait_drawn()

@@ -779,7 +779,7 @@ const G = {
         S.cache.clear(); S.cacheKey = ''; S.viewport = null; S.page = 0; S.nPages = 1;
         S.gen++;
         regrid();
-        show(0, why || 'drawing');
+        return show(0, why || 'drawing');   // resolves once page 1 is drawn
     },
     togglePlay() {
         if (S.playing) { clearInterval(S.playing); S.playing = null; b_play.label = 'Play'; return; }

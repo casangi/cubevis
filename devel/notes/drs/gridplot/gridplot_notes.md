@@ -448,6 +448,23 @@ DA49 gives only the baselines to DA49 that have data.  Iterate by Antenna
 already filtered.  `test_selection_narrows_the_cells`; the browser *all
 (✱)* check now counts cells (Antenna ▶: fewer cells; ✱: all again).
 
+**Fix (2026-11-12): busy until the grid's page is drawn.**  Stepping the
+antennas in Grid, the cursor went idle before the grid changed: doPlot's
+reply released the busy state (two frames, plus a 450 ms bridge for the
+panels' re-render), but in Grid that reply only configures the source --
+the page is a second request, made after it.  Now, in Grid, doPlot's busy
+hold is released when `__cvGrid[key].reload()` (which returns `show()`'s
+promise) has drawn page 1, two frames later; the 450 ms bridge is skipped.
+The *busy* browser check delays each grid page by a second in the kernel
+(a flag file, in the page's worker thread) and samples `__cvBusyN` every
+5 ms: before the fix it fell to 0 for ~0.8 s of the draw; after, it holds
+until the page is drawn and is 0 afterwards.
+
+Seen on the way, not changed: each Plot in Grid also re-renders the hidden
+template panel (the reply's new ranges set off its range re-render), which
+competes with the grid's page for the kernel.  Skipping a hidden figure's
+range re-render needs a "draw when shown" for its return from Grid.
+
 **Open, for Darrell:**
 
 1. *Default colour scope.*  "this page" now; "whole grid" after G3.

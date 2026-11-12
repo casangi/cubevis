@@ -9309,11 +9309,24 @@ function doPlot(reload) {
         // ~300 ms later, and that request is what actually draws the new
         // plot (2026-09-30: after Z-Score the cursor went idle, then the
         // plot changed a noticeable moment later).
-        window.__cvSetBusy(true);
-        setTimeout(function() { window.__cvSetBusy(false); }, 450);
-        requestAnimationFrame(function() {
-            requestAnimationFrame(function() { cvSetBusy(false); });
-        });
+        // In Grid the response only configures the grid; the page is drawn
+        // by the grid's own request after it, so the busy state is
+        // released when that page is painted (2026-11-12: stepping the
+        // antennas, the cursor went idle before the grid changed).
+        const _gridApi = (resp && resp.grid && typeof grid_key !== 'undefined'
+                          && window.__cvGrid && window.__cvGrid[grid_key]) || null;
+        const _release = function() {
+            requestAnimationFrame(function() {
+                requestAnimationFrame(function() { cvSetBusy(false); });
+            });
+        };
+        // (reference counted: doPlot's own hold is released once, by
+        // _release; the 450 ms bridge is a hold and release of its own)
+        if (!_gridApi) {
+            window.__cvSetBusy(true);
+            setTimeout(function() { window.__cvSetBusy(false); }, 450);
+            _release();
+        }
         if (!resp) return;
         // Which table rows have data in this field / SPW selection: the
         // Prev / Next stepping skips the others, the tables dim them.
@@ -9356,8 +9369,13 @@ function doPlot(reload) {
         const hide0    = _grid || (_one && (_order[0] !== 0));
         const hide1    = _grid || (_one && (_order[0] !== 1));
         if (resp.grid) window.__cvGridDrawn = true;
-        if (resp.grid && typeof grid_key !== 'undefined' && window.__cvGrid && window.__cvGrid[grid_key])
-            window.__cvGrid[grid_key].reload('drawing ' + resp.grid.n_cells + ' plots');
+        if (_gridApi) {
+            let _drawn;
+            try { _drawn = _gridApi.reload('drawing ' + resp.grid.n_cells + ' plots'); }
+            catch (e) { console.warn('grid reload failed:', e); }
+            Promise.resolve(_drawn).catch(function(e) { console.warn('grid page failed:', e); })
+                .finally(_release);
+        }
 
         // Show the kind that rendered, hide the other (both hidden when
         // this slot is the hidden one in "One" layout).  A figure that

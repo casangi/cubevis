@@ -233,6 +233,12 @@ Frequency (found by the tests: every cell was blank).
 - *Choosing Grid draws it*: the first time Grid is shown it plots, as Plot
   in Grid would (Darrell's first try, TW Hya: Grid showed empty cells until
   Plot was pressed).  Later switches show the page last drawn.
+- *Cells fit the window* (Darrell, TW Hya): the grid measures the room its
+  area has in the browser (`GridView.fit_to`) at every rows x cols, when
+  shown and when the window is resized -- a 1 x 1 page fills it.
+- *The cursor readout sits above the grid*, a fixed two lines: below it,
+  it moved with the grid and was drawn over the cells after a reshape
+  (Bokeh had not caught up with the grid's new height).
 - *Iterate by* sits in the grid's control row; changing it plots again.
 - *Tap* drills down: the sidebar is set to the cell's selection (as the
   Prev / Next steppers set it), Layout to One, and Plot runs.  Back to
@@ -320,9 +326,9 @@ unchanged: the 40 reference PNGs are byte-identical to `fe6c0b0d`'s.
   every iteration axis, common extent, drawing, zoom, probe, theme,
   scatter refused, `plotfile` pages, GUI models, Plot in Grid, summary.
 - `tests/manual/gridplot/visplot_grid_check.py --ms DATA.ms [--start grid]
-  [--kernel python3]`: 14 browser checks (load, Grid, Plot, axis names,
+  [--kernel python3]`: 16 browser checks (load, Grid, Plot, axis names,
   ticks, Iterate by, probe, zoom, drill-down, back to Grid, theme, preset,
-  export, console).  14 of 14: starting in Over, starting in Grid, and
+  readout, fit, export, console).  16 of 16: starting in Over, starting in Grid, and
   through a remote kernel (`python3` on this host).
 - Remote headless: 9 cells through the kernel are pixel-identical to
   local (3.0 s vs 2.7 s).
@@ -341,5 +347,9 @@ untouched); a real remote host.
    bright baseline is normalised away).  Options: per cell (now); one
    range for the grid -- from the template's own (whole-selection) render,
    or from the page.  plotms's iteration has no colour axis to follow.
-2. *Status line after Back to Grid* says "One panel" until the next Plot
+2. *Scatter grids and one place to configure them* (asked 2026-11-11):
+   the grid's configuration is Panel A's tab in the sidebar -- its
+   Raster / Scatter switch included -- so no new control area is
+   needed; scatter cells wait for G3's read-once-and-split.
+3. *Status line after Back to Grid* says "One panel" until the next Plot
    (the layout buttons do not talk to Python).

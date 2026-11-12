@@ -293,6 +293,14 @@ class GridView:
         h = (ah - (24 if common else rows * 24) - rows * 26) // max(1, rows)
         return max(MIN_FRAME[0], int(w)), max(MIN_FRAME[1], int(h))
 
+    def fit_to(self, model) -> None:
+        """Size the cells to fill *model* (a layout of the application's
+        page, e.g. the area the grid is shown in) as it is in the browser,
+        at every rows x cols and window size; ``area`` is then only the
+        size used before the browser has measured it.  Call before the page
+        is shown."""
+        self._init_cb.args = dict(self._init_cb.args, fit_to=model)
+
     def set_theme(self, theme: str) -> None:
         """The theme Save PNG draws its chrome in (the browser restyles the
         cells: ``restyle``)."""
@@ -395,8 +403,13 @@ class GridView:
         label_css = InlineStyleSheet(css=_LABEL_CSS % fg)
         for w in (sel_rows, sel_cols, sel_scale, sel_speed, cb_loop, *self._extra):
             w.stylesheets = list(w.stylesheets) + [label_css]
-        status = Div(text="", width=500, styles={"color": fg})
-        probe = Div(text=" ", width=900, styles={"color": fg, "font-family": "monospace"})
+        status = Div(text="", width=170, styles={"color": fg})
+        # The cursor readout above the grid, two lines high whatever it says:
+        # below it, it moved with the grid's height and (when Bokeh had not
+        # caught up with a reshape) was drawn over the cells (2026-11-11).
+        probe = Div(text="\u00a0", width=1000, height=34, styles={
+            "color": fg, "font-family": "monospace", "font-size": "11px",
+            "overflow": "hidden", "line-height": "16px"})
         x_name = Div(text=xn, width=self._cols * fw, styles={"color": fg, "text-align": "center",
                                                       "font-weight": "bold"})
         y_name = Div(text=yn, width=22, height=self._rows * fh, styles={
@@ -412,10 +425,13 @@ class GridView:
                     min_frame=list(MIN_FRAME), autoload=self._autoload, label_css=label_css,
                     label_tpl=_LABEL_CSS, idle_text=self._idle_text,
                     drill_js=self._drill_js, key=self._ids["page"])
+        args["fit_to"] = None
         if self._app_context is not None:
             self._app_context.add_init_script(code=_GRID_JS, args=args, description="grid view")
+            self._init_cb = self._app_context.init_scripts[-1][0]
         else:
-            curdoc().js_on_event(DocumentReady, CustomJS(args=args, code=_GRID_JS))
+            self._init_cb = CustomJS(args=args, code=_GRID_JS)
+            curdoc().js_on_event(DocumentReady, self._init_cb)
 
         def call(fn, extra=""):
             return CustomJS(args={"key": self._ids["page"]},
@@ -444,7 +460,7 @@ class GridView:
         controls = row(*self._extra, b_first, b_prev, page_div, b_next, b_last, sel_rows,
                        sel_cols, sel_scale, b_play, sel_speed, cb_loop, b_save)
         self._models = dict(args, controls=controls)
-        return column(controls, status, row(y_name, column(x_name, grid)), probe,
+        return column(controls, row(status, probe), row(y_name, column(x_name, grid)),
                       styles={"background-color": bg} if dark else {})
 
 
@@ -474,7 +490,22 @@ function shape() { return {rows: S.rows, cols: S.cols, common: S.common,
 function keyOf() { return JSON.stringify([S.rows, S.cols, S.common, S.viewport, S.frame]); }
 // each cell's plot area: *cell*, or the page's share of *area* (as
 // GridView.frame_for computes it)
+// The area the cells share: *fit_to*'s room below and right of the grid's
+// top-left corner as the browser lays it out, else *area*.
+function areaNow() {
+    if (!fit_to || !window.Bokeh) return area;
+    try {
+        const box = Bokeh.index.find_one_by_id(fit_to.id);
+        const gv = Bokeh.index.find_one_by_id(grid.id);
+        if (!box || !gv) return area;
+        const b = box.el.getBoundingClientRect(), g = gv.el.getBoundingClientRect();
+        const w = Math.floor(b.right - g.left - 12), h = Math.floor(b.bottom - g.top - 12);
+        if (w < 200 || h < 150) return area;          // hidden, or not laid out yet
+        return [w, h];
+    } catch (e) { return area; }
+}
 function frameFor(rows, cols, common) {
+    const area = areaNow();
     if (!area) return [cell[0], cell[1]];
     const yAll = !common || S.yEach, xAll = !common || S.xEach;
     const w = Math.floor((area[0] - 36 - (yAll ? cols * 46 : 36) - cols * 8) / Math.max(1, cols));
@@ -670,12 +701,20 @@ const G = {
         S.cache.clear(); S.cacheKey = '';
         if (S.nCells > 0) show(S.page, 'redrawing');
     },
+    refit() {
+        // the window or the grid's area changed size: cells to fit, the
+        // page drawn again at that size
+        const before = JSON.stringify(S.frame);
+        regrid();
+        if (JSON.stringify(S.frame) !== before && S.nCells > 0) show(S.page, 'resizing');
+    },
     reload(why) {
         // the source changed (the application's Plot): page 1, full extent
         clearTimeout(S.zoomTimer);
         if (S.playing) G.togglePlay();
         S.cache.clear(); S.cacheKey = ''; S.viewport = null; S.page = 0; S.nPages = 1;
         S.gen++;
+        regrid();
         show(0, why || 'drawing');
     },
     togglePlay() {
@@ -751,6 +790,10 @@ const G = {
 };
 window.__cvGrid[key] = G;
 regrid();
+if (fit_to) window.addEventListener('resize', () => {
+    clearTimeout(S.fitTimer);
+    S.fitTimer = setTimeout(() => G.refit(), 250);
+});
 // The first page waits for the connection to Python: a message sent while
 // the websocket is still opening makes cubevis reconnect, which drops the
 // opening connection (and the session with it; seen 2026-11-11 when visplot

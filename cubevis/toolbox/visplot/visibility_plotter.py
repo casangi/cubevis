@@ -2471,6 +2471,8 @@ window.__cvGridLayout = function (on) {
     grid_area.visible = !!on;
     plot_area.visible = !on;
     if (!on) return;
+    // the grid's room is known now that it is shown: cells to fit it
+    setTimeout(() => { for (const k in (window.__cvGrid || {})) window.__cvGrid[k].refit(); }, 50);
     // Nothing drawn in the grid yet: plot, as pressing Plot in Grid would
     // (2026-11-11: Grid alone showed empty cells until Plot was pressed).
     if (!window.__cvGridDrawn && grid_plot) {
@@ -6357,6 +6359,9 @@ cvApplySelectionText(
         self._grid_area = column(*([self._grid_container] if self._grid_on else []),
                                  sizing_mode="stretch_both", styles={"overflow": "auto"},
                                  visible=self._grid_on)
+        # cells sized to the room the window gives the grid (a 1 x 1 page
+        # fills it), GRID_AREA until the browser has measured it
+        self._grid_view.fit_to(self._grid_area)
 
     def _wire_grid(self) -> None:
         """Connect the grid to doPlot (after ``_build_toolbar``): a

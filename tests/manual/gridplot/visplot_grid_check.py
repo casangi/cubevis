@@ -24,6 +24,9 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
                     drawn again in the new palette
     preset          a preset pressed in Grid: Grid stays, the grid repeats
                     the preset's panel
+    readout         the cursor readout sits above the grid, clear of every cell
+    fit             1 x 1: the cell fills the room the window gives the grid,
+                    and follows the window's size
     export          Export PNG in Grid writes the page
     console         no errors in the browser console
 
@@ -308,6 +311,26 @@ def main() -> int:
                   and yall, f"vplot in Grid: axis names {names}; each antenna's baselines "
                             f"labelled on every cell: {yall}")
             pg.screenshot(path=os.path.join(a.out, "preset_vplot.png"))
+
+            ov = pg.evaluate(f"""() => {{
+                const p = {MODELS}.find(m => m.type === 'Div' && m.styles && m.styles['line-height'] === '16px');
+                const pv = Bokeh.index.find_one_by_id(p.id), gv = Bokeh.index.find_one_by_id({model(GRIDPLOT)}.id);
+                return [pv.el.getBoundingClientRect().bottom, gv.el.getBoundingClientRect().top]; }}""")
+            check("readout", ov[0] <= ov[1], f"readout ends at {ov[0]:.0f} px, grid starts at {ov[1]:.0f} px")
+
+            def frame0():
+                return pg.evaluate(f"""() => {{ const f = {model(GRIDPLOT)}.children[0][0];
+                    return [f.frame_width, f.frame_height]; }}""")
+            set_marker(); select("Rows", "1"); wait_drawn()
+            set_marker(); select("Cols", "1"); wait_drawn()
+            big = frame0()
+            pg.screenshot(path=os.path.join(a.out, "fit_1x1.png"))
+            set_marker(); pg.set_viewport_size({"width": 1300, "height": 900}); wait_drawn()
+            small = frame0()
+            pg.set_viewport_size({"width": 1600, "height": 1200}); pg.wait_for_timeout(800)
+            check("fit", big[0] > 900 and big[1] > 450 and small[0] < big[0] and small[1] < big[1],
+                  f"1 x 1 cell {big[0]} x {big[1]} px in 1600 x 1200; {small[0]} x {small[1]} "
+                  f"in 1300 x 900")
 
             with pg.expect_download(timeout=120000) as dl:
                 click_button("Export PNG")

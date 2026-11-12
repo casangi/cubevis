@@ -27,8 +27,8 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
     readout         the cursor readout is clear of the grid (above visplot's
                     status bar); the grid's controls are in the sidebar and
                     the toolbar, not over the plots
-    all (✱)         after Antenna ▶, the stepper's ✱ goes back to all
-                    antennas and plots at once
+    all (✱)         Antenna ▶ narrows the grid to that antenna's cells;
+                    the stepper's ✱ goes back to all antennas and plots at once
     colour          Colour: "this page" by default; "per cell" draws the
                     cells again in their own ranges; "whole grid" waits for
                     the background pass, then draws in the grid's range
@@ -345,14 +345,25 @@ def main() -> int:
 
             def status_line():
                 return status_div_text("t.includes('Layout:')") or ""
+            def n_cells():
+                t = pg.evaluate(f"() => {MODELS}.filter(m => m.type === 'Div' && "
+                                f"m.text.includes(' cells')).map(m => m.text).join(' ')")
+                import re as _re
+                m = _re.search(r"(\d+) cells", t)
+                return int(m.group(1)) if m else -1
+            set_marker(); run_button("✱", "ant_src.selected.indices = []"); wait_drawn()
+            all_cells = n_cells()
             set_marker(); run_button("▶", "doIterateAntenna(1)"); wait_drawn()
             stepped = status_line()
+            one_cells = n_cells()
             set_marker(); run_button("✱", "ant_src.selected.indices = []"); wait_drawn()
             back = status_line()
+            back_cells = n_cells()
             green = pg.evaluate(f"() => {MODELS}.find(m => m.type === 'Button' && m.label === 'Plot ▶').button_type")
-            check("all (✱)", "Antenna 1/" in stepped and "Antenna: all" in back and green == "success",
-                  f"after ▶: {stepped.split('Antenna')[1][:22]!r}; after ✱: "
-                  f"{back.split('Antenna')[1][:12]!r}; Plot {green}")
+            check("all (✱)", "Antenna 1/" in stepped and "Antenna: all" in back and green == "success"
+                  and 0 < one_cells < all_cells == back_cells,
+                  f"after ▶: {stepped.split('Antenna')[1][:22]!r}, {one_cells} cells; after ✱: "
+                  f"{back.split('Antenna')[1][:12]!r}, {back_cells} cells (of {all_cells}); Plot {green}")
 
             def cells_sum():
                 return pg.evaluate(f"""() => {{ let s = 0;

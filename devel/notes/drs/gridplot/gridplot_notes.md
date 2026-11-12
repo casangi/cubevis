@@ -439,6 +439,15 @@ workstation with 16 GiB free 6 GiB; 512 GiB shared host with 40 GiB free
   through a remote kernel.
 - `grid_browser_check.py` 13 of 13 (non-embedded GridView).
 
+**Fix (2026-11-12, base `78f7131e`): the selection narrows a baseline
+grid.**  Stepping Antenna to DA49 on TW Hya with Iterate by = Baseline left
+all 210 baselines (24 pages).  `_pairs_with_rows` applied the selection's
+baselines / antennas only when the reader could not list the baselines
+with rows; the reader's list ignores them.  Both lists are now narrowed, so
+DA49 gives only the baselines to DA49 that have data.  Iterate by Antenna
+already filtered.  `test_selection_narrows_the_cells`; the browser *all
+(✱)* check now counts cells (Antenna ▶: fewer cells; ✱: all again).
+
 **Open, for Darrell:**
 
 1. *Default colour scope.*  "this page" now; "whole grid" after G3.

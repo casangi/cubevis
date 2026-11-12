@@ -118,6 +118,25 @@ def _ranges(src, idx, colour, page=None):
     return out
 
 
+def test_selection_narrows_the_cells(plotter):
+    """An antenna or baseline selection (the steppers' too) narrows a grid
+    by baseline to those baselines (gridplot, 2026-11-12)."""
+    from cubevis.toolbox.visplot.vis_grid_source import VisGridSource
+    names = [a.name for a in plotter._meta.antennas]
+    sel = plotter._selection.copy()
+    sel.antenna_names = [names[2]]
+    src = VisGridSource(plotter).configure(iterate_by="baseline", selection=sel)
+    labels = src.labels()
+    assert len(labels) == len(names) - 1
+    assert all(names[2] in lab.split("-") for lab in labels)
+    sel = plotter._selection.copy()
+    sel.baselines = [[names[0], names[1]], [names[1], names[2]]]
+    src.configure(iterate_by="baseline", selection=sel)
+    assert src.labels() == [f"{names[0]}-{names[1]}", f"{names[1]}-{names[2]}"]
+    src.configure(iterate_by="baseline", selection=plotter._selection)
+    assert len(src.labels()) == len(names) * (len(names) - 1) // 2
+
+
 def test_colour_scopes(plotter):
     """per cell: each its own range; this page: one over the page; whole
     grid: one over every cell, after the background pass (gridplot, 11-11)."""

@@ -155,7 +155,10 @@ class VisGridSource:
 
     def _pairs_with_rows(self) -> list:
         """Baselines in the selection that have rows, in the metadata's
-        order; all the metadata's baselines when the reader cannot tell."""
+        order; all the metadata's baselines when the reader cannot tell.
+        The selection's baselines or antennas narrow either list: the
+        reader's answer does not apply them (seen 2026-11-12: stepping
+        the Antenna stepper to DA49 left all 210 TW Hya baselines)."""
         meta = self._p._meta
         try:
             have = self._p._reader.baselines_with_rows(self._selection)
@@ -170,16 +173,17 @@ class VisGridSource:
                 pairs = [p for p in pairs if p[0] != p[1]]
             elif auto == "only":
                 pairs = [p for p in pairs if p[0] == p[1]]
-            if self._selection.baselines:
-                want = {tuple(b) for b in self._selection.baselines}
-                pairs = [p for p in pairs if p in want or p[::-1] in want]
-            elif self._selection.antenna_names:
-                want = set(self._selection.antenna_names)
-                pairs = [p for p in pairs if p[0] in want or p[1] in want]
-            return pairs
-        have = {tuple(p) for p in have}
-        known = [p for p in order if p in have]
-        return known + sorted(have - set(known))
+        else:
+            have = {tuple(p) for p in have}
+            known = [p for p in order if p in have]
+            pairs = known + sorted(have - set(known))
+        if self._selection.baselines:
+            want = {tuple(b) for b in self._selection.baselines}
+            pairs = [p for p in pairs if p in want or p[::-1] in want]
+        elif self._selection.antenna_names:
+            want = set(self._selection.antenna_names)
+            pairs = [p for p in pairs if p[0] in want or p[1] in want]
+        return pairs
 
     def _iteration_values(self) -> Tuple[list, list]:
         """``(values, labels)``: each value is a dict of selection fields

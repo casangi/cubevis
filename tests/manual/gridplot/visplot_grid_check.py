@@ -9,7 +9,8 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
     load            the page loads (time to the first panel drawn); Layout
                     has four buttons; the grid is hidden -- or, with
                     ``--start grid``, shown and drawn
-    grid shown      Layout Grid: the grid instead of the panels
+    grid shown      Layout Grid: the grid instead of the panels, page 1 drawn
+                    (no Plot needed)
     plot in grid    Plot: page 1 of the baselines, every cell drawn
     axis names      each once, the panels' own (UTC date in the time axis)
     tick labels     the cells' tick formatter has the panel's axis state
@@ -207,9 +208,12 @@ def main() -> int:
                       f"{t_load:.1f} s to the first panel; Layout {labels}")
             pg.screenshot(path=os.path.join(a.out, "load.png"))
 
-            set_radio(3)
-            pg.wait_for_timeout(500)
-            check("grid shown", grid_shown() and radio() == 3, "Grid: the grid, no panels")
+            if a.start != "grid":
+                set_marker()
+                set_radio(3)
+                wait_drawn()
+            check("grid shown", grid_shown() and radio() == 3 and all(x > 1 for x in drawn_cells()),
+                  "Grid: the grid, no panels, page 1 drawn without pressing Plot")
 
             set_marker()
             t = time.time()

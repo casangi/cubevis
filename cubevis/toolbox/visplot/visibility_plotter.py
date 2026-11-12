@@ -2471,6 +2471,12 @@ window.__cvGridLayout = function (on) {
     grid_area.visible = !!on;
     plot_area.visible = !on;
     if (!on) return;
+    // Nothing drawn in the grid yet: plot, as pressing Plot in Grid would
+    // (2026-11-11: Grid alone showed empty cells until Plot was pressed).
+    if (!window.__cvGridDrawn && grid_plot) {
+        window.__cvGridDrawn = true;
+        setTimeout(() => grid_plot.execute(grid_plot, {}), 0);
+    }
     const sv = window.__cvGridSavedSel;
     if (!sv) return;
     window.__cvGridSavedSel = null;
@@ -6340,7 +6346,8 @@ cvApplySelectionText(
             self._grid_source, self._comm_mgr, rows=rows, cols=cols, pool=pool,
             area=self.GRID_AREA, theme=self._theme, on_drill=self._grid_drill,
             drill_js=self._grid_drill_js, autoload=autoload,
-            extra_controls=[self._grid_iter_sel], app_context=self._app_context)
+            extra_controls=[self._grid_iter_sel], app_context=self._app_context,
+            idle_text="Press <b>Plot &#9654;</b> to draw the grid")
         self._grid_container = column(self._grid_view.layout)
         # Empty until Grid is first shown (window.__cvGridLayout attaches the
         # grid): the browser builds a view for every cell of a layout even
@@ -6363,6 +6370,8 @@ cvApplySelectionText(
             args=args, code=self._do_plot_js + "if (layout_rbg.active === 3) doPlot(false);"))
         self._grid_restore_args = {k: args[k] for k in (
             "ant_src", "bl_src", "spw_src", "field_sel", "scan_inp", "corr_cbg", "ant_mode")}
+        self._grid_restore_args["grid_plot"] = CustomJS(
+            args=args, code=self._do_plot_js + "doPlot(false);")
 
     def _grid_drill(self, index: int, label: str) -> dict:
         """A grid cell tapped: what the browser selects to show it in a
@@ -9258,6 +9267,7 @@ function doPlot(reload) {
         const _grid    = (layout_rbg.active === 3);
         const hide0    = _grid || (_one && (_order[0] !== 0));
         const hide1    = _grid || (_one && (_order[0] !== 1));
+        if (resp.grid) window.__cvGridDrawn = true;
         if (resp.grid && typeof grid_key !== 'undefined' && window.__cvGrid && window.__cvGrid[grid_key])
             window.__cvGrid[grid_key].reload('drawing ' + resp.grid.n_cells + ' plots');
 

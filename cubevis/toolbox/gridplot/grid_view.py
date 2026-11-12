@@ -105,6 +105,7 @@ class GridView:
         ``reload``)
     extra_controls : widgets placed at the start of the control row (an
         application's "Iterate by")
+    idle_text : the status line before the first page (no autoload)
     app_context : the application's ``BokehAppContext``: the view's script
         is one of its init scripts (else it runs on ``curdoc()``'s
         DocumentReady, which a page saved from the app context may not
@@ -117,7 +118,8 @@ class GridView:
                  theme: str = "light",
                  on_drill: Optional[Callable[[int, str], object]] = None,
                  drill_js=None, autoload: bool = True,
-                 extra_controls: Sequence = (), app_context=None) -> None:
+                 extra_controls: Sequence = (), app_context=None,
+                 idle_text: str = "") -> None:
         pr, pc = int(pool[0]), int(pool[1])
         if not (1 <= pr <= MAX_POOL[0] and 1 <= pc <= MAX_POOL[1]):
             raise ValueError(f"pool must be within 1 x 1 .. {MAX_POOL[0]} x {MAX_POOL[1]}")
@@ -134,6 +136,7 @@ class GridView:
         self._autoload = bool(autoload)
         self._extra = list(extra_controls)
         self._app_context = app_context
+        self._idle_text = idle_text
         self._labels = list(source.labels())
         self._comm_mgr = comm_mgr
         self._pipe = comm_mgr.open(squash_queue=False, description="grid view")
@@ -407,7 +410,7 @@ class GridView:
                     x_name=x_name, y_name=y_name, pool=[pr, pc], frame=[fw, fh],
                     cell=list(self._cell), area=list(self._area) if self._area else None,
                     min_frame=list(MIN_FRAME), autoload=self._autoload, label_css=label_css,
-                    label_tpl=_LABEL_CSS,
+                    label_tpl=_LABEL_CSS, idle_text=self._idle_text,
                     drill_js=self._drill_js, key=self._ids["page"])
         if self._app_context is not None:
             self._app_context.add_init_script(code=_GRID_JS, args=args, description="grid view")
@@ -762,5 +765,5 @@ if (autoload) {
         if (connected() || n >= 600) show(0, 'drawing');
         else setTimeout(() => first(n + 1), 100);
     })(0);
-} else status.text = '';
+} else status.text = idle_text || '';
 """

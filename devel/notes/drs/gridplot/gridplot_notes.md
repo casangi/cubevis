@@ -230,6 +230,9 @@ Frequency (found by the tests: every cell was blank).
 - *Plot in Grid* updates only the template panel, then configures the
   source; the browser draws page 1.  The panels' layout (`_layout`) is
   kept: Grid is a mode (`_grid_on`), so a drill-down has One to go to.
+- *Choosing Grid draws it*: the first time Grid is shown it plots, as Plot
+  in Grid would (Darrell's first try, TW Hya: Grid showed empty cells until
+  Plot was pressed).  Later switches show the page last drawn.
 - *Iterate by* sits in the grid's control row; changing it plots again.
 - *Tap* drills down: the sidebar is set to the cell's selection (as the
   Prev / Next steppers set it), Layout to One, and Plot runs.  Back to

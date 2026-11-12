@@ -74,6 +74,7 @@ def _validate_params(
         iterate_by,
         gridrows,
         gridcols,
+        gridcolour,
         exprange,
         time_labels,
         autocorr,
@@ -135,6 +136,7 @@ def _validate_params(
         'iterate_by': 'str',
         'gridrows': 'int',
         'gridcols': 'int',
+        'gridcolour': 'str',
         'exprange': 'str',
         'time_labels': 'str',
         'autocorr': 'str',
@@ -254,6 +256,7 @@ def _validate_params(
     _check('iterate_by', iterate_by, _type_map['iterate_by'])
     _check('gridrows', gridrows, _type_map['gridrows'])
     _check('gridcols', gridcols, _type_map['gridcols'])
+    _check('gridcolour', gridcolour, _type_map['gridcolour'])
     _check('exprange', exprange, _type_map['exprange'])
     _check('time_labels', time_labels, _type_map['time_labels'])
     _check('autocorr', autocorr, _type_map['autocorr'])
@@ -315,6 +318,7 @@ def _visplot_t(
         iterate_by: str = 'baseline',
         gridrows: int = 3,
         gridcols: int = 3,
+        gridcolour: str = 'page',
         exprange: str = 'current',
         time_labels: str = 'utc',
         autocorr: str = 'exclude',
@@ -375,6 +379,7 @@ def _visplot_t(
         iterate_by = iterate_by,
         gridrows = gridrows,
         gridcols = gridcols,
+        gridcolour = gridcolour,
         exprange = exprange,
         time_labels = time_labels,
         autocorr = autocorr,
@@ -616,6 +621,13 @@ class _visplot:
         Rows of plots on a page of the Grid layout (1-8, default 3).
     gridcols : int
         Columns of plots on a page of the Grid layout (1-8, default 3).
+    gridcolour : str
+        The Grid layout's colour range: ``"page"`` (default), one range
+        for the plots on a page; ``"grid"``, one for every plot in the
+        grid, so that pages compare (found cell by cell in the
+        background; until then a page is coloured by its own range);
+        ``"cell"``, each plot its own.  With ``eq_hist`` the plots that
+        share a range share its curve too.
     exprange : str
         Which pages of the Grid layout ``plotfile=`` writes: ``"current"``
         (default: the first page, as plotms), ``"all"``, or page numbers
@@ -728,11 +740,14 @@ class _visplot:
         not fit, every redraw and flag operation re-reads them from the data
         (an INFO/WARNING line says so).  ``None`` (default): the
         ``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` environment variable if set, else
-        a tenth of physical memory, clamped to 256 MiB .. 4 GiB.  Remote
-        sessions apply it in the worker, where the frames live.  Example:
-        TW Hya with all fields (2 x 31 M samples, ~1.5 GiB per frame) needs
-        about 3-4 GiB; on a 24 GB Mac the 2.4 GiB default evicted frames
-        and a flag box took 3.6 s instead of 0.5 s.
+        by the host: a tenth of memory below 12 GiB; a quarter, at most
+        half of what is free and 16 GiB, above; on a host with 48 GiB or
+        more free (a compute node) 40 % of what is free, up to 64 GiB.  The
+        budget chosen is logged (INFO).  Remote sessions apply it in the
+        worker, where the frames live.  Example: TW Hya with all fields
+        (2 x 31 M samples, ~1.5 GiB per frame) needs about 3-4 GiB; on a 24
+        GB Mac the old 2.4 GiB default evicted frames and a flag box took
+        3.6 s instead of 0.5 s.
     plotfile : str | None
         Write a PNG of the plot to this path instead of opening the GUI
         (the ``visplot`` task then returns the path).  Implies
@@ -803,6 +818,7 @@ class _visplot:
             iterate_by: str = 'baseline',
             gridrows: int = 3,
             gridcols: int = 3,
+            gridcolour: str = 'page',
             exprange: str = 'current',
             time_labels: str = 'utc',
             autocorr: str = 'exclude',
@@ -877,6 +893,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             iterate_by = iterate_by,
             gridrows = gridrows,
             gridcols = gridcols,
+            gridcolour = gridcolour,
             exprange = exprange,
             time_labels = time_labels,
             autocorr = autocorr,
@@ -938,6 +955,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'iterate_by=' + repr(iterate_by),
                 'gridrows=' + repr(gridrows),
                 'gridcols=' + repr(gridcols),
+                'gridcolour=' + repr(gridcolour),
                 'exprange=' + repr(exprange),
                 'time_labels=' + repr(time_labels),
                 'autocorr=' + repr(autocorr),
@@ -1000,6 +1018,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 iterate_by = iterate_by,
                 gridrows = gridrows,
                 gridcols = gridcols,
+                gridcolour = gridcolour,
                 exprange = exprange,
                 time_labels = time_labels,
                 autocorr = autocorr,

@@ -106,6 +106,10 @@ class GridView:
     extra_controls : widgets placed at the start of the control row (an
         application's "Iterate by")
     idle_text : the status line before the first page (no autoload)
+    embedded : the layout is the grid alone; the application places the
+        controls (``widgets``) where its own controls are -- visplot puts
+        the shape in its sidebar, paging in its toolbar, the readout over
+        its status bar
     app_context : the application's ``BokehAppContext``: the view's script
         is one of its init scripts (else it runs on ``curdoc()``'s
         DocumentReady, which a page saved from the app context may not
@@ -119,7 +123,8 @@ class GridView:
                  on_drill: Optional[Callable[[int, str], object]] = None,
                  drill_js=None, autoload: bool = True,
                  extra_controls: Sequence = (), app_context=None,
-                 idle_text: str = "") -> None:
+                 idle_text: str = "", embedded: bool = False,
+                 colour: Optional[str] = None) -> None:
         pr, pc = int(pool[0]), int(pool[1])
         if not (1 <= pr <= MAX_POOL[0] and 1 <= pc <= MAX_POOL[1]):
             raise ValueError(f"pool must be within 1 x 1 .. {MAX_POOL[0]} x {MAX_POOL[1]}")
@@ -137,6 +142,12 @@ class GridView:
         self._extra = list(extra_controls)
         self._app_context = app_context
         self._idle_text = idle_text
+        self._embedded = bool(embedded)
+        # the colour scopes the source offers (render(colour=...)): none, a
+        # source whose cells each colour themselves
+        self._colours = tuple(getattr(source, "COLOUR_SCOPES", ()))
+        self._colour = colour if colour in self._colours else (
+            "page" if "page" in self._colours else None)
         self._labels = list(source.labels())
         self._comm_mgr = comm_mgr
         self._pipe = comm_mgr.open(squash_queue=False, description="grid view")
@@ -204,7 +215,8 @@ class GridView:
             vp = tuple(float(v) for v in self._source.extent())
         w = max(MIN_FRAME[0] // 2, int(msg.get("w") or self._cell[0]))
         h = max(MIN_FRAME[1] // 2, int(msg.get("h") or self._cell[1]))
-        rendered = self._source.render(indices, vp, (w, h)) if indices else []
+        colour, ckw = self._colour_kw(msg, page, rows, cols)
+        rendered = self._source.render(indices, vp, (w, h), **ckw) if indices else []
         cells = []
         for i, rp in zip(indices, rendered):
             spec = rp.spec
@@ -223,7 +235,23 @@ class GridView:
         ext = [float(v) for v in self._source.extent()]
         return {"page": page, "n_pages": n_pages, "n_cells": self.n_cells, "rows": rows,
                 "cols": cols, "cells": cells, "x_name": xn, "y_name": yn, "extent": ext,
-                "partial": msg.get("indices") is not None}
+                "partial": msg.get("indices") is not None,
+                "colour": self._colour_state(colour)}
+
+    def _colour_kw(self, msg: dict, page: int, rows: int, cols: int):
+        """The colour scope a request asks for, and ``render``'s keywords
+        for it (none for a source without scopes)."""
+        if not self._colours:
+            return None, {}
+        colour = msg.get("colour") or self._colour
+        if colour not in self._colours:
+            colour = self._colour
+        return colour, {"colour": colour,
+                        "page_indices": self.page_indices(page, rows, cols)}
+
+    def _colour_state(self, colour) -> dict:
+        fn = getattr(self._source, "colour_state", None)
+        return fn(colour) if (fn and colour) else {"pending": False, "note": ""}
 
     async def _handle_probe(self, msg, context=None):
         try:
@@ -269,7 +297,10 @@ class GridView:
             tuple(self._source.extent()) if common else None)
         w = int(msg.get("w") or self._cell[0])
         h = int(msg.get("h") or self._cell[1])
-        rendered = list(self._source.render(indices, vp, (w, h)))
+        colour, ckw = self._colour_kw(msg, page, rows, cols)
+        if colour == "grid" and hasattr(self._source, "wait_for_grid_range"):
+            self._source.wait_for_grid_range()      # the file is coloured as asked
+        rendered = list(self._source.render(indices, vp, (w, h), **ckw))
         # used rows only: a partly filled last page is not padded with
         # empty rows; the empty cells of its last row stay framed
         used_rows = max(1, math.ceil(len(rendered) / cols))
@@ -394,6 +425,14 @@ class GridView:
                           options=[str(i) for i in range(1, pc + 1)], width=60)
         sel_scale = Select(title="Scale", value="common", options=["common", "per cell"],
                            width=100)
+        _names = {"cell": "per cell", "page": "this page", "grid": "whole grid"}
+        sel_colour = Select(title="Colour", value=self._colour or "cell",
+                            options=[(c, _names.get(c, c)) for c in self._colours] or
+                            [("cell", "per cell")], width=100,
+                            visible=bool(self._colours),
+                            description="One colour range for each cell, for the cells "
+                                        "on this page, or for every cell in the grid "
+                                        "(found in the background)")
         b_play = Button(label="Play", width=70, button_type="success")
         sel_speed = Select(title="Pages/s", value="1", options=["0.5", "1", "2", "4", "8"],
                            width=70)
@@ -401,7 +440,7 @@ class GridView:
         b_save = Button(label="Save PNG", width=90)
         # the controls' titles in the theme's text colour (restyle changes it)
         label_css = InlineStyleSheet(css=_LABEL_CSS % fg)
-        for w in (sel_rows, sel_cols, sel_scale, sel_speed, cb_loop, *self._extra):
+        for w in (sel_rows, sel_cols, sel_scale, sel_colour, sel_speed, cb_loop, *self._extra):
             w.stylesheets = list(w.stylesheets) + [label_css]
         status = Div(text="", width=170, styles={"color": fg})
         # The cursor readout above the grid, two lines high whatever it says:
@@ -419,7 +458,7 @@ class GridView:
         args = dict(pipe=self._pipe, probe_pipe=self._probe_pipe, ids=self._ids, figs=figs,
                     sources=sources, states=states, grid=grid, page_div=page_div,
                     status=status, probe=probe, sel_rows=sel_rows, sel_cols=sel_cols,
-                    sel_scale=sel_scale, b_play=b_play, sel_speed=sel_speed, cb_loop=cb_loop,
+                    sel_scale=sel_scale, sel_colour=sel_colour, b_play=b_play, sel_speed=sel_speed, cb_loop=cb_loop,
                     x_name=x_name, y_name=y_name, pool=[pr, pc], frame=[fw, fh],
                     cell=list(self._cell), area=list(self._area) if self._area else None,
                     min_frame=list(MIN_FRAME), autoload=self._autoload, label_css=label_css,
@@ -444,6 +483,7 @@ class GridView:
         sel_rows.js_on_change("value", call("reshape"))
         sel_cols.js_on_change("value", call("reshape"))
         sel_scale.js_on_change("value", call("rescale"))
+        sel_colour.js_on_change("value", call("recolour"))
         sel_speed.js_on_change("value", call("respeed"))
         b_play.js_on_click(call("togglePlay"))
         b_save.js_on_click(call("save"))
@@ -457,10 +497,21 @@ class GridView:
             f.js_on_event("rangesupdate", on_ranges)
             f.js_on_event("reset", on_reset)
 
+        #: the controls, for an application that places them itself
+        #: (``embedded``): ``nav`` (paging), ``play`` (Play, Pages/s, Loop),
+        #: ``shape`` (Rows, Cols, Scale), ``colour``, ``status``, ``probe``, ``save``
+        self.widgets = dict(nav=[b_first, b_prev, page_div, b_next, b_last],
+                            play=[b_play, sel_speed, cb_loop],
+                            shape=[sel_rows, sel_cols, sel_scale], colour=sel_colour,
+                            status=status, probe=probe, save=b_save)
+        plot = row(y_name, column(x_name, grid))
+        if self._embedded:
+            self._models = dict(args)
+            return column(plot, styles={"background-color": bg} if dark else {})
         controls = row(*self._extra, b_first, b_prev, page_div, b_next, b_last, sel_rows,
-                       sel_cols, sel_scale, b_play, sel_speed, cb_loop, b_save)
+                       sel_cols, sel_scale, sel_colour, b_play, sel_speed, cb_loop, b_save)
         self._models = dict(args, controls=controls)
-        return column(controls, row(status, probe), row(y_name, column(x_name, grid)),
+        return column(controls, row(status, probe), plot,
                       styles={"background-color": bg} if dark else {})
 
 
@@ -473,7 +524,8 @@ _GRID_JS = r"""
 window.__cvGrid = window.__cvGrid || {};
 if (window.__cvGrid[key]) return;
 const S = {page: 0, nPages: 1, nCells: 0, rows: +sel_rows.value, cols: +sel_cols.value,
-           common: sel_scale.value === 'common', viewport: null, playing: null,
+           common: sel_scale.value === 'common', colour: sel_colour.value,
+           viewport: null, playing: null, colourTimer: null,
            cache: new Map(), cacheKey: '', loading: false, syncing: false, zoomTimer: null,
            extent: null, gen: 0, frame: [frame[0], frame[1]], xEach: false, yEach: false};
 const PR = pool[0], PC = pool[1];
@@ -485,9 +537,9 @@ const BLANK = sources[0].data.image[0];
 function send(p, id, msg) {
     return new Promise((res) => p.send(id, msg, (r) => res(r)));
 }
-function shape() { return {rows: S.rows, cols: S.cols, common: S.common,
+function shape() { return {rows: S.rows, cols: S.cols, common: S.common, colour: S.colour,
                            viewport: S.viewport, w: S.frame[0], h: S.frame[1]}; }
-function keyOf() { return JSON.stringify([S.rows, S.cols, S.common, S.viewport, S.frame]); }
+function keyOf() { return JSON.stringify([S.rows, S.cols, S.common, S.colour, S.viewport, S.frame]); }
 // each cell's plot area: *cell*, or the page's share of *area* (as
 // GridView.frame_for computes it)
 // The area the cells share: *fit_to*'s room below and right of the grid's
@@ -649,6 +701,17 @@ async function show(page, why) {
     }
     apply(resp, page);
     status.text = `drawn in ${(performance.now() - t0).toFixed(0)} ms`;
+    const col = resp.colour || {};
+    if (col.pending) {
+        // the whole grid's range is still being found: this page was
+        // coloured by its own range; ask again until it is known
+        S.cache.clear();
+        status.text += '<br><span style="opacity:0.7">' + col.note + '</span>';
+        clearTimeout(S.colourTimer);
+        S.colourTimer = setTimeout(() => {
+            if (gen === S.gen && S.colour === 'grid' && !S.loading) show(S.page, 'colouring');
+        }, 1500);
+    }
     if (S.playing) prefetch();
 }
 function prefetch() {
@@ -679,6 +742,7 @@ const G = {
         S.nPages = Math.max(1, Math.ceil(S.nCells / (S.rows * S.cols)));
         show(Math.floor(first / (S.rows * S.cols)), 'reshaping');
     },
+    recolour() { S.colour = sel_colour.value; clearTimeout(S.colourTimer); show(S.page, 'colouring'); },
     rescale() { S.common = sel_scale.value === 'common'; S.viewport = null; regrid(); show(S.page, 'rescaling'); },
     restyle(dark) {
         // the application's Light / Dark toggle: the chrome now (the cells'

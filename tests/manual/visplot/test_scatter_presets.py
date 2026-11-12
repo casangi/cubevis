@@ -248,7 +248,7 @@ class TestPresetConstruction:
                 for line in ("panel0_kind_switch.active = 1;", "panel1_kind_switch.active = 1;",
                              "layout_rbg.active = lay;", "pos0_scatter_layout.visible = true;",
                              "pos1_scatter_layout.visible = (lay !== 0);",
-                             "pin_cb.active.length > 0) ? layout_rbg.active : 2;",
+                             "layout_rbg.active === 3) ? layout_rbg.active : 2;",  # pinned or Grid: kept
                              f"panel0_sx_sel.value = '{x}';", f"panel1_sx_sel.value = '{x}';",
                              "panel0_sy_sel.value = 'AMPLITUDE';", "panel1_sy_sel.value = 'PHASE';",
                              f"panel0_sat_sel.value = '{at}';", f"panel1_sac_sel.value = '{ac}';",

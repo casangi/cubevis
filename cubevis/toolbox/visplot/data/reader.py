@@ -1403,15 +1403,29 @@ FRAME_CACHE_ENV = "CUBEVIS_VISPLOT_FRAME_CACHE_MB"
 """Environment override for the cache budget, in MiB.  ``0`` disables the
 cache entirely (every call re-reads, exactly as before this feature)."""
 
-# Default budget = a tenth of physical memory, clamped.  Deliberately small:
-# a read's transient memory peaks at ~4x the final frame (measured: 1.7 GB RSS
-# for a 0.44 GB frame), and the cache keeps OTHER frames alive during it.  A
-# first draft used a quarter of RAM and, on a 4 GB machine, made a combined
-# test run swap and fail a 10 s timing test that passes alone in 4.2 s; capping
-# the budget at 256 MiB made the same run pass in half the time.
-_FRAME_CACHE_FRACTION = 0.10
+# Default budget, by the size of the host (2026-11-11, Darrell: "a larger
+# cache really does make a difference"; TW Hya's two frames, ~1.5 GiB each,
+# did not fit the old 2.4 GiB on a 24 GB Mac, so every redraw re-read one).
+#
+# * a small machine (under 12 GiB): a tenth of memory, as before.  A read's
+#   transient memory peaks at ~4x the final frame (measured: 1.7 GB RSS for a
+#   0.44 GB frame) and the cache keeps OTHER frames alive during it; a quarter
+#   of RAM on a 4 GB machine made a combined test run swap and fail a timing
+#   test that passes alone.
+# * otherwise: a quarter of memory, but no more than half of what is free
+#   when the cache is made (what else the machine is doing), up to 16 GiB.
+# * a large host with much free -- a compute node, the usual remote kernel's
+#   host, not a shared interactive one: 40 % of what is free, up to 64 GiB.
+#   What is free tells the two apart better than any setting would.
+_FRAME_CACHE_FRACTION = 0.10           # small machines
+_FRAME_CACHE_SMALL_HOST = 12 << 30
+_FRAME_CACHE_FRACTION_LARGE = 0.25     # of physical memory
+_FRAME_CACHE_FREE_SHARE = 0.5          # at most this share of what is free
+_FRAME_CACHE_MAX_DEFAULT = 16 << 30
+_FRAME_CACHE_NODE_FREE = 48 << 30      # this much free: a compute node
+_FRAME_CACHE_NODE_SHARE = 0.4
+_FRAME_CACHE_NODE_MAX = 64 << 30
 _FRAME_CACHE_MIN_BYTES = 256 << 20
-_FRAME_CACHE_MAX_DEFAULT = 4 << 30
 _FRAME_CACHE_FALLBACK = 512 << 20
 
 
@@ -1438,9 +1452,11 @@ def _physical_memory_bytes() -> Optional[int]:
 
 
 def _default_frame_cache_bytes() -> int:
-    """The cache budget: ``$CUBEVIS_VISPLOT_FRAME_CACHE_MB`` if set, else a
-    tenth of physical memory clamped to [256 MiB, 4 GiB] (512 MiB when the
-    memory size is unknown)."""
+    """The cache budget: ``$CUBEVIS_VISPLOT_FRAME_CACHE_MB`` if set, else by
+    the host (see the constants above): a tenth of memory under 12 GiB; a
+    quarter, at most half of what is free and 16 GiB, above; 40 % of what is
+    free, up to 64 GiB, on a host with 48 GiB or more free.  Never under
+    256 MiB; 512 MiB when the memory size is unknown."""
     env = os.environ.get(FRAME_CACHE_ENV)
     if env is not None and env.strip():
         try:
@@ -1448,11 +1464,31 @@ def _default_frame_cache_bytes() -> int:
         except ValueError:
             log.warning("%s=%r is not a number; using the default budget",
                         FRAME_CACHE_ENV, env)
-    phys = _physical_memory_bytes()
+    b, why = _frame_cache_budget(_physical_memory_bytes(), _available_memory_bytes())
+    log.info("visplot frame cache: %.1f GiB (%s; %s=<MiB> to set it)",
+             b / 2 ** 30, why, FRAME_CACHE_ENV)
+    return b
+
+
+def _frame_cache_budget(phys: Optional[int], avail: Optional[int]) -> tuple:
+    """``(bytes, reason)`` for a host with *phys* bytes of memory, *avail*
+    of them free now (either may be ``None``: unknown)."""
+    g = 2 ** 30
     if not phys:
-        return _FRAME_CACHE_FALLBACK
-    return int(min(_FRAME_CACHE_MAX_DEFAULT,
-                   max(_FRAME_CACHE_MIN_BYTES, _FRAME_CACHE_FRACTION * phys)))
+        return _FRAME_CACHE_FALLBACK, "memory size unknown"
+    if phys < _FRAME_CACHE_SMALL_HOST:
+        b = _FRAME_CACHE_FRACTION * phys
+        why = f"a tenth of {phys / g:.0f} GiB"
+    elif avail is not None and avail >= _FRAME_CACHE_NODE_FREE:
+        b = min(_FRAME_CACHE_NODE_MAX, _FRAME_CACHE_NODE_SHARE * avail)
+        why = f"40 % of the {avail / g:.0f} GiB free on a large host"
+    else:
+        b = min(_FRAME_CACHE_MAX_DEFAULT, _FRAME_CACHE_FRACTION_LARGE * phys)
+        why = f"a quarter of {phys / g:.0f} GiB"
+        if avail is not None and _FRAME_CACHE_FREE_SHARE * avail < b:
+            b = _FRAME_CACHE_FREE_SHARE * avail
+            why = f"half of the {avail / g:.1f} GiB free"
+    return int(max(_FRAME_CACHE_MIN_BYTES, b)), why
 
 
 # --------------------------------------------------------------------------

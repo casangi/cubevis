@@ -105,6 +105,72 @@ def test_cells_drawn_at_a_common_extent(plotter):
     assert out.image is None and out.spec.note
 
 
+def _ranges(src, idx, colour, page=None):
+    """Each drawn cell's (vmin, vmax) as its colour bar has it."""
+    from cubevis.toolbox.visplot.visibility_raster import VisibilityRaster
+    src.render(idx, src.extent(), (120, 90), colour=colour, page_indices=page)
+    out = []
+    for i in idx:
+        c = src._cells[i]
+        spec = c._panel_spec()
+        m = VisibilityRaster._bands_with_mappings(c, spec)[0].mapping
+        out.append((round(m.vmin, 6), round(m.vmax, 6)))
+    return out
+
+
+def test_colour_scopes(plotter):
+    """per cell: each its own range; this page: one over the page; whole
+    grid: one over every cell, after the background pass (gridplot, 11-11)."""
+    from cubevis.toolbox.visplot.vis_grid_source import VisGridSource
+    src = VisGridSource(plotter).configure(iterate_by="baseline")
+    n = len(src.labels())
+    page = list(range(4))
+    own = _ranges(src, page, "cell")
+    assert len(set(own)) > 1, own                       # the baselines differ
+    shared = _ranges(src, page, "page")
+    assert len(set(shared)) == 1
+    lo, hi = shared[0]
+    assert lo == min(r[0] for r in own) and hi == max(r[1] for r in own)
+    # a cell drawn again alone (a zoom) keeps its page's range
+    assert _ranges(src, [1], "page", page) == [shared[0]]
+    st = src.colour_state("grid")
+    assert st["pending"] and f"/{n} cells" in st["note"]
+    assert src.wait_for_grid_range(timeout=120)
+    assert not src.colour_state("grid")["pending"]
+    whole = _ranges(src, page, "grid")
+    assert len(set(whole)) == 1
+    allc = _ranges(src, list(range(n)), "cell")
+    assert whole[0] == (min(r[0] for r in allc), max(r[1] for r in allc))
+    # a new configuration forgets the ranges
+    src.configure(iterate_by="baseline")
+    assert src.colour_state("grid")["pending"]
+    with pytest.raises(ValueError):
+        src.render([0], None, (120, 90), colour="everything")
+
+
+def test_colour_eq_hist_shares_the_curve(plotter):
+    """eq_hist on a page: one curve (the pooled values'), not one per cell."""
+    from cubevis.toolbox.visplot.vis_grid_source import VisGridSource
+    old = plotter._pos0._scaling
+    plotter._pos0._scaling = "eq_hist"
+    try:
+        src = VisGridSource(plotter).configure(iterate_by="baseline")
+        src.render([0, 1], src.extent(), (120, 90), colour="page")
+        a, b = src._cells[0], src._cells[1]
+        assert a._shared_reference is b._shared_reference is not None
+        ma = a._bands_with_mappings(a._panel_spec())[0].mapping
+        mb = b._bands_with_mappings(b._panel_spec())[0].mapping
+        assert np.allclose(ma._x, mb._x) and np.allclose(ma._u, mb._u)
+    finally:
+        plotter._pos0._scaling = old
+
+
+def test_gridcolour_argument(ms):
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    with pytest.raises(ValueError):
+        VisibilityPlotter(ms=ms, headless=True, gridcolour="all")
+
+
 def test_theme_recolours_kept_cells(plotter):
     from cubevis.toolbox.visplot.vis_grid_source import VisGridSource
     from cubevis.toolbox.gridplot import palettes

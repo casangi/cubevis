@@ -24,7 +24,14 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
                     drawn again in the new palette
     preset          a preset pressed in Grid: Grid stays, the grid repeats
                     the preset's panel
-    readout         the cursor readout sits above the grid, clear of every cell
+    readout         the cursor readout is clear of the grid (above visplot's
+                    status bar); the grid's controls are in the sidebar and
+                    the toolbar, not over the plots
+    all (✱)         after Antenna ▶, the stepper's ✱ goes back to all
+                    antennas and plots at once
+    colour          Colour: "this page" by default; "per cell" draws the
+                    cells again in their own ranges; "whole grid" waits for
+                    the background pass, then draws in the grid's range
     fit             1 x 1: the cell fills the room the window gives the grid,
                     and follows the window's size
     export          Export PNG in Grid writes the page
@@ -316,7 +323,66 @@ def main() -> int:
                 const p = {MODELS}.find(m => m.type === 'Div' && m.styles && m.styles['line-height'] === '16px');
                 const pv = Bokeh.index.find_one_by_id(p.id), gv = Bokeh.index.find_one_by_id({model(GRIDPLOT)}.id);
                 return [pv.el.getBoundingClientRect().bottom, gv.el.getBoundingClientRect().top]; }}""")
-            check("readout", ov[0] <= ov[1], f"readout ends at {ov[0]:.0f} px, grid starts at {ov[1]:.0f} px")
+            ov = pg.evaluate(f"""() => {{
+                const p = {MODELS}.find(m => m.type === 'Div' && m.styles && m.styles['line-height'] === '16px');
+                const g = {model(GRIDPLOT)};
+                const pr = Bokeh.index.find_one_by_id(p.id).el.getBoundingClientRect();
+                const gr = Bokeh.index.find_one_by_id(g.id).el.getBoundingClientRect();
+                const rows = {MODELS}.find(m => m.type === 'Select' && m.title === 'Rows');
+                const rr = Bokeh.index.find_one_by_id(rows.id).el.getBoundingClientRect();
+                return [pr.top, pr.bottom, gr.top, gr.bottom, rr.left, gr.left]; }}""")
+            clear = ov[1] <= ov[2] or ov[0] >= ov[3]
+            check("readout", clear and ov[4] < ov[5],
+                  f"readout {ov[0]:.0f}-{ov[1]:.0f} px, grid {ov[2]:.0f}-{ov[3]:.0f} px; "
+                  f"Rows at x {ov[4]:.0f}, left of the grid ({ov[5]:.0f}): in the sidebar")
+
+            def run_button(label, code_part):
+                pg.evaluate(f"""([l, c]) => {{ const b = {MODELS}.find(m => m.type === 'Button'
+                    && m.label === l && (m.js_event_callbacks['button_click'] || [])
+                    .some(cb => cb.code.includes(c)));
+                    for (const cb of b.js_event_callbacks['button_click']) cb.execute(b); }}""",
+                            [label, code_part])
+
+            def status_line():
+                return status_div_text("t.includes('Layout:')") or ""
+            set_marker(); run_button("▶", "doIterateAntenna(1)"); wait_drawn()
+            stepped = status_line()
+            set_marker(); run_button("✱", "ant_src.selected.indices = []"); wait_drawn()
+            back = status_line()
+            green = pg.evaluate(f"() => {MODELS}.find(m => m.type === 'Button' && m.label === 'Plot ▶').button_type")
+            check("all (✱)", "Antenna 1/" in stepped and "Antenna: all" in back and green == "success",
+                  f"after ▶: {stepped.split('Antenna')[1][:22]!r}; after ✱: "
+                  f"{back.split('Antenna')[1][:12]!r}; Plot {green}")
+
+            def cells_sum():
+                return pg.evaluate(f"""() => {{ let s = 0;
+                    const it = (x) => {{ if (typeof x === 'number') s = (s * 31 + x) % 1000000007;
+                                         else for (const y of x) it(y); }};
+                    for (const m of {MODELS})
+                        if (m.type === 'ColumnDataSource' && m.data.image) it(m.data.image[0]);
+                    return s; }}""")
+
+            def set_colour(v):
+                pg.evaluate(f"""(v) => {{ {model("m.type === 'Select' && m.title === 'Colour'")}
+                    .value = v; }}""", v)
+
+            g_state = "() => Object.values(window.__cvGrid)[0].state()"
+            first = pg.evaluate(g_state)["colour"]
+            page_sum = cells_sum()
+            set_marker(); set_colour("cell"); wait_drawn()
+            cell_sum = cells_sum()
+            t1 = time.time()
+            set_marker(); set_colour("grid")
+            pg.wait_for_function(f"""() => {MODELS}.filter(m => m.type === 'Div').some(d =>
+                d.text.startsWith('drawn in') && !d.text.includes('grid colour range'))""",
+                timeout=300000)
+            grid_s = time.time() - t1
+            grid_sum = cells_sum()
+            st = pg.evaluate(g_state)["colour"]
+            check("colour", first == "page" and page_sum != cell_sum and st == "grid"
+                  and grid_sum not in (0,), f"default {first!r}; per cell redrawn: "
+                  f"{page_sum != cell_sum}; whole grid ready in {grid_s:.1f} s")
+            set_marker(); set_colour("page"); wait_drawn()
 
             def frame0():
                 return pg.evaluate(f"""() => {{ const f = {model(GRIDPLOT)}.children[0][0];

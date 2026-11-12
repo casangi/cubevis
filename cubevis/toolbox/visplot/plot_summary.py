@@ -275,6 +275,8 @@ def reproducing_call(plotter) -> str:
         if tuple(plotter._grid_shape) != (3, 3):
             args.append(("gridrows", plotter._grid_shape[0]))
             args.append(("gridcols", plotter._grid_shape[1]))
+        if getattr(plotter, "_grid_colour", "page") != "page":
+            args.append(("gridcolour", plotter._grid_colour))
     else:
         args.append(("layout", getattr(plotter, "_layout", "side")))
     # Sizes only when not the layout's default (2026-10-13).

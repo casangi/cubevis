@@ -353,3 +353,95 @@ untouched); a real remote host.
    needed; scatter cells wait for G3's read-once-and-split.
 3. *Status line after Back to Grid* says "One panel" until the next Plot
    (the layout buttons do not talk to Python).
+
+## 5. G2 follow-ups: room for the plots, ✱, colour scope, frame cache (base `fc3ea3b8`, 2026-11-11)
+
+Darrell's review of section 4: the grid's control row took the plots'
+room; "All fields" after stepping left Plot orange (staged, as designed,
+but surprising after the steppers plot at once); the colour range should be
+a choice, defaulting to a common one; the frame cache evicted 1.5 GiB
+frames at a 2.4 GiB budget.  Open item 1 of section 4 is settled by
+**Colour scope** below; item 2 stands as agreed (Panel A's tab is the
+grid's configuration); item 3 is still open.
+
+**Grid controls placed as visplot's own** (`_place_grid_controls`).
+`GridView(embedded=True)` builds only the plots and hands its widgets
+back (`GridView.widgets`: `nav`, `play`, `shape`, `colour`, `status`,
+`probe`, `save`); the application places them.  visplot puts:
+
+- a **Grid** section at the top of the sidebar: Iterate by, Scale; Rows,
+  Cols, Colour; Pages/s, Loop;
+- paging and Play at the end of the toolbar;
+- "drawn in" and the cursor readout in a row between the body and the
+  status bar (clear of the cells, which now get the whole plot area).
+
+Each is shown only in Grid (`grid_parts` in `__cvGridLayout`).  Save PNG
+is not placed: Export PNG already writes the grid's page.  The stand-alone
+`GridApp` keeps its control row (non-embedded, unchanged).
+
+**✱ on the iteration steppers.**  Each stepper (Field, SPW, Antenna) is
+◀ ✱ ▶; ✱ goes back to all (All fields, every SPW, no antenna or baseline
+ticked) and plots at once, as ◀ / ▶ do.  Choosing "All fields" in the
+dropdown still stages (Plot orange) like any other edit.
+
+**Colour scope** (Grid section: *per cell*, *this page* (default), *whole
+grid*; `gridcolour=` for scripts and `plotfile=`; in the reproducing call
+when not "page").  A common colour scale needs common normalisation, not
+only a common vmin/vmax: with `eq_hist` each cell equalised to its own
+histogram makes any shared range meaningless.  So the cells share a
+*reference population*:
+
+- `VisibilityRaster._shared_reference` (default `None`): when set,
+  `_shade_agg` takes vmin/vmax from it and `eq_hist` builds its curve from
+  it; the colour bar mapping (`_bands_with_mappings`) uses the same, so a
+  bar always describes the image.  A manual vmin/vmax still wins.
+- `VisGridSource` keeps a sample of each cell's aggregated values (at most
+  20000, at least 2000, about 2 M over the grid, evenly strided, plus the
+  cell's exact min and max) and pools them: the page's cells for *this
+  page*; every cell for *whole grid*.  `render(..., colour=,
+  page_indices=)` sets the pool on each cell under the source's lock, so a
+  prefetched page and a shown one do not mix ranges.  A cell drawn again
+  alone (a per-cell zoom) keeps its page's range.
+- *whole grid*: a background thread visits every cell (querying one not
+  kept, then dropping it), a cell per lock hold, so page requests wait at
+  most one cell.  Until it has finished a page is drawn in its own range
+  and the response says `colour.pending`; the browser shows "grid colour
+  range: k/n cells" and asks again every 1.5 s.  A new Plot (`configure`)
+  forgets the samples and stops the pass.  Headless export with
+  `gridcolour="grid"` waits for it (`wait_for_grid_range`).
+- Cost: *this page* queries the page's cells before shading the first --
+  the same work as before, in a different order.  *whole grid* reads
+  every cell once; after G3 (read once, split) it becomes cheap enough to
+  be the default.
+
+**Frame cache budget** (`reader._frame_cache_budget`).  Remote hosts are
+usually compute nodes, so free memory, not caution, decides:
+
+| host | budget |
+|---|---|
+| < 12 GiB physical | 10 % of physical |
+| ≥ 48 GiB free | min(64 GiB, 40 % of free) |
+| otherwise | min(16 GiB, 25 % of physical), at most half of free |
+
+Floor 256 MiB (512 MiB when memory cannot be read).  The choice and its
+reason are logged at INFO; `CUBEVIS_VISPLOT_FRAME_CACHE_MB` (or
+`frame_cache_mb=`) still sets it.  Examples: 8 GiB laptop 0.8 GiB; 24 GiB
+workstation with 16 GiB free 6 GiB; 512 GiB shared host with 40 GiB free
+16 GiB; 256 GiB node with 200 GiB free 64 GiB.
+
+**Checks**
+
+- `test_vis_grid.py` 19 (new: colour scopes, eq_hist shares one curve,
+  `gridcolour` checked); `test_frame_cache.py` 31 (the host table above).
+- `visplot_grid_check.py` 18 of 18 (new: *readout* clear of the grid with
+  Rows in the sidebar; *all (✱)*; *colour*: default "this page", "per
+  cell" redraws, "whole grid" ready), starting in Over, in Grid, and
+  through a remote kernel.
+- `grid_browser_check.py` 13 of 13 (non-embedded GridView).
+
+**Open, for Darrell:**
+
+1. *Default colour scope.*  "this page" now; "whole grid" after G3.
+   Paging under "this page" changes the colours from page to page --
+   intended, and the reason for the whole-grid option.
+2. *Status line after Back to Grid* (section 4, item 3), still.

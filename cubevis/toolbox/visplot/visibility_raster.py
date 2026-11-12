@@ -1552,7 +1552,9 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             return spec.bands
         crop = self._crop_agg(viewport) if viewport is not None else self._agg
         values = np.asarray((crop if crop is not None else self._agg).values)
-        reference = (np.asarray(self._agg.values)
+        shared = self._shared_reference
+        reference = (shared if shared is not None and shared.size
+                     else np.asarray(self._agg.values)
                      if self._color_mode == "global" else None)
         m = ScalarMapping.from_values(
             values, self._scaling,
@@ -1576,6 +1578,13 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             return None
 
     _QUERY_PATH = "raster"
+
+    _shared_reference: "Optional[np.ndarray]" = None
+    """Values this panel's colours are scaled against with others', or
+    ``None`` (its own).  Set by a grid (``VisGridSource``) whose cells
+    share a colour range: the range, and for ``eq_hist`` the curve, come
+    from it -- a common scale needs common normalisation, not only a
+    common vmin/vmax.  A manual vmin/vmax still wins."""
 
     _degenerate_reason: "Optional[str]" = None
     """Why the last render produced a blank image, or ``None``.
@@ -2289,7 +2298,12 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         Returns the raw Datashader ``Image`` (not yet converted to
         ``uint32``) — callers apply ``_img_to_uint32`` themselves.
         """
-        if self._color_mode == "global" and self._agg is not None:
+        shared = self._shared_reference
+        if shared is not None and shared.size:
+            # a grid's shared colour range: the values of the cells
+            # coloured together (finite already), whatever color_mode says
+            vmin, vmax = float(shared.min()), float(shared.max())
+        elif self._color_mode == "global" and self._agg is not None:
             finite = self._agg.values[np.isfinite(self._agg.values)]
             vmin = float(finite.min()) if finite.size else None
             vmax = float(finite.max()) if finite.size else None
@@ -2316,7 +2330,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
 
         if self._scaling == "eq_hist":
             reference = (
-                self._agg.values
+                shared if shared is not None and shared.size
+                else self._agg.values
                 if self._color_mode == "global" and self._agg is not None
                 else None
             )

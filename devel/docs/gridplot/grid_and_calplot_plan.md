@@ -402,8 +402,8 @@ weeks of sessions. Each stage has an exit test you run in the browser.
 | **G0** | Benchmark: page of 9/16 headless cells (waterfall per baseline; time series per baseline; one cal-like scatter), read-per-cell vs read-once-and-split. Record in this note. **Done 2026-11-10: section 11** (synthetic data; the cal-like scatter waits for C0; retake on real data) | S | Numbers; decide whether "read once, split" is needed in G2 or later |
 | **G1a** | Move `panel_spec`, `png_export`, `tick_format`, `palettes`, `colormap_scaling`, `panel_sizes` (and shading helpers as needed) to a shared module; re-export from old paths **Done 2026-11-10** (`devel/notes/drs/gridplot/gridplot_notes.md` section 1) | S–M | Test suite unchanged; `plotfile=` output byte-identical |
 | **G1b** | `GridView` (Bokeh) + `GridController` + `GridSource` protocol; a synthetic source for tests; paging; common/per-cell scale; external axes; one probe; crosshair; save-page; tap event. **Built 2026-11-11: section 12** (remote waits for G2) | M–L | Demo notebook with a synthetic 4×4 source, both themes, local and remote |
-| **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets. **Built 2026-11-11: section 13** (rasters; presets are the panel presets in Grid; TW Hya / VLBA to test) | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
-| **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only | M | Page time inside the G0 target |
+| **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets. **Built 2026-11-11: sections 13, 14** (rasters; presets are the panel presets in Grid; TW Hya / VLBA to test) | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
+| **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only; scatter grids; "whole grid" colour scope by default (section 14) | M | Page time inside the G0 target |
 | **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables | M | Round-trip of values and flags against casatools reads |
 | **C1** | calplot app: selection (antenna, SPW, field, pol, time), grid per antenna, overlay mode, flagged solutions shown, refant in titles, PNG pages; remote kernels via the existing setup | L | Gain, bandpass and fringe tables from a real VLA/VLBA reduction |
 | **C2** | Solution flagging: box in drill-down panel, FlagDB list/undo, commit to `FLAG` with a backup copy | M | Flag, undo, commit, reopen in plotms and see the same flags |
@@ -827,6 +827,33 @@ fixed).  G1a's alias modules, never committed, are restored.  Details:
 `devel/notes/drs/gridplot/gridplot_notes.md` section 4.
 
 Open: one colour scale for the grid, or per cell as now (notes section 4).
+*Settled in section 14.*
+
+## 14. G2 follow-ups (2026-11-11, base `fc3ea3b8`)
+
+From Darrell's review of G2 (details: notes section 5):
+
+- **The plots get the whole plot area.**  The grid's own control row is
+  gone from visplot: Iterate by, Scale, Rows, Cols, Colour, Pages/s and
+  Loop are a Grid section at the top of the sidebar; paging and Play are
+  in the toolbar; the cursor readout sits above the status bar.  The grid's
+  configuration stays Panel A's tab (its Raster / Scatter switch included):
+  one place to configure, no gear of the grid's own.  `GridView(embedded=True)`
+  lets an application (calplot too) place the controls itself.
+- **✱ on the iteration steppers** (Field, SPW, Antenna): back to all, and
+  plot at once, as ◀ / ▶ do.  Other edits still stage until Plot.
+- **Colour scope** (*per cell*, *this page*, *whole grid*;
+  `gridcolour=`).  Shared normalisation, not only a shared vmin/vmax: the
+  cells colour against one pooled sample of their values, so `eq_hist`
+  shares one curve.  Default *this page*; *whole grid* is found in the
+  background, a cell at a time, and becomes the default once G3 makes
+  reading every cell cheap.
+- **Frame cache budget** from the host: free memory decides, since remote
+  hosts are usually compute nodes (up to 64 GiB with 48 GiB or more free;
+  up to 16 GiB otherwise; 10 % under 12 GiB).
+
+**Plan changes**: G3 adds "whole grid becomes the default colour scope".
+Next: G3 (read once and split; scatter grids).
 
 ## Sources
 

@@ -27,6 +27,8 @@ from collections import OrderedDict
 from dataclasses import replace
 from typing import Optional, Sequence, Tuple
 
+import numpy as np
+
 log = logging.getLogger(__name__)
 
 #: what a grid can iterate over, in the order the GUI offers them
@@ -57,6 +59,30 @@ def normalize_iterate_by(value) -> str:
     return v
 
 
+#: colour scopes: each cell its own range; the page's cells one range; all
+#: the grid's cells one range (found in the background, cell by cell)
+COLOUR_SCOPES = ("cell", "page", "grid")
+
+#: values kept of each cell for a shared range (plus its exact min and
+#: max): enough for an eq_hist curve, small enough for a big grid
+_SAMPLE_MAX, _SAMPLE_MIN, _SAMPLE_TOTAL = 20000, 2000, 2_000_000
+
+
+def _agg_sample(cell, size: int) -> Optional[np.ndarray]:
+    """Up to *size* of *cell*'s finite aggregated values, evenly strided,
+    with its exact minimum and maximum: ``None`` if it has none."""
+    agg = getattr(cell, "_agg", None)
+    if agg is None:
+        return None
+    v = np.asarray(agg.values, dtype=np.float64).ravel()
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return None
+    if v.size > size:
+        v = np.concatenate([v[:: -(-v.size // size)], [v.min(), v.max()]])
+    return v
+
+
 class VisGridSource:
     """``GridSource`` over a ``VisibilityPlotter``.
 
@@ -68,6 +94,8 @@ class VisGridSource:
     iterate_by : one of ``ITERATE_BY``
     keep : how many cells' panels are kept (least recently drawn dropped)
     """
+
+    COLOUR_SCOPES = COLOUR_SCOPES
 
     def __init__(self, plotter, iterate_by: str = "baseline", *, keep: int = 128) -> None:
         self._p = plotter
@@ -82,6 +110,12 @@ class VisGridSource:
         self._extent: Optional[tuple] = None
         self._names = ("", "")
         self._union = None
+        # shared colour ranges: each cell's sample, the whole grid's pool,
+        # and the background pass that fills them (stopped by a new gen)
+        self._samples: dict = {}
+        self._grid_ref: Optional[np.ndarray] = None
+        self._gen = 0
+        self._bg: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------
     # configuration
@@ -112,6 +146,9 @@ class VisGridSource:
             self._cells.clear()
             self._extent = None
             self._union = None
+            self._samples.clear()
+            self._grid_ref = None
+            self._gen += 1
             self._names = (tmpl._panel_spec().axis_label("x"),
                            tmpl._panel_spec().axis_label("y"))
         return self
@@ -296,11 +333,20 @@ class VisGridSource:
             self._union = u
         return self._union
 
-    def render(self, indices, viewport, size):
+    def render(self, indices, viewport, size, *, colour: str = "cell",
+               page_indices=None):
+        """The cells *indices*, drawn at *viewport* (or each its own) and
+        *size*.  *colour* (``COLOUR_SCOPES``): ``"cell"``, each its own
+        colour range; ``"page"``, one range over *page_indices* (default
+        *indices*); ``"grid"``, one over every cell, once the background
+        pass has seen them all (until then, the page's: see
+        ``colour_state``)."""
         from ..gridplot.panel_spec import RenderedPanel
         w, h = int(size[0]), int(size[1])
         out = []
         with self._lock:
+            shared = self._shared_reference(colour, indices if page_indices is None
+                                            else page_indices)
             for i in indices:
                 i = int(i)
                 if not (0 <= i < len(self._values)):
@@ -309,6 +355,7 @@ class VisGridSource:
                 label = self._labels[i]
                 try:
                     cell = self._cell(i)
+                    cell._shared_reference = shared
                     cell._width, cell._height = w, h
                     if viewport is not None and getattr(cell, "_is_decimated", False):
                         try:
@@ -326,6 +373,115 @@ class VisGridSource:
             if out and out[0].spec.status == "ok":
                 self._names = (out[0].spec.axis_label("x"), out[0].spec.axis_label("y"))
         return out
+
+    # ------------------------------------------------------------------
+    # shared colour ranges
+    # ------------------------------------------------------------------
+    def colour_scope(self, colour: str) -> str:
+        """*colour* checked against ``COLOUR_SCOPES``."""
+        colour = str(colour or "cell").lower()
+        if colour not in COLOUR_SCOPES:
+            raise ValueError(f"colour must be one of {COLOUR_SCOPES}, not {colour!r}")
+        return colour
+
+    def colour_state(self, colour: str) -> dict:
+        """For the browser: ``pending`` (the whole grid's range is still
+        being found) and ``note`` (how far it has got)."""
+        if self.colour_scope(colour) != "grid" or self._grid_ref is not None:
+            return {"pending": False, "note": ""}
+        n = len(self._values)
+        return {"pending": True,
+                "note": f"grid colour range: {len(self._samples)}/{n} cells"}
+
+    def _sample_size(self) -> int:
+        n = max(1, len(self._values))
+        return int(min(_SAMPLE_MAX, max(_SAMPLE_MIN, _SAMPLE_TOTAL // n)))
+
+    def _sample(self, i: int, cell=None) -> Optional[np.ndarray]:
+        """Cell *i*'s sample, kept; *cell* if it is at hand, else the kept
+        cell, else one queried for this and dropped (lock held)."""
+        if i in self._samples:
+            return self._samples[i]
+        if cell is None:
+            cell = self._cells.get(i)
+        if cell is None:
+            from .refresh import RefreshLevel
+            sel = self._selection.copy()
+            pol = None
+            for k, v in self._values[i].items():
+                if k == "_polarization":
+                    pol = v
+                else:
+                    setattr(sel, k, list(v) if isinstance(v, list) else v)
+            cell = self._clone(sel, pol)
+            cell.apply_refresh(RefreshLevel.QUERY)
+        smp = _agg_sample(cell, self._sample_size())
+        self._samples[i] = smp
+        return smp
+
+    @staticmethod
+    def _pool(samples) -> Optional[np.ndarray]:
+        parts = [s for s in samples if s is not None]
+        return np.concatenate(parts) if parts else None
+
+    def _shared_reference(self, colour: str, page_indices) -> Optional[np.ndarray]:
+        """The values the cells' colours are scaled against together (lock
+        held): ``None`` for each cell its own."""
+        colour = self.colour_scope(colour)
+        if colour == "cell":
+            return None
+        if colour == "grid":
+            if self._grid_ref is None and len(self._samples) >= len(self._values):
+                self._grid_ref = self._pool(self._samples.get(i) for i in
+                                            range(len(self._values)))
+            if self._grid_ref is not None:
+                return self._grid_ref
+            self._start_grid_pass()
+        page = []
+        for i in page_indices:
+            i = int(i)
+            if 0 <= i < len(self._values):
+                try:
+                    page.append(self._sample(i, self._cell(i)))
+                except Exception:                           # noqa: BLE001 -- drawn as an error
+                    log.debug("grid cell %d sample failed", i, exc_info=True)
+        return self._pool(page)
+
+    def _start_grid_pass(self) -> None:
+        """Find every cell's sample in a thread, a cell at a time, so the
+        page requests in between are not held up for long."""
+        if self._bg is not None and self._bg.is_alive():
+            return
+        gen = self._gen
+
+        def run():
+            for i in range(len(self._values)):
+                with self._lock:
+                    if self._gen != gen:
+                        return
+                    if i in self._samples:
+                        continue
+                    try:
+                        self._sample(i)
+                    except Exception:                       # noqa: BLE001
+                        log.debug("grid colour pass: cell %d failed", i, exc_info=True)
+                        self._samples[i] = None
+            with self._lock:
+                if self._gen == gen and self._grid_ref is None:
+                    self._grid_ref = self._pool(self._samples.get(i) for i in
+                                                range(len(self._values)))
+        self._bg = threading.Thread(target=run, name="grid colour range", daemon=True)
+        self._bg.start()
+
+    def wait_for_grid_range(self, timeout: Optional[float] = None) -> bool:
+        """Block until the whole grid's range is known (headless use)."""
+        with self._lock:
+            if self._grid_ref is None:
+                self._start_grid_pass()
+            bg = self._bg
+        if bg is not None:
+            bg.join(timeout)
+        return self._grid_ref is not None
 
     def probe(self, index: int, x: float, y: float) -> str:
         with self._lock:
@@ -408,5 +564,8 @@ class VisGridSource:
 
     def close(self) -> None:
         with self._lock:
+            self._gen += 1
+            self._samples.clear()
+            self._grid_ref = None
             self._cells.clear()
             self._union = None

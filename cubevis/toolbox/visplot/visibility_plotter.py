@@ -2047,18 +2047,21 @@ class _IterButtons:
     BTN_DIMS: ClassVar[dict] = {"width": 24, "height": 24}
     # Two 24px buttons plus the 6px+2px gaps used between them and their
     # neighbour below -- _SIDEBAR_WIDTH minus exactly that footprint.
-    LABEL_WIDTH: ClassVar[int] = _SIDEBAR_WIDTH - (2 * 24 + 6 + 2)
+    # three buttons: Prev, All (✱, 2026-11-11), Next
+    LABEL_WIDTH: ClassVar[int] = _SIDEBAR_WIDTH - (3 * 24 + 6 + 2 + 2)
 
     def __post_init__(self):
         enabled = self.count > 1
         if enabled:
             prev_tip = f"Previous {self.axis_label} (wraps at the ends)"
             next_tip = f"Next {self.axis_label} (wraps at the ends)"
+            all_tip = (f"All {self.axis_label}s again, plotted at once (the "
+                       f"steppers' way back; the list waits for Plot)")
         else:
             why = (f"This dataset has only {self.count} "
                    f"{self.axis_label}{'s' if self.count != 1 else ''} "
                    "— nothing to iterate")
-            prev_tip = next_tip = why
+            prev_tip = next_tip = all_tip = why
 
         self.prev_btn = Button(
             label="◀", button_type="default",
@@ -2072,17 +2075,28 @@ class _IterButtons:
             disabled=not enabled,
             margin=(0, 0, 0, 0), **self.BTN_DIMS,
         )
+        # ✱: back to all of this axis and plot (Darrell, 2026-11-11: the
+        # steppers plot at once, so after stepping, picking "All fields" in
+        # the list -- which waits for Plot -- looked as if it had not taken)
+        self.all_btn = Button(
+            label="✱", button_type="default",
+            stylesheets=[self.dark, self.icon_btn_css],
+            disabled=not enabled,
+            margin=(0, 0, 0, 0), **self.BTN_DIMS,
+        )
         self.row = row(
             self.control,
             Tip(self.prev_btn, tooltip=self.tt(prev_tip),
                 margin=(self.vertical_nudge, 0, 0, 6), **self.BTN_DIMS),
+            Tip(self.all_btn, tooltip=self.tt(all_tip),
+                margin=(self.vertical_nudge, 0, 0, 2), **self.BTN_DIMS),
             Tip(self.next_btn, tooltip=self.tt(next_tip),
                 margin=(self.vertical_nudge, 0, 0, 2), **self.BTN_DIMS),
             align="center", margin=(0, 0, 0, 0),
         )
 
     def wire(self, plot_js_args: dict, do_plot_js: str, step_js: str,
-             fn_name: str) -> None:
+             fn_name: str, all_js: str = "") -> None:
         """Attach the Prev/Next click handlers. Call once, from
         ``_build_toolbar()``, after ``self._do_plot_js``/``_plot_js_args``
         exist -- see this class's own docstring for why construction and
@@ -2109,6 +2123,9 @@ class _IterButtons:
             The function name ``step_js`` defines, e.g.
             ``"doIterateField"`` -- called with ``-1``/``+1`` to build
             each button's full ``CustomJS`` code.
+        all_js : str
+            Statements that select all of this axis again (the ✱ button,
+            which then plots).
         """
         self.prev_btn.js_on_click(CustomJS(
             args=plot_js_args,
@@ -2118,6 +2135,9 @@ class _IterButtons:
             args=plot_js_args,
             code=step_js + do_plot_js + f"{fn_name}(1);\ndoPlot(false);",
         ))
+        if all_js:
+            self.all_btn.js_on_click(CustomJS(
+                args=plot_js_args, code=do_plot_js + all_js + "\ndoPlot(false);"))
 
 
 # ---------------------------------------------------------------------------
@@ -2470,6 +2490,7 @@ window.__cvGridLayout = function (on) {
     if (on && grid_area.children.length === 0) grid_area.children = [grid_container];
     grid_area.visible = !!on;
     plot_area.visible = !on;
+    for (const p of grid_parts) p.visible = !!on;
     if (!on) return;
     // the grid's room is known now that it is shown: cells to fit it
     setTimeout(() => { for (const k in (window.__cvGrid || {})) window.__cvGrid[k].refit(); }, 50);
@@ -2763,6 +2784,13 @@ class VisibilityPlotter:
         Rows of plots on a page of the Grid layout (1-8, default 3).
     gridcols : int
         Columns of plots on a page of the Grid layout (1-8, default 3).
+    gridcolour : str
+        The Grid layout's colour range: ``"page"`` (default), one range
+        for the plots on a page; ``"grid"``, one for every plot in the
+        grid, so that pages compare (found cell by cell in the
+        background; until then a page is coloured by its own range);
+        ``"cell"``, each plot its own.  With ``eq_hist`` the plots that
+        share a range share its curve too.
     exprange : str
         Which pages of the Grid layout ``plotfile=`` writes: ``"current"``
         (default: the first page, as plotms), ``"all"``, or page numbers
@@ -2875,11 +2903,14 @@ class VisibilityPlotter:
         not fit, every redraw and flag operation re-reads them from the data
         (an INFO/WARNING line says so).  ``None`` (default): the
         ``CUBEVIS_VISPLOT_FRAME_CACHE_MB`` environment variable if set, else
-        a tenth of physical memory, clamped to 256 MiB .. 4 GiB.  Remote
-        sessions apply it in the worker, where the frames live.  Example:
-        TW Hya with all fields (2 x 31 M samples, ~1.5 GiB per frame) needs
-        about 3-4 GiB; on a 24 GB Mac the 2.4 GiB default evicted frames
-        and a flag box took 3.6 s instead of 0.5 s.
+        by the host: a tenth of memory below 12 GiB; a quarter, at most
+        half of what is free and 16 GiB, above; on a host with 48 GiB or
+        more free (a compute node) 40 % of what is free, up to 64 GiB.  The
+        budget chosen is logged (INFO).  Remote sessions apply it in the
+        worker, where the frames live.  Example: TW Hya with all fields
+        (2 x 31 M samples, ~1.5 GiB per frame) needs about 3-4 GiB; on a 24
+        GB Mac the old 2.4 GiB default evicted frames and a flag box took
+        3.6 s instead of 0.5 s.
     plotfile : str | None
         Write a PNG of the plot to this path instead of opening the GUI
         (the ``visplot`` task then returns the path).  Implies
@@ -2954,6 +2985,7 @@ class VisibilityPlotter:
         iterate_by:       str           = "baseline",
         gridrows:         int           = 3,
         gridcols:         int           = 3,
+        gridcolour:       str           = "page",
         exprange:         str           = "current",
         time_labels:      str           = "utc",
         autocorr:         str           = "exclude",
@@ -3010,6 +3042,10 @@ class VisibilityPlotter:
             if not isinstance(_v, int) or isinstance(_v, bool) or not 1 <= _v <= _cap:
                 raise ValueError(f"{_n} must be an integer 1..{_cap}; got {_v!r}")
         self._grid_shape = (int(gridrows), int(gridcols))
+        from .vis_grid_source import COLOUR_SCOPES
+        if gridcolour not in COLOUR_SCOPES:
+            raise ValueError(f"gridcolour must be one of {COLOUR_SCOPES}; got {gridcolour!r}")
+        self._grid_colour = gridcolour
         self._exprange = parse_exprange(exprange)
         self._grid_on = False          # set from layout= in _resolve_config
         self._grid_source = None
@@ -4800,10 +4836,13 @@ for (const dt of other.tools) {
         vp = src.extent()
         size = self._grid_cell_size()
         footer = self._status_text()
+        colour = self._grid_colour
+        if colour == "grid":
+            src.wait_for_grid_range()
         out = []
         for page in pages:
             idx = list(range((page - 1) * per, min(len(labels), page * per)))
-            rendered = src.render(idx, vp, size) if idx else []
+            rendered = src.render(idx, vp, size, colour=colour) if idx else []
             first = re.sub(r"[^\w.+-]+", "_", labels[idx[0]]) if idx else "empty"
             if "{page}" in base or "{value}" in base:
                 path = base.replace("{page}", f"{page:02d}").replace("{value}", first)
@@ -5186,6 +5225,8 @@ for (const dt of other.tools) {
                     self._grid_shape = (r, c)          # for plotfile= and the summary
             except (TypeError, ValueError):
                 pass
+            if msg.get("grid_colour") in ("cell", "page", "grid"):
+                self._grid_colour = msg["grid_colour"]
             if msg.get("iterate_by"):
                 try:
                     self._iterate_by = normalize_iterate_by(msg["iterate_by"])
@@ -6348,8 +6389,9 @@ cvApplySelectionText(
             self._grid_source, self._comm_mgr, rows=rows, cols=cols, pool=pool,
             area=self.GRID_AREA, theme=self._theme, on_drill=self._grid_drill,
             drill_js=self._grid_drill_js, autoload=autoload,
-            extra_controls=[self._grid_iter_sel], app_context=self._app_context,
+            app_context=self._app_context, embedded=True, colour=self._grid_colour,
             idle_text="Press <b>Plot &#9654;</b> to draw the grid")
+        self._place_grid_controls()
         self._grid_container = column(self._grid_view.layout)
         # Empty until Grid is first shown (window.__cvGridLayout attaches the
         # grid): the browser builds a view for every cell of a layout even
@@ -6362,6 +6404,44 @@ cvApplySelectionText(
         # cells sized to the room the window gives the grid (a 1 x 1 page
         # fills it), GRID_AREA until the browser has measured it
         self._grid_view.fit_to(self._grid_area)
+
+    def _place_grid_controls(self) -> None:
+        """The grid's controls where visplot's own are (Darrell, 2026-11-11:
+        the grid's control row took the plots' room): what is drawn -- Iterate
+        by, Rows, Cols, Scale, Colour, Pages/s, Loop -- in a Grid section at the top
+        of the sidebar; paging and Play in the toolbar; the "drawn in" line
+        and the cursor readout above the status bar.  Each is shown only in
+        Grid (``window.__cvGridLayout``)."""
+        from bokeh.models import Div
+        w = self._grid_view.widgets
+        sel_rows, sel_cols, sel_scale = w["shape"]
+        b_play, sel_speed, cb_loop = w["play"]
+        self._grid_iter_sel.width = 125
+        sel_scale.width = 110
+        sel_rows.width = sel_cols.width = 62
+        sel_speed.width = 76
+        sel_colour = w["colour"]
+        sel_colour.width = 100
+        side = [self._grid_iter_sel, sel_scale, sel_rows, sel_cols, sel_colour, sel_speed, cb_loop]
+        for x in side:
+            # visplot's widget sheet first: the theme restyle swaps sheet 0
+            x.stylesheets = [self._dark()] + list(x.stylesheets)
+        self._grid_sidebar_widgets = side
+        head = Div(text=f"<span style='color:{_SECTION_DARK};font-weight:bold'>Grid</span>",
+                   width=_SIDEBAR_WIDTH)
+        head.tags = ["section-label", "Grid"]
+        self._section_divs.append(head)
+        self._grid_section = column(
+            head, row(self._grid_iter_sel, sel_scale), row(sel_rows, sel_cols, sel_colour),
+            row(sel_speed, cb_loop), visible=self._grid_on, width=_SIDEBAR_WIDTH,
+            margin=(0, 0, 10, 0), styles={"max-height": "none"})   # as the other sections
+        kids = list(self._sidebar_col.children)
+        self._sidebar_col.children = kids[:1] + [self._grid_section] + kids[1:]
+        self._grid_nav = row(*w["nav"], b_play, visible=self._grid_on)
+        w["status"].width = 160
+        w["probe"].width = 1100
+        self._grid_readout = row(w["status"], w["probe"], visible=self._grid_on,
+                                 margin=(2, 0, 0, 10))
 
     def _wire_grid(self) -> None:
         """Connect the grid to doPlot (after ``_build_toolbar``): a
@@ -6544,7 +6624,8 @@ html, body { height: 100%; margin: 0; }
         self._app_context.add_init_script(
             code=_GRID_LAYOUT_JS,
             args=dict(self._grid_restore_args, grid_area=self._grid_area,
-                      grid_container=self._grid_container, plot_area=plot_area),
+                      grid_container=self._grid_container, plot_area=plot_area,
+                      grid_parts=[self._grid_section, self._grid_nav, self._grid_readout]),
             description="grid layout",
         )
         # "More below" cue (2026-09-28): when the plots plus their info /
@@ -6572,7 +6653,7 @@ html, body { height: 100%; margin: 0; }
             sidebar_col, plot_area, self._grid_area,
             sizing_mode="stretch_both",
         )
-        return column(_css_div, toolbar, body, status_bar,
+        return column(_css_div, toolbar, body, self._grid_readout, status_bar,
                       self._flag_preview_box,
                       sizing_mode="stretch_both")
 
@@ -9215,6 +9296,8 @@ function doPlot(reload) {
         grid_slot:   [panel0_id, panel1_id][(display_order_source.data['order'][0] || [0, 1])[0]],
         grid_shape:  (typeof grid_key !== 'undefined' && window.__cvGrid && window.__cvGrid[grid_key])
                      ? [window.__cvGrid[grid_key].state().rows, window.__cvGrid[grid_key].state().cols] : null,
+        grid_colour: (typeof grid_key !== 'undefined' && window.__cvGrid && window.__cvGrid[grid_key])
+                     ? window.__cvGrid[grid_key].state().colour : null,
         // Row height / column width as shown (2026-10-13), for the
         // reproducing call and the status line.
         sizes:       window.__cvSizeSpec ? window.__cvSizeSpec() : null,
@@ -10030,14 +10113,21 @@ function doIterateSpw(delta) {
         # from these bodies + self._do_plot_js exactly the way the
         # hand-written js_on_click() calls this replaced did -- the
         # only thing that moved is who writes the boilerplate.
+        # ✱ (2026-11-11): all of the axis again, plotted at once.  SPW's
+        # "all" is every row ticked (as at the start); Antenna's and
+        # Baseline's is nothing ticked (the tables' own rule).
+        _all_ab = "ant_src.selected.indices = []; bl_src.selected.indices = [];"
         self._field_iter.wire(self._plot_js_args, self._do_plot_js,
-                              _iterate_field_js, "doIterateField")
+                              _iterate_field_js, "doIterateField",
+                              all_js="field_sel.value = '';")
         self._spw_iter.wire(self._plot_js_args, self._do_plot_js,
-                            _iterate_spw_js, "doIterateSpw")
+                            _iterate_spw_js, "doIterateSpw",
+                            all_js="spw_src.selected.indices = "
+                                   "(spw_src.data['ident'] || []).map((_, i) => i);")
         self._antenna_iter.wire(self._plot_js_args, self._do_plot_js,
-                                _iterate_antenna_js, "doIterateAntenna")
+                                _iterate_antenna_js, "doIterateAntenna", all_js=_all_ab)
         self._baseline_iter.wire(self._plot_js_args, self._do_plot_js,
-                                 _iterate_baseline_js, "doIterateBaseline")
+                                 _iterate_baseline_js, "doIterateBaseline", all_js=_all_ab)
         self._wire_tick_text_inputs()
 
         # Rule 3 (§3.1c of the plan): superseded by the sidebar move.
@@ -10652,6 +10742,10 @@ doPlot();
                                  self._baseline_text, self._spw_text,
                                  self._antenna_prev_btn, self._antenna_next_btn,
                                  self._baseline_prev_btn, self._baseline_next_btn]
+                                + [it.all_btn for it in (self._field_iter, self._spw_iter,
+                                                         self._antenna_iter,
+                                                         self._baseline_iter)]
+                                + list(getattr(self, "_grid_sidebar_widgets", []))
                                 + _all_axis_widgets
                                 + self._flags.themed_widgets(),
                 # Colormap histogram figures + reset-button icons (added
@@ -10796,6 +10890,7 @@ if (typeof ctrl !== 'undefined' && ctrl && ids && ids['theme']) {
             self._hover(export_btn, "tb_export"),
             _sep(),
             self._hover(dark_btn, "tb_theme"),
+            self._grid_nav,
             # A window too narrow for the whole row (a laptop, with the
             # Spectrum / Time series presets added, 2026-10-09) wraps it
             # onto a second line instead of cutting off its end.  The

@@ -105,6 +105,10 @@ class GridView:
         ``reload``)
     extra_controls : widgets placed at the start of the control row (an
         application's "Iterate by")
+    extra_tools : tools added to every cell, so the grid's one toolbar
+        has one button for each -- an application's own actions (visplot's
+        gear, which opens the grid's panel).  Arguments must be the same
+        for every cell: the cell is never theirs to know.
     idle_text : the status line before the first page (no autoload)
     embedded : the layout is the grid alone; the application places the
         controls (``widgets``) where its own controls are -- visplot puts
@@ -122,7 +126,8 @@ class GridView:
                  theme: str = "light",
                  on_drill: Optional[Callable[[int, str], object]] = None,
                  drill_js=None, autoload: bool = True,
-                 extra_controls: Sequence = (), app_context=None,
+                 extra_controls: Sequence = (), extra_tools: Sequence = (),
+                 app_context=None,
                  idle_text: str = "", embedded: bool = False,
                  colour: Optional[str] = None) -> None:
         pr, pc = int(pool[0]), int(pool[1])
@@ -140,6 +145,7 @@ class GridView:
         self._drill_js = drill_js
         self._autoload = bool(autoload)
         self._extra = list(extra_controls)
+        self._extra_tools = list(extra_tools)
         self._app_context = app_context
         self._idle_text = idle_text
         self._embedded = bool(embedded)
@@ -400,7 +406,7 @@ class GridView:
                                     "dw": [x1 - x0], "dh": [y1 - y0]})
             f.image_rgba(image="image", x="x", y="y", dw="dw", dh="dh", source=src)
             f.add_tools(PanTool(), WheelZoomTool(), BoxZoomTool(), ResetTool(), TapTool(),
-                        HoverTool(tooltips=None), crosshair)
+                        HoverTool(tooltips=None), crosshair, *self._extra_tools)
             figs.append(f)
             sources.append(src)
 

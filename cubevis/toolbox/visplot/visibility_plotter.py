@@ -6730,11 +6730,21 @@ cvApplySelectionText(
         self._grid_drill_js = CustomJS(code="")
         rows, cols = self._grid_shape
         pool = (min(MAX_POOL[0], max(6, rows)), min(MAX_POOL[1], max(6, cols)))
+        # The grid's gear (gridplot G3, 2026-11-13): as each panel's gear
+        # opens its tab, this opens the grid's panel in the sidebar.  Its
+        # callback's arguments are filled in by _place_grid_controls, once
+        # the tab exists.
+        from bokeh.models import CustomAction
+        self._grid_gear_js = CustomJS(code="")
+        self._grid_gear = CustomAction(icon=_GEAR_ICON_DATA_URI,
+                                       description="Configure the grid's panel",
+                                       callback=self._grid_gear_js)
         self._grid_view = GridView(
             self._grid_source, self._comm_mgr, rows=rows, cols=cols, pool=pool,
             area=self.GRID_AREA, theme=self._theme, on_drill=self._grid_drill,
             drill_js=self._grid_drill_js, autoload=autoload,
             app_context=self._app_context, embedded=True, colour=self._grid_colour,
+            extra_tools=[self._grid_gear],
             idle_text="Press <b>Plot &#9654;</b> to draw the grid")
         self._place_grid_controls()
         self._grid_container = column(self._grid_view.layout)
@@ -6789,6 +6799,24 @@ cvApplySelectionText(
 tab.visible = !tab.visible;
 btn.label = '\u2699 Grid panel ' + (tab.visible ? '\u25be' : '\u25b8');
 """))
+        # The toolbar's gear: the sidebar shown, the tab open, and the
+        # sidebar scrolled to it (the Grid section is at the top, but the
+        # sidebar may have been scrolled down to the selection).
+        self._grid_gear_js.args = {"tab": self._grid_tab, "btn": self._grid_tab_btn,
+                                   "sidebar": self._sidebar_col,
+                                   "toggle_btn": getattr(self, "_sidebar_toggle_btn", None)}
+        self._grid_gear_js.code = """
+if (!sidebar.visible) {
+    sidebar.visible = true;
+    if (toggle_btn) toggle_btn.label = '\u27e8';
+}
+tab.visible = true;
+btn.label = '\u2699 Grid panel \u25be';
+setTimeout(function () {
+    const v = Bokeh.index.find_one_by_id(btn.id);
+    if (v && v.el) v.el.scrollIntoView({block: 'start', behavior: 'smooth'});
+}, 60);
+"""
         side += [self._grid_tab_btn] + [w for w in self._grid_tab_widgets.values()
                                         if w not in side]
         self._grid_section = column(
@@ -7003,6 +7031,7 @@ html, body { height: 100%; margin: 0; }
                          getattr(panel, "_unflag_tool", None)):
                 if tool is not None:
                     tool.response_callback = _flag_resp_cb
+        self._sidebar_toggle_btn = toggle_btn     # the grid's gear opens the sidebar
         self._build_grid()
         toolbar                  = self._build_toolbar(toggle_btn)
         self._wire_grid()

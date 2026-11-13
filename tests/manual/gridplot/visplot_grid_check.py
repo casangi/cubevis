@@ -24,6 +24,8 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
                     drawn again in the new palette
     preset          a preset pressed in Grid: Grid stays, the grid repeats
                     the preset's panel
+    gear            the grid's toolbar has one gear (G3); with the sidebar
+                    scrolled away, it opens the grid's panel and scrolls to it
     grid panel      the grid's own panel (G3): its tab holds what the preset
                     set; Panel A's tab is untouched
     grid edit       the grid's tab edited (Phase) and plotted: the cells show
@@ -372,8 +374,25 @@ def main() -> int:
                     && m.label === 'Plot ▶');
                     return b.js_event_callbacks['button_click'][0].args[k].value; }}""", k)
 
-            click_button("\u2699 Grid panel \u25b8")
-            pg.wait_for_timeout(400)
+            n_gear = pg.evaluate(f"""() => {model("m.type === 'GridPlot'")}.toolbar.tools
+                .filter(t => (t.tools ? t.tools[0] : t).description === "Configure the grid's panel")
+                .length""")
+            pg.evaluate("""() => { const f = (r) => { for (const e of r.querySelectorAll('*')) {
+                if (e.classList && e.classList.contains('cv-sidebar')) return e;
+                if (e.shadowRoot) { const x = f(e.shadowRoot); if (x) return x; } } return null; };
+                const sb = f(document); if (sb) sb.scrollTop = sb.scrollHeight; }""")
+            pg.wait_for_timeout(300)
+            pg.locator("[title=\"Configure the grid's panel\"]").first.click()
+            pg.wait_for_timeout(1200)
+            gear = pg.evaluate(f"""() => {{ const b = {MODELS}.find(m => m.type === 'Button'
+                && m.label.startsWith('\u2699 Grid panel'));
+                const tab = {MODELS}.find(m => m.tags && m.tags[0] === 'grid-tab' && m.tags[1] === 'ry');
+                const r = Bokeh.index.find_one_by_id(b.id).el.getBoundingClientRect();
+                return [b.label, r.top, r.bottom, window.innerHeight]; }}""")
+            check("gear", n_gear == 1 and gear[0].endswith("\u25be") and 0 <= gear[1] < gear[3],
+                  f"{n_gear} gear in the grid's toolbar; tab {gear[0]!r}, its button at "
+                  f"y {gear[1]:.0f} of {gear[3]}")
+            pg.screenshot(path=os.path.join(a.out, "grid_gear.png"))
             g_axes, a_axes = [gtab("ry"), gtab("rx")], [panel0("panel0_ry_sel"), panel0("panel0_rx_sel")]
             check("grid panel", "BASELINE" in g_axes and a_axes != g_axes,
                   f"grid's tab {g_axes} (the preset's); Panel A's {a_axes}")

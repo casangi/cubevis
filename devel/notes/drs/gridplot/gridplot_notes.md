@@ -621,3 +621,24 @@ TW Hya and the VLBA subset; a real remote host.
 **Next**: G3 item 2, read once and split (plan section 11, finding 3),
 then scatter grids (item 3).  The Scatter half of the grid's tab is
 already there for them.
+
+## 8. The grid's gear (base `dd4e51b8`, 2026-11-13)
+
+Darrell's review of section 7: the toolbar's gear opens a panel's tab, so
+the grid's toolbar should have one too.
+
+- `GridView(extra_tools=[...])` (shared, so calplot has it too): tools
+  added to every cell.  Like the crosshair, it is one instance in every
+  cell, so Bokeh's merge gives the toolbar one button.  Its arguments must
+  be the same for every cell.
+- visplot passes a `CustomAction` with the panels' gear icon ("Configure
+  the grid's panel").  It shows the sidebar if it is hidden, opens the
+  grid's tab, and scrolls the sidebar to "⚙ Grid panel".  The callback's
+  arguments are filled in by `_place_grid_controls`, once the tab exists
+  (the gear has to exist before the `GridView`).  It opens the tab; the
+  sidebar button still toggles it.
+
+**Checks**: `visplot_grid_check.py` 25 of 25.  New: *gear*: one gear in
+the grid's toolbar; with the sidebar scrolled to the bottom, a real click
+on it opens the tab, and its button is in view.  `grid_browser_check.py`
+13 of 13; `test_vis_grid.py` 34.

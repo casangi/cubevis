@@ -4,8 +4,8 @@
 <path d="M40 150 a10 10 0 0 1 10 -10 H170 V295 H50 a10 10 0 0 1 -10 -10 Z" fill="#3B6EA8"/>
 <text x="105" y="225" font-family="Helvetica, Arial, sans-serif" font-size="24" font-weight="bold" fill="white" text-anchor="middle"  xml:space="preserve">Reads</text>
 <text x="195" y="199.0" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">MSv2 measurement sets through xarray-ms, and MSv4 / Processing Sets</text>
-<text x="195" y="224.08" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">through xarray's own Zarr engine. vis= detects which, as in any CASA</text>
-<text x="195" y="249.16000000000003" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">task. Data column DATA, CORRECTED or MODEL.</text>
+<text x="195" y="224.08" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">through xradio. vis= detects which, as in any CASA task. Data column</text>
+<text x="195" y="249.16000000000003" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="normal" fill="#222" text-anchor="start"  xml:space="preserve">DATA, CORRECTED or MODEL.</text>
 <rect x="40" y="310" width="900" height="155" rx="10" fill="white" stroke="#A9B8CA" stroke-width="1.5" />
 <path d="M40 320 a10 10 0 0 1 10 -10 H170 V465 H50 a10 10 0 0 1 -10 -10 Z" fill="#C9711F"/>
 <text x="105" y="395" font-family="Helvetica, Arial, sans-serif" font-size="24" font-weight="bold" fill="white" text-anchor="middle"  xml:space="preserve">Shows</text>

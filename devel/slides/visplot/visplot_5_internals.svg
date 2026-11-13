@@ -25,7 +25,7 @@
 <text x="260.0" y="623.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">reads: xarray-ms on arcae · flags: arcae</text>
 <rect x="490" y="573" width="380" height="62" rx="7" fill="#EEF2F7" stroke="#A9B8CA" stroke-width="1.5" />
 <text x="680.0" y="601.0" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1C2733" text-anchor="middle"  xml:space="preserve">MSv4Backend</text>
-<text x="680.0" y="623.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">reads and flags: xarray / Zarr, no xradio</text>
+<text x="680.0" y="623.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#5A6573" text-anchor="middle"  xml:space="preserve">reads: xradio · flags: Zarr</text>
 <path d="M270 635 V657" stroke="#8A94A0" stroke-width="3"/><path d="M263 655 L270 665 L277 655 Z" fill="#8A94A0"/>
 <path d="M670 635 V657" stroke="#8A94A0" stroke-width="3"/><path d="M663 655 L670 665 L677 655 Z" fill="#8A94A0"/>
 <path d="M120 680 V744 A150 13 0 0 0 420 744 V680" fill="#FFF7E0" stroke="#A88A2E" stroke-width="2"/>

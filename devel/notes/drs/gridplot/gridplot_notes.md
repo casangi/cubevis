@@ -465,6 +465,36 @@ template panel (the reply's new ranges set off its range re-render), which
 competes with the grid's page for the kernel.  Skipping a hidden figure's
 range re-render needs a "draw when shown" for its return from Grid.
 
+**Grid fits its cells (2026-11-12, agreed with Darrell).**  Rows x Cols is
+the most a page holds: when every cell fits on one page the grid shrinks
+to them -- fewest rows, then fewest columns: one cell is one plot the size
+of the grid; 2 are 1 x 2, 4 are 2 x 2, 5 are 2 x 3 (in 3 x 3).  A
+baseline stepped to one cell no longer shows one plot among eight blank
+ones.  It stays in Grid (no switch to One: paging and the grid's settings
+stay; a tap still drills down to the full panel).  `GridView` keeps the
+chosen shape (`state().rows/cols`) apart from the shown one
+(`shownRows/shownCols`); `reload(why, nCells)` takes the count so the
+first request is already the fitted shape (a source without the hint is
+asked again at it).  Headless pages use the same rule
+(`fit_grid_shape`).
+
+Bokeh: putting back figures taken out of the `GridPlot` (1 x 1 back to
+3 x 3) threw in `GridBoxView._update_layout` ("parent_style" of undefined)
+on the next layout pass, before their views were rebuilt.  `regrid()` now
+sizes figures outside the grid silently, re-assigns the children only when
+they change, and then `show()` waits two frames (`S.settle`) before
+anything else is laid out.
+
+**Decided (2026-11-12): the grid gets its own panel, in G3.**  Editing the
+gear tab in Grid changes Panel A today (the grid repeats Panel A's live
+raster), each Plot in Grid re-renders hidden Panel A, and drill-down
+overwrites it.  G3 gives the grid its own headless template with its own
+gear tab (Raster / Scatter included), shown in the sidebar only in Grid,
+started as a copy of Panel A the first time; drill-down copies the cell
+into Panel A; the data selection (sidebar) stays shared.  Presets,
+`plotfile=` and the reproducing call then name which configuration they
+apply to.  The hidden Panel A re-render goes with it.
+
 **Open, for Darrell:**
 
 1. *Default colour scope.*  "this page" now; "whole grid" after G3.

@@ -31,6 +31,8 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
                     the stepper's ✱ goes back to all antennas and plots at once
     busy            stepping in Grid: busy until the grid's page is drawn,
                     idle after
+    fit to cells    when every cell fits on one page the grid shrinks to them:
+                    one cell is shown 1 x 1, the size of the grid
     colour          Colour: "this page" by default; "per cell" draws the
                     cells again in their own ranges; "whole grid" waits for
                     the background pass, then draws in the grid's range
@@ -143,6 +145,8 @@ def main() -> int:
             pg = ctx.new_page()
             errs = []
             pg.on("console", lambda m: errs.append(m.text[:300]) if m.type == "error" else None)
+            warns = []
+            pg.on("console", lambda m: warns.append(m.text[:3000]) if m.type in ("warning", "log") else None)
             pg.on("pageerror", lambda e: errs.append(str(e)[:300]))
             t_load = t_start = time.time()
             pg.goto(url)
@@ -187,8 +191,15 @@ def main() -> int:
                     if (d.type === 'Div' && d.text.startsWith('drawn in')) d.text = ''; }}""")
 
             def wait_drawn(timeout=180000):
-                pg.wait_for_function(f"""() => {MODELS}.filter(m => m.type === 'Div')
-                    .some(d => d.text.startsWith('drawn in'))""", timeout=timeout)
+                try:
+                    pg.wait_for_function(f"""() => {MODELS}.filter(m => m.type === 'Div')
+                        .some(d => d.text.startsWith('drawn in'))""", timeout=timeout)
+                except Exception:
+                    print("not drawn; grid status:", pg.evaluate(f"""() => {MODELS}.filter(m =>
+                        m.type === 'Div' && m.text.length < 300).map(d => d.text)
+                        .filter(t => /drawing|resiz|drawn|error|⚠/.test(t))"""),
+                          "console errors:", errs[-5:], "console:", warns[-8:], pg.evaluate("() => { const s = Object.values(window.__cvGrid)[0].state(); return [s.rows, s.cols, s.shownRows, s.shownCols, s.nCells, s.nPages, s.page, s.loading, s.gen]; }"), flush=True)
+                    raise
                 pg.wait_for_timeout(300)
 
             def titles():
@@ -396,9 +407,18 @@ def main() -> int:
                   f"{bool(drawing) and min(drawing) > 0}; idle after: {blog[-1][0] == 0}")
             stepped = status_line()
             one_cells = n_cells()
+            gst = "() => { const s = Object.values(window.__cvGrid)[0].state(); " \
+                  "return [s.shownRows, s.shownCols, s.rows, s.cols, s.frame[0], s.frame[1]]; }"
+            one_shape = pg.evaluate(gst)
             set_marker(); run_button("✱", "ant_src.selected.indices = []"); wait_drawn()
             back = status_line()
             back_cells = n_cells()
+            back_shape = pg.evaluate(gst)
+            fits = (one_cells != 1 or one_shape[:2] == [1, 1]) and back_shape[:2] == back_shape[2:4]
+            check("fit to cells", fits and one_shape[4] > back_shape[4],
+                  f"{one_cells} cell shown {one_shape[0]} x {one_shape[1]} "
+                  f"({one_shape[4]} x {one_shape[5]} px) of {one_shape[2]} x {one_shape[3]}; "
+                  f"{back_cells} cells {back_shape[0]} x {back_shape[1]} ({back_shape[4]} x {back_shape[5]} px)")
             green = pg.evaluate(f"() => {MODELS}.find(m => m.type === 'Button' && m.label === 'Plot ▶').button_type")
             check("all (✱)", "Antenna 1/" in stepped and "Antenna: all" in back and green == "success"
                   and 0 < one_cells < all_cells == back_cells,

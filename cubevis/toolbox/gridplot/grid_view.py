@@ -523,11 +523,16 @@ _LABEL_CSS = ".bk-input-group label, label, .bk-clearfix { color: %s !important;
 _GRID_JS = r"""
 window.__cvGrid = window.__cvGrid || {};
 if (window.__cvGrid[key]) return;
+// rows x cols as chosen (want*) and as shown (rows, cols): when every
+// cell fits on one page the grid shrinks to fit them -- one cell is one
+// plot the size of the grid, four are 2 x 2, five 2 x 3 (2026-11-12)
 const S = {page: 0, nPages: 1, nCells: 0, rows: +sel_rows.value, cols: +sel_cols.value,
+           wantRows: +sel_rows.value, wantCols: +sel_cols.value,
            common: sel_scale.value === 'common', colour: sel_colour.value,
            viewport: null, playing: null, colourTimer: null,
            cache: new Map(), cacheKey: '', loading: false, syncing: false, zoomTimer: null,
-           extent: null, gen: 0, frame: [frame[0], frame[1]], xEach: false, yEach: false};
+           extent: null, gen: 0, frame: [frame[0], frame[1]], xEach: false, yEach: false,
+           settle: null};
 const PR = pool[0], PC = pool[1];
 const AXIS0 = Object.assign({}, states[0].data);
 // a 1 x 1 image as Python sent it (a 2-D array, which image_rgba needs):
@@ -623,17 +628,42 @@ function setAxes() {
     x_name.width = S.cols * S.frame[0];
     y_name.height = S.rows * S.frame[1];
 }
+function fitShape(n) {
+    // the shape to show for n cells; true if it changed
+    let r = S.wantRows, c = S.wantCols;
+    if (n > 0 && n < r * c) { r = Math.ceil(n / Math.min(c, n)); c = Math.ceil(n / r); }
+    const changed = (r !== S.rows || c !== S.cols);
+    S.rows = r; S.cols = c;
+    return changed;
+}
 function regrid() {
     S.frame = frameFor(S.rows, S.cols, S.common);
     const kids = [];
     for (let r = 0; r < S.rows; r++)
-        for (let c = 0; c < S.cols; c++) {
-            const f = figs[r * PC + c];
-            if (f.frame_width !== S.frame[0]) f.frame_width = S.frame[0];
-            if (f.frame_height !== S.frame[1]) f.frame_height = S.frame[1];
-            kids.push([f, r, c]);
-        }
-    grid.children = kids;
+        for (let c = 0; c < S.cols; c++) kids.push([figs[r * PC + c], r, c]);
+    // A figure not in the grid now is sized silently: sizing it out loud
+    // runs Bokeh's grid layout for it, which throws while its view is
+    // detached (taken out earlier) or not built yet (just put back) --
+    // 2026-11-12, a 1 x 1 grid going back to 3 x 3.  Its view reads the
+    // size when the grid lays it out.
+    const inGrid = new Set((grid.children || []).map(k => k[0]));
+    for (const [f] of kids) {
+        const w = S.frame[0], h = S.frame[1];
+        if (f.frame_width === w && f.frame_height === h) continue;
+        if (inGrid.has(f)) { f.frame_width = w; f.frame_height = h; }
+        else f.setv({frame_width: w, frame_height: h}, {silent: true});
+    }
+    const prev = grid.children || [];
+    const same = prev.length === kids.length
+        && prev.every((k, n) => k[0] === kids[n][0] && k[1] === kids[n][1] && k[2] === kids[n][2]);
+    if (!same) {
+        grid.children = kids;
+        // Bokeh builds the new children's views asynchronously; a layout
+        // pass before that (any text or size change) throws, so the grid
+        // waits two frames before its next change (see show())
+        S.settle = new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));
+    }
+    if (!same) { S.settle.then(() => setAxes()); return; }
     setAxes();
 }
 function blank(f, src) {
@@ -688,6 +718,7 @@ function apply(resp, page) {
 async function show(page, why) {
     page = Math.max(0, Math.min(page, S.nPages - 1));
     const gen = ++S.gen;
+    if (S.settle) { await S.settle; if (gen !== S.gen) return; }
     status.text = (why || 'drawing') + '…';
     const t0 = performance.now();
     S.loading = true;
@@ -698,6 +729,13 @@ async function show(page, why) {
         S.cache.clear();
         status.text = '<span style="color:#e06c75">' + resp.error + '</span>';
         return;
+    }
+    if (resp && !resp.partial && resp.n_cells != null && fitShape(resp.n_cells)) {
+        // the cell count was not known when this page was asked for (no
+        // hint from the application): shown again at the fitted shape
+        S.nCells = resp.n_cells;
+        S.cache.clear(); regrid();
+        return show(0, why);
     }
     apply(resp, page);
     status.text = `drawn in ${(performance.now() - t0).toFixed(0)} ms`;
@@ -737,7 +775,8 @@ const G = {
     },
     reshape() {
         const first = S.page * S.rows * S.cols;          // keep the first cell in view
-        S.rows = +sel_rows.value; S.cols = +sel_cols.value;
+        S.wantRows = +sel_rows.value; S.wantCols = +sel_cols.value;
+        fitShape(S.nCells);
         regrid();
         S.nPages = Math.max(1, Math.ceil(S.nCells / (S.rows * S.cols)));
         show(Math.floor(first / (S.rows * S.cols)), 'reshaping');
@@ -772,12 +811,15 @@ const G = {
         regrid();
         if (JSON.stringify(S.frame) !== before && S.nCells > 0) show(S.page, 'resizing');
     },
-    reload(why) {
-        // the source changed (the application's Plot): page 1, full extent
+    reload(why, nCells) {
+        // the source changed (the application's Plot): page 1, full extent;
+        // nCells, when the application knows it, sizes the grid at once
         clearTimeout(S.zoomTimer);
         if (S.playing) G.togglePlay();
         S.cache.clear(); S.cacheKey = ''; S.viewport = null; S.page = 0; S.nPages = 1;
         S.gen++;
+        if (nCells != null) S.nCells = +nCells;
+        fitShape(S.nCells);
         regrid();
         return show(0, why || 'drawing');   // resolves once page 1 is drawn
     },
@@ -850,7 +892,8 @@ const G = {
         S.viewport = null;
         show(S.page, 'resetting');
     },
-    state() { return Object.assign({}, S, {cache: S.cache.size}); },
+    state() { return Object.assign({}, S, {cache: S.cache.size, rows: S.wantRows, cols: S.wantCols,
+                                         shownRows: S.rows, shownCols: S.cols}); },
 };
 window.__cvGrid[key] = G;
 regrid();

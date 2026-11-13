@@ -137,6 +137,17 @@ def test_selection_narrows_the_cells(plotter):
     assert len(src.labels()) == len(names) * (len(names) - 1) // 2
 
 
+@pytest.mark.parametrize("rows, cols, n, want", [
+    (3, 3, 1, (1, 1)), (3, 3, 2, (1, 2)), (3, 3, 4, (2, 2)), (3, 3, 5, (2, 3)),
+    (3, 3, 9, (3, 3)), (3, 3, 10, (3, 3)), (4, 4, 7, (2, 4)), (2, 5, 3, (1, 3)),
+    (3, 3, 0, (3, 3))])
+def test_fit_grid_shape(rows, cols, n, want):
+    """Rows x cols is a page's most: all the cells on one page shrink it
+    (gridplot, 2026-11-12)."""
+    from cubevis.toolbox.visplot.visibility_plotter import fit_grid_shape
+    assert fit_grid_shape(rows, cols, n) == want
+
+
 def test_colour_scopes(plotter):
     """per cell: each its own range; this page: one over the page; whole
     grid: one over every cell, after the background pass (gridplot, 11-11)."""

@@ -2562,6 +2562,17 @@ if (sel) {
 """
 
 
+def fit_grid_shape(rows: int, cols: int, n: int) -> tuple:
+    """Rows x cols is the most a page holds: when all *n* cells fit on
+    one page the grid shrinks to fit them (one cell, one plot; four,
+    2 x 2; five, 2 x 3), as the browser's grid does (gridplot, 2026-11-12)."""
+    rows, cols = int(rows), int(cols)
+    if 0 < n < rows * cols:
+        rows = -(-n // min(cols, n))        # fewest rows, then fewest columns
+        cols = -(-n // rows)
+    return rows, cols
+
+
 def parse_exprange(value) -> object:
     """``exprange=`` (gridplot G2): ``"current"`` (the first page),
     ``"all"``, or 1-based page numbers (``"2"``, ``"1-3,5"``) as a sorted
@@ -4815,6 +4826,7 @@ for (const dt of other.tools) {
         rows = int(nrows or self._grid_shape[0])
         cols = int(ncols or self._grid_shape[1])
         labels = src.labels()
+        rows, cols = fit_grid_shape(rows, cols, len(labels))   # as the browser shows it
         per = rows * cols
         n_pages = max(1, math.ceil(len(labels) / per))
         want = parse_exprange(exprange) if exprange is not None else self._exprange
@@ -9371,7 +9383,7 @@ function doPlot(reload) {
         if (resp.grid) window.__cvGridDrawn = true;
         if (_gridApi) {
             let _drawn;
-            try { _drawn = _gridApi.reload('drawing ' + resp.grid.n_cells + ' plots'); }
+            try { _drawn = _gridApi.reload('drawing ' + resp.grid.n_cells + ' plots', resp.grid.n_cells); }
             catch (e) { console.warn('grid reload failed:', e); }
             Promise.resolve(_drawn).catch(function(e) { console.warn('grid page failed:', e); })
                 .finally(_release);

@@ -99,6 +99,12 @@ class GridView:
         cell is tapped.  A string is shown in the status line; a dict is
         handed to *drill_js* (its ``"text"`` is shown).  An application
         opens the cell in a full panel here
+    play_outer : a ``CustomJS`` run once in the browser with the grid's
+        JS API as ``cb_obj``; it may set ``cb_obj.outer = {label(), step(loop)}``
+        to give Play something to play when every cell fits on one page:
+        ``label()`` names it (``null``: nothing), ``step(loop)`` moves on
+        one and returns a promise of whether it did (``false`` ends
+        playback).  visplot steps its sidebar's stepper with it.
     drill_js : a ``CustomJS`` run in the browser with the drill response as
         ``cb_obj`` (an application switches to its panel view there)
     autoload : draw page 1 when the page loads (else on the first
@@ -125,7 +131,7 @@ class GridView:
                  area: Optional[Tuple[int, int]] = None,
                  theme: str = "light",
                  on_drill: Optional[Callable[[int, str], object]] = None,
-                 drill_js=None, autoload: bool = True,
+                 drill_js=None, play_outer=None, autoload: bool = True,
                  extra_controls: Sequence = (), extra_tools: Sequence = (),
                  app_context=None,
                  idle_text: str = "", embedded: bool = False,
@@ -143,6 +149,7 @@ class GridView:
         self._theme = theme
         self._on_drill = on_drill
         self._drill_js = drill_js
+        self._play_outer = play_outer
         self._autoload = bool(autoload)
         self._extra = list(extra_controls)
         self._extra_tools = list(extra_tools)
@@ -469,7 +476,8 @@ class GridView:
                     cell=list(self._cell), area=list(self._area) if self._area else None,
                     min_frame=list(MIN_FRAME), autoload=self._autoload, label_css=label_css,
                     label_tpl=_LABEL_CSS, idle_text=self._idle_text,
-                    drill_js=self._drill_js, key=self._ids["page"])
+                    drill_js=self._drill_js, play_outer=self._play_outer,
+                    key=self._ids["page"])
         args["fit_to"] = None
         if self._app_context is not None:
             self._app_context.add_init_script(code=_GRID_JS, args=args, description="grid view")
@@ -535,7 +543,7 @@ if (window.__cvGrid[key]) return;
 const S = {page: 0, nPages: 1, nCells: 0, rows: +sel_rows.value, cols: +sel_cols.value,
            wantRows: +sel_rows.value, wantCols: +sel_cols.value,
            common: sel_scale.value === 'common', colour: sel_colour.value,
-           viewport: null, playing: null, colourTimer: null,
+           viewport: null, playing: null, colourTimer: null, outerPlay: false, outerBusy: false,
            cache: new Map(), cacheKey: '', loading: false, syncing: false, zoomTimer: null,
            extent: null, gen: 0, frame: [frame[0], frame[1]], xEach: false, yEach: false,
            settle: null};
@@ -819,9 +827,10 @@ const G = {
     },
     reload(why, nCells) {
         // the source changed (the application's Plot): page 1, full extent;
-        // nCells, when the application knows it, sizes the grid at once
+        // nCells, when the application knows it, sizes the grid at once.
+        // A Plot stops playback -- unless it is playback's own step.
         clearTimeout(S.zoomTimer);
-        if (S.playing) G.togglePlay();
+        if (S.playing && !S.outerBusy) G.togglePlay();
         S.cache.clear(); S.cacheKey = ''; S.viewport = null; S.page = 0; S.nPages = 1;
         S.gen++;
         if (nCells != null) S.nCells = +nCells;
@@ -830,11 +839,41 @@ const G = {
         return show(0, why || 'drawing');   // resolves once page 1 is drawn
     },
     togglePlay() {
-        if (S.playing) { clearInterval(S.playing); S.playing = null; b_play.label = 'Play'; return; }
+        if (S.playing) {
+            clearInterval(S.playing); S.playing = null; b_play.label = 'Play';
+            if (S.outerPlay) { S.outerPlay = false; status.text = 'stopped'; }
+            return;
+        }
+        // Every cell on one page (2026-11-13): nothing to page through, so
+        // Play plays what the application offers (visplot: its sidebar's
+        // stepper -- the next baseline, antenna, SPW or field, drawn as a
+        // Plot).  A tick while a step is still on its way is skipped.
+        const outer = (S.nPages <= 1 && G.outer) ? G.outer.label() : null;
+        if (S.nPages <= 1 && !outer) {
+            status.text = 'one page: nothing to play';
+            return;
+        }
         b_play.label = 'Pause';
+        if (outer) {
+            S.outerPlay = true;
+            status.text = 'playing ' + outer;
+            S.playing = setInterval(G.outerTick, 1000 / (+sel_speed.value));
+            return;
+        }
         S.playing = setInterval(() => G.step(1), 1000 / (+sel_speed.value));
         prefetch();
     },
+    outerTick() {
+        if (!S.playing || S.outerBusy || S.loading) return;
+        S.outerBusy = true;
+        const done = (ok) => {
+            S.outerBusy = false;
+            if (!ok && S.playing) G.togglePlay();
+        };
+        Promise.resolve(G.outer.step(cb_loop.active.includes(0)))
+            .then(done, (e) => { console.warn('grid playback step failed:', e); done(false); });
+    },
+    stop() { if (S.playing) G.togglePlay(); },
     respeed() { if (S.playing) { G.togglePlay(); G.togglePlay(); } },
     async save() {
         status.text = 'writing PNG…';
@@ -902,6 +941,11 @@ const G = {
                                          shownRows: S.rows, shownCols: S.cols}); },
 };
 window.__cvGrid[key] = G;
+// the application's playback beyond the pages (play_outer, 2026-11-13)
+if (play_outer) {
+    try { play_outer.execute(G, {}); }
+    catch (e) { console.warn('grid play_outer failed:', e); }
+}
 regrid();
 if (fit_to) window.addEventListener('resize', () => {
     clearTimeout(S.fitTimer);

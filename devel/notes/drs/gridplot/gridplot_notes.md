@@ -642,3 +642,54 @@ the grid's toolbar should have one too.
 the grid's toolbar; with the sidebar scrolled to the bottom, a real click
 on it opens the tab, and its button is in view.  `grid_browser_check.py`
 13 of 13; `test_vis_grid.py` 34.
+
+## 9. Play with one plot plays the stepper (base `2f825f1a`, 2026-11-13)
+
+Darrell: after narrowing down to a single plot (an antenna, then one of
+its baselines), Play should play through the baselines.  Before this,
+one cell was one page, so Play did nothing.
+
+**Rule**: when every cell fits on one page, Play plays the most specific
+sidebar stepper that has exactly one row ticked: Baseline, then Antenna,
+then SPW (when there are several), then Field (one of several).  Each
+step is that stepper's ▶ followed by a Plot.  With nothing to step, Play
+says "one page: nothing to play".  It is not only for one cell: by
+correlation on one baseline, the four correlation cells are played
+baseline by baseline.
+
+- *Which baselines*: the Baseline stepper already stays within the
+  ticked antenna's baselines (`iterate_baseline_js`).  So antenna then
+  baseline plays that antenna's baselines; the browser check confirms it.
+- *Rows without data* are skipped, as the steppers skip them.
+- *Loop*: wraps.  Without Loop, the step that would wrap is undone (the
+  sidebar is put back, Plot stays green) and playback stops on the last
+  item.
+- *Speed*: Pages/s is the most it goes.  A tick is skipped while a step's
+  Plot or its page is still on its way, so a slow Plot slows playback
+  rather than queueing Plots.  Nothing is prefetched: each step is a Plot.
+- *Pause stays clickable*: a playback step is a quiet Plot
+  (`window.__cvQuietPlot`).  doPlot puts up no busy overlay and holds
+  nothing; the step's caller is told when the page is drawn
+  (`__cvPlayStepDone`).  If the Plot is refused before it is sent,
+  playback stops.
+- *Stops*: Pause, a Plot of the user's (`reload` stops playback unless
+  the reload is playback's own step), leaving Grid, or a drill-down.
+
+**Pieces**: `GridView(play_outer=CustomJS)` (shared): run once at load
+with the grid's JS API.  It may set `outer = {label(), step(loop) ->
+Promise<bool>}`, which `togglePlay` uses when `nPages <= 1`
+(`outerTick`).  Also `G.stop()`.  visplot's `_GRID_PLAY_JS` sets it,
+with the four stepper functions (kept as `self._iterate_js`) and doPlot
+in its scope.
+
+**Checks**: `visplot_grid_check.py` 27 of 27, and the same starting in
+Grid and through a remote kernel.  New:
+- *play one*: by antenna, one antenna ticked, 2/s: six or more antennas
+  drawn in 9 s, the busy count 0 throughout, Pause stops it; from the
+  last antenna without Loop, Play stops with that antenna still ticked.
+- *play baselines*: by baseline, an antenna and one of its baselines
+  ticked: one cell, and Play plays that antenna's baselines only.
+
+"grid edit"'s hover probe missed once in about ten runs; it now moves
+the mouse once more before failing.  `grid_browser_check.py` 13 of 13;
+`test_vis_grid.py` 34.

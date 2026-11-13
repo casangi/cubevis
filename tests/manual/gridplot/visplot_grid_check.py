@@ -47,6 +47,12 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
     fit             1 x 1: the cell fills the room the window gives the grid,
                     and follows the window's size
     export          Export PNG in Grid writes the page
+    play one        one cell (Iterate by Antenna, one antenna ticked): Play
+                    steps the Antenna stepper -- other antennas drawn, no busy
+                    overlay, Pause stops it; without Loop it stops at the last
+                    antenna and leaves it ticked
+    play baselines  one cell by baseline (an antenna and one of its baselines
+                    ticked): Play plays that antenna's baselines
     panels again    Plot in Grid draws only the grid (G3); Side by Side
                     afterwards draws the panels (Python answers that Plot)
     console         no errors in the browser console
@@ -408,6 +414,10 @@ def main() -> int:
             pg.mouse.move(x, y, steps=3)
             pg.wait_for_timeout(1000)
             text = status_div_text("t.startsWith('<b>') && t.includes('<b>Phase:</b>')") or ""
+            if not text:                      # the hover can miss once: move again
+                pg.mouse.move(x + 8, y + 4, steps=3)
+                pg.wait_for_timeout(1500)
+                text = status_div_text("t.startsWith('<b>') && t.includes('<b>Phase:</b>')") or ""
             check("grid edit", "Phase:" in text and panel0("panel0_rq_sel") == a_q
                   and gtab("scaling") == "auto",
                   f"cells: {text[:70]!r}; Panel A's quantity still {a_q}")
@@ -547,6 +557,80 @@ def main() -> int:
             dl.value.save_as(path)
             ok = os.path.getsize(path) > 10000 and open(path, "rb").read(8) == b"\x89PNG\r\n\x1a\n"
             check("export", ok, f"{dl.value.suggested_filename}, {os.path.getsize(path) // 1024} KB")
+            # --- Play with one cell: the stepper is played --------------------
+            if pg.evaluate(f"() => {MODELS}.find(m => m.type === 'Select' && "
+                           f"m.title === 'Iterate by').value") != "antenna":
+                set_marker()
+                select("Iterate by", "antenna")
+                wait_drawn()
+            set_marker(); run_button("▶", "doIterateAntenna(1)"); wait_drawn()
+            ant_sel = "() => Array.from(" + model("m.type === 'ColumnDataSource' && m.data.name "
+                                                   "&& m.data.has_data && !m.data.ant1") + ".selected.indices)"
+            pg.evaluate(f"""() => {{ const l = {MODELS}.find(m => m.type === 'CheckboxGroup'
+                && m.labels[0] === 'Loop'); l.active = [0];
+                const sp = {MODELS}.find(m => m.type === 'Select' && m.title === 'Pages/s');
+                sp.value = sp.options.map(String).includes('2') ? '2' : sp.value; }}""")
+            pg.evaluate(f"""() => {{ window.__cvPlayLog = [];
+                window.__cvPlayPoll = setInterval(() => window.__cvPlayLog.push([
+                    {model("m.type === 'GridPlot'")}.children[0][0].title.text,
+                    window.__cvBusyN || 0]), 50); }}""")
+            click_button("Play")
+            pg.wait_for_timeout(300)
+            label_playing = pg.evaluate(f"() => {MODELS}.find(m => m.type === 'Button' && "
+                                        f"(m.label === 'Pause' || m.label === 'Play')).label")
+            pg.wait_for_timeout(9000)
+            click_button("Pause")
+            pg.wait_for_timeout(1500)
+            plog = pg.evaluate("() => { clearInterval(window.__cvPlayPoll); return window.__cvPlayLog; }")
+            seen = list(dict.fromkeys(t for t, _ in plog if t.strip()))
+            quiet = max(b for _, b in plog) == 0
+            label_after = pg.evaluate(f"() => {MODELS}.find(m => m.type === 'Button' && "
+                                      f"(m.label === 'Pause' || m.label === 'Play')).label")
+            # the last antenna, no Loop: one step would wrap, so Play stops there
+            n_ant = pg.evaluate("() => " + model("m.type === 'ColumnDataSource' && m.data.name "
+                                                 "&& m.data.has_data && !m.data.ant1") + ".data.name.length")
+            pg.evaluate(f"""(n) => {{ {model("m.type === 'ColumnDataSource' && m.data.name && m.data.has_data && !m.data.ant1")}.selected.indices = [n - 1];
+                {MODELS}.find(m => m.type === 'CheckboxGroup' && m.labels[0] === 'Loop').active = []; }}""",
+                        n_ant)
+            set_marker(); click_button("Plot ▶"); wait_drawn()
+            click_button("Play")
+            pg.wait_for_timeout(3000)
+            end_label = pg.evaluate(f"() => {MODELS}.find(m => m.type === 'Button' && "
+                                    f"(m.label === 'Pause' || m.label === 'Play')).label")
+            end_sel = pg.evaluate(ant_sel)
+            check("play one", label_playing == "Pause" and len(seen) >= 3 and quiet
+                  and label_after == "Play" and end_label == "Play" and end_sel == [n_ant - 1],
+                  f"played {seen[:6]}{'...' if len(seen) > 6 else ''}; busy overlay never up: "
+                  f"{quiet}; paused: {label_after == 'Play'}; at the last without Loop: "
+                  f"stopped ({end_label}), still {end_sel}")
+            pg.screenshot(path=os.path.join(a.out, "play_one.png"))
+
+            # Darrell's case: an antenna, then one of its baselines
+            set_marker(); select("Iterate by", "baseline"); wait_drawn()
+            ANT = "m.type === 'ColumnDataSource' && m.data.name && m.data.has_data && !m.data.ant1"
+            BL = "m.type === 'ColumnDataSource' && m.data.ant1 && m.data.has_data"
+            ant0 = pg.evaluate(f"""() => {{ const a = {model(ANT)}, b = {model(BL)};
+                a.selected.indices = [3]; const n = a.data.name[3];
+                b.selected.indices = [b.data.ant1.findIndex((x, i) => x === n || b.data.ant2[i] === n)];
+                {MODELS}.find(m => m.type === 'CheckboxGroup' && m.labels[0] === 'Loop').active = [0];
+                return n; }}""")
+            set_marker(); click_button("Plot ▶"); wait_drawn()
+            one = n_cells()
+            pg.evaluate(f"""() => {{ window.__cvPlayLog = [];
+                window.__cvPlayPoll = setInterval(() => window.__cvPlayLog.push(
+                    {model("m.type === 'GridPlot'")}.children[0][0].title.text), 50); }}""")
+            click_button("Play")
+            pg.wait_for_timeout(7000)
+            click_button("Pause")
+            pg.wait_for_timeout(1500)
+            blog = pg.evaluate("() => { clearInterval(window.__cvPlayPoll); return window.__cvPlayLog; }")
+            bseen = list(dict.fromkeys(t for t in blog if t.strip()))
+            check("play baselines", one == 1 and len(bseen) >= 3 and all(ant0 in t for t in bseen),
+                  f"{one} cell; played {bseen[:5]}{'...' if len(bseen) > 5 else ''}, "
+                  f"all with {ant0}: {all(ant0 in t for t in bseen)}")
+            pg.screenshot(path=os.path.join(a.out, "play_baselines.png"))
+            pg.evaluate(f"() => {{ {model(ANT)}.selected.indices = []; {model(BL)}.selected.indices = []; }}")
+
             set_marker()
             click_button("Plot ▶")
             wait_drawn()

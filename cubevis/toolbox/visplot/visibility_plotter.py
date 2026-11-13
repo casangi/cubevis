@@ -2494,6 +2494,8 @@ window.__cvGridLayout = function (on) {
     plot_area.visible = !on;
     for (const p of grid_parts) p.visible = !!on;
     if (!on) {
+        // playback is the grid's: it stops when the grid is left
+        for (const k in (window.__cvGrid || {})) if (window.__cvGrid[k].stop) window.__cvGrid[k].stop();
         // Plots in Grid draw only the grid (gridplot G3): the panels are
         // drawn now, for the selection the grid was drawn with.
         if (window.__cvPanelsStale && window.__cvDoPlot) {
@@ -2590,6 +2592,76 @@ if (sel) {
     layout_rbg.active = 0;                        // One: the cell, full size
     doPlot(false);
 }
+"""
+
+
+# Play with every cell on one page (2026-11-13; Darrell: narrowed to one
+# plot, Play should play the baselines): GridView's ``play_outer`` hook.
+# What is played is the most specific stepper with exactly one row ticked
+# -- Baseline, then Antenna, then SPW, then Field -- each step its ▶ and a
+# quiet Plot (doPlot with no busy overlay, so Pause stays clickable).
+# Without Loop, playback stops at the last one and the sidebar is put back
+# as it was before that last step.  cb_obj is the grid's JS API.
+_GRID_PLAY_JS = """
+const LABELS = {baseline: 'baselines', antenna: 'antennas', spw: 'spectral windows',
+                field: 'fields'};
+function cvPlayOne(src) {
+    return !!(src && src.selected && (src.selected.indices || []).length === 1);
+}
+function cvPlayFields() {
+    return field_sel ? field_sel.options.slice(1).map(o => Array.isArray(o) ? o[0] : o)
+                       .filter(v => String(v).indexOf(',') < 0) : [];
+}
+function cvPlayAxis() {
+    if (cvPlayOne(bl_src)) return 'baseline';
+    if (cvPlayOne(ant_src)) return 'antenna';
+    if ((spw_src.data['ident'] || []).length > 1 && cvPlayOne(spw_src)) return 'spw';
+    const f = cvPlayFields();
+    if (f.length > 1 && f.indexOf(field_sel.value) >= 0) return 'field';
+    return null;
+}
+function cvPlayPos(axis) {
+    if (axis === 'baseline') return bl_src.selected.indices[0];
+    if (axis === 'antenna') return ant_src.selected.indices[0];
+    if (axis === 'spw') return spw_src.selected.indices[0];
+    return cvPlayFields().indexOf(field_sel.value);
+}
+function cvPlaySnapshot() {
+    return {ant: Array.from(ant_src.selected.indices || []),
+            bl: Array.from(bl_src.selected.indices || []),
+            spw: Array.from(spw_src.selected.indices || []),
+            field: field_sel ? field_sel.value : null};
+}
+function cvPlayRestore(s) {
+    ant_src.selected.indices = s.ant; bl_src.selected.indices = s.bl;
+    spw_src.selected.indices = s.spw;
+    if (field_sel && s.field != null) field_sel.value = s.field;
+    if (window.__cvPlotPending) window.__cvPlotPending(false);   // as last plotted
+}
+cb_obj.outer = {
+    label() { const a = cvPlayAxis(); return a ? LABELS[a] : null; },
+    step(loop) {
+        const axis = cvPlayAxis();
+        if (!axis) return Promise.resolve(false);
+        const before = cvPlaySnapshot(), pos = cvPlayPos(axis);
+        ({baseline: doIterateBaseline, antenna: doIterateAntenna,
+          spw: doIterateSpw, field: doIterateField})[axis](1);
+        const now = cvPlayPos(axis);
+        if (now === pos || (now < pos && !loop)) {     // one only, or past the last
+            cvPlayRestore(before);
+            return Promise.resolve(false);
+        }
+        return new Promise((res) => {
+            window.__cvQuietPlot = true; window.__cvPlayStepDone = res;
+            window.__cvPlotSent = false;
+            doPlot(false);
+            if (!window.__cvPlotSent) {                // refused before sending
+                window.__cvQuietPlot = false; window.__cvPlayStepDone = null;
+                res(false);
+            }
+        });
+    },
+};
 """
 
 
@@ -6728,6 +6800,9 @@ cvApplySelectionText(
             options=[(k, self._GRID_ITERATE_LABELS[k]) for k in ITERATE_BY])
         # filled in by _wire_grid, once doPlot exists
         self._grid_drill_js = CustomJS(code="")
+        # Play with every cell on one page steps the sidebar's stepper
+        # (2026-11-13); filled in by _wire_grid, once the steppers exist
+        self._grid_play_js = CustomJS(code="")
         rows, cols = self._grid_shape
         pool = (min(MAX_POOL[0], max(6, rows)), min(MAX_POOL[1], max(6, cols)))
         # The grid's gear (gridplot G3, 2026-11-13): as each panel's gear
@@ -6742,7 +6817,7 @@ cvApplySelectionText(
         self._grid_view = GridView(
             self._grid_source, self._comm_mgr, rows=rows, cols=cols, pool=pool,
             area=self.GRID_AREA, theme=self._theme, on_drill=self._grid_drill,
-            drill_js=self._grid_drill_js, autoload=autoload,
+            drill_js=self._grid_drill_js, play_outer=self._grid_play_js, autoload=autoload,
             app_context=self._app_context, embedded=True, colour=self._grid_colour,
             extra_tools=[self._grid_gear],
             idle_text="Press <b>Plot &#9654;</b> to draw the grid")
@@ -6919,6 +6994,9 @@ setTimeout(function () {
         args = dict(self._plot_js_args)
         self._grid_drill_js.args = args
         self._grid_drill_js.code = self._do_plot_js + _GRID_DRILL_JS
+        self._grid_play_js.args = args
+        self._grid_play_js.code = ("".join(self._iterate_js.values()) + self._do_plot_js
+                                   + _GRID_PLAY_JS)
         self._grid_iter_sel.js_on_change("value", CustomJS(
             args=args, code=self._do_plot_js + "if (layout_rbg.active === 3) doPlot(false);"))
         self._grid_restore_args = {k: args[k] for k in (
@@ -9830,7 +9908,12 @@ function doPlot(reload) {
         return;
     }
 
-    cvSetBusy(true);
+    // A playback step (Play with every cell on one page, 2026-11-13): no
+    // busy overlay, so Pause stays clickable; the step's caller is told
+    // when the page is drawn (or the Plot failed).
+    const _quiet = !!window.__cvQuietPlot, _done = window.__cvPlayStepDone || null;
+    window.__cvQuietPlot = false; window.__cvPlayStepDone = null; window.__cvPlotSent = true;
+    if (!_quiet) cvSetBusy(true);
 
     ctrl.send(ids['plot'], {
         field:       field_sel.value,
@@ -9878,14 +9961,19 @@ function doPlot(reload) {
                           && window.__cvGrid && window.__cvGrid[grid_key]) || null;
         const _release = function() {
             requestAnimationFrame(function() {
-                requestAnimationFrame(function() { cvSetBusy(false); });
+                requestAnimationFrame(function() {
+                    if (!_quiet) cvSetBusy(false);
+                    if (_done) _done(!!_gridApi);
+                });
             });
         };
         // (reference counted: doPlot's own hold is released once, by
         // _release; the 450 ms bridge is a hold and release of its own)
         if (!_gridApi) {
-            window.__cvSetBusy(true);
-            setTimeout(function() { window.__cvSetBusy(false); }, 450);
+            if (!_quiet) {
+                window.__cvSetBusy(true);
+                setTimeout(function() { window.__cvSetBusy(false); }, 450);
+            }
             _release();
         }
         if (!resp) return;
@@ -10700,6 +10788,11 @@ function doIterateSpw(delta) {
             _iter_guard_js("names.length", "antenna"))
         _iterate_baseline_js = STEP_INDEX_JS + _abs.iterate_baseline_js(
             _iter_guard_js("cand.length", "baseline"))
+        # kept for the grid's Play (gridplot, 2026-11-13: with every cell on
+        # one page, Play steps these; _wire_grid)
+        self._iterate_js = {"field": _iterate_field_js, "spw": _iterate_spw_js,
+                            "antenna": _iterate_antenna_js,
+                            "baseline": _iterate_baseline_js}
         # .wire() (see _IterButtons) assembles each button's CustomJS
         # from these bodies + self._do_plot_js exactly the way the
         # hand-written js_on_click() calls this replaced did -- the

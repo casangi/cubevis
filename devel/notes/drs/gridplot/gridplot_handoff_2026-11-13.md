@@ -1,5 +1,11 @@
 # Handoff: grid plots in visplot, G2 done, G3 next (2026-11-13)
 
+> **Update, later on 2026-11-13: G3 item 1, the grid's own panel, is
+> done.**  See `gridplot_notes.md` section 7 and plan section 15.  It was
+> delivered as `gridplot-g3a_b694c8ad.zip`.  Next is G3 item 2, read once
+> and split.  The test counts below are now 34 (`test_vis_grid.py`) and 24
+> (`visplot_grid_check.py`).
+
 The plan is `devel/docs/gridplot/grid_and_calplot_plan.md`, mirrored to
 the claude.ai project doc `claude/grid_and_calplot_plan.md`.  Sections 13
 and 14 cover what was built; the stage table is section 6.  The record

@@ -7,9 +7,10 @@ Stage G2 of ``devel/docs/gridplot/grid_and_calplot_plan.md`` (sections 3.2,
 labels, an extent, cells' images and probe text; this answers from a
 headless copy of the template panel per cell:
 
-* **the template** is a raster panel (Panel A in the GUI, the constructor's
-  panel for ``plotfile=``): its axes, quantity, correlation, averaging,
-  scaling and colormap are copied into every cell;
+* **the template** is a raster panel -- the plotter's grid panel (slot G,
+  gridplot G3: ``grid_panel=``, or a copy of Panel A), which is never drawn
+  itself: its axes, quantity, correlation, averaging, scaling and colormap
+  are copied into every cell;
 * **the selection** is the plotter's, narrowed per cell by the iteration
   value -- the grid iterates *within* the current selection (plan 1.3);
 * **each cell is its own headless ``VisibilityRaster``**, kept (up to
@@ -130,12 +131,15 @@ class VisGridSource:
         the Grid layout, or a headless export); cells drawn before are
         dropped."""
         from .visibility_raster import VisibilityRaster
-        tmpl = template if template is not None else self._p._pos0
+        tmpl = template
+        if tmpl is None:
+            gs = getattr(self._p, "_grid_slot", None)
+            tmpl = gs.active if gs is not None else self._p._pos0
         if not isinstance(tmpl, VisibilityRaster):
             raise GridTemplateError(
                 "the Grid layout draws raster panels for now (a scatter cell costs "
                 "about 1.7 s; scatter grids come with read-once-and-split, gridplot G3): "
-                "set Panel A to a raster")
+                "set the grid's panel to Raster")
         with self._lock:
             if iterate_by is not None:
                 self._iterate_by = normalize_iterate_by(iterate_by)

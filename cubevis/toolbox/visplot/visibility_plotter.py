@@ -233,6 +233,8 @@ _STATIC_HINTS = {
     "tb_reload": "<b>Reload</b> \u2014 read the data again and redraw  | Use after something else has changed the data on disk  | <span style=\"color:#f38ba8\"><b>Discards pending (unapplied) flags</b></span>",
     "tb_layout": "<b>Layout</b> \u2014 one panel, or both: side by side or one above the other  | Side by side suits Baseline \u00d7 Time; one above the other gives a waterfall the full width  | Each preset switches to the layout that suits it, unless <b>Pin layout</b> (in the configuration panel) is ticked",
     "gear_pin": "<b>Pin</b> \u2014 keep this panel's configuration tab open after <b>Plot &#9654;</b>, to try one setting after another (the Ant\u00d7Ant quantities, say)  | Unticked, a successful Plot closes the tab  | \u2715 closes it either way",
+    "grid_panel": "<b>Grid panel</b> \u2014 the plot every cell of the grid repeats, apart from Panels A and B  | Starts as a copy of the first panel the first time Grid is shown  | Changes apply when you press <b>Plot &#9654;</b>  | Tapping a cell shows it in the first panel, set up as this one",
+    "grid_scaling": "<b>Grid colour scaling</b> \u2014 how the cells spread their values over the colours, applied at <b>Plot &#9654;</b>  | <b>auto</b>: the quantity's own (Phase: linear \u2212180..180\u00b0; Z-Score: threshold)  | Min / max: empty is automatic  | <b>Colour</b> above says which cells share one range",
     "pin_layout": "<b>Pin layout</b> \u2014 keep the panels arranged as they are now (One, Side by Side or Over / Under) when a preset is pressed  | Unticked, each preset switches to the arrangement that suits it (Spectrum and the waterfalls one above the other, the others side by side)  | Only the arrangement is kept: a preset still sets what each panel shows  | The Layout buttons in the toolbar change the arrangement either way",
     "autocorr": "<b>Autocorrelations</b> \u2014 baselines from an antenna to itself  | <b>Exclude</b> (default): cross-correlations only. Autocorrelations can be hundreds of times larger (VLBI data before amplitude calibration) and flatten every plot of all baselines  | <b>Include</b>: both; the Ant\u00d7Ant matrix then has its diagonal  | <b>Only</b>: autocorrelations alone \u2014 the bandpass shape and interference at each station  | A baseline ticked by name (e.g. BR&amp;BR) is plotted whatever is chosen here  | Applied by Plot",
     "time_labels": "<b>Time labels</b> \u2014 how every time axis and the cursor readout give time  | <b>UTC</b>: time of day, with the date in the axis label; when the data cross midnight the ticks read day/hh:mm:ss from the first day, as in AIPS. Matches observing logs, <tt>listobs</tt> and the Time range box  | <b>Elapsed</b>: minutes and seconds from the first sample shown  | Changes the labels only; nothing is read again",
@@ -2491,7 +2493,15 @@ window.__cvGridLayout = function (on) {
     grid_area.visible = !!on;
     plot_area.visible = !on;
     for (const p of grid_parts) p.visible = !!on;
-    if (!on) return;
+    if (!on) {
+        // Plots in Grid draw only the grid (gridplot G3): the panels are
+        // drawn now, for the selection the grid was drawn with.
+        if (window.__cvPanelsStale && window.__cvDoPlot) {
+            window.__cvPanelsStale = false;
+            setTimeout(() => window.__cvDoPlot(false), 0);
+        }
+        return;
+    }
     // the grid's room is known now that it is shown: cells to fit it
     setTimeout(() => { for (const k in (window.__cvGrid || {})) window.__cvGrid[k].refit(); }, 50);
     // Nothing drawn in the grid yet: plot, as pressing Plot in Grid would
@@ -2556,6 +2566,27 @@ if (sel) {
         const i = corr_cbg.labels.indexOf(sel.correlation);
         if (i >= 0) corr_cbg.active = [i];
     }
+    // The panel One shows becomes the cell (gridplot G3): the grid's panel
+    // as last plotted, its colour scaling sent with this Plot and shown in
+    // the panel's colour controls (without sending: Plot applies it).
+    const _pi = (display_order_source.data['order'][0] || [0, 1])[0];
+    const _pw = panel_tabs[_pi];
+    if (cb_obj.panel) cvSetPanelTab(_pw, cb_obj.panel);
+    const _col = cb_obj.colour;
+    if (_col && _col.scaling) {
+        window.__cvDrillColour = {id: [panel0_id, panel1_id][_pi], colour: _col};
+        try {
+            window.__cvQuietScaling = true;
+            if (_pw.cm_scale) _pw.cm_scale.value = _col.scaling;
+        } catch (e) {} finally { window.__cvQuietScaling = false; }
+        const _fmt = v => (v == null || !isFinite(v)) ? null : String(parseFloat(Number(v).toPrecision(6)));
+        for (const [k, v] of [['cm_alpha', _col.alpha], ['cm_gamma', _col.gamma],
+                              ['cm_min', _col.vmin], ['cm_max', _col.vmax]]) {
+            const t = _fmt(v);
+            if (_pw[k] && t != null) try { _pw[k].value = t; } catch (e) {}
+        }
+    }
+    window.__cvPanelsStale = false;               // this Plot draws them
     layout_rbg.active = 0;                        // One: the cell, full size
     doPlot(false);
 }
@@ -2790,7 +2821,7 @@ class VisibilityPlotter:
         (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
         ``"field"``, ``"scan"`` or ``"correlation"`` -- within the
         selection, as plotms's ``iteraxis``.  Every plot is drawn as the
-        first panel is (its axes, quantity, averaging, colour scale).
+        grid's own panel is (``grid_panel``).
     gridrows : int
         Rows of plots on a page of the Grid layout (1-8, default 3).
     gridcols : int
@@ -2830,6 +2861,19 @@ class VisibilityPlotter:
                     dict(kind="scatter", scatter_x="FREQUENCY",
                          scatter_y="PHASE", scatter_avg_time="scan")],
             layout="over"
+    grid_panel : dict | None
+        The Grid layout's own panel: what every plot of the grid is
+        drawn as, apart from the panels -- so ``layout="grid"`` can start
+        with both the grid and the panels set up.  The keys of one
+        ``panels`` entry; a key left out takes the first panel's value.
+        Without it the grid starts as a copy of the first panel, made
+        the first time Grid is shown.  In the GUI it is "Grid panel" in
+        the Grid section; a tapped plot is shown in the first panel set up
+        as this one.  Raster only for now.  Example::
+
+            layout="grid", iterate_by="antenna",
+            grid_panel=dict(raster_y="TIME", raster_x="BASELINE",
+                            raster_qty="PHASE")
     autocorr : str
         Autocorrelations (baselines from an antenna to itself):
         ``"exclude"`` (default; cross-correlations only), ``"include"``
@@ -3001,6 +3045,7 @@ class VisibilityPlotter:
         time_labels:      str           = "utc",
         autocorr:         str           = "exclude",
         panels:           Optional[list] = None,
+        grid_panel:       Optional[dict] = None,
         raster_y:         Optional[str] = None,
         raster_x:         Optional[str] = None,
         raster_qty:       Optional[str] = None,
@@ -3076,6 +3121,10 @@ class VisibilityPlotter:
         # Per-panel configuration (HRS A2, 2026-10-11); resolved in
         # _resolve_config into self._slot_cfg.
         self._panels_arg = panels
+        # The Grid layout's own panel (gridplot G3, 2026-11-13): what the
+        # grid repeats in every cell, apart from Panels A and B.  None: a
+        # copy of Panel A, made the first time Grid is shown.
+        self._grid_panel_arg = grid_panel
 
         # A failure once the data are open closes them (and a remote
         # kernel) here, not in __del__ at interpreter exit, where closing a
@@ -3485,7 +3534,8 @@ class VisibilityPlotter:
         _avail = _data_correlations(self._meta)
         for _i, _c in enumerate([self._raster_corr] + [
                 _normalize_raster_corr((d or {}).get("raster_corr"))
-                for d in (getattr(self, "_panels_arg", None) or [])
+                for d in (list(getattr(self, "_panels_arg", None) or [])
+                          + [getattr(self, "_grid_panel_arg", None)])
                 if isinstance(d, dict)]):
             if _c not in ("auto", "parallel") and _avail and _c not in _avail:
                 raise ValueError(
@@ -3615,8 +3665,8 @@ class VisibilityPlotter:
         # Per-panel configuration (HRS A2): what each slot is built from.
         # Defaults come from the flat arguments and the preset, exactly as
         # before; panels=[...] overrides them per slot.
-        self._slot_cfg = self._resolve_slot_configs(
-            getattr(self, "_panels_arg", None))
+        cfgs = self._resolve_slot_configs(getattr(self, "_panels_arg", None))
+        self._slot_cfg, self._grid_cfg = cfgs[:2], cfgs[2]
         self._kind = self._slot_cfg[0]["kind"]
 
     # Keys a panels=[...] dict may hold (HRS A2).  Raster-only colour
@@ -3630,7 +3680,9 @@ class VisibilityPlotter:
     MAX_PANELS = 2
 
     def _resolve_slot_configs(self, panels) -> list:
-        """One fully resolved settings dict per slot (A, B).
+        """One fully resolved settings dict per slot (A, B), and a third
+        for the Grid layout's own panel (G: Panel A's, then
+        ``grid_panel=``).
 
         Starts from what the flat arguments and ``preset`` give each slot
         -- slot A: the flat values; slot B: the complementary kind, or
@@ -3672,63 +3724,80 @@ class VisibilityPlotter:
         for i, d in enumerate(panels):
             if d is None:
                 continue
-            if not isinstance(d, dict):
-                raise ValueError(f"panels[{i}] must be a dict, not {type(d).__name__}")
-            bad = sorted(set(d) - set(self._PANEL_KEYS))
-            if bad:
-                raise ValueError(
-                    f"panels[{i}]: unknown key(s) {', '.join(bad)}; "
-                    f"allowed: {', '.join(self._PANEL_KEYS)}")
-            c = cfgs[i]
-            tag = f"panels[{i}]"
-            if "kind" in d:
-                if d["kind"] not in ("raster", "scatter"):
-                    raise ValueError(f"{tag}: kind must be 'raster' or 'scatter'")
-                c["kind"] = d["kind"]
-            for k, opts in (("raster_y", _RASTER_AXIS_OPTIONS),
-                            ("raster_x", _RASTER_AXIS_OPTIONS),
-                            ("raster_qty", _RASTER_QTY_OPTIONS),
-                            ("scatter_x", _SCATTER_X_OPTIONS),
-                            ("scatter_y", _SCATTER_Y_OPTIONS)):
-                if k in d:
-                    v = d[k]
-                    c[k] = (v if isinstance(v, Axis)
-                            else _resolve_axis_arg(v, opts, f"{tag}.{k}", c[k]))
-            norm = {"averaging": normalize_averaging,
-                    "raster_corr": _normalize_raster_corr,
-                    "baseline_order": normalize_baseline_order,
-                    "baseline_combine": normalize_baseline_combine,
-                    "stat_time_window": normalize_time_window,
-                    "stat_chan_window": normalize_chan_window,
-                    "scatter_avg_time": normalize_avg_time,
-                    "scatter_avg_chan": normalize_avg_chan}
-            for k, f in norm.items():
-                if k in d:
-                    try:
-                        c[k] = f(d[k])
-                    except ValueError as exc:
-                        raise ValueError(f"{tag}.{k}: {exc}") from None
-            if "detrend" in d:
-                c["detrend"] = bool(d["detrend"])
-            if any(k in d for k in ("detrend", "stat_time_window", "stat_chan_window")):
-                c["scatter_stat_own"] = True
-            if "scaling" in d:
-                from ..gridplot import colormap_scaling as _cms
-                if d["scaling"] not in _cms.ALL_SCALINGS:
-                    raise ValueError(f"{tag}.scaling must be one of "
-                                     f"{', '.join(_cms.ALL_SCALINGS)}")
-                c["scaling"] = d["scaling"]
-            for k in ("vmin", "vmax"):
-                if k in d and d[k] is not None:
-                    c[k] = float(d[k])
-            if c["raster_y"] == c["raster_x"]:
-                raise ValueError(f"{tag}: raster_y and raster_x must differ")
+            self._apply_panel_dict(cfgs[i], d, f"panels[{i}]")
         for i, c in enumerate(cfgs):
             problem = (raster_axes_problem(c["raster_y"], c["raster_x"])
                        if c.get("kind") == "raster" else None)
             if problem:
                 raise ValueError(f"panel {'AB'[i]}: {problem}")
+        # The grid's own panel (gridplot G3): Panel A's settings, then
+        # grid_panel={...} on top -- the same keys as one panels= entry.
+        g = dict(cfgs[0])
+        grid_panel = getattr(self, "_grid_panel_arg", None)
+        if grid_panel is not None:
+            if not isinstance(grid_panel, dict):
+                raise ValueError("grid_panel must be a dict (the keys of one "
+                                 "panels= entry)")
+            self._apply_panel_dict(g, grid_panel, "grid_panel")
+            problem = (raster_axes_problem(g["raster_y"], g["raster_x"])
+                       if g.get("kind") == "raster" else None)
+            if problem:
+                raise ValueError(f"grid_panel: {problem}")
+        cfgs.append(g)
         return cfgs
+
+    def _apply_panel_dict(self, c: dict, d: dict, tag: str) -> None:
+        """Validate one ``panels=`` entry (or ``grid_panel=``) *d* and
+        apply it to the resolved settings *c*."""
+        if not isinstance(d, dict):
+            raise ValueError(f"{tag} must be a dict, not {type(d).__name__}")
+        bad = sorted(set(d) - set(self._PANEL_KEYS))
+        if bad:
+            raise ValueError(
+                f"{tag}: unknown key(s) {', '.join(bad)}; "
+                f"allowed: {', '.join(self._PANEL_KEYS)}")
+        if "kind" in d:
+            if d["kind"] not in ("raster", "scatter"):
+                raise ValueError(f"{tag}: kind must be 'raster' or 'scatter'")
+            c["kind"] = d["kind"]
+        for k, opts in (("raster_y", _RASTER_AXIS_OPTIONS),
+                        ("raster_x", _RASTER_AXIS_OPTIONS),
+                        ("raster_qty", _RASTER_QTY_OPTIONS),
+                        ("scatter_x", _SCATTER_X_OPTIONS),
+                        ("scatter_y", _SCATTER_Y_OPTIONS)):
+            if k in d:
+                v = d[k]
+                c[k] = (v if isinstance(v, Axis)
+                        else _resolve_axis_arg(v, opts, f"{tag}.{k}", c[k]))
+        norm = {"averaging": normalize_averaging,
+                "raster_corr": _normalize_raster_corr,
+                "baseline_order": normalize_baseline_order,
+                "baseline_combine": normalize_baseline_combine,
+                "stat_time_window": normalize_time_window,
+                "stat_chan_window": normalize_chan_window,
+                "scatter_avg_time": normalize_avg_time,
+                "scatter_avg_chan": normalize_avg_chan}
+        for k, f in norm.items():
+            if k in d:
+                try:
+                    c[k] = f(d[k])
+                except ValueError as exc:
+                    raise ValueError(f"{tag}.{k}: {exc}") from None
+        if "detrend" in d:
+            c["detrend"] = bool(d["detrend"])
+        if any(k in d for k in ("detrend", "stat_time_window", "stat_chan_window")):
+            c["scatter_stat_own"] = True
+        if "scaling" in d:
+            from ..gridplot import colormap_scaling as _cms
+            if d["scaling"] not in _cms.ALL_SCALINGS:
+                raise ValueError(f"{tag}.scaling must be one of "
+                                 f"{', '.join(_cms.ALL_SCALINGS)}")
+            c["scaling"] = d["scaling"]
+        for k in ("vmin", "vmax"):
+            if k in d and d[k] is not None:
+                c[k] = float(d[k])
+        if c["raster_y"] == c["raster_x"]:
+            raise ValueError(f"{tag}: raster_y and raster_x must differ")
 
     def _build_comm(self) -> None:
         """Phase 2a (GUI only): comm layer and reconnection handlers.
@@ -3968,7 +4037,7 @@ class VisibilityPlotter:
             else 2_000_000
         )
 
-        def _raster(c, wh, skip=False):
+        def _raster(c, wh, skip=False, grid=False):
             r = VisibilityRaster(
                 backend       = self._reader,
                 selection     = self._selection,
@@ -3984,12 +4053,12 @@ class VisibilityPlotter:
                 polarization  = _raster_polarization(c.get("raster_corr", "auto"), pols),
                 width         = wh[0],
                 height        = wh[1],
-                comm_mgr      = self._comm_mgr,
-                cursor_source = self._cursor_source,
-                enable_flagging = self._enable_flagging,
+                comm_mgr      = None if grid else self._comm_mgr,
+                cursor_source = None if grid else self._cursor_source,
+                enable_flagging = self._enable_flagging and not grid,
                 compact_toolbar = self._compact_toolbar,
-                defer_initial_render = (c["kind"] != "raster") or skip,
-                headless             = self._headless,
+                defer_initial_render = (c["kind"] != "raster") or skip or grid,
+                headless             = self._headless or grid,
                 cmap                 = raster_ramp,
                 max_cells            = _raster_max_cells,
                 **({"scaling": c["scaling"]} if c["scaling"] else {}),
@@ -4003,7 +4072,7 @@ class VisibilityPlotter:
 
         # One scatter layer per polarisation -- multi-layer compositing
         # naturally boosts density and visibility vs a single layer.
-        def _scatter(c, wh, skip=False):
+        def _scatter(c, wh, skip=False, grid=False):
             sc = VisibilityScatter(
                 backend       = self._reader,
                 selection     = self._selection,
@@ -4012,12 +4081,12 @@ class VisibilityPlotter:
                     c["scatter_y"], pols, cmaps=scatter_ramps),
                 width         = wh[0],
                 height        = wh[1],
-                comm_mgr      = self._comm_mgr,
-                cursor_source = self._cursor_source,
-                enable_flagging = self._enable_flagging,
+                comm_mgr      = None if grid else self._comm_mgr,
+                cursor_source = None if grid else self._cursor_source,
+                enable_flagging = self._enable_flagging and not grid,
                 compact_toolbar = self._compact_toolbar,
-                defer_initial_render = (c["kind"] != "scatter") or skip,
-                headless             = self._headless,
+                defer_initial_render = (c["kind"] != "scatter") or skip or grid,
+                headless             = self._headless or grid,
                 layer_cmaps          = scatter_ramps,
                 avg_time             = c["scatter_avg_time"],
                 avg_chan             = c["scatter_avg_chan"],
@@ -4042,9 +4111,13 @@ class VisibilityPlotter:
         # rendered at all (2026-10-18: it read the whole selection for a
         # panel nobody sees -- on TW Hya, all of the memory of a raster
         # export went to slot B's scatter).
-        _skip_b = self._headless and self._layout == "one"
-        _slot_a_raster  = _raster(_ca, _wh_a)
-        _slot_a_scatter = _scatter(_ca, _wh_a)
+        _skip_b = self._headless and (self._layout == "one" or self._grid_on)
+        # A headless Grid export draws from the grid's own panel (gridplot
+        # G3): Panel A is not drawn either, only marked stale below, so a
+        # later export of the panels still brings it up to date.
+        _skip_a = self._headless and self._grid_on
+        _slot_a_raster  = _raster(_ca, _wh_a, skip=_skip_a)
+        _slot_a_scatter = _scatter(_ca, _wh_a, skip=_skip_a)
         _slot_b_scatter = _scatter(_cb, _wh_b, skip=_skip_b)
         _slot_b_raster  = _raster(_cb, _wh_b, skip=_skip_b)
 
@@ -4071,6 +4144,26 @@ class VisibilityPlotter:
         for _slot in self._slots:
             self._last_raster_selection_by_slot[_slot.id]  = self._selection
             self._last_scatter_selection_by_slot[_slot.id] = self._selection
+
+        # The Grid layout's own panel (gridplot G3, 2026-11-13): slot "G",
+        # outside self._slots (A / B, Swap, the layouts never see it).
+        # Both kinds headless and comm-free: it holds the configuration
+        # the grid repeats, and is never drawn itself -- the cells are
+        # VisGridSource's clones of it, and the grid's extent comes from
+        # the source's own union panel.  Built from grid_panel= (or Panel
+        # A's settings); without grid_panel= the browser's first Grid
+        # Plot replaces it with a copy of Panel A as it is then
+        # (_grid_tmpl_pending, _handle_plot).
+        _cg = self._grid_cfg
+        self._grid_slot = _PanelSlot(
+            id="G", kind=_cg["kind"],
+            raster=_raster(_cg, _wh_a, grid=True),
+            scatter=_scatter(_cg, _wh_a, grid=True))
+        self._grid_tmpl_pending = (getattr(self, "_grid_panel_arg", None) is None
+                                   and not self._grid_on and not self._headless)
+        if _skip_a:
+            self.__dict__.setdefault("_stale_after_selection", set()).update(
+                id(sl.active) for sl in self._slots)
 
         # Screen-position order, added 2026-07-31 alongside the Group 1/2
         # slot-indexed rework: self._slot_display_order[0] is whichever
@@ -4115,6 +4208,11 @@ class VisibilityPlotter:
         self._all_panels = [obj for slot in self._slots
                             for obj in (slot.raster, slot.scatter)]
         for _p in self._all_panels:
+            _p._time_labels = self._time_labels
+        # The grid's panel follows the theme and time labels too (its
+        # clones copy both), but is not one of the four.
+        for _p in (self._grid_slot.raster, self._grid_slot.scatter):
+            _p._theme = self._theme
             _p._time_labels = self._time_labels
         self._flags.init_panels()
 
@@ -4270,6 +4368,17 @@ class VisibilityPlotter:
         log.debug("set_theme(%r): %s re-shade of %d panels (defaults %s)",
                   theme, RefreshLevel.SHADE.name, len(self._all_panels),
                   "re-resolved" if changed else "kept (user-set)")
+        # The grid's own panel (never drawn): its palette, which the cells
+        # it makes from now on copy.
+        gs = getattr(self, "_grid_slot", None)
+        if gs is not None:
+            gs.raster._theme = gs.scatter._theme = theme
+            gs.raster._cmap = self._raster_ramp
+            try:
+                gs.scatter.set_layer_cmaps(self._scatter_ramps,
+                                           statistical_cmap=self._raster_ramp)
+            except Exception:                                # noqa: BLE001
+                log.debug("grid panel scatter re-colour failed", exc_info=True)
         # The Grid layout's cells copy the template's palette: re-colour the
         # ones kept (no re-query) -- gridplot G2
         if getattr(self, "_grid_source", None) is not None:
@@ -4791,6 +4900,154 @@ for (const dt of other.tools) {
     #: column_width do not give one
     GRID_CELL = (300, 200)
 
+    # ------------------------------------------------------------------ #
+    # The Grid layout's own panel (gridplot G3, 2026-11-13)                 #
+    # ------------------------------------------------------------------ #
+    def grid_panel_settings(self) -> dict:
+        """The ``grid_panel=`` dict that reproduces the panel the grid
+        repeats: the keys of one ``panels=`` entry, with the colour
+        scaling and range only where they are not the quantity's
+        default."""
+        from .plot_summary import _slot_settings
+        from .scaling_memory import default_scaling_settings
+        d = _slot_settings(self, self._grid_slot)
+        if d.get("kind") == "raster":
+            r = self._grid_slot.raster
+            dflt = default_scaling_settings(r._quantity)
+            if d.get("scaling") == dflt.scaling:
+                d.pop("scaling", None)
+            for k in ("vmin", "vmax"):
+                if k in d and d[k] == getattr(dflt, k):
+                    d.pop(k)
+        return d
+
+    def set_grid_panel(self, settings: dict) -> None:
+        """Make the panel the grid repeats *settings* (the keys of one
+        ``panels=`` entry) on top of Panel A's defaults -- the colour
+        scaling and range are the quantity's defaults unless given.
+        Validated as ``grid_panel=`` is; nothing is drawn (the grid draws
+        its cells from it at the next Plot)."""
+        base = dict(self._grid_cfg, scaling=None, vmin=None, vmax=None)
+        c = dict(base)
+        self._apply_panel_dict(c, dict(settings), "grid panel")
+        if c.get("kind") == "raster":
+            problem = raster_axes_problem(c["raster_y"], c["raster_x"])
+            if problem:
+                raise ValueError(f"grid panel: {problem}")
+        self._grid_cfg = c
+        self._configure_grid_slot(c)
+        self._grid_tmpl_pending = False
+
+    def _configure_grid_slot(self, c: dict) -> None:
+        """Set slot G's two (never drawn) panels from the resolved
+        settings *c*, without a query: VisGridSource copies them into
+        each cell."""
+        from .axes import AxisInfo
+        from .scaling_memory import default_scaling_settings
+        gs = self._grid_slot
+        gs.kind = c["kind"]
+        pols = self._selection.correlation or ["XX"]
+        r = gs.raster
+        r._y_dim, r._x_dim = c["raster_y"], c["raster_x"]
+        r._y_info, r._x_info = AxisInfo.direct(r._y_dim), AxisInfo.direct(r._x_dim)
+        r._quantity = c["raster_qty"]
+        r._scaling_owner = r._quantity
+        r._averaging = c["averaging"]
+        r._baseline_order = c["baseline_order"]
+        r._baseline_combine = c["baseline_combine"]
+        r._detrend = bool(c["detrend"])
+        r._stat_time_window = c["stat_time_window"]
+        r._stat_chan_window = c["stat_chan_window"]
+        r._corr_choice = c.get("raster_corr", "auto")
+        r._polarization = _raster_polarization(r._corr_choice, pols)
+        r._selection = self._selection
+        st = default_scaling_settings(r._quantity,
+                                      getattr(r, "_scaling_alpha_default", r._scaling_alpha),
+                                      getattr(r, "_scaling_gamma_default", r._scaling_gamma))
+        r._load_scaling_settings(st)
+        if c.get("scaling"):
+            r._scaling = c["scaling"]
+        if c.get("vmin") is not None:
+            r._scaling_vmin, r._zscore_vmin_auto = float(c["vmin"]), False
+        if c.get("vmax") is not None:
+            r._scaling_vmax = float(c["vmax"])
+        sc = gs.scatter
+        sc._x_dim = c["scatter_x"]
+        sc._layers = sc._with_default_cmaps(_make_scatter_layers(
+            c["scatter_y"], pols, cmaps=self._scatter_ramps))
+        sc._avg_time, sc._avg_chan = c["scatter_avg_time"], c["scatter_avg_chan"]
+        sc._averaging = c["averaging"]
+        if c.get("scatter_stat_own"):
+            sc._detrend = bool(c["detrend"])
+            sc._stat_time_window = c["stat_time_window"]
+            sc._stat_chan_window = c["stat_chan_window"]
+        sc._selection = self._selection
+
+    def _grid_panel_from(self, slot) -> dict:
+        """*slot*'s settings as a ``grid_panel=`` dict -- both kinds, so
+        the grid's tab has both to show (the copy of Panel A)."""
+        from .plot_summary import _slot_settings
+        from .scaling_memory import default_scaling_settings
+        kind = slot.kind
+        try:
+            slot.kind = "raster"
+            d = _slot_settings(self, slot)
+            slot.kind = "scatter"
+            d.update({k: v for k, v in _slot_settings(self, slot).items()
+                      if k not in ("kind", "averaging")})
+        finally:
+            slot.kind = kind
+        d["kind"] = kind
+        r = slot.raster
+        if r._quantity is not None:
+            dflt = default_scaling_settings(r._quantity)
+            if d.get("scaling") == dflt.scaling:
+                d.pop("scaling", None)
+            for k in ("vmin", "vmax"):
+                if k in d and d[k] == getattr(dflt, k):
+                    d.pop(k)
+        return d
+
+    @staticmethod
+    def _apply_drill_colour(panel, col: dict) -> None:
+        """Give a raster the grid panel's colour scaling (a drill-down):
+        scaling, alpha, gamma, and the range -- ``None`` is automatic."""
+        from .scaling_memory import ScalingSettings
+        cur = panel._current_scaling_settings()
+        def num(v, dflt):
+            try:
+                return dflt if v is None else float(v)
+            except (TypeError, ValueError):
+                return dflt
+        panel._load_scaling_settings(ScalingSettings(
+            scaling=col.get("scaling") or cur.scaling,
+            alpha=num(col.get("alpha"), cur.alpha),
+            gamma=num(col.get("gamma"), cur.gamma),
+            vmin=num(col.get("vmin"), None), vmax=num(col.get("vmax"), None)))
+        panel._reshade_image()
+
+    def _grid_tab_values(self) -> dict:
+        """What the grid's tab shows for slot G's settings (the copy of
+        Panel A is made in Python, so the browser is told)."""
+        c = self._grid_cfg
+        return {
+            "kind": c["kind"],
+            "ry": c["raster_y"].name, "rx": c["raster_x"].name,
+            "rq": c["raster_qty"].name, "rk": c.get("raster_corr", "auto"),
+            "ra": c["averaging"], "rb": c["baseline_order"],
+            "rm": c["baseline_combine"],
+            "rd": "remove" if c["detrend"] else "keep",
+            "rt": _window_value(c["stat_time_window"]),
+            "rc": _window_value(c["stat_chan_window"]),
+            "sx": c["scatter_x"].name, "sy": c["scatter_y"].name,
+            "sat": _window_value(c["scatter_avg_time"]),
+            "sac": _window_value(c["scatter_avg_chan"]),
+            "sam": c["averaging"],
+            "scaling": c.get("scaling") or "auto",
+            "vmin": "" if c.get("vmin") is None else f"{c['vmin']:.6g}",
+            "vmax": "" if c.get("vmax") is None else f"{c['vmax']:.6g}",
+        }
+
     def _grid_cell_size(self) -> tuple:
         w, h = self.GRID_CELL
         if isinstance(self._column_width, int) and not isinstance(self._column_width, bool):
@@ -4800,12 +5057,14 @@ for (const dt of other.tools) {
         return int(w), int(h)
 
     def _grid(self):
-        """The grid's source, configured from the first panel and the
-        selection as they are now."""
+        """The grid's source, configured from the grid's own panel (slot
+        G, gridplot G3) and the selection as they are now."""
         from .vis_grid_source import VisGridSource
         if self._grid_source is None:
             self._grid_source = VisGridSource(self, self._iterate_by)
-        return self._grid_source.configure(template=self._pos0, iterate_by=self._iterate_by)
+        gs = self._grid_slot
+        gs.raster._selection = gs.scatter._selection = self._selection
+        return self._grid_source.configure(template=gs.active, iterate_by=self._iterate_by)
 
     def _export_grid_png(self, *, plotfile=None, nrows=None, ncols=None, theme=None,
                          dpi=100, selection=None, exprange=None):
@@ -4817,9 +5076,9 @@ for (const dt of other.tools) {
         import re
         from ..gridplot.png_export import export_png
         if selection:
-            # the template's own extent is the cells' common one: only it
-            # is drawn again
-            self._apply_selection_overrides(selection, panels=[self._pos0])
+            # nothing is drawn for the grid but its cells: the panels are
+            # marked stale (gridplot G3: the grid has its own panel)
+            self._apply_selection_overrides(selection, panels=[])
         if theme is not None and theme != self._theme:
             self.set_theme(theme)
         src = self._grid()
@@ -5067,6 +5326,9 @@ for (const dt of other.tools) {
         self._time_labels = mode
         for panel in self._all_panels:
             panel.set_time_labels(mode)
+        gs = getattr(self, "_grid_slot", None)
+        if gs is not None:
+            gs.raster._time_labels = gs.scatter._time_labels = mode
 
     def describe(self, slot: str = "A", viewport=None, html: bool = False):
         """What panel *slot* shows and how it was made, and the
@@ -5214,57 +5476,118 @@ for (const dt of other.tools) {
 
     async def _handle_plot(self, msg, context=None):
         """Plot ▶ (and Reload, presets, steppers).  In the Grid layout
-        (gridplot G2) only the panel the grid repeats is updated -- the
-        template -- and then the grid's source is configured from it; the
-        browser draws page 1 again on the response's ``grid``."""
+        the grid's own panel (slot G, gridplot G3) takes the request's
+        ``panels["G"]``, the selection is updated, and the grid's source
+        is configured from them; Panels A and B are not drawn (they are
+        drawn when shown again: the response says ``panels_stale``).  The
+        browser draws page 1 on the response's ``grid``.
+
+        The first Plot in Grid without ``grid_panel=`` makes the grid's
+        panel a copy of the panel shown first (Panel A, unless swapped),
+        as it is then, and sends the grid's tab its values
+        (``grid_template``)."""
         from .vis_grid_source import GridTemplateError, normalize_iterate_by
         grid = msg.get("layout") == "grid"
-        tslot = None
         if "layout" in msg:
             self._grid_on = grid
-        if grid:
-            msg = dict(msg)
-            msg["layout"] = self._layout
+        if not grid:
+            return await self._handle_plot_panels(msg, context)
+
+        msg = dict(msg)
+        msg["layout"] = self._layout
+        gmsg = (msg.get("panels") or {}).get(self._grid_slot.id)
+        msg["panels"] = {}                     # A and B are not drawn in Grid
+        try:
+            r, c = (int(v) for v in msg.get("grid_shape") or ())
+            if 1 <= r <= 8 and 1 <= c <= 8:
+                self._grid_shape = (r, c)          # for plotfile= and the summary
+        except (TypeError, ValueError):
+            pass
+        if msg.get("grid_colour") in ("cell", "page", "grid"):
+            self._grid_colour = msg["grid_colour"]
+
+        def _error(text, **extra):
+            text = f"⚠ {text}"
+            self._notify(text)
+            return dict({"status": "error", "status_text": text,
+                         "notify_text": text, "notify_color": "#f38ba8"}, **extra)
+
+        if msg.get("iterate_by"):
             try:
-                tslot = self._slot_by_id(msg.get("grid_slot")).id
-            except ValueError:
-                tslot = self._slots[self._slot_display_order[0]].id
-            panels = msg.get("panels") or {}
-            msg["panels"] = {tslot: panels[tslot]} if tslot in panels else {}
-            try:
-                r, c = (int(v) for v in msg.get("grid_shape") or ())
-                if 1 <= r <= 8 and 1 <= c <= 8:
-                    self._grid_shape = (r, c)          # for plotfile= and the summary
-            except (TypeError, ValueError):
-                pass
-            if msg.get("grid_colour") in ("cell", "page", "grid"):
-                self._grid_colour = msg["grid_colour"]
-            if msg.get("iterate_by"):
-                try:
-                    self._iterate_by = normalize_iterate_by(msg["iterate_by"])
-                except ValueError as exc:
-                    text = f"⚠ {exc}"
-                    self._notify(text)
-                    return {"status": "error", "status_text": text,
-                            "notify_text": text, "notify_color": "#f38ba8"}
+                self._iterate_by = normalize_iterate_by(msg["iterate_by"])
+            except ValueError as exc:
+                return _error(exc)
         resp = await self._handle_plot_panels(msg, context)
-        if not grid or not isinstance(resp, dict) or resp.get("status") != "ok":
+        if not isinstance(resp, dict) or resp.get("status") != "ok":
             return resp
+        copied = False
+        try:
+            if self._grid_tmpl_pending:
+                try:
+                    src_slot = self._slot_by_id(msg.get("grid_slot"))
+                except ValueError:
+                    src_slot = self._slots[self._slot_display_order[0]]
+                self.set_grid_panel(self._grid_panel_from(src_slot))
+                copied = True
+            elif gmsg:
+                self.set_grid_panel(self._grid_panel_from_msg(gmsg))
+            else:
+                self._configure_grid_slot(self._grid_cfg)    # the new selection
+        except ValueError as exc:
+            return _error(f"Grid panel: {exc}", failed_slot=self._grid_slot.id)
         try:
             from .vis_grid_source import VisGridSource
             if self._grid_source is None:
                 self._grid_source = VisGridSource(self, self._iterate_by)
-            src = await asyncio.to_thread(
-                self._grid_source.configure,
-                template=self._slot_by_id(tslot).active, iterate_by=self._iterate_by)
+            src = await asyncio.to_thread(self._grid)
         except GridTemplateError as exc:
-            text = f"⚠ {exc}"
-            self._notify(text)
-            return dict(resp, status="error", status_text=text, notify_text=text,
-                        notify_color="#f38ba8", failed_slot=tslot)
+            return dict(_error(exc), failed_slot=self._grid_slot.id,
+                        **({"grid_template": self._grid_tab_values()} if copied else {}))
         resp["grid"] = {"n_cells": len(src.labels()), "iterate_by": self._iterate_by}
+        resp["panels_stale"] = True
+        if copied:
+            resp["grid_template"] = self._grid_tab_values()
         resp["status_text"] = self._status_text()
         return resp
+
+    def _grid_panel_from_msg(self, m: dict) -> dict:
+        """The grid's tab as Plot sends it -- ``{kind, raster: {...},
+        scatter: {...}, colour: {...}}`` -- as a ``grid_panel=`` dict.
+        Both kinds' choices are kept (the tab shows both); the shared
+        keys (averaging, slope, windows) come from the kind shown.
+        Staged colour: ``scaling`` "auto" and empty min / max are the
+        quantity's defaults."""
+        kind = m.get("kind") or "raster"
+        ra, sc = m.get("raster") or {}, m.get("scatter") or {}
+        d = {"kind": kind}
+        for key, k in (("raster_y", "y"), ("raster_x", "x"), ("raster_qty", "qty"),
+                       ("baseline_order", "baseline_order"),
+                       ("baseline_combine", "baseline_combine"),
+                       ("raster_corr", "raster_corr")):
+            if ra.get(k):
+                d[key] = ra[k]
+        for key, k in (("scatter_x", "x"), ("scatter_y", "y"),
+                       ("scatter_avg_time", "avg_time"), ("scatter_avg_chan", "avg_chan")):
+            if sc.get(k):
+                d[key] = sc[k]
+        own = ra if kind == "raster" else sc
+        for key, k in (("averaging", "averaging"), ("stat_time_window", "twin"),
+                       ("stat_chan_window", "cwin")):
+            if own.get(k):
+                d[key] = own[k]
+        if own.get("detrend") in ("remove", "keep"):
+            d["detrend"] = own["detrend"] == "remove"
+        col = m.get("colour") or {}
+        if col.get("scaling") not in (None, "", "auto"):
+            d["scaling"] = col["scaling"]
+        for k in ("vmin", "vmax"):
+            v = col.get(k)
+            if v not in (None, ""):
+                try:
+                    d[k] = float(v)
+                except (TypeError, ValueError):
+                    raise ValueError(f"{k} must be a number, not {v!r}") from None
+        return d
 
     async def _handle_plot_panels(self, msg, context=None):
         # Validation-error auto-switch-to-tab (added 2026-08-03) — the
@@ -5615,6 +5938,13 @@ for (const dt of other.tools) {
                             )
                         self._last_raster_selection_by_slot[slot.id] = self._selection
                     panel._corr_choice = rk
+                    # A drill-down from the grid (gridplot G3) brings the
+                    # grid panel's colour scaling with it.
+                    col = panel_msg.get("colour")
+                    if isinstance(col, dict) and col.get("scaling"):
+                        async with panel._render_lock:
+                            await asyncio.to_thread(
+                                self._apply_drill_colour, panel, col)
                 except Exception as exc:
                     log.error("_handle_plot: panel %s raster update_axes "
                               "failed: %s", slot.id, exc, exc_info=True)
@@ -6087,8 +6417,11 @@ window.__cvPlotPending(true);
         skip = {"status_div", "notify_div", "plot_btn", "reload_btn", "sidebar",
                 "toggle_btn", "gear_tabs", "layout_rbg", "panel_a_pin", "panel_b_pin"}
         seen = set()
-        for name, w in js_args.items():
-            if name in skip or w is None or id(w) in seen:
+        # The grid's tab (gridplot G3) is staged like a gear tab.
+        items = list(js_args.items()) + [
+            (f"grid_tmpl.{k}", v) for k, v in (js_args.get("grid_tmpl") or {}).items()]
+        for name, w in items:
+            if name in skip or w is None or isinstance(w, (dict, list)) or id(w) in seen:
                 continue
             seen.add(id(w))
             if isinstance(w, (Select, TextInput)):
@@ -6443,9 +6776,25 @@ cvApplySelectionText(
                    width=_SIDEBAR_WIDTH)
         head.tags = ["section-label", "Grid"]
         self._section_divs.append(head)
+        # The grid's own panel (gridplot G3): a tab of its own, opened by
+        # its button (there is no panel figure in Grid to carry a gear).
+        from bokeh.models import Button, CustomJS
+        dark = self._dark()
+        self._grid_tab, self._grid_tab_widgets = self._build_grid_panel_tab(dark)
+        self._grid_tab_btn = Button(label="\u2699 Grid panel \u25b8", width=_SIDEBAR_WIDTH,
+                                    button_type="default", stylesheets=[dark])
+        self._grid_tab_btn.js_on_click(CustomJS(
+            args={"tab": self._grid_tab, "btn": self._grid_tab_btn},
+            code="""
+tab.visible = !tab.visible;
+btn.label = '\u2699 Grid panel ' + (tab.visible ? '\u25be' : '\u25b8');
+"""))
+        side += [self._grid_tab_btn] + [w for w in self._grid_tab_widgets.values()
+                                        if w not in side]
         self._grid_section = column(
             head, row(self._grid_iter_sel, sel_scale), row(sel_rows, sel_cols, sel_colour),
-            row(sel_speed, cb_loop), visible=self._grid_on, width=_SIDEBAR_WIDTH,
+            row(sel_speed, cb_loop), self._hover(self._grid_tab_btn, "grid_panel"),
+            self._grid_tab, visible=self._grid_on, width=_SIDEBAR_WIDTH,
             margin=(0, 0, 10, 0), styles={"max-height": "none"})   # as the other sections
         kids = list(self._sidebar_col.children)
         self._sidebar_col.children = kids[:1] + [self._grid_section] + kids[1:]
@@ -6454,6 +6803,85 @@ cvApplySelectionText(
         w["probe"].width = 1100
         self._grid_readout = row(w["status"], w["probe"], visible=self._grid_on,
                                  margin=(2, 0, 0, 10))
+
+    def _panel_tab_widgets(self, slot) -> dict:
+        """*slot*'s gear-tab widgets under the grid tab's keys (gridplot G3:
+        a drill-down sets them with ``cvSetPanelTab``), with its raster's
+        colour controls (``cm_*``) for the copied colour scaling."""
+        r = self._panel_axis_widgets[slot.id]["raster"]
+        sc = self._panel_axis_widgets[slot.id]["scatter"]
+        w = {"kind": self._panel_kind_switch[slot.id],
+             "ry": r["y_sel"], "rx": r["x_sel"], "rq": r["q_sel"], "rk": r["corr_sel"],
+             "ra": r["avg_sel"], "rm": r["bcombine_sel"], "rb": r["border_sel"],
+             "rd": r["detrend_sel"], "rt": r["twin_sel"], "rc": r["cwin_sel"],
+             "sx": sc["x_sel"], "sy": sc["y_sel"], "sat": sc["avg_time_sel"],
+             "sac": sc["avg_chan_sel"], "sam": sc["avg_mode_sel"],
+             "sd": sc["detrend_sel"], "st": sc["twin_sel"], "sc": sc["cwin_sel"]}
+        w.update({k: v for k, v in r.get("cmap_parts", {}).items() if v is not None})
+        return w
+
+    def _build_grid_panel_tab(self, dark):
+        """The grid's own panel tab (gridplot G3, 2026-11-13): the pickers
+        of a panel's gear tab, for slot G, with a staged colour scaling
+        (applied at Plot, like the axes: the grid's panel is never drawn,
+        so the panels' live colour controls have nothing to act on).
+        Returns ``(column, widgets)``; ``widgets`` is what doPlot reads
+        (``grid_tmpl``) and the drill-down copies from."""
+        from bokeh.models import Div, RadioButtonGroup, Select, TextInput, CustomJS
+        from ..gridplot import colormap_scaling as _cms
+        gs = self._grid_slot
+        rp = self._raster_pickers(gs, dark)
+        sp = self._scatter_pickers(gs, dark)
+        c = self._grid_cfg
+        kind = RadioButtonGroup(labels=["Raster", "Scatter"],
+                                active=0 if gs.kind == "raster" else 1,
+                                width=120, stylesheets=[dark])
+        scale = Select(title="Colour scaling", value=c.get("scaling") or "auto",
+                       options=["auto"] + list(_cms.ALL_SCALINGS),
+                       width=_SIDEBAR_WIDTH, stylesheets=[dark])
+        vmin = TextInput(title="min", width=110, stylesheets=[dark],
+                         value="" if c.get("vmin") is None else f"{c['vmin']:.6g}",
+                         placeholder="auto")
+        vmax = TextInput(title="max", width=110, stylesheets=[dark],
+                         value="" if c.get("vmax") is None else f"{c['vmax']:.6g}",
+                         placeholder="auto")
+        # Another quantity: its own colour scaling (Phase's fixed range,
+        # Z-Score's threshold), as a panel's per-quantity memory gives it.
+        rp["rq_sel"].js_on_change("value", CustomJS(
+            args={"scale": scale, "vmin": vmin, "vmax": vmax},
+            code="scale.value = 'auto'; vmin.value = ''; vmax.value = '';"))
+        raster = column(
+            self._hover(column(rp["ry_sel"], rp["rx_sel"], width=_SIDEBAR_WIDTH), "r_axes"),
+            self._hover(rp["rq_sel"], "r_qty"),
+            rp["rk_box"], rp["ra_box"], rp["rm_box"], rp["rb_box"], rp["rd_box"],
+            rp["rt_box"], rp["rc_box"], rp["conflict_div"],
+            self._hover(column(scale, row(vmin, vmax), width=_SIDEBAR_WIDTH), "grid_scaling"),
+            visible=gs.kind == "raster", width=_SIDEBAR_WIDTH)
+        scatter = column(
+            Div(text="<i>Scatter grids come with gridplot G3's read-once-and-split; "
+                     "Plot refuses them until then.</i>",
+                width=_SIDEBAR_WIDTH - 10, stylesheets=[dark], margin=(0, 0, 4, 5)),
+            self._hover(sp["sx_sel"], "s_x"), self._hover(sp["sy_sel"], "s_y"),
+            sp["savg_box"], sp["sd_box"], sp["st_box"], sp["sc_box"],
+            visible=gs.kind == "scatter", width=_SIDEBAR_WIDTH)
+        kind.js_on_change("active", CustomJS(
+            args={"raster": raster, "scatter": scatter},
+            code="raster.visible = (cb_obj.active === 0); scatter.visible = (cb_obj.active === 1);"))
+        note = Div(text="<i>What every plot of the grid repeats.  Changes apply when "
+                        "you press <b>Plot &#9654;</b></i>",
+                   width=_SIDEBAR_WIDTH - 10, stylesheets=[dark], margin=(2, 0, 4, 5))
+        body = column(note, kind, raster, scatter, width=_SIDEBAR_WIDTH, visible=False,
+                      margin=(0, 0, 0, 0))
+        widgets = {"kind": kind, "ry": rp["ry_sel"], "rx": rp["rx_sel"], "rq": rp["rq_sel"],
+                   "rk": rp["rk_sel"], "ra": rp["ra_sel"], "rm": rp["rm_sel"],
+                   "rb": rp["rb_sel"], "rd": rp["rd_sel"], "rt": rp["rt_sel"],
+                   "rc": rp["rc_sel"], "sx": sp["sx_sel"], "sy": sp["sy_sel"],
+                   "sat": sp["sat_sel"], "sac": sp["sac_sel"], "sam": sp["sam_sel"],
+                   "sd": sp["sd_sel"], "st": sp["st_sel"], "sc": sp["sc_sel"],
+                   "scaling": scale, "vmin": vmin, "vmax": vmax}
+        for k, w in widgets.items():
+            w.tags = ["grid-tab", k]
+        return body, widgets
 
     def _wire_grid(self) -> None:
         """Connect the grid to doPlot (after ``_build_toolbar``): a
@@ -6477,9 +6905,17 @@ cvApplySelectionText(
             target = self._grid_source.drill_target(index)
         except (IndexError, KeyError):
             return {"text": ""}
-        return {"text": f"{label}: shown in the full panel (One).  Grid returns "
-                        f"to the grid and its selection.",
-                "select": target}
+        # The cell's configuration goes to the panel shown in One (gridplot
+        # G3): the grid's panel as last plotted -- not its tab, which may
+        # hold edits not yet plotted -- and its colour scaling, which the
+        # browser sends back with that panel's Plot.
+        r = self._grid_slot.raster
+        colour = {"scaling": r._scaling, "alpha": r._scaling_alpha,
+                  "gamma": r._scaling_gamma, "vmin": r._scaling_vmin,
+                  "vmax": r._scaling_vmax}
+        return {"text": f"{label}: shown in the full panel (One), set up as the "
+                        f"grid's panel.  Grid returns to the grid and its selection.",
+                "select": target, "panel": self._grid_tab_values(), "colour": colour}
 
     def _build_layout(self):
         """Build the full layout.
@@ -6827,25 +7263,9 @@ html, body { height: 100%; margin: 0; }
     # hardcoded per-slot calls) specifically so a third slot, whenever
     # that's supported, is a non-event here — build for N, ship for 2.
 
-    def _build_raster_config_panel(self, slot: "_PanelSlot", dark) -> tuple:
-        """Build one slot's raster config panel: Y/X/quantity + colormap.
-
-        Wired to ``slot.raster`` — that slot's own, already-constructed
-        ``VisibilityRaster`` object — via ``colormap_controls()``, so
-        scaling/min/max controls are genuinely independent per slot, not
-        shared. The Y/X/quantity ``Select`` widgets are plain pickers with
-        no live wiring of their own; they're read at Plot-press time by
-        ``_handle_plot()``'s rewrite (piece 3, not yet built), same as the
-        old global controls were.
-
-        Returns
-        -------
-        panel : Bokeh column
-        widgets : dict
-            ``y_sel``, ``x_sel``, ``q_sel``, ``conflict_div``,
-            ``cmap_widgets``, ``cmap_figs``, ``cmap_icons`` — stored by
-            the caller in ``self._panel_axis_widgets[slot.id]["raster"]``.
-        """
+    def _raster_pickers(self, slot: "_PanelSlot", dark) -> dict:
+        """A slot's raster axis and plot-time pickers (no colour controls):
+        shared by the panels' gear tabs and the grid's own tab."""
         ry_sel = Select(
             title="Raster Y axis", value=(slot.raster._y_dim or self._raster_y).name,
             options=[(k, v) for k, v in _RASTER_Y_OPTIONS],
@@ -6971,7 +7391,43 @@ conflict_div.text = m ? '⚠ ' + m : '';
         ry_sel.js_on_change("value", conflict_js)
         rx_sel.js_on_change("value", conflict_js)
 
+        return dict(ry_sel=ry_sel, rx_sel=rx_sel, rq_sel=rq_sel, ra_sel=ra_sel, rb_sel=rb_sel, rm_sel=rm_sel, rd_sel=rd_sel, rt_sel=rt_sel, rc_sel=rc_sel, rk_sel=rk_sel, rk_box=rk_box, ra_box=ra_box, rb_box=rb_box, rm_box=rm_box, rd_box=rd_box, rt_box=rt_box, rc_box=rc_box, conflict_div=conflict_div)
+
+    def _build_raster_config_panel(self, slot: "_PanelSlot", dark) -> tuple:
+        """Build one slot's raster config panel: Y/X/quantity + colormap.
+
+        Wired to ``slot.raster`` — that slot's own, already-constructed
+        ``VisibilityRaster`` object — via ``colormap_controls()``, so
+        scaling/min/max controls are genuinely independent per slot, not
+        shared. The Y/X/quantity ``Select`` widgets are plain pickers with
+        no live wiring of their own; they're read at Plot-press time by
+        ``_handle_plot()``'s rewrite (piece 3, not yet built), same as the
+        old global controls were.
+
+        Returns
+        -------
+        panel : Bokeh column
+        widgets : dict
+            ``y_sel``, ``x_sel``, ``q_sel``, ``conflict_div``,
+            ``cmap_widgets``, ``cmap_figs``, ``cmap_icons`` — stored by
+            the caller in ``self._panel_axis_widgets[slot.id]["raster"]``.
+        """
+        _pk = self._raster_pickers(slot, dark)
+        (ry_sel, rx_sel, rq_sel, ra_sel, rb_sel, rm_sel, rd_sel, rt_sel, rc_sel, rk_sel, rk_box, ra_box, rb_box, rm_box, rd_box, rt_box, rc_box, conflict_div) = (
+            _pk["ry_sel"], _pk["rx_sel"], _pk["rq_sel"], _pk["ra_sel"], _pk["rb_sel"], _pk["rm_sel"], _pk["rd_sel"], _pk["rt_sel"], _pk["rc_sel"], _pk["rk_sel"], _pk["rk_box"], _pk["ra_box"], _pk["rb_box"], _pk["rm_box"], _pk["rd_box"], _pk["rt_box"], _pk["rc_box"], _pk["conflict_div"])
+
         raster_cmap  = slot.raster.colormap_controls()
+        # Its colour controls by name (gridplot G3: a drill-down shows the
+        # grid panel's colour scaling in them): see colormap_controls()'s
+        # layout -- scaling, equation, (alpha, gamma), histogram, (reset,
+        # min, max).
+        try:
+            _cmk = raster_cmap.children
+            cmap_parts = {"cm_scale": _cmk[0], "cm_alpha": _cmk[2].children[0],
+                          "cm_gamma": _cmk[2].children[1],
+                          "cm_min": _cmk[4].children[1], "cm_max": _cmk[4].children[2]}
+        except (AttributeError, IndexError):
+            cmap_parts = {}
         cmap_widgets, cmap_figs, cmap_icons, _no_tables = self._style_cmap_column(raster_cmap, dark)
 
         # What the permanent info block (left panel) shows for this
@@ -7003,6 +7459,7 @@ conflict_div.text = m ? '⚠ ' + m : '';
             "corr_sel": rk_sel,
             "info_selectors": info_sel,
             "conflict_div": conflict_div, "cmap_widgets": cmap_widgets,
+            "cmap_parts": cmap_parts,
             "cmap_figs": cmap_figs, "cmap_icons": cmap_icons,
             # Always empty for raster -- no colorize-by-axis checklist
             # exists here -- but present so the generic "flatten
@@ -7012,59 +7469,9 @@ conflict_div.text = m ? '⚠ ' + m : '';
         }
         return panel, widgets
 
-    def _build_scatter_config_panel(self, slot: "_PanelSlot", dark) -> tuple:
-        """Build one slot's scatter config panel: X/Y + per-layer controls.
-
-        Same reasoning as ``_build_raster_config_panel`` above — see that
-        docstring. No Y/X conflict check here: scatter's X and Y axes
-        aren't drawn from the same shared vocabulary the way raster's are,
-        so the same-value conflict this class checks for raster doesn't
-        apply.
-
-        Part 4 (colorize-by-axis UI wiring): every layer's scaling AND
-        colorize controls are built up front — ``build for N, ship for
-        2`` applied one level down, same precedent already established
-        for the two per-slot config panels themselves (see this
-        method's own history). A ``layer_select`` picks which single
-        layer's combined column is visible; switching it is purely
-        client-side (a ``CustomJS`` toggling ``.visible`` on each
-        pre-built column, mirroring the Raster/Scatter ``kind_switch``
-        pattern below), never a comm round trip — the controls
-        themselves already send their own backend messages the moment
-        the user touches them, independent of which one happens to be
-        on screen.
-
-        Mutual exclusivity (design doc Sec 4.3) between a layer's
-        scaling controls and its colorize controls is wired here, not
-        inside ``colorize_controls()``: that method manages its own
-        axis-picker/checklist visibility, but has no reference to the
-        sibling ``colormap_controls()`` column it needs to hide. Found
-        by class (``RadioButtonGroup``) among ``_style_cmap_column``'s
-        already-flattened widget list — ``colorize_controls()`` does
-        return a handles dict now (Part 5, 2026-09: ``doPlot()`` needs
-        direct references to its ``mode_group``/``axis_select``/
-        ``checklists`` to read their staged values from), but this
-        mutual-exclusivity lookup predates that and stays as it was —
-        a ``RadioButtonGroup`` only ever appears in this tree as that
-        method's own mode switch, so the by-class lookup is no less
-        precise than threading the same reference through a second
-        path would be.
-
-        Returns
-        -------
-        panel : Bokeh column
-        widgets : dict
-            ``x_sel``, ``y_sel``, ``layer_select`` (``None`` for a
-            single-layer scatter), ``layer_columns``, ``cmap_widgets``,
-            ``cmap_figs``, ``cmap_icons`` — the last three flattened
-            across every layer, not just the visible one, so the dark/
-            light toggle recolors all of them regardless of which is
-            currently shown. Also ``colorize_handles`` (Part 5, 2026-09)
-            — one entry per layer, each ``colorize_controls()``'s own
-            returned handles dict, for ``doPlot()``'s payload-building
-            JS to read staged colorize state from. Stored by the caller
-            in ``self._panel_axis_widgets[slot.id]["scatter"]``.
-        """
+    def _scatter_pickers(self, slot: "_PanelSlot", dark) -> dict:
+        """A slot's scatter axis and plot-time pickers (no colour or
+        colorize controls): shared by the gear tabs and the grid's tab."""
         sx_sel = Select(
             title="Scatter X axis", value=(slot.scatter._x_dim or self._scatter_x).name,
             options=[(k, v) for k, v in _SCATTER_X_OPTIONS],
@@ -7135,6 +7542,65 @@ conflict_div.text = m ? '⚠ ' + m : '';
             width=_SIDEBAR_WIDTH, stylesheets=[dark],
         )
         savg_box = self._hover(column(sat_sel, sac_sel, sam_sel, width=_SIDEBAR_WIDTH), "s_avg")
+
+        return dict(sx_sel=sx_sel, sy_sel=sy_sel, sd_sel=sd_sel, st_sel=st_sel, sc_sel=sc_sel, sd_box=sd_box, st_box=st_box, sc_box=sc_box, sat_sel=sat_sel, sac_sel=sac_sel, sam_sel=sam_sel, savg_box=savg_box)
+
+    def _build_scatter_config_panel(self, slot: "_PanelSlot", dark) -> tuple:
+        """Build one slot's scatter config panel: X/Y + per-layer controls.
+
+        Same reasoning as ``_build_raster_config_panel`` above — see that
+        docstring. No Y/X conflict check here: scatter's X and Y axes
+        aren't drawn from the same shared vocabulary the way raster's are,
+        so the same-value conflict this class checks for raster doesn't
+        apply.
+
+        Part 4 (colorize-by-axis UI wiring): every layer's scaling AND
+        colorize controls are built up front — ``build for N, ship for
+        2`` applied one level down, same precedent already established
+        for the two per-slot config panels themselves (see this
+        method's own history). A ``layer_select`` picks which single
+        layer's combined column is visible; switching it is purely
+        client-side (a ``CustomJS`` toggling ``.visible`` on each
+        pre-built column, mirroring the Raster/Scatter ``kind_switch``
+        pattern below), never a comm round trip — the controls
+        themselves already send their own backend messages the moment
+        the user touches them, independent of which one happens to be
+        on screen.
+
+        Mutual exclusivity (design doc Sec 4.3) between a layer's
+        scaling controls and its colorize controls is wired here, not
+        inside ``colorize_controls()``: that method manages its own
+        axis-picker/checklist visibility, but has no reference to the
+        sibling ``colormap_controls()`` column it needs to hide. Found
+        by class (``RadioButtonGroup``) among ``_style_cmap_column``'s
+        already-flattened widget list — ``colorize_controls()`` does
+        return a handles dict now (Part 5, 2026-09: ``doPlot()`` needs
+        direct references to its ``mode_group``/``axis_select``/
+        ``checklists`` to read their staged values from), but this
+        mutual-exclusivity lookup predates that and stays as it was —
+        a ``RadioButtonGroup`` only ever appears in this tree as that
+        method's own mode switch, so the by-class lookup is no less
+        precise than threading the same reference through a second
+        path would be.
+
+        Returns
+        -------
+        panel : Bokeh column
+        widgets : dict
+            ``x_sel``, ``y_sel``, ``layer_select`` (``None`` for a
+            single-layer scatter), ``layer_columns``, ``cmap_widgets``,
+            ``cmap_figs``, ``cmap_icons`` — the last three flattened
+            across every layer, not just the visible one, so the dark/
+            light toggle recolors all of them regardless of which is
+            currently shown. Also ``colorize_handles`` (Part 5, 2026-09)
+            — one entry per layer, each ``colorize_controls()``'s own
+            returned handles dict, for ``doPlot()``'s payload-building
+            JS to read staged colorize state from. Stored by the caller
+            in ``self._panel_axis_widgets[slot.id]["scatter"]``.
+        """
+        _pk = self._scatter_pickers(slot, dark)
+        (sx_sel, sy_sel, sd_sel, st_sel, sc_sel, sd_box, st_box, sc_box, sat_sel, sac_sel, sam_sel, savg_box) = (
+            _pk["sx_sel"], _pk["sy_sel"], _pk["sd_sel"], _pk["st_sel"], _pk["sc_sel"], _pk["sd_box"], _pk["st_box"], _pk["sc_box"], _pk["sat_sel"], _pk["sac_sel"], _pk["sam_sel"], _pk["savg_box"])
 
         layers = slot.scatter.layers
         cmap_widgets: list = []
@@ -9095,6 +9561,32 @@ function cvSetBusy(on) {
     window.__cvSetBusy(on);
 }
 
+// A panel's tab (or the grid's) set to *vals* (gridplot G3): the copy of
+// Panel A into the grid's tab, and of the grid's panel into the panel a
+// drill-down shows.  Keys as VisibilityPlotter._grid_tab_values; a Select
+// whose view does not exist yet throws on a value change (see the presets),
+// so each is set on its own.
+function cvSetPanelTab(w, vals) {
+    if (!w || !vals) return;
+    if (w.kind && vals.kind) {
+        try { w.kind.active = (vals.kind === 'raster') ? 0 : 1; } catch (e) {}
+    }
+    for (const k of ['ry', 'rx', 'rq', 'rk', 'ra', 'rm', 'rb', 'rd', 'rt', 'rc',
+                     'sx', 'sy', 'sat', 'sac', 'sam', 'sd', 'st', 'sc']) {
+        if (!w[k] || vals[k] == null) continue;
+        try {
+            const opts = (w[k].options || []).map(o => Array.isArray(o) ? String(o[0]) : String(o));
+            if (opts.length && opts.indexOf(String(vals[k])) < 0) continue;
+            w[k].value = String(vals[k]);
+        } catch (e) {}
+    }
+    // after the quantity: its change resets the grid tab's colour to auto
+    for (const k of ['scaling', 'vmin', 'vmax']) {
+        if (!w[k] || vals[k] == null) continue;
+        try { w[k].value = String(vals[k]); } catch (e) {}
+    }
+}
+
 function doPlot(reload) {
     // Group 3 piece 3 / Chunk 1 (added 2026-07-31): request/response are
     // now per-slot (panels: {id: {...}}) instead of flat raster_y/
@@ -9200,17 +9692,39 @@ function doPlot(reload) {
     // for this specific error — same underlying UX problem as that
     // feature was built for, just reached via a different, client-only
     // path. Fixed by calling the same switchToTab() helper here too.
-    if (rasterConflict(panel0_kind_switch, panel0_ry_sel, panel0_rx_sel)) {
+    // Grid (gridplot G3): only the grid's own panel is sent -- its tab
+    // is what Plot reads; Panels A and B are drawn when shown again.
+    const _inGrid = (layout_rbg.active === 3) && (typeof grid_tmpl !== 'undefined') && !!grid_tmpl;
+    window.__cvDoPlot = doPlot;
+    if (_inGrid && rasterConflict(grid_tmpl.kind, grid_tmpl.ry, grid_tmpl.rx)) {
+        if (grid_tab) grid_tab.visible = true;
+        if (notify_div) notify_div.text = '<b>Grid panel:</b> ' + rasterAxesProblem(grid_tmpl.ry.value, grid_tmpl.rx.value);
+        return;
+    }
+    if (!_inGrid && rasterConflict(panel0_kind_switch, panel0_ry_sel, panel0_rx_sel)) {
         switchToTab(panel_a_tab, gear_tabs, sidebar, toggle_btn);
         return;
     }
-    if (rasterConflict(panel1_kind_switch, panel1_ry_sel, panel1_rx_sel)) {
+    if (!_inGrid && rasterConflict(panel1_kind_switch, panel1_ry_sel, panel1_rx_sel)) {
         switchToTab(panel_b_tab, gear_tabs, sidebar, toggle_btn);
         return;
     }
 
     const corr = corr_cbg.labels.filter((_, i) => corr_cbg.active.includes(i));
     const panels = {};
+    if (_inGrid) {
+        const g = grid_tmpl;
+        panels[grid_id] = {
+            kind: g.kind.active === 0 ? 'raster' : 'scatter',
+            raster: {y: g.ry.value, x: g.rx.value, qty: g.rq.value, raster_corr: g.rk.value,
+                     averaging: g.ra.value, baseline_combine: g.rm.value,
+                     baseline_order: g.rb.value, detrend: g.rd.value,
+                     twin: g.rt.value, cwin: g.rc.value},
+            scatter: {x: g.sx.value, y: g.sy.value, avg_time: g.sat.value,
+                      avg_chan: g.sac.value, averaging: g.sam.value,
+                      detrend: g.sd.value, twin: g.st.value, cwin: g.sc.value},
+            colour: {scaling: g.scaling.value, vmin: g.vmin.value, vmax: g.vmax.value}};
+    } else {
     panels[panel0_id] = buildPanelPayload(
         panel0_kind_switch, panel0_ry_sel, panel0_rx_sel, panel0_rq_sel,
         panel0_sx_sel, panel0_sy_sel, panel0_colorize_handles, panel0_ra_sel,
@@ -9233,6 +9747,12 @@ function doPlot(reload) {
         // known yet, so a redraw follows a resize (visibility_plot.py).
         if (f && f.inner_width > 0 && f.inner_height > 0) { e[0].w = f.inner_width; e[0].h = f.inner_height; }
     });
+    // A drill-down from the grid (gridplot G3) brings the grid panel's
+    // colour scaling to the panel it is shown in.
+    const _dc = window.__cvDrillColour;
+    if (_dc && panels[_dc.id] && panels[_dc.id].kind === 'raster') panels[_dc.id].colour = _dc.colour;
+    window.__cvDrillColour = null;
+    }
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
 
@@ -9381,6 +9901,11 @@ function doPlot(reload) {
         const hide0    = _grid || (_one && (_order[0] !== 0));
         const hide1    = _grid || (_one && (_order[0] !== 1));
         if (resp.grid) window.__cvGridDrawn = true;
+        // The grid's panel copied from Panel A (gridplot G3): its tab shows it.
+        if (resp.grid_template && typeof grid_tmpl !== 'undefined' && grid_tmpl)
+            cvSetPanelTab(grid_tmpl, resp.grid_template);
+        // Panels A / B were not drawn for this (Grid) Plot: drawn when shown.
+        if (resp.status === 'ok') window.__cvPanelsStale = !!resp.panels_stale;
         if (_gridApi) {
             let _drawn;
             try { _drawn = _gridApi.reload('drawing ' + resp.grid.n_cells + ' plots', resp.grid.n_cells); }
@@ -9867,6 +10392,13 @@ function doPlot(reload) {
             # Grid layout (gridplot G2)
             "grid_iter_sel":        self._grid_iter_sel,
             "grid_key":             self._grid_view.key,
+            # The grid's own panel (gridplot G3): its tab's widgets, which
+            # doPlot reads in Grid, and each panel's, which a drill-down
+            # sets (screen-position independent: by slot index).
+            "grid_id":              self._grid_slot.id,
+            "grid_tmpl":            self._grid_tab_widgets,
+            "grid_tab":             self._grid_tab,
+            "panel_tabs":           [self._panel_tab_widgets(sl) for sl in self._slots],
             "display_order_source": self._display_order_source,
             "field_sel":  self._field_select,
             # Scan / Time range / UV range boxes (HRS A1).
@@ -10506,12 +11038,27 @@ try {
                 f"try {{ {w}.value = '{v}'; }} catch(e) {{}}\n"
                 for w, v in _PRESET_SETS.get(preset_name, ()))
 
+            # In Grid (gridplot G3) the preset sets the grid's own panel --
+            # its raster -- and nothing else: Panels A and B keep theirs.
+            grid_sets = [("ry", ry.name), ("rx", rx.name), ("rq", rq.name)]
+            if preset_name in _PRESETS_RESET_STAT:
+                grid_sets += [("rd", "remove"), ("rt", "auto"), ("rc", "off")]
+            grid_sets += [(w[len("panel0_"):-len("_sel")], v)
+                          for w, v in _PRESET_SETS.get(preset_name, ())
+                          if w.startswith("panel0_r")]
+            grid_js = "".join(f"try {{ grid_tmpl.{k}.value = '{v}'; }} catch(e) {{}}\n"
+                              for k, v in grid_sets)
             return CustomJS(
                 args=args,
-                code=self._do_plot_js + colorize_mode_js + f"""
+                code=self._do_plot_js + f"""
+if (layout_rbg.active === 3 && grid_tmpl) {{
+    try {{ grid_tmpl.kind.active = 0; }} catch(e) {{}}
+{grid_js}    doPlot();
+    return;
+}}
+""" + colorize_mode_js + f"""
 // The preset's own layout, unless "Pin layout" is ticked (2026-10-10).
-// In Grid a preset sets what the grid repeats, and Grid stays (gridplot G2).
-const lay = ((pin_cb && pin_cb.active.length > 0) || layout_rbg.active === 3) ? layout_rbg.active : active_layout;
+const lay = (pin_cb && pin_cb.active.length > 0) ? layout_rbg.active : active_layout;
 layout_rbg.active      = lay;
 
 // Presets' fixed target: pos0 = raster, pos1 = scatter. Set the complete
@@ -10619,6 +11166,17 @@ doPlot();
             return CustomJS(
                 args=args,
                 code=self._do_plot_js + f"""
+// In Grid (gridplot G3) the preset sets the grid's own panel: a scatter,
+// which Plot refuses until scatter grids come (G3, read once and split).
+if (layout_rbg.active === 3 && grid_tmpl) {{
+    try {{ grid_tmpl.kind.active = 1; }} catch(e) {{}}
+    try {{ grid_tmpl.sx.value = '{sx.name}'; }} catch(e) {{}}
+    try {{ grid_tmpl.sy.value = '{y0.name}'; }} catch(e) {{}}
+    try {{ grid_tmpl.sat.value = '{at}'; }} catch(e) {{}}
+    try {{ grid_tmpl.sac.value = '{ac}'; }} catch(e) {{}}
+    doPlot();
+    return;
+}}
 // A Statistical (Z-Score) colouring left by the Z-Score preset goes back
 // to Continuous, as for every other preset; Categorical is left alone.
 try {{
@@ -10627,8 +11185,7 @@ try {{
     }});
 }} catch(e) {{ console.warn('preset colorize-mode sync failed:', e); }}
 // Over / Under, unless "Pin layout" is ticked (2026-10-10).
-// In Grid a preset sets what the grid repeats, and Grid stays (gridplot G2).
-const lay = ((pin_cb && pin_cb.active.length > 0) || layout_rbg.active === 3) ? layout_rbg.active : 2;
+const lay = (pin_cb && pin_cb.active.length > 0) ? layout_rbg.active : 2;
 layout_rbg.active = lay;
 pos0_raster_layout.visible  = false;
 pos0_scatter_layout.visible = true;

@@ -79,6 +79,7 @@ def _validate_params(
         time_labels,
         autocorr,
         panels,
+        grid_panel,
         raster_y,
         raster_x,
         raster_qty,
@@ -141,6 +142,7 @@ def _validate_params(
         'time_labels': 'str',
         'autocorr': 'str',
         'panels': 'Optional[list]',
+        'grid_panel': 'Optional[dict]',
         'raster_y': 'Optional[str]',
         'raster_x': 'Optional[str]',
         'raster_qty': 'Optional[str]',
@@ -261,6 +263,7 @@ def _validate_params(
     _check('time_labels', time_labels, _type_map['time_labels'])
     _check('autocorr', autocorr, _type_map['autocorr'])
     _check('panels', panels, _type_map['panels'])
+    _check('grid_panel', grid_panel, _type_map['grid_panel'])
     _check('raster_y', raster_y, _type_map['raster_y'])
     _check('raster_x', raster_x, _type_map['raster_x'])
     _check('raster_qty', raster_qty, _type_map['raster_qty'])
@@ -323,6 +326,7 @@ def _visplot_t(
         time_labels: str = 'utc',
         autocorr: str = 'exclude',
         panels: Optional[list] = None,
+        grid_panel: Optional[dict] = None,
         raster_y: Optional[str] = None,
         raster_x: Optional[str] = None,
         raster_qty: Optional[str] = None,
@@ -384,6 +388,7 @@ def _visplot_t(
         time_labels = time_labels,
         autocorr = autocorr,
         panels = panels,
+        grid_panel = grid_panel,
         raster_y = raster_y,
         raster_x = raster_x,
         raster_qty = raster_qty,
@@ -616,7 +621,7 @@ class _visplot:
         (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
         ``"field"``, ``"scan"`` or ``"correlation"`` -- within the
         selection, as plotms's ``iteraxis``.  Every plot is drawn as the
-        first panel is (its axes, quantity, averaging, colour scale).
+        grid's own panel is (``grid_panel``).
     gridrows : int
         Rows of plots on a page of the Grid layout (1-8, default 3).
     gridcols : int
@@ -656,6 +661,19 @@ class _visplot:
                     dict(kind="scatter", scatter_x="FREQUENCY",
                          scatter_y="PHASE", scatter_avg_time="scan")],
             layout="over"
+    grid_panel : dict | None
+        The Grid layout's own panel: what every plot of the grid is
+        drawn as, apart from the panels -- so ``layout="grid"`` can start
+        with both the grid and the panels set up.  The keys of one
+        ``panels`` entry; a key left out takes the first panel's value.
+        Without it the grid starts as a copy of the first panel, made
+        the first time Grid is shown.  In the GUI it is "Grid panel" in
+        the Grid section; a tapped plot is shown in the first panel set up
+        as this one.  Raster only for now.  Example::
+
+            layout="grid", iterate_by="antenna",
+            grid_panel=dict(raster_y="TIME", raster_x="BASELINE",
+                            raster_qty="PHASE")
     autocorr : str
         Autocorrelations (baselines from an antenna to itself):
         ``"exclude"`` (default; cross-correlations only), ``"include"``
@@ -823,6 +841,7 @@ class _visplot:
             time_labels: str = 'utc',
             autocorr: str = 'exclude',
             panels: Optional[list] = None,
+            grid_panel: Optional[dict] = None,
             raster_y: Optional[str] = None,
             raster_x: Optional[str] = None,
             raster_qty: Optional[str] = None,
@@ -898,6 +917,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             time_labels = time_labels,
             autocorr = autocorr,
             panels = panels,
+            grid_panel = grid_panel,
             raster_y = raster_y,
             raster_x = raster_x,
             raster_qty = raster_qty,
@@ -960,6 +980,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'time_labels=' + repr(time_labels),
                 'autocorr=' + repr(autocorr),
                 'panels=' + repr(panels),
+                'grid_panel=' + repr(grid_panel),
                 'raster_y=' + repr(raster_y),
                 'raster_x=' + repr(raster_x),
                 'raster_qty=' + repr(raster_qty),
@@ -1023,6 +1044,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 time_labels = time_labels,
                 autocorr = autocorr,
                 panels = panels,
+                grid_panel = grid_panel,
                 raster_y = raster_y,
                 raster_x = raster_x,
                 raster_qty = raster_qty,

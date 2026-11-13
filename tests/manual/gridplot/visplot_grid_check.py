@@ -24,6 +24,12 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
                     drawn again in the new palette
     preset          a preset pressed in Grid: Grid stays, the grid repeats
                     the preset's panel
+    grid panel      the grid's own panel (G3): its tab holds what the preset
+                    set; Panel A's tab is untouched
+    grid edit       the grid's tab edited (Phase) and plotted: the cells show
+                    Phase; Panel A's tab is untouched
+    drill copy      a tap: the panel shown in One is set up as the grid's
+                    panel (Phase, its axes, its colour scaling)
     readout         the cursor readout is clear of the grid (above visplot's
                     status bar); the grid's controls are in the sidebar and
                     the toolbar, not over the plots
@@ -39,6 +45,8 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
     fit             1 x 1: the cell fills the room the window gives the grid,
                     and follows the window's size
     export          Export PNG in Grid writes the page
+    panels again    Plot in Grid draws only the grid (G3); Side by Side
+                    afterwards draws the panels (Python answers that Plot)
     console         no errors in the browser console
 
 ``--kernel NAME`` reads the data through a remote kernel (``backend="remote"``;
@@ -348,6 +356,57 @@ def main() -> int:
             check("preset", radio() == 3 and grid_shown() and any("Baseline" in n for n in names)
                   and yall, f"vplot in Grid: axis names {names}; each antenna's baselines "
                             f"labelled on every cell: {yall}")
+
+            # --- the grid's own panel (gridplot G3) ---------------------
+            def gtab(k):
+                return pg.evaluate(f"""(k) => {{ const w = {MODELS}.find(m => m.tags
+                    && m.tags[0] === 'grid-tab' && m.tags[1] === k);
+                    return w.value !== undefined ? w.value : w.active; }}""", k)
+
+            def set_gtab(k, v):
+                pg.evaluate(f"""([k, v]) => {{ {MODELS}.find(m => m.tags
+                    && m.tags[0] === 'grid-tab' && m.tags[1] === k).value = v; }}""", [k, v])
+
+            def panel0(k):
+                return pg.evaluate(f"""(k) => {{ const b = {MODELS}.find(m => m.type === 'Button'
+                    && m.label === 'Plot ▶');
+                    return b.js_event_callbacks['button_click'][0].args[k].value; }}""", k)
+
+            click_button("\u2699 Grid panel \u25b8")
+            pg.wait_for_timeout(400)
+            g_axes, a_axes = [gtab("ry"), gtab("rx")], [panel0("panel0_ry_sel"), panel0("panel0_rx_sel")]
+            check("grid panel", "BASELINE" in g_axes and a_axes != g_axes,
+                  f"grid's tab {g_axes} (the preset's); Panel A's {a_axes}")
+            pg.screenshot(path=os.path.join(a.out, "grid_panel_tab.png"))
+
+            a_q = panel0("panel0_rq_sel")
+            set_marker()
+            set_gtab("rq", "PHASE")
+            click_button("Plot ▶")
+            wait_drawn()
+            x, y = cell_xy(0, 0)
+            pg.mouse.move(x - 5, y)
+            pg.mouse.move(x, y, steps=3)
+            pg.wait_for_timeout(1000)
+            text = status_div_text("t.startsWith('<b>') && t.includes('<b>Phase:</b>')") or ""
+            check("grid edit", "Phase:" in text and panel0("panel0_rq_sel") == a_q
+                  and gtab("scaling") == "auto",
+                  f"cells: {text[:70]!r}; Panel A's quantity still {a_q}")
+
+            tool("TapTool")
+            pg.mouse.click(*cell_xy(0, 0))
+            pg.wait_for_function(f"""() => {MODELS}.filter(m => m.type === 'Div')
+                .some(d => d.text.includes('Layout: One panel'))""", timeout=180000)
+            pg.wait_for_timeout(1500)
+            got = [panel0("panel0_rq_sel"), panel0("panel0_ry_sel"), panel0("panel0_rx_sel")]
+            title = pg.evaluate(f"""() => {{ const b = {MODELS}.find(m => m.type === 'Button'
+                && m.label === 'Plot ▶'); return b.js_event_callbacks['button_click'][0]
+                .args.panel0_raster_fig.title.text; }}""")
+            check("drill copy", got == ["PHASE"] + g_axes and radio() == 0 and "Phase" in title,
+                  f"Panel A now {got}; title {title!r}")
+            pg.screenshot(path=os.path.join(a.out, "drill_copy.png"))
+            set_radio(3)
+            pg.wait_for_timeout(600)
             pg.screenshot(path=os.path.join(a.out, "preset_vplot.png"))
 
             ov = pg.evaluate(f"""() => {{
@@ -469,6 +528,22 @@ def main() -> int:
             dl.value.save_as(path)
             ok = os.path.getsize(path) > 10000 and open(path, "rb").read(8) == b"\x89PNG\r\n\x1a\n"
             check("export", ok, f"{dl.value.suggested_filename}, {os.path.getsize(path) // 1024} KB")
+            set_marker()
+            click_button("Plot ▶")
+            wait_drawn()
+            pg.evaluate(f"""() => {{ for (const d of {MODELS})
+                if (d.type === 'Div' && d.text.includes('Layout: Grid')) d.text = ''; }}""")
+            stale = pg.evaluate("() => !!window.__cvPanelsStale")
+            set_radio(1)
+            try:
+                pg.wait_for_function(f"""() => {MODELS}.filter(m => m.type === 'Div')
+                    .some(d => /Layout: Side/.test(d.text))""", timeout=180000)
+                drawn = True
+            except Exception:
+                drawn = False
+            check("panels again", stale and drawn and not grid_shown(),
+                  f"stale after a Grid Plot: {stale}; Side by Side plotted: {drawn}")
+            pg.screenshot(path=os.path.join(a.out, "panels_again.png"))
             check("console", not errs, "; ".join(errs[:3]))
             b.close()
     finally:

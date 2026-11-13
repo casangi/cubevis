@@ -1308,6 +1308,9 @@ const s = cb_obj.value;
 alpha_input.visible = (s === 'log' || s === 'power');
 gamma_input.visible = (s === 'gamma');
 equation.text = equations[s] || s;
+// Set by the plotter when it only shows a scaling that Plot applies
+// (a drill-down from the grid, gridplot G3): nothing to send.
+if (window.__cvQuietScaling) return;
 console.log('[visplot colormap] sending:', {{scaling: s}});
 comm.send('{msg_update_scaling}', {{scaling: s}}, function(resp) {{
 {_apply_image_js}

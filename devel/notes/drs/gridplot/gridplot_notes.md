@@ -517,3 +517,107 @@ apply to.  The hidden Panel A re-render goes with it.
   `-n 8` pass serially.
 * Handoff: `gridplot_handoff_2026-11-13.md`.  The next section here is 7
   (G3).
+
+## 7. G3a: the grid's own panel (base `b694c8ad`, 2026-11-13)
+
+G3's first item, as decided on 2026-11-12 (section 5) with the details
+agreed with Darrell on 2026-11-13: (a) the grid tab's colour scaling is
+staged and applied at Plot; (b) presets in Grid set the grid's panel;
+(c) `grid_panel=`, one dict (the keys of one `panels=` entry); (d) Back to
+Grid does not restore Panel A; (e) the tab has Raster / Scatter from the
+start, and Plot refuses Scatter until scatter grids come.
+
+**Slot G** (`visibility_plotter._build_panels`): a `_PanelSlot("G")` kept
+apart from `self._slots`, so A / B, Swap, `MAX_PANELS` and the layouts
+never see it.  Its raster and scatter are headless and comm-free and are
+never drawn; `VisGridSource` clones the cells from it, and the grid's
+extent comes from the source's union panel (one query, which replaces
+the hidden Panel A render that used to supply it).  It follows the theme
+and the time labels.
+
+**`grid_panel=`** (constructor, task layers through `sync_layers`): Panel
+A's resolved settings, then the dict on top; it is validated as `panels=`
+entries are (`_apply_panel_dict`, factored out of `_resolve_slot_configs`).
+Without it, the first Plot in Grid in the browser copies the panel shown
+first, as it is at that moment (`_grid_tmpl_pending`; `_grid_panel_from`),
+and the response's `grid_template` sets the grid's tab.  Started in Grid
+without `grid_panel=` there is nothing to copy later: G is Panel A's
+configuration from the start.  Python API: `grid_panel_settings()`,
+`set_grid_panel(dict)`.
+
+**Plot in Grid** (`_handle_plot`): only `panels["G"]` is read
+(`{kind, raster: {...}, scatter: {...}, colour: {...}}`,
+`_grid_panel_from_msg`).  Then `_handle_plot_panels` runs with no panels,
+so the selection is updated and nothing is drawn (a test counts `_render`
+calls on A and B: none).  The response says `panels_stale`.  Leaving Grid
+for a panel layout (`__cvGridLayout(false)`) then plots once, for the grid's
+selection.  A drill-down plots anyway, so it clears the flag.  Colour:
+"auto" and empty min / max mean the quantity's defaults (Phase linear
+−180..180, Z-Score threshold), with no per-quantity memory.  Changing the
+tab's quantity resets them to auto, as a panel's memory would.  A bad
+min/max or a Y/X conflict comes back with `failed_slot: "G"`.
+
+**The tab**: "⚙ Grid panel ▸" in the sidebar's Grid section opens it (Grid
+has no panel figure to carry a gear).  It reuses the gear tabs' pickers,
+which are now factored out as `_raster_pickers` / `_scatter_pickers`.  It
+has a staged Colour scaling (auto + the scalings) and min / max, and no
+histogram: the grid's panel has no data of its own.  Its widgets are
+tagged `["grid-tab", key]`.  They are in `_plot_js_args["grid_tmpl"]`,
+watched by the Plot-pending colour, and restyled by the theme.
+
+**Drill-down** (`_grid_drill`, `_GRID_DRILL_JS`): the response carries the
+grid's panel as last plotted (`panel`; not the tab, which may hold
+unplotted edits) and its colour scaling (`colour`).  The browser sets the
+tab of the panel One shows (`cvSetPanelTab`; by screen position, so a
+swap is honoured).  It sends the colour with that panel's Plot, and
+`_apply_drill_colour` loads it after `update_axes`.  The panel's own
+colour controls show it: the raster's scaling Select is set under
+`window.__cvQuietScaling`, so its live comm message is not sent.  The
+copy is plot-time only; colour scope (page / grid ranges) has no
+single-panel equivalent.
+
+**Presets in Grid** set the grid's tab (raster presets: kind, Y / X /
+quantity, and their windows / baselines-combined settings) and plot.
+Panels A and B keep theirs.  The scatter-pair presets set a scatter there,
+which Plot refuses for now.
+
+**Reproducing call**: in Grid, `grid_panel=dict(...)` after `panels=[...]`,
+leaving out the quantity's default scaling and range.  `plotfile=` in Grid
+draws neither A nor B at construction: they are marked stale and drawn if
+a later call exports them.
+
+**Kernel fingerprint**: `plot_summary` is kernel-side, so it changes,
+`k2-e578cc936d6d2fd8936f` -> `k2-65ddc9f0f49147ca0763`; setup makes new
+environments.
+
+**Checks**
+
+- `test_vis_grid.py` 34 (new: `grid_panel` argument and validation; the
+  grid's panel independent of A, with no A / B render in Grid; colour
+  staging and `grid_panel_settings`; drill-down copy with colour;
+  `plotfile=` with `grid_panel=`, A not drawn, then exported on demand).
+- `visplot_grid_check.py` 24 of 24 (new: *grid panel*: a preset in Grid
+  set the grid's tab, Panel A's untouched; *grid edit*: the tab set to
+  Phase and plotted, the probe says Phase, Panel A's tab untouched;
+  *drill copy*: Panel A becomes Phase on the grid's axes; *panels
+  again*: a Grid Plot leaves the panels stale, Side by Side plots them).
+  Also 24 of 24 starting in Grid and through a remote kernel.
+- `grid_browser_check.py` 13 of 13; `ref_pngs.py`: the 40 hashes equal
+  `b694c8ad`'s (checked against a worktree of it); `sync_layers --check`
+  clean.
+- `test_scatter_presets.py`: one assertion pinned the old Grid branch of
+  the pair presets' JS; it now pins the new one.  The other visplot test
+  files that touch the plotter's configuration, presets, gear tabs or
+  summary pass, one process per file: 8 GB is not enough for one process
+  over all of them.  `test_panels_argument` and `test_plot_summary` skip
+  here (TW Hya).
+- `tests/ci/run.py`: 7 of 8.  `remote`'s
+  `test_a_kernel_over_ssh_without_sshpyk` fails the same way at
+  `b694c8ad`: this sandbox, not the slice.
+
+**Not established here**: the tab in the light theme was not looked at;
+TW Hya and the VLBA subset; a real remote host.
+
+**Next**: G3 item 2, read once and split (plan section 11, finding 3),
+then scatter grids (item 3).  The Scatter half of the grid's tab is
+already there for them.

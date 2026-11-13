@@ -89,6 +89,7 @@ def _visplot_t(
         time_labels: str = 'utc',
         autocorr: str = 'exclude',
         panels: Optional[list] = None,
+        grid_panel: Optional[dict] = None,
         raster_y: Optional[str] = None,
         raster_x: Optional[str] = None,
         raster_qty: Optional[str] = None,
@@ -150,6 +151,7 @@ def _visplot_t(
         time_labels = time_labels,
         autocorr = autocorr,
         panels = panels,
+        grid_panel = grid_panel,
         raster_y = raster_y,
         raster_x = raster_x,
         raster_qty = raster_qty,
@@ -373,7 +375,7 @@ class _visplot:
         (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
         ``"field"``, ``"scan"`` or ``"correlation"`` -- within the
         selection, as plotms's ``iteraxis``.  Every plot is drawn as the
-        first panel is (its axes, quantity, averaging, colour scale).
+        grid's own panel is (``grid_panel``).
     gridrows : int
         Rows of plots on a page of the Grid layout (1-8, default 3).
     gridcols : int
@@ -413,6 +415,19 @@ class _visplot:
                     dict(kind="scatter", scatter_x="FREQUENCY",
                          scatter_y="PHASE", scatter_avg_time="scan")],
             layout="over"
+    grid_panel : dict | None
+        The Grid layout's own panel: what every plot of the grid is
+        drawn as, apart from the panels -- so ``layout="grid"`` can start
+        with both the grid and the panels set up.  The keys of one
+        ``panels`` entry; a key left out takes the first panel's value.
+        Without it the grid starts as a copy of the first panel, made
+        the first time Grid is shown.  In the GUI it is "Grid panel" in
+        the Grid section; a tapped plot is shown in the first panel set up
+        as this one.  Raster only for now.  Example::
+
+            layout="grid", iterate_by="antenna",
+            grid_panel=dict(raster_y="TIME", raster_x="BASELINE",
+                            raster_qty="PHASE")
     autocorr : str
         Autocorrelations (baselines from an antenna to itself):
         ``"exclude"`` (default; cross-correlations only), ``"include"``
@@ -580,6 +595,7 @@ class _visplot:
         'time_labels': 'How time axes and the cursor readout give time: ``"utc"`` (default; time of day, the date in the axis label, AIPS-style ``d/hh:mm:ss`` when the data cross a UTC midnight) or ``"elapsed"`` (minutes and seconds from the first sample).',
         'autocorr': 'Autocorrelations (baselines from an antenna to itself): ``"exclude"`` (default; cross-correlations only), ``"include"`` or ``"only"``.',
         'panels': "Each panel's configuration, in screen order: ``[{...}, {...}]``, one dict per panel, so that a two-panel view can be written as arguments (and the plot summary can print the call that reproduces what is on screen).",
+        'grid_panel': 'The Grid layout\'s own panel: what every plot of the grid is drawn as, apart from the panels -- so ``layout="grid"`` can start with both the grid and the panels set up.',
         'raster_y': '',
         'raster_x': '',
         'raster_qty': 'Explicit raster quantity (color axis), e.g.',
@@ -642,6 +658,7 @@ class _visplot:
         'time_labels': 'utc',
         'autocorr': 'exclude',
         'panels': None,
+        'grid_panel': None,
         'raster_y': None,
         'raster_x': None,
         'raster_qty': None,
@@ -739,6 +756,7 @@ class _visplot:
             'time_labels': 'str',
             'autocorr': 'str',
             'panels': 'Optional[list]',
+            'grid_panel': 'Optional[dict]',
             'raster_y': 'Optional[str]',
             'raster_x': 'Optional[str]',
             'raster_qty': 'Optional[str]',
@@ -1364,6 +1382,21 @@ class _visplot:
             desc, fmt,
         )
 
+    def __grid_panel_inp(self):
+        glb     = self.__globals_()
+        value   = glb.get('grid_panel', self._arg_default['grid_panel'])
+        default = self._arg_default['grid_panel']
+        desc    = self._arg_description.get('grid_panel', '')
+        if self.__validate_('grid_panel', value):
+            pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
+                if value != default else ('', '', 0)
+        else:
+            pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
+        self.__do_inp_output(
+            '%-23.23s = %s%-23s%s' % ('grid_panel', pre, self.__to_string_(value), post),
+            desc, fmt,
+        )
+
     def __raster_y_inp(self):
         glb     = self.__globals_()
         value   = glb.get('raster_y', self._arg_default['raster_y'])
@@ -1763,6 +1796,7 @@ class _visplot:
         if 'time_labels' in glb: del glb['time_labels']
         if 'autocorr' in glb: del glb['autocorr']
         if 'panels' in glb: del glb['panels']
+        if 'grid_panel' in glb: del glb['grid_panel']
         if 'raster_y' in glb: del glb['raster_y']
         if 'raster_x' in glb: del glb['raster_x']
         if 'raster_qty' in glb: del glb['raster_qty']
@@ -1825,6 +1859,7 @@ class _visplot:
         self.__time_labels_inp()
         self.__autocorr_inp()
         self.__panels_inp()
+        self.__grid_panel_inp()
         self.__raster_y_inp()
         self.__raster_x_inp()
         self.__raster_qty_inp()
@@ -1911,6 +1946,7 @@ class _visplot:
         _invocation_parameters['time_labels'] = glb.get('time_labels', self._arg_default['time_labels'])
         _invocation_parameters['autocorr'] = glb.get('autocorr', self._arg_default['autocorr'])
         _invocation_parameters['panels'] = glb.get('panels', self._arg_default['panels'])
+        _invocation_parameters['grid_panel'] = glb.get('grid_panel', self._arg_default['grid_panel'])
         _invocation_parameters['raster_y'] = glb.get('raster_y', self._arg_default['raster_y'])
         _invocation_parameters['raster_x'] = glb.get('raster_x', self._arg_default['raster_x'])
         _invocation_parameters['raster_qty'] = glb.get('raster_qty', self._arg_default['raster_qty'])
@@ -1989,6 +2025,7 @@ class _visplot:
             time_labels = _UNSET,
             autocorr = _UNSET,
             panels = _UNSET,
+            grid_panel = _UNSET,
             raster_y = _UNSET,
             raster_x = _UNSET,
             raster_qty = _UNSET,
@@ -2060,6 +2097,7 @@ class _visplot:
             time_labels,
             autocorr,
             panels,
+            grid_panel,
             raster_y,
             raster_x,
             raster_qty,
@@ -2192,6 +2230,9 @@ class _visplot:
             _invocation_parameters['panels'] = \
                 panels if panels is not _UNSET \
                 else glb.get('panels', self._arg_default['panels'])
+            _invocation_parameters['grid_panel'] = \
+                grid_panel if grid_panel is not _UNSET \
+                else glb.get('grid_panel', self._arg_default['grid_panel'])
             _invocation_parameters['raster_y'] = \
                 raster_y if raster_y is not _UNSET \
                 else glb.get('raster_y', self._arg_default['raster_y'])
@@ -2334,6 +2375,8 @@ class _visplot:
                 glb.get('autocorr', self._arg_default['autocorr'])
             _invocation_parameters['panels'] = \
                 glb.get('panels', self._arg_default['panels'])
+            _invocation_parameters['grid_panel'] = \
+                glb.get('grid_panel', self._arg_default['grid_panel'])
             _invocation_parameters['raster_y'] = \
                 glb.get('raster_y', self._arg_default['raster_y'])
             _invocation_parameters['raster_x'] = \
@@ -2436,6 +2479,7 @@ class _visplot:
                     'time_labels=' + repr(_invocation_parameters['time_labels']),
                     'autocorr=' + repr(_invocation_parameters['autocorr']),
                     'panels=' + repr(_invocation_parameters['panels']),
+                    'grid_panel=' + repr(_invocation_parameters['grid_panel']),
                     'raster_y=' + repr(_invocation_parameters['raster_y']),
                     'raster_x=' + repr(_invocation_parameters['raster_x']),
                     'raster_qty=' + repr(_invocation_parameters['raster_qty']),
@@ -2497,6 +2541,7 @@ class _visplot:
                 time_labels = _invocation_parameters['time_labels'],
                 autocorr = _invocation_parameters['autocorr'],
                 panels = _invocation_parameters['panels'],
+                grid_panel = _invocation_parameters['grid_panel'],
                 raster_y = _invocation_parameters['raster_y'],
                 raster_x = _invocation_parameters['raster_x'],
                 raster_qty = _invocation_parameters['raster_qty'],

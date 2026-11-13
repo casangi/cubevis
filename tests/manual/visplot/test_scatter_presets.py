@@ -248,7 +248,11 @@ class TestPresetConstruction:
                 for line in ("panel0_kind_switch.active = 1;", "panel1_kind_switch.active = 1;",
                              "layout_rbg.active = lay;", "pos0_scatter_layout.visible = true;",
                              "pos1_scatter_layout.visible = (lay !== 0);",
-                             "layout_rbg.active === 3) ? layout_rbg.active : 2;",  # pinned or Grid: kept
+                             "pin_cb.active.length > 0) ? layout_rbg.active : 2;",  # pinned: kept
+                             # in Grid: the grid's own panel (gridplot G3)
+                             "if (layout_rbg.active === 3 && grid_tmpl) {",
+                             "grid_tmpl.kind.active = 1;",
+                             f"grid_tmpl.sx.value = '{x}';",
                              f"panel0_sx_sel.value = '{x}';", f"panel1_sx_sel.value = '{x}';",
                              "panel0_sy_sel.value = 'AMPLITUDE';", "panel1_sy_sel.value = 'PHASE';",
                              f"panel0_sat_sel.value = '{at}';", f"panel1_sac_sel.value = '{ac}';",

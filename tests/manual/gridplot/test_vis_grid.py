@@ -286,3 +286,133 @@ def test_reproducing_call(ms):
         call = p.reproducing_call()
         assert "layout='grid'" in call or 'layout="grid"' in call, call
         assert "antenna" in call and "gridrows=2" in call and "gridcols=4" in call
+
+
+# --- the grid's own panel (gridplot G3) -------------------------------------------
+
+def test_grid_panel_argument(ms):
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    from cubevis.toolbox.visplot.axes import Axis
+    for bad in ({"raster_qty": "NOPE"}, {"colour": "red"}, "PHASE",
+                {"raster_y": "TIME", "raster_x": "TIME"}):
+        with pytest.raises(ValueError):
+            VisibilityPlotter(ms=ms, headless=True, grid_panel=bad)
+    with VisibilityPlotter(ms=ms, headless=True, preset="waterfall") as p:
+        g, a = p._grid_slot, p._slots[0]
+        assert g.raster is not a.raster and g.raster._headless
+        assert (g.raster._y_dim, g.raster._x_dim, g.raster._quantity) == \
+               (a.raster._y_dim, a.raster._x_dim, a.raster._quantity)      # a copy of A
+    with VisibilityPlotter(ms=ms, headless=True, preset="waterfall",
+                           grid_panel=dict(raster_x="BASELINE", raster_qty="PHASE")) as p:
+        r = p._grid_slot.raster
+        assert (r._y_dim, r._x_dim, r._quantity) == (Axis.TIME, Axis.BASELINE, Axis.PHASE)
+        assert p._slots[0].raster._quantity == Axis.AMPLITUDE            # A as the preset says
+        # the grid's panel is never drawn: only its cells are
+        assert r._agg is None
+
+
+def _counting(p, monkeypatch):
+    """Panels A and B (both kinds) that draw from now on (``_render``)."""
+    from cubevis.toolbox.visplot.visibility_raster import VisibilityRaster
+    from cubevis.toolbox.visplot.visibility_scatter import VisibilityScatter
+    calls, mine = [], {id(x) for x in p._all_panels}
+    for cls in (VisibilityRaster, VisibilityScatter):
+        orig = cls._render
+        def wrap(self, *a, _o=orig, **k):
+            if id(self) in mine:
+                calls.append(self)
+            return _o(self, *a, **k)
+        monkeypatch.setattr(cls, "_render", wrap)
+    return calls
+
+
+def test_grid_panel_is_its_own(ms, monkeypatch):
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    from cubevis.toolbox.visplot.axes import Axis
+    with VisibilityPlotter(ms=ms, preset="waterfall") as p:
+        calls = _counting(p, monkeypatch)
+        # the first Plot in Grid: the grid's panel becomes a copy of Panel A
+        resp = asyncio.run(p._handle_plot({"layout": "grid", "grid_slot": "A",
+                                           "field": "", "panels": {}}))
+        assert resp["status"] == "ok", resp
+        assert resp["grid_template"]["rq"] == "AMPLITUDE" and resp["panels_stale"]
+        assert resp["panels"] == {} and calls == []                    # A and B not drawn
+        # the grid's tab, edited and plotted: only the grid's panel changes
+        g = {"kind": "raster",
+             "raster": {"y": "TIME", "x": "CHANNEL", "qty": "PHASE", "averaging": "scalar"},
+             "colour": {"scaling": "auto", "vmin": "", "vmax": ""}}
+        resp = asyncio.run(p._handle_plot({"layout": "grid", "panels": {"G": g}}))
+        assert resp["status"] == "ok", resp
+        assert "grid_template" not in resp and calls == []
+        r = p._grid_slot.raster
+        assert r._quantity == Axis.PHASE and r._averaging == "scalar"
+        assert (r._scaling, r._scaling_vmin, r._scaling_vmax) == ("linear", -180.0, 180.0)
+        assert p._slots[0].raster._quantity == Axis.AMPLITUDE
+        assert p._grid_source._template is r
+        # back to the panels: they are drawn for the grid's selection
+        resp = asyncio.run(p._handle_plot({"layout": "one", "panels": {
+            "A": {"kind": "raster", "y": "TIME", "x": "CHANNEL", "qty": "AMPLITUDE"}}}))
+        assert resp["status"] == "ok" and not p._grid_on
+
+
+def test_grid_panel_colour_and_settings(ms):
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    with VisibilityPlotter(ms=ms, preset="waterfall",
+                           grid_panel=dict(raster_qty="PHASE")) as p:
+        assert not p._grid_tmpl_pending                     # grid_panel= given: no copy
+        assert p.grid_panel_settings()["raster_qty"] == "PHASE"
+        assert "scaling" not in p.grid_panel_settings()     # the quantity's own
+        g = {"kind": "raster", "raster": {"y": "TIME", "x": "CHANNEL", "qty": "AMPLITUDE"},
+             "colour": {"scaling": "linear", "vmin": "0.5", "vmax": ""}}
+        resp = asyncio.run(p._handle_plot({"layout": "grid", "panels": {"G": g}}))
+        assert resp["status"] == "ok", resp
+        r = p._grid_slot.raster
+        assert (r._scaling, r._scaling_vmin, r._scaling_vmax) == ("linear", 0.5, None)
+        s = p.grid_panel_settings()
+        assert s["scaling"] == "linear" and s["vmin"] == 0.5 and "vmax" not in s
+        # every cell is drawn with it
+        cell = p._grid_source._cell(0)
+        assert (cell._scaling, cell._scaling_vmin) == ("linear", 0.5)
+        bad = dict(g, colour={"vmin": "low"})
+        resp = asyncio.run(p._handle_plot({"layout": "grid", "panels": {"G": bad}}))
+        assert resp["status"] == "error" and resp["failed_slot"] == "G"
+        sc = {"kind": "scatter", "scatter": {"x": "TIME", "y": "AMPLITUDE"}}
+        resp = asyncio.run(p._handle_plot({"layout": "grid", "panels": {"G": sc}}))
+        assert resp["status"] == "error" and "grid's panel" in resp["notify_text"]
+
+
+def test_drill_down_copies_the_grid_panel(ms):
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    from cubevis.toolbox.visplot.axes import Axis
+    with VisibilityPlotter(ms=ms, preset="waterfall",
+                           grid_panel=dict(raster_y="TIME", raster_x="BASELINE",
+                                           raster_qty="PHASE")) as p:
+        assert asyncio.run(p._handle_plot({"layout": "grid", "iterate_by": "spw"}))["status"] == "ok"
+        d = p._grid_drill(0, p._grid_source.labels()[0])
+        assert (d["panel"]["rq"], d["panel"]["rx"]) == ("PHASE", "BASELINE")
+        assert d["colour"]["scaling"] == "linear" and d["colour"]["vmin"] == -180.0
+        # the browser sets Panel A's tab from d["panel"] and sends the colour
+        resp = asyncio.run(p._handle_plot({"layout": "one", "spw_ids": [d["select"]["spw"]],
+            "panels": {"A": {"kind": "raster", "y": d["panel"]["ry"], "x": d["panel"]["rx"],
+                             "qty": d["panel"]["rq"],
+                             "colour": dict(d["colour"], scaling="sqrt")}}}))
+        assert resp["status"] == "ok", resp
+        a = p._slots[0].raster
+        assert (a._quantity, a._x_dim, a._scaling, a._scaling_vmin) == \
+               (Axis.PHASE, Axis.BASELINE, "sqrt", -180.0)
+
+
+def test_plotfile_grid_panel(ms, tmp_path):
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    out = str(tmp_path / "gp.png")
+    with VisibilityPlotter(ms=ms, layout="grid", preset="waterfall", iterate_by="spw",
+                           grid_panel=dict(raster_qty="PHASE"), plotfile=out) as p:
+        a = p._slots[0].raster
+        assert a._agg is None                         # Panel A is not drawn for the grid
+        assert p() == out and os.path.getsize(out) > 5000
+        assert p._grid_source._cell(0)._quantity.name == "PHASE"
+        call = p.reproducing_call()
+        assert "grid_panel=dict(" in call and "raster_qty='PHASE'" in call, call
+        # the panels are still there to export: brought up to date when shown
+        one = p(layout="one", plotfile=str(tmp_path / "one.png"))
+        assert os.path.getsize(one) > 5000 and a._agg is not None

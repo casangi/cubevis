@@ -318,8 +318,29 @@ def reproducing_call(plotter) -> str:
         rows.append(cur.rstrip())
         lines.extend(rows)
     lines.append("    ],")
+    if getattr(plotter, "_grid_on", False) and getattr(plotter, "_grid_slot", None) is not None:
+        # the grid's own panel (gridplot G3): what every cell repeats
+        lines.extend(_dict_lines("    grid_panel=dict(",
+                                 plotter.grid_panel_settings(), lit))
     lines.append(")")
     return "\n".join(lines)
+
+
+def _dict_lines(head: str, d: dict, lit) -> list:
+    """``head`` + ``k=v, ...`` + ``"),"``, wrapped at ~78 columns with the
+    continuation lines under the first key."""
+    items = [f"{k}={lit(v)}" for k, v in d.items()]
+    cur, rows, indent = head, [], " " * len(head)
+    for i, it in enumerate(items):
+        piece = it + ("," if i < len(items) - 1 else "),")
+        if len(cur) + len(piece) + 1 > 78 and not cur.endswith("("):
+            rows.append(cur.rstrip())
+            cur = indent
+        cur += piece + " "
+    if not items:
+        cur += "),"
+    rows.append(cur.rstrip())
+    return rows
 
 
 # ----------------------------------------------------------------------

@@ -146,7 +146,7 @@ def main() -> int:
             errs = []
             pg.on("console", lambda m: errs.append(m.text[:300]) if m.type == "error" else None)
             warns = []
-            pg.on("console", lambda m: warns.append(m.text[:3000]) if m.type in ("warning", "log") else None)
+            pg.on("console", lambda m: warns.append(m.text[:1000]) if m.type in ("warning", "log") else None)
             pg.on("pageerror", lambda e: errs.append(str(e)[:300]))
             t_load = t_start = time.time()
             pg.goto(url)
@@ -195,6 +195,8 @@ def main() -> int:
                     pg.wait_for_function(f"""() => {MODELS}.filter(m => m.type === 'Div')
                         .some(d => d.text.startsWith('drawn in'))""", timeout=timeout)
                 except Exception:
+                    # say why, before the timeout's traceback: the grid's
+                    # status, the console, and the grid's state
                     print("not drawn; grid status:", pg.evaluate(f"""() => {MODELS}.filter(m =>
                         m.type === 'Div' && m.text.length < 300).map(d => d.text)
                         .filter(t => /drawing|resiz|drawn|error|⚠/.test(t))"""),
@@ -394,14 +396,6 @@ def main() -> int:
             pg.wait_for_timeout(800)
             blog = pg.evaluate("() => { clearInterval(window.__cvBusyPoll); return window.__cvBusyLog; }")
             drawing = [b for b, d in blog if d]
-            if os.environ.get("CV_BUSY_DEBUG"):
-                runs = []
-                for b, d in blog:
-                    if runs and runs[-1][0] == (b, d):
-                        runs[-1][1] += 1
-                    else:
-                        runs.append([(b, d), 1])
-                print("busy timeline (busyN, drawing) x samples:", runs)
             check("busy", drawing and min(drawing) > 0 and blog[-1][0] == 0,
                   f"{len(drawing)} samples while the page was drawing, busy in all: "
                   f"{bool(drawing) and min(drawing) > 0}; idle after: {blog[-1][0] == 0}")

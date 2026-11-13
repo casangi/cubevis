@@ -501,3 +501,19 @@ apply to.  The hidden Panel A re-render goes with it.
    Paging under "this page" changes the colours from page to page --
    intended, and the reason for the whole-grid option.
 2. *Status line after Back to Grid* (section 4, item 3), still.
+
+## 6. Clean-up and handoff (base `fa907501`, 2026-11-13)
+
+* `devel/tools/gridplot_bench/ref_pngs.py`: the reference-PNG check that
+  had lived in this session's `/tmp`.  Every preset, light and dark, on
+  `ci.ms` and `g0.ms` (made when missing), through `plotfile=`, prints
+  hashes to diff.  With fresh sets it gives the same 40 hashes as at
+  `fc3ea3b8`.
+* `visplot_grid_check.py`: one-off debugging removed.  A page that never
+  draws now prints the grid's status, the console and `state()` before
+  the timeout.
+* Whole suite at `fa907501`: green apart from `test_info_panel`'s
+  collection error, which predates this work.  Timing failures under
+  `-n 8` pass serially.
+* Handoff: `gridplot_handoff_2026-11-13.md`.  The next section here is 7
+  (G3).

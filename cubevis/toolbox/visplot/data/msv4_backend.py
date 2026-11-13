@@ -3,9 +3,18 @@
 MSv4 Processing Sets (``*.ps.zarr``) are plain Zarr DataTrees produced by
 ``xradio.measurement_set.convert_msv2_to_processing_set()`` or by writing
 an ``xarray-ms``-opened MSv2 DataTree to Zarr via ``DataTree.to_zarr()``.
-They are opened here with ``xarray.open_datatree(path, engine="zarr")``,
-which is xarray's own Zarr engine — no xradio or xarray-ms dependency is
-required in the read path.
+Two readers open them (``MSv4Backend(reader=)``, or
+``$CUBEVIS_VISPLOT_MSV4_READER`` when that is not given):
+
+* ``"zarr"`` (the default for now) -- ``xarray.open_datatree(path,
+  engine="zarr")``, xarray's own Zarr engine; needs only ``zarr``.
+* ``"xradio"`` (opt-in; cubevis issue #5, for RADPS: MSv4 on disk read
+  through xradio rather than by opening the Zarr store directly) --
+  ``xradio.measurement_set.open_processing_set()``, which also accepts
+  ``s3://`` URLs; needs ``cubevis[xradio]``.  Meant to become the default.
+
+Both give the same DataTree, so nothing past ``open()`` depends on which
+reader was used.  ``xarray-ms`` is not involved in either.
 
 The on-disk structure is a DataTree whose leaf nodes fall into two categories:
 
@@ -26,9 +35,12 @@ The on-disk structure is a DataTree whose leaf nodes fall into two categories:
 
 Key differences from ``MSv2Backend``
 --------------------------------------
-* **Open path**: ``xr.open_datatree(path, engine="zarr")`` with
-  ``consolidated=True`` (fast single-file metadata read) falling back to the
-  default walk if consolidated metadata is absent.
+* **Open path**: ``"zarr"`` reader -- ``xr.open_datatree(path,
+  engine="zarr")`` with ``consolidated=True`` (fast single-file metadata
+  read) falling back to the default walk if consolidated metadata is
+  absent, ``chunks`` passed to the open.  ``"xradio"`` reader --
+  ``xradio.measurement_set.open_processing_set(path)`` (lazy, Dask arrays
+  on the store's own chunks), then ``chunks`` applied with ``Dataset.chunk``.
 * **Partition cache**: ``self._partitions`` is built once at ``open()`` and
   reused by every query call, avoiding repeated DataTree subtree walks that
   grow linearly with partition count.
@@ -136,15 +148,43 @@ from ..selection import SelectionSpec
 
 log = logging.getLogger(__name__)
 
-# Zarr engine name — xarray's own built-in engine, no extra backend needed
-_ZARR_ENGINE = "zarr"
-
 # Adaptive pipeline thresholds — identical to MSv2Backend (confirmed by test_11)
 _THRESH_FUSED = 500_000
 _THRESH_PAR   = 5_000_000
 
 # Speed of light
 _C_MS = 299_792_458.0
+
+# Zarr engine name — xarray's own built-in engine, no extra backend needed
+_ZARR_ENGINE = "zarr"
+
+# Which reader opens a Processing Set (see the module docstring).  "zarr"
+# is the default until "xradio" (issue #5) becomes it; the environment
+# variable picks one for every MSv4Backend made without reader= -- which is
+# how visplot makes them, locally and in a remote kernel (set it where the
+# kernel runs for a remote one).
+MSV4_READER_ENV = "CUBEVIS_VISPLOT_MSV4_READER"
+MSV4_READERS = ("zarr", "xradio")
+DEFAULT_MSV4_READER = "zarr"
+
+
+def _resolve_reader(reader: Optional[str]) -> str:
+    """*reader*, else ``$CUBEVIS_VISPLOT_MSV4_READER``, else the default;
+    ``ValueError`` for a name that is not one of ``MSV4_READERS``."""
+    import os
+    source = "reader="
+    if reader is None:
+        reader = os.environ.get(MSV4_READER_ENV, "").strip() or None
+        source = MSV4_READER_ENV
+    if reader is None:
+        return DEFAULT_MSV4_READER
+    name = str(reader).strip().lower()
+    if name not in MSV4_READERS:
+        raise ValueError(
+            f"MSv4Backend: {source} must be one of {list(MSV4_READERS)}, "
+            f"got {reader!r}"
+        )
+    return name
 
 
 
@@ -157,9 +197,10 @@ class MSv4Backend(XArrayReader):
     """``XArrayReader`` backed by MSv4 Zarr Processing Sets.
 
     Opens an MSv4 ``*.ps.zarr`` store produced by ``xradio`` or by exporting
-    an ``xarray-ms`` DataTree to Zarr.  Uses ``xarray.open_datatree`` with
-    ``engine="zarr"`` — xarray's own Zarr backend.  No xradio or xarray-ms
-    dependency is required in the read path.
+    an ``xarray-ms`` DataTree to Zarr, with xarray's Zarr engine (the
+    default) or, opted into with ``reader="xradio"``, with
+    ``xradio.measurement_set.open_processing_set`` (cubevis issue #5), which
+    also opens ``s3://`` URLs.  ``xarray-ms`` is not needed here.
 
     The interface is identical to ``MSv2Backend``.  The query, selection, and
     probe methods share the same signatures and return types.
@@ -169,9 +210,16 @@ class MSv4Backend(XArrayReader):
     path :
         Path to the ``*.ps.zarr`` directory (the Processing Set root).
     chunks :
-        Dask chunk specification forwarded to ``xarray.open_datatree``.
+        Dask chunk specification: forwarded to ``xarray.open_datatree``
+        (``"zarr"`` reader), or applied with ``Dataset.chunk`` after xradio
+        opens the store on its own chunks (``"xradio"`` reader).
         ``None`` uses ``{"time": 100, "baseline_id": 100}`` which matches
-        the ``MSv2Backend`` default.
+        the ``MSv2Backend`` default; ``{}`` keeps the store's chunks.
+    reader :
+        ``"zarr"`` or ``"xradio"``: which reader opens the store (see the
+        module docstring).  ``None`` (default) uses
+        ``$CUBEVIS_VISPLOT_MSV4_READER`` if set, else ``"zarr"``.  An
+        unknown name raises ``ValueError`` here, not at ``open()``.
     data_group :
         Which MSv4 ``data_group`` to read visibility and flag data from.
         MSv4 stores can contain multiple copies of VISIBILITY/FLAG/WEIGHT/UVW
@@ -218,12 +266,14 @@ class MSv4Backend(XArrayReader):
         chunks: Optional[dict] = None,
         data_group: Optional[str] = None,
         observation_mode: str = "auto",
+        reader: Optional[str] = None,
     ) -> None:
         if observation_mode not in self.OBSERVATION_MODES:
             raise ValueError(
                 f"observation_mode must be one of {sorted(self.OBSERVATION_MODES)}, "
                 f"got {observation_mode!r}"
             )
+        self._reader           = _resolve_reader(reader)
         self._path             = path
         self._chunks           = chunks if chunks is not None else self._DEFAULT_CHUNKS
         self._data_group       = data_group
@@ -240,7 +290,9 @@ class MSv4Backend(XArrayReader):
     # ------------------------------------------------------------------ #
 
     def open(self) -> None:
-        """Open the ``.ps.zarr`` store via ``xarray.open_datatree``.
+        """Open the ``.ps.zarr`` store with the backend's reader:
+        ``xarray.open_datatree`` (``"zarr"``) or
+        ``xradio.measurement_set.open_processing_set`` (``"xradio"``).
 
         Idempotent — safe to call multiple times.
 
@@ -251,19 +303,24 @@ class MSv4Backend(XArrayReader):
         Raises
         ------
         ImportError
-            If ``zarr`` is not installed.
+            If ``zarr`` is not installed, or, for the ``"xradio"`` reader,
+            ``xradio`` -- an explicit choice, so no silent fallback.
         RuntimeError
-            If xarray fails to open the Zarr store (wraps original error).
+            If the store fails to open (wraps original error).
         """
         with self._lock:
             if self._datatree is not None:
                 return
-            _check_zarr()
-            log.debug("MSv4Backend: opening %s", self._path)
+            if self._reader == "xradio":
+                _check_xradio()
+                opener = _open_processing_set
+            else:
+                _check_zarr()
+                opener = _open_zarr_datatree
+            log.debug("MSv4Backend: opening %s (%s reader)",
+                      self._path, self._reader)
             try:
-                self._datatree = _open_zarr_datatree(
-                    self._path, chunks=self._chunks
-                )
+                self._datatree = opener(self._path, chunks=self._chunks)
             except Exception as exc:
                 raise RuntimeError(
                     f"MSv4Backend failed to open {self._path!r}: {exc}"
@@ -2706,6 +2763,7 @@ class MSv4Backend(XArrayReader):
             parts.append(self._resolved_mode or "unknown mode")
         if self._data_group is not None:
             parts.append(f"data_group={self._data_group!r}")
+        parts.append(f"reader={self._reader!r}")
         return ", ".join(parts) + ")"
 
 
@@ -2730,6 +2788,8 @@ def _open_zarr_datatree(
     chunks: Optional[dict],
 ) -> xr.DataTree:
     """Open a Zarr DataTree, trying consolidated metadata first.
+
+    The ``"zarr"`` reader (the default).
 
     Zarr stores produced by ``xarray-ms dt.to_zarr()`` write ``zarr.json``
     (Zarr V3 consolidated metadata) and those produced by xradio write
@@ -2759,6 +2819,56 @@ def _open_zarr_datatree(
             engine=_ZARR_ENGINE,
             chunks=chunks,
         )
+
+
+def _check_xradio() -> None:
+    """Raise ImportError with a helpful message if xradio (with the
+    pieces its Processing Set reader needs: zarr, s3fs) is absent."""
+    try:
+        import zarr  # noqa: F401
+        import xradio.measurement_set  # noqa: F401
+    except ImportError as exc:
+        raise ImportError(
+            "xradio is required for MSv4Backend's \"xradio\" reader "
+            f"(reader=\"xradio\" or {MSV4_READER_ENV}=xradio).\n"
+            "Install: pip install 'cubevis[xradio]'  "
+            "(or: pip install 'xradio[zarr]>=1.3'), or use the default "
+            "\"zarr\" reader.\n"
+            f"Import failed: {exc}"
+        ) from exc
+
+
+def _open_processing_set(
+    path: str,
+    chunks: Optional[dict],
+) -> xr.DataTree:
+    """Open an MSv4 Processing Set with ``xradio``, then apply *chunks*.
+
+    The ``"xradio"`` reader (opt-in for now).
+    ``xradio.measurement_set.open_processing_set`` is the RADPS-supported
+    reader (cubevis issue #5).  It opens the store lazily with Dask arrays
+    on the store's own Zarr chunks, handles local paths and ``s3://``
+    URLs, and returns a DataTree with xradio's ``xr_ps`` / ``xr_ms``
+    accessors available.  It opens xradio-written stores and the
+    ``xarray-ms`` ``DataTree.to_zarr()`` stores the tests use alike.
+
+    xradio takes no chunk specification, so *chunks* (the backend's
+    ``chunks=``, ``{"time": 100, "baseline_id": 100}`` by default -- what
+    ``MSv2Backend`` uses) is applied afterwards with ``Dataset.chunk`` on
+    every node that has those dimensions.  Splitting a larger Zarr chunk
+    this way reads it once and slices it, rather than once per Dask chunk.
+    """
+    from xradio.measurement_set import open_processing_set
+
+    dt = open_processing_set(str(path))
+    if not chunks:
+        return dt
+
+    def _rechunk(ds: xr.Dataset) -> xr.Dataset:
+        mine = {d: c for d, c in chunks.items() if d in ds.dims}
+        return ds.chunk(mine) if mine else ds
+
+    return dt.map_over_datasets(_rechunk)
 
 
 def _resolve_observation_mode(

@@ -67,6 +67,19 @@ xarray = [
     "datashader"
 ]
 
+# xradio reading MSv4 Processing Sets for MSv4Backend -- opt-in for now
+# (issue #5: RADPS wants MSv4 on disk read through xradio rather than by
+# opening the Zarr store directly).  Chosen per backend with
+# MSv4Backend(reader="xradio") or for every one with
+# CUBEVIS_VISPLOT_MSV4_READER=xradio; xarray's Zarr engine stays the
+# default until this becomes it (then: fold this into [xarray]).
+# Install alongside [visplot]: pip install "cubevis[visplot,xradio]".
+# Its [zarr] extra is what open_processing_set needs (zarr 3, s3fs,
+# toolviper); xradio itself needs no python-casacore.  xradio declares
+# requires-python "<3.15,>=3.11" (1.3.1): the marker keeps this extra
+# resolvable (and pdm.lock lockable) for cubevis's open-ended ">=3.12".
+xradio = ["xradio[zarr]>=1.3; python_version < '3.15'"]
+
 # --- App-named extras -------------------------------------------------------
 # What a user actually installs cubevis for. Document/recommend these in
 # the README and quickstart rather than the backend extras above.
@@ -76,10 +89,11 @@ xarray = [
 # as for visplot.  CASA's data (casadata, or a measurespath of your own) is
 # not an extra: setup offers a private copy per environment.
 #
-# visplot is xarray-ms/arcae-only for BOTH its MSv2 and MSv4 backends - arcae
-# reads MSv2 tables directly, no casatasks involved - so "I have old-format
-# data" is NOT a reason to reach for [casa6]; [visplot] (or [xarray]) is
-# still correct even for MSv2 data.
+# visplot needs no casatasks for either backend - MSv2 is read by
+# xarray-ms/arcae (arcae reads MSv2 tables directly), MSv4 by zarr (or,
+# opted into, xradio: [xradio] above) - so
+# "I have old-format data" is NOT a reason to reach for [casa6]; [visplot]
+# (or [xarray]) is still correct even for MSv2 data.
 #
 # Self-referential extras (a package listing itself[other-extra]) are
 # standard PEP 621/pip behavior and resolve fine at install time. If

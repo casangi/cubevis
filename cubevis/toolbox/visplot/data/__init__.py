@@ -10,9 +10,11 @@ its two concrete backends:
     to all layers above.
 
 ``MSv4Backend``
-    Backed by ``xradio``.
-    Opens MSv4 Processing Sets (``*.ps.zarr``) via
-    ``xradio.read_processing_set()``.
+    Backed by ``zarr`` (default) or ``xradio`` (opt-in).
+    Opens MSv4 Processing Sets (``*.ps.zarr``) with xarray's Zarr engine,
+    or -- opted into with ``reader="xradio"`` or
+    ``CUBEVIS_VISPLOT_MSV4_READER=xradio`` -- with
+    ``xradio.measurement_set.open_processing_set()`` (also ``s3://``).
 
 Both backends expose an identical interface and may be used
 interchangeably by the ``VisibilityPlotter`` source classes.

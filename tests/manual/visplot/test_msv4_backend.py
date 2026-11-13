@@ -278,6 +278,101 @@ class TestLifecycle:
         with pytest.raises(RuntimeError):
             b.open()
 
+    # --- reader choice: "zarr" (default) / "xradio" (opt-in, issue #5) ---
+
+    @staticmethod
+    def _spy_xradio(monkeypatch):
+        """Record calls to xradio's open_processing_set (``None`` without
+        xradio: then nothing can call it)."""
+        try:
+            import xradio.measurement_set as xms
+        except ImportError:
+            return None
+        calls = []
+        real = xms.open_processing_set
+
+        def spy(*args, **kwargs):
+            calls.append(args[0] if args else kwargs.get("ps_store"))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(xms, "open_processing_set", spy)
+        return calls
+
+    def test_default_reader_is_zarr(self, monkeypatch):
+        """Without reader= or the environment variable, xarray's Zarr
+        engine opens the store and xradio is not used."""
+        _suppress_warnings()
+        monkeypatch.delenv("CUBEVIS_VISPLOT_MSV4_READER", raising=False)
+        calls = self._spy_xradio(monkeypatch)
+        with MSv4Backend(_get_ps()) as b:
+            assert b._reader == "zarr"
+            assert len(b._partitions) > 0
+        assert not calls
+
+    def test_opened_through_xradio(self, monkeypatch):
+        """``reader="xradio"``: xradio's open_processing_set opens the store
+        (issue #5), and the result carries xradio's processing-set accessor."""
+        pytest.importorskip("xradio.measurement_set")
+        _suppress_warnings()
+        calls = self._spy_xradio(monkeypatch)
+        with MSv4Backend(_get_ps(), reader="xradio") as b:
+            assert calls == [str(_get_ps())]
+            assert hasattr(b._datatree, "xr_ps")
+            assert len(b._partitions) > 0
+
+    def test_environment_selects_reader(self, monkeypatch):
+        """``$CUBEVIS_VISPLOT_MSV4_READER`` picks the reader for a backend
+        made without reader= (how visplot makes them); reader= wins."""
+        pytest.importorskip("xradio.measurement_set")
+        _suppress_warnings()
+        monkeypatch.setenv("CUBEVIS_VISPLOT_MSV4_READER", " XRadio ")
+        calls = self._spy_xradio(monkeypatch)
+        with MSv4Backend(_get_ps()) as b:
+            assert b._reader == "xradio"
+        assert len(calls) == 1
+        with MSv4Backend(_get_ps(), reader="zarr") as b:
+            assert b._reader == "zarr"
+        assert len(calls) == 1
+
+    def test_unknown_reader_raises(self, monkeypatch):
+        """A reader name that is not "zarr"/"xradio" fails at construction."""
+        with pytest.raises(ValueError, match="reader="):
+            MSv4Backend(_get_ps(), reader="casacore")
+        monkeypatch.setenv("CUBEVIS_VISPLOT_MSV4_READER", "zar")
+        with pytest.raises(ValueError, match="CUBEVIS_VISPLOT_MSV4_READER"):
+            MSv4Backend(_get_ps())
+
+    def test_both_readers_agree(self):
+        """Both readers give the same partitions, dims, chunks and values."""
+        pytest.importorskip("xradio.measurement_set")
+        _suppress_warnings()
+        with MSv4Backend(_get_ps(), reader="zarr") as bz, \
+                MSv4Backend(_get_ps(), reader="xradio") as bx:
+            assert len(bz._partitions) == len(bx._partitions)
+            for pz, px in zip(bz._partitions, bx._partitions):
+                assert dict(pz.sizes) == dict(px.sizes)
+                assert pz["VISIBILITY"].chunks == px["VISIBILITY"].chunks
+                np.testing.assert_array_equal(
+                    pz["VISIBILITY"].isel(time=slice(0, 3)).values,
+                    px["VISIBILITY"].isel(time=slice(0, 3)).values)
+
+    @pytest.mark.parametrize("reader", ["zarr", "xradio"])
+    def test_store_chunks_kept_with_empty_chunks(self, reader):
+        """``chunks={}`` keeps the store's own Zarr chunks (no rechunk)."""
+        if reader == "xradio":
+            pytest.importorskip("xradio.measurement_set")
+        _suppress_warnings()
+        with MSv4Backend(_get_ps(), chunks={}, reader=reader) as b:
+            ds_part = next(iter(b._iter_visibility_partitions()))
+            vis = ds_part["VISIBILITY"]
+            assert vis.chunks is not None
+            enc = vis.encoding.get("chunks") or vis.encoding.get("preferred_chunks")
+            if isinstance(enc, dict):
+                enc = tuple(enc[d] for d in vis.dims)
+            if enc:
+                assert tuple(c[0] for c in vis.chunks) == tuple(
+                    min(e, n) for e, n in zip(enc, vis.shape))
+
     def test_custom_chunks_applied(self):
         """Chunks passed at construction affect Dask chunk sizes."""
         _suppress_warnings()

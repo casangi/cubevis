@@ -1713,6 +1713,32 @@ def _selection_fingerprint(selection) -> Optional[tuple]:
         return None
 
 
+def _rows_of(df: "pd.DataFrame", sel) -> "pd.DataFrame":
+    """The rows of a raw frame that *sel*'s baselines, antennas, fields and
+    scans select -- the same rules as the backends' ``_apply_selection``
+    (a baseline in its data orientation; an antenna at either end)."""
+    if len(df) == 0:
+        return df.copy()
+    keep = np.ones(len(df), dtype=bool)
+    a1 = df["baseline_antenna1_name"] if "baseline_antenna1_name" in df.columns else None
+    a2 = df["baseline_antenna2_name"] if "baseline_antenna2_name" in df.columns else None
+    if sel.baselines is not None and a1 is not None:
+        m = np.zeros(len(df), dtype=bool)
+        for p, q in sel.baselines:
+            m |= ((a1 == p) & (a2 == q)).to_numpy()
+        keep &= m
+    elif sel.antenna_names is not None and a1 is not None:
+        want = list(sel.antenna_names)
+        keep &= (a1.isin(want) | a2.isin(want)).to_numpy()
+    if sel.field_names is not None and "field_name" in df.columns:
+        keep &= df["field_name"].isin(list(sel.field_names)).to_numpy()
+    if sel.scan is not None and "scan_name" in df.columns:
+        keep &= df["scan_name"].isin([str(x) for x in sel.scan]).to_numpy()
+    out = df.loc[keep].reset_index(drop=True)
+    out.attrs = dict(df.attrs)
+    return out
+
+
 def _frame_nbytes(df: pd.DataFrame) -> int:
     """Approximate in-memory size of *df*.  Shallow on purpose: ``deep=True``
     walks every element of an ``object`` column (seconds at 4M rows), and
@@ -2902,6 +2928,158 @@ class XArrayReader(abc.ABC):
 
     _frame_extent = staticmethod(_frame_extent)
 
+    # ------------------------------------------------------------------ #
+    # Read once, split (gridplot G3, 2026-11-13)                           #
+    # ------------------------------------------------------------------ #
+    #
+    # A grid draws one small plot per baseline, antenna, SPW, ... of a
+    # selection.  Each cell's query on its own costs a lazy read and a dask
+    # graph of its own (G0: 0.37 s a raster cell, 0.58 s of a scatter
+    # cell's 0.79 s on the VLBA-sized test MS) although every cell reads a
+    # slice of the same rows.  ``preload`` reads the cells' union ONCE into
+    # memory -- the union's time rows and baselines of each partition, every
+    # channel and correlation, the data column, FLAG, WEIGHT and UVW -- and
+    # a query whose selection carries the returned key (``SelectionSpec.
+    # preload``) and asks for rows within that union is served from it:
+    # ``_iter_visibility_partitions`` yields the in-memory partitions, and
+    # the query applies its own selection to them exactly as it would to
+    # the lazy ones.  Channels, correlations, UV range and autocorrelations
+    # are not narrowed in the copy, so any choice of those is served too;
+    # what decides "within" is the rows: partitions (SPW), time (field,
+    # scan, time range) and baselines.
+    #
+    # Opt-in by key, never automatic: flagging, commits and the panels
+    # read the data as before, and the frames read from the copy are kept
+    # apart by the key in their cache fingerprint.  One copy per reader;
+    # a commit, a Reload (cache generation) or close drops it.
+
+    #: the fields that narrow rows within the copy's partitions
+    _PRELOAD_ROW_FIELDS = ("spw", "field_names", "scan", "time_range",
+                           "baselines", "antenna_names")
+
+    def preload(self, selection, budget_mb: Optional[float] = None) -> dict:
+        """Hold *selection*'s rows in memory for the grid's cells; returns
+        ``{"key": str | None, "mb": float, "reason": str}`` (``key`` None:
+        nothing held -- too big, or nothing to hold; the cells then read as
+        before).  Replaces any copy held before."""
+        import uuid
+        from ..selection import SelectionSpec
+        self.drop_preload()
+        base = SelectionSpec(
+            spw=selection.spw, field_names=selection.field_names, scan=selection.scan,
+            time_range=selection.time_range, baselines=selection.baselines,
+            antenna_names=selection.antenna_names, autocorr="include",
+            data_column=selection.data_column,
+            cache_generation=int(getattr(selection, "cache_generation", 0) or 0))
+        budget = (float(budget_mb) * 2**20 if budget_mb is not None
+                  else float(self._frame_cache_obj().max_bytes))
+        parts, all_pairs, nbytes = [], set(), 0
+        for raw in self._iter_visibility_partitions(base):
+            if ("baseline_antenna1_name" in raw.coords
+                    and "baseline_antenna2_name" in raw.coords):
+                all_pairs.update(zip(raw.coords["baseline_antenna1_name"].values.tolist(),
+                                     raw.coords["baseline_antenna2_name"].values.tolist()))
+            ds = self._apply_selection(raw, base)
+            if ds.sizes.get("time", 0) == 0 or ds.sizes.get("baseline_id", 1) == 0:
+                continue
+            try:
+                vis = _resolve_vis_variable(ds, base.data_column or "DATA")
+            except KeyError:
+                vis = None
+            heavy = [v for v in (vis, "FLAG", "WEIGHT", "UVW") if v and v in ds.data_vars]
+            nbytes += sum(int(ds[v].nbytes) for v in heavy)
+            if nbytes > budget:
+                why = (f"the selection is {nbytes / 2**20:.0f} MiB or more, over "
+                       f"{budget / 2**20:.0f} MiB: the cells read one by one")
+                log.info("visplot grid: not held in memory (%s)", why)
+                return {"key": None, "mb": round(nbytes / 2**20, 1), "reason": why}
+            parts.append((ds, heavy))
+        if not parts:
+            return {"key": None, "mb": 0.0, "reason": "no rows"}
+        t0 = __import__("time").perf_counter()
+        held = []
+        for ds, heavy in parts:
+            ds = ds.copy()
+            for v in heavy:
+                ds[v] = ds[v].load()
+            held.append(ds)
+        key = uuid.uuid4().hex[:12]
+        self._cv_preload = {"key": key, "base": base, "parts": held,
+                            "all_pairs": all_pairs, "nbytes": nbytes}
+        log.info("visplot grid: %.0f MiB held in memory for the cells (%.2f s)",
+                 nbytes / 2**20, __import__("time").perf_counter() - t0)
+        return {"key": key, "mb": round(nbytes / 2**20, 1), "reason": ""}
+
+    def drop_preload(self, key: Optional[str] = None) -> None:
+        """Release the in-memory copy (*key*: only if it is that one)."""
+        pre = getattr(self, "_cv_preload", None)
+        if pre is not None and (key is None or pre["key"] == key):
+            self._cv_preload = None
+
+    def _preloaded_partitions(self, selection) -> Optional[list]:
+        """The in-memory partitions for *selection*, if it carries the
+        copy's key and its rows are within the copy's; else ``None``."""
+        pre = getattr(self, "_cv_preload", None)
+        key = getattr(selection, "preload", None) if selection is not None else None
+        if pre is None or key is None or key != pre["key"]:
+            return None
+        base = pre["base"]
+        if int(getattr(selection, "cache_generation", 0) or 0) != base.cache_generation:
+            return None
+        if not self._preload_covers(selection, base, pre["all_pairs"]):
+            log.debug("visplot grid: a query outside the held rows reads as usual")
+            return None
+        return pre["parts"]
+
+    #: what a cell's raw frame is cut from the union's by (the frame's own
+    #: identity columns); SPW cells already skip whole partitions
+    _SPLIT_FIELDS = ("baselines", "antenna_names", "field_names", "scan")
+
+    def _split_from_union(self, xaxis, keys, selection, cache) -> Optional[dict]:
+        """Raw frames for a grid cell's *selection*, cut from the frames of
+        the grid's union (``preload``'s rows with the cell's other
+        settings), which are read once and cached; ``None`` when this is
+        not a cell within the held union, or is the union itself."""
+        pre = getattr(self, "_cv_preload", None)
+        if pre is None or getattr(selection, "preload", None) != pre["key"]:
+            return None
+        base = pre["base"]
+        if not self._preload_covers(selection, base, pre["all_pairs"]):
+            return None
+        parent = dataclasses.replace(selection, **{f: getattr(base, f)
+                                                   for f in self._SPLIT_FIELDS})
+        if _selection_fingerprint(parent) == _selection_fingerprint(selection):
+            return None
+        frames = self._raw_frames(xaxis, keys, parent, cache=cache)
+        if not frames:
+            return None
+        return {k: _rows_of(df, selection) for k, df in frames.items()}
+
+    @staticmethod
+    def _preload_covers(sel, base, all_pairs) -> bool:
+        """Whether *sel*'s rows are within *base*'s (see ``preload``)."""
+        def within(a, b):
+            return b is None or (a is not None and set(a) <= set(b))
+        if not (within(sel.spw, base.spw) and within(sel.field_names, base.field_names)
+                and within(sel.scan, base.scan)):
+            return False
+        if base.time_range is not None:
+            if sel.time_range is None:
+                return False
+            if sel.time_range[0] < base.time_range[0] or sel.time_range[1] > base.time_range[1]:
+                return False
+        if base.baselines is None and base.antenna_names is None:
+            return True
+
+        def pairs(s):
+            if s.baselines is not None:
+                return {tuple(p) for p in s.baselines}
+            if s.antenna_names is not None:
+                want = set(s.antenna_names)
+                return {p for p in all_pairs if p[0] in want or p[1] in want}
+            return set(all_pairs)
+        return (pairs(sel) & all_pairs) <= pairs(base)
+
     def _frame_cache_obj(self) -> "_FrameCache":
         """The process-wide cache (see ``_global_frame_cache``)."""
         return _global_frame_cache()
@@ -2949,6 +3127,7 @@ class XArrayReader(abc.ABC):
         another thread holds the cache lock and waits for that worker
         (seen 2026-10-11 as a hang of two plotters built in one process).
         """
+        self._cv_preload = None        # the grid's in-memory copy goes with them
         cache = _GLOBAL_FRAME_CACHE
         token = getattr(self, "_frame_cache_token", None)
         if cache is not None and token is not None:
@@ -3071,6 +3250,14 @@ class XArrayReader(abc.ABC):
                     missing.append(k)
                 else:
                     raw[k] = frame
+            if missing:
+                # A grid cell (read once, split): its rows cut from the
+                # grid's union frames, read once (G3, 2026-11-13).
+                split = self._split_from_union(xaxis, missing, selection, cache)
+                for k, df in (split or {}).items():
+                    cache.put(key_of(k), gen, df)
+                    raw[k] = df
+                missing = [k for k in missing if k not in raw]
             if missing:
                 with _FlagViewContext("none"):
                     built = self._query_columns_raw(xaxis, missing, selection)

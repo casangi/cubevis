@@ -693,3 +693,106 @@ Grid and through a remote kernel.  New:
 "grid edit"'s hover probe missed once in about ten runs; it now moves
 the mouse once more before failing.  `grid_browser_check.py` 13 of 13;
 `test_vis_grid.py` 34.
+
+## 10. G3 item 2: read once, split (base `732798c5`, 2026-11-13)
+
+The plan's 3.4 and 11 (finding 3).  G0 found that a cell's cost is per
+query, not per byte.  Profiled again before starting, on `g0.ms`:
+- *Raster cell*, ≈ 0.55 s: `query_raster` 0.37 s (each cell a fresh
+  lazy dask graph over the partitions, and the selection applied again),
+  identity tables 0.12 s, shading 0.03 s.
+- *Scatter cell*, ≈ 0.79 s: 0.58 s reading its raw frame, the rest
+  binning and shading.  Nine baselines in one query take 0.68 s in all.
+
+**Read once** (`XArrayReader.preload` / `drop_preload`, in `reader.py`, so
+both MSv2 and MSv4 have it):
+- What it holds: the grid's rows in memory, read once when the grid's
+  source is configured.  That is, the union's time rows and baselines of
+  each selected partition, with every channel and correlation, and the
+  data column, FLAG, WEIGHT and UVW loaded (other variables stay lazy).
+- How cells use it: a query whose `SelectionSpec.preload` carries the
+  returned key is served from it.  `_iter_visibility_partitions` yields
+  the in-memory partitions (`_preloaded_partitions`, a hook at the top of
+  each backend's).  The query applies its own selection to them exactly
+  as to the lazy ones, so channels, correlations, UV range,
+  autocorrelations, pending flags and every quantity work unchanged.
+- *Covers*: the query's rows must be within the copy's.  Partitions
+  (SPW), fields, scans and time range must be subsets, and its baselines
+  must be among the copy's, by the same orientation and either-end rules
+  as `_apply_selection` (`_preload_covers`).  Otherwise it reads as usual.
+- *Opt-in by key*: `SelectionSpec.preload` is a new field, `None` for
+  every other caller.  Panels, flagging and commits never read from the
+  copy.  The key is part of the frame-cache fingerprint, so frames built
+  from the copy are never handed to anyone else.
+- *Lifetime*: one copy per reader.  It is replaced at the next
+  `configure` and dropped by `close`, a commit or restore
+  (`_clear_frame_cache`), or a Reload (another `cache_generation` no
+  longer matches).
+- *Budget*: the frame cache's (the host rule of section 5).  Over it,
+  nothing is held and the cells read one by one, as before; the log says
+  so at INFO.  `CUBEVIS_VISPLOT_GRID_PRELOAD=0` turns it off.
+- *Remote*: the copy is in the worker, where the data are.  `preload` /
+  `drop_preload` go through `LocalVisibilityReader`,
+  `RemoteReductionContext` (a data call, repeatable) and
+  `remote_registrations`.
+
+**Split** (scatter, `_split_from_union`, `_rows_of`): a cell's raw frames
+are cut from the union's.  The union's frames are read once from the copy
+and cached, and each cell takes the rows of its baselines, antennas,
+fields or scans by the frame's own identity columns.  SPW cells already
+skip whole partitions.  Scatter grids are item 3; this is ready for them.
+
+**Colour samples**: a cell queried only for the whole-grid range
+(`_sample`) no longer builds hover-probe identity tables
+(`VisibilityRaster._values_only`); its values are pooled, never shown.
+
+**Numbers** (`g0.ms`: 10 antennas, 45 baselines, 64 channels, 600 times;
+the 2-core sandbox):
+
+| | before | after |
+|---|---|---|
+| holding the grid's rows (87 MiB) | — | 0.16 s |
+| 45 waterfall cells, each its own range | 12.7 s | 7.3 s |
+| page 1, 9 cells (configure + extent + page) | 3.5 s | 2.0 s |
+| whole-grid range after page 1 (45 cells) | 10.1 s | 4.3 s |
+| scatter cell (Amplitude v Time), after the union's frames | 0.79 s | 0.25 s (all rendering) |
+| scatter, the union's frames read once | — | ≈ 1.9 s for the whole MS |
+
+**Checks**:
+- `test_vis_grid.py` 47.  New:
+  - nine `test_rows_held_draw_the_same` cases: every cell pixel-identical
+    held and read one by one.  They cover waterfall, vplot, zscore and a
+    Phase grid panel with median baselines; iterating by baseline,
+    antenna, SPW, correlation and scan; pending flags, autocorrelations
+    included, and a UV range.
+  - `test_rows_held_only_when_asked`: no key, a wrong key, rows outside
+    the copy, a Reload, a commit, and over budget.
+  - three `test_scatter_cells_cut_from_the_union` cases: baselines,
+    antennas with pending flags, and scan averaging.
+- Remote (a `python3` kernel on this host): the worker holds the rows,
+  and the cells are pixel-identical to local.
+- `visplot_grid_check.py` 27 of 27: as before, starting in Grid, and
+  through a remote kernel.  `grid_browser_check.py` 13 of 13.
+- `ref_pngs.py`: the 40 hashes equal `732798c5`'s.  `test_frame_cache.py`
+  31, and the visplot files on selections, frames, flagging and the
+  backends pass, one process per file.  `tests/ci/run.py` 7 of 8: the
+  sandbox's `remote` failure of section 7, unchanged.
+
+**Kernel fingerprint**: `k2-65ddc9f0f49147ca0763` ->
+`k2-bece1842923091660ba0` (the reader, the selection and both backends
+are kernel-side); setup makes new environments.
+
+**Not done here**:
+- Rasters are not split: each raster cell still queries, now from
+  memory, at ≈ 0.15 s.  A raster split would mean redoing every raster
+  reduction (averaging, baselines combined, phase statistics, Z-Score)
+  per cell from one baseline-resolved query.  That is a larger change
+  for a smaller gain than scatter's.
+- Real-data timings (TW Hya, the VLBA subset) with `bench_g0.py --ms`
+  and the grid.
+
+**Open, for Darrell: the default colour scope.**  The plan makes "whole
+grid" the default once reading every cell is cheap.  It is now 4.3 s for
+45 cells after page 1 (from 10.1 s).  On TW Hya's 210 baselines that is
+likely 20-40 s, during which page 1 shows its own range and then
+recolours.

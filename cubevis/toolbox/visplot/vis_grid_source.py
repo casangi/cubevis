@@ -117,6 +117,8 @@ class VisGridSource:
         self._grid_ref: Optional[np.ndarray] = None
         self._gen = 0
         self._bg: Optional[threading.Thread] = None
+        #: what the reader holds in memory for the cells (``_preload``)
+        self.preload_info = {"key": None, "mb": 0.0, "reason": "", "s": 0.0}
 
     # ------------------------------------------------------------------
     # configuration
@@ -155,7 +157,34 @@ class VisGridSource:
             self._gen += 1
             self._names = (tmpl._panel_spec().axis_label("x"),
                            tmpl._panel_spec().axis_label("y"))
+            self._preload()
         return self
+
+    def _preload(self) -> None:
+        """Read once, split (gridplot G3, 2026-11-13): the reader holds the
+        grid's rows in memory, and every cell's selection (copied from
+        ``self._selection``) carries the key, so each cell is a selection
+        of rows already in memory instead of a read of its own.  Too big,
+        or a reader without it: the cells read one by one, as before.
+        ``CUBEVIS_VISPLOT_GRID_PRELOAD=0`` turns it off."""
+        import os
+        import time
+        self._selection.preload = None
+        self.preload_info = {"key": None, "mb": 0.0, "reason": "off", "s": 0.0}
+        if os.environ.get("CUBEVIS_VISPLOT_GRID_PRELOAD", "1").strip() in ("0", "off", "no"):
+            return
+        reader = self._p._reader
+        if not hasattr(reader, "preload") or not self._values:
+            return
+        t0 = time.perf_counter()
+        try:
+            info = dict(reader.preload(self._selection) or {})
+        except Exception as exc:                            # noqa: BLE001 -- read one by one
+            log.warning("grid: rows not held in memory (%s); the cells read one by one", exc)
+            return
+        info["s"] = round(time.perf_counter() - t0, 2)
+        self.preload_info = info
+        self._selection.preload = info.get("key")
 
     def _pairs_with_rows(self) -> list:
         """Baselines in the selection that have rows, in the metadata's
@@ -422,6 +451,7 @@ class VisGridSource:
                 else:
                     setattr(sel, k, list(v) if isinstance(v, list) else v)
             cell = self._clone(sel, pol)
+            cell._values_only = True          # only its values are pooled
             cell.apply_refresh(RefreshLevel.QUERY)
         smp = _agg_sample(cell, self._sample_size())
         self._samples[i] = smp
@@ -572,6 +602,12 @@ class VisGridSource:
 
     def close(self) -> None:
         with self._lock:
+            key = getattr(self._selection, "preload", None) if self._selection else None
+            if key and hasattr(self._p._reader, "drop_preload"):
+                try:
+                    self._p._reader.drop_preload(key)
+                except Exception:                           # noqa: BLE001
+                    log.debug("grid: drop_preload failed", exc_info=True)
             self._gen += 1
             self._samples.clear()
             self._grid_ref = None

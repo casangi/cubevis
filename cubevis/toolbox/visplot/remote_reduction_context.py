@@ -209,7 +209,7 @@ DATA_METHODS = frozenset({
     "query_raster", "query_columns", "probe_scatter_region",
     "identity_tables", "baselines_with_rows", "axis_info",
     "evaluate_flag_request", "probe_flag_region",
-    "set_pending_flags", "sync_pending_flags",
+    "set_pending_flags", "sync_pending_flags", "preload",
 })
 
 #: Calls safe to send twice: reads, and the pending-flag sets, which send
@@ -223,6 +223,7 @@ REPEATABLE_METHODS = frozenset({
     "evaluate_flag_request", "metadata", "backend_kind", "spw_casa_ids", "flag_spw_table",
     "flag_commit_capabilities", "list_flag_backups", "software_versions", "runtime_info",
     "set_pending_flags", "sync_pending_flags", "set_frame_cache_limit_mb",
+    "preload", "drop_preload",
 })
 
 
@@ -666,6 +667,15 @@ class RemoteReductionContext(ReductionContext):
     def set_frame_cache_limit_mb(self, mb: float, timeout: Optional[float] = None) -> None:
         """Frame cache budget of the WORKER (where the frames live)."""
         self._call("set_frame_cache_limit_mb", mb=float(mb), timeout=timeout)
+
+    def preload(self, selection, budget_mb=None, timeout: Optional[float] = None) -> dict:
+        """Hold the grid's cells' rows in the WORKER's memory (gridplot G3):
+        ``XArrayReader.preload``."""
+        return self._call("preload", selection=selection, budget_mb=budget_mb,
+                          timeout=timeout)
+
+    def drop_preload(self, key=None, timeout: Optional[float] = None) -> None:
+        self._call("drop_preload", key=key, timeout=timeout)
 
     def list_flag_backups(self, timeout: Optional[float] = None) -> list:
         try:

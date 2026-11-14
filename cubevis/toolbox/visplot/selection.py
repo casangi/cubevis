@@ -390,6 +390,20 @@ class SelectionSpec:
     Part of the frame-cache fingerprint (it decides which rows are drawn).
     """
 
+    preload: Optional[str] = None
+    """Which in-memory copy of the data this query may read from -- NOT a
+    row constraint (gridplot G3, "read once, split", 2026-11-13).
+
+    The grid's source asks the reader to hold its cells' union in memory
+    (``XArrayReader.preload``) and stamps each cell's selection with the
+    key it got back.  The reader serves a query from that copy only when
+    the key matches and the query's rows are within the copy's, and
+    otherwise reads as usual.  ``None`` (every other caller -- panels,
+    flagging, commits) never reads from it.  Part of the frame-cache
+    fingerprint, so frames read from the copy are never handed to anyone
+    else.
+    """
+
     # ------------------------------------------------------------------ #
 
     def is_empty(self) -> bool:
@@ -433,6 +447,7 @@ class SelectionSpec:
             cache_generation=self.cache_generation,
             pending_version=self.pending_version,
             flag_view=self.flag_view,
+            preload=self.preload,
         )
 
     # ------------------------------------------------------------------ #

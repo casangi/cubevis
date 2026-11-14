@@ -312,6 +312,15 @@ class VisplotRemoteBackend:
         self._reader.set_frame_cache_limit_mb(float(mb))
         return True
 
+    def preload(self, selection, budget_mb=None):
+        """The grid's cells' rows held in memory, in the worker (where the
+        data are): ``XArrayReader.preload``."""
+        return _wire_safe(self._reader.preload(selection, budget_mb))
+
+    def drop_preload(self, key=None):
+        self._reader.drop_preload(key)
+        return True
+
     def list_flag_backups(self):
         return _wire_safe(self._reader.list_flag_backups())
 

@@ -416,3 +416,108 @@ def test_plotfile_grid_panel(ms, tmp_path):
         # the panels are still there to export: brought up to date when shown
         one = p(layout="one", plotfile=str(tmp_path / "one.png"))
         assert os.path.getsize(one) > 5000 and a._agg is not None
+
+
+# --- read once, split (gridplot G3 item 2) ---------------------------------------
+
+def _grid_images(ms, monkeypatch, held, preset, by, flags=False, **kw):
+    """Every cell of a headless grid, drawn with the rows held in memory
+    (*held*) or read cell by cell; also what the source says it held."""
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    from cubevis.toolbox.visplot.flag_model import FlagDelta
+    monkeypatch.setenv("CUBEVIS_VISPLOT_GRID_PRELOAD", "1" if held else "0")
+    with VisibilityPlotter(ms=ms, headless=True, layout="grid", preset=preset,
+                           iterate_by=by, **kw) as p:
+        if flags:                          # a pending flag over part of the time
+            t0, t1 = p._meta.time_range
+            p._reader.set_pending_flags([FlagDelta(time_range=(t0, t0 + (t1 - t0) / 3))], 1)
+            p._selection.pending_version = 1
+        src = p._grid()
+        n = len(src.labels())
+        imgs = [r.image for r in src.render(list(range(n)), src.extent(), (160, 120),
+                                            colour="cell")]
+        return imgs, dict(src.preload_info)
+
+
+@pytest.mark.parametrize("preset, by, flags, kw", [
+    ("waterfall", "baseline", False, {}),
+    ("waterfall", "antenna", True, {}),
+    ("vplot", "antenna", False, {}),
+    ("vplot", "spw", True, {}),
+    ("zscore", "baseline", False, {}),
+    ("waterfall", "correlation", False, {}),
+    ("waterfall", "scan", False, {"autocorr": "include"}),
+    ("waterfall", "baseline", True, {"uvrange": "0~2000m"}),
+    ("vplot", "baseline", False, {"grid_panel": {"raster_qty": "PHASE",
+                                                  "baseline_combine": "median"}}),
+])
+def test_rows_held_draw_the_same(ms, monkeypatch, preset, by, flags, kw):
+    """The cells drawn from the rows held in memory are pixel for pixel the
+    cells read one by one -- whatever the quantity, iteration, pending flags
+    and selection."""
+    read, info0 = _grid_images(ms, monkeypatch, False, preset, by, flags, **kw)
+    held, info = _grid_images(ms, monkeypatch, True, preset, by, flags, **kw)
+    assert info0["key"] is None and info["key"], info
+    assert len(read) == len(held) > 1
+    for i, (a, b) in enumerate(zip(read, held)):
+        assert a is not None and np.array_equal(a, b), f"cell {i} differs"
+
+
+def test_rows_held_only_when_asked(ms):
+    """The reader serves the held rows only to a selection with the key,
+    within the held rows, at the same cache generation."""
+    from dataclasses import replace
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    with VisibilityPlotter(ms=ms, headless=True, preset="waterfall") as p:
+        be = p._reader._backend
+        base = replace(p._selection, antenna_names=[p._meta.antennas[0].name])
+        key = be.preload(base)["key"]
+        assert key and be._preloaded_partitions(replace(base, preload=key))
+        a0 = p._meta.antennas[0].name
+        mine = [b.pair for b in p._meta.baselines if a0 in b.pair][:1]
+        other = [b.pair for b in p._meta.baselines if a0 not in b.pair][:1]
+        assert be._preloaded_partitions(replace(base, preload=key, antenna_names=None,
+                                                baselines=[tuple(x) for x in mine]))
+        assert be._preloaded_partitions(replace(base, preload=key, antenna_names=None,
+                                                baselines=[tuple(x) for x in other])) is None
+        assert be._preloaded_partitions(base) is None                          # no key
+        assert be._preloaded_partitions(replace(base, preload="other")) is None
+        assert be._preloaded_partitions(replace(base, preload=key,
+                                                cache_generation=7)) is None  # Reload
+        be._clear_frame_cache()                                                # a commit
+        assert be._preloaded_partitions(replace(base, preload=key)) is None
+        tiny = be.preload(p._selection, budget_mb=0.001)                       # too big
+        assert tiny["key"] is None and "MiB" in tiny["reason"]
+
+
+@pytest.mark.parametrize("narrow, flags, kw", [
+    ("baselines", False, {}),
+    ("antenna_names", True, {}),
+    ("baselines", False, {"scatter_avg_time": "scan"}),
+])
+def test_scatter_cells_cut_from_the_union(ms, narrow, flags, kw):
+    """A scatter cell's samples cut from the union's frames (read once) draw
+    as the cell read by itself does -- scatter grids (item 3) will use it."""
+    from dataclasses import replace
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    from cubevis.toolbox.visplot.refresh import RefreshLevel
+    from cubevis.toolbox.visplot.flag_model import FlagDelta
+    with VisibilityPlotter(ms=ms, headless=True, layout="one", kind="scatter",
+                           scatter_x="TIME", scatter_y="AMPLITUDE", **kw) as p:
+        if flags:
+            t0, t1 = p._meta.time_range
+            p._reader.set_pending_flags([FlagDelta(time_range=(t0, t0 + (t1 - t0) / 3))], 1)
+            p._selection.pending_version = 1
+        sc = p._slots[0].scatter
+        cells = ([{"baselines": [tuple(b.pair)]} for b in p._meta.baselines[:4]]
+                 if narrow == "baselines" else
+                 [{"antenna_names": [a.name]} for a in p._meta.antennas[:3]])
+        key = p._reader.preload(p._selection)["key"]
+        assert key
+        for cell in cells:
+            imgs = []
+            for k in (None, key):
+                sc._selection = replace(p._selection, preload=k, **cell)
+                sc.apply_refresh(RefreshLevel.QUERY)
+                imgs.append(sc.render_result(None).image.copy())
+            assert np.array_equal(*imgs), cell

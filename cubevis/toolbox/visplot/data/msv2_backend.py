@@ -612,6 +612,10 @@ class MSv2Backend(XArrayReader):
         *selection* and are unaffected.
         """
         dt = self._require_open()
+        held = self._preloaded_partitions(selection)       # read once, split (G3)
+        if held is not None:
+            yield from (ds for ds in held if self._spw_selected(ds, selection))
+            return
         n_total = n_kept = 0
         for node in dt.subtree:
             if not node.has_data:

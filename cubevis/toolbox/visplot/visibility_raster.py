@@ -1697,7 +1697,10 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             # change (neither touches either). Skipped under `defer`
             # since there's nothing to warm for a panel that isn't
             # even shown yet.
-            self._ensure_identity_tables(polarization=self._polarization)
+            # (Not for a grid's colour sample, gridplot G3: it is never
+            # shown or probed, only its values are pooled.)
+            if not getattr(self, "_values_only", False):
+                self._ensure_identity_tables(polarization=self._polarization)
             # Elapsed-time labels count from the first cell's centre.
             self._x_origin, self._y_origin = float(x_range[0]), float(y_range[0])
             # Baselines side by side in this panel's order, then ranges

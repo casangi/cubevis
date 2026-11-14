@@ -1352,7 +1352,7 @@ def _resample_interpolate(
     ``VisibilityRaster._resample_method`` exactly (see that method's
     docstring for the "why nearest" rationale: an interpolated image
     shows fabricated intermediate values a probe cannot back up, while a
-    smoothed gradient's displayed colour varies even though every probe
+    smoothed gradient's displayed color varies even though every probe
     returns the same underlying number).
     """
     x0, x1 = x_range

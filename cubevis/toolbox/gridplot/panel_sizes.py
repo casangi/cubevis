@@ -3,7 +3,7 @@
 Every layout is a grid -- One is 1 x 1, Side by Side 1 x 2, Over / Under
 2 x 1 -- and a panel's plot is its row's height by its column's width.
 The size is the plot's figure (the plot with its axes, title and
-toolbar), not the cursor readout and colour bars underneath it, so a
+toolbar), not the cursor readout and color bars underneath it, so a
 given ``row_height`` gives the same plot whatever is shown below.
 
 Each argument is one of:
@@ -13,7 +13,7 @@ Each argument is one of:
     (Over / Under); widths follow the window.
 ``"fit"``
     Share the window: rows divide the plot area's height (after the
-    readouts and colour bars, never below ``FIT_MIN_HEIGHT``), columns
+    readouts and color bars, never below ``FIT_MIN_HEIGHT``), columns
     its width.
 a number of pixels
     Every row (column) that size.
@@ -41,7 +41,7 @@ FILE_WIDTH = {"one": 1020, "side": 500, "over": 1020}
 
 FIT_MIN_HEIGHT = 250
 """``"fit"`` never makes a row shorter than this: the plot area scrolls
-instead (Darrell, 2026-10-13: a fitted Over / Under with colour bars
+instead (Darrell, 2026-10-13: a fitted Over / Under with color bars
 would otherwise be too short to read on a laptop)."""
 
 MIN_SIZE, MAX_SIZE = 100, 4000

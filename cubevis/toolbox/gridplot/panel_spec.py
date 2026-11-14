@@ -110,7 +110,7 @@ class ColorBand:
         compositor to draw a category legend instead of a colorbar for
         this band (``png_export.py``).
     mapping : ScalarMapping | None
-        The value-to-colour-position curve, from
+        The value-to-color-position curve, from
         ``colormap_scaling.ScalarMapping``.  ``None`` on a spec built for
         ``_state_data()``, which never needs it; populated by
         ``render_result()``, where a colorbar might.  Building it costs a

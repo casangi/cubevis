@@ -259,7 +259,7 @@ query.  A note beneath each reads *"Full selection — full release"*.
 - X axis: UVDIST, TIME, FREQUENCY (working)
 - Y axis: AMPLITUDE, PHASE, REAL, IMAGINARY, U, V (working — one ScatterLayer per selected polarisation, XX and YY by default, composited by Datashader; U/V added this session, deliberately unmasked by flags)
 - Multi-layer *controls* (user-facing add/remove layer UI): absent
-- Colour-by-metadata axis: absent
+- Color-by-metadata axis: absent
 
 Axis labels use SI-prefix formatting (e.g. "GHz" rather than raw Hz) derived from `AxisInfo`, which records what was actually plotted rather than relying on `Axis.label` (the enum display name, which does not know about data ranges or units chosen at query time). This parity is enforced by a JS/Python harness.
 
@@ -339,7 +339,7 @@ Absent with no stubs:
 - Iteration (Prev/Next antenna/baseline) — absent from this (pre-preview) release, but now required for the general-user `preview` release; a scoped Field/SPW MVP is planned as Phase 2.5 (`I-series`) in the implementation plan, ahead of the full antenna/baseline/scan/time iteration engine in Phase 3
 - Save/load layout configuration (`config=` constructor parameter, Save Layout toolbar action) — absent from this (pre-preview) release, but now required for the general-user `preview` release. Schema and round-trip design settled 2026-08-31 (see "Saving and loading layout" below and §3.1e of the implementation plan); not yet implemented — tracked as P-12
 - Calibration sidebar section
-- Colour-by-metadata axis in scatter
+- Color-by-metadata axis in scatter
 - Colorbar (partial — `plot_left`/`plot_right` placement works; display-scope GUI colorbar deferred)
 - Multi-layer scatter *controls* (the rendering machinery and probe both handle multiple layers; the absent piece is user-facing UI to add/remove layers)
 - Draggable panel divider

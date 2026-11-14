@@ -235,7 +235,7 @@ Task arguments (preview)
    * - ``row_height``
      - int, str or list, optional
      - Height of each row of plots in pixels (the plot with its axes,
-       not the readout and colour bars under it). Default: 550 for One
+       not the readout and color bars under it). Default: 550 for One
        and Side by Side, 280 for Over / Under. ``"fit"``: the rows share
        the window's height (never below 250 px; the plot area scrolls
        instead). A list gives one height per row, e.g. ``[250, 400]``
@@ -342,7 +342,7 @@ Toolbar
     and each cell showing the largest amplitude among them (the AIPS
     FTFLG view), with Amplitude vs Channel below: a quick survey for
     interference
-  * *Z-Score* — Baseline vs Time coloured by Z-Score, to spot outliers
+  * *Z-Score* — Baseline vs Time colored by Z-Score, to spot outliers
   * *φrms·t*, *φrms·ν*, *φrms·uv* — Phase RMS against time, against
     frequency (channel) and against UV distance. The raster shows which
     baseline and when (or at which channel); the scatter shows the same
@@ -493,7 +493,7 @@ panels at once.
 
    * *Ant×Ant* -- one cell per baseline, averaged over the selection. An
      antenna that is bad on every baseline is a whole row and column.
-   * *Z-Score* -- Baseline × Time coloured by how unusual each sample is
+   * *Z-Score* -- Baseline × Time colored by how unusual each sample is
      for its own baseline; isolated bright cells are outliers in time.
    * *φrms·t* / *φrms·uv* -- phase stability per baseline over time, and
      against baseline length: a rise with length is the atmosphere, one
@@ -549,7 +549,7 @@ Each plot's toolbar has a **Describe this plot** button (a page icon,
 beside the gear). It opens a page with everything that went into that
 plot: the data set and how it was opened (local or remote kernel), the
 selection in full, the axes and every setting that shaped the image, the
-colour scaling, the displayed range and zoom, the number of pending
+color scaling, the displayed range and zoom, the number of pending
 flags, the versions of cubevis (with its git commit when run from a
 checkout) and the main libraries, and the ``visplot(...)`` call that
 reproduces the view, with a *Copy* button. The same page is available
@@ -563,7 +563,7 @@ When reporting a problem, please include:
   AIPS plot of the same data that shows it.
 
 The summary lists what the call does not reproduce (zoom, pending flags,
-scatter colour settings, theme), so say if any of those matter.
+scatter color settings, theme), so say if any of those matter.
 
 Checking against plotms
 ------------------------
@@ -670,7 +670,7 @@ concepts line up as follows:
      - Flag (raster quantity: the flagged fraction of each cell)
      - flagged data can also be shown (Flagging, *Show flagged data*)
    * - ``coloraxis``
-     - Colourize (scatter, per layer)
+     - Colorize (scatter, per layer)
      - continuous, categorical (e.g. by antenna, baseline, scan, field)
        or statistical (Z-Score)
    * - ``elevation``, ``hourangle``, ``azimuth``, ``parang``

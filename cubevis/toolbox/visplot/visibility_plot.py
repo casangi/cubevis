@@ -402,7 +402,7 @@ def _img_to_uint32(img) -> np.ndarray:
     HISTORY: the PIL branch used to write B, G, R, A, producing
     BGRA-in-memory — R and B transposed relative to what ``image_rgba``
     consumes.  Test-only, so nothing user-visible was wrong, but any test
-    asserting colour through this path was asserting a mirrored answer,
+    asserting color through this path was asserting a mirrored answer,
     and the old docstring's "0xAARRGGBB" described that same wrong
     layout.  Datashader's actual output was verified empirically
     (2026-08): shading ``cmap=["#FF0000", "#0000FF"]`` yields bytes
@@ -835,7 +835,7 @@ class VisibilityPlot(Model):
 
     @abc.abstractmethod
     def _panel_spec(self) -> "PanelSpec":
-        """Describe this panel: geometry, labels, and colour bands.
+        """Describe this panel: geometry, labels, and color bands.
 
         Must be cheap — plain attribute reads and values already computed
         during ``_render()``.  It is called on every ``_state_source``
@@ -1469,13 +1469,13 @@ class VisibilityPlot(Model):
                 # Theme via CSS custom properties (set on the page root by
                 # the Light/Dark toggle, inherited into shadow DOM): any
                 # later re-send of these styles carries the variable, not a
-                # baked-in dark colour, so the strip can never revert to
+                # baked-in dark color, so the strip can never revert to
                 # dark in light mode.
                 "background":  "var(--cv-info-bg, #1e1e2e)",
                 "overflow-y":  "auto",
                 # The full width less Bokeh's default 5 px margin on each
                 # side (2026-10-14).  A plain 100% (the 2026-09 guard
-                # against a colour bar narrower than its plot) made each
+                # against a color bar narrower than its plot) made each
                 # strip 5 px wider than its panel, so the plot area always
                 # had a few pixels to scroll sideways.
                 "width":       f"calc(100% - {2 * _STRIP_MARGIN}px)",

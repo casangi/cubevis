@@ -403,7 +403,7 @@ class TestDisplay:
         assert spread_sparse(b, 1.0)
         drawn = (b >> 24) > 0
         assert drawn[4:7, 4:9].all() and drawn[0:2, 0:2].all() and drawn.sum() == 15 + 4
-        assert b[5, 5] == a[5, 5] and b[5, 7] == a[5, 7]       # points keep their colour
+        assert b[5, 5] == a[5, 5] and b[5, 7] == a[5, 7]       # points keep their color
         assert b[4, 4] == a[5, 5] and b[4, 8] == a[5, 7]
         c = a.copy()
         assert not spread_sparse(c, 3.0) and (c == a).all()    # bins already big enough

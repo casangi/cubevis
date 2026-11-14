@@ -124,7 +124,7 @@ Final image analysis
 |---|---|---|
 | RFI (narrowband) | Amplitude spike at specific channel(s) | Raster: time × channel |
 | RFI (broadband/transient) | Spike at specific time, all channels | Scatter: amp vs time |
-| Bad antenna | All baselines to one antenna deviant | Scatter: amp vs time, colour-by-baseline, iterate by antenna |
+| Bad antenna | All baselines to one antenna deviant | Scatter: amp vs time, color-by-baseline, iterate by antenna |
 | Bad baseline | One pair consistently deviant | Scatter: amp vs UVdist |
 | Failed scans | Scan missing | Scatter: time vs amp, color by field, iterate by antenna |
 | Phase decorrelation | Rapidly varying phase for a scan | Scatter: phase vs time |
@@ -142,7 +142,7 @@ Final image analysis
 Difmap remains popular outside NRAO specifically because of features absent from
 CASA tools. The following difmap capabilities inform this design:
 
-- **`vplot` mode** — amplitude/phase vs time per baseline and IF, colour-coded by flag
+- **`vplot` mode** — amplitude/phase vs time per baseline and IF, color-coded by flag
   state (green = unflagged, yellow = flagged, blue = selfcal-flagged, red = antenna flagged).
   Planned as a named view preset in `visplot`.
 - **`radplot` mode** — amplitude/phase vs UV-radius; single-click nearest-point flagging
@@ -697,7 +697,7 @@ the same rows in `FlagDB`.
 **Raster:**
 - Y: TIME, BASELINE (working in UI); FREQUENCY, CHANNEL, CORRELATION (backend-implemented, not yet in GUI dropdown); ANTENNA1, UVDIST_LAMBDA (planned)
 - X: CHANNEL, TIME, FREQUENCY (working in UI); CORRELATION (same backend status); UVDIST_LAMBDA (planned)
-- Quantity (colour): AMPLITUDE, PHASE, REAL, IMAGINARY (working); FLAG_FRACTION (planned); WEIGHT (planned)
+- Quantity (color): AMPLITUDE, PHASE, REAL, IMAGINARY (working); FLAG_FRACTION (planned); WEIGHT (planned)
 
 **Scatter:**
 - X: TIME, UVDIST, UVDIST_LAMBDA, FREQUENCY, CHANNEL, U, V (working — CHANNEL and UVDIST_LAMBDA added to GUI this session); W, BASELINE, ANTENNA1 (planned)
@@ -820,7 +820,7 @@ panels happen to share an axis.
 
 ### 4.9 Named view presets (difmap-inspired)
 
-- **vplot mode** — amplitude vs time, colour-by-baseline, flag-state overlay,
+- **vplot mode** — amplitude vs time, color-by-baseline, flag-state overlay,
   one-per-antenna iteration
 - **radplot mode** — amplitude vs UVdist, nearest-point flag tool active
 > [!NOTE]
@@ -1133,7 +1133,7 @@ from the `span` parameter — which is the **y-axis coordinate range**
 (e.g. TIME in MJD seconds, ~5×10⁹) in this raster's `"global"`
 color-mode convention, not the **value range** of the rendered quantity
 (e.g. AMPLITUDE, ~0–100). Whenever the y-axis differs from the rendered
-quantity — the common case (TIME or BASELINE on y, AMPLITUDE as colour)
+quantity — the common case (TIME or BASELINE on y, AMPLITUDE as color)
 — every agg value silently clipped to a single bin, collapsing the image
 to one flat color regardless of which explicit scaling was selected.
 Fixed by deriving `vmin`/`vmax` from the agg's own finite value range
@@ -1173,7 +1173,7 @@ across the full scaling matrix.
 
 Root cause: `_shade_agg()`'s `span` parameter is only honoured by the
 Datashader-native `how="linear"` path; `"log"` and `"eq_hist"` compute
-their colour mapping purely from the values present in the supplied agg,
+their color mapping purely from the values present in the supplied agg,
 with no span-like external anchor — so `color_mode` has **no effect at
 all** for those two scalings, by construction of how Datashader
 implements them. Since `eq_hist` is now the CM-1 default, the
@@ -1203,7 +1203,7 @@ Resolution:
 * `test_explicit_scaling_color_mode_changes_value_domain` added,
   verifying the global/local distinction at the **transformed-array**
   level rather than the rendered pixel level. This was necessary because
-  whether a given `vmin`/`vmax` difference survives 8-bit colour
+  whether a given `vmin`/`vmax` difference survives 8-bit color
   quantization into a *visibly* different image turned out to be
   data- and viewport-dependent — a sweep across 30 random seeds found
   cases (e.g. `sqrt` when the crop's max happened to land within ~0.4%
@@ -1216,7 +1216,7 @@ Resolution:
 **Follow-up: `eq_hist` global/local restored, not just documented as
 absent.** After the fix above shipped, the maintainer raised a fair
 question: `color_mode` (global/local) is a useful feature when zoomed
-in — locking colours to the full data range avoids them shifting under
+in — locking colors to the full data range avoids them shifting under
 the user as they pan, while local mode reveals fine structure in
 whatever's currently visible. Since `eq_hist` is the new CM-1 default,
 having global/local silently do nothing for it was a real feature loss,
@@ -1254,7 +1254,7 @@ the raster where `self._agg` already serves that role.
 
 Verified across 15 random seeds for both classes: `eq_hist` global and
 local now produce genuinely different output in every case, restoring
-the zoomed-in colour-stability/detail-reveal choice for the default
+the zoomed-in color-stability/detail-reveal choice for the default
 scaling. `test_color_mode_has_no_effect_for_eq_hist_and_log` (the test
 added in the prior fix, asserting `eq_hist` and `log` are *identical*
 across modes) was replaced with two separate tests:
@@ -1361,8 +1361,8 @@ https://github.com/casangi/cubevis/tree/main/tests/reference/visplot.
 | F-5 | `Casa6ReductionContext` — flag operations only: `commit_flags()` calling `flagdata()`, `save_flag_version()`, `restore_flag_version()`, `list_flag_versions()` | `casa6_reduction_context.py` *(new)* |
 | F-6 | Wire `FlagDB.commit()` to call `ReductionContext.commit_flags()` | `flag_db.py` |
 | F-7/F-8 | Flag/unflag j2p handler — shared implementation in `VisibilityPlot` base class (`_add_flag_tools()`), used identically by both `VisibilityRaster` and `VisibilityScatter`. Custom `FlagTool` sends data-space `(x0,x1,y0,y1)` to Python via a dedicated `Comm` channel (`squash_queue=False`); `UnflagTool` (`flag=False`) is the spatial unflag. Flagging gated on 1:1 pixel resolution. *(Preview sketched the gesture UI; this item delivers the `FlagDB` accumulation and overlay wiring.)* | `visibility_plot.py`, `cubevis/bokeh/tools/_flag_tool.py` |
-| F-9 | **OPEN DESIGN QUESTION — resolve before scheduling.** "Show flagged" overlay in `VisibilityRaster`. Two candidate mechanisms: (A) re-query the backend with `FlagDB` state applied, shade flagged cells a distinct colour, and composite as a second `image_rgba` layer toggled by `figure.visible` — clean separation, independent show/hide, user-selectable colour, but requires a backend round-trip on every flag/unflag; (B) post-process the existing rendered `uint32` image in Python/NumPy, recolouring pixels that correspond to flagged data-space cells — cheaper but tightly couples flagging display to the rendering pipeline and loses independent show/hide. Complication: raster pixels are Datashader-aggregated bins, not 1:1 with MS rows, so identifying which pixels to recolour from a `FlagDelta` coordinate range is non-trivial. A second overlay image (option A) is architecturally cleaner and maps better to the "show/hide flagged data" UX goal. | `visibility_raster.py` |
-| F-10 | **OPEN DESIGN QUESTION — resolve before scheduling.** "Show flagged" overlay in `VisibilityScatter`. Same two-option framing as F-9. Scatter's existing Porter-Duff compositing pipeline already layers multiple `ScatterLayer` images; a third "flagged data" layer using a distinct colour and rendered from `FlagDB` coordinate ranges is a natural fit (option A equivalent). Complication: scatter's `FlagTool` 1:1 resolution criterion is an acknowledged approximation — the overlay must be visually consistent with what was actually flagged. | `visibility_scatter.py` |
+| F-9 | **OPEN DESIGN QUESTION — resolve before scheduling.** "Show flagged" overlay in `VisibilityRaster`. Two candidate mechanisms: (A) re-query the backend with `FlagDB` state applied, shade flagged cells a distinct color, and composite as a second `image_rgba` layer toggled by `figure.visible` — clean separation, independent show/hide, user-selectable color, but requires a backend round-trip on every flag/unflag; (B) post-process the existing rendered `uint32` image in Python/NumPy, recoloring pixels that correspond to flagged data-space cells — cheaper but tightly couples flagging display to the rendering pipeline and loses independent show/hide. Complication: raster pixels are Datashader-aggregated bins, not 1:1 with MS rows, so identifying which pixels to recolor from a `FlagDelta` coordinate range is non-trivial. A second overlay image (option A) is architecturally cleaner and maps better to the "show/hide flagged data" UX goal. | `visibility_raster.py` |
+| F-10 | **OPEN DESIGN QUESTION — resolve before scheduling.** "Show flagged" overlay in `VisibilityScatter`. Same two-option framing as F-9. Scatter's existing Porter-Duff compositing pipeline already layers multiple `ScatterLayer` images; a third "flagged data" layer using a distinct color and rendered from `FlagDB` coordinate ranges is a natural fit (option A equivalent). Complication: scatter's `FlagTool` 1:1 resolution criterion is an acknowledged approximation — the overlay must be visually consistent with what was actually flagged. | `visibility_scatter.py` |
 | F-11 | Nearest-point flag tool in `VisibilityScatter` (difmap-style): given screen coordinate, find closest data point, add `FlagDelta` | `visibility_scatter.py` |
 
 ---
@@ -1504,7 +1504,7 @@ has already been pulled forward — see Phase 2.5.*
 | R-2 | 1:1 zoom button in `VisibilityRaster`: JS button fires viewport reset using `agg_n_x`/`agg_n_y` from `_state_source` | `visibility_raster.py` |
 | R-3 | Colorbar in `VisibilityRaster`: Bokeh `ColorBar` linked to shade span | `visibility_raster.py` |
 | R-4 | Axis label units: CHANNEL shows frequency (GHz) secondary label; TIME shows ISO or elapsed | `visibility_raster.py`, `visibility_scatter.py` |
-| S-1 | Colour-by-metadata axis in `VisibilityScatter`: categorical palette per SPW / antenna / scan / baseline | `visibility_scatter.py`, `msv2_backend.py`, `msv4_backend.py` |
+| S-1 | Color-by-metadata axis in `VisibilityScatter`: categorical palette per SPW / antenna / scan / baseline | `visibility_scatter.py`, `msv2_backend.py`, `msv4_backend.py` |
 | S-2 | Per-layer legend widget in `VisibilityScatter`: toggle (alpha=0) per layer from legend | `visibility_scatter.py` |
 | S-3 | Auto-alpha review: expose sensitivity slider or improve perceptual model | `visibility_scatter.py` |
 | S-4 | Multi-layer probe: `_handle_probe` returns a row per layer for hovered pixel | `visibility_scatter.py` |
@@ -1530,12 +1530,12 @@ has already been pulled forward — see Phase 2.5.*
 | T-4 | `RemoteReductionContext` skeleton and transport protocol | `remote_reduction_context.py` *(new)* |
 | X-1 | **CASR-385** SPFLG-style **grid mode**: paginated N×M grid of panels sharing the same axes, iterating through a selection value (antenna, SPW, field, scan) per cell. Each cell is a real interactive `VisibilityRaster`/`VisibilityScatter` instance (own `ColumnDataSource`s, comm registrations, flag tools) — not a static image. Object pool sized to the page, not the full iteration count; page turns re-select via existing `update_axes()` path, never rebuild. Depends on A-10 (`_PanelSlot` list, ✅ done) and P-4a (autohide, ✅ done). Grid/iteration layout is a sibling value on the same `layout_rbg` control as duo mode — switching between duo and iteration mid-session is supported by construction. Default/cap grid dimensions (proposed 3×3/6×6) should be set from E-4 benchmark numbers, not guessed. Key design decisions already settled: real interactive panels per cell; bounded grid size; paginate not scroll; uniform axes/mode per grid by default (data model supports heterogeneous, UI does not expose it in phase 1); object count sized to page; cross-cell pan/zoom sync gated by toggle; cross-cell crosshair position sync (reuses Bokeh native linked-crosshair, cheaper than the raster↔scatter crosshair link in duo mode). **Open questions:** exact default/max dimensions; compound "Iterate by" (single axis vs. antenna+SPW simultaneously); cross-cell flagging propagation; pan/zoom per-axis granularity; concurrent-backend-query burst mitigation; N-panel swap-trigger UI (coordinate dropdown vs. spatial button grid). Full detail in `visplot-development-handoff.md`. See X-6 for why GUI heterogeneous/independent configuration does **not** extend into this mode's larger N (different cursor-sync mechanism, uniform-kind-only), and X-7 for the headless/PNG counterpart, which is not subject to grid's paginated/bounded constraints. | `visibility_plotter.py`, `visibility_raster.py`, `visibility_scatter.py` |
 | X-2 | **CASR-385** `Axis.PHASE_RMS`: phase RMS vs time or frequency as a scatter y-axis quantity; backend computes `std(angle(visibility))` across the baseline axis per time/channel cell; same Phase 4 bucket as `CLOSURE_PHASE` | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
-| X-3 | **CASR-385** User-specified colours in colour-by-metadata mode: colour picker widget per category value (SPW, antenna, baseline); supplements the automatic categorical palette in S-1 | `visibility_plotter.py`, `visibility_scatter.py` |
+| X-3 | **CASR-385** User-specified colors in color-by-metadata mode: color picker widget per category value (SPW, antenna, baseline); supplements the automatic categorical palette in S-1 | `visibility_plotter.py`, `visibility_scatter.py` |
 | X-4 | **CASR-385** Performance benchmarks: explicit test cases at ngVLA scale (200+ antennas, 8000 channels, 1-second integrations, 10 SPWs) and ALMA/VLA scale (50+ antennas, 1000 channels); used to validate Datashader pipeline and `is_decimated` gate | `tests/` |
 | X-5 | **CASR-385** Elevate `RemoteReductionContext` from stub to working implementation: serialise `ReductionOperation`, dispatch to remote worker (Dask or HTTP), return real `Future`; required for ngVLA TB-scale datasets where data cannot be local | `remote_reduction_context.py` |
 | X-6 | GUI independent/heterogeneous multi-panel mode (per-panel `kind=`, independent axis config, semantic cursor-sync — the N>2 generalization of today's duo/split, distinct from grid mode) capped at **2×2 by default** — see §3.1d for the three constraints (live-object cost, per-move semantic cursor-sync cost, sidebar/config-UI scalability) and why they don't resolve on the same schedule. **Open questions:** whether 3×3 is supportable, pending E-4-style benchmark numbers for cursor-sync specifically (not just build/query cost) and a design answer for presenting N full per-panel config sections in the sidebar without repeating the scroll-clamp issue `kind_switch` already hit at N=1 extra section. No work scheduled beyond capturing the boundary; revisit once E-4 numbers exist. | `visibility_plotter.py` |
 | X-7 | Headless/PNG grid output: architecturally unbounded (no cursor-sync cost, no shadow/complementary-kind objects, no sidebar — see §3.1d), bounded only by ordinary batch-job wall-clock/memory. Extends `kind=` to a nested per-cell form (`kind=[["raster","scatter"],[...]]`, one row-major list per grid row) for heterogeneous cells, with `rows`/`cols` inferred from the nested shape when `kind=` is given that way and required (as today) only when `kind=` is a plain scalar. Natural fit for headless ahead of GUI grid mode, which stays uniform-kind through phase 1 (X-1) for UI-effort reasons that don't apply to a UI-less batch path. Per-cell axis config (`raster_y`/`scatter_x`/etc., not just `kind`) beyond phase 1 is a known follow-on, not yet designed. Not yet implemented. | `visibility_plotter.py`, `png_export.py` |
-| Y-1 | **CASR-385** Autoflag "calculate+display" mode: run an autoflag algorithm (e.g. `flagdata(mode='tfcrop', action='calculate')`), receive proposed flags, display them as a distinct overlay colour (e.g. orange, distinct from the committed-flag red), allow the astronomer to accept or reject before any disk write. Requires a new `ReductionContext.calculate_flags()` method returning proposed `FlagDelta` entries that flow into a separate "proposed" layer in `FlagDB` without entering the pending-commit queue. | `reduction_context.py`, `flag_db.py`, `visibility_raster.py`, `visibility_scatter.py`, `visibility_plotter.py` |
+| Y-1 | **CASR-385** Autoflag "calculate+display" mode: run an autoflag algorithm (e.g. `flagdata(mode='tfcrop', action='calculate')`), receive proposed flags, display them as a distinct overlay color (e.g. orange, distinct from the committed-flag red), allow the astronomer to accept or reject before any disk write. Requires a new `ReductionContext.calculate_flags()` method returning proposed `FlagDelta` entries that flow into a separate "proposed" layer in `FlagDB` without entering the pending-commit queue. | `reduction_context.py`, `flag_db.py`, `visibility_raster.py`, `visibility_scatter.py`, `visibility_plotter.py` |
 | Y-2 | **CASR-385** `Axis.RESIDUAL`: DATA − MODEL and CORRECTED − MODEL as displayable quantities in both raster and scatter, computed by the backend from the existing data column infrastructure | `axes.py`, `msv2_backend.py`, `msv4_backend.py` |
 | Y-3 | **CASR-385** Frequency frame conversion (topo → LSRK/BARY/etc.) and velocity axis: display-time approximation analogous to plotms `transform` / `freqframe` / `restfreq` / `veldef` parameters; uses casacore `VelocityMachine` for MSv2 and equivalent MSv4 machinery. New `TransformSpec` dataclass to carry `freqframe`, `restfreq`, `veldef` alongside `SelectionSpec`. Note: on-the-fly frame conversion at display time is not as accurate as `cvel`/`mstransform` regridding; this limitation should be documented in the UI. | `axes.py` (`Axis.VELOCITY`), `msv2_backend.py`, `msv4_backend.py`, new `transform_spec.py` |
 | Y-4 | **CASR-385** Histogram view panel: standalone amplitude or flag-fraction distribution display as an optional third panel in `VisibilityPlotter`, sharing the `histogram()` data already computed by `VisibilityRaster`/`VisibilityScatter`; candidate view type raised in requirements but no confirmed use case yet — see Appendix C | `visibility_plotter.py` |
@@ -1723,8 +1723,8 @@ class RemoteReductionContext(ReductionContext):
 | `visibility_scatter.py` | A-3: same type annotation change; F-10: flagged overlay (open design question); F-11: nearest-point flag; S-1 – S-4 |
 | `visibility_plot.py` | F-7/F-8: `_add_flag_tools()` shared `FlagTool`/`UnflagTool` mechanism (delivered in preview) |
 | `cubevis/bokeh/tools/_flag_tool.py` *(new)* | Custom `FlagTool` Bokeh tool class |
-| `msv2_backend.py` | V-2, V-3: averaging; R-1: FLAG_FRACTION; S-1: colour-by-metadata; G-6: closure phase |
-| `msv4_backend.py` | V-4, V-5: averaging; R-1: FLAG_FRACTION; S-1: colour-by-metadata; G-6: closure phase |
+| `msv2_backend.py` | V-2, V-3: averaging; R-1: FLAG_FRACTION; S-1: color-by-metadata; G-6: closure phase |
+| `msv4_backend.py` | V-4, V-5: averaging; R-1: FLAG_FRACTION; S-1: color-by-metadata; G-6: closure phase |
 | `reader.py` | No changes required. `XArrayReader` ABC is unchanged. |
 | `flag_db.py` | F-1 – F-6: coordinate resolvers, undo, extend, wire to `ReductionContext` |
 | `selection.py` | P-6: add `uv_range` field |

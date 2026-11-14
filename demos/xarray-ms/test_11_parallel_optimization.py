@@ -211,18 +211,18 @@ def _add_rgba(p, rgba, x_range, y_range):
 
 
 def _timing_label(label, t_serial, t_opt, match):
-    colour = "#00ff88" if match else "#ff4444"
+    color = "#00ff88" if match else "#ff4444"
     speedup = t_serial / t_opt if t_opt > 0 else float("inf")
     status  = "✓ pixel-identical" if match else "✗ MISMATCH"
     return Div(
         text=f"""
         <div style="background:#16213e;color:#c0c0e0;padding:8px;
-                    font-family:monospace;font-size:11px;border-left:3px solid {colour}">
+                    font-family:monospace;font-size:11px;border-left:3px solid {color}">
         <b>{label}</b><br>
         Serial: {t_serial:.2f}s &nbsp;|&nbsp;
         Optimized: {t_opt:.2f}s &nbsp;|&nbsp;
         Speedup: <b>{speedup:.1f}×</b> &nbsp;|&nbsp;
-        <span style="color:{colour}">{status}</span>
+        <span style="color:{color}">{status}</span>
         </div>""",
         width=PLOT_W * 2 + 10,
     )
@@ -646,14 +646,14 @@ def _build_comparison_row(serial_results, opt_results, strategy_name,
     )
     _add_rgba(p_serial, s_rgba, x_range, y_range)
 
-    colour = "#00cc66" if match_overall else "#ff4444"
+    color = "#00cc66" if match_overall else "#ff4444"
     p_opt = _make_figure(
         title=f"{strategy_name} ({t_opt:.1f}s) — "
               f"{'✓ identical' if match_overall else '✗ differs'}",
         x_label="Time (MJD s)", y_label="Amplitude (Jy)",
         x_range=x_range, y_range=y_range,
     )
-    p_opt.title.text_color = colour
+    p_opt.title.text_color = color
     _add_rgba(p_opt, o_rgba, x_range, y_range)
 
     # Per-plot comparison details

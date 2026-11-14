@@ -58,12 +58,12 @@ log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Theme:
-    """Colours for the chrome.
+    """Colors for the chrome.
 
     The GUI is dark; a publication PNG is almost always light.  That is a
     deliberate difference between the two outputs, not a fidelity bug —
     "matches the GUI" is a claim about data pixels, ranges, and tick
-    label text, not about background colour.
+    label text, not about background color.
     """
     figure:    str
     axes:      str
@@ -86,7 +86,7 @@ THEMES = {
 }
 
 def _check_background_agreement() -> None:
-    """Assert ``palettes.BACKGROUNDS`` matches this module's axes colours.
+    """Assert ``palettes.BACKGROUNDS`` matches this module's axes colors.
 
     The same fact lives in two files: ``palettes`` trims ramps away from
     the background, and ``png_export`` paints it.  If they drift, ramps
@@ -94,7 +94,7 @@ def _check_background_agreement() -> None:
     sparse end quietly vanishes again -- the exact defect conditioning
     exists to prevent, and one that is invisible in a swatch.
 
-    Warns rather than raises: a colour mismatch degrades legibility, and
+    Warns rather than raises: a color mismatch degrades legibility, and
     refusing to export over it would be a worse outcome than a slightly
     faint plot.
     """
@@ -166,7 +166,7 @@ _CBAR_LBL_PT   = 52.0       # tick labels + rotated axis label beside a bar
 # NOTE on measuring fidelity: matplotlib places the axes bbox at exactly
 # the requested device-pixel size, and imshow with interpolation="nearest"
 # fills it without resampling -- verified via ax.get_window_extent().  A
-# naive check that counts coloured pixels in the output will come up one
+# naive check that counts colored pixels in the output will come up one
 # row and one column short, because the axes spine overdraws the boundary
 # pixels.  That is a frame drawn over the image, not data loss; assert on
 # the bbox, not on pixel counts.  Do not "correct" it by padding the axes
@@ -263,7 +263,7 @@ class _ExtentIndex:
 
 
 def _band_swatch(band: ColorBand) -> str:
-    """Representative colour for a legend entry.
+    """Representative color for a legend entry.
 
     The high end of the band's colormap: scatter layers are told apart by
     hue, and the top of each layer's ramp is where that hue is most
@@ -901,7 +901,7 @@ def _draw_cell(ax, panel: Optional[RenderedPanel], theme: Theme,
     # Empty or failed.  "No rows selected" and "the shade raised" are
     # different events and only the first is routine -- a pipeline
     # emitting 43 PNGs must not swallow the second silently, so failures
-    # are coloured and labelled as failures.
+    # are colored and labelled as failures.
     is_error = spec is not None and spec.status == "error"
     msg = (spec.note if spec is not None and spec.note else
            ("error" if is_error else "no data"))
@@ -960,7 +960,7 @@ def export_png(
         months from now has to be drawn on.  Derive it from
         ``VisibilityPlotter._status_text()`` so the two cannot diverge.
     theme : {"light", "dark"} or None
-        Chrome colours.  ``None`` (default) adopts the theme the panels
+        Chrome colors.  ``None`` (default) adopts the theme the panels
         were *shaded* for, via ``PanelSpec.theme`` -- see the note at the
         defaulting site.  Pass a value explicitly only when you know the
         pixels suit it; a light theme over dark-conditioned ramps is

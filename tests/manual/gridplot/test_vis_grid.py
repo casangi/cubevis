@@ -105,10 +105,10 @@ def test_cells_drawn_at_a_common_extent(plotter):
     assert out.image is None and out.spec.note
 
 
-def _ranges(src, idx, colour, page=None):
-    """Each drawn cell's (vmin, vmax) as its colour bar has it."""
+def _ranges(src, idx, color, page=None):
+    """Each drawn cell's (vmin, vmax) as its color bar has it."""
     from cubevis.toolbox.visplot.visibility_raster import VisibilityRaster
-    src.render(idx, src.extent(), (120, 90), colour=colour, page_indices=page)
+    src.render(idx, src.extent(), (120, 90), color=color, page_indices=page)
     out = []
     for i in idx:
         c = src._cells[i]
@@ -148,7 +148,7 @@ def test_fit_grid_shape(rows, cols, n, want):
     assert fit_grid_shape(rows, cols, n) == want
 
 
-def test_colour_scopes(plotter):
+def test_color_scopes(plotter):
     """per cell: each its own range; this page: one over the page; whole
     grid: one over every cell, after the background pass (gridplot, 11-11)."""
     from cubevis.toolbox.visplot.vis_grid_source import VisGridSource
@@ -163,29 +163,29 @@ def test_colour_scopes(plotter):
     assert lo == min(r[0] for r in own) and hi == max(r[1] for r in own)
     # a cell drawn again alone (a zoom) keeps its page's range
     assert _ranges(src, [1], "page", page) == [shared[0]]
-    st = src.colour_state("grid")
+    st = src.color_state("grid")
     assert st["pending"] and f"/{n} cells" in st["note"]
     assert src.wait_for_grid_range(timeout=120)
-    assert not src.colour_state("grid")["pending"]
+    assert not src.color_state("grid")["pending"]
     whole = _ranges(src, page, "grid")
     assert len(set(whole)) == 1
     allc = _ranges(src, list(range(n)), "cell")
     assert whole[0] == (min(r[0] for r in allc), max(r[1] for r in allc))
     # a new configuration forgets the ranges
     src.configure(iterate_by="baseline")
-    assert src.colour_state("grid")["pending"]
+    assert src.color_state("grid")["pending"]
     with pytest.raises(ValueError):
-        src.render([0], None, (120, 90), colour="everything")
+        src.render([0], None, (120, 90), color="everything")
 
 
-def test_colour_eq_hist_shares_the_curve(plotter):
+def test_color_eq_hist_shares_the_curve(plotter):
     """eq_hist on a page: one curve (the pooled values'), not one per cell."""
     from cubevis.toolbox.visplot.vis_grid_source import VisGridSource
     old = plotter._pos0._scaling
     plotter._pos0._scaling = "eq_hist"
     try:
         src = VisGridSource(plotter).configure(iterate_by="baseline")
-        src.render([0, 1], src.extent(), (120, 90), colour="page")
+        src.render([0, 1], src.extent(), (120, 90), color="page")
         a, b = src._cells[0], src._cells[1]
         assert a._shared_reference is b._shared_reference is not None
         ma = a._bands_with_mappings(a._panel_spec())[0].mapping
@@ -195,13 +195,13 @@ def test_colour_eq_hist_shares_the_curve(plotter):
         plotter._pos0._scaling = old
 
 
-def test_gridcolour_argument(ms):
+def test_gridcolor_argument(ms):
     from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
     with pytest.raises(ValueError):
-        VisibilityPlotter(ms=ms, headless=True, gridcolour="all")
+        VisibilityPlotter(ms=ms, headless=True, gridcolor="all")
 
 
-def test_theme_recolours_kept_cells(plotter):
+def test_theme_recolors_kept_cells(plotter):
     from cubevis.toolbox.visplot.vis_grid_source import VisGridSource
     from cubevis.toolbox.gridplot import palettes
     src = VisGridSource(plotter).configure(iterate_by="spw")
@@ -293,7 +293,7 @@ def test_reproducing_call(ms):
 def test_grid_panel_argument(ms):
     from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
     from cubevis.toolbox.visplot.axes import Axis
-    for bad in ({"raster_qty": "NOPE"}, {"colour": "red"}, "PHASE",
+    for bad in ({"raster_qty": "NOPE"}, {"color": "red"}, "PHASE",
                 {"raster_y": "TIME", "raster_x": "TIME"}):
         with pytest.raises(ValueError):
             VisibilityPlotter(ms=ms, headless=True, grid_panel=bad)
@@ -340,7 +340,7 @@ def test_grid_panel_is_its_own(ms, monkeypatch):
         # the grid's tab, edited and plotted: only the grid's panel changes
         g = {"kind": "raster",
              "raster": {"y": "TIME", "x": "CHANNEL", "qty": "PHASE", "averaging": "scalar"},
-             "colour": {"scaling": "auto", "vmin": "", "vmax": ""}}
+             "color": {"scaling": "auto", "vmin": "", "vmax": ""}}
         resp = asyncio.run(p._handle_plot({"layout": "grid", "panels": {"G": g}}))
         assert resp["status"] == "ok", resp
         assert "grid_template" not in resp and calls == []
@@ -355,7 +355,7 @@ def test_grid_panel_is_its_own(ms, monkeypatch):
         assert resp["status"] == "ok" and not p._grid_on
 
 
-def test_grid_panel_colour_and_settings(ms):
+def test_grid_panel_color_and_settings(ms):
     from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
     with VisibilityPlotter(ms=ms, preset="waterfall",
                            grid_panel=dict(raster_qty="PHASE")) as p:
@@ -363,7 +363,7 @@ def test_grid_panel_colour_and_settings(ms):
         assert p.grid_panel_settings()["raster_qty"] == "PHASE"
         assert "scaling" not in p.grid_panel_settings()     # the quantity's own
         g = {"kind": "raster", "raster": {"y": "TIME", "x": "CHANNEL", "qty": "AMPLITUDE"},
-             "colour": {"scaling": "linear", "vmin": "0.5", "vmax": ""}}
+             "color": {"scaling": "linear", "vmin": "0.5", "vmax": ""}}
         resp = asyncio.run(p._handle_plot({"layout": "grid", "panels": {"G": g}}))
         assert resp["status"] == "ok", resp
         r = p._grid_slot.raster
@@ -373,7 +373,7 @@ def test_grid_panel_colour_and_settings(ms):
         # every cell is drawn with it
         cell = p._grid_source._cell(0)
         assert (cell._scaling, cell._scaling_vmin) == ("linear", 0.5)
-        bad = dict(g, colour={"vmin": "low"})
+        bad = dict(g, color={"vmin": "low"})
         resp = asyncio.run(p._handle_plot({"layout": "grid", "panels": {"G": bad}}))
         assert resp["status"] == "error" and resp["failed_slot"] == "G"
         sc = {"kind": "scatter", "scatter": {"x": "TIME", "y": "AMPLITUDE"}}
@@ -390,12 +390,12 @@ def test_drill_down_copies_the_grid_panel(ms):
         assert asyncio.run(p._handle_plot({"layout": "grid", "iterate_by": "spw"}))["status"] == "ok"
         d = p._grid_drill(0, p._grid_source.labels()[0])
         assert (d["panel"]["rq"], d["panel"]["rx"]) == ("PHASE", "BASELINE")
-        assert d["colour"]["scaling"] == "linear" and d["colour"]["vmin"] == -180.0
-        # the browser sets Panel A's tab from d["panel"] and sends the colour
+        assert d["color"]["scaling"] == "linear" and d["color"]["vmin"] == -180.0
+        # the browser sets Panel A's tab from d["panel"] and sends the color
         resp = asyncio.run(p._handle_plot({"layout": "one", "spw_ids": [d["select"]["spw"]],
             "panels": {"A": {"kind": "raster", "y": d["panel"]["ry"], "x": d["panel"]["rx"],
                              "qty": d["panel"]["rq"],
-                             "colour": dict(d["colour"], scaling="sqrt")}}}))
+                             "color": dict(d["color"], scaling="sqrt")}}}))
         assert resp["status"] == "ok", resp
         a = p._slots[0].raster
         assert (a._quantity, a._x_dim, a._scaling, a._scaling_vmin) == \
@@ -435,7 +435,7 @@ def _grid_images(ms, monkeypatch, held, preset, by, flags=False, **kw):
         src = p._grid()
         n = len(src.labels())
         imgs = [r.image for r in src.render(list(range(n)), src.extent(), (160, 120),
-                                            colour="cell")]
+                                            color="cell")]
         return imgs, dict(src.preload_info)
 
 

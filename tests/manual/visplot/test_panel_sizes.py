@@ -223,7 +223,7 @@ def test_more_to_the_right_cue():
 
 @needs_ms
 def test_nothing_is_wider_than_its_place():
-    """No stray horizontal scrolling: the readout / colour-bar strips are
+    """No stray horizontal scrolling: the readout / color-bar strips are
     their panel's width less their margins, and the toolbar's last button
     stays inside the window (checked in a browser: page and plot area
     exactly the window's width at 900-1400 px)."""

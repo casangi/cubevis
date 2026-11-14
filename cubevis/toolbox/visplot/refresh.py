@@ -23,7 +23,7 @@ re-aggregates.
 
 ``CHROME``
     Nothing about the pixels changes.  Titles, axis labels, theme
-    colours, tick formatting.  In the GUI this is usually pure
+    colors, tick formatting.  In the GUI this is usually pure
     JavaScript and never reaches Python at all.
 
 ``SHADE``
@@ -103,7 +103,7 @@ _LEVELS: dict[str, RefreshLevel] = {
     "y_label":        RefreshLevel.CHROME,
     "compact_toolbar": RefreshLevel.CHROME,
 
-    # -- shade: same aggregation, different colours ------------------- #
+    # -- shade: same aggregation, different colors ------------------- #
     "cmap":           RefreshLevel.SHADE,
     "layer_cmaps":    RefreshLevel.SHADE,
     "raster_cmap":    RefreshLevel.SHADE,

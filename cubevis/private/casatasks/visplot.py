@@ -74,7 +74,7 @@ def _validate_params(
         iterate_by,
         gridrows,
         gridcols,
-        gridcolour,
+        gridcolor,
         exprange,
         time_labels,
         autocorr,
@@ -137,7 +137,7 @@ def _validate_params(
         'iterate_by': 'str',
         'gridrows': 'int',
         'gridcols': 'int',
-        'gridcolour': 'str',
+        'gridcolor': 'str',
         'exprange': 'str',
         'time_labels': 'str',
         'autocorr': 'str',
@@ -258,7 +258,7 @@ def _validate_params(
     _check('iterate_by', iterate_by, _type_map['iterate_by'])
     _check('gridrows', gridrows, _type_map['gridrows'])
     _check('gridcols', gridcols, _type_map['gridcols'])
-    _check('gridcolour', gridcolour, _type_map['gridcolour'])
+    _check('gridcolor', gridcolor, _type_map['gridcolor'])
     _check('exprange', exprange, _type_map['exprange'])
     _check('time_labels', time_labels, _type_map['time_labels'])
     _check('autocorr', autocorr, _type_map['autocorr'])
@@ -321,7 +321,7 @@ def _visplot_t(
         iterate_by: str = 'baseline',
         gridrows: int = 3,
         gridcols: int = 3,
-        gridcolour: str = 'page',
+        gridcolor: str = 'page',
         exprange: str = 'current',
         time_labels: str = 'utc',
         autocorr: str = 'exclude',
@@ -383,7 +383,7 @@ def _visplot_t(
         iterate_by = iterate_by,
         gridrows = gridrows,
         gridcols = gridcols,
-        gridcolour = gridcolour,
+        gridcolor = gridcolor,
         exprange = exprange,
         time_labels = time_labels,
         autocorr = autocorr,
@@ -581,7 +581,7 @@ class _visplot:
         an explicit, conflicting ``kind=`` raises ``ValueError``.
     row_height : int, str or list
         Height of each row of plots, in pixels: the plot with its axes,
-        not the readout and colour bars below it.  ``None`` (default):
+        not the readout and color bars below it.  ``None`` (default):
         550 for One and Side by Side, 280 for Over / Under.  ``"fit"``:
         the rows share the window's height (never less than 250 px).  A
         list gives one height per row (Over / Under has two).  The GUI's
@@ -626,11 +626,11 @@ class _visplot:
         Rows of plots on a page of the Grid layout (1-8, default 3).
     gridcols : int
         Columns of plots on a page of the Grid layout (1-8, default 3).
-    gridcolour : str
-        The Grid layout's colour range: ``"page"`` (default), one range
+    gridcolor : str
+        The Grid layout's color range: ``"page"`` (default), one range
         for the plots on a page; ``"grid"``, one for every plot in the
         grid, so that pages compare (found cell by cell in the
-        background; until then a page is coloured by its own range);
+        background; until then a page is colored by its own range);
         ``"cell"``, each plot its own.  With ``eq_hist`` the plots that
         share a range share its curve too.
     exprange : str
@@ -650,7 +650,7 @@ class _visplot:
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
         ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
         ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
-        and ``vmax`` (its colour scale).  A key left out takes the value
+        and ``vmax`` (its color scale).  A key left out takes the value
         the flat argument (or ``preset``) gives that panel, so the flat
         arguments still describe the first panel; an unknown key raises.
         At most two panels for now.  ``layout`` still decides how many are
@@ -732,7 +732,7 @@ class _visplot:
         How pending flags are shown: ``"hide"`` (flagged points disappear,
         the default) or ``"color"`` (drawn in ``flag_color``).
     flag_color : str
-        Colour for pending flags when ``flag_display="color"``.
+        Color for pending flags when ``flag_display="color"``.
     flag_reach : str
         How far a flag box reaches beyond what is drawn, as the "Flag
         reaches" controls start: a comma-separated list of
@@ -751,7 +751,7 @@ class _visplot:
         ``flag_flagged_color``, so an Unflag box can select them.  Off by
         default; toggled in the Flagging controls.
     flag_flagged_color : str
-        Colour for flagged data when ``flag_show_flagged`` is on.
+        Color for flagged data when ``flag_show_flagged`` is on.
     frame_cache_mb : float | None
         Budget (MiB) of the cache of scatter frames -- the decoded samples a
         scatter panel draws, flags and probes.  When a selection's frames do
@@ -836,7 +836,7 @@ class _visplot:
             iterate_by: str = 'baseline',
             gridrows: int = 3,
             gridcols: int = 3,
-            gridcolour: str = 'page',
+            gridcolor: str = 'page',
             exprange: str = 'current',
             time_labels: str = 'utc',
             autocorr: str = 'exclude',
@@ -912,7 +912,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
             iterate_by = iterate_by,
             gridrows = gridrows,
             gridcols = gridcols,
-            gridcolour = gridcolour,
+            gridcolor = gridcolor,
             exprange = exprange,
             time_labels = time_labels,
             autocorr = autocorr,
@@ -975,7 +975,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 'iterate_by=' + repr(iterate_by),
                 'gridrows=' + repr(gridrows),
                 'gridcols=' + repr(gridcols),
-                'gridcolour=' + repr(gridcolour),
+                'gridcolor=' + repr(gridcolor),
                 'exprange=' + repr(exprange),
                 'time_labels=' + repr(time_labels),
                 'autocorr=' + repr(autocorr),
@@ -1039,7 +1039,7 @@ See ``_resolve_config``, ``_build_panels`` and ``_build_gui``."""
                 iterate_by = iterate_by,
                 gridrows = gridrows,
                 gridcols = gridcols,
-                gridcolour = gridcolour,
+                gridcolor = gridcolor,
                 exprange = exprange,
                 time_labels = time_labels,
                 autocorr = autocorr,

@@ -115,5 +115,5 @@ table row).
   `cubevis/__js__/casalib.min.js` and the matching `cubevisjs.min.js` as
   inline scripts before the document JSON, open with Playwright. There
   is no Python connection, so Plot does nothing, but layout, titles,
-  colours, the initial images and status-area help can all be seen and
+  colors, the initial images and status-area help can all be seen and
   driven through `Bokeh.documents[0]`.

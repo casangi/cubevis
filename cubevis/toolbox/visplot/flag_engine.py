@@ -36,7 +36,7 @@ Raster
 Scatter
     A scatter point is one sample of one layer (x value, y value).  A box
     addresses the samples of every *visible* layer whose (x, y) lies inside
-    it and which is displayed: finite, not hidden by a categorical colouring
+    it and which is displayed: finite, not hidden by a categorical coloring
     ("hide" mode), and -- for Flag -- currently unflagged (flagged samples
     are not drawn).  An Unflag box addresses currently flagged samples in
     the box.
@@ -713,7 +713,7 @@ def _scatter_box_from_frames(backend, req, flag, sel, x_axis, xr_, yr_, extend, 
 
     Same semantics as the general path: a sample is addressed when its drawn
     (x, y) on a visible layer lies in the box, it is not hidden by a
-    categorical colouring, and -- for Flag -- it is displayed (unflagged in
+    categorical coloring, and -- for Flag -- it is displayed (unflagged in
     the effective state) or -- for Unflag -- it is flagged.  Samples of
     several layers with the same correlation are united.  Returns the same
     result dict as ``evaluate_request``, or ``None`` to fall back.
@@ -1231,7 +1231,7 @@ def _region_counts(backend, ds, bc, axes, flag) -> FlagCounts:
 def _scatter_layer_masks(backend, ds, bc, req, x_axis, xr_, yr_):
     """Per visible layer: ``(layer_index, pol_index, mask3d)`` of the samples
     whose drawn (x, y) lies in the box and that are not hidden by a
-    categorical colouring.  ``mask3d`` is ``(time, baseline, frequency)``.
+    categorical coloring.  ``mask3d`` is ``(time, baseline, frequency)``.
     Flag state is NOT applied here (see ``_scatter_box`` / ``probe_region``).
     """
     canon = _canon(backend)
@@ -1357,7 +1357,7 @@ def probe_region(backend, req: dict) -> dict:
 
 
 def _scatter_zscore(backend, ds, bc, req, pol) -> np.ndarray:
-    """Per-sample Z-Score exactly as the scatter colouring computes it:
+    """Per-sample Z-Score exactly as the scatter coloring computes it:
     reference = the whole current selection (every partition), per
     baseline, for this correlation."""
     cache = req.setdefault("_zscore_stats", {})

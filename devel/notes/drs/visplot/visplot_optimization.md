@@ -123,7 +123,7 @@ Relay cost fell from roughly 250 ms/MB to ~140 ms/MB on the hosts.
 
 **M. A second scatter query after flagging outliers.** Flagging outliers shrinks the data extent while the view stays put; the Level-1 rule "viewport outside the reference → re-query" forced a second query, although a *full-extent* reference has nothing outside it. **Fix:** Level-1 may serve viewports beyond a full-extent reference. zuul06 scatter flag + redraws 3.08 → 2.21 s at the time.
 
-**N. A double query when zoomed in.** After a flag while zoomed, the panel re-read the full extent and then queried the zoomed view. A viewport query already returns the full-data extent, global scaling and colour-bar inputs. **Fix:** when clearly zoomed (10% margin), drop the stale references and make only the viewport query; image, extent, colour bar and histograms are identical to the old path. zuul06 zoomed flag + redraws 1.91 → 1.25 s.
+**N. A double query when zoomed in.** After a flag while zoomed, the panel re-read the full extent and then queried the zoomed view. A viewport query already returns the full-data extent, global scaling and color-bar inputs. **Fix:** when clearly zoomed (10% margin), drop the stale references and make only the viewport query; image, extent, color bar and histograms are identical to the old path. zuul06 zoomed flag + redraws 1.91 → 1.25 s.
 
 ### 3.6 Fidelity fixes found along the way
 

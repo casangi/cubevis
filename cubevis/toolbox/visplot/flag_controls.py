@@ -17,15 +17,15 @@ Display of pending flags (user selectable, ``flag_display=``)
 ------------------------------------------------------------
 ``"hide"`` (default)
     Pending flags are applied like on-disk flags: flagged points disappear,
-    and every statistic (colour scaling, Z-Score reference, Flag fraction)
+    and every statistic (color scaling, Z-Score reference, Flag fraction)
     is recomputed without them -- the AIPS flag-then-look-again loop.
 ``"color"``
     The data are drawn from the on-disk flags only and the samples whose
     state the pending flags change are painted on top in a user-selected
-    colour (``flag_color=``).
+    color (``flag_color=``).
 
 While a proposal is under review (preview on) the samples it would change
-are painted in the proposal colour (orange) in either mode.
+are painted in the proposal color (orange) in either mode.
 
 The data backend is told which view a query wants through
 ``SelectionSpec.flag_view`` (``"effective"``, ``"disk"``, ``"pending"``,
@@ -161,7 +161,7 @@ class FlagController:
     display :
         ``"hide"`` or ``"color"`` -- see the module docstring.
     color :
-        Colour for pending flags in ``"color"`` mode.
+        Color for pending flags in ``"color"`` mode.
     """
 
     def __init__(self, plotter, *, filters: Optional[Mapping[str, Any]] = None,
@@ -230,7 +230,7 @@ class FlagController:
         """``[(flag_view, rgba), ...]`` panels composite over their image."""
         out = []
         if self.show_flagged:
-            # First, so pending / proposal colours are drawn on top of it.
+            # First, so pending / proposal colors are drawn on top of it.
             out.append(("flagged", _hex_to_rgba(self.flagged_color, 0.8)))
         if self.display == "color" and len(self.db):
             out.append(("pending", _hex_to_rgba(self.color)))
@@ -242,7 +242,7 @@ class FlagController:
         """Send the pending state to the backend, re-stamp every panel's
         selection and mark every panel stale (re-queried on next render).
 
-        ``data_changed=False``: only the overlays changed (display colour,
+        ``data_changed=False``: only the overlays changed (display color,
         "Show flagged data", a display switch with nothing pending) -- the
         drawn data are the same, so panels only refresh their overlays."""
         if not data_changed:
@@ -1238,10 +1238,10 @@ class FlagController:
             row("Samples (as proposed)", f"{total:,}"),
             row("Undo / redo available", f"{'yes' if self.db.can_undo() else 'no'} / "
                                          f"{'yes' if self.db.can_redo() else 'no'}"),
-            row("Display", esc(self.display) + (f" (colour {esc(self.color)})"
+            row("Display", esc(self.display) + (f" (color {esc(self.color)})"
                                                if self.display == "color" else "")),
             row("Preview", "on" if self.preview else "off"),
-            row("Show flagged data", ("on (colour " + esc(self.flagged_color) + ")")
+            row("Show flagged data", ("on (color " + esc(self.flagged_color) + ")")
                 if self.show_flagged else "off"),
             row("Current filter", esc(f.label) + (" " + esc(str(self.filter_params.get(f.name)))
                                                   if self.filter_params.get(f.name) else "")),
@@ -1402,11 +1402,11 @@ class FlagController:
                              reach_spw=reach_spw, reach_scan=reach_scan,
                              reach_field=reach_field, reach_note=reach_note,
                              reason=reason_in, preview=preview_cb, filter=filt_sel)
-        display = RadioButtonGroup(labels=["Hide flagged", "Show in colour"],
+        display = RadioButtonGroup(labels=["Hide flagged", "Show in color"],
                                    active=DISPLAY_MODES.index(self.display), width=width)
-        color = ColorPicker(title="Pending colour", color=self.color, width=width)
+        color = ColorPicker(title="Pending color", color=self.color, width=width)
         show_flagged = Checkbox(label="Show flagged data (to unflag)", active=self.show_flagged)
-        flagged_color = ColorPicker(title="Flagged colour", color=self.flagged_color, width=width)
+        flagged_color = ColorPicker(title="Flagged color", color=self.flagged_color, width=width)
         # mid-grey: readable on both the dark and the light sidebar
         info = Div(text=self.info_text(), width=width,
                    styles={"font-size": "11px", "color": "#8c8fa1"})
@@ -1541,7 +1541,7 @@ class FlagController:
         div = Div(text="", sizing_mode="stretch_width")
         acc = Button(label="Accept", button_type="success", width=110)
         rej = Button(label="Reject", button_type="danger", width=110)
-        # Readable in both themes: page colours via the info-strip CSS
+        # Readable in both themes: page colors via the info-strip CSS
         # variables (set by the Light/Dark toggle), full-strength text, a
         # solid accent border (2026-09-30: grey-on-grey was hard to read).
         div.styles = {"color": "var(--cv-info-fg, #cdd6f4)", "font-size": "13px"}
@@ -1580,7 +1580,7 @@ def scatter_layer_entries(panel) -> list:
     Shared by the FlagTool (``FlagController.build_request``) and the
     InfoTool box probe so both address exactly the same samples: hidden
     layers (alpha 0) are skipped and categories hidden by a categorical
-    colouring are excluded.
+    coloring are excluded.
     """
     layers = []
     for lyr in getattr(panel, "_layers", ()):

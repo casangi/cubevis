@@ -123,7 +123,7 @@ console.log(JSON.stringify({tabs: gear_tabs.tabs.map(t => t.title), visible: gea
     assert out["tabs"] == want_tabs and out["visible"] == bool(want_tabs)
     if want_tabs:
         assert out["active"] < len(want_tabs)
-    # Panel B's figure always gets its own title and colour back
+    # Panel B's figure always gets its own title and color back
     assert out["b_scatter"] == ["B before", "white"]
     if kind_a == "raster":
         assert out["a_raster"] == ["Phase now", "white"]

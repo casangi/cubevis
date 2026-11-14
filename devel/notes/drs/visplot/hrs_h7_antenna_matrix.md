@@ -146,7 +146,7 @@ stays as set when the tab is closed and opened again. A failed Plot
 leaves every tab open, as before.
 
 `self._panel_pin`; the doPlot success branch (`keepPinned` updates the
-tab's saved title, colour and kind). `test_gear_tab_pin.py` runs that
+tab's saved title, color and kind). `test_gear_tab_pin.py` runs that
 branch under node with stand-in models (pinned / not / both / switched to
 Scatter while pinned). Live: Ant×Ant with Panel A pinned and Panel B
 not; Phase, then Real; A stayed open, B closed; ✕ left "Real".

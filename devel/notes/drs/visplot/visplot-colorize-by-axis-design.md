@@ -376,7 +376,7 @@ that produced it (RFI, hardware malfunction, gain problems). It's
 already documented as a target use case —
 `visibility_plotter_implementation_plan.md`'s astronomer-workflow table
 lists "Bad antenna: all baselines to one antenna deviant" with the
-prescribed plot as "Scatter: amp vs time, colour-by-baseline, iterate
+prescribed plot as "Scatter: amp vs time, color-by-baseline, iterate
 by antenna." That's a manual, eyeball-driven process today. The idea
 that came out of discussion: surface a computed statistical-deviation
 score as a coloring, so the deviant pattern is visually immediate

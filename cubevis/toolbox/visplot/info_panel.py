@@ -316,7 +316,7 @@ def colorbar_html(bands: Iterable[Any], *, max_stops: int = 24,
     """HTML colorbar(s) for the live info block, from ``ColorBand``s.
 
     Draws exactly what ``png_export`` would draw for the same bands: the
-    bar is coloured by *position* along the colormap and the labels are
+    bar is colored by *position* along the colormap and the labels are
     the data values at those positions (``ScalarMapping.ticks``), so a
     non-linear scaling shows its bunched ticks here as it does in an
     exported figure.  Skipped, as there: categorical bands (they get the
@@ -325,7 +325,7 @@ def colorbar_html(bands: Iterable[Any], *, max_stops: int = 24,
     Returns ``""`` when there is nothing to draw -- the caller uses that
     to hide the Div rather than show an empty box.
 
-    Text colours are ``inherit`` so the bar follows the Div's own colour
+    Text colors are ``inherit`` so the bar follows the Div's own color
     (set by the dark/light restyle) instead of baking in one theme.
 
     Slice 2 (Part 6, 2026-09): a band with ``antenna_summary`` set (a

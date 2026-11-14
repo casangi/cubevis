@@ -13,7 +13,7 @@ Usage
 
 What it shows
 -------------
-* One ``ScatterLayer`` per polarization, each with a distinct colour map
+* One ``ScatterLayer`` per polarization, each with a distinct color map
 * The composite image is produced by ``datashader.tf.stack()`` — overlapping
   data points are alpha-composited correctly in float space rather than by
   painter's order

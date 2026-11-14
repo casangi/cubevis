@@ -275,8 +275,8 @@ def reproducing_call(plotter) -> str:
         if tuple(plotter._grid_shape) != (3, 3):
             args.append(("gridrows", plotter._grid_shape[0]))
             args.append(("gridcols", plotter._grid_shape[1]))
-        if getattr(plotter, "_grid_colour", "page") != "page":
-            args.append(("gridcolour", plotter._grid_colour))
+        if getattr(plotter, "_grid_color", "page") != "page":
+            args.append(("gridcolor", plotter._grid_color))
     else:
         args.append(("layout", getattr(plotter, "_layout", "side")))
     # Sizes only when not the layout's default (2026-10-13).
@@ -456,11 +456,11 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
             ("Phase slope removed", "yes" if r.detrend else "no"),
             ("Statistic time window", str(r.stat_time_window)),
             ("Statistic channel window", str(r.stat_chan_window)),
-            ("Colour map", getattr(plotter, "_raster_cmap_name", "—")),
-            ("Colour scaling", str(getattr(r, "_scaling", "—"))),
-            ("Colour range", "automatic" if (r._scaling_vmin is None and r._scaling_vmax is None)
+            ("Color map", getattr(plotter, "_raster_cmap_name", "—")),
+            ("Color scaling", str(getattr(r, "_scaling", "—"))),
+            ("Color range", "automatic" if (r._scaling_vmin is None and r._scaling_vmax is None)
              else f"{r._scaling_vmin} – {r._scaling_vmax}"),
-            ("Colour mode", getattr(r, "_color_mode", "—")),
+            ("Color mode", getattr(r, "_color_mode", "—")),
         ]
         agg = getattr(r, "_agg", None)
         if agg is not None:
@@ -479,7 +479,7 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
             ("Averaging (vector / scalar)", s._averaging or plotter._averaging),
             ("Phase slope removed", "as the plotter" if s._detrend is None
              else ("yes" if s._detrend else "no")),
-            ("Colour map", getattr(plotter, "_scatter_cmap_name", "—")),
+            ("Color map", getattr(plotter, "_scatter_cmap_name", "—")),
         ]
     if spec is not None:
         rows.append(("Y extent (data)",
@@ -531,7 +531,7 @@ def describe(plotter, slot_id: str, viewport=None) -> dict:
     not_in_call = [
         "the zoom / pan shown (see Plot, above)",
         "pending flags (export them as JSON from the Flagging section)",
-        "scatter layer colour scaling and colourize settings",
+        "scatter layer color scaling and colorize settings",
         "the theme and panel sizes",
     ]
     return {

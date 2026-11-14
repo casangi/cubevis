@@ -225,7 +225,7 @@ class Axis(Enum):
     WEIGHT_SPECTRUM = ("Weight Spectrum", "", AxisType.DERIVED)
 
     FLAG = ("Flag", "", AxisType.DERIVED)
-    """Boolean FLAG array — rendered via the three-colour overlay, not
+    """Boolean FLAG array — rendered via the three-color overlay, not
     as a conventional plot axis."""
 
     UVDIST_LAMBDA = ("UV Distance", "λ", AxisType.DERIVED)

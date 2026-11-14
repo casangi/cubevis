@@ -147,7 +147,7 @@ _MIN_ALPHA = 90
 Datashader defaults to 40, which makes a single-point pixel nearly
 invisible against either background -- the low-end complaint that
 ``palettes.condition`` could only half-address, because conditioning
-moves the *colour* while alpha decides how much of it survives.
+moves the *color* while alpha decides how much of it survives.
 
 Measured against the dark ground with the conditioned ``polar[0]`` ramp,
 distance from background at the sparse end:
@@ -227,8 +227,8 @@ SPARSE_MIN_PX = 3.0
 def spread_sparse(img32: np.ndarray, px_per_bin: float) -> bool:
     """Grow the points of a sparse ARGB *img32* in place (see SPARSE_FILL).
 
-    An empty pixel takes the colour of a non-empty neighbour (edge
-    neighbours before corner ones); drawn pixels keep their own colour.
+    An empty pixel takes the color of a non-empty neighbour (edge
+    neighbours before corner ones); drawn pixels keep their own color.
     Returns True if the image was changed.
     """
     if img32 is None or img32.ndim != 2 or img32.size == 0:
@@ -1533,7 +1533,7 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
         return wrap_title(title)
 
     def _panel_spec(self) -> PanelSpec:
-        """Describe this scatter: one colour band per ScatterLayer.
+        """Describe this scatter: one color band per ScatterLayer.
 
         One band per layer regardless of visibility, so band indices stay
         stable — the same invariant the probe envelope's ``layers`` list
@@ -3195,8 +3195,8 @@ comm.send('{msg_update_scaling}', {{layer_index: layer_index, reset_range: true}
 
         A viewport (Level-2) query already returns everything the full one
         would refresh -- the full-data extent (``ScatterRenderResult.
-        x_range/y_range`` are resolved over ALL data), the global colour
-        scaling and colour-bar inputs (computed from all frames in
+        x_range/y_range`` are resolved over ALL data), the global color
+        scaling and color-bar inputs (computed from all frames in
         ``color_mode="global"``) -- plus the zoomed image and a reference
         for it.  The full-extent image and reference would be replaced at
         once.  So: refresh axis info, drop the stale references (forcing

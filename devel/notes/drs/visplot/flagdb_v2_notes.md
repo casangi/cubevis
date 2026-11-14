@@ -8,7 +8,7 @@ review dialog, panel refresh) still needs a live GUI check.
 
 ## Part 2 (GUI)
 - `flag_controls.FlagController` owns the FlagDB, the filter registry,
-  preview/display/colour/extend settings, proposals, export and the widgets.
+  preview/display/color/extend settings, proposals, export and the widgets.
 - `VisibilityPlotter(flag_filters=, flag_preview=False, flag_display="hide",
   flag_color="#ff00ff")`; `plotter.flag_db`, `plotter.flags`,
   `plotter.export_flags(path, fmt="flagdata"|"jsonl")`.
@@ -31,11 +31,11 @@ review dialog, panel refresh) still needs a live GUI check.
 ## Decisions (agreed 2026-09-28)
 - Flag, Unflag, Undo, Redo, Clear all operate on the DB (ordered fold).
 - Display is user selectable: default "hide" (pending-flagged points vanish,
-  AIPS-like); alternative shows pending points in a user-selected colour.
+  AIPS-like); alternative shows pending points in a user-selected color.
   Backend support: `set_pending_flags(..., apply=False)` + `pending_flag_mask()`.
 - The 1:1 zoom gate is removed (part 2); filters replace it.
 - Constructor parameter: `flag_filters=`.
-- Z-Score filter reference matches the colouring of the panel being flagged:
+- Z-Score filter reference matches the coloring of the panel being flagged:
   scatter = whole selection per baseline+correlation (`reference="selection"`),
   raster = per spectral window (`reference="spw"`); `granularity="cell"`
   reproduces the raster's per-cell max with the Sidak-corrected cutoff.
@@ -83,7 +83,7 @@ review dialog, panel refresh) still needs a live GUI check.
 - Generic remote testing: `tests/manual/visplot/remote_visplot_check.py`
   (local-vs-remote parity + timings) and `REMOTE_TESTING.md` (plan + manual
   GUI checklist).
-- Light mode: legend and colour-bar Divs now recoloured with the info Divs.
+- Light mode: legend and color-bar Divs now recolored with the info Divs.
 
 ## Remote execution (2026-09-28)
 - `tests/manual/visplot/test_flagdb_remote.py`: 9 tests through a real Jupyter
@@ -109,10 +109,10 @@ review dialog, panel refresh) still needs a live GUI check.
   strips stayed dark in light mode before).
 
 ## Layout / overflow (2026-09-28, round 7)
-- Several colour bars in one panel use a compact one-row-per-layer form
-  (label | bar + ticks, ~22 px) so the fixed 100 px colourbar box shows them all.
+- Several color bars in one panel use a compact one-row-per-layer form
+  (label | bar + ticks, ~22 px) so the fixed 100 px colorbar box shows them all.
 - Plot area gets class `cv-plot-area`; a page script shows a small
-  "▾ more below — colour bars / info" chip at its bottom edge only while
+  "▾ more below — color bars / info" chip at its bottom edge only while
   content is hidden below (click scrolls down). Verified headless at 640 px
   (chip shown) and 820/1300 px (hidden).
 
@@ -279,18 +279,18 @@ review dialog, panel refresh) still needs a live GUI check.
   1.5); cvpost140 1.07 / 1.00 / 1.07 / 1.31. Skipping the full-extent
   reference cut transfer, not worker time (binning is shared since part 17).
 - Part 20: zoomed stale redraw is ONE Level-2 query -- the viewport result
-  already carries the full-data extent, global scaling and colour-bar inputs.
+  already carries the full-data extent, global scaling and color-bar inputs.
   _prepare_stale_render now returns True to skip the full re-read (refreshes
   axis info, drops stale references). Test: one query; image, extent,
-  colour bar and histograms identical to the old full-then-zoomed path.
+  color bar and histograms identical to the old full-then-zoomed path.
 
 ## 2026-09-30: part 21 -- show flagged data (unflag on-disk flags)
 - New flag view "flagged": only effectively flagged (on-disk and/or pending)
   VALID samples are drawn (padding never). Dask path: ~(eff & valid);
   raw frames: eff (frames hold valid samples only).
-- FlagController: show_flagged / flagged_color (GUI checkbox + colour picker;
+- FlagController: show_flagged / flagged_color (GUI checkbox + color picker;
   VisibilityPlotter(flag_show_flagged=False, flag_flagged_color="#7f849c");
-  sync_layers regenerated). Overlay drawn first so pending/proposal colours
+  sync_layers regenerated). Overlay drawn first so pending/proposal colors
   stay on top; init_panels() applies configured overlays and redraws panels
   already rendered in their constructors so the first page carries it.
 - Unflag boxes already addressed flagged samples; with the overlay they can
@@ -326,7 +326,7 @@ review dialog, panel refresh) still needs a live GUI check.
   test must run on NRAO hosts.
 
 ## 2026-09-30: part 26 -- responsiveness of display toggles
-- Report: toggling Hide/Show in colour or "Show flagged data" started long
+- Report: toggling Hide/Show in color or "Show flagged data" started long
   operations with no busy cursor, and stalled the websocket heartbeat
   (browser declared the socket dead after 10 s and reconnected).
 - Causes: (1) panel re-render comm handler ran synchronously on the asyncio
@@ -338,7 +338,7 @@ review dialog, panel refresh) still needs a live GUI check.
   lock still serializes per panel); __cvSetBusy is reference counted, every
   flag-control request balances its own true/false and defines the helper
   itself; push_state(data_changed=False) for overlay-only changes (Show
-  flagged, colours, display switch with nothing pending) -> panels refresh
+  flagged, colors, display switch with nothing pending) -> panels refresh
   only overlays (_overlays_stale / _refresh_flag_overlays).
 - Tests: toggles make no main-data queries; rerender runs off the main
   thread; headless: busy counter returns to 0.
@@ -370,7 +370,7 @@ review dialog, panel refresh) still needs a live GUI check.
   commands. Calls are now chunked (FLAGDATA_CHUNK=500); the result message
   reports commands/calls. The missing flags are most likely CASA-side with
   that single huge list -- needs the commit message / CASA log to confirm.
-- Dialog readability: page colour variables, full-strength text, labels by
+- Dialog readability: page color variables, full-strength text, labels by
   opacity, solid accent border, sans-serif.
 
 ## 2026-09-30: part 31 -- exact MSv2 write with arcae (default)
@@ -417,7 +417,7 @@ review dialog, panel refresh) still needs a live GUI check.
   worker on a SCRATCH copy (CUBEVIS_TEST_KERNEL_SCRATCH_MS/_PS), verified,
   restored. Passed here: TW Hya MS + real TW Hya PS locally; scratch MS/PS
   through a local kernel.
-- Decisions (Darrell): "Show flagged data" stays full flag colour; "Hide
+- Decisions (Darrell): "Show flagged data" stays full flag color; "Hide
   flagged" = what a fresh open after commit shows (already the behaviour;
   now pinned by the test above) -- no partial-cell marker.
 - Remote sessions only: debounced background JSON Lines autosave of pending

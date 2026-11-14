@@ -6,13 +6,13 @@ Shared by visplot, the grid view and calplot
 
 ``panel_spec``
     ``PanelSpec`` / ``RenderedPanel``: a panel as data (axes, ticks,
-    colour bands, legend) and its RGBA image -- what a grid cell is.
+    color bands, legend) and its RGBA image -- what a grid cell is.
 ``png_export``
     ``export_png``: one or many ``RenderedPanel`` composited into a PNG,
-    as an M x N grid with shared or per-cell colour bars and legend.
+    as an M x N grid with shared or per-cell color bars and legend.
 ``tick_format``, ``palettes``, ``colormap_scaling``, ``panel_sizes``,
 ``raster_grid``
-    tick labels and units; palettes and backgrounds; colour scaling;
+    tick labels and units; palettes and backgrounds; color scaling;
     panel size arguments; where a raster's cells are.
 
 Nothing here imports Bokeh, CASA or a data backend: a remote worker, a test

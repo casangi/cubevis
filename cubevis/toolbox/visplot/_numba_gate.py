@@ -8,7 +8,7 @@ The crash this prevents
     been detected.
     zsh: abort      ipython
 
-Several datashader kernels (``tf.shade``'s colour/eq_hist helpers,
+Several datashader kernels (``tf.shade``'s color/eq_hist helpers,
 ``Canvas.raster``'s resampling) are ``parallel=True`` + ``nogil=True``.
 visplot renders each panel in a worker thread (``asyncio.to_thread``)
 under that panel's own ``asyncio.Lock`` -- which orders work *within* a

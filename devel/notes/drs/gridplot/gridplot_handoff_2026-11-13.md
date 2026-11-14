@@ -22,7 +22,7 @@ next section is **7**.
   * the grid's controls are in the sidebar, the toolbar and the readout
     row, so the plots get the whole plot area;
   * ✱ on the Field / SPW / Antenna steppers;
-  * Colour scope: per cell / this page (the default) / whole grid, with
+  * Color scope: per cell / this page (the default) / whole grid, with
     shared normalisation, so the cells share one eq_hist curve;
   * the frame cache budget is set from the host's free memory;
   * the selection narrows a baseline grid;
@@ -33,7 +33,7 @@ next section is **7**.
   scan or correlation.  Paging and Play work.  Common and per-cell scales
   work, with outer axes drawn once.  Probe, drill-down and Back to Grid
   work.  Export PNG writes the page, and `plotfile=` writes pages with
-  `gridrows`, `gridcols`, `gridcolour` and `exprange`.
+  `gridrows`, `gridcols`, `gridcolor` and `exprange`.
 * **Not yet:** scatter grids (G3); a grid template of its own (G3); real
   data timings.  Darrell has used it on TW Hya
   (`sis14_twhya_calibrated_flagged.ms`, 26 antennas, 210 baselines).  The
@@ -60,9 +60,9 @@ next section is **7**.
 
 | Where | What |
 |---|---|
-| `cubevis/toolbox/gridplot/grid_view.py` | `GridView`: pool of figures and the JS API `window.__cvGrid[key]` (reload, refit, redraw, restyle, state, save).  `embedded=True` hands back `.widgets` for the app to place.  `fitShape`/`regrid`/`S.settle` handle fit-to-cells; `colour` scope comes from the source's `COLOUR_SCOPES`. |
+| `cubevis/toolbox/gridplot/grid_view.py` | `GridView`: pool of figures and the JS API `window.__cvGrid[key]` (reload, refit, redraw, restyle, state, save).  `embedded=True` hands back `.widgets` for the app to place.  `fitShape`/`regrid`/`S.settle` handle fit-to-cells; `color` scope comes from the source's `COLOR_SCOPES`. |
 | `cubevis/toolbox/gridplot/grid_source.py`, `grid_app.py` | `GridSource` protocol, synthetic source, stand-alone `GridApp`. |
-| `cubevis/toolbox/visplot/vis_grid_source.py` | `VisGridSource`: one headless clone of the template per cell (`_cell`, `_clone`); `_iteration_values` / `_pairs_with_rows` decide the cells from the selection; colour scope (`_shared_reference`, `_sample`, background `_start_grid_pass`); `drill_target`. |
+| `cubevis/toolbox/visplot/vis_grid_source.py` | `VisGridSource`: one headless clone of the template per cell (`_cell`, `_clone`); `_iteration_values` / `_pairs_with_rows` decide the cells from the selection; color scope (`_shared_reference`, `_sample`, background `_start_grid_pass`); `drill_target`. |
 | `cubevis/toolbox/visplot/visibility_raster.py` | `_shared_reference`, honoured in `_shade_agg` and `_bands_with_mappings`. |
 | `cubevis/toolbox/visplot/visibility_plotter.py` | `_build_grid`, `_place_grid_controls`, `_wire_grid`, `_grid_drill`, `_export_grid_png`, `_GRID_LAYOUT_JS`, `_GRID_DRILL_JS`, `fit_grid_shape`, `parse_exprange`.  doPlot's callback reloads the grid and releases busy when page 1 is drawn.  `_handle_plot` → `_handle_plot_panels`, which re-renders only the template in Grid. |
 | `cubevis/toolbox/visplot/data/reader.py` | `_frame_cache_budget` (host rule in notes section 5). |
@@ -140,10 +140,10 @@ In order of value:
    * one frame read for the page's union selection, grouped by baseline
      or antenna;
    * scatter grids need it (1.7 s a cell today against 0.11 s split);
-   * it makes "whole grid" colour cheap, and then that becomes the
+   * it makes "whole grid" color cheap, and then that becomes the
      default scope.
 3. **Scatter grids**: Raster / Scatter in the grid template; cells from the
-   scatter renderer; the colour scope for scatter density.
+   scatter renderer; the color scope for scatter density.
 4. Compound iteration (antenna, then SPW) and the `axes_override` hook
    only.
 
@@ -154,7 +154,7 @@ sections 4, 9 and 10).
 
 * **Stale status line** after Back to Grid: it says "One panel" until the
   next Plot (notes section 4).
-* **Default colour scope**: "this page" until G3, then "whole grid".
+* **Default color scope**: "this page" until G3, then "whole grid".
 * **The cubevis transport** drops the session on an early message (see
   Lessons).
 * **Real-data timings** for G2 and G3 on TW Hya and the VLBA subset,

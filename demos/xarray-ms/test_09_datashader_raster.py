@@ -13,12 +13,12 @@ leaving a 2D DataArray that feeds directly into ds.Canvas.raster() or
 ds.Canvas.points() depending on whether the grid is regular.
 
 Raster combinations tested:
-  1. time × baseline_id    coloured by channel-averaged amplitude
-  2. time × baseline_id    coloured by channel-averaged phase
-  3. time × baseline_id    coloured by flag fraction (occupancy)
-  4. frequency × baseline_id  coloured by time-averaged amplitude (spectrum per baseline)
-  5. frequency × time      coloured by amplitude (per-baseline RFI waterfall)
-  6. frequency × time      coloured by flag fraction
+  1. time × baseline_id    colored by channel-averaged amplitude
+  2. time × baseline_id    colored by channel-averaged phase
+  3. time × baseline_id    colored by flag fraction (occupancy)
+  4. frequency × baseline_id  colored by time-averaged amplitude (spectrum per baseline)
+  5. frequency × time      colored by amplitude (per-baseline RFI waterfall)
+  6. frequency × time      colored by flag fraction
 
 Two-layer design verified in each test:
   - Layer 1: agg DataArray (float64/int32) — the scientifically meaningful intermediate
@@ -321,7 +321,7 @@ def _assert_raster_output(agg, rgba, label=""):
 
 def test_time_baseline_amplitude():
     """
-    time × baseline_id raster coloured by channel-averaged amplitude.
+    time × baseline_id raster colored by channel-averaged amplitude.
 
     This is the primary msview analog — the most common raster plot.
     Tests both the float64 agg layer and the uint8 RGBA layer.
@@ -349,7 +349,7 @@ def test_time_baseline_amplitude():
 
 def test_time_baseline_phase():
     """
-    time × baseline_id raster coloured by channel-averaged phase (degrees).
+    time × baseline_id raster colored by channel-averaged phase (degrees).
     """
     _require_datashader()
     ms = _get_ms()
@@ -375,7 +375,7 @@ def test_time_baseline_phase():
 
 def test_time_baseline_flag_fraction():
     """
-    time × baseline_id raster coloured by flag fraction.
+    time × baseline_id raster colored by flag fraction.
 
     Values in [0, 1]: 0=unflagged, 1=fully flagged.
     NaN for padded (missing) baseline slots.
@@ -411,7 +411,7 @@ def test_time_baseline_flag_fraction():
 
 def test_frequency_baseline_amplitude():
     """
-    frequency × baseline_id raster coloured by time-averaged amplitude.
+    frequency × baseline_id raster colored by time-averaged amplitude.
 
     Shows the spectral structure per baseline — useful for identifying
     narrow-band RFI or passband shape variations across baselines.

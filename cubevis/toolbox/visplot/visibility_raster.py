@@ -176,8 +176,8 @@ class _Detail:
     ``VisibilityRaster._agg`` always holds the aggregate of the whole
     selection.  When that had to be decimated and the user zooms in past
     its resolution, the zoomed region is queried again and kept here.
-    The full aggregate is never replaced, so zooming back out, colour
-    scaling, the colour bar, the axis ranges and the time origin all go
+    The full aggregate is never replaced, so zooming back out, color
+    scaling, the color bar, the axis ranges and the time origin all go
     on working from the whole selection.  See ``_ensure_detail``.
     """
     agg:          object            # DataArray, in the full raster's coordinates
@@ -1441,7 +1441,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         return controls
 
     def _panel_spec(self) -> PanelSpec:
-        """Describe this raster: one colour band, the quantity.
+        """Describe this raster: one color band, the quantity.
 
         ``status`` is ``"empty"`` whenever ``_render()`` took its
         degenerate branch — a deferred panel, a sub-2-cell agg, an
@@ -1544,7 +1544,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
 
         ``color_mode`` decides the reference exactly as in ``_shade_agg``:
         ``"global"`` anchors to ``self._agg`` (the full cached
-        aggregation) so colours stay put under zoom; ``"local"`` anchors
+        aggregation) so colors stay put under zoom; ``"local"`` anchors
         to the viewport crop.  A manual ``vmin``/``vmax`` override wins
         over both, again matching the shade.
         """
@@ -1583,9 +1583,9 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
     _QUERY_PATH = "raster"
 
     _shared_reference: "Optional[np.ndarray]" = None
-    """Values this panel's colours are scaled against with others', or
+    """Values this panel's colors are scaled against with others', or
     ``None`` (its own).  Set by a grid (``VisGridSource``) whose cells
-    share a colour range: the range, and for ``eq_hist`` the curve, come
+    share a color range: the range, and for ``eq_hist`` the curve, come
     from it -- a common scale needs common normalisation, not only a
     common vmin/vmax.  A manual vmin/vmax still wins."""
 
@@ -1697,7 +1697,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
             # change (neither touches either). Skipped under `defer`
             # since there's nothing to warm for a panel that isn't
             # even shown yet.
-            # (Not for a grid's colour sample, gridplot G3: it is never
+            # (Not for a grid's color sample, gridplot G3: it is never
             # shown or probed, only its values are pooled.)
             if not getattr(self, "_values_only", False):
                 self._ensure_identity_tables(polarization=self._polarization)
@@ -2306,8 +2306,8 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
         """
         shared = self._shared_reference
         if shared is not None and shared.size:
-            # a grid's shared colour range: the values of the cells
-            # coloured together (finite already), whatever color_mode says
+            # a grid's shared color range: the values of the cells
+            # colored together (finite already), whatever color_mode says
             vmin, vmax = float(shared.min()), float(shared.max())
         elif self._color_mode == "global" and self._agg is not None:
             finite = self._agg.values[np.isfinite(self._agg.values)]
@@ -2428,7 +2428,7 @@ comm.send('{msg_update_scaling}', {{reset_range: true}}, function(resp) {{
     ) -> np.ndarray:
         """Draw a viewport from what is held: the detail aggregate when
         it covers the viewport and is fine enough for it, otherwise the
-        full one.  Colours are anchored to the full aggregate either
+        full one.  Colors are anchored to the full aggregate either
         way (``_shade_agg``), so they do not shift between the two."""
         x0, x1 = x_range
         y0, y1 = y_range

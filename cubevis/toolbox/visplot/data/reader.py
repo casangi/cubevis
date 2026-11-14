@@ -3524,7 +3524,7 @@ class XArrayReader(abc.ABC):
         averaging over all dimensions not in ``(y_dim, x_dim)``, then
         decimates the result to at most ``max_cells`` cells by applying a
         uniform stride in each dimension.  The caller (``VisibilityRaster``)
-        is responsible for Datashader resampling, colour mapping, and RGBA
+        is responsible for Datashader resampling, color mapping, and RGBA
         conversion.
 
         Two-level rendering contract
@@ -3543,8 +3543,8 @@ class XArrayReader(abc.ABC):
           higher ``max_cells`` to fetch the sub-window at full resolution.
 
         Separating the data reduction (backend) from the canvas sizing and
-        colour mapping (``VisibilityRaster``) keeps the backend free of
-        canvas-size knowledge and lets the caller re-colour without
+        color mapping (``VisibilityRaster``) keeps the backend free of
+        canvas-size knowledge and lets the caller re-color without
         re-reading data.
 
         Parameters
@@ -3556,7 +3556,7 @@ class XArrayReader(abc.ABC):
         x_dim :
             Native axis for the x (column) dimension — same vocabulary.
         quantity :
-            Derived axis to render as colour.  Must be one of
+            Derived axis to render as color.  Must be one of
             ``Axis.AMPLITUDE``, ``Axis.PHASE``, ``Axis.REAL``,
             ``Axis.IMAGINARY``, ``Axis.FLAG``.
         selection :

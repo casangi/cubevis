@@ -155,7 +155,7 @@ one antenna standing out is equipment).
 
 How it is built: every sample carries the statistic of the window it
 falls in (`paint_phase_stat`), so the existing per-sample scatter
-pipeline (binning, hover, flag views, colouring by axis) plots it
+pipeline (binning, hover, flag views, coloring by axis) plots it
 unchanged. Samples sharing a window land on the same point. "Phase rms vs
 time" in a scatter equals the Baseline x Time raster, one point per cell;
 a test checks that.
@@ -279,7 +279,7 @@ to another control is one hint Div in `_build_status_bar` plus one call.
    raster axis yet"). Not implemented.
 4. **Black text on the dark sidebar** ("Changes apply when you press
    Plot", and the notes under the Antenna and Baseline tables): plain Div
-   text had no colour rule in the shared widget stylesheet. Added to the
+   text had no color rule in the shared widget stylesheet. Added to the
    dark and light sheets.
 
 ## Titles on two lines (2026-10-07)

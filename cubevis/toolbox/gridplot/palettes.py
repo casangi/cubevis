@@ -7,7 +7,7 @@ Why this exists
 ---------------
 The palette is baked into the shaded image.  It is chosen before
 ``tf.shade()`` runs, lives in ``ColorBand.cmap``, and by the time
-``png_export`` sees a ``RenderedPanel`` the pixels are already coloured.
+``png_export`` sees a ``RenderedPanel`` the pixels are already colored.
 So a palette is a **render-time** choice, not a chrome choice, and
 ``export_png(theme=...)`` cannot fix a mismatched one -- it would have to
 re-shade, and it deliberately has no backend access.
@@ -159,9 +159,9 @@ _CATEGORICAL: dict[str, tuple[str, ...]] = {
 # ---------------------------------------------------------------------------
 #
 # Phase is an angle: -180 and +180 degrees are the same direction, so the
-# two ends of its colormap must be the same colour, or a phase drifting
+# two ends of its colormap must be the same color, or a phase drifting
 # through the wrap shows as a hard edge that is not in the data.  A
-# sequential ramp (plasma) puts its two most different colours there.
+# sequential ramp (plasma) puts its two most different colors there.
 #
 # These are 25 samples of cmocean's ``phase`` map (Thyng et al. 2016,
 # Oceanography 29(3); MIT licence), which is cyclic AND of constant
@@ -179,7 +179,7 @@ _CYCLIC_PHASE: tuple[str, ...] = (
 
 
 def cyclic_cmap() -> tuple[str, ...]:
-    """Cyclic ramp for an angle (Phase): first and last colour equal.
+    """Cyclic ramp for an angle (Phase): first and last color equal.
     The same in both themes; never conditioned."""
     return _CYCLIC_PHASE
 
@@ -212,7 +212,7 @@ BACKGROUNDS = {"dark": "#181825", "light": "#ffffff"}
 """Axes background per theme — must track ``png_export.THEMES[...].axes``."""
 
 RASTER_MIN_DIST = 70.0
-"""Minimum RGB distance (0-441) between a raster ramp colour and the background.
+"""Minimum RGB distance (0-441) between a raster ramp color and the background.
 
 **Distance, not luminance.**  An earlier version used luminance alone and
 trimmed plasma's low end from ``#0d0887`` to ``#7804a6`` -- discarding the
@@ -295,7 +295,7 @@ def _hex(rgb) -> str:
 def _dist(a, b) -> float:
     """Euclidean RGB distance in 0-255 space (max 441).
 
-    Used instead of a luminance difference because two colours of similar
+    Used instead of a luminance difference because two colors of similar
     brightness but different hue are perfectly distinguishable, and a
     luminance-only rule discards them -- see ``RASTER_MIN_DIST``.
     """
@@ -319,7 +319,7 @@ def _sample(cmap, t: float):
 
 def condition(cmap, theme: str, n: Optional[int] = None,
               min_gap: float = SCATTER_MIN_DIST) -> tuple[str, ...]:
-    """Trim *cmap* so no colour sits within *min_gap* of the background.
+    """Trim *cmap* so no color sits within *min_gap* of the background.
 
     Rather than hand-tuning every hex list per theme, the canonical ramps
     stay as authored and are re-sampled here over the longest contiguous
@@ -436,7 +436,7 @@ def raster_cmap(name: Optional[str] = None, theme: str = "dark"
 
     Unknown names fall back to the theme default rather than raising: a
     palette name is cosmetic, and failing a whole render over one is a
-    worse outcome than drawing it in the default colours.
+    worse outcome than drawing it in the default colors.
     """
     if name is None:
         name = default_for("raster", theme)
@@ -509,9 +509,9 @@ def categorical_cmap(name: Optional[str] = None, theme: str = "dark",
 # Self-check
 # ---------------------------------------------------------------------------
 
-def _luminance(hex_colour: str) -> float:
+def _luminance(hex_color: str) -> float:
     """Relative luminance in [0, 1] (Rec. 709 coefficients)."""
-    h = hex_colour.lstrip("#")
+    h = hex_color.lstrip("#")
     r, g, b = (int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
@@ -526,11 +526,11 @@ def check_background_contrast() -> list[str]:
     within 0.1 of the background and ``polar[1]`` was within 0.008.
 
     Checks what actually matters -- that after conditioning, every ramp
-    colour clears the background by its role's margin, and that the ramp
+    color clears the background by its role's margin, and that the ramp
     still runs the right way for its theme so the *sparse* end is the one
     that fades out.
 
-    This defect is invisible in a swatch: the colours look fine on their
+    This defect is invisible in a swatch: the colors look fine on their
     own and only the composited image shows the problem, so it needs a
     programmatic check rather than review.
     """
@@ -543,7 +543,7 @@ def check_background_contrast() -> list[str]:
         # Tolerance covers 8-bit quantisation: condition() re-samples in
         # float and _hex() rounds to a byte, shifting distance by ~1 unit.
         if worst < gap - 1.5:
-            bad.append(f"{label}: closest colour is {worst:.1f} RGB units "
+            bad.append(f"{label}: closest color is {worst:.1f} RGB units "
                        f"from the {theme} background, want >= {gap:.0f}")
         if label.startswith("raster"):
             # Direction is free for an opaque raster: nothing fades into
@@ -572,7 +572,7 @@ def check_background_contrast() -> list[str]:
                 if d < CATEGORICAL_MIN_DIST - 1.5:
                     bad.append(
                         f"categorical {name!r}[{i}] ({theme}): closest "
-                        f"colour is {d:.1f} RGB units from the {theme} "
+                        f"color is {d:.1f} RGB units from the {theme} "
                         f"background, want >= {CATEGORICAL_MIN_DIST:.0f}"
                     )
     for fam, cmaps in _SCATTER.items():

@@ -5,7 +5,7 @@ Plot ▶ turns orange when a control Plot reads has changed since the last
 successful Plot, and green when it answers (2026-10-18).
 
 Structure only (which controls carry the callback; the reset in doPlot's
-reply).  The colour change itself was checked live with
+reply).  The color change itself was checked live with
 devel/tools/visplot_headless (see hrs_h8_consolidation_prep.md section 24).
 """
 from __future__ import annotations

@@ -153,7 +153,7 @@ async def main():
     fig.background_fill_color = "black"
     fig.border_fill_color     = "#1e1e2e"   # match the info Div
 
-    # Tick labels and axis labels in a light colour so they read clearly
+    # Tick labels and axis labels in a light color so they read clearly
     # against the dark border area.
     _label_color = "#cdd6f4"
     _grid_color  = "#45475a"

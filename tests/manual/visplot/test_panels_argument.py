@@ -64,7 +64,7 @@ def test_flat_arguments_unchanged_without_panels():
 @pytest.mark.parametrize("panels,msg", [
     ([{}, {}, {}], "at most 2"),
     ({"kind": "raster"}, "list of dicts"),
-    ([{"colour": "red"}], "unknown key"),
+    ([{"color": "red"}], "unknown key"),
     ([{"kind": "image"}], "kind must be"),
     ([{"raster_qty": "BOGUS"}], "not a valid axis"),
     ([{"raster_y": "TIME", "raster_x": "TIME"}], "must differ"),

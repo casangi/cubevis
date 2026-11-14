@@ -31,7 +31,7 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
     grid edit       the grid's tab edited (Phase) and plotted: the cells show
                     Phase; Panel A's tab is untouched
     drill copy      a tap: the panel shown in One is set up as the grid's
-                    panel (Phase, its axes, its colour scaling)
+                    panel (Phase, its axes, its color scaling)
     readout         the cursor readout is clear of the grid (above visplot's
                     status bar); the grid's controls are in the sidebar and
                     the toolbar, not over the plots
@@ -41,7 +41,7 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
                     idle after
     fit to cells    when every cell fits on one page the grid shrinks to them:
                     one cell is shown 1 x 1, the size of the grid
-    colour          Colour: "this page" by default; "per cell" draws the
+    color          Color: "this page" by default; "per cell" draws the
                     cells again in their own ranges; "whole grid" waits for
                     the background pass, then draws in the grid's range
     fit             1 x 1: the cell fills the room the window gives the grid,
@@ -515,27 +515,27 @@ def main() -> int:
                         if (m.type === 'ColumnDataSource' && m.data.image) it(m.data.image[0]);
                     return s; }}""")
 
-            def set_colour(v):
-                pg.evaluate(f"""(v) => {{ {model("m.type === 'Select' && m.title === 'Colour'")}
+            def set_color(v):
+                pg.evaluate(f"""(v) => {{ {model("m.type === 'Select' && m.title === 'Color'")}
                     .value = v; }}""", v)
 
             g_state = "() => Object.values(window.__cvGrid)[0].state()"
-            first = pg.evaluate(g_state)["colour"]
+            first = pg.evaluate(g_state)["color"]
             page_sum = cells_sum()
-            set_marker(); set_colour("cell"); wait_drawn()
+            set_marker(); set_color("cell"); wait_drawn()
             cell_sum = cells_sum()
             t1 = time.time()
-            set_marker(); set_colour("grid")
+            set_marker(); set_color("grid")
             pg.wait_for_function(f"""() => {MODELS}.filter(m => m.type === 'Div').some(d =>
-                d.text.startsWith('drawn in') && !d.text.includes('grid colour range'))""",
+                d.text.startsWith('drawn in') && !d.text.includes('grid color range'))""",
                 timeout=300000)
             grid_s = time.time() - t1
             grid_sum = cells_sum()
-            st = pg.evaluate(g_state)["colour"]
-            check("colour", first == "page" and page_sum != cell_sum and st == "grid"
+            st = pg.evaluate(g_state)["color"]
+            check("color", first == "page" and page_sum != cell_sum and st == "grid"
                   and grid_sum not in (0,), f"default {first!r}; per cell redrawn: "
                   f"{page_sum != cell_sum}; whole grid ready in {grid_s:.1f} s")
-            set_marker(); set_colour("page"); wait_drawn()
+            set_marker(); set_color("page"); wait_drawn()
 
             def frame0():
                 return pg.evaluate(f"""() => {{ const f = {model(GRIDPLOT)}.children[0][0];

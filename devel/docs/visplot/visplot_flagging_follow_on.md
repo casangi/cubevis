@@ -32,7 +32,7 @@ are logged.
      change the drawn positions at the 1e-7 relative level — needs an explicit
      decision);
    * audit columns that are carried but not used by display, flagging,
-     probing or colourising.
+     probing or colorising.
    Target: ≤ 0.6 GiB per TW Hya all-field frame, so the default budget holds
    both layers.  Test: frame equality of every derived quantity and the
    existing equivalence tests.
@@ -46,19 +46,19 @@ are logged.
 
 **Status.** With frames cached, the scatter redraw after a flag still takes
 ~7.6 s on TW Hya all fields: every change re-filters 2 × 31 M rows,
-re-aggregates, recomputes the colour scaling and the reference image.
+re-aggregates, recomputes the color scaling and the reference image.
 
 **Approach.** A flag operation changes few samples, so update the drawing by
 **subtracting / adding exactly those samples**:
 * keep per-layer `sum` and `count` aggregates (display canvas and reference)
   instead of only means; the samples a delta changes are known (row mask from
   `row_delta_mask`); subtract their (x, y) contributions → new mean = sum/count;
-* keep the colour-scaling histogram as counts and update it the same way
+* keep the color-scaling histogram as counts and update it the same way
   (eq-hist curves are recomputed from the histogram, cheap);
 * the hover id-grid and Z-Score reference need a rule: recompute when the
   changed samples touch them, else keep;
 * undo = add back; clear/reload = full render.
-**Fidelity gate:** pixel-identical images, histograms and colour bars
+**Fidelity gate:** pixel-identical images, histograms and color bars
 against a full re-render for flag, unflag, undo, hidden categories, both
 display modes and both formats (same style as
 `test_cached_frames_after_commit_match_a_fresh_read`).

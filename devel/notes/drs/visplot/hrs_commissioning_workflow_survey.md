@@ -62,7 +62,7 @@ by the DIFF modes; a rolling buffer centred on each sample). The CookBook's
 advice: amplitude finds long-lived problems, AMP V DIFF finds short
 excursions and is sensitive to both amplitude and phase problems; the rms
 modes need averaging and so blur flagging in time; for phase use a circular
-colour table.
+color table.
 
 Baseline axis: ordered by baseline number, switchable interactively to
 **sort by length**. An input option shows each baseline twice (1-2 and 2-1)
@@ -258,7 +258,7 @@ vector rms pairs).
 | Flag a whole row/column of the image (a time, a baseline, a channel) | Only by drawing a box that spans it | Convenience: click-to-select row or column |
 | Clip above/below on the displayed quantity | Amplitude range, Z-Score, MAD, Phase deviation and user filters, with preview | Clip on whatever quantity is displayed (including the new rms/diff quantities); "clip by form" equals re-running a stored filter on another selection |
 | Editing while stepping through baselines | No baseline iteration | As 4.1 |
-| EDITR stacked baselines to one antenna | Antenna iteration plus colour-by-baseline scatter approximates it | Acceptable for now |
+| EDITR stacked baselines to one antenna | Antenna iteration plus color-by-baseline scatter approximates it | Acceptable for now |
 
 ### 4.4 Gap list, in the order the plan takes them
 

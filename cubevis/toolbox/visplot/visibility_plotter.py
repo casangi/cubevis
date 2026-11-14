@@ -157,7 +157,7 @@ _PANEL_HEIGHT_OVER = 280    # each panel height in over/under mode
 
 _SECTION_DARK      = "#cdd6f4"
 _SECTION_LIGHT     = "#1e293b"
-"""Sidebar section-heading colours.
+"""Sidebar section-heading colors.
 
 Previously hardcoded inline at construction with nothing able to change
 them, so the headings stayed dark-blue on a light sidebar and read as
@@ -208,15 +208,15 @@ _STATIC_HINTS = {
     "col": "<b>Data column</b> \u2014 which visibilities are plotted  | <b>DATA</b>: as observed  | <b>CORRECTED_DATA</b>: after calibration has been applied  | <b>MODEL_DATA</b>: what the calibration model predicts  | Only the columns this dataset has are listed",
     # ---- raster gear tab
     "r_axes": "<b>Raster axes</b> \u2014 what runs up (Y) and across (X) the image; everything else is averaged into each cell  | <b>Baseline \u00d7 Time</b>: all baselines at once, to find when and where something went wrong  | <b>Time \u00d7 Channel</b>: a waterfall \u2014 one baseline if one is ticked, otherwise the selected baselines combined (see Baselines combined)  | <b>Baseline \u00d7 Channel</b>: the band on every baseline  | <b>Antenna 1 \u00d7 Antenna 2</b>: one cell per baseline over time and channels, mirrored, so a bad antenna is a whole row and column (the Ant\u00d7Ant preset); the two Antenna axes only go together  | Y and X must differ  | Which correlation is shown: <b>Correlation shown</b>, below",
-    "r_qty": "<b>Raster quantity</b> \u2014 what the colour shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
-    "scaling": "<b>Colour scaling</b> \u2014 how values are spread over the colours; changes the picture, never the data  | <b>eq_hist</b> uses every colour equally and shows faint structure, but distances between colours mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap",
+    "r_qty": "<b>Raster quantity</b> \u2014 what the color shows  | <b>Amplitude / Phase / Real / Imaginary</b>: the averaged visibility  | <b>Phase RMS / Coherence</b>: how steady the phase is within each cell  | <b>Amp V Diff / Phase Diff</b>: how far each sample is from the mean of the others in its time window (scan by default) \u2014 shows short-lived changes and hides everything steady  | <b>Flag</b>: fraction flagged  | <b>Z-Score</b>: how unusual for its baseline",
+    "scaling": "<b>Color scaling</b> \u2014 how values are spread over the colors; changes the picture, never the data  | <b>eq_hist</b> uses every color equally and shows faint structure, but distances between colors mean nothing  | <b>linear</b> is honest about size and lets a few strong values hide the rest  | <b>log / sqrt</b> sit between  | Min / max (or drag on the histogram) clip the range; <b>threshold</b> highlights everything above a cutoff  | Phase is fixed at \u2212180..180\u00b0 linear with a cyclic colormap",
     "bcombine": "<b>Baselines combined</b> \u2014 what a cell shows when it covers several baselines: any raster without Baseline on an axis, such as Time \u00d7 Channel with no single baseline ticked. Averaging (above) applies to the samples of each baseline; this is what happens to the baselines  | <b>Mean</b>: the average of the baselines\u2019 amplitudes. The general picture of the selected baselines; a problem on a few of them is diluted  | <b>Median</b>: the middle baseline at each cell: what most baselines share, unmoved by a few bad ones. A feature that shows in Maximum but not in Median is on a few baselines (find and flag those); one in both is on most of them  | <b>Maximum</b>: the largest baseline at each cell. Interference or a bad antenna shows even if only one baseline has it; then tick baselines to find which  | <b>Coherent</b>: the baselines are added as complex numbers first. Only for a calibrated point source, where all baselines agree and noise averages down; on anything else they cancel and the plot reads low  | Applies to Amplitude, Phase (Mean, Median and Maximum all give the mean direction), Amp V Diff and Phase Diff. A flag box on such a plot flags every selected baseline",
     "border": "<b>Baseline order</b> \u2014 how the Baseline axis of this raster is laid out; the baselines that have data are drawn side by side either way  | <b>By number</b>: in the order of the Baseline table; baselines to one antenna sit together  | <b>By length</b>: shortest first, and the ticks read the length. Trouble that grows along the axis is then about distance (atmosphere, a source that is resolved); trouble in scattered columns is about particular antennas  | The cursor readout names the baseline and its length in both",
     "info": "<b>Info block</b> \u2014 which facts about this panel are listed in the block left of the plots (selection, axes, averaging, counts)  | Tick what you want to see there; it does not change the plot",
     # ---- scatter gear tab
     "s_x": "<b>Scatter X axis</b>  | <b>UV Distance</b>: baseline length; in wavelengths to compare across frequency  | <b>Time</b>: stability through the observation  | <b>Frequency / Channel</b>: the spectrum  | <b>U / V</b>: with V or U as Y, the uv coverage  | For Phase RMS and Coherence, X also decides what one point is (see the window controls)",
     "s_y": "<b>Scatter Y axis</b> \u2014 the value plotted for every sample  | <b>Amplitude / Phase / Real / Imaginary</b>: one point per visibility, drawn as density  | <b>Phase RMS / Coherence</b>: one point per window (per integration, channel or scan, depending on X)  | <b>Z-Score</b>: how unusual each sample is for its baseline",
-    "colorize": "<b>Layer colouring</b> \u2014 each ticked correlation is a layer with its own colours  | <b>Continuous</b>: density of points; scaling works as for the raster  | <b>Categorical</b>: colour by antenna, baseline, field, scan or SPW; tick which values to show  | <b>Statistical</b>: colour by Z-Score so outliers stand out  | <b>Layer</b> chooses which layer the controls below apply to",
+    "colorize": "<b>Layer coloring</b> \u2014 each ticked correlation is a layer with its own colors  | <b>Continuous</b>: density of points; scaling works as for the raster  | <b>Categorical</b>: color by antenna, baseline, field, scan or SPW; tick which values to show  | <b>Statistical</b>: color by Z-Score so outliers stand out  | <b>Layer</b> chooses which layer the controls below apply to",
     # ---- toolbar
     "s_avg": "<b>Averaging (scatter)</b> \u2014 one point per baseline and correlation for each stretch of time and block of channels, instead of one per sample: what a spectrum or a time series needs  | <b>Average over time</b>: <i>Off</i> (every integration), <i>Scan</i> (a spectrum per scan, with X Frequency or Channel), or a length (from the start of each scan, never across a scan boundary)  | <b>Average over channels</b>: <i>Off</i>, a number of channels, or <i>All</i> (one point per spectral window: a time series, with X Time)  | <b>Vector</b>: average the complex visibilities, then take amplitude and phase; amplitude drops where the samples do not add up (noise, an uncalibrated phase, a delay across the averaged channels)  | <b>Scalar</b>: average the amplitudes  | Amplitude, Phase, Real and Imaginary only; flagged samples are left out; a flag box takes every sample behind the points it encloses",
     # ---- Flagging panel (HRS H5, 2026-10-07)
@@ -224,22 +224,22 @@ _STATIC_HINTS = {
     "flag_preview": "<b>Preview each proposal</b> \u2014 show what a box would flag (how many samples, on which baselines, antennas, windows and scans) and paint those samples on the plots before anything is recorded; then accept or reject  | Worth having on while the Flag reaches settings are wider than the box",
     "flag_reach": "<b>Flag reaches</b> \u2014 how far each flag (or unflag) goes beyond the box that is drawn. The settings stay until changed; the line underneath turns amber while any is wider than the box  | <b>Baselines</b>: <i>As drawn</i>; or all baselines <i>to the antenna they share</i> (drag across two or more baselines of the bad antenna; refused if they do not share exactly one); or all <i>to every antenna drawn</i>; or <i>all baselines</i>  | <b>All channels</b>: the drawn time range over the whole band (a bad integration)  | <b>All selected spectral windows</b>: the same channels and times in every selected window  | <b>Whole scan</b>: every integration of the scans the box touches  | <b>All fields</b>: only matters on a plot without a Time axis  | <b>All correlations</b>: not just the one plotted  | Baselines, windows, scans and fields are extended for a raster box with the All selected filter; other boxes say so  | While any is wider, the box is outlined in amber as it is drawn  | For one box only, without changing these: <b>Shift</b> while dragging gives the full height of the plot as shown, <b>Alt</b> (<b>Option</b> on a Mac) the full width. A key held as the drag starts, or pressed during it, counts for the whole drag, even if let go first; <b>Esc</b> before letting go of the button drops the box",
     "flag_reason": "<b>Reason</b> \u2014 a few words on why, stored with every flag made from now on until the text is changed  | Shown in Describe pending flags, saved in the JSON, and written as the reason in exported flagdata commands, so flags can later be listed or undone by reason  | Leave empty for none",
-    "flag_display": "<b>Pending flags on the plots</b>  | <b>Hide flagged</b>: flagged samples disappear and colour scales and statistics are recomputed without them \u2014 flag, then look again  | <b>Show in colour</b>: the data stay as on disk and the samples the pending flags change are painted in the chosen colour, to see what has been marked",
-    "flag_shown": "<b>Show flagged data</b> \u2014 also draw samples that are flagged now, on disk or pending, in the chosen colour  | Needed to unflag: an Unflag box can only take what is drawn",
+    "flag_display": "<b>Pending flags on the plots</b>  | <b>Hide flagged</b>: flagged samples disappear and color scales and statistics are recomputed without them \u2014 flag, then look again  | <b>Show in color</b>: the data stay as on disk and the samples the pending flags change are painted in the chosen color, to see what has been marked",
+    "flag_shown": "<b>Show flagged data</b> \u2014 also draw samples that are flagged now, on disk or pending, in the chosen color  | Needed to unflag: an Unflag box can only take what is drawn",
     "flag_undo": "<b>Undo / Redo / Clear</b> \u2014 step back through the pending flags one box at a time, forward again, or drop them all  | Nothing here touches the data on disk",
     "flag_report": "<b>Describe pending flags</b> \u2014 open a page listing every pending flag in order: what it covers, how far it reached, its filter, its reason and how many samples it changes",
     "tb_sidebar": "<b>\u27e8 / \u27e9</b> \u2014 hide or show the configuration panel on the left, to give the plots the full width",
-    "tb_plot": "<b>Plot</b> \u2014 draw both panels with everything as now set in the panel on the left  | Selections, axes, quantities and window settings take effect only when this is pressed; colour scaling applies at once  | <b>Orange</b>: something has been changed since the last Plot and is not shown yet  | Pending flags are kept",
+    "tb_plot": "<b>Plot</b> \u2014 draw both panels with everything as now set in the panel on the left  | Selections, axes, quantities and window settings take effect only when this is pressed; color scaling applies at once  | <b>Orange</b>: something has been changed since the last Plot and is not shown yet  | Pending flags are kept",
     "tb_reload": "<b>Reload</b> \u2014 read the data again and redraw  | Use after something else has changed the data on disk  | <span style=\"color:#f38ba8\"><b>Discards pending (unapplied) flags</b></span>",
     "tb_layout": "<b>Layout</b> \u2014 one panel, or both: side by side or one above the other  | Side by side suits Baseline \u00d7 Time; one above the other gives a waterfall the full width  | Each preset switches to the layout that suits it, unless <b>Pin layout</b> (in the configuration panel) is ticked",
     "gear_pin": "<b>Pin</b> \u2014 keep this panel's configuration tab open after <b>Plot &#9654;</b>, to try one setting after another (the Ant\u00d7Ant quantities, say)  | Unticked, a successful Plot closes the tab  | \u2715 closes it either way",
     "grid_panel": "<b>Grid panel</b> \u2014 the plot every cell of the grid repeats, apart from Panels A and B  | Starts as a copy of the first panel the first time Grid is shown  | Changes apply when you press <b>Plot &#9654;</b>  | Tapping a cell shows it in the first panel, set up as this one",
-    "grid_scaling": "<b>Grid colour scaling</b> \u2014 how the cells spread their values over the colours, applied at <b>Plot &#9654;</b>  | <b>auto</b>: the quantity's own (Phase: linear \u2212180..180\u00b0; Z-Score: threshold)  | Min / max: empty is automatic  | <b>Colour</b> above says which cells share one range",
+    "grid_scaling": "<b>Grid color scaling</b> \u2014 how the cells spread their values over the colors, applied at <b>Plot &#9654;</b>  | <b>auto</b>: the quantity's own (Phase: linear \u2212180..180\u00b0; Z-Score: threshold)  | Min / max: empty is automatic  | <b>Color</b> above says which cells share one range",
     "pin_layout": "<b>Pin layout</b> \u2014 keep the panels arranged as they are now (One, Side by Side or Over / Under) when a preset is pressed  | Unticked, each preset switches to the arrangement that suits it (Spectrum and the waterfalls one above the other, the others side by side)  | Only the arrangement is kept: a preset still sets what each panel shows  | The Layout buttons in the toolbar change the arrangement either way",
     "autocorr": "<b>Autocorrelations</b> \u2014 baselines from an antenna to itself  | <b>Exclude</b> (default): cross-correlations only. Autocorrelations can be hundreds of times larger (VLBI data before amplitude calibration) and flatten every plot of all baselines  | <b>Include</b>: both; the Ant\u00d7Ant matrix then has its diagonal  | <b>Only</b>: autocorrelations alone \u2014 the bandpass shape and interference at each station  | A baseline ticked by name (e.g. BR&amp;BR) is plotted whatever is chosen here  | Applied by Plot",
     "time_labels": "<b>Time labels</b> \u2014 how every time axis and the cursor readout give time  | <b>UTC</b>: time of day, with the date in the axis label; when the data cross midnight the ticks read day/hh:mm:ss from the first day, as in AIPS. Matches observing logs, <tt>listobs</tt> and the Time range box  | <b>Elapsed</b>: minutes and seconds from the first sample shown  | Changes the labels only; nothing is read again",
-    "tb_export": "<b>Export PNG</b> \u2014 write the current view (both panels, titles, axes, colour bars) to a PNG file where Python is running  | The path is reported in the status line",
-    "tb_row_height": "<b>Row height</b> \u2014 the height of each row of plots, in every layout  | <i>default</i>: 550 px for One and Side by Side, 280 px for Over / Under  | <i>fit</i>: the rows share the window's height, after the readouts and colour bars below each plot (never less than 250 px; the plot area scrolls instead)  | Takes effect at once, and stays when the layout changes  | <code>row_height=</code> sets it from Python (a number, \"fit\", or one height per row)",
+    "tb_export": "<b>Export PNG</b> \u2014 write the current view (both panels, titles, axes, color bars) to a PNG file where Python is running  | The path is reported in the status line",
+    "tb_row_height": "<b>Row height</b> \u2014 the height of each row of plots, in every layout  | <i>default</i>: 550 px for One and Side by Side, 280 px for Over / Under  | <i>fit</i>: the rows share the window's height, after the readouts and color bars below each plot (never less than 250 px; the plot area scrolls instead)  | Takes effect at once, and stays when the layout changes  | <code>row_height=</code> sets it from Python (a number, \"fit\", or one height per row)",
     "tb_theme": "<b>Dark / Light</b> \u2014 switch the background  | The colormaps change with it so faint points stay visible; exported PNGs follow",
 }
 
@@ -384,7 +384,7 @@ _PRESET_BUTTONS = (
     ("waterfall", "Waterfall", 78,
      "<b>Waterfall</b> \u2014 Time \u00d7 Channel amplitude, one panel above the other  | Scatter: Amplitude vs Time  | Shows interference: narrow in frequency, or short in time  | Tick one baseline (or step through them) to see it by itself; with several, the cell is the mean of their amplitudes (Baselines combined is set to Mean)"),
     ("zscore", "Z-Score", 70,
-     "<b>Z-Score</b> \u2014 how unusual each sample is for its own baseline  | Raster: Baseline \u00d7 Time coloured by Z-Score, to spot an outlier baseline at a glance  | Scatter: Amplitude vs Time, coloured the same way, to confirm what is there"),
+     "<b>Z-Score</b> \u2014 how unusual each sample is for its own baseline  | Raster: Baseline \u00d7 Time colored by Z-Score, to spot an outlier baseline at a glance  | Scatter: Amplitude vs Time, colored the same way, to confirm what is there"),
     ("phaserms-time", "\u03c6rms\u00b7t", 62,
      "<b>Phase RMS vs Time</b> \u2014 how steady the phase is, and when  | Raster: Baseline \u00d7 Time, phase scatter across the band in each integration  | Scatter: the same values against time, all baselines  | Low and flat is good; a rise shows when the phase became unstable. Slope and window controls are reset"),
     ("phaserms-freq", "\u03c6rms\u00b7\u03bd", 62,
@@ -392,7 +392,7 @@ _PRESET_BUTTONS = (
     ("phaserms-uvdist", "\u03c6rms\u00b7uv", 66,
      "<b>Phase RMS vs UV Distance</b> \u2014 does phase stability get worse on longer baselines?  | Raster: Baseline \u00d7 Time, Phase RMS  | Scatter: one point per baseline and scan against baseline length  | A rise with length is the atmosphere; one high baseline is an antenna. Slope and window controls are reset"),
     ("phase-waterfall", "\u03c6 Wfall", 68,
-     "<b>Phase waterfall</b> \u2014 Time \u00d7 Channel phase in a cyclic colormap (\u2212180\u00b0 and +180\u00b0 are the same colour)  | Scatter: Phase vs Time  | Stripes across frequency are a delay; stripes in time are a rate; uniform colour is calibrated  | Tick one baseline, or step through them"),
+     "<b>Phase waterfall</b> \u2014 Time \u00d7 Channel phase in a cyclic colormap (\u2212180\u00b0 and +180\u00b0 are the same color)  | Scatter: Phase vs Time  | Stripes across frequency are a delay; stripes in time are a rate; uniform color is calibrated  | Tick one baseline, or step through them"),
     ("waterfall-all", "All-BL", 62,
      "<b>All-baseline waterfall</b> \u2014 Time \u00d7 Channel with every selected baseline in one image, like AIPS FTFLG  | Each cell shows the largest amplitude among the baselines (Baselines combined is set to Maximum)  | Scatter: Amplitude vs Channel  | A quick survey for interference: one picture instead of one per baseline. A flag box here flags <b>every selected baseline</b>, and the message says how many  | What looks bad here may be on only a few baselines: tick antennas or baselines to find which before flagging them all"),
     ("antmatrix", "Ant\u00d7Ant", 68,
@@ -708,7 +708,7 @@ _MORE_BELOW_JS = r"""
   function ensureChip() {
     if (chip) return chip;
     chip = document.createElement('div');
-    chip.textContent = '\u25BE more below \u2014 colour bars / info';
+    chip.textContent = '\u25BE more below \u2014 color bars / info';
     Object.assign(chip.style, {
       position: 'fixed', zIndex: 50, padding: '2px 12px', borderRadius: '10px',
       font: '12px system-ui, sans-serif', cursor: 'pointer', display: 'none',
@@ -749,7 +749,7 @@ _MORE_BELOW_JS = r"""
     }
   }
   window.addEventListener('resize', update);
-  setInterval(update, 700);   // content (colour bars, info items) changes size
+  setInterval(update, 700);   // content (color bars, info items) changes size
 })();
 """
 
@@ -834,7 +834,7 @@ _SIZES_JS = r"""
     return [s.raster_fig, s.scatter_fig];
   }
   // "fit": the plot area's visible height, less what is not a figure
-  // (each panel's readouts and colour bars), shared by the rows; never
+  // (each panel's readouts and color bars), shared by the rows; never
   // below FIT_MIN.  Measured per panel (its block less its figure): the
   // containers stretch with the window, so their height says nothing
   // about their contents.
@@ -902,7 +902,7 @@ _SIZES_JS = r"""
     clearTimeout(window.__cvFitTimer);
     window.__cvFitTimer = setTimeout(refit, 200);
   });
-  // Readouts and colour bars change height after a Plot; follow them.
+  // Readouts and color bars change height after a Plot; follow them.
   setInterval(refit, 1000);
   setTimeout(apply, 300);
 })();
@@ -940,7 +940,7 @@ label {
 }
 /* The blanket .bk-btn rule above is !important, so it also flattened the
    selected button of every RadioButtonGroup (Raster/Scatter, colorize
-   mode, ...) to the same colour as its unselected neighbours -- no way to
+   mode, ...) to the same color as its unselected neighbours -- no way to
    tell which mode was active.  More specific, so it wins. */
 .bk-btn.bk-active, .bk-btn.bk-active:hover {
     background:   #89b4fa !important;
@@ -998,7 +998,7 @@ label {
 # survive a toggle at all — this way, sizing lives once, attached at
 # stylesheets[1] (see _field_prev_btn / _spw_prev_btn's construction in
 # _build_sidebar()), a slot the widgets loop never touches, while
-# stylesheets[0] still gets the normal dark/light colour swap like every
+# stylesheets[0] still gets the normal dark/light color swap like every
 # other themed sidebar widget. Same two-stylesheet shape as
 # self._spw_table's [dark, table_css_dark] — that pairing exists for a
 # different reason (SlickGrid needs its own sheet) but the mechanism is
@@ -2217,7 +2217,7 @@ function _step(name, fn) {
 }
 
 // --- sidebar section headings ---------------------------------------
-// Their colour was baked into the Div's inline style at construction, so
+// Their color was baked into the Div's inline style at construction, so
 // nothing could change it and they stayed dark-blue on a light sidebar.
 _step('section headings', () => {
     if (typeof section_divs === 'undefined' || !section_divs) return;
@@ -2330,7 +2330,7 @@ _step('info divs', () => {
         } catch(e) { console.error('[visplot theme] sidebar container failed:', e); }
     }
     // Page-level theme variables read by the info/legend/colorbar strips
-    // (VisibilityPlot._build: background var(--cv-info-bg), colour
+    // (VisibilityPlot._build: background var(--cv-info-bg), color
     // var(--cv-info-fg)).  Custom properties inherit into shadow DOM.
     try {
         document.documentElement.style.setProperty('--cv-info-bg', info_bg);
@@ -2569,14 +2569,14 @@ if (sel) {
         if (i >= 0) corr_cbg.active = [i];
     }
     // The panel One shows becomes the cell (gridplot G3): the grid's panel
-    // as last plotted, its colour scaling sent with this Plot and shown in
-    // the panel's colour controls (without sending: Plot applies it).
+    // as last plotted, its color scaling sent with this Plot and shown in
+    // the panel's color controls (without sending: Plot applies it).
     const _pi = (display_order_source.data['order'][0] || [0, 1])[0];
     const _pw = panel_tabs[_pi];
     if (cb_obj.panel) cvSetPanelTab(_pw, cb_obj.panel);
-    const _col = cb_obj.colour;
+    const _col = cb_obj.color;
     if (_col && _col.scaling) {
-        window.__cvDrillColour = {id: [panel0_id, panel1_id][_pi], colour: _col};
+        window.__cvDrillColor = {id: [panel0_id, panel1_id][_pi], color: _col};
         try {
             window.__cvQuietScaling = true;
             if (_pw.cm_scale) _pw.cm_scale.value = _col.scaling;
@@ -2853,7 +2853,7 @@ class VisibilityPlotter:
         an explicit, conflicting ``kind=`` raises ``ValueError``.
     row_height : int, str or list
         Height of each row of plots, in pixels: the plot with its axes,
-        not the readout and colour bars below it.  ``None`` (default):
+        not the readout and color bars below it.  ``None`` (default):
         550 for One and Side by Side, 280 for Over / Under.  ``"fit"``:
         the rows share the window's height (never less than 250 px).  A
         list gives one height per row (Over / Under has two).  The GUI's
@@ -2898,11 +2898,11 @@ class VisibilityPlotter:
         Rows of plots on a page of the Grid layout (1-8, default 3).
     gridcols : int
         Columns of plots on a page of the Grid layout (1-8, default 3).
-    gridcolour : str
-        The Grid layout's colour range: ``"page"`` (default), one range
+    gridcolor : str
+        The Grid layout's color range: ``"page"`` (default), one range
         for the plots on a page; ``"grid"``, one for every plot in the
         grid, so that pages compare (found cell by cell in the
-        background; until then a page is coloured by its own range);
+        background; until then a page is colored by its own range);
         ``"cell"``, each plot its own.  With ``eq_hist`` the plots that
         share a range share its curve too.
     exprange : str
@@ -2922,7 +2922,7 @@ class VisibilityPlotter:
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
         ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
         ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
-        and ``vmax`` (its colour scale).  A key left out takes the value
+        and ``vmax`` (its color scale).  A key left out takes the value
         the flat argument (or ``preset``) gives that panel, so the flat
         arguments still describe the first panel; an unknown key raises.
         At most two panels for now.  ``layout`` still decides how many are
@@ -3004,7 +3004,7 @@ class VisibilityPlotter:
         How pending flags are shown: ``"hide"`` (flagged points disappear,
         the default) or ``"color"`` (drawn in ``flag_color``).
     flag_color : str
-        Colour for pending flags when ``flag_display="color"``.
+        Color for pending flags when ``flag_display="color"``.
     flag_reach : str
         How far a flag box reaches beyond what is drawn, as the "Flag
         reaches" controls start: a comma-separated list of
@@ -3023,7 +3023,7 @@ class VisibilityPlotter:
         ``flag_flagged_color``, so an Unflag box can select them.  Off by
         default; toggled in the Flagging controls.
     flag_flagged_color : str
-        Colour for flagged data when ``flag_show_flagged`` is on.
+        Color for flagged data when ``flag_show_flagged`` is on.
     frame_cache_mb : float | None
         Budget (MiB) of the cache of scatter frames -- the decoded samples a
         scatter panel draws, flags and probes.  When a selection's frames do
@@ -3112,7 +3112,7 @@ class VisibilityPlotter:
         iterate_by:       str           = "baseline",
         gridrows:         int           = 3,
         gridcols:         int           = 3,
-        gridcolour:       str           = "page",
+        gridcolor:       str           = "page",
         exprange:         str           = "current",
         time_labels:      str           = "utc",
         autocorr:         str           = "exclude",
@@ -3170,10 +3170,10 @@ class VisibilityPlotter:
             if not isinstance(_v, int) or isinstance(_v, bool) or not 1 <= _v <= _cap:
                 raise ValueError(f"{_n} must be an integer 1..{_cap}; got {_v!r}")
         self._grid_shape = (int(gridrows), int(gridcols))
-        from .vis_grid_source import COLOUR_SCOPES
-        if gridcolour not in COLOUR_SCOPES:
-            raise ValueError(f"gridcolour must be one of {COLOUR_SCOPES}; got {gridcolour!r}")
-        self._grid_colour = gridcolour
+        from .vis_grid_source import COLOR_SCOPES
+        if gridcolor not in COLOR_SCOPES:
+            raise ValueError(f"gridcolor must be one of {COLOR_SCOPES}; got {gridcolor!r}")
+        self._grid_color = gridcolor
         self._exprange = parse_exprange(exprange)
         self._grid_on = False          # set from layout= in _resolve_config
         self._grid_source = None
@@ -3741,7 +3741,7 @@ class VisibilityPlotter:
         self._slot_cfg, self._grid_cfg = cfgs[:2], cfgs[2]
         self._kind = self._slot_cfg[0]["kind"]
 
-    # Keys a panels=[...] dict may hold (HRS A2).  Raster-only colour
+    # Keys a panels=[...] dict may hold (HRS A2).  Raster-only color
     # scale keys have no flat argument.
     _PANEL_KEYS = ("kind", "raster_y", "raster_x", "raster_qty", "averaging",
                    "raster_corr",
@@ -4418,7 +4418,7 @@ class VisibilityPlotter:
         if not self._scatter_cmap_user_set:
             self._scatter_cmap_name = _palettes.default_for("scatter", theme)
             changed = True
-        # Even a user-set *name* resolves to different colours per theme,
+        # Even a user-set *name* resolves to different colors per theme,
         # because condition() trims against the background -- so the
         # ramps are recomputed either way.
         self._raster_ramp = _palettes.raster_cmap(self._raster_cmap_name,
@@ -4450,8 +4450,8 @@ class VisibilityPlotter:
                 gs.scatter.set_layer_cmaps(self._scatter_ramps,
                                            statistical_cmap=self._raster_ramp)
             except Exception:                                # noqa: BLE001
-                log.debug("grid panel scatter re-colour failed", exc_info=True)
-        # The Grid layout's cells copy the template's palette: re-colour the
+                log.debug("grid panel scatter re-color failed", exc_info=True)
+        # The Grid layout's cells copy the template's palette: re-color the
         # ones kept (no re-query) -- gridplot G2
         if getattr(self, "_grid_source", None) is not None:
             self._grid_source.set_theme(theme, self._raster_ramp)
@@ -4977,7 +4977,7 @@ for (const dt of other.tools) {
     # ------------------------------------------------------------------ #
     def grid_panel_settings(self) -> dict:
         """The ``grid_panel=`` dict that reproduces the panel the grid
-        repeats: the keys of one ``panels=`` entry, with the colour
+        repeats: the keys of one ``panels=`` entry, with the color
         scaling and range only where they are not the quantity's
         default."""
         from .plot_summary import _slot_settings
@@ -4995,7 +4995,7 @@ for (const dt of other.tools) {
 
     def set_grid_panel(self, settings: dict) -> None:
         """Make the panel the grid repeats *settings* (the keys of one
-        ``panels=`` entry) on top of Panel A's defaults -- the colour
+        ``panels=`` entry) on top of Panel A's defaults -- the color
         scaling and range are the quantity's defaults unless given.
         Validated as ``grid_panel=`` is; nothing is drawn (the grid draws
         its cells from it at the next Plot)."""
@@ -5081,8 +5081,8 @@ for (const dt of other.tools) {
         return d
 
     @staticmethod
-    def _apply_drill_colour(panel, col: dict) -> None:
-        """Give a raster the grid panel's colour scaling (a drill-down):
+    def _apply_drill_color(panel, col: dict) -> None:
+        """Give a raster the grid panel's color scaling (a drill-down):
         scaling, alpha, gamma, and the range -- ``None`` is automatic."""
         from .scaling_memory import ScalingSettings
         cur = panel._current_scaling_settings()
@@ -5179,13 +5179,13 @@ for (const dt of other.tools) {
         vp = src.extent()
         size = self._grid_cell_size()
         footer = self._status_text()
-        colour = self._grid_colour
-        if colour == "grid":
+        color = self._grid_color
+        if color == "grid":
             src.wait_for_grid_range()
         out = []
         for page in pages:
             idx = list(range((page - 1) * per, min(len(labels), page * per)))
-            rendered = src.render(idx, vp, size, colour=colour) if idx else []
+            rendered = src.render(idx, vp, size, color=color) if idx else []
             first = re.sub(r"[^\w.+-]+", "_", labels[idx[0]]) if idx else "empty"
             if "{page}" in base or "{value}" in base:
                 path = base.replace("{page}", f"{page:02d}").replace("{value}", first)
@@ -5575,8 +5575,8 @@ for (const dt of other.tools) {
                 self._grid_shape = (r, c)          # for plotfile= and the summary
         except (TypeError, ValueError):
             pass
-        if msg.get("grid_colour") in ("cell", "page", "grid"):
-            self._grid_colour = msg["grid_colour"]
+        if msg.get("grid_color") in ("cell", "page", "grid"):
+            self._grid_color = msg["grid_color"]
 
         def _error(text, **extra):
             text = f"⚠ {text}"
@@ -5624,10 +5624,10 @@ for (const dt of other.tools) {
 
     def _grid_panel_from_msg(self, m: dict) -> dict:
         """The grid's tab as Plot sends it -- ``{kind, raster: {...},
-        scatter: {...}, colour: {...}}`` -- as a ``grid_panel=`` dict.
+        scatter: {...}, color: {...}}`` -- as a ``grid_panel=`` dict.
         Both kinds' choices are kept (the tab shows both); the shared
         keys (averaging, slope, windows) come from the kind shown.
-        Staged colour: ``scaling`` "auto" and empty min / max are the
+        Staged color: ``scaling`` "auto" and empty min / max are the
         quantity's defaults."""
         kind = m.get("kind") or "raster"
         ra, sc = m.get("raster") or {}, m.get("scatter") or {}
@@ -5649,7 +5649,7 @@ for (const dt of other.tools) {
                 d[key] = own[k]
         if own.get("detrend") in ("remove", "keep"):
             d["detrend"] = own["detrend"] == "remove"
-        col = m.get("colour") or {}
+        col = m.get("color") or {}
         if col.get("scaling") not in (None, "", "auto"):
             d["scaling"] = col["scaling"]
         for k in ("vmin", "vmax"):
@@ -6011,12 +6011,12 @@ for (const dt of other.tools) {
                         self._last_raster_selection_by_slot[slot.id] = self._selection
                     panel._corr_choice = rk
                     # A drill-down from the grid (gridplot G3) brings the
-                    # grid panel's colour scaling with it.
-                    col = panel_msg.get("colour")
+                    # grid panel's color scaling with it.
+                    col = panel_msg.get("color")
                     if isinstance(col, dict) and col.get("scaling"):
                         async with panel._render_lock:
                             await asyncio.to_thread(
-                                self._apply_drill_colour, panel, col)
+                                self._apply_drill_color, panel, col)
                 except Exception as exc:
                     log.error("_handle_plot: panel %s raster update_axes "
                               "failed: %s", slot.id, exc, exc_info=True)
@@ -6818,7 +6818,7 @@ cvApplySelectionText(
             self._grid_source, self._comm_mgr, rows=rows, cols=cols, pool=pool,
             area=self.GRID_AREA, theme=self._theme, on_drill=self._grid_drill,
             drill_js=self._grid_drill_js, play_outer=self._grid_play_js, autoload=autoload,
-            app_context=self._app_context, embedded=True, colour=self._grid_colour,
+            app_context=self._app_context, embedded=True, color=self._grid_color,
             extra_tools=[self._grid_gear],
             idle_text="Press <b>Plot &#9654;</b> to draw the grid")
         self._place_grid_controls()
@@ -6838,7 +6838,7 @@ cvApplySelectionText(
     def _place_grid_controls(self) -> None:
         """The grid's controls where visplot's own are (Darrell, 2026-11-11:
         the grid's control row took the plots' room): what is drawn -- Iterate
-        by, Rows, Cols, Scale, Colour, Pages/s, Loop -- in a Grid section at the top
+        by, Rows, Cols, Scale, Color, Pages/s, Loop -- in a Grid section at the top
         of the sidebar; paging and Play in the toolbar; the "drawn in" line
         and the cursor readout above the status bar.  Each is shown only in
         Grid (``window.__cvGridLayout``)."""
@@ -6850,9 +6850,9 @@ cvApplySelectionText(
         sel_scale.width = 110
         sel_rows.width = sel_cols.width = 62
         sel_speed.width = 76
-        sel_colour = w["colour"]
-        sel_colour.width = 100
-        side = [self._grid_iter_sel, sel_scale, sel_rows, sel_cols, sel_colour, sel_speed, cb_loop]
+        sel_color = w["color"]
+        sel_color.width = 100
+        side = [self._grid_iter_sel, sel_scale, sel_rows, sel_cols, sel_color, sel_speed, cb_loop]
         for x in side:
             # visplot's widget sheet first: the theme restyle swaps sheet 0
             x.stylesheets = [self._dark()] + list(x.stylesheets)
@@ -6895,7 +6895,7 @@ setTimeout(function () {
         side += [self._grid_tab_btn] + [w for w in self._grid_tab_widgets.values()
                                         if w not in side]
         self._grid_section = column(
-            head, row(self._grid_iter_sel, sel_scale), row(sel_rows, sel_cols, sel_colour),
+            head, row(self._grid_iter_sel, sel_scale), row(sel_rows, sel_cols, sel_color),
             row(sel_speed, cb_loop), self._hover(self._grid_tab_btn, "grid_panel"),
             self._grid_tab, visible=self._grid_on, width=_SIDEBAR_WIDTH,
             margin=(0, 0, 10, 0), styles={"max-height": "none"})   # as the other sections
@@ -6910,7 +6910,7 @@ setTimeout(function () {
     def _panel_tab_widgets(self, slot) -> dict:
         """*slot*'s gear-tab widgets under the grid tab's keys (gridplot G3:
         a drill-down sets them with ``cvSetPanelTab``), with its raster's
-        colour controls (``cm_*``) for the copied colour scaling."""
+        color controls (``cm_*``) for the copied color scaling."""
         r = self._panel_axis_widgets[slot.id]["raster"]
         sc = self._panel_axis_widgets[slot.id]["scatter"]
         w = {"kind": self._panel_kind_switch[slot.id],
@@ -6925,9 +6925,9 @@ setTimeout(function () {
 
     def _build_grid_panel_tab(self, dark):
         """The grid's own panel tab (gridplot G3, 2026-11-13): the pickers
-        of a panel's gear tab, for slot G, with a staged colour scaling
+        of a panel's gear tab, for slot G, with a staged color scaling
         (applied at Plot, like the axes: the grid's panel is never drawn,
-        so the panels' live colour controls have nothing to act on).
+        so the panels' live color controls have nothing to act on).
         Returns ``(column, widgets)``; ``widgets`` is what doPlot reads
         (``grid_tmpl``) and the drill-down copies from."""
         from bokeh.models import Div, RadioButtonGroup, Select, TextInput, CustomJS
@@ -6939,7 +6939,7 @@ setTimeout(function () {
         kind = RadioButtonGroup(labels=["Raster", "Scatter"],
                                 active=0 if gs.kind == "raster" else 1,
                                 width=120, stylesheets=[dark])
-        scale = Select(title="Colour scaling", value=c.get("scaling") or "auto",
+        scale = Select(title="Color scaling", value=c.get("scaling") or "auto",
                        options=["auto"] + list(_cms.ALL_SCALINGS),
                        width=_SIDEBAR_WIDTH, stylesheets=[dark])
         vmin = TextInput(title="min", width=110, stylesheets=[dark],
@@ -6948,7 +6948,7 @@ setTimeout(function () {
         vmax = TextInput(title="max", width=110, stylesheets=[dark],
                          value="" if c.get("vmax") is None else f"{c['vmax']:.6g}",
                          placeholder="auto")
-        # Another quantity: its own colour scaling (Phase's fixed range,
+        # Another quantity: its own color scaling (Phase's fixed range,
         # Z-Score's threshold), as a panel's per-quantity memory gives it.
         rp["rq_sel"].js_on_change("value", CustomJS(
             args={"scale": scale, "vmin": vmin, "vmax": vmax},
@@ -7013,15 +7013,15 @@ setTimeout(function () {
             return {"text": ""}
         # The cell's configuration goes to the panel shown in One (gridplot
         # G3): the grid's panel as last plotted -- not its tab, which may
-        # hold edits not yet plotted -- and its colour scaling, which the
+        # hold edits not yet plotted -- and its color scaling, which the
         # browser sends back with that panel's Plot.
         r = self._grid_slot.raster
-        colour = {"scaling": r._scaling, "alpha": r._scaling_alpha,
+        color = {"scaling": r._scaling, "alpha": r._scaling_alpha,
                   "gamma": r._scaling_gamma, "vmin": r._scaling_vmin,
                   "vmax": r._scaling_vmax}
         return {"text": f"{label}: shown in the full panel (One), set up as the "
                         f"grid's panel.  Grid returns to the grid and its selection.",
-                "select": target, "panel": self._grid_tab_values(), "colour": colour}
+                "select": target, "panel": self._grid_tab_values(), "color": color}
 
     def _build_layout(self):
         """Build the full layout.
@@ -7371,7 +7371,7 @@ html, body { height: 100%; margin: 0; }
     # that's supported, is a non-event here — build for N, ship for 2.
 
     def _raster_pickers(self, slot: "_PanelSlot", dark) -> dict:
-        """A slot's raster axis and plot-time pickers (no colour controls):
+        """A slot's raster axis and plot-time pickers (no color controls):
         shared by the panels' gear tabs and the grid's own tab."""
         ry_sel = Select(
             title="Raster Y axis", value=(slot.raster._y_dim or self._raster_y).name,
@@ -7524,8 +7524,8 @@ conflict_div.text = m ? '⚠ ' + m : '';
             _pk["ry_sel"], _pk["rx_sel"], _pk["rq_sel"], _pk["ra_sel"], _pk["rb_sel"], _pk["rm_sel"], _pk["rd_sel"], _pk["rt_sel"], _pk["rc_sel"], _pk["rk_sel"], _pk["rk_box"], _pk["ra_box"], _pk["rb_box"], _pk["rm_box"], _pk["rd_box"], _pk["rt_box"], _pk["rc_box"], _pk["conflict_div"])
 
         raster_cmap  = slot.raster.colormap_controls()
-        # Its colour controls by name (gridplot G3: a drill-down shows the
-        # grid panel's colour scaling in them): see colormap_controls()'s
+        # Its color controls by name (gridplot G3: a drill-down shows the
+        # grid panel's color scaling in them): see colormap_controls()'s
         # layout -- scaling, equation, (alpha, gamma), histogram, (reset,
         # min, max).
         try:
@@ -7577,7 +7577,7 @@ conflict_div.text = m ? '⚠ ' + m : '';
         return panel, widgets
 
     def _scatter_pickers(self, slot: "_PanelSlot", dark) -> dict:
-        """A slot's scatter axis and plot-time pickers (no colour or
+        """A slot's scatter axis and plot-time pickers (no color or
         colorize controls): shared by the gear tabs and the grid's tab."""
         sx_sel = Select(
             title="Scatter X axis", value=(slot.scatter._x_dim or self._scatter_x).name,
@@ -9687,7 +9687,7 @@ function cvSetPanelTab(w, vals) {
             w[k].value = String(vals[k]);
         } catch (e) {}
     }
-    // after the quantity: its change resets the grid tab's colour to auto
+    // after the quantity: its change resets the grid tab's color to auto
     for (const k of ['scaling', 'vmin', 'vmax']) {
         if (!w[k] || vals[k] == null) continue;
         try { w[k].value = String(vals[k]); } catch (e) {}
@@ -9830,7 +9830,7 @@ function doPlot(reload) {
             scatter: {x: g.sx.value, y: g.sy.value, avg_time: g.sat.value,
                       avg_chan: g.sac.value, averaging: g.sam.value,
                       detrend: g.sd.value, twin: g.st.value, cwin: g.sc.value},
-            colour: {scaling: g.scaling.value, vmin: g.vmin.value, vmax: g.vmax.value}};
+            color: {scaling: g.scaling.value, vmin: g.vmin.value, vmax: g.vmax.value}};
     } else {
     panels[panel0_id] = buildPanelPayload(
         panel0_kind_switch, panel0_ry_sel, panel0_rx_sel, panel0_rq_sel,
@@ -9855,10 +9855,10 @@ function doPlot(reload) {
         if (f && f.inner_width > 0 && f.inner_height > 0) { e[0].w = f.inner_width; e[0].h = f.inner_height; }
     });
     // A drill-down from the grid (gridplot G3) brings the grid panel's
-    // colour scaling to the panel it is shown in.
-    const _dc = window.__cvDrillColour;
-    if (_dc && panels[_dc.id] && panels[_dc.id].kind === 'raster') panels[_dc.id].colour = _dc.colour;
-    window.__cvDrillColour = null;
+    // color scaling to the panel it is shown in.
+    const _dc = window.__cvDrillColor;
+    if (_dc && panels[_dc.id] && panels[_dc.id].kind === 'raster') panels[_dc.id].color = _dc.color;
+    window.__cvDrillColor = null;
     }
 
     console.log('[visplot doPlot] sending panels:', JSON.parse(JSON.stringify(panels)));
@@ -9940,8 +9940,8 @@ function doPlot(reload) {
         grid_slot:   [panel0_id, panel1_id][(display_order_source.data['order'][0] || [0, 1])[0]],
         grid_shape:  (typeof grid_key !== 'undefined' && window.__cvGrid && window.__cvGrid[grid_key])
                      ? [window.__cvGrid[grid_key].state().rows, window.__cvGrid[grid_key].state().cols] : null,
-        grid_colour: (typeof grid_key !== 'undefined' && window.__cvGrid && window.__cvGrid[grid_key])
-                     ? window.__cvGrid[grid_key].state().colour : null,
+        grid_color: (typeof grid_key !== 'undefined' && window.__cvGrid && window.__cvGrid[grid_key])
+                     ? window.__cvGrid[grid_key].state().color : null,
         // Row height / column width as shown (2026-10-13), for the
         // reproducing call and the status line.
         sizes:       window.__cvSizeSpec ? window.__cvSizeSpec() : null,
@@ -10828,7 +10828,7 @@ function doIterateSpw(delta) {
         # see field_prev_btn/field_next_btn/spw_prev_btn/spw_next_btn
         # above, each `stylesheets=[dark, self._icon_btn_css]` — and
         # all four are in self._theme_restyle_args["widgets"] below, so
-        # stylesheets[0] (colour) follows the toggle exactly like every
+        # stylesheets[0] (color) follows the toggle exactly like every
         # other themed sidebar widget; stylesheets[1] (_ICON_BTN_CSS,
         # sizing only) is deliberately never touched by that loop — see
         # _ICON_BTN_CSS's own comment for why.
@@ -11299,7 +11299,7 @@ if (layout_rbg.active === 3 && grid_tmpl) {{
     doPlot();
     return;
 }}
-// A Statistical (Z-Score) colouring left by the Z-Score preset goes back
+// A Statistical (Z-Score) coloring left by the Z-Score preset goes back
 // to Continuous, as for every other preset; Categorical is left alone.
 try {{
     panel0_colorize_handles.concat(panel1_colorize_handles).forEach(function(h) {{
@@ -11415,11 +11415,11 @@ doPlot();
                 # correct theme by the time it's shown, not caught in
                 # Bokeh's raw default because the toggle never reached it.
                 "figs":         [p.figure    for p in self._all_panels],
-                # Cursor readout, categorical legend and colour bar of every
+                # Cursor readout, categorical legend and color bar of every
                 # panel: all three sit in the same info block and share its
-                # background (the legend and colour bar were missing here,
-                # so they stayed dark in light mode).  The colour bar's
-                # text uses ``inherit``, so recolouring the Div is enough.
+                # background (the legend and color bar were missing here,
+                # so they stayed dark in light mode).  The color bar's
+                # text uses ``inherit``, so recoloring the Div is enough.
                 "info_divs":    ([p._info_div for p in self._all_panels]
                                  + [p._legend_content for p in self._all_panels]
                                  + [p._colorbar_content for p in self._all_panels]),

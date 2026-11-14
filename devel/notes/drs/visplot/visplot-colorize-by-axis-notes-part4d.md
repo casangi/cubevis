@@ -213,7 +213,7 @@ not real DOM interaction). Whether the new worst-case panel heights
 
 ## Known limitations
 
-* In "local" colour mode the raster/scatter colorbar tracks the last Plot /
+* In "local" color mode the raster/scatter colorbar tracks the last Plot /
   scaling change, not pan/zoom.
 * With "All" checked on a scatter panel with a long legend, worst-case panel
   height is figure + 250px — noticeably taller than the pre-session 90px

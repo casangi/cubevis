@@ -539,7 +539,7 @@ class TestRealRaster:
 
     def test_drawn_rows_are_the_rows_the_axis_says(self, backend):
         # Amplitude rises by 1 per integration, so with linear scaling
-        # the colour of a row identifies its integration.
+        # the color of a row identifies its integration.
         vr = _raster(backend)
         img, _x, y = _image(vr)
         t = vr.agg.coords["time"].values

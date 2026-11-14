@@ -19,7 +19,7 @@ It exercises the complete path:
         → HTML figure
 
 Plots produced (one panel per row in the output HTML):
-  Row 1 — Scatter: Amplitude vs Time (XX and YY overlaid, different colours)
+  Row 1 — Scatter: Amplitude vs Time (XX and YY overlaid, different colors)
   Row 2 — Scatter: Amplitude vs UV-distance (metres)
   Row 3 — Scatter: Phase vs Time (XX polarization)
   Row 4 — Scatter: UV-coverage (U vs V with conjugate baselines)
@@ -36,7 +36,7 @@ Each panel includes:
 
 The flag overlay in Row 7 demonstrates compositing: two Datashader images
 are stacked in the same Bokeh figure — data amplitude underneath, flag
-regions on top in a distinct colour (red with partial transparency).
+regions on top in a distinct color (red with partial transparency).
 
 Usage:
     MS=sis14_twhya_calibrated_flagged.ms python test_10_bokeh_display.py

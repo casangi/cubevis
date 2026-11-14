@@ -14,7 +14,7 @@ Linear value-to-color mapping saturates badly on real visibility data: a
 small high-amplitude population dominates the colormap while the populous
 low-amplitude region collapses into a featureless gradient (observed
 directly during scatter testing — amplitude vs UVdist rendered as a
-near-solid colour field below amplitude ~40, with structure visible only
+near-solid color field below amplitude ~40, with structure visible only
 near the top of the range). This is a value-distribution problem, not a
 bit-depth problem; a wider bit depth under the same linear map saturates
 identically.
@@ -65,10 +65,10 @@ import numpy as np
 # "eq_hist" is deliberately NOT included here even though Datashader
 # implements it natively: Datashader raises ValueError if span= is passed
 # together with how="eq_hist" ("span is not (yet) valid to use with
-# eq_hist"), which means there is no way to anchor eq_hist's colour
+# eq_hist"), which means there is no way to anchor eq_hist's color
 # mapping to a fixed external range — color_mode="global" would be a
 # silent no-op for it. To make global/local meaningful for eq_hist too
-# (useful when zoomed in and wanting the option to either lock colours to
+# (useful when zoomed in and wanting the option to either lock colors to
 # the full data range or let them auto-equalize to the visible crop),
 # eq_hist is implemented as an explicit pre-transform instead — see
 # ``equalize_histogram`` below — and is classified under
@@ -179,7 +179,7 @@ def equalize_histogram(
     ``np.interp``) rather than calling ``tf.shade(..., how="eq_hist")``
     directly, because Datashader rejects ``span=`` for ``"eq_hist"``
     (raises ``ValueError: span is not (yet) valid to use with eq_hist``)
-    — there is no way to anchor its colour mapping to an external range
+    — there is no way to anchor its color mapping to an external range
     through the public API. Reimplementing it here as an explicit
     pre-transform restores that capability: the *reference* parameter
     lets the CDF be built from a different array (e.g. the full cached
@@ -197,7 +197,7 @@ def equalize_histogram(
         Datashader's native ``how="eq_hist"`` behaviour, i.e. "local"
         mode where the mapping always matches what's currently visible.
         Pass the full cached aggregation's values here for "global" mode
-        — colours stay anchored to the full data's distribution
+        — colors stay anchored to the full data's distribution
         regardless of how far zoomed in the viewport is.
     nbins : int
         Histogram bin count, matching Datashader's own default.
@@ -453,11 +453,11 @@ def apply_explicit_scaling(
 
 
 # ---------------------------------------------------------------------------
-# ScalarMapping — value <-> colour-position, as an object
+# ScalarMapping — value <-> color-position, as an object
 # ---------------------------------------------------------------------------
 
 class ScalarMapping:
-    """The value-to-colour-position curve of a shade, made inspectable.
+    """The value-to-color-position curve of a shade, made inspectable.
 
     ``apply_explicit_scaling`` and ``equalize_histogram`` transform an
     array and discard the curve they used.  That is all a shade needs,
@@ -641,21 +641,21 @@ class ScalarMapping:
         return self._x, self._u
 
     def forward(self, v):
-        """Data value(s) -> colour position in [0, 1]."""
+        """Data value(s) -> color position in [0, 1]."""
         return np.interp(v, self._x, self._u,
                          left=self._u[0], right=self._u[-1])
 
     def inverse(self, u):
-        """Colour position in [0, 1] -> data value(s)."""
+        """Color position in [0, 1] -> data value(s)."""
         return np.interp(u, self._u, self._x,
                          left=self._x[0], right=self._x[-1])
 
     # -- convenience -----------------------------------------------------
 
     def ticks(self, n: int = 6) -> np.ndarray:
-        """*n* data values evenly spaced along the *colour* axis.
+        """*n* data values evenly spaced along the *color* axis.
 
-        Even spacing in colour, not in value, is what makes a non-linear
+        Even spacing in color, not in value, is what makes a non-linear
         colorbar readable: under eq_hist the ticks bunch up where the
         data is dense, which is exactly the information the scaling was
         chosen to expose.

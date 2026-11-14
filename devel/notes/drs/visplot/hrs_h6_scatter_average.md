@@ -37,10 +37,10 @@ the vector / scalar start value is the existing `averaging` argument
 - Only Amplitude, Phase, Real and Imaginary are averaged. Phase RMS,
   Coherence, Z-Score, ... are drawn as before.
 - X of a point is the mean X of its samples (mean time, frequency, UV
-  distance, ...). Scan, field, baseline and spectral window (colouring,
+  distance, ...). Scan, field, baseline and spectral window (coloring,
   hover) are those of the window, which never mixes scans.
-- Flagged samples are left out of the averages; in "Show in colour" or
-  "Show flagged data" the coloured points are averages of the samples in
+- Flagged samples are left out of the averages; in "Show in color" or
+  "Show flagged data" the colored points are averages of the samples in
   that state.
 - **Flagging**: a box takes every sample behind the points it encloses
   (for Unflag, the flagged samples behind the points of the flagged

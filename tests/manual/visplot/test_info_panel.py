@@ -165,8 +165,8 @@ def test_colorbar_survives_a_mapping_that_cannot_tick():
     assert "<span>0</span>" in html and "<span>1</span>" in html
 
 
-def test_colorbar_text_inherits_theme_colour():
-    # no hard-coded light-on-dark text: the dark/light restyle recolours
+def test_colorbar_text_inherits_theme_color():
+    # no hard-coded light-on-dark text: the dark/light restyle recolors
     # the Div, and the bar must follow it
     assert "#cdd6f4" not in ip.colorbar_html([_band()])
 

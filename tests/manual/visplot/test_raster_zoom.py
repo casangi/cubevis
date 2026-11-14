@@ -317,7 +317,7 @@ class TestRealRaster:
         assert vr._current_viewport == box
         assert out["image"].shape == (vr._height, vr._width)
 
-    def test_colours_stay_anchored_to_the_whole_selection(self, backend):
+    def test_colors_stay_anchored_to_the_whole_selection(self, backend):
         vr = _raster(backend)
         s0 = vr._panel_spec()
         vr._do_viewport_rerender(*_zoom_box(vr))

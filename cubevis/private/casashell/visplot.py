@@ -84,7 +84,7 @@ def _visplot_t(
         iterate_by: str = 'baseline',
         gridrows: int = 3,
         gridcols: int = 3,
-        gridcolour: str = 'page',
+        gridcolor: str = 'page',
         exprange: str = 'current',
         time_labels: str = 'utc',
         autocorr: str = 'exclude',
@@ -146,7 +146,7 @@ def _visplot_t(
         iterate_by = iterate_by,
         gridrows = gridrows,
         gridcols = gridcols,
-        gridcolour = gridcolour,
+        gridcolor = gridcolor,
         exprange = exprange,
         time_labels = time_labels,
         autocorr = autocorr,
@@ -335,7 +335,7 @@ class _visplot:
         an explicit, conflicting ``kind=`` raises ``ValueError``.
     row_height : int, str or list
         Height of each row of plots, in pixels: the plot with its axes,
-        not the readout and colour bars below it.  ``None`` (default):
+        not the readout and color bars below it.  ``None`` (default):
         550 for One and Side by Side, 280 for Over / Under.  ``"fit"``:
         the rows share the window's height (never less than 250 px).  A
         list gives one height per row (Over / Under has two).  The GUI's
@@ -380,11 +380,11 @@ class _visplot:
         Rows of plots on a page of the Grid layout (1-8, default 3).
     gridcols : int
         Columns of plots on a page of the Grid layout (1-8, default 3).
-    gridcolour : str
-        The Grid layout's colour range: ``"page"`` (default), one range
+    gridcolor : str
+        The Grid layout's color range: ``"page"`` (default), one range
         for the plots on a page; ``"grid"``, one for every plot in the
         grid, so that pages compare (found cell by cell in the
-        background; until then a page is coloured by its own range);
+        background; until then a page is colored by its own range);
         ``"cell"``, each plot its own.  With ``eq_hist`` the plots that
         share a range share its curve too.
     exprange : str
@@ -404,7 +404,7 @@ class _visplot:
         ``stat_chan_window``, ``scatter_x``, ``scatter_y``,
         ``scatter_avg_time``, ``scatter_avg_chan`` -- plus, for a raster,
         ``scaling`` (``"linear"``, ``"log"``, ``"eq_hist"``, ...), ``vmin``
-        and ``vmax`` (its colour scale).  A key left out takes the value
+        and ``vmax`` (its color scale).  A key left out takes the value
         the flat argument (or ``preset``) gives that panel, so the flat
         arguments still describe the first panel; an unknown key raises.
         At most two panels for now.  ``layout`` still decides how many are
@@ -486,7 +486,7 @@ class _visplot:
         How pending flags are shown: ``"hide"`` (flagged points disappear,
         the default) or ``"color"`` (drawn in ``flag_color``).
     flag_color : str
-        Colour for pending flags when ``flag_display="color"``.
+        Color for pending flags when ``flag_display="color"``.
     flag_reach : str
         How far a flag box reaches beyond what is drawn, as the "Flag
         reaches" controls start: a comma-separated list of
@@ -505,7 +505,7 @@ class _visplot:
         ``flag_flagged_color``, so an Unflag box can select them.  Off by
         default; toggled in the Flagging controls.
     flag_flagged_color : str
-        Colour for flagged data when ``flag_show_flagged`` is on.
+        Color for flagged data when ``flag_show_flagged`` is on.
     frame_cache_mb : float | None
         Budget (MiB) of the cache of scatter frames -- the decoded samples a
         scatter panel draws, flags and probes.  When a selection's frames do
@@ -590,7 +590,7 @@ class _visplot:
         'iterate_by': 'What the Grid layout makes one plot of each: ``"baseline"`` (default), ``"antenna"`` (each antenna\'s baselines), ``"spw"``, ``"field"``, ``"scan"`` or ``"correlation"`` -- within the selection, as plotms\'s ``iteraxis``.',
         'gridrows': 'Rows of plots on a page of the Grid layout (1-8, default 3).',
         'gridcols': 'Columns of plots on a page of the Grid layout (1-8, default 3).',
-        'gridcolour': 'The Grid layout\'s colour range: ``"page"`` (default), one range for the plots on a page; ``"grid"``, one for every plot in the grid, so that pages compare (found cell by cell in the background; until then a page is coloured by its own range); ``"cell"``, each plot its own.',
+        'gridcolor': 'The Grid layout\'s color range: ``"page"`` (default), one range for the plots on a page; ``"grid"``, one for every plot in the grid, so that pages compare (found cell by cell in the background; until then a page is colored by its own range); ``"cell"``, each plot its own.',
         'exprange': 'Which pages of the Grid layout ``plotfile=`` writes: ``"current"`` (default: the first page, as plotms), ``"all"``, or page numbers such as ``"2"`` or ``"1-3,5"``.',
         'time_labels': 'How time axes and the cursor readout give time: ``"utc"`` (default; time of day, the date in the axis label, AIPS-style ``d/hh:mm:ss`` when the data cross a UTC midnight) or ``"elapsed"`` (minutes and seconds from the first sample).',
         'autocorr': 'Autocorrelations (baselines from an antenna to itself): ``"exclude"`` (default; cross-correlations only), ``"include"`` or ``"only"``.',
@@ -605,7 +605,7 @@ class _visplot:
         'freq_range': '``(start, end)`` in Hz.',
         'uvdist_range': '``(min, max)`` UV distance in metres, the programmatic form of ``uvrange``; shown in the UV range box as text.',
         'compact_toolbar': "Whether each figure's toolbar auto-hides until the mouse is over that plot.",
-        'row_height': 'Height of each row of plots, in pixels: the plot with its axes, not the readout and colour bars below it.',
+        'row_height': 'Height of each row of plots, in pixels: the plot with its axes, not the readout and color bars below it.',
         'column_width': 'Width of each column of plots, in pixels.',
         'theme': '',
         'raster_cmap': '',
@@ -614,9 +614,9 @@ class _visplot:
         'flag_filters': 'Extra flag filters, ``{name: callable | FlagFilter}``; each callable is ``func(ds, **params) -> bool mask`` (see ``flag_filters.py``).',
         'flag_preview': 'Review each flag proposal (counts, breakdown, highlighted samples) before it is added to the pending flags.',
         'flag_display': 'How pending flags are shown: ``"hide"`` (flagged points disappear, the default) or ``"color"`` (drawn in ``flag_color``).',
-        'flag_color': 'Colour for pending flags when ``flag_display="color"``.',
+        'flag_color': 'Color for pending flags when ``flag_display="color"``.',
         'flag_show_flagged': 'Also draw data that are currently flagged (on disk or pending) in ``flag_flagged_color``, so an Unflag box can select them.',
-        'flag_flagged_color': 'Colour for flagged data when ``flag_show_flagged`` is on.',
+        'flag_flagged_color': 'Color for flagged data when ``flag_show_flagged`` is on.',
         'flag_reach': 'How far a flag box reaches beyond what is drawn, as the "Flag reaches" controls start: a comma-separated list of ``shared-antenna`` (all baselines to the antenna the drawn baselines share), ``antennas`` (all baselines to every antenna of the drawn baselines), ``all-baselines``, ``channels``, ``spw`` (all selected spectral windows), ``scan`` (the whole scan), ``fields``, ``correlations``.',
         'flag_reason': 'Text stored with each flag made from now on (why it was flagged); shown in the report, saved in the JSON, written as ``reason=`` in exported flagdata commands.',
         'frame_cache_mb': 'Budget (MiB) of the cache of scatter frames -- the decoded samples a scatter panel draws, flags and probes.',
@@ -653,7 +653,7 @@ class _visplot:
         'iterate_by': 'baseline',
         'gridrows': 3,
         'gridcols': 3,
-        'gridcolour': 'page',
+        'gridcolor': 'page',
         'exprange': 'current',
         'time_labels': 'utc',
         'autocorr': 'exclude',
@@ -751,7 +751,7 @@ class _visplot:
             'iterate_by': 'str',
             'gridrows': 'int',
             'gridcols': 'int',
-            'gridcolour': 'str',
+            'gridcolor': 'str',
             'exprange': 'str',
             'time_labels': 'str',
             'autocorr': 'str',
@@ -1307,18 +1307,18 @@ class _visplot:
             desc, fmt,
         )
 
-    def __gridcolour_inp(self):
+    def __gridcolor_inp(self):
         glb     = self.__globals_()
-        value   = glb.get('gridcolour', self._arg_default['gridcolour'])
-        default = self._arg_default['gridcolour']
-        desc    = self._arg_description.get('gridcolour', '')
-        if self.__validate_('gridcolour', value):
+        value   = glb.get('gridcolor', self._arg_default['gridcolor'])
+        default = self._arg_default['gridcolor']
+        desc    = self._arg_description.get('gridcolor', '')
+        if self.__validate_('gridcolor', value):
             pre, post, fmt = ('\x1B[34m', '\x1B[0m', len('\x1B[34m') + len('\x1B[0m')) \
                 if value != default else ('', '', 0)
         else:
             pre, post, fmt = '\x1B[91m', '\x1B[0m', len('\x1B[91m') + len('\x1B[0m')
         self.__do_inp_output(
-            '%-23.23s = %s%-23s%s' % ('gridcolour', pre, self.__to_string_(value), post),
+            '%-23.23s = %s%-23s%s' % ('gridcolor', pre, self.__to_string_(value), post),
             desc, fmt,
         )
 
@@ -1791,7 +1791,7 @@ class _visplot:
         if 'iterate_by' in glb: del glb['iterate_by']
         if 'gridrows' in glb: del glb['gridrows']
         if 'gridcols' in glb: del glb['gridcols']
-        if 'gridcolour' in glb: del glb['gridcolour']
+        if 'gridcolor' in glb: del glb['gridcolor']
         if 'exprange' in glb: del glb['exprange']
         if 'time_labels' in glb: del glb['time_labels']
         if 'autocorr' in glb: del glb['autocorr']
@@ -1854,7 +1854,7 @@ class _visplot:
         self.__iterate_by_inp()
         self.__gridrows_inp()
         self.__gridcols_inp()
-        self.__gridcolour_inp()
+        self.__gridcolor_inp()
         self.__exprange_inp()
         self.__time_labels_inp()
         self.__autocorr_inp()
@@ -1941,7 +1941,7 @@ class _visplot:
         _invocation_parameters['iterate_by'] = glb.get('iterate_by', self._arg_default['iterate_by'])
         _invocation_parameters['gridrows'] = glb.get('gridrows', self._arg_default['gridrows'])
         _invocation_parameters['gridcols'] = glb.get('gridcols', self._arg_default['gridcols'])
-        _invocation_parameters['gridcolour'] = glb.get('gridcolour', self._arg_default['gridcolour'])
+        _invocation_parameters['gridcolor'] = glb.get('gridcolor', self._arg_default['gridcolor'])
         _invocation_parameters['exprange'] = glb.get('exprange', self._arg_default['exprange'])
         _invocation_parameters['time_labels'] = glb.get('time_labels', self._arg_default['time_labels'])
         _invocation_parameters['autocorr'] = glb.get('autocorr', self._arg_default['autocorr'])
@@ -2020,7 +2020,7 @@ class _visplot:
             iterate_by = _UNSET,
             gridrows = _UNSET,
             gridcols = _UNSET,
-            gridcolour = _UNSET,
+            gridcolor = _UNSET,
             exprange = _UNSET,
             time_labels = _UNSET,
             autocorr = _UNSET,
@@ -2092,7 +2092,7 @@ class _visplot:
             iterate_by,
             gridrows,
             gridcols,
-            gridcolour,
+            gridcolor,
             exprange,
             time_labels,
             autocorr,
@@ -2215,9 +2215,9 @@ class _visplot:
             _invocation_parameters['gridcols'] = \
                 gridcols if gridcols is not _UNSET \
                 else glb.get('gridcols', self._arg_default['gridcols'])
-            _invocation_parameters['gridcolour'] = \
-                gridcolour if gridcolour is not _UNSET \
-                else glb.get('gridcolour', self._arg_default['gridcolour'])
+            _invocation_parameters['gridcolor'] = \
+                gridcolor if gridcolor is not _UNSET \
+                else glb.get('gridcolor', self._arg_default['gridcolor'])
             _invocation_parameters['exprange'] = \
                 exprange if exprange is not _UNSET \
                 else glb.get('exprange', self._arg_default['exprange'])
@@ -2365,8 +2365,8 @@ class _visplot:
                 glb.get('gridrows', self._arg_default['gridrows'])
             _invocation_parameters['gridcols'] = \
                 glb.get('gridcols', self._arg_default['gridcols'])
-            _invocation_parameters['gridcolour'] = \
-                glb.get('gridcolour', self._arg_default['gridcolour'])
+            _invocation_parameters['gridcolor'] = \
+                glb.get('gridcolor', self._arg_default['gridcolor'])
             _invocation_parameters['exprange'] = \
                 glb.get('exprange', self._arg_default['exprange'])
             _invocation_parameters['time_labels'] = \
@@ -2474,7 +2474,7 @@ class _visplot:
                     'iterate_by=' + repr(_invocation_parameters['iterate_by']),
                     'gridrows=' + repr(_invocation_parameters['gridrows']),
                     'gridcols=' + repr(_invocation_parameters['gridcols']),
-                    'gridcolour=' + repr(_invocation_parameters['gridcolour']),
+                    'gridcolor=' + repr(_invocation_parameters['gridcolor']),
                     'exprange=' + repr(_invocation_parameters['exprange']),
                     'time_labels=' + repr(_invocation_parameters['time_labels']),
                     'autocorr=' + repr(_invocation_parameters['autocorr']),
@@ -2536,7 +2536,7 @@ class _visplot:
                 iterate_by = _invocation_parameters['iterate_by'],
                 gridrows = _invocation_parameters['gridrows'],
                 gridcols = _invocation_parameters['gridcols'],
-                gridcolour = _invocation_parameters['gridcolour'],
+                gridcolor = _invocation_parameters['gridcolor'],
                 exprange = _invocation_parameters['exprange'],
                 time_labels = _invocation_parameters['time_labels'],
                 autocorr = _invocation_parameters['autocorr'],

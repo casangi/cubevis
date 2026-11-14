@@ -354,7 +354,7 @@ def test_remote_plotter_flags_undo_export_like_local(plotters, tmp_path):
     lf = ops(lp.export_flags(str(tmp_path / "l.jsonl")))
     rf = ops(rp.export_flags(str(tmp_path / "r.jsonl")))
     assert lf == rf
-    # display: a colour-mode re-render and the InfoTool box work remotely
+    # display: a color-mode re-render and the InfoTool box work remotely
     asyncio.run(rp.flags.handle_action({"action": "config", "display": "color"}))
     sc = rp._slots[1].scatter
     img = sc._handle_rerender(dict(x0=sc._x_range[0], x1=sc._x_range[1],

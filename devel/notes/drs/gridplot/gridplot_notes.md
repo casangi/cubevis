@@ -19,7 +19,7 @@ docstring's "Package location" line):
 | `png_export` | `export_png`: panels composited into one PNG, M x N |
 | `tick_format` | tick labels, units, UTC times, the Bokeh tick formatter's JS (as text) |
 | `palettes` | palettes and backgrounds per theme |
-| `colormap_scaling` | colour scaling (equalised, threshold, statistical) |
+| `colormap_scaling` | color scaling (equalised, threshold, statistical) |
 | `panel_sizes` | size arguments, cell sizes |
 | `raster_grid` | where a raster's cells are |
 
@@ -86,7 +86,7 @@ Bokeh 3.10.
 | what that needs | Bokeh merges tools of one class whose properties are equal (`bokeh.layouts.group_tools`; `overlay` and `renderers` ignored).  **A tool with a per-cell argument does not merge** -- a `CustomJS` with the cell's index in its args, or `FlagTool`/`InfoTool` as visplot builds them today (each panel's `comm`, `image_source`, `state_source`) would give 64 buttons. |
 | each tool knows its cell? | **Yes, from the event**: `js_on_event` per figure with one shared `CustomJS`, the cell from `cb_obj.origin.tags[0]`.  Real mouse: moves in cells 0, 9, 27, 63 and taps in 5, 42 each reported the right cell. |
 | common scale | Cells sharing `x_range`/`y_range`: a box zoom in cell 12 moved all 64 (one range, 64 `rangesupdate` events).  No sync code. |
-| one crosshair | **Yes**: one `CrosshairTool(overlay=[Span, Span])` instance added to every cell draws in all of them (checked on plain images; on noise images a thin line is invisible -- use a visible colour/width). |
+| one crosshair | **Yes**: one `CrosshairTool(overlay=[Span, Span])` instance added to every cell draws in all of them (checked on plain images; on noise images a thin line is invisible -- use a visible color/width). |
 | page switch (new RGBA in every cell, to paint) | 9 cells 55 ms, 16: 80 ms, 36: 200 ms, 64: 320 ms (writing the data: 2-11 ms; the rest is Bokeh's repaint).  The browser is not where a page's time goes (G0: Python is). |
 | rows x cols in the browser, no server | **Re-assigning the grid's children** (`grid.children = [[fig, r, c], ...]`): 3x3 73 ms, 4x4 139 ms, 6x6 390 ms, 8x8 762 ms.  **Not** by hiding cells (`visible = false` on 55 figures: 8.4 s, a re-layout per figure). |
 | the pool's cost | about 55 ms a cell in Python (37 ms building, 17 ms serialising), with 1x1 placeholder images: 16 cells 0.9 s / 1.0 MB of page, 36 cells 1.9 s / 2.2 MB, 64 cells 3.5 s / 3.8 MB. |
@@ -254,7 +254,7 @@ Frequency (found by the tests: every cell was blank).
   cell, in the browser as in `png_export` -- else the first column's
   labels would stand for every column.
 - *Light / Dark*: the grid's chrome at once, its cells redrawn in the new
-  palette once Python has it (kept cells re-coloured, not re-queried).
+  palette once Python has it (kept cells re-colored, not re-queried).
 - *Cells fill an area* (1020 x 640 px) at every rows x cols, with the
   panels' tick labels (UTC times, SI units, names along a Baseline axis:
   each cell carries its `PanelSpec` axis state for `TICK_FORMATTER_JS`).
@@ -341,12 +341,12 @@ untouched); a real remote host.
 
 **Open, for Darrell:**
 
-1. *Colour scale across cells.*  Each cell scales its colours to its own
+1. *Color scale across cells.*  Each cell scales its colors to its own
    data, as the template panel would alone; at a common axis scale a
-   common colour scale may matter more for spotting the odd one out (a
+   common color scale may matter more for spotting the odd one out (a
    bright baseline is normalised away).  Options: per cell (now); one
    range for the grid -- from the template's own (whole-selection) render,
-   or from the page.  plotms's iteration has no colour axis to follow.
+   or from the page.  plotms's iteration has no color axis to follow.
 2. *Scatter grids and one place to configure them* (asked 2026-11-11):
    the grid's configuration is Panel A's tab in the sidebar -- its
    Raster / Scatter switch included -- so no new control area is
@@ -354,23 +354,23 @@ untouched); a real remote host.
 3. *Status line after Back to Grid* says "One panel" until the next Plot
    (the layout buttons do not talk to Python).
 
-## 5. G2 follow-ups: room for the plots, ✱, colour scope, frame cache (base `fc3ea3b8`, 2026-11-11)
+## 5. G2 follow-ups: room for the plots, ✱, color scope, frame cache (base `fc3ea3b8`, 2026-11-11)
 
 Darrell's review of section 4: the grid's control row took the plots'
 room; "All fields" after stepping left Plot orange (staged, as designed,
-but surprising after the steppers plot at once); the colour range should be
+but surprising after the steppers plot at once); the color range should be
 a choice, defaulting to a common one; the frame cache evicted 1.5 GiB
 frames at a 2.4 GiB budget.  Open item 1 of section 4 is settled by
-**Colour scope** below; item 2 stands as agreed (Panel A's tab is the
+**Color scope** below; item 2 stands as agreed (Panel A's tab is the
 grid's configuration); item 3 is still open.
 
 **Grid controls placed as visplot's own** (`_place_grid_controls`).
 `GridView(embedded=True)` builds only the plots and hands its widgets
-back (`GridView.widgets`: `nav`, `play`, `shape`, `colour`, `status`,
+back (`GridView.widgets`: `nav`, `play`, `shape`, `color`, `status`,
 `probe`, `save`); the application places them.  visplot puts:
 
 - a **Grid** section at the top of the sidebar: Iterate by, Scale; Rows,
-  Cols, Colour; Pages/s, Loop;
+  Cols, Color; Pages/s, Loop;
 - paging and Play at the end of the toolbar;
 - "drawn in" and the cursor readout in a row between the body and the
   status bar (clear of the cells, which now get the whole plot area).
@@ -384,31 +384,31 @@ is not placed: Export PNG already writes the grid's page.  The stand-alone
 ticked) and plots at once, as ◀ / ▶ do.  Choosing "All fields" in the
 dropdown still stages (Plot orange) like any other edit.
 
-**Colour scope** (Grid section: *per cell*, *this page* (default), *whole
-grid*; `gridcolour=` for scripts and `plotfile=`; in the reproducing call
-when not "page").  A common colour scale needs common normalisation, not
+**Color scope** (Grid section: *per cell*, *this page* (default), *whole
+grid*; `gridcolor=` for scripts and `plotfile=`; in the reproducing call
+when not "page").  A common color scale needs common normalisation, not
 only a common vmin/vmax: with `eq_hist` each cell equalised to its own
 histogram makes any shared range meaningless.  So the cells share a
 *reference population*:
 
 - `VisibilityRaster._shared_reference` (default `None`): when set,
   `_shade_agg` takes vmin/vmax from it and `eq_hist` builds its curve from
-  it; the colour bar mapping (`_bands_with_mappings`) uses the same, so a
+  it; the color bar mapping (`_bands_with_mappings`) uses the same, so a
   bar always describes the image.  A manual vmin/vmax still wins.
 - `VisGridSource` keeps a sample of each cell's aggregated values (at most
   20000, at least 2000, about 2 M over the grid, evenly strided, plus the
   cell's exact min and max) and pools them: the page's cells for *this
-  page*; every cell for *whole grid*.  `render(..., colour=,
+  page*; every cell for *whole grid*.  `render(..., color=,
   page_indices=)` sets the pool on each cell under the source's lock, so a
   prefetched page and a shown one do not mix ranges.  A cell drawn again
   alone (a per-cell zoom) keeps its page's range.
 - *whole grid*: a background thread visits every cell (querying one not
   kept, then dropping it), a cell per lock hold, so page requests wait at
   most one cell.  Until it has finished a page is drawn in its own range
-  and the response says `colour.pending`; the browser shows "grid colour
+  and the response says `color.pending`; the browser shows "grid color
   range: k/n cells" and asks again every 1.5 s.  A new Plot (`configure`)
   forgets the samples and stops the pass.  Headless export with
-  `gridcolour="grid"` waits for it (`wait_for_grid_range`).
+  `gridcolor="grid"` waits for it (`wait_for_grid_range`).
 - Cost: *this page* queries the page's cells before shading the first --
   the same work as before, in a different order.  *whole grid* reads
   every cell once; after G3 (read once, split) it becomes cheap enough to
@@ -431,10 +431,10 @@ workstation with 16 GiB free 6 GiB; 512 GiB shared host with 40 GiB free
 
 **Checks**
 
-- `test_vis_grid.py` 19 (new: colour scopes, eq_hist shares one curve,
-  `gridcolour` checked); `test_frame_cache.py` 31 (the host table above).
+- `test_vis_grid.py` 19 (new: color scopes, eq_hist shares one curve,
+  `gridcolor` checked); `test_frame_cache.py` 31 (the host table above).
 - `visplot_grid_check.py` 18 of 18 (new: *readout* clear of the grid with
-  Rows in the sidebar; *all (✱)*; *colour*: default "this page", "per
+  Rows in the sidebar; *all (✱)*; *color*: default "this page", "per
   cell" redraws, "whole grid" ready), starting in Over, in Grid, and
   through a remote kernel.
 - `grid_browser_check.py` 13 of 13 (non-embedded GridView).
@@ -497,8 +497,8 @@ apply to.  The hidden Panel A re-render goes with it.
 
 **Open, for Darrell:**
 
-1. *Default colour scope.*  "this page" now; "whole grid" after G3.
-   Paging under "this page" changes the colours from page to page --
+1. *Default color scope.*  "this page" now; "whole grid" after G3.
+   Paging under "this page" changes the colors from page to page --
    intended, and the reason for the whole-grid option.
 2. *Status line after Back to Grid* (section 4, item 3), still.
 
@@ -521,7 +521,7 @@ apply to.  The hidden Panel A re-render goes with it.
 ## 7. G3a: the grid's own panel (base `b694c8ad`, 2026-11-13)
 
 G3's first item, as decided on 2026-11-12 (section 5) with the details
-agreed with Darrell on 2026-11-13: (a) the grid tab's colour scaling is
+agreed with Darrell on 2026-11-13: (a) the grid tab's color scaling is
 staged and applied at Plot; (b) presets in Grid set the grid's panel;
 (c) `grid_panel=`, one dict (the keys of one `panels=` entry); (d) Back to
 Grid does not restore Panel A; (e) the tab has Raster / Scatter from the
@@ -546,12 +546,12 @@ configuration from the start.  Python API: `grid_panel_settings()`,
 `set_grid_panel(dict)`.
 
 **Plot in Grid** (`_handle_plot`): only `panels["G"]` is read
-(`{kind, raster: {...}, scatter: {...}, colour: {...}}`,
+(`{kind, raster: {...}, scatter: {...}, color: {...}}`,
 `_grid_panel_from_msg`).  Then `_handle_plot_panels` runs with no panels,
 so the selection is updated and nothing is drawn (a test counts `_render`
 calls on A and B: none).  The response says `panels_stale`.  Leaving Grid
 for a panel layout (`__cvGridLayout(false)`) then plots once, for the grid's
-selection.  A drill-down plots anyway, so it clears the flag.  Colour:
+selection.  A drill-down plots anyway, so it clears the flag.  Color:
 "auto" and empty min / max mean the quantity's defaults (Phase linear
 −180..180, Z-Score threshold), with no per-quantity memory.  Changing the
 tab's quantity resets them to auto, as a panel's memory would.  A bad
@@ -560,20 +560,20 @@ min/max or a Y/X conflict comes back with `failed_slot: "G"`.
 **The tab**: "⚙ Grid panel ▸" in the sidebar's Grid section opens it (Grid
 has no panel figure to carry a gear).  It reuses the gear tabs' pickers,
 which are now factored out as `_raster_pickers` / `_scatter_pickers`.  It
-has a staged Colour scaling (auto + the scalings) and min / max, and no
+has a staged Color scaling (auto + the scalings) and min / max, and no
 histogram: the grid's panel has no data of its own.  Its widgets are
 tagged `["grid-tab", key]`.  They are in `_plot_js_args["grid_tmpl"]`,
-watched by the Plot-pending colour, and restyled by the theme.
+watched by the Plot-pending color, and restyled by the theme.
 
 **Drill-down** (`_grid_drill`, `_GRID_DRILL_JS`): the response carries the
 grid's panel as last plotted (`panel`; not the tab, which may hold
-unplotted edits) and its colour scaling (`colour`).  The browser sets the
+unplotted edits) and its color scaling (`color`).  The browser sets the
 tab of the panel One shows (`cvSetPanelTab`; by screen position, so a
-swap is honoured).  It sends the colour with that panel's Plot, and
-`_apply_drill_colour` loads it after `update_axes`.  The panel's own
-colour controls show it: the raster's scaling Select is set under
+swap is honoured).  It sends the color with that panel's Plot, and
+`_apply_drill_color` loads it after `update_axes`.  The panel's own
+color controls show it: the raster's scaling Select is set under
 `window.__cvQuietScaling`, so its live comm message is not sent.  The
-copy is plot-time only; colour scope (page / grid ranges) has no
+copy is plot-time only; color scope (page / grid ranges) has no
 single-panel equivalent.
 
 **Presets in Grid** set the grid's tab (raster presets: kind, Y / X /
@@ -593,8 +593,8 @@ environments.
 **Checks**
 
 - `test_vis_grid.py` 34 (new: `grid_panel` argument and validation; the
-  grid's panel independent of A, with no A / B render in Grid; colour
-  staging and `grid_panel_settings`; drill-down copy with colour;
+  grid's panel independent of A, with no A / B render in Grid; color
+  staging and `grid_panel_settings`; drill-down copy with color;
   `plotfile=` with `grid_panel=`, A not drawn, then exported on demand).
 - `visplot_grid_check.py` 24 of 24 (new: *grid panel*: a preset in Grid
   set the grid's tab, Panel A's untouched; *grid edit*: the tab set to
@@ -742,7 +742,7 @@ and cached, and each cell takes the rows of its baselines, antennas,
 fields or scans by the frame's own identity columns.  SPW cells already
 skip whole partitions.  Scatter grids are item 3; this is ready for them.
 
-**Colour samples**: a cell queried only for the whole-grid range
+**Color samples**: a cell queried only for the whole-grid range
 (`_sample`) no longer builds hover-probe identity tables
 (`VisibilityRaster._values_only`); its values are pooled, never shown.
 
@@ -791,8 +791,36 @@ are kernel-side); setup makes new environments.
 - Real-data timings (TW Hya, the VLBA subset) with `bench_g0.py --ms`
   and the grid.
 
-**Open, for Darrell: the default colour scope.**  The plan makes "whole
-grid" the default once reading every cell is cheap.  It is now 4.3 s for
-45 cells after page 1 (from 10.1 s).  On TW Hya's 210 baselines that is
-likely 20-40 s, during which page 1 shows its own range and then
-recolours.
+**Decided (Darrell deferred, 2026-11-13): the default color scope stays
+*this page*.**  The plan made "whole grid" the default once reading every
+cell is cheap.  It is now 4.3 s for 45 cells after page 1 (from 10.1 s).
+On TW Hya's 210 baselines that is likely 20-40 s, during which page 1
+shows its own range and then recolors.  Revisit with real-data timings.
+
+## 11. "color", not "colour" (base `1db713db`, 2026-11-13)
+
+Darrell: American spelling for the documentation, and for parameters and
+other names too.  Done across the repository: 645 replacements in 86
+files (code, comments, docstrings, UI labels, tests, docs), case kept
+(`colour` -> `color`, `Colour` -> `Color`, `COLOUR` -> `COLOR`).  Among
+the renamed names:
+- `gridcolour=` -> `gridcolor=` (constructor, task wrappers through
+  `sync_layers`);
+- `GridView(colour=)` / `render(colour=)` -> `color=`;
+- `COLOUR_SCOPES`, `colour_scope`, `colour_state` -> `COLOR_*`, `color_*`;
+- the grid's "Colour" select -> "Color", and the message keys `colour`
+  -> `color`.
+
+There is no alias for the old spellings: they were only ever on this
+branch.  Checked first that no renamed name lands on an existing one in
+the same scope (Python names by the tokenizer, and the words in JS
+strings): none does.  `flag_tool.ts` changed only in a comment, so the
+JS bundle is unchanged.
+
+**Checks**: `test_vis_grid.py` 47; `visplot_grid_check.py` 27 of 27, also
+through a remote kernel; `grid_browser_check.py` 13 of 13; the 40
+reference PNG hashes are those of `1db713db`; the visplot test files with
+renamed names pass (`test_info_panel.py` fails to collect, as before);
+`tests/ci/run.py` 7 of 8, the sandbox's `remote` failure as before.
+Kernel-side code changed: fingerprint `k2-6e36b69fae2e837ff9de`; setup
+makes new environments.

@@ -140,7 +140,6 @@ of specific tools and applications.
 
    applications/interactive_clean
    boundary
-   ../python/cubevis
 
 .. toctree::
    :maxdepth: 3

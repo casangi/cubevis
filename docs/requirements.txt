@@ -1,11 +1,7 @@
-casadata
-casatools
-bokeh>=2.4.1
-websockets
-plotly
-pandas
-numpy
-sphinx-autoapi
-sphinx-rtd-theme
---extra-index-url https://casa-pip.nrao.edu:443/repository/pypi-group/simple
-casatasks
+# What the documentation build needs.  The Python source is parsed, not
+# imported, so cubevis and its dependencies are not installed.
+sphinx>=8.1
+myst-parser>=4.0
+furo
+pyyaml
+jinja2

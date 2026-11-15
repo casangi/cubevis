@@ -1,0 +1,111 @@
+# Writing this documentation
+
+The documentation is built with [Sphinx](https://www.sphinx-doc.org). Its
+source is in [`docs/source`](https://github.com/casangi/cubevis/tree/main/docs/source)
+and is published at <https://casangi.github.io/cubevis/> by a GitHub
+Actions workflow.
+
+## Editing a page
+
+Pages are Markdown (`.md`) files. New pages should be Markdown; the older
+reStructuredText (`.rst`) pages build alongside them and can be converted
+when convenient.
+
+To add a page, create the `.md` file and add its name (without the
+extension) to a `toctree` list, for example the *User guide* list in
+`index.md`.
+
+The Markdown dialect is [MyST](https://myst-parser.readthedocs.io). Beyond
+ordinary Markdown, three things are used here:
+
+````markdown
+A link to another page, by file name:  [](remote_kernels.md)
+
+:::{note}
+A highlighted note.  Also: warning, tip.
+:::
+
+```{figure} _static/window.png
+:alt: the visplot window
+:width: 100%
+
+A figure with a caption.
+```
+````
+
+## Including text from the Python source
+
+Parameter descriptions are written once, in the docstring of the class
+that implements a task. The CASA task and CASA shell layers are generated
+from that docstring by `scripts/sync_layers`, and the documentation
+includes it with the same scraper. To change what a parameter's
+description says, change the docstring.
+
+````markdown
+```{task-doc} visplot
+```
+````
+
+inserts the description at the top of the task's docstring. With
+`:section: Resource lifecycle` it inserts that section of the docstring
+instead.
+
+````markdown
+```{task-params} visplot
+:only: vis, ms, ps
+```
+````
+
+inserts parameters with their types, defaults and full descriptions.
+
+| Option | Effect |
+|---|---|
+| (none) | every parameter, in the order of the signature |
+| `:only: a, b, c` | these parameters, in this order |
+| `:exclude: a, b` | every parameter but these |
+| `:all:` | every parameter not already shown by another `task-params` block on the same page |
+
+The name after the directive is a task name or class name from
+`scripts/sync_layers/project_layers.yaml`. Parameters listed there as
+`layer_args` are supplied by the layers themselves and are never shown.
+On GitHub, where the directives are not expanded, each appears as a small
+code block marking where the text will go.
+
+Included text is drawn in a bordered, tinted box that names the class it
+came from. This is how it looks:
+
+```{task-params} visplot
+:only: vis, autocorr
+```
+
+## Slide decks
+
+Each folder in `devel/slides` that contains a `slides.html` is copied to
+the site as `<folder>/slides.html` and listed on the [](slides.md) page.
+Adding a deck needs no change to the documentation.
+
+## Building locally
+
+```console
+$ pip install -r docs/requirements.txt
+$ cd docs
+$ make html
+$ open build/html/index.html
+```
+
+The Python source is parsed, not imported, so `cubevis` and its
+dependencies do not need to be installed to build the documentation.
+
+## Publishing
+
+The workflow in `.github/workflows/docs.yml` builds the site whenever the
+documentation, the slides, `scripts/sync_layers` or a documented source
+file changes.
+
+- On `main`, and on branches named `docs-*`, the result is published to
+  <https://casangi.github.io/cubevis/>.
+- On a pull request the site is built and attached to the workflow run as
+  an artifact, and is not published.
+
+There is one published site per repository, so a `docs-*` branch replaces
+what `main` published until `main` is built again.

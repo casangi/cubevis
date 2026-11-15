@@ -1,0 +1,82 @@
+# Builds the documentation (docs/, Sphinx) together with the slide decks
+# (devel/slides/) and publishes the result to GitHub Pages:
+#
+#   https://casangi.github.io/cubevis/                      the documentation
+#   https://casangi.github.io/cubevis/<name>/slides.html    devel/slides/<name>/
+#
+# Sphinx copies the slide decks into the site (html_extra_path in
+# docs/source/conf.py), so there is nothing slide-specific here.
+#
+#   push to main or to a docs-* branch   build and publish
+#   pull request                         build only; the site is attached to
+#                                        the run as the "github-pages" artifact
+#
+# One-time setup:
+#   Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
+#   To publish from docs-* branches as well: Settings -> Environments ->
+#   github-pages -> Deployment branches and tags -> add "docs-*".
+#
+# There is one published site per repository: a docs-* branch replaces what
+# main published until main is built again (Actions -> Publish documentation
+# -> Run workflow, on main).
+name: Publish documentation
+
+on:
+  push:
+    branches: [main, "docs-*"]
+    paths:
+      - "docs/**"
+      - "devel/slides/**"
+      - "scripts/sync_layers/**"
+      # sources whose docstrings the documentation includes
+      # (scripts/sync_layers/project_layers.yaml, sources[].file)
+      - "cubevis/toolbox/visplot/visibility_plotter.py"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:          # keep the same as the list above
+      - "docs/**"
+      - "devel/slides/**"
+      - "scripts/sync_layers/**"
+      # sources whose docstrings the documentation includes
+      # (scripts/sync_layers/project_layers.yaml, sources[].file)
+      - "cubevis/toolbox/visplot/visibility_plotter.py"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+      - run: pip install -r docs/requirements.txt
+      - name: Build
+        run: python -m sphinx -b html --keep-going docs/source _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

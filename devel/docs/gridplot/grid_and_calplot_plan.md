@@ -733,6 +733,15 @@ unrelated. The new name avoids confusion with it.
 
 ### 10.5 To verify in C0
 
+*Checked 2026-11-15 on tables CASA 6.7.6 solved from a simulated MS
+(`devel/tools/calplot/make_caltables.py`; notes
+`devel/notes/drs/gridplot/gridplot_notes.md` section 14).  The type is
+`table.info` `subType` and the `VisCal` keyword.  Fringe `FPARAM` is
+(8, nchan): phase, delay, rate and dispersive delay for each of two pols.
+arcae reads every column and keyword.  The first bullet is answered for
+synthetic tables; a real VLBA fringe-fit and ALMA Tsys are still worth
+checking.*
+
 - Cal-table keyword names and the `FPARAM`/`CPARAM` packing per type, on
   real VLA, VLBA and ALMA tables.
 - How arcae returns complex and variably shaped columns (its README: complex

@@ -979,3 +979,70 @@ limit back.
 
 **Kernel fingerprint**: unchanged, `k2-f3f8ed78dcf99e5a11a8`.  Nothing
 the kernel runs changed: the grid source runs beside the GUI.
+
+## 14. Two checks before C0 (2026-11-15, base `eabf9829`)
+
+**`pip install cubevis[iclean,visplot]` works.**  The README said casa6
+and xarray could not share a plain pip environment because of
+`libprotobuf`.  Checked in a fresh venv (Python 3.13, Linux):
+- It resolves and installs: casatools / casatasks 6.7.6.14, arcae 0.5.9,
+  xarray-ms 0.5.14, pyarrow 26.0.1.  pip installs no protobuf package.
+- casatools ships its own `libprotobuf.so.17`; pyarrow exports protobuf
+  symbols of its own.
+- The protobuf-using paths ran with arcae and pyarrow (with
+  `pyarrow.substrait` and `pyarrow.flight`) loaded before casatools, after
+  it, and not at all.  The data was a VLA MS simulated with casatools:
+  - flagdata summary, manual and clip, and the tfcrop agent;
+  - tclean (the image peaks at the 1 Jy source);
+  - arcae reading the same DATA and the flags CASA wrote;
+  - a visplot plot.
+  All three gave identical results.
+- The README now says the combined install works.
+- `tests/manual/visplot/README.md`'s note stays: it is about casa6-dev
+  builds in pixi, where casatools links conda's shared `libprotobuf`.
+- Not covered: macOS, other Pythons, casatools' gRPC links to casaviewer
+  and plotms.
+- Seen on the way: `import casatasks` needs `six`, which was missing.
+  CASA has since dropped that dependency, so nothing to do here.
+- casatools will not import without measures data.  The `casadata`
+  wheel on PyPI (350 MB) carries it.  Point `measurespath` at
+  `casadata/__data__` in `~/.casa/config.py`, with auto-updates off.
+
+**Cal tables with known answers:
+`devel/tools/calplot/make_caltables.py OUTDIR`.**  CASA's calibration
+code sets a table's layout, not the data, so tables solved from a
+simulated MS have the real structure.
+- The MS: 10 VLA antennas, 2 SPWs × 32 channels, RR/RL/LR/LL, four
+  10-minute scans.
+- It is corrupted with known per-antenna terms: amplitude, phase drift,
+  bandpass ripple, delay and rate.  A `SYSCAL` table holds the Tsys.
+- The solves: `gaincal` K, then `bandpass`, then `gaincal` G (2 min),
+  then `fringefit` (global solve), then `gencal` tsys.
+- `truth.npz` holds the corruption, and `layout.txt` each table's
+  columns, shapes and keywords.
+- Against the truth: K delays are within 0.5 ns; G amplitudes within
+  0.002; fringe delays equal K's to 0.01 ns; fringe rates are within the
+  noise of the small rates used.  Larger rates would wash out the K and
+  B solves per scan.
+
+What the tables settle for plan section 10.5 (CASA 6.7.6):
+- **Type**: `table.info` has `type = Calibration`, and `subType` is
+  "G Jones", "B Jones", "K Jones", "Fringe Jones" or "B TSYS".  The
+  `VisCal` keyword says the same.  `ParType` is Complex or Float.
+  Other keywords: `MSName`, `PolBasis`, `CASA_Version`, and the
+  subtables ANTENNA, FIELD, SPECTRAL_WINDOW, OBSERVATION and HISTORY.
+- **Columns**: TIME, FIELD_ID, SPECTRAL_WINDOW_ID, ANTENNA1, ANTENNA2,
+  INTERVAL, SCAN_NUMBER, OBSERVATION_ID, then CPARAM or FPARAM, PARAMERR,
+  FLAG and SNR.  These are (npar, nchan) per row; arcae returns them as
+  (row, chan, par).  WEIGHT is present but has no cells.
+- **Per-type shapes**: G (2, 1) complex; B (2, nchan) complex; K (2, 1)
+  float, in ns; Tsys (2, 1) float, in K, because SYSCAL's TSYS has one
+  value per pol (a TSYS_SPECTRUM would give channels); Fringe (8, 1)
+  float.
+- **Fringe packing**: 4 values per pol, in the order phase (rad),
+  delay (ns), rate (s/s) and dispersive delay.
+- arcae reads all of it, keywords included, with no casatools.
+
+Still worth a real table, when one turns up: a VLBA fringe-fit from an
+HRS-like reduction, an ALMA Tsys with TSYS_SPECTRUM, and a pipeline G
+with flagged solutions.

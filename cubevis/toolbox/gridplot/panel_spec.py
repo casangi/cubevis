@@ -532,11 +532,16 @@ class RenderedPanel:
         GUI's viewport lives only in the browser — Bokeh model
         properties set from ``CustomJS`` never propagate back — so an
         export triggered from the GUI must be told what is on screen.
+    own_scale : bool
+        A grid cell drawn at its own scale even when the grid's is common
+        (one with its own axes: ``VisGridSource.set_axes_override``).  The
+        grid view leaves it out of the common zoom and labels its axes.
     """
 
     spec:     PanelSpec
     image:    Optional[np.ndarray] = None
     viewport: Optional[tuple[float, float, float, float]] = None
+    own_scale: bool = False
 
     @property
     def extent(self) -> tuple[float, float, float, float]:

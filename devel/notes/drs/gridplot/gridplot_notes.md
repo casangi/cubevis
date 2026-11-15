@@ -894,3 +894,88 @@ to Scatter.
   reads a cell.
 
 **Kernel fingerprint**: `k2-f3f8ed78dcf99e5a11a8` (the reader changed).
+
+## 13. G3 item 4: compound iteration and the axes override hook (base `d5a14e6e`, 2026-11-14)
+
+**Compound iteration.**
+- `iterate_by` takes two axes, outer first: `"antenna,spw"`.  It also
+  accepts `"antenna then spw"`, `"antenna > spw"` and
+  `("antenna", "spw")`, and is always stored as `"antenna,spw"`
+  (`iterate_axes`, `normalize_iterate_by`).
+- These are refused: more than two axes, the same axis twice, and
+  baseline with antenna (a baseline is already one antenna's).  The
+  constructor raises `ValueError`; a Plot gets an error answer.
+- The values are the outer axis's in turn.  Within each, the inner axis's
+  values are found in the selection narrowed to that outer value:
+  - a field's cells are its scans;
+  - a SPW's baseline cells are the baselines with rows in that SPW.
+  So combinations that could not have data are not listed.  Other inner
+  axes (SPW, correlation) are listed in full.
+- A cell's value is the two values merged.  Its label is
+  `"test_antenna_0 · SPW 1"`.  The source keeps each cell's label per
+  axis (`_parts`), so a drill-down selects both, e.g.
+  `{"antenna": ..., "spw": ...}`.  `_GRID_DRILL_JS` already applied
+  each key on its own.
+- Everything that asked whether the grid iterates by baseline or antenna
+  now asks `splits_baselines`, i.e. whether either axis is one.  That
+  covers the union panel's narrowed baselines and the widest-cell
+  Baseline extent.
+- A cell of "antenna, then SPW" is pixel-identical to that antenna's cell
+  in a grid by antenna over that SPW alone (test).
+- The GUI has a "then" menu beside Iterate by: "—" (none) or an axis.
+  Changing it in Grid plots, as Iterate by does.  doPlot sends
+  `"outer,inner"` and drops "then" when it equals the outer axis.  The
+  Grid section now reads: Iterate by / then; Rows, Cols, Scale; Color,
+  Pages/s, Loop.
+- The status line says "Grid by antenna, then spw".  The reproducing call
+  writes `iterate_by='antenna,spw'`.  `plotfile=` and paging are
+  unchanged.
+- Play with every cell on one page still plays the sidebar's stepper.
+- Not done: plotms's "one row per outer value" page layout.  Cells fill
+  row by row, so an outer value's cells start mid-row unless Cols is a
+  multiple of the inner count.
+
+**Axes override (a hook; no GUI).**  This is July decision 8, kept
+general for a later per-cell editor.
+- `VisGridSource.set_axes_override(fn)` takes
+  `fn(index, label, value) -> dict | None`, or a dict mapping label to an
+  override.  It applies at the next `configure`.
+- An override sets some of `AXES_OVERRIDE_KEYS`: a raster's `x_dim`,
+  `y_dim` and `quantity`; a scatter's `x_axis` and `y_axis`.  Each is an
+  `Axis`, its name or its label.  Other keys raise `ValueError`.  An
+  override equal to the template's axes counts as none.
+- A cell with an override (`own_scale(i)`) is drawn at its own extent
+  with its own color range, and is left out of the common extent.
+  Without that, an overridden cell with a Baseline X axis widened its
+  Channel neighbours to 0–9.5.
+- `RenderedPanel` has a new `own_scale` flag.  `GridView.page` passes it
+  as `own`.  In the browser such a cell zooms alone, the common zoom
+  leaves it be, and a page with one labels every cell's axes.  Saved
+  pages (Save PNG, `plotfile=`) use `axes="each"` when a page has one.
+- Test-only so far; nothing sets it from the GUI or the task.
+
+**Also**: `test_scatter_split_stops_when_the_union_does_not_fit` (section
+12) lowered the process-wide frame cache to 0.05 MiB and left it there.
+A later test that held rows in memory then got no key.  It now puts the
+limit back.
+
+**Checks**:
+- `test_vis_grid.py` 63.  New:
+  - names and refusals;
+  - values, labels and drill-downs: antenna then SPW, and SPW then
+    baseline (each SPW's baselines);
+  - a compound cell equals the simple grid's cell;
+  - Plot and `plotfile=` (status line, reproducing call);
+  - the GUI's "then" menu;
+  - a scatter grid by SPW then correlation, held equal to read;
+  - the override: own scale, own extent, by label, refusal, and through
+    the view, Save PNG and `plotfile=`.
+- `visplot_grid_check.py` 29 of 29, also with `--start grid` and
+  `--kernel python3`.  New: *compound*, Antenna then Correlation on
+  `g0.ms`: 20 cells, the first titled "test_antenna_0 · XX".
+- `grid_browser_check.py` 13 of 13.
+- The 40 reference PNG hashes are unchanged.
+- CI 7 of 8; the failure is the sandbox's ssh test, as before.
+
+**Kernel fingerprint**: unchanged, `k2-f3f8ed78dcf99e5a11a8`.  Nothing
+the kernel runs changed: the grid source runs beside the GUI.

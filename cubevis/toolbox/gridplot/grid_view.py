@@ -237,6 +237,8 @@ class GridView:
             cell = {"index": i, "slot": i - page * per, "title": spec.title or self._label(i),
                     "x0": float(x0), "x1": float(x1), "y0": float(y0), "y1": float(y1),
                     "note": spec.note or ""}
+            if getattr(rp, "own_scale", False):
+                cell["own"] = True              # its own axes: its own scale
             if rp.image is not None:
                 cell["image"] = np.ascontiguousarray(rp.image, dtype=np.uint32)
             if spec.status == "ok":
@@ -319,8 +321,9 @@ class GridView:
         used_rows = max(1, math.ceil(len(rendered) / cols))
         name = f"grid_page{page + 1:02d}_of{self.n_pages(rows, cols):02d}.png"
         out = path or os.path.join(tempfile.mkdtemp(prefix="cubevis-grid-"), name)
+        own = any(getattr(rp, "own_scale", False) for rp in rendered)
         export_png(rendered, out, nrows=used_rows, ncols=cols, theme=self._theme,
-                   axes="outer" if common else "each")
+                   axes="outer" if common and not own else "each")
         if path is not None:
             return {"name": name, "path": out}
         with open(out, "rb") as f:
@@ -545,7 +548,7 @@ const S = {page: 0, nPages: 1, nCells: 0, rows: +sel_rows.value, cols: +sel_cols
            common: sel_scale.value === 'common', color: sel_color.value,
            viewport: null, playing: null, colorTimer: null, outerPlay: false, outerBusy: false,
            cache: new Map(), cacheKey: '', loading: false, syncing: false, zoomTimer: null,
-           extent: null, gen: 0, frame: [frame[0], frame[1]], xEach: false, yEach: false,
+           extent: null, gen: 0, frame: [frame[0], frame[1]], xEach: false, yEach: false, own: new Set(),
            settle: null};
 const PR = pool[0], PC = pool[1];
 const AXIS0 = Object.assign({}, states[0].data);
@@ -704,7 +707,8 @@ function apply(resp, page) {
                 src.data = {image: [c.image], x: [c.x0], y: [c.y0], dw: [c.x1 - c.x0], dh: [c.y1 - c.y0]};
             else { src.data = {image: [BLANK], x: [c.x0], y: [c.y0], dw: [1], dh: [1]};
                    f.title.text = c.title + (c.note ? ' (' + c.note + ')' : ''); }
-            if (!resp.partial || !S.common) {
+            if (c.own) S.own.add(r * PC + col); else S.own.delete(r * PC + col);
+            if (!resp.partial || !S.common || c.own) {
                 f.x_range.setv({start: c.x0, end: c.x1});
                 f.y_range.setv({start: c.y0, end: c.y1});
             }
@@ -713,14 +717,17 @@ function apply(resp, page) {
             for (let r = 0; r < S.rows; r++)
                 for (let c = 0; c < S.cols; c++) {
                     const k = r * PC + c;
-                    if (!filled.has(k)) blank(figs[k], sources[k]);
+                    if (!filled.has(k)) { blank(figs[k], sources[k]); S.own.delete(k); }
                 }
         // do the page's cells name their positions alike (png_export's
         // _same_ticks)?  If not, that axis is labelled on every cell
         if (!resp.partial) {
             const cats = (ax) => new Set(resp.cells.filter(c => c.axes)
                 .map(c => JSON.stringify(c.axes[ax + '_cat'] ? c.axes[ax + '_cat'][0] : null)));
-            const xEach = cats('x').size > 1, yEach = cats('y').size > 1;
+            // a cell with axes of its own (an axes override) labels them,
+            // and then every cell does
+            const own = resp.cells.some(c => c.own);
+            const xEach = own || cats('x').size > 1, yEach = own || cats('y').size > 1;
             if (xEach !== S.xEach || yEach !== S.yEach) {
                 S.xEach = xEach; S.yEach = yEach;
                 regrid();
@@ -910,13 +917,15 @@ const G = {
         if (S.syncing) return;
         const f = ev.origin, slot = f.tags[0];
         const vp = [f.x_range.start, f.x_range.end, f.y_range.start, f.y_range.end];
-        if (S.common) {
+        // a cell with its own axes zooms alone; the others leave it be
+        const alone = !S.common || S.own.has(slot);
+        if (!alone) {
             S.syncing = true;
             try {
                 for (let r = 0; r < S.rows; r++)
                     for (let c = 0; c < S.cols; c++) {
                         const g = figs[r * PC + c];
-                        if (g === f) continue;
+                        if (g === f || S.own.has(r * PC + c)) continue;
                         g.x_range.setv({start: vp[0], end: vp[1]});
                         g.y_range.setv({start: vp[2], end: vp[3]});
                     }
@@ -924,7 +933,7 @@ const G = {
         }
         clearTimeout(S.zoomTimer);
         S.zoomTimer = setTimeout(async () => {
-            if (S.common) { S.viewport = vp; show(S.page, 'zooming'); return; }
+            if (!alone) { S.viewport = vp; show(S.page, 'zooming'); return; }
             const r = Math.floor(slot / PC), c = slot % PC;
             const index = S.page * S.rows * S.cols + r * S.cols + c;
             const resp = await send(pipe, ids.page, Object.assign(

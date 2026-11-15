@@ -4,7 +4,7 @@
 > done.**  See `gridplot_notes.md` section 7 and plan section 15.  It was
 > delivered as `gridplot-g3a_b694c8ad.zip`.  Next is G3 item 2, read once
 > and split.  The test counts below are now 34 (`test_vis_grid.py`) and 24
-> (`visplot_grid_check.py`).  Section 8 adds the grid's gear; section 9 makes Play play the stepper when every cell is on one page (27).  Section 10 is G3 item 2, read once and split (test_vis_grid 47); Section 11 renames colour to color; section 12 is G3 item 3, scatter grids (test_vis_grid 55, visplot_grid_check 28).  G3 has compound iteration and the `axes_override` hook left.
+> (`visplot_grid_check.py`).  Section 8 adds the grid's gear; section 9 makes Play play the stepper when every cell is on one page (27).  Section 10 is G3 item 2, read once and split (test_vis_grid 47); Section 11 renames colour to color; section 12 is G3 item 3, scatter grids (test_vis_grid 55, visplot_grid_check 28).  Section 13 (2026-11-14) is G3 item 4, compound iteration and the `axes_override` hook (test_vis_grid 63, visplot_grid_check 29): G3 is done, next is C0.
 
 The plan is `devel/docs/gridplot/grid_and_calplot_plan.md`, mirrored to
 the claude.ai project doc `claude/grid_and_calplot_plan.md`.  Sections 13

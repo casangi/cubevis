@@ -22,6 +22,16 @@ headless copy of the template panel per cell:
 
 Color scopes (one range per page or grid) are a raster's: a scatter cell
 is shaded by its own density (eq_hist of its counts).
+
+**Compound iteration** (G3 item 4): ``iterate_by="antenna,spw"`` is a cell
+per antenna and SPW, the outer axis's values in turn and, within each,
+the inner axis's values found in the selection narrowed to it (a field's
+scans; a SPW's baselines with rows).
+
+**Axes override** (G3 item 4, a hook: nothing in the GUI sets it yet):
+``set_axes_override(fn)`` lets a cell draw other axes than the template
+(July notes decision 8).  Such a cell is drawn at its own scale, and the
+grid view leaves it out of the common scale's zoom.
 """
 from __future__ import annotations
 
@@ -51,16 +61,75 @@ class GridTemplateError(ValueError):
     """The template panel cannot be drawn as a grid (e.g. a scatter)."""
 
 
+_ITERATE_ALIASES = {"baselines": "baseline", "antennas": "antenna", "ant": "antenna",
+                    "spws": "spw", "fields": "field", "scans": "scan",
+                    "corr": "correlation", "correlations": "correlation",
+                    "pol": "correlation", "polarization": "correlation"}
+
+
+def iterate_axes(value) -> tuple:
+    """``iterate_by`` as a tuple of one or two axes, outer first:
+    ``"antenna"``, ``"antenna,spw"``, ``"antenna then spw"``,
+    ``("antenna", "spw")`` (compound iteration, gridplot G3 item 4,
+    2026-11-14: a cell per antenna and SPW, the SPWs of each antenna in
+    turn).  Two axes at most, not the same twice, and not both Baseline
+    and Antenna (a baseline is already one antenna's).  Raises
+    ``ValueError``."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        parts = ["baseline"]
+    elif isinstance(value, (list, tuple)):
+        parts = [str(v) for v in value if str(v).strip()]
+    else:
+        v = str(value).lower()
+        for sep in (" then ", ">", "/", "+", ";"):
+            v = v.replace(sep, ",")
+        parts = [p for p in v.split(",") if p.strip()]
+    axes = []
+    for p in parts:
+        a = p.strip().lower()
+        a = _ITERATE_ALIASES.get(a, a)
+        if a not in ITERATE_BY:
+            raise ValueError(f"iterate_by must be one or two of {ITERATE_BY} "
+                             f"(e.g. 'antenna,spw'); got {value!r}")
+        axes.append(a)
+    if not axes:
+        axes = ["baseline"]
+    if len(axes) > 2:
+        raise ValueError(f"iterate_by: two axes at most (outer, inner); got {value!r}")
+    if len(axes) == 2 and axes[0] == axes[1]:
+        raise ValueError(f"iterate_by: {axes[0]} twice in {value!r}")
+    if set(axes) == {"baseline", "antenna"}:
+        raise ValueError("iterate_by: baseline and antenna cannot be combined "
+                         "(each baseline is already one antenna's)")
+    return tuple(axes)
+
+
 def normalize_iterate_by(value) -> str:
-    v = str(value or "baseline").strip().lower()
-    aliases = {"baselines": "baseline", "antennas": "antenna", "ant": "antenna",
-               "spws": "spw", "fields": "field", "scans": "scan",
-               "corr": "correlation", "correlations": "correlation",
-               "pol": "correlation", "polarization": "correlation"}
-    v = aliases.get(v, v)
-    if v not in ITERATE_BY:
-        raise ValueError(f"iterate_by must be one of {ITERATE_BY}; got {value!r}")
-    return v
+    """``iterate_by`` checked and spelled one way: ``"antenna"``, or two
+    axes joined by a comma, outer first (``"antenna,spw"``)."""
+    return ",".join(iterate_axes(value))
+
+
+#: what a cell's axes override may change (``VisGridSource.set_axes_override``)
+AXES_OVERRIDE_KEYS = {"raster": ("x_dim", "y_dim", "quantity"),
+                      "scatter": ("x_axis", "y_axis")}
+
+
+def _as_axis(value):
+    """An ``Axis`` from an ``Axis``, its name (``"TIME"``) or its label
+    (``"Time"``)."""
+    from .axes import Axis
+    if isinstance(value, Axis):
+        return value
+    v = str(value).strip()
+    try:
+        return Axis[v.upper().replace(" ", "_")]
+    except KeyError:
+        pass
+    for a in Axis:
+        if str(a.label).lower() == v.lower():
+            return a
+    raise ValueError(f"axes override: no axis {value!r}")
 
 
 #: color scopes: each cell its own range; the page's cells one range; all
@@ -107,6 +176,12 @@ class VisGridSource:
         self._lock = threading.RLock()
         self._cells: "OrderedDict[int, object]" = OrderedDict()
         self._iterate_by = normalize_iterate_by(iterate_by)
+        #: each cell's label per iteration axis, outer first
+        self._parts: list = []
+        #: ``fn(index, label, value) -> dict | None`` (``set_axes_override``)
+        self._axes_override = None
+        #: each cell's axes override, checked (None: the template's)
+        self._axes: list = []
         self._template = None
         self._selection = None
         self._values: list = []
@@ -155,7 +230,8 @@ class VisGridSource:
             self._template = tmpl
             self._selection = (selection if selection is not None
                                else self._p._selection).copy()
-            self._values, self._labels = self._iteration_values()
+            self._values, self._labels, self._parts = self._iteration_values()
+            self._axes = self._cell_axes()
             self._cells.clear()
             self._extent = None
             self._union = None
@@ -193,22 +269,23 @@ class VisGridSource:
         self.preload_info = info
         self._selection.preload = info.get("key")
 
-    def _pairs_with_rows(self) -> list:
+    def _pairs_with_rows(self, sel=None) -> list:
         """Baselines in the selection that have rows, in the metadata's
         order; all the metadata's baselines when the reader cannot tell.
         The selection's baselines or antennas narrow either list: the
         reader's answer does not apply them (seen 2026-11-12: stepping
         the Antenna stepper to DA49 left all 210 TW Hya baselines)."""
         meta = self._p._meta
+        sel = self._selection if sel is None else sel
         try:
-            have = self._p._reader.baselines_with_rows(self._selection)
+            have = self._p._reader.baselines_with_rows(sel)
         except Exception:                                   # noqa: BLE001
             log.debug("baselines_with_rows failed", exc_info=True)
             have = None
         order = [tuple(b.pair) for b in (getattr(meta, "baselines", ()) or ())]
         if have is None:
             pairs = order
-            auto = (self._selection.autocorr or "exclude")
+            auto = (sel.autocorr or "exclude")
             if auto == "exclude":
                 pairs = [p for p in pairs if p[0] != p[1]]
             elif auto == "only":
@@ -217,24 +294,62 @@ class VisGridSource:
             have = {tuple(p) for p in have}
             known = [p for p in order if p in have]
             pairs = known + sorted(have - set(known))
-        if self._selection.baselines:
-            want = {tuple(b) for b in self._selection.baselines}
+        if sel.baselines:
+            want = {tuple(b) for b in sel.baselines}
             pairs = [p for p in pairs if p in want or p[::-1] in want]
-        elif self._selection.antenna_names:
-            want = set(self._selection.antenna_names)
+        elif sel.antenna_names:
+            want = set(sel.antenna_names)
             pairs = [p for p in pairs if p[0] in want or p[1] in want]
         return pairs
 
-    def _iteration_values(self) -> Tuple[list, list]:
-        """``(values, labels)``: each value is a dict of selection fields
-        the cell sets."""
-        meta, sel, by = self._p._meta, self._selection, self._iterate_by
+    @property
+    def axes(self) -> tuple:
+        """The iteration axes, outer first."""
+        return iterate_axes(self._iterate_by)
+
+    @property
+    def splits_baselines(self) -> bool:
+        """Whether the cells split the baselines (iterating by baseline or
+        antenna, alone or in a compound)."""
+        return bool({"baseline", "antenna"} & set(self.axes))
+
+    @staticmethod
+    def _narrowed(sel, value: dict):
+        """*sel* narrowed to an iteration value."""
+        out = sel.copy()
+        for k, v in value.items():
+            if not k.startswith("_"):
+                setattr(out, k, list(v) if isinstance(v, list) else v)
+        return out
+
+    def _iteration_values(self) -> Tuple[list, list, list]:
+        """``(values, labels, parts)``: each value is a dict of selection
+        fields the cell sets; *parts* is each cell's label per axis.  For
+        two axes the inner one's values are found in the selection
+        narrowed to each outer value, so a field's cells are its scans,
+        and a SPW's its baselines with rows."""
+        axes = self.axes
+        vals, labs = self._axis_values(axes[0], self._selection)
+        if len(axes) == 1:
+            return vals, labs, [(lab,) for lab in labs]
+        values, labels, parts = [], [], []
+        for v, lab in zip(vals, labs):
+            iv, il = self._axis_values(axes[1], self._narrowed(self._selection, v))
+            for v2, lab2 in zip(iv, il):
+                values.append({**v, **v2})
+                labels.append(f"{lab} · {lab2}")
+                parts.append((lab, lab2))
+        return values, labels, parts
+
+    def _axis_values(self, by: str, sel) -> Tuple[list, list]:
+        """One axis's ``(values, labels)`` within *sel*."""
+        meta = self._p._meta
         if by == "baseline":
-            pairs = self._pairs_with_rows()
+            pairs = self._pairs_with_rows(sel)
             return ([{"baselines": [p], "antenna_names": None} for p in pairs],
                      [f"{a}-{b}" for a, b in pairs])
         if by == "antenna":
-            pairs = self._pairs_with_rows()
+            pairs = self._pairs_with_rows(sel)
             present = {a for p in pairs for a in p}
             names = [a.name for a in meta.antennas if a.name in present]
             if sel.antenna_names and not sel.baselines:
@@ -312,24 +427,28 @@ class VisGridSource:
         if spec is None or spec.status != "ok" or not self._template_current():
             spec = self._union_panel()._panel_spec()
         ext = {"x": list(map(float, spec.x_range)), "y": list(map(float, spec.y_range))}
-        first = self._cell(0)._panel_spec()
+        # cells with their own axes (an override) have their own extents
+        common = [i for i in range(len(self._values)) if not self.own_scale(i)]
+        if not common:
+            return (ext["x"][0], ext["x"][1], ext["y"][0], ext["y"][1])
+        first = self._cell(common[0])._panel_spec()
         t = self._template
         dims = ({"x": t._x_dim, "y": t._y_dim} if self._kind == "raster"
                 else {"x": t._x_dim, "y": t._layers[0].y_axis})
         for axis in ("x", "y"):
             if first.status == "ok" and _axis_kind(first, axis) != _axis_kind(spec, axis):
                 rngs = []
-                for i in range(min(len(self._values), self._keep)):
+                for i in common[:self._keep]:
                     s = self._cell(i)._panel_spec()
                     if s.status == "ok":
                         rngs.append(s.x_range if axis == "x" else s.y_range)
-                if len(self._values) > self._keep:
+                if len(common) > self._keep:
                     log.info("grid extent: the first %d of %d cells set the %s axis",
                              self._keep, len(self._values), axis)
                 if rngs:
                     ext[axis] = [min(r[0] for r in rngs), max(r[1] for r in rngs)]
-            elif dims[axis] == Axis.BASELINE and self._iterate_by in ("baseline", "antenna"):
-                widest = max(range(len(self._values)),
+            elif dims[axis] == Axis.BASELINE and self.splits_baselines:
+                widest = max(common,
                              key=lambda i: len(self._values[i].get("baselines") or ()))
                 s = self._cell(widest)._panel_spec()
                 ext[axis] = list(map(float, s.x_range if axis == "x" else s.y_range))
@@ -350,21 +469,25 @@ class VisGridSource:
         """What a drill-down selects in the full panel for cell *index*:
         ``{"baselines": [[a, b], ...]}``, ``{"antenna": name}``,
         ``{"spw": id}``, ``{"field": name}``, ``{"scan": name}`` or
-        ``{"correlation": c}``."""
-        v, by = self._values[index], self._iterate_by
-        if by == "baseline":
-            return {"baselines": [list(p) for p in v["baselines"]]}
-        if by == "antenna":
-            if self._selection.baselines:
-                return {"baselines": [list(p) for p in v["baselines"]]}
-            return {"antenna": self._labels[index]}
-        if by == "spw":
-            return {"spw": v["spw"][0]}
-        if by == "field":
-            return {"field": v["field_names"][0]}
-        if by == "scan":
-            return {"scan": v["scan"][0]}
-        return {"correlation": v["correlation"][0]}
+        ``{"correlation": c}`` -- one key per iteration axis."""
+        v, out = self._values[index], {}
+        for by, label in zip(self.axes, self._parts[index]):
+            if by == "baseline":
+                out["baselines"] = [list(p) for p in v["baselines"]]
+            elif by == "antenna":
+                if self._selection.baselines:
+                    out["baselines"] = [list(p) for p in v["baselines"]]
+                else:
+                    out["antenna"] = label
+            elif by == "spw":
+                out["spw"] = v["spw"][0]
+            elif by == "field":
+                out["field"] = v["field_names"][0]
+            elif by == "scan":
+                out["scan"] = v["scan"][0]
+            else:
+                out["correlation"] = v["correlation"][0]
+        return out
 
     def _union_panel(self):
         if self._union is None:
@@ -372,7 +495,7 @@ class VisGridSource:
             sel = self._selection.copy()
             # A scatter's union is the selection as it is: the same frames
             # the cells are cut from (``_split_from_union``), read once.
-            if self._iterate_by in ("baseline", "antenna") and self._kind == "raster":
+            if self.splits_baselines and self._kind == "raster":
                 pairs = sorted({p for v in self._values for p in v["baselines"]})
                 sel.baselines, sel.antenna_names = pairs or sel.baselines, None
             u = self._clone(sel, None)
@@ -400,29 +523,35 @@ class VisGridSource:
                     out.append(RenderedPanel(spec=self._empty_spec("", "no such cell")))
                     continue
                 label = self._labels[i]
+                own = self.own_scale(i)
+                vp = None if own else viewport
                 try:
                     cell = self._cell(i)
-                    cell._shared_reference = shared
+                    # a cell with its own axes has its own color range too
+                    cell._shared_reference = None if own else shared
                     cell._width, cell._height = w, h
-                    if viewport is not None and getattr(cell, "_is_decimated", False):
+                    if vp is not None and getattr(cell, "_is_decimated", False):
                         try:
-                            cell._ensure_detail(*viewport)
+                            cell._ensure_detail(*vp)
                         except Exception:                   # noqa: BLE001
                             log.debug("grid cell detail failed", exc_info=True)
-                    rp = cell.render_result(tuple(viewport) if viewport is not None else None)
-                    if self._kind == "scatter" and viewport is not None:
+                    rp = cell.render_result(tuple(vp) if vp is not None else None)
+                    if self._kind == "scatter" and vp is not None:
                         # the probe's range check is against what is on
                         # screen: the grid's extent, not the cell's own
-                        cell._current_viewport = tuple(map(float, viewport))
+                        cell._current_viewport = tuple(map(float, vp))
                     spec = replace(rp.spec, title=label)
                     if spec.status != "ok" and not spec.note:
                         spec = replace(spec, note="no data")
-                    out.append(RenderedPanel(spec=spec, image=rp.image, viewport=rp.viewport))
+                    out.append(RenderedPanel(spec=spec, image=rp.image, viewport=rp.viewport,
+                                             own_scale=own))
                 except Exception as exc:                    # noqa: BLE001 -- a cell, not the page
                     log.warning("grid cell %s failed: %s", label, exc)
                     out.append(RenderedPanel(spec=self._empty_spec(label, str(exc), "error")))
-            if out and out[0].spec.status == "ok":
-                self._names = (out[0].spec.axis_label("x"), out[0].spec.axis_label("y"))
+            first = next((rp for i, rp in zip(indices, out)
+                          if rp.spec.status == "ok" and not self.own_scale(int(i))), None)
+            if first is not None:
+                self._names = (first.spec.axis_label("x"), first.spec.axis_label("y"))
         return out
 
     # ------------------------------------------------------------------
@@ -460,14 +589,7 @@ class VisGridSource:
             cell = self._cells.get(i)
         if cell is None:
             from .refresh import RefreshLevel
-            sel = self._selection.copy()
-            pol = None
-            for k, v in self._values[i].items():
-                if k == "_polarization":
-                    pol = v
-                else:
-                    setattr(sel, k, list(v) if isinstance(v, list) else v)
-            cell = self._clone(sel, pol)
+            cell = self._new_cell(i)
             cell._values_only = True          # only its values are pooled
             cell.apply_refresh(RefreshLevel.QUERY)
         smp = _agg_sample(cell, self._sample_size())
@@ -561,29 +683,82 @@ class VisGridSource:
         if cell is not None:
             self._cells.move_to_end(i)
             return cell
-        sel = self._selection.copy()
-        pol = None
-        for k, v in self._values[i].items():
-            if k == "_polarization":
-                pol = v
-            else:
-                setattr(sel, k, list(v) if isinstance(v, list) else v)
-        cell = self._clone(sel, pol)
+        cell = self._new_cell(i)
         cell.apply_refresh(RefreshLevel.QUERY)
         self._cells[i] = cell
         while len(self._cells) > self._keep:
             self._cells.popitem(last=False)
         return cell
 
-    def _clone(self, selection, polarization):
-        """A headless panel drawn as the template is."""
+    def _new_cell(self, i: int):
+        """Cell *i*'s panel, not yet queried: the template's, narrowed to
+        the cell's value, with its axes override if it has one."""
+        pol = self._values[i].get("_polarization")
+        axes = self._axes[i] if i < len(self._axes) else None
+        return self._clone(self._narrowed(self._selection, self._values[i]), pol, axes)
+
+    # ------------------------------------------------------------------
+    # axes override (a hook, G3 item 4)
+    # ------------------------------------------------------------------
+    def set_axes_override(self, fn) -> None:
+        """Let cells draw other axes than the template (July notes
+        decision 8; no GUI sets it yet).  *fn* is ``fn(index, label,
+        value) -> dict | None``, or a dict of label to override; an
+        override sets some of ``AXES_OVERRIDE_KEYS`` (a raster's
+        ``x_dim``, ``y_dim``, ``quantity``; a scatter's ``x_axis``,
+        ``y_axis``), each an ``Axis`` or its name.  ``None`` clears it.
+        Takes effect at the next ``configure``.  A cell with an override
+        is drawn at its own scale (``own_scale``)."""
+        if fn is not None and not callable(fn):
+            table = dict(fn)
+            fn = lambda i, label, value: table.get(label)      # noqa: E731
+        with self._lock:
+            self._axes_override = fn
+
+    def _cell_axes(self) -> list:
+        """Each cell's override, checked; None where it draws the
+        template's axes."""
+        fn = self._axes_override
+        if fn is None:
+            return [None] * len(self._values)
+        allowed = AXES_OVERRIDE_KEYS[self._kind]
+        out = []
+        for i, (lab, v) in enumerate(zip(self._labels, self._values)):
+            o = fn(i, lab, dict(v))
+            if not o:
+                out.append(None)
+                continue
+            bad = set(o) - set(allowed)
+            if bad:
+                raise ValueError(f"axes override for {lab}: {sorted(bad)} not one of "
+                                 f"{allowed} (a {self._kind} grid)")
+            o = {k: _as_axis(a) for k, a in o.items()}
+            mine = self._template_axes()
+            out.append(o if any(mine.get(k) != a for k, a in o.items()) else None)
+        return out
+
+    def _template_axes(self) -> dict:
+        t = self._template
+        if self._kind == "raster":
+            return {"x_dim": t._x_dim, "y_dim": t._y_dim, "quantity": t._quantity}
+        return {"x_axis": t._x_dim, "y_axis": t._layers[0].y_axis}
+
+    def own_scale(self, index: int) -> bool:
+        """Whether cell *index* draws its own axes (an override), so it
+        has its own scale even when the grid's is common."""
+        return 0 <= index < len(self._axes) and self._axes[index] is not None
+
+    def _clone(self, selection, polarization, axes=None):
+        """A headless panel drawn as the template is (with *axes*, an
+        override of its axes)."""
         if self._kind == "scatter":
-            return self._clone_scatter(selection, polarization)
+            return self._clone_scatter(selection, polarization, axes)
         from .visibility_raster import VisibilityRaster
         t = self._template
+        a = dict(self._template_axes(), **(axes or {}))
         r = VisibilityRaster(
-            backend=t._backend, selection=selection, y_dim=t._y_dim, x_dim=t._x_dim,
-            quantity=t._quantity, polarization=polarization or t._polarization,
+            backend=t._backend, selection=selection, y_dim=a["y_dim"], x_dim=a["x_dim"],
+            quantity=a["quantity"], polarization=polarization or t._polarization,
             width=t._width, height=t._height, cmap=t._cmap, max_cells=t._max_cells,
             color_mode=t._color_mode, scaling=t._scaling, scaling_alpha=t._scaling_alpha,
             scaling_gamma=t._scaling_gamma, raster_interpolate=t._raster_interpolate,
@@ -601,7 +776,7 @@ class VisGridSource:
                 log.debug("grid cell scaling copy failed", exc_info=True)
         return r
 
-    def _clone_scatter(self, selection, polarization):
+    def _clone_scatter(self, selection, polarization, axes=None):
         """A headless scatter drawn as the template is: its X axis, its
         layers (each Y quantity and correlation, with its colorize and
         scaling settings), averaging and Phase RMS / Coherence settings.
@@ -619,8 +794,11 @@ class VisGridSource:
                                  label=str(l0.label).replace(str(l0.polarization),
                                                              polarization))]
             layers = mine
+        if axes and "y_axis" in axes:
+            layers = [_replace(lyr, y_axis=axes["y_axis"]) for lyr in layers]
+        x_axis = (axes or {}).get("x_axis", t._x_dim)
         sc = VisibilityScatter(
-            backend=t._backend, selection=selection, x_axis=t._x_dim, layers=layers,
+            backend=t._backend, selection=selection, x_axis=x_axis, layers=layers,
             layer_cmaps=list(t._layer_cmaps), width=t._width, height=t._height,
             color_mode=t._color_mode, avg_time=t._avg_time, avg_chan=t._avg_chan,
             averaging=t._averaging, detrend=t._detrend,

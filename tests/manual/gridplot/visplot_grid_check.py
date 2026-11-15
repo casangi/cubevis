@@ -56,6 +56,9 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
     scatter grid    Time series pressed in Grid: a grid of scatter cells (G3
                     item 3), the grid's tab on Scatter, the probe reads a
                     cell; vplot then brings the rasters back
+    compound        Iterate by Antenna, then Correlation (G3 item 4): a cell per
+                    antenna and correlation, titled "antenna · correlation",
+                    and the status line says so
     panels again    Plot in Grid draws only the grid (G3); Side by Side
                     afterwards draws the panels (Python answers that Plot)
     console         no errors in the browser console
@@ -654,6 +657,20 @@ def main() -> int:
                   f"grid's tab kind {sk} (1 = Scatter); {imgs} drawn of {ncs} cells; probe {ptxt[:80]!r}")
             pg.screenshot(path=os.path.join(a.out, "scatter_grid.png"))
             set_marker(); click_button("vplot"); wait_drawn()
+
+            # --- compound iteration (G3 item 4) --------------------------------
+            set_marker(); select("Iterate by", "antenna"); wait_drawn()
+            n_ant = n_cells()
+            set_marker(); select("then", "correlation"); wait_drawn()
+            n_pair, t0 = n_cells(), (titles() or [""])[0]
+            sline = status_line()
+            check("compound", n_ant > 1 and n_pair > n_ant and n_pair % n_ant == 0
+                  and " · " in t0 and "Grid by antenna, then correlation" in sline,
+                  f"{n_ant} antennas, {n_pair} cells by antenna then correlation; "
+                  f"first {t0!r}; status {'ok' if 'then correlation' in sline else sline[:60]!r}")
+            pg.screenshot(path=os.path.join(a.out, "compound.png"))
+            set_marker(); select("then", ""); wait_drawn()
+            set_marker(); select("Iterate by", "baseline"); wait_drawn()
 
             set_marker()
             click_button("Plot ▶")

@@ -328,7 +328,7 @@ class _visplot:
         panels, side by side), ``"over"`` (both panels, one above
         the other), or ``"grid"`` (the first panel repeated once per
         baseline, antenna, SPW, field, scan or correlation -- see
-        ``iterate_by``; raster panels only, for now). Default ``"side"``.
+        ``iterate_by``; a raster or a scatter). Default ``"side"``.
         ``"raster"``/``"scatter"`` are
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
@@ -374,8 +374,10 @@ class _visplot:
         What the Grid layout makes one plot of each: ``"baseline"``
         (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
         ``"field"``, ``"scan"`` or ``"correlation"`` -- within the
-        selection, as plotms's ``iteraxis``.  Every plot is drawn as the
-        grid's own panel is (``grid_panel``).
+        selection, as plotms's ``iteraxis``.  Two axes, outer first,
+        make one plot of each pair: ``"antenna,spw"`` is each antenna's
+        SPWs in turn (not both baseline and antenna).  Every plot is drawn
+        as the grid's own panel is (``grid_panel``).
     gridrows : int
         Rows of plots on a page of the Grid layout (1-8, default 3).
     gridcols : int
@@ -583,7 +585,7 @@ class _visplot:
         'stat_chan_window': 'Channel window for the same statistic: ``"off"`` (default) or a number of channels.',
         'scatter_avg_time': 'Scatter points averaged over time, per baseline and correlation: ``"off"`` (default, every sample a point), ``"scan"``, or a number of seconds (windows from the start of each scan, never across a scan boundary).',
         'scatter_avg_chan': 'Scatter points averaged over channels: ``"off"`` (default), a number of channels, or ``"all"`` (one point per spectral window).',
-        'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), ``"over"`` (both panels, one above the other), or ``"grid"`` (the first panel repeated once per baseline, antenna, SPW, field, scan or correlation -- see ``iterate_by``; raster panels only, for now).',
+        'layout': 'Panel layout: ``"one"`` (single panel), ``"side"`` (both panels, side by side), ``"over"`` (both panels, one above the other), or ``"grid"`` (the first panel repeated once per baseline, antenna, SPW, field, scan or correlation -- see ``iterate_by``; a raster or a scatter).',
         'kind': 'Which panel kind leads: ``"raster"`` (default when omitted) or ``"scatter"``.',
         'preset': 'Named startup preset (vplot, radplot, waterfall).',
         'pin_layout': 'Start with "Pin layout" ticked: presets (this ``preset`` and the toolbar buttons) keep the current layout -- ``layout`` -- instead of switching to their own.',

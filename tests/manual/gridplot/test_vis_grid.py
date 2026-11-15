@@ -610,13 +610,151 @@ def test_scatter_split_stops_when_the_union_does_not_fit(ms):
                            scatter_x="TIME", scatter_y="AMPLITUDE") as p:
         be = p._reader._backend
         key = be.preload(p._selection, budget_mb=4096)["key"]
+        was = be._frame_cache_obj().max_bytes / (1 << 20)
         be.set_frame_cache_limit_mb(0.05)            # far below the union's frames
-        sc = p._slots[0].scatter
-        for b in p._meta.baselines[:3]:
-            imgs = []
-            for k in (None, key):
-                sc._selection = replace(p._selection, preload=k, baselines=[tuple(b.pair)])
-                sc.apply_refresh(RefreshLevel.QUERY)
-                imgs.append(sc.render_result(None).image.copy())
-            assert np.array_equal(*imgs)
-        assert be._cv_preload["no_split"] is True
+        try:
+            sc = p._slots[0].scatter
+            for b in p._meta.baselines[:3]:
+                imgs = []
+                for k in (None, key):
+                    sc._selection = replace(p._selection, preload=k, baselines=[tuple(b.pair)])
+                    sc.apply_refresh(RefreshLevel.QUERY)
+                    imgs.append(sc.render_result(None).image.copy())
+                assert np.array_equal(*imgs)
+            assert be._cv_preload["no_split"] is True
+        finally:                                     # the limit is process-wide
+            be.set_frame_cache_limit_mb(was)
+
+
+# --- compound iteration and the axes override (gridplot G3 item 4) ---------------
+
+def test_compound_iterate_by_names():
+    from cubevis.toolbox.visplot.vis_grid_source import iterate_axes, normalize_iterate_by
+    assert normalize_iterate_by("antenna,spw") == "antenna,spw"
+    assert normalize_iterate_by("Antennas then SPWs") == "antenna,spw"
+    assert normalize_iterate_by(("field", "scan")) == "field,scan"
+    assert iterate_axes("spw > corr") == ("spw", "correlation")
+    assert iterate_axes(None) == ("baseline",)
+    for bad in ("spw,spw", "baseline,antenna", "antenna,baseline", "spw,field,scan",
+                "antenna,time"):
+        with pytest.raises(ValueError):
+            normalize_iterate_by(bad)
+
+
+def test_compound_values_and_labels(plotter):
+    from cubevis.toolbox.visplot.vis_grid_source import VisGridSource
+    one = VisGridSource(plotter).configure(iterate_by="antenna")
+    src = VisGridSource(plotter).configure(iterate_by="antenna,spw")
+    spws = VisGridSource(plotter).configure(iterate_by="spw")
+    ants, n = one.labels(), len(one.labels())
+    s0, s1 = spws.labels()
+    sid1 = spws.values()[1]["spw"][0]
+    assert len(src.labels()) == 2 * n
+    # the outer axis's values in turn, each with the inner axis's
+    assert src.labels()[:2] == [f"{ants[0]} · {s0}", f"{ants[0]} · {s1}"]
+    assert src.labels()[2].startswith(ants[1])
+    v = src.values()[1]
+    assert v["spw"] == [sid1] and v["baselines"] == one.values()[0]["baselines"]
+    # a drill-down selects both
+    assert src.drill_target(1) == {"antenna": ants[0], "spw": sid1}
+    # spw then baseline: each SPW's baselines with rows
+    sb = VisGridSource(plotter).configure(iterate_by="spw,baseline")
+    assert len(sb.labels()) == 20 and sb.labels()[0].startswith(f"{s0} · ")
+    t = sb.drill_target(10)
+    assert t["spw"] == sid1 and len(t["baselines"]) == 1
+
+
+def test_compound_cells_draw_as_the_simple_grid(plotter):
+    """A cell of "antenna, then SPW" is the cell of "antenna" with its SPW
+    picked: the same pixels as that antenna's cell in a grid by antenna
+    over that SPW alone."""
+    from cubevis.toolbox.visplot.vis_grid_source import VisGridSource
+    src = VisGridSource(plotter).configure(iterate_by="antenna,spw")
+    sel = plotter._selection.copy()
+    sel.spw = [VisGridSource(plotter).configure(iterate_by="spw").values()[1]["spw"][0]]
+    alone = VisGridSource(plotter).configure(iterate_by="antenna", selection=sel)
+    ext = src.extent()
+    a = src.render([1], ext, (160, 100))[0]
+    b = alone.render([0], ext, (160, 100))[0]
+    assert a.spec.status == "ok" and np.array_equal(a.image, b.image)
+
+
+def test_compound_plot_and_plotfile(ms, tmp_path):
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    out = str(tmp_path / "c.png")
+    with VisibilityPlotter(ms=ms, layout="grid", preset="vplot", iterate_by="antenna, then spw",
+                           gridrows=2, gridcols=5, exprange="all", plotfile=out) as p:
+        assert p._iterate_by == "antenna,spw"
+        assert p() == out and os.path.getsize(out) > 5000
+        assert "Grid by antenna, then spw" in p._status_text()
+        assert "iterate_by='antenna,spw'" in p.reproducing_call()
+    with VisibilityPlotter(ms=ms, headless=True, layout="grid", preset="waterfall") as p:
+        resp = asyncio.run(p._handle_plot({"layout": "grid", "iterate_by": "spw,correlation"}))
+        assert resp["status"] == "ok" and resp["grid"]["iterate_by"] == "spw,correlation"
+        from cubevis.toolbox.visplot.vis_grid_source import VisGridSource
+        n = [len(VisGridSource(p).configure(iterate_by=b).labels()) for b in ("spw", "correlation")]
+        assert resp["grid"]["n_cells"] == n[0] * n[1] >= 4
+        bad = asyncio.run(p._handle_plot({"layout": "grid", "iterate_by": "baseline,antenna"}))
+        assert bad["status"] == "error"
+
+
+def test_compound_gui_select(ms):
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    with VisibilityPlotter(ms=ms, layout="grid", iterate_by="field,scan") as p:
+        p._build_layout() if not hasattr(p, "_grid_then_sel") else None
+        assert (p._grid_iter_sel.value, p._grid_then_sel.value) == ("field", "scan")
+        assert p._grid_then_sel.options[0] == ("", "—")
+
+
+def test_scatter_compound_grid(ms, monkeypatch):
+    held, info = _grid_images(ms, monkeypatch, True, "vplot", "spw,correlation",
+                              grid_panel=dict(kind="scatter"))
+    read, _ = _grid_images(ms, monkeypatch, False, "vplot", "spw,correlation",
+                           grid_panel=dict(kind="scatter"))
+    assert len(held) == len(read) >= 2 and info["key"]
+    assert all(a is not None and np.array_equal(a, b) for a, b in zip(held, read))
+
+
+def test_axes_override_hook(plotter):
+    from cubevis.toolbox.visplot.vis_grid_source import VisGridSource
+    from cubevis.toolbox.visplot.axes import Axis
+    src = VisGridSource(plotter)
+    src.set_axes_override(lambda i, label, value: {"quantity": "PHASE"} if i == 1 else None)
+    src.configure(iterate_by="baseline")
+    assert not src.own_scale(0) and src.own_scale(1)
+    ext = src.extent()
+    c0, c1 = src.render([0, 1], ext, (160, 100), color="page")
+    assert c1.own_scale and not c0.own_scale
+    assert src._cell(1)._quantity == Axis.PHASE and src._cell(0)._quantity != Axis.PHASE
+    # drawn at its own extent, not the grid's
+    assert c0.viewport == ext and c1.viewport is None
+    # by label; an override equal to the template's is none
+    src.set_axes_override({src.labels()[2]: {"quantity": src._template._quantity.name}})
+    src.configure()
+    assert not any(src.own_scale(i) for i in range(len(src.labels())))
+    src.set_axes_override(lambda i, label, value: {"layers": 1})
+    with pytest.raises(ValueError):
+        src.configure()
+    src.set_axes_override(None)
+    src.configure()
+
+
+def test_axes_override_in_the_view(ms, tmp_path):
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    with VisibilityPlotter(ms=ms, layout="grid", preset="waterfall", iterate_by="spw") as p:
+        src = p._grid_source
+        plain = p._grid().extent()
+        src.set_axes_override(lambda i, label, value: {"x_dim": "BASELINE"} if i == 0 else None)
+        p._grid()
+        # the cell with its own axes does not widen the others' extent
+        assert src.extent() == plain
+        view = p._grid_view
+        resp = view.page({"page": 0, "rows": 1, "cols": 2})
+        assert resp["cells"][0].get("own") and not resp["cells"][1].get("own")
+        saved = view.save({"page": 0, "rows": 1, "cols": 2}, path=str(tmp_path / "o.png"))
+        assert os.path.getsize(saved["path"]) > 5000
+    with VisibilityPlotter(ms=ms, headless=True, layout="grid", preset="waterfall",
+                           iterate_by="spw") as p:
+        p._grid().set_axes_override(lambda i, label, value: {"x_dim": "BASELINE"} if i else None)
+        out = p(plotfile=str(tmp_path / "pf.png"))
+        assert os.path.getsize(out) > 5000 and p._grid_source.own_scale(1)

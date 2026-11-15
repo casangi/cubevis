@@ -574,7 +574,7 @@ class _visplot:
         panels, side by side), ``"over"`` (both panels, one above
         the other), or ``"grid"`` (the first panel repeated once per
         baseline, antenna, SPW, field, scan or correlation -- see
-        ``iterate_by``; raster panels only, for now). Default ``"side"``.
+        ``iterate_by``; a raster or a scatter). Default ``"side"``.
         ``"raster"``/``"scatter"`` are
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
@@ -620,8 +620,10 @@ class _visplot:
         What the Grid layout makes one plot of each: ``"baseline"``
         (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
         ``"field"``, ``"scan"`` or ``"correlation"`` -- within the
-        selection, as plotms's ``iteraxis``.  Every plot is drawn as the
-        grid's own panel is (``grid_panel``).
+        selection, as plotms's ``iteraxis``.  Two axes, outer first,
+        make one plot of each pair: ``"antenna,spw"`` is each antenna's
+        SPWs in turn (not both baseline and antenna).  Every plot is drawn
+        as the grid's own panel is (``grid_panel``).
     gridrows : int
         Rows of plots on a page of the Grid layout (1-8, default 3).
     gridcols : int

@@ -2846,7 +2846,7 @@ class VisibilityPlotter:
         panels, side by side), ``"over"`` (both panels, one above
         the other), or ``"grid"`` (the first panel repeated once per
         baseline, antenna, SPW, field, scan or correlation -- see
-        ``iterate_by``; raster panels only, for now). Default ``"side"``.
+        ``iterate_by``; a raster or a scatter). Default ``"side"``.
         ``"raster"``/``"scatter"`` are
         also accepted as shorthand for ``layout="one", kind="raster"``/
         ``"scatter"`` — see ``kind`` below. Combining the shortcut with
@@ -2892,8 +2892,10 @@ class VisibilityPlotter:
         What the Grid layout makes one plot of each: ``"baseline"``
         (default), ``"antenna"`` (each antenna's baselines), ``"spw"``,
         ``"field"``, ``"scan"`` or ``"correlation"`` -- within the
-        selection, as plotms's ``iteraxis``.  Every plot is drawn as the
-        grid's own panel is (``grid_panel``).
+        selection, as plotms's ``iteraxis``.  Two axes, outer first,
+        make one plot of each pair: ``"antenna,spw"`` is each antenna's
+        SPWs in turn (not both baseline and antenna).  Every plot is drawn
+        as the grid's own panel is (``grid_panel``).
     gridrows : int
         Rows of plots on a page of the Grid layout (1-8, default 3).
     gridcols : int
@@ -5194,9 +5196,11 @@ for (const dt of other.tools) {
             else:
                 path = base
             used_rows = max(1, math.ceil(max(1, len(rendered)) / cols))
+            # a cell with axes of its own (an axes override) labels them
+            own = any(getattr(rp, "own_scale", False) for rp in rendered)
             out.append(export_png(rendered, path, nrows=used_rows, ncols=cols,
                                   footer=footer, theme=self._theme, dpi=dpi,
-                                  axes="outer"))
+                                  axes="each" if own else "outer"))
             log.info("wrote %s (grid page %d of %d)", out[-1], page, n_pages)
         return out[0] if len(out) == 1 else out
 
@@ -6683,7 +6687,7 @@ cvApplySelectionText(
         layout_label = {"one": "One panel", "side": "Side by Side",
                         "over": "Over / Under"}.get(self._layout, self._layout)
         if getattr(self, "_grid_on", False):
-            layout_label = f"Grid by {self._iterate_by}"
+            layout_label = "Grid by " + ", then ".join(self._iterate_by.split(","))
 
         # I-1 (Phase 2.5): once a single field/SPW is selected -- via
         # Prev/Next or a manual pick, the two are indistinguishable here
@@ -6795,9 +6799,16 @@ cvApplySelectionText(
                 autoload = True
             except GridTemplateError as exc:
                 self._notify(f"⚠ {exc}")
+        from .vis_grid_source import iterate_axes
+        axes = iterate_axes(self._iterate_by)
         self._grid_iter_sel = Select(
-            title="Iterate by", value=self._iterate_by, width=110,
+            title="Iterate by", value=axes[0], width=110,
             options=[(k, self._GRID_ITERATE_LABELS[k]) for k in ITERATE_BY])
+        # compound iteration (gridplot G3 item 4, 2026-11-14): "Antenna,
+        # then SPW" -- each antenna's SPWs in turn
+        self._grid_then_sel = Select(
+            title="then", value=axes[1] if len(axes) > 1 else "", width=110,
+            options=[("", "—")] + [(k, self._GRID_ITERATE_LABELS[k]) for k in ITERATE_BY])
         # filled in by _wire_grid, once doPlot exists
         self._grid_drill_js = CustomJS(code="")
         # Play with every cell on one page steps the sidebar's stepper
@@ -6847,12 +6858,14 @@ cvApplySelectionText(
         sel_rows, sel_cols, sel_scale = w["shape"]
         b_play, sel_speed, cb_loop = w["play"]
         self._grid_iter_sel.width = 125
+        self._grid_then_sel.width = 110
         sel_scale.width = 110
         sel_rows.width = sel_cols.width = 62
         sel_speed.width = 76
         sel_color = w["color"]
         sel_color.width = 100
-        side = [self._grid_iter_sel, sel_scale, sel_rows, sel_cols, sel_color, sel_speed, cb_loop]
+        side = [self._grid_iter_sel, self._grid_then_sel, sel_scale, sel_rows, sel_cols,
+                sel_color, sel_speed, cb_loop]
         for x in side:
             # visplot's widget sheet first: the theme restyle swaps sheet 0
             x.stylesheets = [self._dark()] + list(x.stylesheets)
@@ -6895,8 +6908,9 @@ setTimeout(function () {
         side += [self._grid_tab_btn] + [w for w in self._grid_tab_widgets.values()
                                         if w not in side]
         self._grid_section = column(
-            head, row(self._grid_iter_sel, sel_scale), row(sel_rows, sel_cols, sel_color),
-            row(sel_speed, cb_loop), self._hover(self._grid_tab_btn, "grid_panel"),
+            head, row(self._grid_iter_sel, self._grid_then_sel),
+            row(sel_rows, sel_cols, sel_scale), row(sel_color, sel_speed, cb_loop),
+            self._hover(self._grid_tab_btn, "grid_panel"),
             self._grid_tab, visible=self._grid_on, width=_SIDEBAR_WIDTH,
             margin=(0, 0, 10, 0), styles={"max-height": "none"})   # as the other sections
         kids = list(self._sidebar_col.children)
@@ -6997,8 +7011,10 @@ setTimeout(function () {
         self._grid_play_js.args = args
         self._grid_play_js.code = ("".join(self._iterate_js.values()) + self._do_plot_js
                                    + _GRID_PLAY_JS)
-        self._grid_iter_sel.js_on_change("value", CustomJS(
-            args=args, code=self._do_plot_js + "if (layout_rbg.active === 3) doPlot(false);"))
+        replot = CustomJS(
+            args=args, code=self._do_plot_js + "if (layout_rbg.active === 3) doPlot(false);")
+        self._grid_iter_sel.js_on_change("value", replot)
+        self._grid_then_sel.js_on_change("value", replot)
         self._grid_restore_args = {k: args[k] for k in (
             "ant_src", "bl_src", "spw_src", "field_sel", "scan_inp", "corr_cbg", "ant_mode")}
         self._grid_restore_args["grid_plot"] = CustomJS(
@@ -9936,7 +9952,12 @@ function doPlot(reload) {
         layout:      ['one', 'side', 'over', 'grid'][layout_rbg.active],
         // Grid layout (gridplot G2): what it iterates over, and the panel
         // it repeats -- the one shown first.
-        iterate_by:  (typeof grid_iter_sel !== 'undefined' && grid_iter_sel) ? grid_iter_sel.value : null,
+        // with "then" (compound, G3 item 4): "antenna,spw"
+        iterate_by:  (typeof grid_iter_sel !== 'undefined' && grid_iter_sel)
+                     ? grid_iter_sel.value + ((typeof grid_then_sel !== 'undefined' && grid_then_sel
+                                               && grid_then_sel.value && grid_then_sel.value !== grid_iter_sel.value)
+                                              ? ',' + grid_then_sel.value : '')
+                     : null,
         grid_slot:   [panel0_id, panel1_id][(display_order_source.data['order'][0] || [0, 1])[0]],
         grid_shape:  (typeof grid_key !== 'undefined' && window.__cvGrid && window.__cvGrid[grid_key])
                      ? [window.__cvGrid[grid_key].state().rows, window.__cvGrid[grid_key].state().cols] : null,
@@ -10508,6 +10529,7 @@ function doPlot(reload) {
             "layout_rbg":           layout_rbg,
             # Grid layout (gridplot G2)
             "grid_iter_sel":        self._grid_iter_sel,
+            "grid_then_sel":        self._grid_then_sel,
             "grid_key":             self._grid_view.key,
             # The grid's own panel (gridplot G3): its tab's widgets, which
             # doPlot reads in Grid, and each panel's, which a drill-down

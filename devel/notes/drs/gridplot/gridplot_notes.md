@@ -824,3 +824,73 @@ renamed names pass (`test_info_panel.py` fails to collect, as before);
 `tests/ci/run.py` 7 of 8, the sandbox's `remote` failure as before.
 Kernel-side code changed: fingerprint `k2-6e36b69fae2e837ff9de`; setup
 makes new environments.
+
+## 12. G3 item 3: scatter grids (base `eac9c066`, 2026-11-13)
+
+The grid now draws scatter panels: the grid's panel set to Scatter in its
+tab, `grid_panel=dict(kind="scatter", ...)`, or a scatter-pair preset
+(Time series, Spectrum) pressed in Grid.
+
+**`VisGridSource`**:
+- It takes a `VisibilityScatter` template (`self._kind`).
+- A scatter cell (`_clone_scatter`) copies the template's X axis and its
+  layers, each Y quantity and correlation with its colorize and scaling
+  settings, plus averaging and Phase RMS / Coherence settings.  A
+  correlation cell keeps that correlation's layers.
+- The common extent comes from the union panel as for rasters.  For a
+  scatter, the union is the selection as it is: the same frames the
+  cells are cut from.
+- *Probe*: a scatter cell's probe checks the hover against the viewport
+  it was drawn at.  That is now the grid's extent (`_current_viewport`),
+  not the cell's own data range, which reported "out of range" over most
+  of the cell.
+- *Color scopes* stay a raster's.  A scatter cell is shaded by its own
+  density (eq_hist of its counts), so with this page / whole grid the
+  status says "scatter: each cell its own density scale".  One count
+  scale across cells would need a pooled count reference per layer;
+  left for later.
+- Theme: kept scatter cells take the template's layer colormaps.
+
+**The split, under a budget** (`XArrayReader._split_from_union`): vector
+averaging needs Amplitude, Real and Imaginary frames for each
+correlation.  On `g0.ms` the union's frames were 6 × 165 MiB against an
+802 MiB cache, so they pushed each other out and were read again for
+every cell, slower than no split (10.7 s for the first time-series page
+in the browser).  Now, when the union's frames take more than half the
+frame cache, the split stops for that grid (`no_split`).  The cells then
+read their own rows, still from memory.
+
+**Times** (`g0.ms`, 45 baselines, page of 9, each its own scale):
+
+| Scatter grid | configure + extent | page of 9 |
+|---|---|---|
+| Amplitude v Time, read cell by cell | 5.3 s | 4.5 s |
+| Amplitude v Time, held + split | 2.9 s | 2.4 s |
+| Time series (channels averaged), read | 6.8 s | 7.6 s |
+| Time series, held (union too big to split) | 6.3 s | 3.4 s |
+| Spectrum (scan averaged), read | 6.2 s | 7.6 s |
+| Spectrum, held | 6.2 s | 3.3 s |
+
+The averaged grids' configure + extent is the union panel: one averaged
+plot of the whole selection, which sets the common scale.
+
+**GUI**: the grid tab's Scatter note now says each cell has its own
+density scale.  The `grid_panel=` docstring says raster or scatter.  The
+pair presets' Grid branch is unchanged: it already set the grid's panel
+to Scatter.
+
+**Checks**:
+- `test_vis_grid.py` 55.  The two refusal tests now accept scatter.
+  New:
+  - four `test_scatter_grid_held_draw_the_same` cases: baseline, antenna
+    with pending flags, correlation with Frequency and scan averaging,
+    and SPW with channel averaging and pending flags.
+  - probe across the extent, and drill-down to a scatter.
+  - a time-series preset in Grid.
+  - `plotfile=` of a scatter grid.
+  - the split stops when the union does not fit, with the same pixels.
+- `visplot_grid_check.py` 28 of 28.  New: *scatter grid*: Time series in
+  Grid draws a scatter grid of 45 cells, the tab on Scatter, the probe
+  reads a cell.
+
+**Kernel fingerprint**: `k2-f3f8ed78dcf99e5a11a8` (the reader changed).

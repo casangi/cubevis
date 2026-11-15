@@ -423,7 +423,7 @@ class _visplot:
         Without it the grid starts as a copy of the first panel, made
         the first time Grid is shown.  In the GUI it is "Grid panel" in
         the Grid section; a tapped plot is shown in the first panel set up
-        as this one.  Raster only for now.  Example::
+        as this one.  A raster or a scatter.  Example::
 
             layout="grid", iterate_by="antenna",
             grid_panel=dict(raster_y="TIME", raster_x="BASELINE",

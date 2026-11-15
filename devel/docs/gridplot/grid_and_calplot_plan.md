@@ -406,7 +406,7 @@ weeks of sessions. Each stage has an exit test you run in the browser.
 | **G1a** | Move `panel_spec`, `png_export`, `tick_format`, `palettes`, `colormap_scaling`, `panel_sizes` (and shading helpers as needed) to a shared module; re-export from old paths **Done 2026-11-10** (`devel/notes/drs/gridplot/gridplot_notes.md` section 1) | S–M | Test suite unchanged; `plotfile=` output byte-identical |
 | **G1b** | `GridView` (Bokeh) + `GridController` + `GridSource` protocol; a synthetic source for tests; paging; common/per-cell scale; external axes; one probe; crosshair; save-page; tap event. **Built 2026-11-11: section 12** (remote waits for G2) | M–L | Demo notebook with a synthetic 4×4 source, both themes, local and remote |
 | **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets. **Built 2026-11-11: sections 13, 14** (rasters; presets are the panel presets in Grid; TW Hya / VLBA to test) | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
-| **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only; scatter grids; "whole grid" color scope by default (kept at "this page" for now: section 16); the grid's own template panel (section 14). **The grid's own panel built 2026-11-13: section 15; read once, split: section 16** | M | Page time inside the G0 target |
+| **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only; scatter grids; "whole grid" color scope by default (kept at "this page" for now: section 16); the grid's own template panel (section 14). **The grid's own panel built 2026-11-13: section 15; read once, split: section 16; scatter grids: section 17** (compound iteration and `axes_override` remain) | M | Page time inside the G0 target |
 | **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables | M | Round-trip of values and flags against casatools reads |
 | **C1** | calplot app: selection (antenna, SPW, field, pol, time), grid per antenna, overlay mode, flagged solutions shown, refant in titles, PNG pages; remote kernels via the existing setup | L | Gain, bandpass and fringe tables from a real VLA/VLBA reduction |
 | **C2** | Solution flagging: box in drill-down panel, FlagDB list/undo, commit to `FLAG` with a backup copy | M | Flag, undo, commit, reopen in plotms and see the same flags |
@@ -921,6 +921,35 @@ item 2, read once and split.
 The default color scope stays *this page* (2026-11-13): the whole
 grid's range still takes seconds, tens of seconds on a large array.
 Revisit with real-data timings.  Next: item 3, scatter grids.
+
+## 17. G3 item 3 built: scatter grids (2026-11-13, base `eac9c066`)
+
+- **Scatter cells.**  The grid's panel may be a scatter: set it to
+  Scatter in the grid tab, pass `grid_panel=dict(kind="scatter", ...)`,
+  or press Time series or Spectrum in Grid.  Each cell is a copy of that
+  panel, with its layers, averaging and statistics, cut to its baseline,
+  antenna, SPW, field, scan or correlation.  Cells share the X and Y
+  range of the whole selection.  The probe and drill-down work as for
+  rasters.
+- **Density per cell.**  A scatter cell is shaded by its own counts.
+  *This page* and *whole grid* apply to rasters only; a pooled count
+  scale is left for later.
+- **Read once, under a budget.**  Cells are cut from the union's frames.
+  When averaging makes those frames larger than half the frame cache, the
+  cut stops and the cells read their own rows from memory instead.
+  Without that limit, the frames pushed each other out of the cache and
+  were read again for every cell.
+- **Numbers** (synthetic VLBA-sized MS, page of 9): Amplitude v Time
+  2.4 s (was 4.5 s); time series 3.4 s (was 7.6 s); spectrum 3.3 s
+  (was 7.6 s).  For the averaged grids, configuring takes about 6 s.
+  Most of that is one averaged plot of the whole selection, which sets
+  the shared range.
+- **Same pixels.**  Each cell drawn from memory is identical to the cell
+  read alone.  This holds across iteration axes, pending flags, and scan
+  and channel averaging.
+
+Details: `devel/notes/drs/gridplot/gridplot_notes.md` section 12.  G3 has
+two items left: compound iteration and the `axes_override` hook.
 
 ## Sources
 

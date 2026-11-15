@@ -7,18 +7,21 @@ Stage G2 of ``devel/docs/gridplot/grid_and_calplot_plan.md`` (sections 3.2,
 labels, an extent, cells' images and probe text; this answers from a
 headless copy of the template panel per cell:
 
-* **the template** is a raster panel -- the plotter's grid panel (slot G,
-  gridplot G3: ``grid_panel=``, or a copy of Panel A), which is never drawn
-  itself: its axes, quantity, correlation, averaging, scaling and colormap
-  are copied into every cell;
+* **the template** is a raster or scatter panel -- the plotter's grid
+  panel (slot G, gridplot G3: ``grid_panel=``, or a copy of Panel A), which
+  is never drawn itself: its axes, quantity or layers, correlation,
+  averaging, scaling and colormap are copied into every cell;
 * **the selection** is the plotter's, narrowed per cell by the iteration
   value -- the grid iterates *within* the current selection (plan 1.3);
-* **each cell is its own headless ``VisibilityRaster``**, kept (up to
-  *keep* cells) so a zoom re-shades from what it holds (about 10 ms) and the
-  probe reads the cell under the cursor, as a full panel's probe does.
+* **each cell is its own headless ``VisibilityRaster`` or
+  ``VisibilityScatter``**, kept (up to *keep* cells) so a zoom re-shades
+  from what it holds and the probe reads the cell under the cursor, as a
+  full panel's probe does;
+* **the rows are read once** (G3): the reader holds the grid's rows in
+  memory, and a scatter cell's samples are cut from the union's frames.
 
-Raster only for now: a scatter cell costs about 1.7 s through today's path
-(G0, plan section 11), so scatter grids wait for read-once-and-split (G3).
+Color scopes (one range per page or grid) are a raster's: a scatter cell
+is shaded by its own density (eq_hist of its counts).
 """
 from __future__ import annotations
 
@@ -111,6 +114,7 @@ class VisGridSource:
         self._extent: Optional[tuple] = None
         self._names = ("", "")
         self._union = None
+        self._kind = "raster"          # the template's: "raster" or "scatter"
         # shared color ranges: each cell's sample, the whole grid's pool,
         # and the background pass that fills them (stopped by a new gen)
         self._samples: dict = {}
@@ -133,16 +137,19 @@ class VisGridSource:
         the Grid layout, or a headless export); cells drawn before are
         dropped."""
         from .visibility_raster import VisibilityRaster
+        from .visibility_scatter import VisibilityScatter
         tmpl = template
         if tmpl is None:
             gs = getattr(self._p, "_grid_slot", None)
             tmpl = gs.active if gs is not None else self._p._pos0
-        if not isinstance(tmpl, VisibilityRaster):
+        if not isinstance(tmpl, (VisibilityRaster, VisibilityScatter)):
             raise GridTemplateError(
-                "the Grid layout draws raster panels for now (a scatter cell costs "
-                "about 1.7 s; scatter grids come with read-once-and-split, gridplot G3): "
-                "set the grid's panel to Raster")
+                f"the Grid layout draws raster or scatter panels, not {type(tmpl).__name__}")
         with self._lock:
+            # Scatter grids (gridplot G3 item 3, 2026-11-13): their cells
+            # read from the rows held in memory, cut from the union's frames
+            # (``XArrayReader._split_from_union``).
+            self._kind = "raster" if isinstance(tmpl, VisibilityRaster) else "scatter"
             if iterate_by is not None:
                 self._iterate_by = normalize_iterate_by(iterate_by)
             self._template = tmpl
@@ -307,7 +314,8 @@ class VisGridSource:
         ext = {"x": list(map(float, spec.x_range)), "y": list(map(float, spec.y_range))}
         first = self._cell(0)._panel_spec()
         t = self._template
-        dims = {"x": t._x_dim, "y": t._y_dim}
+        dims = ({"x": t._x_dim, "y": t._y_dim} if self._kind == "raster"
+                else {"x": t._x_dim, "y": t._layers[0].y_axis})
         for axis in ("x", "y"):
             if first.status == "ok" and _axis_kind(first, axis) != _axis_kind(spec, axis):
                 rngs = []
@@ -362,7 +370,9 @@ class VisGridSource:
         if self._union is None:
             from .refresh import RefreshLevel
             sel = self._selection.copy()
-            if self._iterate_by in ("baseline", "antenna"):
+            # A scatter's union is the selection as it is: the same frames
+            # the cells are cut from (``_split_from_union``), read once.
+            if self._iterate_by in ("baseline", "antenna") and self._kind == "raster":
                 pairs = sorted({p for v in self._values for p in v["baselines"]})
                 sel.baselines, sel.antenna_names = pairs or sel.baselines, None
             u = self._clone(sel, None)
@@ -400,6 +410,10 @@ class VisGridSource:
                         except Exception:                   # noqa: BLE001
                             log.debug("grid cell detail failed", exc_info=True)
                     rp = cell.render_result(tuple(viewport) if viewport is not None else None)
+                    if self._kind == "scatter" and viewport is not None:
+                        # the probe's range check is against what is on
+                        # screen: the grid's extent, not the cell's own
+                        cell._current_viewport = tuple(map(float, viewport))
                     spec = replace(rp.spec, title=label)
                     if spec.status != "ok" and not spec.note:
                         spec = replace(spec, note="no data")
@@ -424,6 +438,9 @@ class VisGridSource:
     def color_state(self, color: str) -> dict:
         """For the browser: ``pending`` (the whole grid's range is still
         being found) and ``note`` (how far it has got)."""
+        if self._kind == "scatter" and self.color_scope(color) != "cell":
+            return {"pending": False,
+                    "note": "scatter: each cell its own density scale"}
         if self.color_scope(color) != "grid" or self._grid_ref is not None:
             return {"pending": False, "note": ""}
         n = len(self._values)
@@ -466,7 +483,9 @@ class VisGridSource:
         """The values the cells' colors are scaled against together (lock
         held): ``None`` for each cell its own."""
         color = self.color_scope(color)
-        if color == "cell":
+        if color == "cell" or self._kind == "scatter":
+            # a scatter cell's colors are its own density scale (eq_hist of
+            # its counts); one scale across cells is a raster's
             return None
         if color == "grid":
             if self._grid_ref is None and len(self._samples) >= len(self._values):
@@ -557,7 +576,9 @@ class VisGridSource:
         return cell
 
     def _clone(self, selection, polarization):
-        """A headless raster drawn as the template is."""
+        """A headless panel drawn as the template is."""
+        if self._kind == "scatter":
+            return self._clone_scatter(selection, polarization)
         from .visibility_raster import VisibilityRaster
         t = self._template
         r = VisibilityRaster(
@@ -580,10 +601,41 @@ class VisGridSource:
                 log.debug("grid cell scaling copy failed", exc_info=True)
         return r
 
+    def _clone_scatter(self, selection, polarization):
+        """A headless scatter drawn as the template is: its X axis, its
+        layers (each Y quantity and correlation, with its colorize and
+        scaling settings), averaging and Phase RMS / Coherence settings.
+        A correlation cell keeps the layers of that correlation (one made
+        from the first layer if the template has none)."""
+        from dataclasses import replace as _replace
+        from .visibility_scatter import VisibilityScatter
+        t = self._template
+        layers = [_replace(lyr) for lyr in t._layers]
+        if polarization:
+            mine = [lyr for lyr in layers if lyr.polarization == polarization]
+            if not mine:
+                l0 = layers[0]
+                mine = [_replace(l0, polarization=polarization,
+                                 label=str(l0.label).replace(str(l0.polarization),
+                                                             polarization))]
+            layers = mine
+        sc = VisibilityScatter(
+            backend=t._backend, selection=selection, x_axis=t._x_dim, layers=layers,
+            layer_cmaps=list(t._layer_cmaps), width=t._width, height=t._height,
+            color_mode=t._color_mode, avg_time=t._avg_time, avg_chan=t._avg_chan,
+            averaging=t._averaging, detrend=t._detrend,
+            stat_time_window=t._stat_time_window, stat_chan_window=t._stat_chan_window,
+            enable_info_tool=False, headless=True, defer_initial_render=True)
+        sc._theme = getattr(t, "_theme", "dark")
+        sc._time_labels = getattr(t, "_time_labels", "utc")
+        if getattr(t, "_statistical_cmap", None):
+            sc._statistical_cmap = t._statistical_cmap
+        return sc
+
     def _empty_spec(self, title: str, note: str, status: str = "empty"):
         from ..gridplot.panel_spec import PanelSpec
         x0, x1, y0, y1 = self._extent or (0.0, 1.0, 0.0, 1.0)
-        return PanelSpec(kind="raster", title=title, x_label=self._names[0],
+        return PanelSpec(kind=self._kind, title=title, x_label=self._names[0],
                          y_label=self._names[1], x_range=(x0, x1), y_range=(y0, y1),
                          x_is_time=False, y_is_time=False, agg_n_x=0, agg_n_y=0,
                          color_mode="global", status=status, note=note,
@@ -596,7 +648,11 @@ class VisGridSource:
             for cell in list(self._cells.values()) + ([self._union] if self._union else []):
                 cell._theme = theme
                 try:
-                    cell.set_cmap(ramp)
+                    if self._kind == "scatter":
+                        cell.set_layer_cmaps(list(self._template._layer_cmaps),
+                                             statistical_cmap=ramp)
+                    else:
+                        cell.set_cmap(ramp)
                 except Exception:                           # noqa: BLE001
                     log.debug("grid cell re-color failed", exc_info=True)
 

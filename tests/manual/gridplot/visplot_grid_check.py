@@ -53,6 +53,9 @@ Checks, one line each (PASS/FAIL), and screenshots in DIR:
                     antenna and leaves it ticked
     play baselines  one cell by baseline (an antenna and one of its baselines
                     ticked): Play plays that antenna's baselines
+    scatter grid    Time series pressed in Grid: a grid of scatter cells (G3
+                    item 3), the grid's tab on Scatter, the probe reads a
+                    cell; vplot then brings the rasters back
     panels again    Plot in Grid draws only the grid (G3); Side by Side
                     afterwards draws the panels (Python answers that Plot)
     console         no errors in the browser console
@@ -630,6 +633,27 @@ def main() -> int:
                   f"all with {ant0}: {all(ant0 in t for t in bseen)}")
             pg.screenshot(path=os.path.join(a.out, "play_baselines.png"))
             pg.evaluate(f"() => {{ {model(ANT)}.selected.indices = []; {model(BL)}.selected.indices = []; }}")
+
+            # --- a scatter grid (G3 item 3) ------------------------------------
+            set_marker(); click_button("Time series"); wait_drawn()
+            sk = gtab("kind")
+            imgs = pg.evaluate(f"""() => {model("m.type === 'GridPlot'")}.children
+                .filter(([f]) => f.visible).map(([f]) => f.renderers.some(r =>
+                    r.data_source && r.data_source.data && r.data_source.data.image
+                    && r.data_source.data.image.length > 0)).filter(Boolean).length""")
+            x, y = cell_xy(0, 0, 0.5, 0.85)
+            pg.mouse.move(x - 6, y); pg.mouse.move(x, y, steps=3)
+            pg.wait_for_timeout(1500)
+            ptxt = status_div_text("t.startsWith('<b>') && t.includes('&nbsp;|&nbsp;')") or ""
+            if "out of range" in ptxt or not ptxt:
+                pg.mouse.move(x + 5, y + 3, steps=3); pg.wait_for_timeout(1500)
+                ptxt = status_div_text("t.startsWith('<b>') && t.includes('&nbsp;|&nbsp;')") or ""
+            ncs = n_cells()
+            check("scatter grid", radio() == 3 and sk == 1 and imgs >= 1 and ncs > 1
+                  and ptxt and "out of range" not in ptxt,
+                  f"grid's tab kind {sk} (1 = Scatter); {imgs} drawn of {ncs} cells; probe {ptxt[:80]!r}")
+            pg.screenshot(path=os.path.join(a.out, "scatter_grid.png"))
+            set_marker(); click_button("vplot"); wait_drawn()
 
             set_marker()
             click_button("Plot ▶")

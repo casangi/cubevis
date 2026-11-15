@@ -211,12 +211,19 @@ def test_theme_recolors_kept_cells(plotter):
     assert not np.array_equal(before, after)
 
 
-def test_scatter_template_refused(ms):
+def test_scatter_template(ms):
+    """Scatter grids (G3 item 3): a scatter template draws scatter cells,
+    each its own density scale whatever the color scope."""
     from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
-    from cubevis.toolbox.visplot.vis_grid_source import GridTemplateError, VisGridSource
+    from cubevis.toolbox.visplot.vis_grid_source import VisGridSource
     with VisibilityPlotter(ms=ms, headless=True, layout="scatter") as p:
-        with pytest.raises(GridTemplateError):
-            VisGridSource(p).configure()
+        src = VisGridSource(p).configure()
+        assert src._kind == "scatter" and len(src.labels()) > 1
+        r = src.render([0, 1], src.extent(), (160, 120), color="page")
+        assert [x.spec.kind for x in r] == ["scatter", "scatter"]
+        assert all(x.spec.status == "ok" and x.image is not None for x in r)
+        assert src.color_state("page")["note"].startswith("scatter")
+        assert src._shared_reference("grid", [0, 1]) is None
 
 
 # --- plotfile= -----------------------------------------------------------------
@@ -378,7 +385,7 @@ def test_grid_panel_color_and_settings(ms):
         assert resp["status"] == "error" and resp["failed_slot"] == "G"
         sc = {"kind": "scatter", "scatter": {"x": "TIME", "y": "AMPLITUDE"}}
         resp = asyncio.run(p._handle_plot({"layout": "grid", "panels": {"G": sc}}))
-        assert resp["status"] == "error" and "grid's panel" in resp["notify_text"]
+        assert resp["status"] == "ok" and p._grid_source._kind == "scatter"
 
 
 def test_drill_down_copies_the_grid_panel(ms):
@@ -521,3 +528,95 @@ def test_scatter_cells_cut_from_the_union(ms, narrow, flags, kw):
                 sc.apply_refresh(RefreshLevel.QUERY)
                 imgs.append(sc.render_result(None).image.copy())
             assert np.array_equal(*imgs), cell
+
+
+# --- scatter grids (gridplot G3 item 3) -------------------------------------------
+
+@pytest.mark.parametrize("by, flags, panel", [
+    ("baseline", False, {"scatter_x": "TIME", "scatter_y": "AMPLITUDE"}),
+    ("antenna", True, {"scatter_x": "TIME", "scatter_y": "PHASE"}),
+    ("correlation", False, {"scatter_x": "FREQUENCY", "scatter_y": "AMPLITUDE",
+                            "scatter_avg_time": "scan"}),
+    ("spw", True, {"scatter_x": "TIME", "scatter_y": "AMPLITUDE",
+                   "scatter_avg_chan": "all"}),
+])
+def test_scatter_grid_held_draws_the_same(ms, monkeypatch, by, flags, panel):
+    """A scatter grid's cells, from the rows held in memory and cut from the
+    union's frames, are pixel for pixel the cells read one by one."""
+    gp = dict(kind="scatter", **panel)
+    read, _ = _grid_images(ms, monkeypatch, False, None, by, flags, grid_panel=gp)
+    held, info = _grid_images(ms, monkeypatch, True, None, by, flags, grid_panel=gp)
+    assert info["key"] and len(read) == len(held) > 1
+    for i, (a, b) in enumerate(zip(read, held)):
+        assert a is not None and np.array_equal(a, b), f"cell {i} differs"
+
+
+def test_scatter_grid_probe_and_drill(ms):
+    """The probe reads a scatter cell anywhere in the grid's extent (not
+    only its own data range), and a tap sets the panel up as a scatter."""
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    with VisibilityPlotter(ms=ms, preset="waterfall",
+                           grid_panel=dict(kind="scatter", scatter_x="TIME",
+                                           scatter_y="AMPLITUDE")) as p:
+        assert asyncio.run(p._handle_plot({"layout": "grid"}))["status"] == "ok"
+        src = p._grid_source
+        ext = src.extent()
+        src.render([0], ext, (200, 150))
+        cell = src._cells[0]
+        assert cell._current_viewport == tuple(ext)
+        x = (ext[0] + ext[1]) / 2
+        texts = [src.probe(0, x, ext[2] + f * (ext[3] - ext[2])) for f in (0.02, 0.5, 0.98)]
+        assert all("out of range" not in t for t in texts), texts
+        d = p._grid_drill(0, src.labels()[0])
+        assert d["panel"]["kind"] == "scatter" and d["panel"]["sy"] == "AMPLITUDE"
+
+
+def test_timeseries_preset_in_grid(ms):
+    """A scatter-pair preset pressed in Grid makes the grid's panel a
+    scatter (the browser sends it as the grid tab): the grid draws it."""
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    with VisibilityPlotter(ms=ms, preset="waterfall") as p:
+        # entering Grid draws once (the copy of Panel A); the preset follows
+        assert asyncio.run(p._handle_plot({"layout": "grid"}))["status"] == "ok"
+        g = {"kind": "scatter", "scatter": {"x": "TIME", "y": "AMPLITUDE",
+                                            "avg_time": "off", "avg_chan": "all"}}
+        resp = asyncio.run(p._handle_plot({"layout": "grid", "iterate_by": "baseline",
+                                           "panels": {"G": g}}))
+        assert resp["status"] == "ok", resp
+        assert p.grid_panel_settings()["kind"] == "scatter"
+        assert p.grid_panel_settings()["scatter_avg_chan"] == "all"
+        cells = p._grid_source.render([0, 1, 2], p._grid_source.extent(), (160, 120))
+        assert all(c.spec.kind == "scatter" and c.spec.status == "ok" for c in cells)
+
+
+def test_plotfile_scatter_grid(ms, tmp_path):
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    out = str(tmp_path / "sg.png")
+    with VisibilityPlotter(ms=ms, layout="grid", iterate_by="antenna", plotfile=out,
+                           grid_panel=dict(kind="scatter", scatter_x="TIME",
+                                           scatter_y="AMPLITUDE")) as p:
+        assert p() == out and os.path.getsize(out) > 5000
+        assert "kind='scatter'" in p.reproducing_call()
+
+
+def test_scatter_split_stops_when_the_union_does_not_fit(ms):
+    """When the union's frames take more than half the frame cache, the
+    cells stop being cut from them (they would push each other out and be
+    read again per cell) and read their own rows: still the same pixels."""
+    from dataclasses import replace
+    from cubevis.toolbox.visplot.visibility_plotter import VisibilityPlotter
+    from cubevis.toolbox.visplot.refresh import RefreshLevel
+    with VisibilityPlotter(ms=ms, headless=True, layout="one", kind="scatter",
+                           scatter_x="TIME", scatter_y="AMPLITUDE") as p:
+        be = p._reader._backend
+        key = be.preload(p._selection, budget_mb=4096)["key"]
+        be.set_frame_cache_limit_mb(0.05)            # far below the union's frames
+        sc = p._slots[0].scatter
+        for b in p._meta.baselines[:3]:
+            imgs = []
+            for k in (None, key):
+                sc._selection = replace(p._selection, preload=k, baselines=[tuple(b.pair)])
+                sc.apply_refresh(RefreshLevel.QUERY)
+                imgs.append(sc.render_result(None).image.copy())
+            assert np.array_equal(*imgs)
+        assert be._cv_preload["no_split"] is True

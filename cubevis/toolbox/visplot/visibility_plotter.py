@@ -2941,7 +2941,7 @@ class VisibilityPlotter:
         Without it the grid starts as a copy of the first panel, made
         the first time Grid is shown.  In the GUI it is "Grid panel" in
         the Grid section; a tapped plot is shown in the first panel set up
-        as this one.  Raster only for now.  Example::
+        as this one.  A raster or a scatter.  Example::
 
             layout="grid", iterate_by="antenna",
             grid_panel=dict(raster_y="TIME", raster_x="BASELINE",
@@ -6961,8 +6961,8 @@ setTimeout(function () {
             self._hover(column(scale, row(vmin, vmax), width=_SIDEBAR_WIDTH), "grid_scaling"),
             visible=gs.kind == "raster", width=_SIDEBAR_WIDTH)
         scatter = column(
-            Div(text="<i>Scatter grids come with gridplot G3's read-once-and-split; "
-                     "Plot refuses them until then.</i>",
+            Div(text="<i>Each cell is shaded by its own density: Color (page / grid) "
+                     "applies to rasters.</i>",
                 width=_SIDEBAR_WIDTH - 10, stylesheets=[dark], margin=(0, 0, 4, 5)),
             self._hover(sp["sx_sel"], "s_x"), self._hover(sp["sy_sel"], "s_y"),
             sp["savg_box"], sp["sd_box"], sp["st_box"], sp["sc_box"],
@@ -11289,7 +11289,7 @@ doPlot();
                 args=args,
                 code=self._do_plot_js + f"""
 // In Grid (gridplot G3) the preset sets the grid's own panel: a scatter,
-// which Plot refuses until scatter grids come (G3, read once and split).
+// one scatter cell per baseline, antenna, ... (G3 item 3).
 if (layout_rbg.active === 3 && grid_tmpl) {{
     try {{ grid_tmpl.kind.active = 1; }} catch(e) {{}}
     try {{ grid_tmpl.sx.value = '{sx.name}'; }} catch(e) {{}}

@@ -3046,6 +3046,8 @@ class XArrayReader(abc.ABC):
         base = pre["base"]
         if not self._preload_covers(selection, base, pre["all_pairs"]):
             return None
+        if pre.get("no_split"):
+            return None
         parent = dataclasses.replace(selection, **{f: getattr(base, f)
                                                    for f in self._SPLIT_FIELDS})
         if _selection_fingerprint(parent) == _selection_fingerprint(selection):
@@ -3053,6 +3055,18 @@ class XArrayReader(abc.ABC):
         frames = self._raw_frames(xaxis, keys, parent, cache=cache)
         if not frames:
             return None
+        # The union's frames must stay cached for the cells to be cut from
+        # them; when they take more than half the cache (vector averaging
+        # needs Amplitude, Real and Imaginary for each correlation), they
+        # would push each other out and be read again for every cell --
+        # worse than no split.  Then the cells read on their own, from the
+        # held rows (this one is cut from what was just read).
+        big = sum(_frame_nbytes(df) for df in frames.values())
+        if big > cache.max_bytes / 2:
+            pre["no_split"] = True
+            log.info("visplot grid: the union's frames (%.0f MiB) take more than half "
+                     "the frame cache (%.0f MiB): each cell reads its own rows",
+                     big / 2**20, cache.max_bytes / 2**20)
         return {k: _rows_of(df, selection) for k, df in frames.items()}
 
     @staticmethod

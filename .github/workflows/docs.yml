@@ -29,8 +29,9 @@ on:
       - "devel/slides/**"
       - "scripts/sync_layers/**"
       # sources whose docstrings the documentation includes
-      # (scripts/sync_layers/project_layers.yaml, sources[].file)
+      # (scripts/sync_layers/project_layers.yaml: sources[].file, documentation[].file)
       - "cubevis/toolbox/visplot/visibility_plotter.py"
+      - "cubevis/private/casatasks/iclean.py"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:          # keep the same as the list above
@@ -38,8 +39,9 @@ on:
       - "devel/slides/**"
       - "scripts/sync_layers/**"
       # sources whose docstrings the documentation includes
-      # (scripts/sync_layers/project_layers.yaml, sources[].file)
+      # (scripts/sync_layers/project_layers.yaml: sources[].file, documentation[].file)
       - "cubevis/toolbox/visplot/visibility_plotter.py"
+      - "cubevis/private/casatasks/iclean.py"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 

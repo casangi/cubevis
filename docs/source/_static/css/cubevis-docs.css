@@ -41,3 +41,16 @@ div.pydoc-box.container {
 }
 .pydoc-box dl.pydoc-params > dd > p { margin: 0.25rem 0; }
 .pydoc-box .pydoc-missing { font-style: italic; color: var(--color-foreground-muted, #57606a); }
+
+/* Preformatted descriptions (CASA task docstrings): folded away by default */
+.pydoc-box details.pydoc-more { margin: 0.2rem 0 0.4rem 0; }
+.pydoc-box details.pydoc-more > summary {
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--color-link, #2962ff);
+}
+.pydoc-box details.pydoc-more pre {
+    font-size: 0.78rem;
+    margin: 0.4rem 0 0 0;
+    background: var(--color-background-primary, #fff);
+}

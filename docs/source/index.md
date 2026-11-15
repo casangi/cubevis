@@ -1,10 +1,15 @@
 # cubevis
 
-`cubevis` provides graphical user interfaces for radio astronomy data:
-interactive image reconstruction (`iclean`) and visibility inspection and
-flagging (`visplot`). The interfaces are built with
+`cubevis` provides graphical tools for radio astronomy data processing
+with [CASA6](https://casadocs.readthedocs.io) and
+[Xradio](https://github.com/casangi/xradio). The tools are built with
 [Bokeh](https://bokeh.org), display in a web browser, and are started from
-Python or CASA with a single function call.
+Python or CASA with a single function call:
+
+- **`iclean`**, interactive clean: observe and control CASA's image
+  reconstruction (`tclean`) cycle by cycle.
+- **`visplot`**: inspect and flag visibility data, in MSv2 measurement
+  sets and in Xradio's MSv4 / Processing Sets.
 
 ```python
 from cubevis import visplot
@@ -12,9 +17,12 @@ from cubevis import visplot
 visplot(vis="twhya_selfcal_contsub_ms", field="5", spw="0")
 ```
 
+Each tool can do its work on the data on another computer, with only its
+window on yours.
+
 ## User guide
 
-For astronomers using the applications.
+For astronomers using the tools.
 
 ```{toctree}
 :maxdepth: 2
@@ -24,7 +32,8 @@ applications/installing
 applications/remote_kernels
 applications/visplot_starting
 applications/visplot
-applications/interactive_clean
+applications/iclean_starting
+applications/iclean_parameters
 ```
 
 ## Slides
@@ -39,18 +48,18 @@ does.
 slides
 ```
 
-## Design and development
+## Background and development
 
-The motivation, architecture and long-term goals of `cubevis`, and how to
-work on this documentation. Notes for developers working on `cubevis`
-itself are in the
+How to work on this documentation, and the design documents of `casagui`,
+the package `cubevis` grew out of. Notes for developers working on
+`cubevis` itself are in the
 [`devel`](https://github.com/casangi/cubevis/tree/main/devel) directory of
 the repository.
 
 ```{toctree}
-:maxdepth: 2
-:caption: Design and development
+:maxdepth: 1
+:caption: Background and development
 
-design/intro
 contributing
+historical/index
 ```

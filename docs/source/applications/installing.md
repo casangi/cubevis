@@ -12,6 +12,9 @@ so that installing one does not pull in what only the other needs:
 
 The `visplot` and `iclean` extras include `remote`.
 
+Add the `notebook` extra to use `iclean` in a Jupyter notebook:
+`pip install "cubevis[iclean,notebook]"`.
+
 ## Where visplot can read data
 
 `visplot` reads MSv2 measurement sets and MSv4 / Processing Sets through

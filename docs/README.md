@@ -12,7 +12,7 @@ $ make html                      # result: build/html/index.html
 |---|---|
 | `source/index.md` | the front page and the table of contents |
 | `source/applications/` | the user guide |
-| `source/design/` | design documents |
+| `source/historical/` | design and implementation documents from `casagui`, kept for reference |
 | `source/contributing.md` | how to write pages, and how to include docstrings from the Python source |
 | `source/extensions/pydoc_include.py` | the `task-doc`, `task-params` and `slide-decks` directives |
 | `source/conf.py` | Sphinx configuration |

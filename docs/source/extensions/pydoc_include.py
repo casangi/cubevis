@@ -41,7 +41,17 @@ Both ``task-*`` directives draw a bordered, lightly tinted box labelled
 with the Python source it came from (``_static/css/cubevis-docs.css``).
 
 The argument is a task name (``vars.task_name`` of a template in
-``project_layers.yaml``) or a class name (``sources[].class``).
+``project_layers.yaml``, or ``documentation[].task`` there) or a class name
+(``sources[].class``).
+
+Two docstring layouts are understood, and told apart by their content:
+
+* numpy style (``Parameters`` underlined with dashes), as sync_layers reads
+  it.  The descriptions are reStructuredText.
+* the layout xml-casa generates from a CASA task's XML (``--------- parameter
+  descriptions ---------``), as in ``iclean``, whose text is tclean's.  The
+  descriptions are preformatted text: the first lines are shown, the rest
+  behind a "more" control.
 """
 from __future__ import annotations
 
@@ -81,6 +91,9 @@ def _scraper():
 def _find_source(config: dict, name: str) -> dict:
     """The ``sources`` entry for a task name or a class name."""
     sources = config.get("sources") or []
+    for doc in config.get("documentation") or []:
+        if doc.get("task") == name:
+            return doc
     for src in sources:
         if src.get("class") == name:
             return src
@@ -93,7 +106,8 @@ def _find_source(config: dict, name: str) -> dict:
             if src.get("file") == module:
                 return src
     known = sorted({(t.get("vars") or {}).get("task_name") for t in config.get("templates") or []}
-                   - {None}) + [s.get("class") for s in sources]
+                   - {None}) + [d.get("task") for d in config.get("documentation") or []] \
+        + [s.get("class") for s in sources]
     raise KeyError(f"{name!r} is not a task or class in {LAYERS_YAML.name} "
                    f"(known: {', '.join(known)})")
 
@@ -145,6 +159,62 @@ def parse_params(body: str) -> dict[str, tuple[str, str, tuple]]:
     return out
 
 
+# xml-casa layout:  "--------- parameter descriptions -------------"
+_CASA_HEAD_RE = re.compile(r"^-{5,}\s*(?P<title>.*?)\s*-{5,}\s*$", re.MULTILINE)
+_CASA_PARAM_RE = re.compile(r"^(?P<name>\w+)(?:\s+(?P<text>\S.*))?$")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def is_casa_layout(docstring: str) -> bool:
+    return any("parameter" in m.group("title") for m in _CASA_HEAD_RE.finditer(docstring))
+
+
+def parse_casa(docstring: str, names: set) -> tuple[str, dict[str, tuple[str, str, tuple]]]:
+    """``(description, {name: ("", text, (name,))})`` of an xml-casa docstring.
+
+    Every block whose heading mentions "parameter" is read.  A parameter
+    starts at a line beginning with its name; *names* (the signature's)
+    tells such a line from a continuation line that happens to start at
+    the margin."""
+    docstring = _ANSI_RE.sub("", docstring)
+    marks = list(_CASA_HEAD_RE.finditer(docstring))
+    description = docstring[:marks[0].start()].strip()
+    out: dict[str, tuple[str, str, tuple]] = {}
+    for i, m in enumerate(marks):
+        if "parameter" not in m.group("title"):
+            continue
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(docstring)
+        name, lines = None, []
+
+        def flush():
+            if name:
+                first, rest = lines[0], lines[1:]
+                indents = [len(ln) - len(ln.lstrip()) for ln in rest if ln.strip()]
+                cut = min(indents) if indents else 0
+                text = "\n".join([first] + [ln[cut:] for ln in rest]).strip("\n")
+                out[name] = ("", text, (name,))
+
+        for line in docstring[m.end():end].splitlines():
+            pm = _CASA_PARAM_RE.match(line)
+            if pm and pm.group("name") in names:
+                flush()
+                name, lines = pm.group("name"), [pm.group("text") or ""]
+            elif pm and pm.group("name") == "RETURNS":
+                flush()
+                name = None
+            elif name:
+                lines.append(line.expandtabs())
+        flush()
+    return description, out
+
+
+def tidy_default(default: str) -> str:
+    """xml-casa writes ``int(100)``, ``float(0.2)``, ``[  ]``."""
+    default = re.sub(r"\b(?:int|float)\(\s*([^()]*?)\s*\)", r"\1", default)
+    default = re.sub(r"\[\s+\]", "[]", default)
+    return re.sub(r"\[\s+(.*?)\s+\]", r"[\1]", default)
+
+
 class TaskInfo:
     """What the directives need to know about one task."""
 
@@ -155,18 +225,25 @@ class TaskInfo:
         self.class_name = src["class"]
         self.file = src["file"]
         self.path = REPO_ROOT / src["file"]
-        info = _scraper()(self.path, self.class_name, ["__init__"],
+        method = src.get("method", "__init__")
+        info = _scraper()(self.path, self.class_name, [method],
                           hidden_args=src.get("hidden_args"),
                           layer_args=src.get("layer_args"))
         doc = info.docstring or ""
         for q in ('"""', "'''"):         # the scraper keeps the quotes for its templates
             if doc.startswith(q) and doc.endswith(q):
                 doc = doc[3:-3]
-        self.description, self.sections = split_sections(doc.strip("\n"))
-        self.documented = parse_params(self.sections.get("Parameters", ""))
-        init = info.methods.get("__init__")
+        init = info.methods.get(method)
         self.args = [a for a in (init.args if init else [])
                      if not (a.is_self or a.is_star or a.is_args or a.is_kwargs or a.is_layer)]
+        doc = doc.strip("\n")
+        self.casa = is_casa_layout(doc)
+        if self.casa:
+            self.sections = {}
+            self.description, self.documented = parse_casa(doc, {a.name for a in self.args})
+        else:
+            self.description, self.sections = split_sections(doc)
+            self.documented = parse_params(self.sections.get("Parameters", ""))
 
 
 def _task(env, name: str) -> TaskInfo:
@@ -198,6 +275,24 @@ def _rst_nodes(text: str, directive: Directive, where: str) -> list:
         bad.parent.remove(bad)
     for prob in [n for o in out for n in o.findall(nodes.problematic)]:
         prob.parent.replace(prob, nodes.Text(prob.astext()))
+    return out
+
+
+def _plain_nodes(text: str) -> list:
+    """Preformatted text (xml-casa docstrings): its first line as a
+    paragraph, the rest as it is, behind a "more" control."""
+    lines = text.split("\n")
+    head = [lines.pop(0).strip()] if lines and lines[0].strip() else []
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    out = [nodes.paragraph(text=" ".join(head))] if head else []
+    if lines:
+        indents = [len(ln) - len(ln.lstrip()) for ln in lines if ln.strip()]
+        cut = min(indents) if indents else 0
+        body = "\n".join(ln[cut:] for ln in lines).rstrip()
+        out.append(nodes.raw("", '<details class="pydoc-more"><summary>more</summary>', format="html"))
+        out.append(nodes.literal_block(body, body, language="none"))
+        out.append(nodes.raw("", "</details>", format="html"))
     return out
 
 
@@ -248,7 +343,13 @@ class TaskDoc(_TaskDirective):
         else:
             text, what = info.description, f"{info.task}"
         box = _box(info, what, env)
-        box += _rst_nodes(text, self, f"{info.class_name} docstring")
+        if info.casa:
+            for para in re.split(r"\n\s*\n", text):
+                if para.strip():
+                    line = " ".join(ln.strip() for ln in para.splitlines())
+                    box += nodes.paragraph(text=re.sub(r"\s-{2,}\s", " \u2014 ", line))
+        else:
+            box += _rst_nodes(text, self, f"{info.class_name} docstring")
         return [box]
 
 
@@ -294,10 +395,11 @@ class TaskParams(_TaskDirective):
                 term += nodes.literal(text=f" : {sig}", classes=["pydoc-type"])
             defaults = {t.default for t in together}
             if len(defaults) == 1 and a.default != "":
-                term += nodes.literal(text=f" = {a.default}", classes=["pydoc-default"])
+                term += nodes.literal(text=f" = {tidy_default(a.default)}", classes=["pydoc-default"])
             item = nodes.definition_list_item("", term)
             definition = nodes.definition()
-            body = _rst_nodes(desc, self, f"{info.class_name}.{a.name}")
+            body = (_plain_nodes(desc) if info.casa
+                    else _rst_nodes(desc, self, f"{info.class_name}.{a.name}"))
             if not body:
                 body = [nodes.paragraph(text="(not documented in the docstring)",
                                         classes=["pydoc-missing"])]

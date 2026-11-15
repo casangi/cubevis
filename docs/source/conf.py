@@ -48,9 +48,9 @@ pydoc_source_url = f'https://github.com/casangi/cubevis/blob/{_ref}'
 
 templates_path = ['_templates']
 
-# python/ (API stubs from the casagui days) and notebooks/ are kept in the
-# tree but are not part of the published documentation.
-exclude_patterns = [ 'python', 'notebooks' ]
+# The casagui API stubs and notebooks are kept with the historical
+# reference but are not built.
+exclude_patterns = [ 'historical/python', 'historical/notebooks' ]
 
 # -- Options for HTML output -------------------------------------------------
 

@@ -16,11 +16,17 @@ from pathlib import Path
 
 SITE = "https://casangi.github.io/cubevis"
 SOURCE = Path(__file__).resolve().parent / "source"
-SKIP = ("python", "notebooks", "_static", "_templates", "extensions", "links")
+SKIP = ("_static", "_templates", "extensions", "links")
+SKIP_UNDER = ("historical/python", "historical/notebooks")
 
 # old page -> where it is now (both without .html)
 MOVED = {
     "applications/intro": "index",
+    "applications/interactive_clean": "applications/iclean_starting",
+    "design/intro": "historical/intro",
+    "design/boundary": "historical/boundary",
+    "design/applications/interactive_clean": "historical/applications/interactive_clean",
+    "design/components/cube_mask": "historical/components/cube_mask",
 }
 
 PAGE = """<!doctype html>
@@ -38,7 +44,8 @@ PAGE = """<!doctype html>
 def pages():
     for path in sorted(SOURCE.rglob("*")):
         rel = path.relative_to(SOURCE)
-        if path.suffix in (".md", ".rst") and rel.parts[0] not in SKIP:
+        if (path.suffix in (".md", ".rst") and rel.parts[0] not in SKIP
+                and not rel.as_posix().startswith(SKIP_UNDER)):
             yield rel.with_suffix("").as_posix()
 
 

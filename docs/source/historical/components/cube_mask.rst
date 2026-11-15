@@ -1,8 +1,14 @@
-.. _design-system-design:
-
 ====================
 Cube Mask Design
 ====================
+
+.. note::
+
+   **Historical reference.**  This page describes the design and
+   implementation of the ``casagui`` package, as it stood after the
+   visualization trade study.  ``cubevis`` grew out of that work.  The page
+   is kept for reference and is not maintained; names, figures and plans in
+   it may no longer match ``cubevis``.  See :doc:`../index`.
 
 .. currentmodule:: design
 

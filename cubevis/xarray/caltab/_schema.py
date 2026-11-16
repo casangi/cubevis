@@ -21,6 +21,8 @@ This backend's own (``DEVIATIONS`` says the same to a reader of the data):
     set is arranged);
   * ``CALPARAM_GAIN``, ``CALPARAM_TSYS`` and ``CALPARAM_DISP_DELAY``, and
     a ``FLAG`` variable beside every dataset's parameters;
+  * the receptor label ``all`` for a solution that is for every
+    polarization (T Jones);
   * CASA's units as stored (delay in ns; the draft has seconds);
   * ``CALPARAM`` over a ``parameter`` dimension for a type not listed
     below;
@@ -85,6 +87,7 @@ class CalType:
     caltype: str                   # short name: the node's ``caltype`` attribute
     partype: str                   # "Complex" (CPARAM) or "Float" (FPARAM)
     params: tuple[Param, ...]
+    one_for_all: bool = False      # its one receptor is a solution for every polarization
 
 
 _GAIN = (Param("GAIN", "Complex gain", "dimensionless"),)
@@ -92,6 +95,8 @@ _GAIN = (Param("GAIN", "Complex gain", "dimensionless"),)
 #: keyed by ``table.info`` SubType (the ``VisCal`` keyword says the same)
 CAL_TYPES: dict[str, CalType] = {
     "G Jones": CalType("G", "Complex", _GAIN),
+    # gaintype="T": one gain for both polarizations, npar = 1
+    "T Jones": CalType("T", "Complex", _GAIN, one_for_all=True),
     "B Jones": CalType("B", "Complex", _GAIN),
     "Accor Jones": CalType("Accor", "Complex", _GAIN),
     "K Jones": CalType("K", "Float", (Param("DELAY", "Delay", "ns"),)),
@@ -124,20 +129,38 @@ def lookup(subtype: Optional[str], partype: Optional[str], npar: int) -> Optiona
     return ct
 
 
+#: the receptor label of a solution that is for every polarization (T Jones)
+ALL_RECEPTORS = "all"
+
+
+def pol_basis_of(labels) -> str:
+    """The ``PolBasis`` keyword for a receptor axis: what ``receptor_labels``
+    would read back as the same labels."""
+    labels = [str(v) for v in labels]
+    if labels and labels == ["X", "Y"][:len(labels)]:
+        return "linear"
+    if labels and labels == ["R", "L"][:len(labels)]:
+        return "circular"
+    return "unknown"
+
+
 def receptor_labels(pol_basis: Optional[str], nreceptor: int,
-                    override: Optional[list[str]] = None) -> list[str]:
+                    override: Optional[list[str]] = None, one_for_all: bool = False) -> list[str]:
     """Labels for the receptor axis.
 
     A cal table says what its receptors are only in the ``PolBasis``
     keyword, and CASA 6.7 writes ``unknown`` there.  ``pol_0``, ``pol_1``
     are MSv4's receptor labels and claim nothing; *override* is for a
-    caller who knows.
+    caller who knows.  A type whose one receptor is for every
+    polarization (*one_for_all*) is labelled ``all``.
     """
     if override is not None:
         labels = [str(v) for v in override]
         if len(labels) != nreceptor:
             raise ValueError(f"receptor_labels has {len(labels)} labels for {nreceptor} receptors")
         return labels
+    if one_for_all and nreceptor == 1:
+        return [ALL_RECEPTORS]
     basis = (pol_basis or "").strip().lower()
     if basis.startswith("lin"):
         labels = ["X", "Y"]

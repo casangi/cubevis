@@ -15,19 +15,27 @@ following xradio's draft calibration schema where it says something
 type the backend does not know is still read: its parameters are
 ``CALPARAM`` over a ``parameter`` dimension.
 
+Without a table: ``synthetic_caltab("Fringe", nant=27)`` is a tree of the
+same shape with values that follow a stated rule, and
+``write_caltab(tree, path)`` makes a CASA table of any tree, with arcae
+alone (for tests; see ``_write``).
+
 Nothing is imported until it is asked for: no Bokeh, no CASA, and arcae
 and xarray only when a table is opened.
 """
 from __future__ import annotations
 
-__all__ = ["open_caltab", "caltab_info", "NotACalTable", "CaltabBackendEntrypoint"]
+__all__ = ["open_caltab", "caltab_info", "NotACalTable", "CaltabBackendEntrypoint",
+           "synthetic_caltab", "synthetic_value", "write_caltab"]
+
+_WHERE = {"open_caltab": "_reader", "caltab_info": "_reader", "NotACalTable": "_reader",
+          "CaltabBackendEntrypoint": "_backend",
+          "synthetic_caltab": "_synthetic", "synthetic_value": "_synthetic",
+          "write_caltab": "_write"}
 
 
 def __getattr__(name):
-    if name in ("open_caltab", "caltab_info", "NotACalTable"):
-        from . import _reader
-        return getattr(_reader, name)
-    if name == "CaltabBackendEntrypoint":
-        from ._backend import CaltabBackendEntrypoint
-        return CaltabBackendEntrypoint
+    if name in _WHERE:
+        from importlib import import_module
+        return getattr(import_module(f"{__name__}.{_WHERE[name]}"), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

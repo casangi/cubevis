@@ -6,6 +6,7 @@ simulated MS have the structure real ones have.  The MS is corrupted with
 known per-antenna terms, so the solutions can be checked too:
 
     gain     amplitude 0.8-1.2 and a phase drifting with time   -> G (gaincal)
+             the same, one gain for both polarizations          -> T (gaincal T)
     bandpass a smooth amplitude ripple and phase slope per SPW  -> B (bandpass)
     delay    a few ns per antenna                               -> K (gaincal K)
     rate     up to 0.1 mHz phase rate per antenna                  -> Fringe (fringefit)
@@ -16,7 +17,7 @@ Usage (needs casatools/casatasks and CASA's measures data, e.g.
 
     python devel/tools/calplot/make_caltables.py OUTDIR
 
-writes ``OUTDIR/sim.ms`` and ``OUTDIR/sim.{G,B,K,fringe,tsys}``, plus
+writes ``OUTDIR/sim.ms`` and ``OUTDIR/sim.{G,T,B,K,fringe,tsys}``, plus
 ``OUTDIR/truth.npz`` (the corruption applied) and ``OUTDIR/layout.txt``
 (each table's columns, shapes and keywords: the "schema assumptions" of
 the plan's section 10.5).
@@ -182,7 +183,7 @@ def add_syscal(ms: str) -> dict:
 def solve(ms: str, out: str) -> dict:
     import casatasks as ct
     refant = "0"
-    tabs = {k: os.path.join(out, "sim." + k) for k in ("K", "B", "G", "fringe", "tsys")}
+    tabs = {k: os.path.join(out, "sim." + k) for k in ("K", "B", "G", "T", "fringe", "tsys")}
     for p in tabs.values():
         shutil.rmtree(p, ignore_errors=True)
     # per scan: the phase drifts and rates do not average out within one
@@ -190,6 +191,9 @@ def solve(ms: str, out: str) -> dict:
     ct.bandpass(vis=ms, caltable=tabs["B"], solint="inf", refant=refant,
                 gaintable=[tabs["K"]], solnorm=True)
     ct.gaincal(vis=ms, caltable=tabs["G"], gaintype="G", calmode="ap", solint="2min",
+               refant=refant, gaintable=[tabs["K"], tabs["B"]])
+    # one gain for both polarizations: a table with one receptor (npar = 1)
+    ct.gaincal(vis=ms, caltable=tabs["T"], gaintype="T", calmode="ap", solint="2min",
                refant=refant, gaintable=[tabs["K"], tabs["B"]])
     ct.fringefit(vis=ms, caltable=tabs["fringe"], solint="inf", refant=refant,
                  zerorates=False, globalsolve=True)

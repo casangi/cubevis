@@ -7,7 +7,7 @@ Data: ``CALTABLES`` names a folder holding two sets of tables, which are
 not in the repository:
 
     $CALTABLES/sim/      python devel/tools/calplot/make_caltables.py $CALTABLES/sim
-                         (5 tables and truth.npz; needs casatools; 2 minutes)
+                         (6 tables and truth.npz; needs casatools; 2 minutes)
     $CALTABLES/tl016b/   caltables.tgz from devel/tools/calplot/tl016b_caltables.py
                          (9 tables from a real VLBA observation)
 
@@ -78,6 +78,8 @@ def test_schema_lookup():
     fringe = S.lookup("Fringe Jones", "Float", 8)
     assert [p.name for p in fringe.params] == ["PHASE", "DELAY", "RATE", "DISP_DELAY"]
     assert S.lookup("K Jones", "Float", 1).caltype == "K"        # one receptor
+    t = S.lookup("T Jones", "Complex", 1)                        # one gain for both polarizations
+    assert t.caltype == "T" and t.one_for_all and [p.name for p in t.params] == ["GAIN"]
     # the generic form: an unknown type, the wrong parameter type, a count that does not divide
     assert S.lookup("EPowerCurve", "Float", 16) is None
     assert S.lookup("G Jones", "Float", 2) is None
@@ -95,6 +97,11 @@ def test_receptor_labels():
     assert S.receptor_labels("unknown", 2, ["R", "L"]) == ["R", "L"]
     with pytest.raises(ValueError):
         S.receptor_labels("unknown", 2, ["R"])
+    assert S.receptor_labels("circular", 1, one_for_all=True) == ["all"]
+    assert S.receptor_labels("unknown", 1, ["I"], one_for_all=True) == ["I"]
+    # the keyword that reads back as the same labels
+    assert [S.pol_basis_of(v) for v in (["X", "Y"], ["R", "L"], ["R"], ["pol_0", "pol_1"], ["all"], [])] \
+        == ["linear", "circular", "circular", "unknown", "unknown", "unknown"]
 
 
 def test_flag_cast():
@@ -291,6 +298,21 @@ def test_truth():
         for v in ("CALPARAM_PHASE", "CALPARAM_DELAY", "CALPARAM_RATE"):
             assert (fds[v].sel({S.ANTENNA: ref}).values == 0).all()
         assert "reference_antenna" not in kds.attrs               # K has none (ANTENNA2 is -1)
+
+
+@need_sim
+def test_one_receptor_table():
+    """gaintype="T": one gain for both polarizations, (1, 1) per row."""
+    path = os.path.join(SIM, "sim.T")
+    if not os.path.isdir(path):
+        pytest.skip("sim.T is not there: make the simulated set again (make_caltables.py)")
+    dt = _sim("sim.T")
+    assert dt.attrs["caltype"] == "T" and dt.attrs["casa_subtype"] == "T Jones"
+    for node in dt.children.values():
+        ds = node.ds
+        assert ds.sizes[S.RECEPTOR] == 1 and list(ds[S.RECEPTOR].values) == ["all"]
+        assert ds.CALPARAM_GAIN.dims == LEAD + (S.RECEPTOR,) and np.iscomplexobj(ds.CALPARAM_GAIN.values)
+        assert "reference_antenna" in ds.attrs
 
 
 @need_sim

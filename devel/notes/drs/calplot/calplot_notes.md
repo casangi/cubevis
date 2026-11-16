@@ -185,3 +185,112 @@ Reading is quick: 12–65 ms a table once arcae is loaded (65 ms is the
 shape; `commit_flags` with backup and read-back (`SOURCE_ROW` is what it
 maps cells to rows with; one `FLAG` cell of a known type is all of that
 receptor's parameters in the row); the thin `CalTableReader`.
+
+## 2. C0b: the synthetic source and the table writer (base `e5e11d15`, 2026-11-16)
+
+**What it is.**  A tree without a table, and a table from a tree:
+
+```python
+from cubevis.xarray.caltab import synthetic_caltab, synthetic_value, write_caltab
+dt = synthetic_caltab("Fringe", nant=27)          # the shape open_caltab gives a CASA table
+path = write_caltab(dt, "fringe.cal")             # a CASA cal table, written with arcae alone
+```
+
+**Files.**
+- `cubevis/xarray/caltab/_build.py` (new): `RawCalTable`, a cal table
+  as rows; `build_tree`, rows to tree; `tree_to_raw`, tree to rows.
+- `cubevis/xarray/caltab/_reader.py`: now only reads the rows
+  (`read_raw`).  The tree is `build_tree`'s.
+- `cubevis/xarray/caltab/_synthetic.py` (new): `synthetic_caltab`,
+  `synthetic_raw`, `synthetic_value`.
+- `cubevis/xarray/caltab/_write.py` (new): `write_caltab`.
+- `cubevis/xarray/caltab/_schema.py`: `T Jones`; the receptor label
+  `all`; `pol_basis_of`.
+- `devel/tools/calplot/make_caltables.py`: also solves `sim.T`.
+- `tests/manual/calplot/test_caltab_synthetic.py` (new); additions to
+  `test_caltab.py`; the `caltab` CI suite runs both files.
+
+**One builder.**  Every source fills in a `RawCalTable` (CASA's layout:
+a row per time, antenna and window, with a (channel, parameter) cell)
+and `build_tree` makes the tree.  The reader's and the synthetic
+source's trees are the same shape because the same code makes them.
+An xradio calset source, when there is one, opens Zarr and needs
+neither.
+
+**The synthetic source.**  `synthetic_caltab(caltype, ...)`:
+- `caltype`: G, T, B, K, Tsys, Fringe or Accor.  Any other name is a
+  type the schema does not know, in the generic form (`npar`).
+- Sizes: `nant`, `nspw`, `ntime`, `nchan` (one number, or one per
+  window), `nreceptor`.
+- Names: `antenna_names`, `receptor_labels`, `field_names`; `nscan`.
+- `reference_antenna`: a number or name, None, or `"changing"` (the
+  first antenna for the first half of the times, the second after).
+  K, Tsys and Accor have none, as CASA's.
+- `flag_fraction`; `missing_fraction` (antennas with times of their
+  own); `noise`; `outliers` (unflagged values 300 times too large, as
+  the real Tsys has); `own_times`; `start`, `interval`; `seed`.
+- Without noise, every value is `synthetic_value(caltype, name, antenna,
+  receptor, tau, x)`: a rule stated in its docstring.  Phases, fringe
+  delays and rates are relative to the reference antenna, so its values
+  are exactly 0, with noise or without.
+
+It covers what no table here does: a Tsys with channels, one receptor,
+a reference antenna that changes, 66 antennas.
+
+**The writer.**  `write_caltab(tree, path)` makes a CASA cal table with
+`arcae.Table.from_descriptor`: CASA's main columns, the keywords,
+`table.info`, and the five subtables.
+- A written table reads back as the same tree.  Checked for 11
+  synthetic cases and for all 15 real tables.
+- casatools reads it as CASA's own: type, keywords, every cell.
+- **`applycal` accepts it**, and corrects the data exactly as it does
+  with the table the tree was read from.  Checked for `sim.G`, `sim.B`
+  and `sim.K` on `sim.ms`.  So tree → CASA table → applied works for
+  those types.
+- For that the subtables must be valid MeasurementSet subtables.  With
+  only the columns a tree knows, `applycal` refused the table
+  ("not a valid MSObservation").  `arcae`'s `ms_descriptor(name)` gives
+  each subtable's required columns.
+- The subtables hold names and frequencies only.  Antenna positions and
+  field directions are zero.  A type that needs them when applied (a
+  gain curve, anything with parallactic angle) is not checked.
+- The tree holds names, not CASA's ids.  Written from a tree, antennas
+  and fields are numbered in the tree's order, and those with no
+  solution are left out.  Written from a `RawCalTable`, ids are kept.
+- A fringe table's unsolved parameter (dispersive delay) has SNR 0 in
+  CASA's table.  Written from a tree it gets the receptor's SNR: the
+  tree keeps one SNR per receptor.
+
+**`T Jones`** (`gaincal(gaintype="T")`) is now a known type.  A real one
+(`sim.T`) is (1, 1) complex per row: one gain for both polarizations.
+Its receptor label is `all`, not `pol_0`, which would say it belongs to
+one of them.  In `sim.T`, 45 % of the solutions are flagged.  That is
+the simulation: each polarization has its own phase, so one gain cannot
+fit both, and CASA flags the antennas where they differ most.
+
+**Tests.**  98 pass with `CALTABLES` and casatools (48 in
+`test_caltab.py`, 50 in `test_caltab_synthetic.py`).  With neither, 32
+pass and the rest skip: the synthetic source, and tables written and
+read back, now run in the quick tests, so the arcae reader is exercised
+in CI.
+- Each known type: shape, and every value the rule's.
+- Times, scans and fields; the reference antenna (one, none, changing).
+- The cases above that no table covers; an unknown type; seed and
+  noise.
+- Written and read back, identical: 11 cases, including windows of 32
+  and 16 channels, missing rows, flags, R/L and X/Y labels.
+- Written from rows: CASA's ids kept.  Overwrite: refused by default,
+  and never removes a directory that is not a table.
+- With casatools: every column and cell of a written table.
+- With `CALTABLES`: each real table written from its tree and read
+  back, identical.  `applycal` on written G, B and K.
+
+`CALTABLES/sim` should be made again to get `sim.T` (2 minutes).  The
+tests that want it skip without it.
+
+**Schema assumptions added**: `T Jones` → `CALPARAM_GAIN`, one receptor
+labelled `all` (ours; the draft has nothing for it).
+
+**Next C0 slices**: `commit_flags` with backup and read-back, tested on
+written tables in CI and on copies of the real ones; then the thin
+`CalTableReader`.

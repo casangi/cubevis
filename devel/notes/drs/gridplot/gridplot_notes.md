@@ -1046,3 +1046,25 @@ What the tables settle for plan section 10.5 (CASA 6.7.6):
 Still worth a real table, when one turns up: a VLBA fringe-fit from an
 HRS-like reduction, an ALMA Tsys with TSYS_SPECTRUM, and a pipeline G
 with flagged solutions.
+
+**Real tables: `devel/tools/calplot/tl016b_caltables.py INPUT OUTDIR`**
+(added 2026-11-15, base `0147d229`).  It follows the calibration in the
+CASA guide "VLBA Basic Phase-referencing Calibration and Imaging"
+(TL016B, the data `tl016b_sub.ms` was split from), up to imaging.  It
+yields every C0 type from one real VLBA observation:
+- accor (G Jones, amplitude) and Tsys (gencal);
+- the gain curve, if the MS has a GAIN_CURVE table;
+- Fringe twice: the instrumental delay (sbd), and phase, delay and rate
+  every 30 s (gff);
+- the bandpass;
+- after the split: K (dcal) and G, phase (pcal) and amplitude (apcal).
+
+INPUT is the FITS-IDI file, the MS, or a subset.  The script reports
+any SYSCAL or GAIN_CURVE that did not survive a split and goes on
+without it.  The fringe finder's minute for the instrumental delay is
+taken from its first scan.  A step that fails is skipped.  It works on
+a copy, and writes `layout.txt` and a small `caltables.tgz`.
+
+Run end to end on the simulated MS: 7 tables.  `accor` was skipped
+because that MS has no autocorrelations, and `--gff-solint 120s` was
+needed because its integrations are 30 s.

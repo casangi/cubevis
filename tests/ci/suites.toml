@@ -91,6 +91,15 @@ command = ["{python}", "tests/manual/visplot/remote_visplot_check.py", "--ms", "
 requires = ["xradio", "arcae", "ipykernel", "xarray_ms"]
 after = "tiny-ms"
 
+[[suite]]
+name = "caltab"
+# the casa-caltab xarray backend (cubevis.xarray.caltab, calplot C0): the
+# schema table, the entry point, what is not a table.  Its tests of real
+# tables need CALTABLES (and casatools for the comparison); they skip here
+pytest = ["tests/manual/calplot/test_caltab.py"]
+args = ["-q"]
+requires = ["xarray", "arcae"]
+
 [[lint]]
 name = "syntax"
 # Lenient on purpose: only what cannot run.  A stricter checker can be

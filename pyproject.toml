@@ -94,6 +94,12 @@ iclean = ["cubevis[casa6,remote]"]
 visplot = ["cubevis[xarray,remote]"]
 
 
+# xarray backends (cubevis/xarray): arcae-based, no Bokeh and no CASA.
+#   xr.open_datatree("cal.G", engine="casa-caltab")   a CASA calibration table
+# They need arcae and xarray, which the [xarray] / [visplot] extras bring.
+[project.entry-points."xarray.backends"]
+casa-caltab = "cubevis.xarray.caltab._backend:CaltabBackendEntrypoint"
+
 [project.urls]
 "Homepage" = "https://github.com/casangi/cubevis?tab=readme-ov-file#cubevis---visualization-tools-for-casa-images"
 "Source" = "https://github.com/casangi/cubevis"

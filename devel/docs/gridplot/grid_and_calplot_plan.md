@@ -407,7 +407,7 @@ weeks of sessions. Each stage has an exit test you run in the browser.
 | **G1b** | `GridView` (Bokeh) + `GridController` + `GridSource` protocol; a synthetic source for tests; paging; common/per-cell scale; external axes; one probe; crosshair; save-page; tap event. **Built 2026-11-11: section 12** (remote waits for G2) | M–L | Demo notebook with a synthetic 4×4 source, both themes, local and remote |
 | **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets. **Built 2026-11-11: sections 13, 14** (rasters; presets are the panel presets in Grid; TW Hya / VLBA to test) | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
 | **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only; scatter grids; "whole grid" color scope by default (kept at "this page" for now: section 16); the grid's own template panel (section 14). **The grid's own panel built 2026-11-13: section 15; read once, split: section 16; scatter grids: section 17; compound iteration and the `axes_override` hook: section 18. G3 done** | M | Page time inside the G0 target |
-| **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables | M | Round-trip of values and flags against casatools reads |
+| **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables. **The `casa-caltab` reader built 2026-11-15: section 19** (the synthetic backend, `commit_flags` and `CalTableReader` to come) | M | Round-trip of values and flags against casatools reads |
 | **C1** | calplot app: selection (antenna, SPW, field, pol, time), grid per antenna, overlay mode, flagged solutions shown, refant in titles, PNG pages; remote kernels via the existing setup | L | Gain, bandpass and fringe tables from a real VLA/VLBA reduction |
 | **C2** | Solution flagging: box in drill-down panel, FlagDB list/undo, commit to `FLAG` with a backup copy | M | Flag, undo, commit, reopen in plotms and see the same flags |
 | G4 / C3 (optional) | Flag-in-cell with the shared tool (3.6 v2) | M | — |
@@ -667,6 +667,12 @@ CASA images that the iclean imaging layer already plans
   natural thing to offer the xradio team, the way xarray-ms serves MSv2.
 
 ### 10.2 Shape
+
+*As built (2026-11-15, section 19): the dims also have the draft's leading
+`direction` (length 1); the source row is `SOURCE_ROW(time, antenna_name)`,
+-1 where there is no solution; units are CASA's (delay in ns); a type the
+backend does not know keeps its parameters as `CALPARAM` over a
+`parameter` dim.*
 
 ```python
 dt = xr.open_datatree("cal.G", engine="casa-caltab")   # entry point, like xarray-ms
@@ -990,6 +996,42 @@ G3 is done.  What G3 measured on synthetic data is within the G0 target.
 It should be retaken on TW Hya and the VLBA subset.  Details:
 `devel/notes/drs/gridplot/gridplot_notes.md` section 13.  Next: C0, the
 arcae `casa-caltab` xarray backend (sections 9.5, 9.6, 10).
+
+## 19. C0, first slice built: the `casa-caltab` reader (2026-11-15, base `3ef11065`)
+
+On branch `calplot`, started from `gridplot`.  Record:
+`devel/notes/drs/calplot/calplot_notes.md` section 1.
+
+- **Built**: `cubevis/xarray/` with `_arcae_util.py` and `caltab/`, and
+  the `casa-caltab` entry point.  `xr.open_datatree(path)` gives one node
+  per SPW; `engine=` is optional.  No Bokeh, no CASA.
+- **Shape**: dims `direction, time, antenna_name, frequency,
+  receptor_label`; variables `CALPARAM_<name>`, `CALERROR_<name>`, `SNR`,
+  `FLAG`, `SOURCE_ROW` and `INTERVAL`; coords `field_name(time)` and
+  `scan_name(time)`.
+- **Types**: G, B and Accor give `CALPARAM_GAIN`; K gives `_DELAY` (ns);
+  Tsys gives `_TSYS` (K); Fringe gives `_PHASE`, `_DELAY`, `_RATE` and
+  `_DISP_DELAY`.  Any other type (EPowerCurve) is read as `CALPARAM` over
+  a `parameter` dim.
+- **Each SPW has its own `time`.**  A time and antenna with no row is NaN
+  and flagged, with `SOURCE_ROW` -1.
+- **The xradio draft is thinner than section 10 assumed** [code, xradio
+  `f871ae3`]: one file, unchanged since 2026-08-06, defining only the
+  fringe-fit dataset.  The names for G, B, K and Tsys, the node per SPW,
+  `FLAG` and the units are this backend's choices.  They are all in
+  `caltab/_schema.py`, and each tree lists them in `schema_deviations`.
+- **`PolBasis` is `unknown`** in every table CASA 6.7 wrote, so the
+  receptor labels are `pol_0`, `pol_1` unless the caller gives them.
+- **Checked**: every value, flag, time and antenna of all 14 tables
+  against casatools, exactly; the known answers of the simulated set; a
+  table whose SPWs differ in channel count; to Zarr and back, identical
+  (the CASA → calset path of 10.1).
+- **Section 10.5**: the packing and keywords are settled for the types
+  above.  Still open: an ALMA Tsys with channels, a one-receptor table,
+  EPowerCurve's values, and locks while CASA rewrites a table.
+
+Next: the synthetic backend, `commit_flags`, then the thin
+`CalTableReader`.
 
 ## Sources
 

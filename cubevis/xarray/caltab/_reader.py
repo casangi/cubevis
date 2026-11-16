@@ -84,6 +84,7 @@ def read_raw(path: str, *, spw: Optional[Iterable[int]] = None) -> RawCalTable:
                 raise ValueError(f"spectral window(s) {missing} have no solutions; the table has {present}")
         spw_tab = au.open_subtable(path, "SPECTRAL_WINDOW")
         try:
+            has_width = "CHAN_WIDTH" in spw_tab.columns()
             for s in ids:
                 # a window's rows on their own: channel counts may differ by window
                 rows = np.flatnonzero(main["SPECTRAL_WINDOW_ID"] == s)
@@ -93,7 +94,9 @@ def read_raw(path: str, *, spw: Optional[Iterable[int]] = None) -> RawCalTable:
                     err=au.getcol_rows(t, "PARAMERR", rows),
                     snr=au.getcol_rows(t, "SNR", rows),
                     flag=au.as_bool(au.getcol_rows(t, "FLAG", rows)),
-                    chan_freq=au.getcol_rows(spw_tab, "CHAN_FREQ", [s])[0].astype(np.float64))
+                    chan_freq=au.getcol_rows(spw_tab, "CHAN_FREQ", [s])[0].astype(np.float64),
+                    chan_width=(au.getcol_rows(spw_tab, "CHAN_WIDTH", [s])[0].astype(np.float64)
+                                if has_width else None))
         finally:
             spw_tab.close()
     finally:

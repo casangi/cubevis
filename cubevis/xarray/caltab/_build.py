@@ -44,6 +44,7 @@ class SpwCells:
     snr: np.ndarray
     flag: np.ndarray               # bool
     chan_freq: np.ndarray          # Hz, one per channel
+    chan_width: Optional[np.ndarray] = None    # Hz, one per channel (CASA's CHAN_WIDTH)
 
 
 @dataclass
@@ -188,6 +189,9 @@ def build_tree(raw: RawCalTable, *, spw: Optional[Iterable[int]] = None,
                      {"type": "time", "units": "s", "scale": raw.time_scale, "format": "unix"}),
             S.ANTENNA: (S.ANTENNA, ant_coord.astype(str)),
             S.FREQUENCY: (S.FREQUENCY, freq, {"type": "spectral_coord", "units": "Hz"}),
+            **({S.CHANNEL_WIDTH: (S.FREQUENCY, np.asarray(c.chan_width, dtype=np.float64),
+                                  {"units": "Hz", "long_name": "Channel width"})}
+               if c.chan_width is not None and len(c.chan_width) == nchan else {}),
             last: (last, np.asarray(last_coord)),
             # "" for field -1: no field (a gain curve)
             "field_name": (S.TIME, np.array([_name(raw.field_names, int(f), "field")
@@ -312,7 +316,9 @@ def tree_to_raw(tree) -> RawCalTable:
             # did not solve (0) is not in the tree
             snr = pack([take(S.SNR)] * nparam)
         cells[s] = SpwCells(rows=rows, par=par, err=err, snr=snr, flag=flag.astype(bool),
-                            chan_freq=np.asarray(ds[S.FREQUENCY].values, dtype=np.float64))
+                            chan_freq=np.asarray(ds[S.FREQUENCY].values, dtype=np.float64),
+                            chan_width=(np.asarray(ds[S.CHANNEL_WIDTH].values, dtype=np.float64)
+                                        if S.CHANNEL_WIDTH in ds.coords else None))
         if partype is None:
             partype = "Complex" if np.iscomplexobj(par) else "Float"
     keywords.setdefault("ParType", partype)

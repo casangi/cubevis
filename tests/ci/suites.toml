@@ -96,10 +96,10 @@ name = "caltab"
 # the casa-caltab xarray backend (cubevis.xarray.caltab, calplot C0): the
 # schema table, the entry point, what is not a table; the synthetic source,
 # tables written from it with arcae and read back, and flags committed to
-# them.  The tests of real
+# them; calplot's CalTableReader over all of it.  The tests of real
 # tables need CALTABLES (and casatools for the comparison); they skip here
 pytest = ["tests/manual/calplot/test_caltab.py", "tests/manual/calplot/test_caltab_synthetic.py",
-          "tests/manual/calplot/test_caltab_flags.py"]
+          "tests/manual/calplot/test_caltab_flags.py", "tests/manual/calplot/test_calplot_reader.py"]
 args = ["-q"]
 requires = ["xarray", "arcae"]
 

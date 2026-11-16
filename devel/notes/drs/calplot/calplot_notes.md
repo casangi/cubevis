@@ -441,3 +441,109 @@ run with neither.  All three files: 127 pass.
 **Next**: the thin `CalTableReader` (selection, K evaluated to phase,
 the flag hook), which is the only thing calplot should talk to.  Then
 the document and example for xradio's schema authors, which closes C0.
+
+## 5. C0e: `CalTableReader` (base `1d1dbbfd`, 2026-11-16)
+
+**What it is.**  The one thing calplot asks about a calibration table.
+
+```python
+from cubevis.toolbox.calplot import CalTableReader
+reader = CalTableReader.open("tl016b.gff")       # a CASA table, a Zarr store, or a tree
+info = reader.info()                             # type, antennas, windows, quantities ...
+s = reader.read("delay", antenna=["BR", "KP"], spw=[1])
+s.time, s.y, s.flag, s.antenna                   # one entry per solution: numpy arrays
+```
+
+**Files.**
+- `cubevis/toolbox/calplot/__init__.py`, `reader.py` (new): the first
+  of the application's package.  No Bokeh, no CASA.
+- `cubevis/xarray/caltab/`: each channel's width now goes through the
+  reader, the tree (`channel_width`), the writer and the synthetic
+  source.
+- `tests/manual/calplot/test_calplot_reader.py` (new); in the `caltab`
+  CI suite.
+
+**The rule it exists for.**  calplot code gets `CalInfo` and
+`CalSamples` only: names, numbers and flat numpy arrays.  It does not
+get the tree.  How the tree is arranged (a node per window, a variable
+per parameter) is then this class's business alone, and a change in
+xradio's layout is a change here, not in the application.  C1 should be
+written against this class and never import `cubevis.xarray.caltab`.
+
+**The interface.**
+- `open(source)`: a CASA cal table, a tree saved to Zarr, or a tree in
+  hand.
+- `info()` → `CalInfo`: `caltype`, `antennas`, `receptors`, `spws`
+  (id, name, channels, frequencies, bandwidth, times), `fields`,
+  `scans`, `time_range`, `reference_antenna` (a name, None, or
+  `"varies"`), `quantities`, `evaluations`, `nsolutions`, `nflagged`,
+  `can_write_flags`.
+- `read(quantity, antenna=, spw=, field=, scan=, receptor=, time=,
+  channel=, frequency=, include_flagged=)` → `CalSamples`.
+  - Quantities: `amplitude`, `phase`, `real`, `imag` of a complex gain;
+    a parameter by name (`delay`, `rate`, `tsys`, ...); `snr`; `value`
+    for a type the schema does not know (its "receptor" numbers the
+    parameter).
+  - Selection is by the names a person uses, or by number.  A wrong
+    name is an error that lists the right ones.
+  - A time and antenna with no solution has no entry.
+  - `samples.where(mask)` cuts a set of samples: a grid cell is
+    `s.where(s.antenna == 3)`.
+- `evaluate("phase", nfreq=, frequencies=, wrap=)`: a K table's delays
+  as the phase they apply (below).
+- `set_flags(flagged, <selection>)`, `flag_changes()`, `commit_flags()`,
+  `restore_flags(backup)`, `flag_backups()`, `reload_flags()`.  Flags
+  are set in memory by the same selection as `read`, and written with
+  section 4's `commit_flags`.
+
+**A K table as phase** (plan 9.4 item 1; plotms shows only the stored
+delay).  phase = 2π × delay × (frequency − the table's frequency).
+- CASA references the phase to the frequency the table gives the
+  solution, which is the middle of the band it was solved over.  Found
+  by applying `sim.K` alone with `applycal`: of zero, the MS's first
+  channel and the table's frequency, only the last fits, and it fits
+  to 0.0000 rad.  It is now a test.
+- A K table has one channel per window, and its `CHAN_WIDTH` is the
+  whole band (64 MHz for 32 channels of 2 MHz).  That is where the
+  default frequencies come from, and why `channel_width` is now in the
+  tree.  (Its `TOTAL_BANDWIDTH` is not usable: CASA leaves the
+  frequency there.)
+- Not done: a fringe fit's phase, delay and rate together as phase
+  over time and frequency.
+
+**Found on the way.**
+- **Zarr returns a store's variables sorted by name.**  The quantities
+  came back in another order from Zarr than from the table.  The reader
+  now orders them by the type's own parameter order.  This is the kind
+  of dependence on the tree the class is there to absorb, and the test
+  that found it (the same answers from a tree, a table and Zarr) stays.
+
+**Checked.**
+- The same `info` and the same samples from a tree, the CASA table
+  written from it, and the Zarr store written from it.
+- On real tables, with casatools: every sample is CASA's value and flag
+  for that time, antenna, window and receptor (gff delay and rate,
+  Tsys, a K table).
+- The evaluated K phase against what `applycal` applies: 12 baselines,
+  windows and polarizations, within 1e-4 rad.
+- The tests fail with the phase referenced to zero frequency, with
+  no-solution cells returned, and with the antenna selection ignored
+  (each tried).
+
+**Timing**: all 45312 Tsys samples in 19 ms; a two-antenna selection of
+the gff in 4 ms.
+
+**Tests**: 16 in `test_calplot_reader.py` (11 without `CALTABLES`).  All
+four files: 143 pass.
+
+**Schema assumptions added**: `channel_width`, a coordinate along
+`frequency` (ours; MSv4 keeps a width as an attribute of `frequency`).
+
+**Left for C1.**
+- Mapping quantities to visplot's `Axis` members (`GAIN_AMPLITUDE`,
+  `DELAY`, ...).  Note `Axis.DELAY` is in seconds and CASA's is ns.
+- Cal-table detection in `data_format.py` (plan 9.6).
+- A CASA-style selection string ("ea01,ea05", "0~3"), if wanted.
+
+**Next**: the document and example for xradio's schema authors, which
+closes C0.

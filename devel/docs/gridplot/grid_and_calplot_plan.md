@@ -407,7 +407,7 @@ weeks of sessions. Each stage has an exit test you run in the browser.
 | **G1b** | `GridView` (Bokeh) + `GridController` + `GridSource` protocol; a synthetic source for tests; paging; common/per-cell scale; external axes; one probe; crosshair; save-page; tap event. **Built 2026-11-11: section 12** (remote waits for G2) | M–L | Demo notebook with a synthetic 4×4 source, both themes, local and remote |
 | **G2** | visplot: Layout "Grid", Iterate by, Rows/Cols, template = Panel A; `VisGridSource`; drill-down tap; `plotfile` per page + range; three presets. **Built 2026-11-11: sections 13, 14** (rasters; presets are the panel presets in Grid; TW Hya / VLBA to test) | M–L | Per-baseline waterfall grid on TW Hya and the VLBA subset; drill-down then flag works; PNG pages match the GUI |
 | **G3** | visplot: read-once-and-split (if G0 says so); compound iteration; `axes_override` hook only; scatter grids; "whole grid" color scope by default (kept at "this page" for now: section 16); the grid's own template panel (section 14). **The grid's own panel built 2026-11-13: section 15; read once, split: section 16; scatter grids: section 17; compound iteration and the `axes_override` hook: section 18. G3 done** | M | Page time inside the G0 target |
-| **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables. **The `casa-caltab` reader built 2026-11-15: section 19; the synthetic source and a table writer 2026-11-16: section 20; `commit_flags`: section 21** (`CalTableReader` to come; C0 closes with a document and example for xradio's schema authors) | M | Round-trip of values and flags against casatools reads |
+| **C0** | `CalTableReader` interface + CASA backend (G, B, K, Fringe, Tsys) into an xradio-draft-shaped dataset; tests on small generated tables. **The `casa-caltab` reader built 2026-11-15: section 19; the synthetic source and a table writer 2026-11-16: section 20; `commit_flags`: section 21; `CalTableReader`: section 22** (C0 closes with a document and example for xradio's schema authors) | M | Round-trip of values and flags against casatools reads |
 | **C1** | calplot app: selection (antenna, SPW, field, pol, time), grid per antenna, overlay mode, flagged solutions shown, refant in titles, PNG pages; remote kernels via the existing setup | L | Gain, bandpass and fringe tables from a real VLA/VLBA reduction |
 | **C2** | Solution flagging: box in drill-down panel, FlagDB list/undo, commit to `FLAG` with a backup copy | M | Flag, undo, commit, reopen in plotms and see the same flags |
 | G4 / C3 (optional) | Flag-in-cell with the shared tool (3.6 v2) | M | — |
@@ -1092,6 +1092,31 @@ Record: `devel/notes/drs/calplot/calplot_notes.md` section 4.
 
 Next: the thin `CalTableReader`, then the document for xradio's schema
 authors.
+
+## 22. C0, fourth slice built: `CalTableReader` (2026-11-16, base `1d1dbbfd`)
+
+Record: `devel/notes/drs/calplot/calplot_notes.md` section 5.
+
+- **`cubevis/toolbox/calplot/reader.py`**: the first file of the
+  application's package.  `CalTableReader.open(source)` takes a CASA cal
+  table, a tree saved to Zarr, or a tree in hand.
+- **It returns names and flat arrays, not the tree** (9.6): `info()` gives
+  a `CalInfo`; `read(quantity, <selection>)` gives a `CalSamples` with one
+  entry per solution.  **C1 is to be written against this class only**, so
+  the tree's arrangement can follow xradio's without touching the
+  application.
+- **Selection** by antenna, window, field, scan, receptor, time, channel
+  and frequency, by name or number.
+- **A K table as the phase it applies** (9.4 item 1): `evaluate("phase")`.
+  CASA references that phase to the table's own frequency, the middle of
+  the band; checked against `applycal`.
+- **Flags**: `set_flags(<selection>)` in memory, then section 21's commit.
+- **Checked**: the same answers from a tree, a CASA table and a Zarr
+  store; samples equal to casatools' values on real tables.
+- **Changed below it**: the tree has `channel_width` along `frequency`.
+
+Next: the document and example for xradio's schema authors, which closes
+C0.  Then C1, the application.
 
 ## Sources
 

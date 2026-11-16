@@ -178,7 +178,9 @@ def synthetic_raw(caltype: str = "G", *, nant: int = 10, nspw: int = 2, ntime: i
         cells[s] = SpwCells(rows=nrow + np.arange(n), par=par,
                             err=(1.0 / np.maximum(snr, 1.0)).reshape(n, nchan, npar),
                             snr=snr.reshape(n, nchan, npar), flag=flag.reshape(n, nchan, npar),
-                            chan_freq=freq)
+                            chan_freq=freq,
+                            # one channel: the band it stands for, as CASA's tables have it
+                            chan_width=np.full(nchan, BANDWIDTH_HZ / nchan))
         nrow += n
         main["TIME"].append(times[ti] + au.MJD_UNIX_OFFSET_S)
         main["FIELD_ID"].append(field_of_time[ti])

@@ -26,7 +26,10 @@ This backend's own (``DEVIATIONS`` says the same to a reader of the data):
   * CASA's units as stored (delay in ns; the draft has seconds);
   * ``CALPARAM`` over a ``parameter`` dimension for a type not listed
     below;
-  * ``SOURCE_ROW`` and ``INTERVAL``.
+  * ``SOURCE_ROW`` and ``INTERVAL``;
+  * ``channel_width``, a coordinate along ``frequency`` (Hz).  A table with
+    one channel per window (G, K, a fringe fit) gives the width of the band
+    it was solved over, which is what evaluating a delay across it needs.
 """
 from __future__ import annotations
 
@@ -54,6 +57,7 @@ PARAM_PREFIX = "CALPARAM"
 ERROR_PREFIX = "CALERROR"
 SNR = "SNR"
 FLAG = "FLAG"
+CHANNEL_WIDTH = "channel_width"          # a coordinate along frequency, Hz
 SOURCE_ROW = "SOURCE_ROW"
 INTERVAL = "INTERVAL"
 REFERENCE_ANTENNA = "REFERENCE_ANTENNA"
@@ -65,6 +69,7 @@ DEVIATIONS = (
     "CALPARAM_GAIN, CALPARAM_TSYS and CALPARAM_DISP_DELAY are not in the draft",
     "CALPARAM over a 'parameter' dimension for a type the backend does not know",
     "SOURCE_ROW (the table row of each time and antenna; -1: no solution) and INTERVAL",
+    "channel_width, a coordinate along frequency",
 )
 
 

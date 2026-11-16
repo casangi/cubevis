@@ -121,8 +121,11 @@ def write_caltab(tree, path: str, *, overwrite: bool = False) -> str:
         nspw = max(max(raw.cells) + 1, len(raw.spw_names))
         chan_freq = [np.asarray(raw.cells[s].chan_freq, dtype=np.float64) if s in raw.cells
                      else np.zeros(1) for s in range(nspw)]
-        # a channel's width: the spacing (the window's bandwidth is not in a tree)
-        width = [np.full(len(f), abs(f[1] - f[0]) if len(f) > 1 else 1.0) for f in chan_freq]
+        # a channel's width: the tree's, or else the spacing
+        width = [np.asarray(raw.cells[s].chan_width, dtype=np.float64)
+                 if s in raw.cells and raw.cells[s].chan_width is not None
+                 else np.full(len(f), abs(f[1] - f[0]) if len(f) > 1 else 1.0)
+                 for s, f in enumerate(chan_freq)]
         nant, nfield = len(raw.antenna_names), len(raw.field_names)
         subtables = {
             "ANTENNA": _subtable(path, "ANTENNA", {
@@ -140,7 +143,7 @@ def write_caltab(tree, path: str, *, overwrite: bool = False) -> str:
                 "NAME": _strings((list(raw.spw_names) + [""] * nspw)[:nspw]),
                 "NUM_CHAN": np.array([len(f) for f in chan_freq], dtype=np.int32),
                 "REF_FREQUENCY": np.array([f[0] for f in chan_freq], dtype=np.float64),
-                "TOTAL_BANDWIDTH": np.array([w.sum() for w in width], dtype=np.float64),
+                "TOTAL_BANDWIDTH": np.array([np.abs(w).sum() for w in width], dtype=np.float64),
                 "MEAS_FREQ_REF": np.full(nspw, 5, dtype=np.int32),          # TOPO
                 "FREQ_GROUP_NAME": _strings([""] * nspw),
                 "CHAN_FREQ": chan_freq, "CHAN_WIDTH": width, "EFFECTIVE_BW": width,

@@ -33,6 +33,7 @@ names) and an ``ImageCube`` per field over an ``ImageStore``
 The same class is what a remote worker will hold; "remote" only puts a
 proxy in front of it.'''
 
+import logging
 import os
 from os.path import abspath, basename, join
 from typing import Callable, Dict, List, Optional
@@ -41,6 +42,8 @@ from ._protocols import CycleResult
 from ._image_cube import ImageCube
 from ._casatools_store import CasatoolsImageStore
 from ._progress import CycleProgress
+
+log = logging.getLogger(__name__)
 
 #: environment variable naming the store for images: "xarray" or "casatools"
 IMAGE_STORE_ENV = 'CUBEVIS_IMAGE_STORE'
@@ -58,17 +61,45 @@ def image_store(name: Optional[str] = None) -> Callable:
     Without ``name``, what the environment variable ``CUBEVIS_IMAGE_STORE``
     says, read where the images are (a remote kernel's own environment).
     Without that: xarray, or casatools where arcae or xarray is not
-    installed.  So ``CUBEVIS_IMAGE_STORE=casatools`` puts everything back.'''
-    choice = (name or os.environ.get(IMAGE_STORE_ENV) or '').strip().lower()
+    installed (said once in the log).  So ``CUBEVIS_IMAGE_STORE=casatools``
+    puts everything back.  With ``CUBEVIS_DEBUG=1`` the log says which store
+    is in use and why; ``image_store_name()`` answers the same question.'''
+    asked = name or os.environ.get(IMAGE_STORE_ENV) or ''
+    why = 'asked for by name' if name else f'{IMAGE_STORE_ENV}={asked}' if asked else 'the default'
+    choice = asked.strip().lower()
     if choice in ('xarray', 'arcae'):
         from ._xarray_store import XarrayImageStore        # pylint: disable=import-outside-toplevel
-        return XarrayImageStore
+        return _chosen(XarrayImageStore, why)
     if choice == 'casatools':
-        return CasatoolsImageStore
+        return _chosen(CasatoolsImageStore, why)
     if choice:
         raise ValueError(f'image store {choice!r}: one of {", ".join(IMAGE_STORES)}')
-    from ._xarray_store import XarrayImageStore, xarray_store_available      # pylint: disable=import-outside-toplevel
-    return XarrayImageStore if xarray_store_available() else CasatoolsImageStore
+    from ._xarray_store import XarrayImageStore, missing_modules          # pylint: disable=import-outside-toplevel
+    missing = missing_modules()
+    if missing:
+        return _chosen(CasatoolsImageStore, f'{" and ".join(missing)} not installed', fallback=True)
+    return _chosen(XarrayImageStore, why)
+
+
+_told: set = set()
+
+
+def _chosen(store: Callable, why: str, fallback: bool = False) -> Callable:
+    '''Say once which store reads the images: at INFO when casatools stands
+    in because arcae or xarray is missing, else at DEBUG (``CUBEVIS_DEBUG=1``).'''
+    if (store, why) not in _told:
+        _told.add((store, why))
+        how = {'XarrayImageStore': 'arcae, through cubevis.xarray.image; no casatools',
+               'CasatoolsImageStore': 'casatools'}.get(store.__name__, '')
+        log.log(logging.INFO if fallback else logging.DEBUG, 'images are read with %s (%s): %s%s',
+                store.__name__, how, why,
+                '; pip install "cubevis[image]" for the arcae store' if fallback else '')
+    return store
+
+
+def image_store_name(name: Optional[str] = None) -> str:
+    '''``"xarray"`` or ``"casatools"``: which store ``image_store(name)`` gives.'''
+    return 'casatools' if image_store(name) is CasatoolsImageStore else 'xarray'
 
 
 def resolve_deconvolver(iclean_backend: str = 'PROD'):

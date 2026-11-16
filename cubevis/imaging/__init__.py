@@ -55,14 +55,14 @@ from ._image_cube import ImageCube, quantize
 from ._casatools_store import CasatoolsImageStore
 from .reader import ImageReader, ImageInfo
 from ._xarray_store import XarrayImageStore
-from ._session import LocalImagingSession, resolve_deconvolver, as_imaging_session, open_image_cube, image_store
+from ._session import LocalImagingSession, resolve_deconvolver, as_imaging_session, open_image_cube, image_store, image_store_name
 from ._coordinates import astropy_wcs, from_casa_coordsys
 from ._masks import polygon_pixels
 from ._progress import CycleProgress, describe as describe_progress
 from ._remote_session import RemoteImagingSession, RemoteImageCube
 
 __all__ = ['CycleResult', 'Deconvolver', 'ImageStore', 'ImagingSession', 'ImageCubeProtocol',
-           'ImageCube', 'quantize', 'CasatoolsImageStore', 'XarrayImageStore', 'ImageReader', 'ImageInfo', 'image_store',
+           'ImageCube', 'quantize', 'CasatoolsImageStore', 'XarrayImageStore', 'ImageReader', 'ImageInfo', 'image_store', 'image_store_name',
            'LocalImagingSession', 'resolve_deconvolver', 'as_imaging_session', 'open_image_cube',
            'astropy_wcs', 'from_casa_coordsys', 'polygon_pixels',
            'RemoteImagingSession', 'RemoteImageCube', 'CycleProgress', 'describe_progress']

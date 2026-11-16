@@ -58,14 +58,21 @@ import numpy as np
 from .reader import ImageReader
 
 
+def missing_modules() -> List[str]:
+    '''Which of arcae and xarray, which reading a CASA image this way
+    needs, cannot be imported ([] when both can).'''
+    import importlib                                 # pylint: disable=import-outside-toplevel
+    missing = []
+    for module in ('arcae', 'xarray'):
+        try:
+            importlib.import_module(module)
+        except Exception:
+            missing.append(module)
+    return missing
+
+
 def xarray_store_available() -> bool:
-    '''arcae and xarray, which reading a CASA image this way needs.'''
-    try:
-        import arcae  # noqa: F401                  # pylint: disable=import-outside-toplevel,unused-import
-        import xarray  # noqa: F401                 # pylint: disable=import-outside-toplevel,unused-import
-        return True
-    except Exception:
-        return False
+    return not missing_modules()
 
 
 class XarrayImageStore:

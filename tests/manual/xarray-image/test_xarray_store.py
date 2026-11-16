@@ -16,7 +16,7 @@ import pytest
 pytest.importorskip('arcae')
 
 from cubevis.imaging import (XarrayImageStore, CasatoolsImageStore, ImageCube, ImageStore, image_store,   # noqa: E402
-                             open_image_cube)
+                             image_store_name, open_image_cube)
 from cubevis.xarray import image as ci                                                                # noqa: E402
 
 SHAPE = (24, 18, 2, 7)
@@ -76,8 +76,33 @@ def test_environment_chooses_the_store(images, monkeypatch):
     assert isinstance(open_image_cube(image, mask_path, store='xarray').store, XarrayImageStore)
     monkeypatch.delenv('CUBEVIS_IMAGE_STORE')
     import cubevis.imaging._xarray_store as xs
-    monkeypatch.setattr(xs, 'xarray_store_available', lambda: False)  # no arcae: casatools, as before
+    monkeypatch.setattr(xs, 'missing_modules', lambda: ['arcae'])     # no arcae: casatools, as before
     assert image_store() is CasatoolsImageStore
+
+
+def test_the_log_says_which_store(monkeypatch, caplog):
+    import logging
+    import cubevis.imaging._session as session
+    import cubevis.imaging._xarray_store as xs
+    logger = logging.getLogger('cubevis')
+    monkeypatch.setattr(logger, 'propagate', True)                   # so caplog hears it
+    caplog.set_level(logging.DEBUG, logger='cubevis')
+    monkeypatch.setattr(session, '_told', set())
+    assert image_store_name() == 'xarray'
+    assert 'XarrayImageStore' in caplog.text and 'the default' in caplog.text and 'arcae' in caplog.text
+    count = len(caplog.records)
+    image_store()
+    assert len(caplog.records) == count                              # said once
+    monkeypatch.setenv('CUBEVIS_IMAGE_STORE', 'casatools')
+    assert image_store_name() == 'casatools'
+    assert 'CasatoolsImageStore' in caplog.records[-1].getMessage() and caplog.records[-1].levelno == logging.DEBUG
+    assert 'CUBEVIS_IMAGE_STORE=casatools' in caplog.records[-1].getMessage()
+    ### arcae missing: casatools stands in, and that is said at INFO, without CUBEVIS_DEBUG
+    monkeypatch.delenv('CUBEVIS_IMAGE_STORE')
+    monkeypatch.setattr(xs, 'missing_modules', lambda: ['arcae'])
+    assert image_store_name() == 'casatools'
+    last = caplog.records[-1]
+    assert last.levelno == logging.INFO and 'arcae not installed' in last.getMessage() and 'cubevis[image]' in last.getMessage()
 
 
 def test_statistics(images):

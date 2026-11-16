@@ -45,9 +45,10 @@ This package stands alone: it imports nothing else of cubevis (not
 ``cubevis.xarray.caltab`` either), so it can be moved out as it is.
 ``cubevis.imaging.ImageReader`` is cubevis's use of it.
 
-Run from a checkout (no entry point registered), pass the engine itself:
-``xr.open_dataset(path, engine=CasaImageBackendEntrypoint)``, or call
-``open_casa_image(path)``.
+Importing this package makes ``engine="casa-image"`` work by name from a
+checkout too, where no entry point is installed (``_register.py``).  The
+engine is only ever used when named: it does not compete with xradio's
+``xradio_casa_image`` for ``xr.open_dataset(path)`` with no engine.
 
 Record: ``devel/notes/drs/xarray-image/xarray_image_notes.md``.
 '''
@@ -56,11 +57,14 @@ from ._image import CasaImage, PagedArray, is_casa_image, table_info
 from ._write import create_image, write_image, default_coords, beam_record, put_keywords
 from ._backend import CasaImageBackendEntrypoint, LazyPixels, open_casa_image, to_casa_image, describe
 from ._dataset import open_image, describe_dataset, sky_variable, source_format
+from ._register import register
 from . import _coords as coords
 from . import _schema as schema
+
+register()
 
 __all__ = ['CasaImage', 'PagedArray', 'is_casa_image', 'table_info',
            'create_image', 'write_image', 'default_coords', 'beam_record', 'put_keywords',
            'CasaImageBackendEntrypoint', 'LazyPixels', 'open_casa_image', 'to_casa_image', 'describe',
            'open_image', 'describe_dataset', 'sky_variable', 'source_format',
-           'coords', 'schema']
+           'register', 'coords', 'schema']

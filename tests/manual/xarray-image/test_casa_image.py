@@ -293,6 +293,32 @@ def test_engine_options(cube):
         entry.open_dataset(path, nonsense=1)
 
 
+def test_engine_by_name_from_a_checkout(cube):
+    """importing the package registers the engine where no entry point is
+    installed (_register.py); xradio's engine, if there, is left as it was"""
+    path, pixels, _ = cube
+    before = set(xr.backends.list_engines())
+    assert 'casa-image' in before
+    ds = xr.open_dataset(path, engine='casa-image')
+    assert np.array_equal(ds.SKY.isel(time=0, frequency=2, polarization=1).values, pixels[:, :, 1, 2])
+    assert ci.register() is False                                       # already there: nothing to do
+    assert set(xr.backends.list_engines()) == before
+    from xarray.backends import plugins
+    assert xr.backends.list_engines()['casa-image'].guess_can_open(path) is False
+    ### an engine table without it (xarray used before the package was imported)
+    saved = plugins.BACKEND_ENTRYPOINTS.pop('casa-image', None)
+    plugins.list_engines.cache_clear()
+    try:
+        if not ci._register.entry_point_installed():
+            assert 'casa-image' not in xr.backends.list_engines()
+            assert ci.register() is True
+        assert 'casa-image' in xr.backends.list_engines()
+    finally:
+        if saved is not None:
+            plugins.BACKEND_ENTRYPOINTS.setdefault('casa-image', saved)
+        plugins.list_engines.cache_clear()
+
+
 def test_entry_point_is_declared():
     with open(os.path.join(ROOT, 'pyproject.toml'), encoding='utf-8') as f:
         text = f.read()

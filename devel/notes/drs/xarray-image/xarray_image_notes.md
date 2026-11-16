@@ -127,8 +127,8 @@ dask, toolviper or astropy needed), writes, and makes images.  So that
 `xr.open_dataset(path)` with no engine keeps meaning what it meant, **this
 engine never claims a path by guessing**: name it.
 
-Run from a checkout no entry point is registered: use
-`open_casa_image(path)`, or `engine=CasaImageBackendEntrypoint`.
+Run from a checkout no entry point is registered; importing the package
+registers the engine itself (section 2).
 
 ### 1.6 Writing CASA images with arcae alone [measured]
 
@@ -194,8 +194,7 @@ sandbox **[measured]**:
   `>=0.5.9,<0.6.0`, inside xarray-ms's range.
 - **Merging with `calplot`**: both branches add `cubevis/xarray/__init__.py`
   (a docstring) and the `xarray.backends` entry-point table in
-  `pyproject.toml`.  Keep both sides.  `calplot`'s
-  `cubevis/xarray/_register.py` could register `casa-image` too.
+  `pyproject.toml`.  Keep both sides.
 - `CasatoolsImageStore.read_mask_chans` fails if called before anything
   opened its image (`_chan_shape` is None).  Not reached by `ImageCube`;
   left alone.
@@ -212,3 +211,61 @@ Changed: `cubevis/imaging/__init__.py`, `_session.py` (`image_store`, the
 default), `_coordinates.py` (`from_image_info`, unit spellings),
 `pyproject.toml` (entry point; extra `image`, added to `iclean`),
 `tests/ci/suites.toml` (suite `xarray-image`).
+
+---
+
+## 2. Which store is in use; the engine by name (2026-11-16, base `xarray-image` `53fdea5`)
+
+Darrell ran his interactive clean test on the first slice: it works.  Two
+things followed.
+
+### 2.1 Saying which store reads the images
+
+The default falls back to casatools when arcae or xarray is missing, and
+nothing said so.  Now:
+
+- **`CUBEVIS_DEBUG=1`** logs, once per choice,
+  `[cubevis.imaging._session] DEBUG: images are read with XarrayImageStore
+  (arcae, through cubevis.xarray.image; no casatools): the default` -- or
+  `CasatoolsImageStore (casatools): CUBEVIS_IMAGE_STORE=casatools`.  For a
+  remote session the line is in the kernel's output, where the store is.
+- **The fallback is said at INFO**, without `CUBEVIS_DEBUG`: `images are
+  read with CasatoolsImageStore (casatools): arcae not installed; pip
+  install "cubevis[image]" for the arcae store`.
+- **`cubevis.imaging.image_store_name()`** returns `"xarray"` or
+  `"casatools"`; `cube.store` is the store object itself.
+
+### 2.2 `engine="casa-image"` from a checkout
+
+`cubevis/xarray/image/_register.py`, called when the package is imported,
+adds the engine to xarray's table where no installed entry point does:
+the remedy of calplot's `cubevis/xarray/_register.py`.
+
+- **It is a copy inside the package**, not an import of calplot's file:
+  the package imports nothing from outside itself (decision 1.2.1), and
+  `gridplot` does not have that file.  About 30 lines.
+- **It does not disturb xradio's engine.**  The overlap noted in 1.5 is
+  about `xr.open_dataset(path)` with *no* engine, which this engine never
+  answers (`guess_can_open` is False).  Registering the name `casa-image`
+  beside `xradio_casa_image` changes nothing for xradio: both were listed,
+  and each opened the same image, in one process **[measured]**.
+- The package has to have been imported (`import cubevis.xarray.image`;
+  `ImageReader` does it on first use).  `import cubevis` alone does not.
+
+Seen on the way **[measured]**: with xarray-ms installed,
+`xr.open_dataset(<a CASA image>)` with no engine is claimed by xarray-ms's
+`msv2` engine, which then fails on a missing `SCAN_NUMBER` column.  It
+does not come from cubevis (this engine does not guess), and is another
+reason to name the engine.
+
+### 2.3 Checked
+
+`tests/manual/xarray-image`: 62 tests pass (two new: the log, the engine by
+name).  `tests/manual/iclean-imaging` (real tclean, local and on a kernel):
+118 pass, 2 skipped, as before.
+
+### 2.4 Files
+
+New: `cubevis/xarray/image/_register.py`.  Changed:
+`cubevis/xarray/image/__init__.py`, `cubevis/imaging/_session.py`,
+`_xarray_store.py`, `__init__.py`, two test files, this note.

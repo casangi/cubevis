@@ -20,18 +20,36 @@ same shape with values that follow a stated rule, and
 ``write_caltab(tree, path)`` makes a CASA table of any tree, with arcae
 alone (for tests; see ``_write``).
 
-Nothing is imported until it is asked for: no Bokeh, no CASA, and arcae
-and xarray only when a table is opened.
+Importing this package is enough for ``engine="casa-caltab"``: where the
+entry point is not installed (a checkout on ``PYTHONPATH``), the import
+registers the engine with xarray (``cubevis.xarray._register``).
+
+No Bokeh and no CASA are imported, and arcae only when a table is opened.
+Installed, xarray is not imported either until it is needed; from a
+checkout, registering the engine imports it.
 """
 from __future__ import annotations
 
 __all__ = ["open_caltab", "caltab_info", "NotACalTable", "CaltabBackendEntrypoint",
-           "synthetic_caltab", "synthetic_value", "write_caltab"]
+           "synthetic_caltab", "synthetic_value", "write_caltab", "register_backend"]
 
 _WHERE = {"open_caltab": "_reader", "caltab_info": "_reader", "NotACalTable": "_reader",
           "CaltabBackendEntrypoint": "_backend",
           "synthetic_caltab": "_synthetic", "synthetic_value": "_synthetic",
           "write_caltab": "_write"}
+
+
+ENGINE = "casa-caltab"
+
+
+def register_backend(force: bool = False) -> bool:
+    """Make ``casa-caltab`` an xarray engine where no installed entry point
+    does (done on import; True when it was added by this call)."""
+    from .._register import register
+    return register(ENGINE, f"{__name__}._backend", "CaltabBackendEntrypoint", force=force)
+
+
+register_backend()
 
 
 def __getattr__(name):

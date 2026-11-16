@@ -186,7 +186,7 @@ def test_seed_and_noise():
 def test_import_is_light():
     code = ("import sys, cubevis.xarray.caltab._build, cubevis.xarray.caltab._synthetic, "
             "cubevis.xarray.caltab._write\n"
-            "bad = [m for m in ('bokeh', 'casatools', 'casatasks', 'arcae', 'xarray') if m in sys.modules]\n"
+            "bad = [m for m in ('bokeh', 'casatools', 'casatasks', 'arcae') if m in sys.modules]\n"
             "print(','.join(bad))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stderr

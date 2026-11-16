@@ -130,13 +130,64 @@ def test_entry_point_registered():
     assert "casa-caltab" in xr.backends.list_engines()
 
 
+def test_engine_known_after_import():
+    """Installed or run from a checkout, importing the package is enough."""
+    import cubevis.xarray.caltab                                 # noqa: F401
+    assert "casa-caltab" in xr.backends.list_engines()
+    assert isinstance(xr.backends.list_engines()["casa-caltab"], CaltabBackendEntrypoint)
+
+
+_NOT_INSTALLED = (
+    "import sys\n"
+    "import cubevis.xarray._register as r\n"
+    "r.entry_point_installed = lambda name: False               # as from a checkout\n"
+    "{before}"
+    "from cubevis.xarray.caltab import open_caltab\n"
+    "import xarray as xr\n"
+    "from xarray.backends import plugins\n"
+    "assert 'casa-caltab' in plugins.BACKEND_ENTRYPOINTS, 'not registered'\n"
+    "assert 'casa-caltab' in xr.backends.list_engines(), 'not listed'\n"
+    "bad = [m for m in ('bokeh', 'casatools', 'casatasks') if m in sys.modules]\n"
+    "assert not bad, bad      # (arcae may be there: listing engines loads xarray-ms)\n"
+    "from cubevis.xarray.caltab import register_backend\n"
+    "assert register_backend() is False                         # once is enough\n"
+)
+
+
+@pytest.mark.parametrize("before", ["", "import xarray as xr; xr.backends.list_engines()\n"],
+                         ids=["cubevis-first", "xarray-used-first"])
+def test_registered_without_the_entry_point(before):
+    """From a checkout that is not installed there is no entry point: the
+    import registers the engine, also when xarray has already listed its
+    engines (its list is cached).
+
+    This uses ``xarray.backends.plugins.BACKEND_ENTRYPOINTS``, which xarray
+    does not document: if a release moves it, this is the test that fails.
+    """
+    out = subprocess.run([sys.executable, "-c", _NOT_INSTALLED.format(before=before)],
+                         capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr[-800:]
+
+
+def test_register_never_raises():
+    from cubevis.xarray import _register
+    assert _register.register("casa-caltab", "cubevis.xarray.caltab._backend",
+                              "CaltabBackendEntrypoint") is False        # there already
+    assert _register.register("no-such-engine", "cubevis.no_such_module", "Nothing",
+                              force=True) is False                       # cannot be done: no error
+    assert "no-such-engine" not in xr.backends.list_engines()
+    assert _register.entry_point_installed("no-such-engine") is False
+
+
 def test_import_is_light():
-    """Importing the backend brings neither Bokeh nor CASA, and not arcae
-    or xarray either until a table is opened."""
+    """Importing the backend brings neither Bokeh nor CASA nor arcae; and,
+    where the entry point is installed, not xarray either."""
     code = ("import sys, cubevis.xarray, cubevis.xarray.caltab, cubevis.xarray.caltab._schema, "
             "cubevis.xarray._arcae_util\n"
-            "bad = [m for m in ('bokeh', 'casatools', 'casatasks', 'arcae', 'xarray') if m in sys.modules]\n"
-            "print(','.join(bad))")
+            "from cubevis.xarray._register import entry_point_installed\n"
+            "names = ['bokeh', 'casatools', 'casatasks', 'arcae']\n"
+            "names += ['xarray'] if entry_point_installed('casa-caltab') else []\n"
+            "print(','.join(m for m in names if m in sys.modules))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == ""

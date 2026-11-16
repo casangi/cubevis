@@ -294,3 +294,68 @@ labelled `all` (ours; the draft has nothing for it).
 **Next C0 slices**: `commit_flags` with backup and read-back, tested on
 written tables in CI and on copies of the real ones; then the thin
 `CalTableReader`.
+
+## 3. C0c: the engine without the entry point (base `5016309a`, 2026-11-16)
+
+**The problem.**  xarray finds `casa-caltab` by its entry point, and an
+entry point exists only for an installed package.  Darrell runs from the
+checkout on `PYTHONPATH`, not installed, so the engine was unknown until
+he added it to xarray's table by hand.
+
+**What changed.**  Importing the package is now enough:
+
+```python
+from cubevis.xarray.caltab import open_caltab     # "casa-caltab" is now an engine
+dt = xr.open_datatree("tl016b.gff")
+```
+
+- `cubevis/xarray/_register.py` (new): `register(name, module, attr)`
+  and `entry_point_installed(name)`.  Shared, for the later backends.
+- `cubevis/xarray/caltab/__init__.py`: calls `register_backend()` on
+  import.
+
+**How it behaves.**
+- **Installed** (`pip install .` or `-e .`): the entry point is there,
+  nothing is registered, and xarray is not imported by the import.
+- **Not installed**: xarray is imported, the class is added to
+  `xarray.backends.plugins.BACKEND_ENTRYPOINTS`, and xarray's cached
+  engine list is cleared, so it works when xarray was used first.  It
+  took 20 ms here with xarray already loaded.
+- It never raises.  Without xarray, or if xarray moves its table, the
+  import still works and `open_caltab` is unaffected.
+
+**Why at `cubevis.xarray.caltab` and not at `import cubevis`**
+(Darrell's first thought, 2026-11-16):
+- `import cubevis` takes 0.17 s and loads neither xarray nor numpy;
+  xarray would add 0.42 s for everyone, iclean users included.
+- Whoever imports `caltab` needs xarray anyway.
+- It moves with `caltab` if that becomes a package of its own, where
+  the entry point makes it a no-op.
+
+**Risk.**  `BACKEND_ENTRYPOINTS` is not xarray's documented interface.
+`test_registered_without_the_entry_point` is the test that fails if a
+release moves it.  The entry point stays the real mechanism: a process
+that has not imported the package (an xradio user with cubevis
+installed) is served by it.
+
+**The alternative** for a checkout: `pip install --no-deps -e .` once.
+Python still imports from the checkout, and the entry point is
+registered.  It needs repeating only when the entry points in
+`pyproject.toml` change.
+
+**Found on the way.**  `xr.backends.list_engines()` loads every
+installed backend, so it imports arcae (through xarray-ms).  Importing
+our package does not.
+
+**Tests**: 102 pass with an editable install; 101 pass and 1 skips run
+from the checkout, not installed (the skip is the entry-point test).
+New: the engine known after import; registered without the entry
+point, with cubevis first and with xarray used first; `register` never
+raises.
+
+**To close C0** (agreed 2026-11-16): a short document for the people
+working on xradio's calibration schema, with a runnable example that
+needs no CASA and no data.  It says what the tree looks like, which
+names are the draft's and which are ours and why, what the draft leaves
+open, and what was checked (casatools parity, `applycal`).  Written
+when `commit_flags` and `CalTableReader` are done.
